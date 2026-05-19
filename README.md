@@ -21,7 +21,7 @@ From the orchestrator root: `just server`, `just server-test`, `just server-chec
 - **pydantic v2** — Typed protocol (`GameMessage` discriminated union) and genre pack models
 - **sqlite3** — Save persistence at `~/.sidequest/saves/`, one DB per genre/world session
 - **PyYAML** — Genre pack loader (read-only at runtime)
-- **OpenTelemetry** — Span emission for the GM dashboard (ADR-058, ADR-090)
+- **OpenTelemetry** — Span emission for the GM dashboard (ADR-090; native OTEL via the tool registry per ADR-103 supersedes the legacy `claude -p` subprocess passthrough of ADR-058)
 - **websockets** — Watcher channel transport
 - **uv** — Dependency management; `pyproject.toml` is the source of truth
 - **Python 3.12+**

@@ -160,6 +160,9 @@ sidequest.server
 | Media | 048 (lore RAG store, cross-process embedding), 050 (image pacing throttle), 086 (image-composition taxonomy) |
 | Tooling / harness | 092 (scene harness HTTP endpoint — dev-gated) |
 | Project lifecycle | 082 (port back to Python), 085 (tracker hygiene during port), 087 (post-port subsystem restoration) |
+| Locations / dungeons | 055 (room graph navigation — the new `MAP_UPDATE` shape lives here; ADR-019 cartography `MAP_UPDATE` was deleted in the port), 096 (cavern renderer revival), 106 (runtime procedural Jaquaysed megadungeon — `beneath_sunden`), 109 (persistent location descriptions + mechanical manifest) |
+| Multiplayer / OOC | 107 (non-turn-consuming out-of-band aside channel for OOC table-talk), 108 (MP item attribution — deferred) |
+| Narrator tuning | 110 (snapshot slimming — deferred), 111 (recency-zone guardrails into tool descriptions — deferred), 112 (genre prose cache promotion — deferred) |
 
 For the full ADR index see `orc-quest/docs/adr/README.md`. Drift notes: `orc-quest/docs/adr/DRIFT.md`. Superseded: `orc-quest/docs/adr/SUPERSEDED.md`.
 

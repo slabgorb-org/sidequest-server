@@ -29,8 +29,11 @@ zero-content), silently contributing nothing to the assembled narrator prompt?
 
 1. `__init__.py` loads each file via `_load()` and exports a `NARRATOR_*` constant.
 2. `narrator.py` re-imports all 11 constants and re-exports via `__all__`.
-3. `orchestrator.py` registers sections into `PromptRegistry` via
-   `register_section(…)` call sites.
+3. `narrator.py`'s `NarratorAgent` methods (`build_context`,
+   `build_dialogue_context`, `build_output_format`, `build_encounter_context`)
+   call `registry.register_section(…)` for each `NARRATOR_*` constant.
+   `orchestrator.py` drives this by calling `self._narrator.build_context(registry)`
+   (and siblings) at its turn-assembly call sites.
 
 No orphaned `.md` files in the directory. No `NARRATOR_*` constants reference
 files that do not exist. No empty placeholder files.

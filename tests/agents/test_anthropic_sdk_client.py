@@ -633,3 +633,31 @@ async def test_last_tool_marker_inherits_5m_ttl_when_configured(
     )
     sent_tools = fake.messages.calls[0]["tools"]
     assert sent_tools[0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+
+
+async def test_empty_tools_array_skips_marker_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test fixtures sometimes pass tools=[]. The marker is best-effort
+    opt-in; an empty array must not raise. Production has 27 tools."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake = _FakeAsyncSdk(
+        responses=[
+            _SdkResponse(
+                content=[_SdkContentTextBlock(type="text", text="ok")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=fake, cache_ttl="1h")
+    # Must not raise.
+    await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        model="claude-sonnet-4-6",
+    )
+    sent_tools = fake.messages.calls[0]["tools"]
+    assert sent_tools == []

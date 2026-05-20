@@ -46,16 +46,21 @@ class AffinityTier(BaseModel):
 
 
 class AffinityUnlocks(BaseModel):
-    """Tier unlocks for an affinity.
+    """Tier unlocks for an affinity (generic per-tier ``ProgressionUnlock`` shape).
 
     Two authored conventions exist:
     - Numbered: ``tier_0, tier_1, tier_2, tier_3`` (elemental_harmony)
-    - Named: ``novice, journeyman, expert`` (spaghetti_western)
+    - Named: ``novice, journeyman, expert, master`` (spaghetti_western)
 
-    Both forms are accepted. Numbered tiers are exposed on their named
-    attributes for typed access; all tiers (however keyed) are also
-    available via ``.tiers`` as an ordered dict. No consumer currently
-    dispatches by tier name — wiring story pending.
+    Both forms are accepted. The named-tier attributes (``tier_0..tier_3``
+    and ``novice/journeyman/expert/master``) are exposed for typed access;
+    all tiers (however keyed) are also available via ``.tiers`` as an
+    ordered dict keyed by the YAML tier name. Other packs with non-magical
+    classes (low_fantasy, pulp_noir) can reuse the named convention without
+    changes here — the dynamic ``.tiers`` dict captures whatever the pack
+    authored. No consumer currently dispatches by tier name — TODO: wire
+    at level-up. See ``docs/content-drift-triage.md`` for the spaghetti_western
+    triage that introduced the named convention.
     """
 
     model_config = {"extra": "allow"}
@@ -64,6 +69,10 @@ class AffinityUnlocks(BaseModel):
     tier_1: AffinityTier | None = None
     tier_2: AffinityTier | None = None
     tier_3: AffinityTier | None = None
+    novice: AffinityTier | None = None
+    journeyman: AffinityTier | None = None
+    expert: AffinityTier | None = None
+    master: AffinityTier | None = None
     tiers: dict[str, AffinityTier] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -75,10 +84,29 @@ class AffinityUnlocks(BaseModel):
         for key, value in data.items():
             if key == "tiers":
                 continue
-            if key in ("tier_0", "tier_1", "tier_2", "tier_3"):
+            if key in _NAMED_TIER_KEYS:
                 out[key] = value
             out["tiers"][key] = value
         return out
+
+
+# Named tier keys that get exposed as typed attributes on ``AffinityUnlocks``.
+# Numbered (``tier_0..tier_3``) and named (``novice..master``) coexist so
+# packs can pick whichever convention fits their progression vibe. Generic
+# enough for cross-pack reuse — non-magical packs (low_fantasy, pulp_noir)
+# can adopt the named convention without changes here.
+_NAMED_TIER_KEYS = frozenset(
+    (
+        "tier_0",
+        "tier_1",
+        "tier_2",
+        "tier_3",
+        "novice",
+        "journeyman",
+        "expert",
+        "master",
+    )
+)
 
 
 class Affinity(BaseModel):

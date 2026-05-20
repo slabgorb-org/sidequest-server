@@ -51,7 +51,21 @@ from sidequest.telemetry.spans import (
     npc_recurring_presence_missed_span,
     npc_reinvented_span,
     orchestrator_notorious_party_gate_span,
+    prompt_game_state_bytes_span,
     room_state_injected_span,
+)
+
+# Story 57-5 / ADR-110 — fields dropped from the per-turn <game_state>
+# blob because the narrator reads them from dedicated prompt sections
+# (Recency-zone pending_trope_context, Valley-zone active_trope_summary,
+# narrative_axis sections) or they belong to deferred subsystems with no
+# consumer. Each entry is audit-evidenced — see context-story-57-5.md
+# §Phase B and the Field Audit in .session/57-5-session.md.
+_PHASE_B_DROP_FIELDS: tuple[str, ...] = (
+    "active_tropes",
+    "axis_values",
+    "genie_wishes",
+    "achievement_tracker",
 )
 
 if TYPE_CHECKING:
@@ -482,7 +496,25 @@ def _build_turn_context(
     # match) — its job is to fire the OTEL event and provide MergeResult.
     handshake_delta = build_shared_world_delta(snapshot, room=room)
     merge_shared_delta_into_snapshot(snapshot, handshake_delta)
-    state_summary_payload = json.loads(snapshot.model_dump_json())
+    # Story 57-5 / ADR-110 Phase A — compact, default-pruned JSON encode.
+    # ``exclude_defaults=True`` drops pydantic default-equal fields
+    # (empty lists/dicts, zero counters); ``exclude_none=True`` drops
+    # ``None``-valued options. Pydantic v2 round-trip equivalence holds
+    # (defaults reconstruct on parse); see
+    # ``test_compact_form_round_trips_to_model_dump_equivalent``.
+    state_summary_payload = snapshot.model_dump(
+        mode="json",
+        exclude_defaults=True,
+        exclude_none=True,
+    )
+    # Story 57-5 / ADR-110 Phase B — field-pruning allowlist. These
+    # fields are either re-rendered in dedicated prompt sections
+    # (active_tropes, axis_values) or belong to deferred subsystems
+    # (genie_wishes, achievement_tracker). ``pop`` with default tolerates
+    # the Phase-A case where ``exclude_defaults`` has already removed
+    # an empty entry.
+    for _drop_field in _PHASE_B_DROP_FIELDS:
+        state_summary_payload.pop(_drop_field, None)
     # Story 49-1 — drop narrative_log from the Valley-zone state_summary
     # JSON dump. The last K=2 entries (57-1) now ride into the narrator prompt
     # via the Recency-zone ``recent_narrative_context`` section (see
@@ -555,7 +587,36 @@ def _build_turn_context(
             retrieved_container_count,
         )
 
-    state_summary_json = json.dumps(state_summary_payload, indent=2)
+    # Story 57-5 / ADR-110 — compact JSON (no whitespace) for the
+    # serialized state_summary. Together with Phase A + Phase B above this
+    # delivers the >=50% byte reduction the ADR commits to.
+    state_summary_json = json.dumps(state_summary_payload, separators=(",", ":"))
+
+    # Story 57-5 / ADR-110 §Observability — emit the
+    # ``prompt.game_state.bytes`` span every narrator turn so the GM panel
+    # can verify the cut is live and within its acceptance gate.
+    # ``bytes_before`` is the size of the pre-slimming encoding pattern
+    # (``model_dump_json`` + ``indent=2``) on the same payload — the
+    # reference the >=50% gate is measured against. Sebastien's
+    # lie-detector contract: the span fires regardless of phase flags.
+    _baseline_payload = json.loads(snapshot.model_dump_json())
+    _bytes_before = len(
+        json.dumps(_baseline_payload, indent=2).encode("utf-8")
+    )
+    _bytes_after = len(state_summary_json.encode("utf-8"))
+    with prompt_game_state_bytes_span(
+        phase_a_applied=True,
+        phase_b_applied=True,
+        bytes_before=_bytes_before,
+        bytes_after=_bytes_after,
+    ):
+        logger.info(
+            "prompt.game_state.bytes phase_a=1 phase_b=1 "
+            "bytes_before=%d bytes_after=%d ratio=%.3f",
+            _bytes_before,
+            _bytes_after,
+            (_bytes_after / _bytes_before) if _bytes_before else 0.0,
+        )
 
     # Story 45-27 — trope foreground / background prompt zones.
     # ``pending_trope_context`` is the Early-zone load-bearing block

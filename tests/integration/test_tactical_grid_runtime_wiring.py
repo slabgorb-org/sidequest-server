@@ -108,21 +108,22 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
     if not _packs_available():
         pytest.skip("caverns_and_claudes content pack not present")
 
-    from sidequest.agents.orchestrator import Orchestrator
+    # noqa block: import order is load-bearing and must not be auto-sorted.
+    # Importing session_handler FIRST resolves its bottom-of-file
+    # ``WebSocketSessionHandler`` re-export before any other caller observes
+    # ``websocket_session_handler`` mid-init. Reversing the order trips a
+    # circular-import (websocket_session_handler imports session_handler at
+    # the top, session_handler re-exports from websocket_session_handler at
+    # the bottom — only one entry order works for fresh-import test
+    # sessions). See ``tests/integration/test_room_enter_cavern.py`` for the
+    # canonical entry order this mirrors. Auto-sort alphabetically would
+    # place `sidequest.server` (bare module) before
+    # `sidequest.server.session_handler` and re-introduce the cycle.
+    from sidequest.agents.orchestrator import Orchestrator  # noqa: I001
     from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.genre.loader import load_genre_pack
     from sidequest.protocol.messages import TacticalGridMessage
-
-    # Import session_handler FIRST so its bottom-of-file
-    # ``WebSocketSessionHandler`` re-export resolves before any other
-    # caller observes ``websocket_session_handler`` mid-init. Reversing
-    # the order trips a circular-import (websocket_session_handler imports
-    # session_handler at the top, session_handler re-exports from
-    # websocket_session_handler at the bottom — only one entry order
-    # works for fresh-import test sessions). See
-    # ``tests/integration/test_room_enter_cavern.py`` for the canonical
-    # entry order this mirrors.
     from sidequest.server.session_handler import _SessionData
     from sidequest.server import websocket_session_handler as wsh
 

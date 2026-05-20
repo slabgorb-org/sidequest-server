@@ -103,6 +103,10 @@ class MessageType(StrEnum):
     # snapshot. Emitted on current_room change and session resume. The
     # LOCATION_OVERLAY_CHANGED delta variant lands in Story 54-7.
     LOCATION_DESCRIPTION = "LOCATION_DESCRIPTION"
+    # Story 54-7 / ADR-109: delta channel for encounter location overlay
+    # state changes. Fires when an encounter with a non-None
+    # location_overlay activates or deactivates touching a bound_room_id.
+    LOCATION_OVERLAY_CHANGED = "LOCATION_OVERLAY_CHANGED"
     # Beneath Sünden BETTER fix (seam 3). Procedural megadungeon map
     # frame: the live region graph (discovered regions + current region +
     # typed adjacencies) projected to the UI Map tab. ADR-019 MAP_UPDATE

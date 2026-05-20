@@ -26,7 +26,7 @@ from opentelemetry import trace
 
 if TYPE_CHECKING:
     from sidequest.handlers.base import MessageHandler
-    from sidequest.protocol.models import LocationEntity
+    from sidequest.protocol.models import EncounterLocationOverlay, LocationEntity
     from sidequest.server.session_room import RoomRegistry, SessionRoom
 
 from sidequest.agents.claude_client import ClaudeClient, LlmClient
@@ -893,12 +893,39 @@ def _maybe_emit_location_description(
         )
         return
 
+    # Story 54-7: layer the active encounter overlay on top of the base
+    # so a session-resume client sees the live overlay state without
+    # waiting for a separate LOCATION_OVERLAY_CHANGED delta.
+    from sidequest.game.location_view import (
+        active_overlays_for,
+        get_location_prose,
+    )
+    from sidequest.protocol.models import LocationDescriptionOverlaySummary
+
+    effective_prose = get_location_prose(
+        region_id=room_id,
+        authored_description=prose,
+        snapshot=snapshot,
+    )
+    active_overlays = active_overlays_for(snapshot, region_id=room_id)
+    overlay_summaries: list[LocationDescriptionOverlaySummary] = []
+    for overlay in active_overlays:
+        enc = getattr(snapshot, "encounter", None)
+        encounter_id_str = f"{enc.encounter_type}@{room_id}" if enc is not None else ""
+        overlay_summaries.append(
+            LocationDescriptionOverlaySummary(
+                encounter_id=encounter_id_str,
+                prose_suffix=overlay.prose_suffix,
+                entity_delta_count=len(overlay.entity_delta),
+            )
+        )
+
     payload = LocationDescriptionPayload(
         region_id=room_id,
-        prose=prose,
+        prose=effective_prose,
         terrain=terrain,
         entities=entities,
-        overlays=[],  # Story 54-7 populates this.
+        overlays=overlay_summaries,
     )
     msg = LocationDescriptionMessage(
         payload=payload,
@@ -911,7 +938,8 @@ def _maybe_emit_location_description(
             "world": sd.world_slug,
             "room_id": room_id,
             "entity_count": len(entities),
-            "prose_chars": len(prose),
+            "prose_chars": len(effective_prose),
+            "overlay_count": len(overlay_summaries),
         },
         component="location",
     )
@@ -923,6 +951,96 @@ def _maybe_emit_location_description(
         len(entities),
     )
     emit_fn(msg, "LOCATION_DESCRIPTION")  # type: ignore[operator]
+
+
+def _maybe_emit_location_overlay_changed(
+    handler: object,
+    *,
+    sd: _SessionData,
+    snapshot: GameSnapshot,
+    transition: str,
+    emit_fn: object,
+    prior_overlay: EncounterLocationOverlay | None = None,
+) -> None:
+    """Emit LOCATION_OVERLAY_CHANGED on encounter overlay activate/deactivate.
+
+    Story 54-7 / ADR-109 §5.5. ``transition`` is ``"activate"`` or
+    ``"deactivate"``:
+
+    - **activate** — called at the ``prior_live=False, now_live=True``
+      edge in the narration turn loop. Reads the overlay off the live
+      encounter; no-op when the encounter has no ``location_overlay``.
+    - **deactivate** — called inside the ``encounter_resolved_this_turn``
+      branch. ``prior_overlay`` is passed by the caller (the prior
+      encounter has been replaced or cleared by this point). No-op when
+      ``prior_overlay`` is ``None``.
+
+    The payload carries the FULL post-transition overlay set — on
+    activate that's one item, on deactivate that's an empty list. The UI
+    replaces its overlay slice rather than reconciling diffs (54-9). The
+    bare ``location_overlay_changed.emitted`` watcher event surfaces the
+    transition on the GM panel until 54-8 wraps it in a dedicated OTEL
+    span.
+    """
+    from sidequest.protocol.messages import LocationOverlayChangedMessage
+    from sidequest.protocol.models import (
+        LocationDescriptionOverlaySummary,
+        LocationOverlayChangedPayload,
+    )
+
+    region_id: str
+    overlay_summaries: list[LocationDescriptionOverlaySummary]
+
+    if transition == "activate":
+        enc = getattr(snapshot, "encounter", None)
+        if enc is None or enc.resolved:
+            return
+        overlay = getattr(enc, "location_overlay", None)
+        if overlay is None:
+            return
+        region_id = overlay.bound_room_id
+        encounter_id_str = f"{enc.encounter_type}@{region_id}"
+        overlay_summaries = [
+            LocationDescriptionOverlaySummary(
+                encounter_id=encounter_id_str,
+                prose_suffix=overlay.prose_suffix,
+                entity_delta_count=len(overlay.entity_delta),
+            )
+        ]
+    elif transition == "deactivate":
+        if prior_overlay is None:
+            return
+        region_id = prior_overlay.bound_room_id
+        overlay_summaries = []
+    else:
+        raise ValueError(f"transition must be 'activate' or 'deactivate', got {transition!r}")
+
+    payload = LocationOverlayChangedPayload(
+        region_id=region_id,
+        overlays=overlay_summaries,
+    )
+    msg = LocationOverlayChangedMessage(
+        payload=payload,
+        player_id=getattr(sd, "player_id", ""),
+    )
+    _watcher_publish(
+        "location_overlay_changed.emitted",
+        {
+            "genre": getattr(sd, "genre_slug", ""),
+            "world": getattr(sd, "world_slug", ""),
+            "region_id": region_id,
+            "transition": transition,
+            "overlay_count": len(overlay_summaries),
+        },
+        component="location",
+    )
+    logger.info(
+        "location_overlay_changed.emitted region=%s transition=%s overlays=%d",
+        region_id,
+        transition,
+        len(overlay_summaries),
+    )
+    emit_fn(msg, "LOCATION_OVERLAY_CHANGED")  # type: ignore[operator]
 
 
 def _maybe_emit_dungeon_map(
@@ -4341,6 +4459,33 @@ class WebSocketSessionHandler:
                         snapshot=snapshot,
                         emit_fn=_emit_shared_world_frame,
                     )
+                    # Story 54-7 / ADR-109: encounter overlay transitions.
+                    # Activate when a fresh encounter goes live this turn
+                    # carrying a location_overlay; deactivate when the prior
+                    # encounter resolved this turn and was carrying one.
+                    # Decoupled from room change — a bar fight can ignite
+                    # in the room the party already stands in.
+                    if now_live and not prior_live and now_encounter is not None:
+                        _maybe_emit_location_overlay_changed(
+                            self,
+                            sd=sd,
+                            snapshot=snapshot,
+                            transition="activate",
+                            emit_fn=_emit_shared_world_frame,
+                        )
+                    if (
+                        encounter_resolved_this_turn
+                        and prior_encounter is not None
+                        and prior_encounter.location_overlay is not None
+                    ):
+                        _maybe_emit_location_overlay_changed(
+                            self,
+                            sd=sd,
+                            snapshot=snapshot,
+                            transition="deactivate",
+                            emit_fn=_emit_shared_world_frame,
+                            prior_overlay=prior_encounter.location_overlay,
+                        )
                     # Story 45-1 — sealed-letter shared-world handshake.
                     # Build the canonical delta from the post-resolution
                     # snapshot and ride it on NARRATION_END so peers see

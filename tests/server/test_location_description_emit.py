@@ -384,3 +384,76 @@ def test_emit_called_at_session_resume_path():
         "session-resume call site for _maybe_emit_location_description must "
         "pass room_id_override=; see plan Task 5 Step 6"
     )
+
+
+def test_emit_includes_active_overlay_in_payload(tmp_path, monkeypatch):
+    """Story 54-7: when an encounter with location_overlay is live and
+    bound to the actor's room, the emitted LocationDescriptionPayload
+    carries the overlay summary, and payload.prose includes the suffix.
+
+    Without this, a session-resume client sees stale base prose during
+    an active overlay until the next LOCATION_OVERLAY_CHANGED delta.
+    """
+    from sidequest.game.encounter import (
+        EncounterMetric,
+        StructuredEncounter,
+    )
+    from sidequest.protocol.messages import LocationDescriptionMessage
+    from sidequest.protocol.models import (
+        EncounterLocationOverlay,
+        LocationEntity,
+    )
+    from sidequest.server.websocket_session_handler import (
+        _maybe_emit_location_description,
+    )
+
+    genre_root = _seed_synthetic_world(tmp_path)
+    _patch_genre_loader_find(monkeypatch, genre_root)
+
+    enc = StructuredEncounter(
+        encounter_type="tavern_brawl",
+        player_metric=EncounterMetric(name="composure", current=10, starting=10, threshold=20),
+        opponent_metric=EncounterMetric(name="brawl_energy", current=10, starting=10, threshold=20),
+        resolved=False,
+        location_overlay=EncounterLocationOverlay(
+            bound_room_id="test_room",
+            entity_delta=[
+                LocationEntity(
+                    id="overturned_cart",
+                    label="an overturned cart",
+                    tier="yes_and",
+                ),
+            ],
+            prose_suffix="Smoke drifts from the alley.",
+        ),
+    )
+
+    emit_fn = MagicMock()
+    sd = MagicMock()
+    sd.genre_slug = "test_pack"
+    sd.world_slug = "test_world"
+    sd.player_id = ""
+    sd.genre_pack = MagicMock()
+    sd.genre_pack.worlds = {"test_world": MagicMock()}
+    snapshot = MagicMock()
+    snapshot.character_locations = {"alice": "test_room"}
+    snapshot.encounter = enc
+
+    _maybe_emit_location_description(
+        MagicMock(),
+        sd=sd,
+        snapshot=snapshot,
+        actor="alice",
+        emit_fn=emit_fn,
+    )
+
+    emit_fn.assert_called_once()
+    sent_msg = emit_fn.call_args.args[0]
+    sent_type = emit_fn.call_args.args[1]
+    assert sent_type == "LOCATION_DESCRIPTION"
+    assert isinstance(sent_msg, LocationDescriptionMessage)
+    assert len(sent_msg.payload.overlays) == 1
+    overlay_summary = sent_msg.payload.overlays[0]
+    assert overlay_summary.prose_suffix == "Smoke drifts from the alley."
+    assert overlay_summary.entity_delta_count == 1
+    assert "Smoke drifts" in sent_msg.payload.prose

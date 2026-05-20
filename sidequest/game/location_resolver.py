@@ -30,6 +30,7 @@ from typing import Literal
 
 from sidequest.game.persistence import LocationPromotionRow, SqliteStore
 from sidequest.protocol.models import (
+    EncounterLocationOverlay,
     LocationEntity,
     LocationEntityResolution,
 )
@@ -92,12 +93,19 @@ def _build_effective_manifest(
     *,
     authored: Iterable[LocationEntity],
     promotions: list[LocationPromotionRow],
+    overlays: Iterable[EncounterLocationOverlay] = (),
 ) -> list[tuple[LocationEntity, bool]]:
     """Return ``(entity, from_promotion)`` for each effective entity.
 
-    Authored entities with a matching promotion row are upgraded; minted
-    promotion rows (entity_id not in authored) become brand-new entities.
-    Encounter overlays will plug into this seam in Story 54-7.
+    Read order (ADR-109 §5.5):
+        authored (with promotion-row overlay)
+        + active overlays' entity_delta (encounter arrival order)
+        + minted-only promotion rows (no authored entity to layer on top of)
+
+    ``overlays`` defaults to ``()`` for backward compatibility with the
+    54-6 resolver contract. Overlay entities are encounter-scoped — they
+    are never written to ``location_promotions`` — so they are tagged
+    ``from_promotion=False``.
     """
     authored_list = list(authored)
     by_authored_id = {e.id: e for e in authored_list}
@@ -111,6 +119,10 @@ def _build_effective_manifest(
             result.append((_apply_promotion(entity, row), True))
         else:
             result.append((entity, False))
+
+    for overlay in overlays:
+        for ent in overlay.entity_delta:
+            result.append((ent, False))
 
     for row in promotions:
         if row.entity_id not in by_authored_id:
@@ -207,14 +219,19 @@ def resolve(
     mode: ResolverMode,
     engagement_kind: EngagementKind = "mention",
     turn_number: int,
+    overlays: Iterable[EncounterLocationOverlay] = (),
 ) -> LocationEntityResolution:
     """Resolve ``label`` in ``region_id`` against the effective manifest.
 
     Returns a ``LocationEntityResolution`` describing what happened. See
-    module docstring for the full two-mode contract.
+    module docstring for the full two-mode contract. ``overlays`` lets
+    callers pass active encounter overlays (Story 54-7) so overlay-only
+    entities can be matched without being persisted to promotions.
     """
     promotions = store.list_location_promotions(save_id=save_id, region_id=region_id)
-    manifest = _build_effective_manifest(authored=authored_entities, promotions=promotions)
+    manifest = _build_effective_manifest(
+        authored=authored_entities, promotions=promotions, overlays=overlays
+    )
 
     hit = _match_label(label, manifest)
 

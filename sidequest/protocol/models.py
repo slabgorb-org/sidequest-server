@@ -565,6 +565,23 @@ class LocationDescriptionPayload(BaseModel):
     overlays: list[LocationDescriptionOverlaySummary] = Field(default_factory=list)
 
 
+class LocationOverlayChangedPayload(BaseModel):
+    """Delta payload for ``LOCATION_OVERLAY_CHANGED``.
+
+    Story 54-7 / ADR-109 §5.5. Fires whenever an encounter's
+    ``location_overlay`` activates or deactivates. ``overlays`` is the
+    FULL current overlay set for the region after the transition (not a
+    diff) so the UI can replace its overlay slice without reconciling
+    enter/leave events. On activate that's one item; on deactivate it
+    is an empty list.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    region_id: str = Field(min_length=1)
+    overlays: list[LocationDescriptionOverlaySummary] = Field(default_factory=list)
+
+
 class LocationEntityResolution(BaseModel):
     """Result of resolve_location_entity. ADR-109 §5.3.
 

@@ -38,6 +38,7 @@ from sidequest.protocol.models import (
     InitialState,
     JournalEntry,
     LocationDescriptionPayload,
+    LocationOverlayChangedPayload,
     PartyMember,
     RolledStat,
     StateDelta,
@@ -1125,6 +1126,22 @@ class LocationDescriptionMessage(ProtocolBase):
     player_id: str = ""
 
 
+class LocationOverlayChangedMessage(ProtocolBase):
+    """GameMessage::LocationOverlayChanged — encounter overlay delta.
+
+    Story 54-7 / ADR-109. Emitted on encounter activate (when the
+    encounter has a ``location_overlay`` touching the party's current
+    room) and on encounter resolve (deactivate). Payload carries the
+    full post-transition overlay set for the region; on activate that's
+    one overlay, on deactivate that's an empty list. The UI replaces
+    its overlay slice rather than reconciling enter/leave events.
+    """
+
+    type: Literal[MessageType.LOCATION_OVERLAY_CHANGED] = MessageType.LOCATION_OVERLAY_CHANGED
+    payload: LocationOverlayChangedPayload
+    player_id: str = ""
+
+
 # ---------------------------------------------------------------------------
 # DUNGEON_MAP — Beneath Sünden BETTER fix (seam 3). ADR-019 MAP_UPDATE was
 # deleted in the Rust→Python port; this is the NEW ADR-055 map frame (do
@@ -1269,6 +1286,7 @@ _Phase1Variant = Annotated[
     | OrbitalChartMessage
     | TacticalGridMessage
     | LocationDescriptionMessage
+    | LocationOverlayChangedMessage
     | DungeonMapMessage
     | JournalRequestMessage
     | JournalResponseMessage

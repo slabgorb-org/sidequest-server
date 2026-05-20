@@ -234,10 +234,14 @@ def test_message_type_complete_count() -> None:
     location description + typed manifest snapshot. Emitted on
     current_room change and session resume. Intentional addition;
     bumped 49 → 50.
+    ADR-109 (story 54-7) added LOCATION_OVERLAY_CHANGED — the delta
+    channel for encounter location overlay state. Fires on encounter
+    activate/deactivate touching a bound_room_id. Intentional addition;
+    bumped 50 → 51.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 50
+    assert len(MessageType) == 51
 
 
 # ===========================================================================

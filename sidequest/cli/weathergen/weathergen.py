@@ -15,7 +15,14 @@ import os
 import sys
 from pathlib import Path
 
-from sidequest.game.weather import WeatherGenerator
+import yaml
+from pydantic import ValidationError
+
+from sidequest.game.weather import (
+    UnknownWeatherSeason,
+    UnknownWeatherZone,
+    WeatherGenerator,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,6 +63,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.genre_packs_path is None or str(args.genre_packs_path) in ("", "."):
+        # An empty SIDEQUEST_CONTENT_PATH env var resolves to Path('.') here,
+        # which would silently look for weather.yaml under CWD. Fail loud.
+        print(
+            "sidequest-weathergen: --genre-packs-path is empty — set "
+            "SIDEQUEST_CONTENT_PATH or pass a concrete path",
+            file=sys.stderr,
+        )
+        return 2
     pack_dir = args.genre_packs_path / args.genre
     weather_path = pack_dir / "weather.yaml"
 
@@ -68,23 +84,27 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    except Exception as e:
+    except (yaml.YAMLError, ValidationError, ValueError) as e:
         print(
-            f"sidequest-weathergen: failed to load {weather_path}: {e}",
+            f"sidequest-weathergen: failed to load {weather_path}: "
+            f"{type(e).__name__}: {e}",
             file=sys.stderr,
         )
         return 1
 
     try:
         state = generator.generate(zone=args.zone, season=args.season, seed=args.seed)
-    except KeyError as e:
-        # KeyError.__str__ reprs its arg; the message text (including the
-        # offending zone/season name) is recoverable from args[0].
-        message = e.args[0] if e.args else str(e)
-        print(f"sidequest-weathergen: {message}", file=sys.stderr)
+    except (UnknownWeatherZone, UnknownWeatherSeason) as e:
+        print(f"sidequest-weathergen: {e}", file=sys.stderr)
         return 2
+    except ValueError as e:
+        print(
+            f"sidequest-weathergen: weather sampling failed: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        return 1
 
-    print(json.dumps(state.model_dump(), indent=2, sort_keys=True))
+    print(json.dumps(state.model_dump(), indent=2, sort_keys=True, ensure_ascii=False))
     return 0
 
 

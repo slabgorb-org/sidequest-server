@@ -3221,6 +3221,14 @@ class Orchestrator:
                 span.set_attribute(
                     "narration.turn.cache_write_tokens", result.cached_input_write_tokens
                 )
+                span.set_attribute(
+                    "narration.turn.cache_write_5m_tokens",
+                    result.cached_input_write_5m_tokens,
+                )
+                span.set_attribute(
+                    "narration.turn.cache_write_1h_tokens",
+                    result.cached_input_write_1h_tokens,
+                )
                 # Cache TTL the client is configured with, so the GM panel
                 # can prove the 1h fix engaged and compute write
                 # amortization against cache_write_tokens above.

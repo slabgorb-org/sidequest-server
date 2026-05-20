@@ -250,3 +250,47 @@ async def test_narration_turn_span_carries_total_cost_usd(
     line = usage_lines[0]
     for needle in ("iter=1", "input=500", "output=80", "cache_read=12000", "cost_usd="):
         assert needle in line, f"missing {needle!r} in usage line: {line!r}"
+
+
+@pytest.mark.asyncio
+async def test_narration_turn_span_carries_ttl_breakdown(
+    simple_turn_context,
+    otel_capture: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """narration.turn span exposes 5m vs 1h write breakdown so the GM
+    panel can verify the tools-cache fix engaged."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk = _Sdk(
+        responses=[
+            _Resp(
+                content=[_TextBlock(type="text", text="The torch sputters.")],
+                stop_reason="end_turn",
+                usage=_Usage(
+                    input_tokens=300,
+                    output_tokens=40,
+                    cache_read_input_tokens=10000,
+                    cache_creation_input_tokens=15000,
+                    cache_creation=_CacheCreation(
+                        ephemeral_5m_input_tokens=0,
+                        ephemeral_1h_input_tokens=15000,
+                    ),
+                ),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
+    orch = Orchestrator(client=client)
+
+    await orch.run_narration_turn("look around", simple_turn_context)
+
+    turn_spans = [s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"]
+    assert turn_spans, "expected a narration.turn span"
+    attrs = dict(turn_spans[0].attributes or {})
+    assert attrs.get("narration.turn.cache_write_5m_tokens") == 0, (
+        f"expected 0; got {attrs.get('narration.turn.cache_write_5m_tokens')!r}"
+    )
+    assert attrs.get("narration.turn.cache_write_1h_tokens") == 15000, (
+        f"expected 15000; got {attrs.get('narration.turn.cache_write_1h_tokens')!r}"
+    )

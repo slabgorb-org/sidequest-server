@@ -8,7 +8,7 @@ how the post-098 narrator started losing prior-turn details (2026-05-11
 Glenross gender flip).
 
 This story:
-  1. Moves the last K=4 entries into a high-attention Recency-zone section
+  1. Moves the last K=2 entries into a high-attention Recency-zone section
      (covered by ``test_orchestrator_recency_narrative.py``).
   2. Removes the duplicate from the ``<game_state>`` JSON dump so the same
      data does not ride twice — once high-attention, once decayed. (AC #3
@@ -175,10 +175,10 @@ def test_state_summary_prose_content_not_duplicated():
 
 def test_recent_narrative_log_populated_on_turn_context_from_store():
     """``_build_turn_context`` MUST populate
-    ``TurnContext.recent_narrative_log`` with the last K=4 entries from
-    the durable SQLite store. Without this the orchestrator's
-    Recency-zone section has no input and the fix is a no-op end-to-end
-    (wiring test per CLAUDE.md).
+    ``TurnContext.recent_narrative_log`` with the last K=2 entries from
+    the durable SQLite store (K tightened from 4→2 in 57-1). Without
+    this the orchestrator's Recency-zone section has no input and the
+    fix is a no-op end-to-end (wiring test per CLAUDE.md).
 
     sq-playtest 2026-05-15: was previously sourced from
     ``snapshot.narrative_log``, but that mirror is only populated by
@@ -193,7 +193,7 @@ def test_recent_narrative_log_populated_on_turn_context_from_store():
     # Live store API: ``recent_narrative(limit)`` returns the most recent
     # ``limit`` entries oldest-first. Mirror the slice the SQLite query
     # would have produced over the durable log.
-    sd.store.recent_narrative.return_value = list(log[-4:])
+    sd.store.recent_narrative.return_value = list(log[-2:])
 
     ctx = _build_turn_context(sd, room=sd._room)
 
@@ -202,22 +202,22 @@ def test_recent_narrative_log_populated_on_turn_context_from_store():
         "TurnContext.recent_narrative_log is empty — the store's 6 "
         "entries did not flow into the Recency-zone seam."
     )
-    assert len(recent) == 4, f"expected last K=4 entries (AC #2 default); got {len(recent)}"
+    assert len(recent) == 2, f"expected last K=2 entries (post-57-1 default); got {len(recent)}"
 
-    # And it MUST be the LAST four — not the first four. Chronological,
+    # And it MUST be the LAST two — not the first two. Chronological,
     # most-recent-window semantics.
-    expected_contents = [e.content for e in log[-4:]]
+    expected_contents = [e.content for e in log[-2:]]
     actual_contents = [e.content for e in recent]
     assert actual_contents == expected_contents, (
         f"recent_narrative_log holds wrong slice — "
-        f"expected last-4 {expected_contents}, got {actual_contents}"
+        f"expected last-2 {expected_contents}, got {actual_contents}"
     )
     # Wiring assertion: _build_turn_context actually called the store, not
     # the snapshot mirror. Defends against a future refactor silently
     # reverting to ``snapshot.narrative_log[-K:]`` (which would pass the
     # content assertion above when the store happens to be empty — the
     # original 2026-05-15 bug repro).
-    sd.store.recent_narrative.assert_called_once_with(4)
+    sd.store.recent_narrative.assert_called_once_with(2)
 
 
 def test_recent_narrative_log_empty_on_fresh_session():

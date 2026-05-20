@@ -11,7 +11,7 @@ Glenross playtest surfaced the regression:
 - Prose-only facts ("secateurs on the blotter") drop between turns.
 
 The fix this story drives: a dedicated Recency-zone section
-(``recent_narrative_context``) carrying the last K=4 narrative_log entries
+(``recent_narrative_context``) carrying the last K=2 narrative_log entries
 rendered as readable prose blocks (NOT JSON), labeled by author/round
 prefix — alongside the existing Recency-zone constraints
 (``player_action``, ``npc_intro_visual_constraint``,
@@ -50,21 +50,13 @@ def _glenross_gender_flip_log() -> list[NarrativeEntry]:
     turn must reference the same patient consistently. The narrator can
     only do this if turn 5's prose rides into the prompt in a high-
     attention zone.
+
+    Trimmed to K=2 entries in 57-1 (rounds 4-5 — the load-bearing
+    male-patient continuity beat) so post-cap section content still
+    contains every fixture entry. Pre-57-1 the fixture spanned rounds
+    3-5 (4 entries) to match the K=4 cap.
     """
     return [
-        _entry(
-            round_=3,
-            author="Player",
-            content="I follow the gardener down the hedge-row.",
-        ),
-        _entry(
-            round_=3,
-            author="narrator",
-            content=(
-                "The gardener leads you past clipped boxwoods to a low stone bench "
-                "where an old man is propped, a wool blanket across his lap."
-            ),
-        ),
         _entry(
             round_=4,
             author="Player",
@@ -243,12 +235,12 @@ async def test_recent_narrative_section_labels_author_and_round(
 
 
 @pytest.mark.asyncio
-async def test_recent_narrative_section_caps_at_last_four_entries(
+async def test_recent_narrative_section_caps_at_last_two_entries(
     simple_turn_context_turn_three,
 ):
-    """AC #2: default K=4 (two player turns + two narrator turns).
+    """AC #2: default K=2 (one player turn + one narrator turn) — tightened in 57-1.
 
-    When the log is longer, the section MUST contain only the last 4
+    When the log is longer, the section MUST contain only the last 2
     entries. Without a cap the section grows unbounded, defeating the
     ADR-098 bounded-prompt invariant (every turn carries the same shape).
     """
@@ -273,33 +265,37 @@ async def test_recent_narrative_section_caps_at_last_four_entries(
     assert section is not None
     body = section.content
 
-    # Last 4 entries (rounds 16..19) must be present.
-    for i in range(16, 20):
+    # Last 2 entries (rounds 18..19) must be present.
+    for i in range(18, 20):
         marker = f"<<line-{i:02d}>>"
         assert marker in body, f"entry round={i} ({marker}) missing — cap dropped it accidentally"
 
-    # Earlier entries (rounds 0..15) must NOT be present.
-    for i in range(16):
+    # Earlier entries (rounds 0..17) must NOT be present.
+    for i in range(18):
         marker = f"<<line-{i:02d}>>"
         assert marker not in body, (
-            f"entry round={i} ({marker}) leaked through cap — section should hold only last 4"
+            f"entry round={i} ({marker}) leaked through cap — section should hold only last 2"
         )
 
 
 # ---------------------------------------------------------------------------
-# Partial windows (K_actual ∈ {1, 2, 3}) — Queen-of-Hearts review C1+C2+M2.
+# Partial windows (K_actual ∈ {1}) — Queen-of-Hearts review C1+C2+M2.
+#
+# (K_actual sweep tightened from {1,2,3} to {1} when 57-1 dropped K=4→K=2;
+# k_actual=2 is the exact-cap case covered by the caps-at-last-two test
+# above, and k_actual≥3 exceeds the cap and is no longer a partial window.)
 #
 # The first GREEN pass gated section registration on
 # ``_recent_turn_count >= _recent_k`` — treating K as a FLOOR rather than
-# a CAP. Turns 1-3 of every fresh save then carried zero high-attention
+# a CAP. Turn 1 of every fresh save then carried zero high-attention
 # recency context (exactly the scenario the story exists to fix). The
 # OTEL span fires regardless, so on partial-window turns the span lies:
-# ``turn_count=2 / total_tokens=25`` while ``section_registered=False`` —
+# ``turn_count=1 / total_tokens=13`` while ``section_registered=False`` —
 # Sebastien's lie-detector flips a false-positive ("injector engaged")
 # when the injector engaged with NOTHING (no high-attention bytes).
 #
 # These tests pin the corrected semantics:
-#   - K=4 caps the window (already covered above).
+#   - K=2 caps the window (already covered above).
 #   - Any non-empty window registers the section with all available
 #     entries.
 #   - The OTEL span's ``total_tokens`` matches the actually-registered
@@ -308,24 +304,24 @@ async def test_recent_narrative_section_caps_at_last_four_entries(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("k_actual", [1, 2, 3])
+@pytest.mark.parametrize("k_actual", [1])
 async def test_partial_window_registers_section_with_available_entries(
     simple_turn_context_turn_three, k_actual: int
 ):
-    """Partial windows of 1, 2, or 3 entries (turns 1-3 of a fresh save)
-    MUST still register ``recent_narrative_context``. K=4 is a cap, not
-    a floor — the whole point of the story is to make turn 2's narrator
-    read turn 1's prose at high attention.
+    """Partial window of 1 entry (turn 1 of a fresh save) MUST still
+    register ``recent_narrative_context``. K=2 is a cap, not a floor —
+    the whole point of the story is to make turn 2's narrator read
+    turn 1's prose at high attention.
 
     Currently fails: GREEN at orchestrator.py:1622 gates on
-    ``_recent_turn_count >= _recent_k``, leaving turns 1-3 with no
+    ``_recent_turn_count >= _recent_k``, leaving turn 1 with no
     high-attention recency at all.
     """
     log = [
         _entry(
             round_=i + 1,
             author=("Player" if i % 2 == 0 else "narrator"),
-            # Sigil-delimited markers per the K=4 cap fixture lesson —
+            # Sigil-delimited markers per the K=2 cap fixture lesson —
             # ``"slice-01"`` is not a substring of ``"slice-12"``.
             content=f"<<slice-{i + 1:02d}>> distinctive prose for partial-window test",
         )
@@ -355,7 +351,7 @@ async def test_partial_window_registers_section_with_available_entries(
             f"partial-window section missing entry {marker} for K_actual={k_actual}"
         )
 
-    # Author labels must still appear (consistent with the K=4 prose-
+    # Author labels must still appear (consistent with the K=2 prose-
     # rendering contract).
     assert "Player" in body or "narrator" in body
     # Chronological order — first entry comes before last.
@@ -368,7 +364,7 @@ async def test_partial_window_registers_section_with_available_entries(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("k_actual", [1, 2, 3])
+@pytest.mark.parametrize("k_actual", [1])
 async def test_partial_window_otel_span_attrs_match_injected_body(
     simple_turn_context_turn_three, otel_capture, k_actual: int
 ):
@@ -379,7 +375,7 @@ async def test_partial_window_otel_span_attrs_match_injected_body(
       (b) turn_count > 0 AND section registered AND total_tokens is the
           token estimate of the registered section's body.
 
-    Currently fails on K_actual ∈ {1, 2, 3}: the span fires with
+    Currently fails on K_actual=1: the span fires with
     ``turn_count=K_actual`` and positive ``total_tokens`` while the
     section was never registered — Sebastien's GM panel sees
     "injector engaged" for a turn with zero high-attention recency
@@ -530,7 +526,7 @@ async def test_recent_narrative_span_truth_invariant_across_window_sizes(
 # ---------------------------------------------------------------------------
 # Per-entry byte cap (Queen-of-Hearts review M4).
 #
-# K=4 caps the entry COUNT but the body has no byte cap. Reviewer
+# K=2 caps the entry COUNT but the body has no byte cap. Reviewer
 # reproduced a 40,086-char Recency section (4 × 10kB) inside a
 # 72,218-char composed prompt — a single verbose narrator turn alone
 # starves Late-zone sections of attention. ADR-009 (attention-aware
@@ -556,7 +552,7 @@ async def test_recent_narrative_span_truth_invariant_across_window_sizes(
 
 
 PER_ENTRY_CAP_BYTES = 2048
-SECTION_BUDGET_BYTES = 12_000  # 4×2kB + label overhead + safety margin
+SECTION_BUDGET_BYTES = 12_000  # K×2kB + label overhead + safety margin (sized for pre-57-1 K=4; still valid for K=2 with headroom)
 TRUNCATION_MARKER = "[truncated]"
 
 
@@ -599,13 +595,16 @@ async def test_oversized_entry_is_truncated_with_marker(
 
 
 @pytest.mark.asyncio
-async def test_four_oversized_entries_stay_within_section_budget(
+async def test_oversized_entries_stay_within_section_budget(
     simple_turn_context_turn_three,
 ):
-    """K=4 × 10kB stress: the section MUST stay within the byte budget.
-    Reviewer reproduced 40,086-char section / 72,218-char full prompt —
-    Late-zone Format guardrails (vocabulary, verbosity) fall out of the
-    model's working memory at that scale.
+    """K=2 × 10kB stress: the section MUST stay within the byte budget.
+    Reviewer originally reproduced 40,086-char section / 72,218-char full
+    prompt at the pre-57-1 K=4 stress shape; the post-tightening K=2
+    stress (2 × 10kB) is still well above SECTION_BUDGET_BYTES and pins
+    the same per-entry-truncation contract. Late-zone Format guardrails
+    (vocabulary, verbosity) fall out of the model's working memory at
+    that scale.
     """
     big_content = "X" * 10_000
     log = [
@@ -614,7 +613,7 @@ async def test_four_oversized_entries_stay_within_section_budget(
             author=("Player" if i % 2 == 0 else "narrator"),
             content=big_content + f" <<entry-{i + 1}>>",
         )
-        for i in range(4)
+        for i in range(2)
     ]
 
     ctx = replace(simple_turn_context_turn_three, recent_narrative_log=log)
@@ -626,31 +625,31 @@ async def test_four_oversized_entries_stay_within_section_budget(
     body = section.content
 
     assert len(body) <= SECTION_BUDGET_BYTES, (
-        f"4 × 10kB stress produced {len(body)}-char section; budget is "
-        f"{SECTION_BUDGET_BYTES}. Reviewer reproduced 40,086 chars on this "
-        "exact shape — same disease."
+        f"2 × 10kB stress produced {len(body)}-char section; budget is "
+        f"{SECTION_BUDGET_BYTES}. Reviewer reproduced 40,086 chars on the "
+        "pre-57-1 K=4 shape — same disease, scaled to the K=2 cap."
     )
 
-    # Truncation marker must be present (at least one — likely all four).
+    # Truncation marker must be present (at least one — likely both).
     assert TRUNCATION_MARKER in body, "oversized entries were truncated silently — marker missing"
 
     # Even after truncation, every entry's sigil tail should ideally survive
-    # so the narrator still sees ALL 4 turns rather than 4 truncated heads
+    # so the narrator still sees BOTH turns rather than 2 truncated heads
     # of one. (Dev's choice: truncate from the tail or the middle. Either
     # way, the per-entry sigil at the END of each content tells us whether
     # truncation kept the start or the end.) Soft assertion: at minimum the
-    # author/round labels for all four entries must survive — pinning total
+    # author/round labels for both entries must survive — pinning total
     # turn coverage, not specific truncation strategy.
-    for round_n in (1, 2, 3, 4):
+    for round_n in (1, 2):
         assert f"Round {round_n}" in body, (
-            f"entry round={round_n} lost its label after truncation — all "
-            "four turns must still be visible even if their bodies are cut"
+            f"entry round={round_n} lost its label after truncation — both "
+            "turns must still be visible even if their bodies are cut"
         )
 
     # And the full composed prompt should be in a sane envelope too —
     # the byte cap is upstream defense for the bounded-prompt invariant.
     assert len(prompt_text) <= 60_000, (
-        f"composed prompt is {len(prompt_text)} chars after the K=4 × 10kB "
+        f"composed prompt is {len(prompt_text)} chars after the K=2 × 10kB "
         "stress; byte cap on the Recency section did not flow through to "
         "the bounded-prompt invariant"
     )
@@ -664,12 +663,11 @@ async def test_within_cap_entries_are_not_truncated(
     the truncation marker. Marker-spam would erode its meaning and the
     GM panel could no longer tell a truncated turn from a clean one.
     """
-    # Four entries (not 2) so this test is independent of the partial-
-    # window bug — pins per-entry cap behavior cleanly even if the
-    # partial-window gate were still broken.
+    # Two entries (post-57-1 K=2) sized well under the per-entry cap.
+    # The test asserts marker-absence on short content; whether the cap
+    # drops earlier entries is orthogonal — what matters is that the
+    # entries that DO survive into the section have no truncation marker.
     short_log = [
-        _entry(round_=1, author="Player", content="A short player line."),
-        _entry(round_=1, author="narrator", content="A short narrator response under 1kB."),
         _entry(round_=2, author="Player", content="Another short player turn."),
         _entry(round_=2, author="narrator", content="And another short narrator reply."),
     ]
@@ -692,9 +690,9 @@ async def test_recent_narrative_section_preserves_chronological_order(
     """Entries must appear oldest → newest so the narrator reads them in
     the order they happened. Reversed ordering would invert cause and
     effect and is worse than no context at all."""
+    # Two entries (post-57-1 K=2) — both survive the cap so the
+    # chronological ordering check operates on a stable log.
     log = [
-        _entry(round_=1, author="Player", content="alpha-action"),
-        _entry(round_=1, author="narrator", content="alpha-response"),
         _entry(round_=2, author="Player", content="bravo-action"),
         _entry(round_=2, author="narrator", content="bravo-response"),
     ]
@@ -894,11 +892,11 @@ async def test_recent_narrative_section_does_not_blow_bounded_prompt():
        M4) silently produces a 40 kB section and starves Late-zone
        Format guardrails of attention regardless of turn count.
 
-    2. **Steady-state shape stability:** once the K=4 window has filled
-       (turn index 3+), section size plateaus. Earlier turns (0..2) are
-       legitimately smaller — the partial-window fix per C1 means a
-       turn-1 prompt carries 1 entry, turn-2 carries 2, turn-3 carries
-       3. Asserting a flat ratio across the ramp-up would penalize that
+    2. **Steady-state shape stability:** once the K=2 window has filled
+       (turn index 1+), section size plateaus. Turn 0 is legitimately
+       smaller — the partial-window fix per C1 means a turn-0 prompt
+       carries 1 entry while turn-1 onward carries the full 2.
+       Asserting a flat ratio across the ramp-up would penalize that
        fix; the right invariant is "flat once full".
 
     Why both invariants? Either alone is insufficient:
@@ -958,10 +956,10 @@ async def test_recent_narrative_section_does_not_blow_bounded_prompt():
         "Per-entry truncation (M4) is what holds this line."
     )
 
-    # Invariant 2 — steady-state ratio after the K=4 window fills.
-    # Index K-1 = 3 is the first turn with all 4 entries available, so
+    # Invariant 2 — steady-state ratio after the K=2 window fills.
+    # Index K-1 = 1 is the first turn with all 2 entries available, so
     # the section reaches the steady-state shape from there on.
-    K = 4
+    K = 2
     steady_state = section_sizes[K - 1 :]
     assert len(steady_state) >= K, "not enough steady-state turns to measure"
     ratio = max(steady_state) / min(steady_state)

@@ -100,14 +100,14 @@ logger = logging.getLogger(__name__)
 NARRATOR_MODEL: str = "opus"
 SOFT_PROMPT_BUDGET_BYTES = 2_000_000  # ~500K tokens, half of Opus 4.7's 1M window (ADR-098)
 
-# Recency-zone narrative-window tunables (Story 49-1).
-# K=4 = 2 player turns + 2 narrator turns. Cap (not floor): any non-empty
-# window registers the section with all available entries — partial windows
-# on turns 1-3 of a fresh save still ride into Recency.
+# Recency-zone narrative-window tunables (Story 49-1; tightened to K=2 in 57-1).
+# K=2 = 1 player turn + 1 narrator turn. Cap (not floor): any non-empty
+# window registers the section with all available entries — a partial window
+# on turn 1 of a fresh save still rides into Recency.
 # PER_ENTRY_CAP_BYTES bounds a single entry's rendered content; oversized
 # entries are truncated and tagged with TRUNCATION_MARKER so the cut is
 # visible on the GM panel (Sebastien) and to anyone debugging a save (Keith).
-RECENT_NARRATIVE_WINDOW_K: int = 4
+RECENT_NARRATIVE_WINDOW_K: int = 2
 RECENT_NARRATIVE_PER_ENTRY_CAP: int = 2048
 RECENT_NARRATIVE_TRUNCATION_MARKER: str = "[truncated]"
 
@@ -680,8 +680,8 @@ class TurnContext:
     recent_body_mentions: Any = field(default_factory=list)  # deque[str] or list[str]
     quest_anchors: list[str] = field(default_factory=list)
 
-    # Recent narrative-log window (Recency zone, Story 49-1).
-    # Last K=4 narrative_log entries (two player turns + two narrator turns),
+    # Recent narrative-log window (Recency zone, Story 49-1; K tightened to 2 in 57-1).
+    # Last K=2 narrative_log entries (one player turn + one narrator turn),
     # populated by _build_turn_context from the live snapshot. Rendered as a
     # high-attention prose block by build_narrator_prompt to give the narrator
     # the recent-narration context that ADR-098 lost when --resume was dropped.

@@ -484,7 +484,7 @@ def _build_turn_context(
     merge_shared_delta_into_snapshot(snapshot, handshake_delta)
     state_summary_payload = json.loads(snapshot.model_dump_json())
     # Story 49-1 — drop narrative_log from the Valley-zone state_summary
-    # JSON dump. The last K=4 entries now ride into the narrator prompt
+    # JSON dump. The last K=2 entries (57-1) now ride into the narrator prompt
     # via the Recency-zone ``recent_narrative_context`` section (see
     # orchestrator.build_narrator_prompt). Keeping the duplicate here
     # would put the same prose in two zones — high-attention Recency

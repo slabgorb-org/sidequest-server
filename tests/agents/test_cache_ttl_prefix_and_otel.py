@@ -116,11 +116,18 @@ async def test_sdk_path_emits_zone_aligned_cacheable_blocks(
 
 
 @dataclass
+class _CacheCreation:
+    ephemeral_5m_input_tokens: int = 0
+    ephemeral_1h_input_tokens: int = 0
+
+
+@dataclass
 class _Usage:
     input_tokens: int
     output_tokens: int
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation: _CacheCreation | None = None
 
 
 @dataclass

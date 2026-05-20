@@ -87,11 +87,18 @@ def test_invalid_cache_ttl_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @dataclass(frozen=True)
+class _CacheCreation:
+    ephemeral_5m_input_tokens: int = 0
+    ephemeral_1h_input_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class _Usage:
     input_tokens: int
     output_tokens: int
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation: _CacheCreation | None = None
 
 
 @dataclass(frozen=True)

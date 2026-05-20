@@ -26,10 +26,10 @@ def test_on_intent_mismatch_defaults_to_warn() -> None:
     assert cdef.on_intent_mismatch == "warn"
 
 
-def test_on_intent_mismatch_accepts_three_values() -> None:
-    for value in ("warn", "soft_suggest", "reprompt"):
-        cdef = ConfrontationDef.model_validate(_minimal_def(on_intent_mismatch=value))
-        assert cdef.on_intent_mismatch == value
+@pytest.mark.parametrize("value", ["warn", "soft_suggest", "reprompt"])
+def test_on_intent_mismatch_accepts_three_values(value: str) -> None:
+    cdef = ConfrontationDef.model_validate(_minimal_def(on_intent_mismatch=value))
+    assert cdef.on_intent_mismatch == value
 
 
 def test_on_intent_mismatch_rejects_unknown_value() -> None:

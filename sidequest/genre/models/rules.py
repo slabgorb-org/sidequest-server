@@ -353,8 +353,6 @@ class ConfrontationDef(BaseModel):
     # other than ``opposed_check``.
     opponent_default_stats: dict[str, int] | None = None
     morale: MoraleDef | None = None
-    # Spec 2026-05-20 confrontation-intent-validator — narrator intent
-    # vocabulary surface for the dormant-ActionRewrite.intent activation.
     intent_verbs: list[str] | None = None
     on_intent_mismatch: Literal["warn", "soft_suggest", "reprompt"] = "warn"
 

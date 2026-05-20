@@ -6,7 +6,7 @@ Port of sidequest-genre/src/models/rules.rs.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -353,6 +353,10 @@ class ConfrontationDef(BaseModel):
     # other than ``opposed_check``.
     opponent_default_stats: dict[str, int] | None = None
     morale: MoraleDef | None = None
+    # Spec 2026-05-20 confrontation-intent-validator — narrator intent
+    # vocabulary surface for the dormant-ActionRewrite.intent activation.
+    intent_verbs: list[str] | None = None
+    on_intent_mismatch: Literal["warn", "soft_suggest", "reprompt"] = "warn"
 
     @model_validator(mode="before")
     @classmethod

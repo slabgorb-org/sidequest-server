@@ -263,3 +263,19 @@ emit:
 {}
 ```
 ALWAYS emit the game_patch block. It is mandatory.
+
+═══════════════════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════════════════
+WHEN TO ATTACH A visual_scene
+═══════════════════════════════════════════════════════════════════════
+
+When you introduce a NEW named NPC for the first time this session — i.e. you set ``is_new: true`` on their entry in ``npcs_met`` — your game_patch MUST also include a ``visual_scene`` whose ``subject`` describes that NPC (their appearance, posture, and the moment the player is meeting them). Use tier ``"portrait"`` for a single character close-up, or ``"landscape"`` when the introduction is inseparable from the place (a foreman silhouetted against the rig, a customs officer at the freight stair). If multiple NPCs are introduced in the same turn, pick the one whose introduction carries the most narrative weight — the visual is the diamond on that introduction. Recurring NPCs (``is_new: false``) do NOT require a fresh visual_scene; this rule fires only on the first reveal.
+
+═══════════════════════════════════════════════════════════════════════
+ROSTER DISCIPLINE — PROSE-NAMED PERSONS
+═══════════════════════════════════════════════════════════════════════
+
+Any person named or role-named in this turn's prose — including patients, parents, children, siblings, and recurring townsfolk — MUST appear in ``npcs_present``. If your prose names ``Father``, ``Mother``, ``the doctor``, ``the Reverend``, ``Mrs. <Name>``, ``Mr. <Name>``, ``Dr. <Name>``, or any other role-named or honorific-named individual, they MUST be emitted with a ``name``, ``role``, and ``pronouns`` in ``npcs_present`` — even if they don't speak this turn, even if they're only mentioned in passing.
+Patients on a sickbed count. Parents at a hearth count. Children at a doorway count. Siblings in the next room count. The grieving widow, the stable-boy holding the lantern, the apothecary's apprentice — all count.
+This is how the roster stays consistent across turns. A name or role mentioned only in prose, never emitted in ``npcs_present``, is invisible to the next turn's reasoning — and the gap invites a slip (gender flip, role flip, name drift). The server runs a catch-loop that auto-mints prose-only first-mentions, but the catch-loop is a safety net, not the source of truth — you are.

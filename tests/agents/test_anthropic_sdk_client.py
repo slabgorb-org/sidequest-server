@@ -418,3 +418,41 @@ async def test_complete_with_tools_records_cost(
 async def test_complete_with_tools_imports_anthropic_sdk_error_types() -> None:
     """Ensure AnthropicSdkClientError exists and is wired."""
     assert issubclass(AnthropicSdkClientError, Exception)
+
+
+def test_tooling_result_has_ttl_breakdown_fields() -> None:
+    """ToolingResult exposes per-TTL write breakdowns so the orchestrator
+    can attribute 5m vs 1h cache writes onto narration.turn spans."""
+    from sidequest.agents.tooling_protocol import ToolingResult
+
+    result = ToolingResult(
+        text="ok",
+        stop_reason="end_turn",
+        input_tokens=10,
+        output_tokens=2,
+        cached_input_read_tokens=0,
+        cached_input_write_tokens=0,
+        model="claude-sonnet-4-6",
+        cached_input_write_5m_tokens=100,
+        cached_input_write_1h_tokens=200,
+    )
+    assert result.cached_input_write_5m_tokens == 100
+    assert result.cached_input_write_1h_tokens == 200
+
+
+def test_tooling_result_breakdown_fields_default_to_zero() -> None:
+    """Legacy test fixtures that construct ToolingResult by hand without
+    the new fields keep working."""
+    from sidequest.agents.tooling_protocol import ToolingResult
+
+    result = ToolingResult(
+        text="ok",
+        stop_reason="end_turn",
+        input_tokens=10,
+        output_tokens=2,
+        cached_input_read_tokens=0,
+        cached_input_write_tokens=0,
+        model="claude-sonnet-4-6",
+    )
+    assert result.cached_input_write_5m_tokens == 0
+    assert result.cached_input_write_1h_tokens == 0

@@ -70,7 +70,7 @@ import pytest
 import sidequest.agents.tools  # noqa: F401
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.narrator_prompts import NARRATOR_OUTPUT_ONLY_SDK
-from sidequest.agents.orchestrator import Orchestrator, TurnContext
+from sidequest.agents.orchestrator import Orchestrator
 from sidequest.agents.prompt_framework.core import PromptRegistry
 from sidequest.agents.prompt_framework.types import AttentionZone, SectionCategory
 from sidequest.agents.tool_registry import default_registry

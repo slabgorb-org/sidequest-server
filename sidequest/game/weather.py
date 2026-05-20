@@ -136,11 +136,29 @@ class WeatherGenerator:
         self._rules = ClimateRulesFile.model_validate(raw)
         self._path = path
 
-    @property
-    def climate_rules(self) -> ClimateRulesFile:
-        return self._rules
-
     def generate(self, zone: str, season: str, seed: int) -> WeatherState:
+        """Sample a WeatherState for the given (zone, season, seed).
+
+        Same arguments always return an identical WeatherState — the seed
+        controls every random draw in the algorithm: special-event eligibility,
+        condition weighting, temperature, and precipitation. The CLI exposes
+        ``--seed`` for reproducible audit; downstream (story 24-7) the OTEL
+        ``proposed vs used`` span records the seed alongside the chosen state.
+
+        Args:
+            zone: Climate zone id (must be a key of ``climate_zones`` in the
+                loaded weather.yaml — e.g. ``glen_floor`` in tea_and_murder).
+            season: Season id (must be a key of the zone's ``seasons`` map).
+            seed: Integer RNG seed. Same value → same output.
+
+        Returns:
+            A fully-populated ``WeatherState`` — never ``None``.
+
+        Raises:
+            KeyError: If ``zone`` is not in the loaded climate rules, or if
+                ``season`` is not in the zone's seasons. The error message
+                names the offending key and lists the available alternatives.
+        """
         if zone not in self._rules.climate_zones:
             available = ", ".join(sorted(self._rules.climate_zones))
             raise KeyError(f"unknown weather zone '{zone}' (available: {available})")

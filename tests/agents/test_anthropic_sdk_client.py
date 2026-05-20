@@ -463,3 +463,67 @@ def test_tooling_result_breakdown_fields_default_to_zero() -> None:
     )
     assert result.cached_input_write_5m_tokens == 0
     assert result.cached_input_write_1h_tokens == 0
+
+
+async def test_ttl_breakdown_flows_into_tooling_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """usage.cache_creation.ephemeral_{5m,1h}_input_tokens reach ToolingResult."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk_response = _SdkResponse(
+        content=[_SdkContentTextBlock(type="text", text="ok")],
+        stop_reason="end_turn",
+        usage=_Usage(
+            input_tokens=10,
+            output_tokens=2,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=300,
+            cache_creation=_CacheCreation(
+                ephemeral_5m_input_tokens=100,
+                ephemeral_1h_input_tokens=200,
+            ),
+        ),
+        model="claude-sonnet-4-6",
+    )
+    fake = _FakeAsyncSdk(responses=[sdk_response])
+    client = AnthropicSdkClient(sdk=fake)
+    result = await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        model="claude-sonnet-4-6",
+    )
+    assert result.cached_input_write_5m_tokens == 100
+    assert result.cached_input_write_1h_tokens == 200
+    # Aggregate stays unchanged.
+    assert result.cached_input_write_tokens == 300
+
+
+async def test_ttl_breakdown_defaults_zero_when_field_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SDK-version-drift case: older SDKs return no `cache_creation` object.
+    The breakdown silently goes to 0; the aggregate field stays correct."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk_response = _SdkResponse(
+        content=[_SdkContentTextBlock(type="text", text="ok")],
+        stop_reason="end_turn",
+        usage=_Usage(
+            input_tokens=10,
+            output_tokens=2,
+            cache_creation_input_tokens=500,
+            cache_creation=None,  # older SDK shape
+        ),
+        model="claude-sonnet-4-6",
+    )
+    fake = _FakeAsyncSdk(responses=[sdk_response])
+    client = AnthropicSdkClient(sdk=fake)
+    result = await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        model="claude-sonnet-4-6",
+    )
+    assert result.cached_input_write_5m_tokens == 0
+    assert result.cached_input_write_1h_tokens == 0
+    assert result.cached_input_write_tokens == 500

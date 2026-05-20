@@ -27,10 +27,15 @@ _TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 
 def _strip_suffix(token: str) -> str:
     """Light suffix strip. Not a Porter stemmer — keeps 'draw' vs 'drawer'
-    distinct by only stripping when the stem is at least 3 chars."""
+    distinct, and refuses to mangle '-ss' words like 'cross', 'press', 'pass'."""
     for suffix in ("ing", "ed", "s"):
-        if token.endswith(suffix) and len(token) > len(suffix) + 2:
-            return token[: -len(suffix)]
+        if not token.endswith(suffix):
+            continue
+        if len(token) <= len(suffix) + 2:
+            continue
+        if suffix == "s" and token.endswith("ss"):
+            continue  # cross, press, pass, boss, class — don't strip
+        return token[: -len(suffix)]
     return token
 
 

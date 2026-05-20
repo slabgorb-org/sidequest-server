@@ -46,4 +46,15 @@ def test_tokenize_empty_input_returns_empty_frozenset() -> None:
 def test_tokenize_idempotent() -> None:
     once = tokenize("Bargaining hard for the horse")
     twice = tokenize(" ".join(sorted(once)))
-    assert twice <= once
+    assert twice == once
+
+
+def test_tokenize_does_not_mangle_double_s_words() -> None:
+    # 'cross', 'press', 'pass', 'boss' are common confrontation-label
+    # words; their tails are 'ss' not pluralization. Don't strip.
+    result = tokenize("cross press pass boss class")
+    assert "cross" in result
+    assert "press" in result
+    assert "pass" in result
+    assert "boss" in result
+    assert "class" in result

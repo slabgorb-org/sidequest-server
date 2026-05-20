@@ -678,6 +678,19 @@ class MagicApplyResult:
         return self.apply.crossings
 
 
+@dataclass(frozen=True)
+class RepromptRequest:
+    """Returned by the apply step when validator severity is 'reprompt'.
+
+    Carries the directive string the orchestrator should inject into the
+    second narrator call's recency zone. Spec 2026-05-20.
+    """
+
+    matched_type: str
+    declared: str | None
+    directive: str
+
+
 @dataclass
 class NarrationApplyOutcome:
     """Aggregate result of applying a NarrationTurnResult to a snapshot.
@@ -702,6 +715,32 @@ class NarrationApplyOutcome:
 
     sealed_letter: SealedLetterOutcome | None = None
     magic: MagicApplyResult | None = None
+    reprompt_request: RepromptRequest | None = None
+    classified_intent: str = "unspecified"
+
+
+def _emit_confrontation_intent_mismatch_span(
+    *,
+    matched_type: str,
+    declared: str | None,
+    severity: str,
+    matched_tokens: tuple[str, ...],
+    reprompt_attempted: bool = False,
+    outcome: str | None = None,
+) -> None:
+    """OTEL span emission for confrontation.intent_mismatch.
+
+    Stubbed here; the canonical implementation lands in
+    sidequest.telemetry.spans (Task 8). Keep in sync until that task
+    deletes this wrapper and replaces with a direct span import.
+    """
+    # Lazy import — Task 8 will add the real span. For now we just
+    # log so the wiring is testable via monkeypatch.
+    logger.info(
+        "confrontation.intent_mismatch matched_type=%s declared=%s severity=%s "
+        "matched_tokens=%s reprompt_attempted=%s outcome=%s",
+        matched_type, declared, severity, matched_tokens, reprompt_attempted, outcome,
+    )
 
 
 def apply_magic_working(*, snapshot: GameSnapshot, patch_field: dict) -> MagicApplyResult:
@@ -1707,6 +1746,7 @@ def _apply_narration_result_to_snapshot(
     opposed_player_beat_id: str | None = None,
     opposed_player_actor: str | None = None,
     acting_character_name: str | None = None,
+    already_reprompted: bool = False,
 ) -> NarrationApplyOutcome:
     """Apply narrator-extracted fields to the snapshot.
 
@@ -1739,6 +1779,14 @@ def _apply_narration_result_to_snapshot(
     from sidequest.agents.orchestrator import NarrationTurnResult
 
     outcome = NarrationApplyOutcome()
+    # Default classified_intent from raw action_rewrite.intent — the
+    # validator dispatch below may overwrite with matched_type on mismatch.
+    _initial_intent = ""
+    if isinstance(result, NarrationTurnResult):
+        ar = getattr(result, "action_rewrite", None)
+        if ar is not None:
+            _initial_intent = (getattr(ar, "intent", "") or "").strip()
+    outcome.classified_intent = _initial_intent or "unspecified"
 
     if not isinstance(result, NarrationTurnResult):
         return outcome
@@ -2500,6 +2548,11 @@ def _apply_narration_result_to_snapshot(
 
     # Encounter lifecycle (dual-track momentum, spec 2026-04-25)
     if pack is not None:
+        # Spec 2026-05-20 confrontation-intent-validator — single mechanism.
+        # ActionRewrite.intent is the authoritative signal. ADR-067's
+        # inference site, finally wired. Legacy _CONFRONTATION_TRIGGER_PATTERNS
+        # scanner is dead code in this branch — Task 9 deletes the module.
+        from sidequest.agents.confrontation_intent_validator import validate as _validate_intent
         from sidequest.game.beat_kinds import apply_beat
         from sidequest.server.dispatch.confrontation import find_confrontation_def
         from sidequest.server.dispatch.encounter_lifecycle import (
@@ -2513,43 +2566,62 @@ def _apply_narration_result_to_snapshot(
             encounter_resolved_span,
         )
 
-        # Pingpong 2026-05-03 [BUG] — narrator wrote a chase-firing beat
-        # ("patrol cutter spinning her reactor up from cold-soak") with
-        # confrontation=None and no encounter fired. The architectural
-        # commitment is narrator-emission (ADR-033, ADR-077) — we don't
-        # auto-fire from server-side keyword inference because that is
-        # exactly the silent fallback CLAUDE.md prohibits. Instead, scan
-        # for high-precision trigger phrases when the narrator skipped
-        # emission AND no encounter is currently active, and fire the
-        # lie-detector so the GM panel and Sebastien can see the gap. The
-        # paired prompt fix (``confrontation_trigger_constraint``) is
-        # what closes the loop; this warning surfaces regressions if the
-        # narrator drifts again.
-        if (
-            not result.confrontation
-            and (snapshot.encounter is None or snapshot.encounter.resolved)
-            and result.narration
-        ):
-            matched_triggers = _scan_for_confrontation_trigger_keywords(result.narration)
-            if matched_triggers:
-                _watcher_publish(
-                    "state_transition",
-                    {
-                        "field": "confrontation",
-                        "op": "skipped_with_trigger_keywords",
-                        "matched_keywords": matched_triggers,
-                        "player_name": player_name,
-                    },
-                    component="confrontation",
-                    severity="warning",
+        _mismatch = _validate_intent(
+            getattr(result, "action_rewrite", None),
+            result.confrontation,
+            pack,
+            active_encounter=snapshot.encounter is not None
+            and not snapshot.encounter.resolved,
+        )
+
+        _intent_text = (
+            (getattr(getattr(result, "action_rewrite", None), "intent", "") or "").strip()
+        )
+        _classified_intent_value = _intent_text or "unspecified"
+
+        if _mismatch is not None:
+            _effective_severity = _mismatch.severity
+            _outcome_label: str | None = None
+            if already_reprompted and _effective_severity == "reprompt":
+                _effective_severity = "warn"  # bounded retry, fall through
+                _outcome_label = "fall_through"
+
+            _classified_intent_value = _mismatch.matched_type
+
+            _emit_confrontation_intent_mismatch_span(
+                matched_type=_mismatch.matched_type,
+                declared=_mismatch.declared,
+                severity=_effective_severity,
+                matched_tokens=_mismatch.matched_tokens,
+                reprompt_attempted=already_reprompted,
+                outcome=_outcome_label,
+            )
+
+            if _effective_severity == "soft_suggest":
+                snapshot.next_turn_directives.append(
+                    f"Last turn's intent suggested {_mismatch.matched_type}. "
+                    f"If this scene is in fact a {_mismatch.matched_type}, open the "
+                    f"encounter on this turn."
                 )
-                logger.warning(
-                    "confrontation.skipped_with_trigger_keywords keywords=%s player=%s — "
-                    "narrator described a confrontation trigger in prose but emitted "
-                    "confrontation=None; encounter not instantiated",
-                    matched_triggers,
-                    player_name,
+            elif _effective_severity == "reprompt":
+                # Build the directive, attach to outcome, return early WITHOUT
+                # applying narration — orchestrator (Task 7) will re-invoke the
+                # narrator with the directive and re-enter this function with
+                # already_reprompted=True.
+                outcome.reprompt_request = RepromptRequest(
+                    matched_type=_mismatch.matched_type,
+                    declared=_mismatch.declared,
+                    directive=(
+                        f"Previous attempt described a {_mismatch.matched_type} "
+                        f"(intent: '{_intent_text}') but did not open one. "
+                        f"Either set confrontation={_mismatch.matched_type} "
+                        f"or rewrite without {_mismatch.matched_type}-shaped language."
+                    ),
                 )
+                outcome.classified_intent = _classified_intent_value
+                return outcome
+
+        outcome.classified_intent = _classified_intent_value
 
         # (a) Narrator-initiated encounter
         if result.confrontation and (snapshot.encounter is None or snapshot.encounter.resolved):

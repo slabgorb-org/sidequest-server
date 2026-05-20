@@ -1,0 +1,15 @@
+# Minimal visibility baseline for the frozen fixture pack used by the
+# unit-test suite. Every slug in tests/fixtures/packs/ is a symlink to
+# test_genre/, so this one file satisfies the loader for every genre
+# tested in tests/server/ and friends.
+tone: balanced
+default_visibility:
+  npc_agency: all
+  confrontation_init: all
+  stealth_roll_check: actor_only
+  lore_reveal: all
+  dice_roll_private: actor_only
+  exploration: all
+  distinctive_detail: all
+  reflect_absence: all
+all_scope: protagonists

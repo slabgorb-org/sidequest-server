@@ -1,0 +1,4 @@
+name: Intent Test Pack
+version: "1.0.0"
+description: Minimal pack for confrontation_intent_validator dispatch tests.
+min_sidequest_version: "0.1.0"

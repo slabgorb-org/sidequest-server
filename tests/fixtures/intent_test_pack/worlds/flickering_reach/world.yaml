@@ -1,0 +1,16 @@
+axis_snapshot:
+  hope: 0.6
+  tech_level: 0.5
+  weirdness: 0.9
+description: "Three wounds define the Flickering Reach. The black glass plain east\
+  \ of Silo Prime still hums its dirge twelve centuries after the Third Conclave's\
+  \ reactor turned the steppe into a singing scar. To the north, Bone Wind canyon\
+  \ funnels irradiated dust through the ruins of a pre-war city. And beneath it all,\
+  \ the Dead Signal pulses from somewhere deep underground \u2014 a rhythm that mutants\
+  \ hear in their teeth and Purebloods pretend doesn't exist. Trade posts cling to\
+  \ the edges of the glass, and every scavenger knows the rule: never cross the plain\
+  \ after dark."
+name: The Flickering Reach
+slug: flickering_reach
+cover_poi: salt_camp
+starting_location: "the trade post at the edge of the black glass plain"

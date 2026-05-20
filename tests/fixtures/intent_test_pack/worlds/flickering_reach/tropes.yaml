@@ -1,0 +1,244 @@
+# Flickering Reach world tropes — specialized for this world's factions and lore.
+
+- id: the_long_signal_wakes
+  name: The Long Signal Wakes
+  extends: dead-signal
+  description: >-
+    The Long Signal — the tangled chorus of pre-war broadcasts the Drifter
+    singers hear in radio static — is changing. New patterns are emerging.
+    Åych Przysåuchkin says the dreaming mind of the world is waking up,
+    and the old machines are remembering what they were built for.
+  triggers:
+    - hearing the Long Signal change or intensify
+    - a Drifter singer behaving erratically after listening
+    - pre-war tech activating near the black glass plain
+    - the singing static shifting to something coherent
+  narrative_hints:
+    - Drifter singers gathered in circles, swaying, humming in unison
+    - radios tuning themselves to frequencies nobody set
+    - the black glass plain humming louder at dawn
+    - animals avoiding the old antenna fields
+  tension_level: 0.7
+  escalation:
+    - at: 0.25
+      event: >-
+        Åych Przysåuchkin sends a runner to every settlement. The Long Signal
+        has spoken a word — a real word, in a dead language. She needs someone
+        to find the source antenna before the Dome Syndicate does.
+      npcs_involved: [Åych Przysåuchkin]
+      stakes: The Signal is becoming coherent. Whoever controls it controls information.
+    - at: 0.5
+      event: >-
+        The Dome Syndicate has triangulated the signal's origin — somewhere
+        beneath the black glass plain, near Silo Prime. Odige Fuseborn is
+        assembling a salvage crew. The Drifters say disturbing the source
+        would be sacrilege.
+      npcs_involved: [Åych Przysåuchkin, Odige Fuseborn]
+      stakes: Two factions converge on the same target with opposing intentions.
+    - at: 0.75
+      event: >-
+        The antenna beneath the glass is found — and it's not an antenna.
+        It's a node in a network that spans the entire Reach. The Signal
+        isn't a broadcast. It's a conversation between machines that never
+        stopped talking.
+      npcs_involved: [Åych Przysåuchkin, Odige Fuseborn]
+      stakes: Activating the network could restore or destroy the Reach.
+    - at: 1.0
+      event: >-
+        The network wakes fully. Every piece of pre-war tech in the Reach
+        flickers to life. The Long Signal becomes a voice — clear, ancient,
+        and asking a question that demands an answer.
+      npcs_involved: [Åych Przysåuchkin]
+      stakes: The world's dreaming mind is awake. It wants to know who you are.
+  passive_progression:
+    rate_per_turn: 0.015
+    rate_per_day: 0.05
+    accelerators: [signal, radio, antenna, broadcast, static, drifter, singing]
+    decelerators: [silence, jam, ignore, underground]
+    accelerator_bonus: 0.05
+    decelerator_penalty: 0.03
+  tags: [mystery, technology, factions, drifters]
+
+- id: understory_hunger
+  name: The Understory Hungers
+  extends: mutation-tide
+  description: >-
+    The Understory — the vast fungal root-intelligence seeded by Kuinem's
+    Great Sowing — is growing faster than anyone has seen in living memory.
+    Root tendrils are breaching salvage sites, consuming metal, and the
+    Greenfolk say Päan Sporecap heard it laugh again. The Dome Syndicate's
+    rain-catchers are being overgrown.
+  triggers:
+    - encountering aggressive or rapidly growing root networks
+    - a salvage site consumed by fungal growth
+    - Greenfolk performing rituals at root emergence points
+    - rain-catcher equipment failing due to overgrowth
+  narrative_hints:
+    - the ground soft and warm where roots spread beneath
+    - salvage tools corroding overnight near root emergence
+    - Greenfolk pilgrims walking barefoot toward the growth fronts
+    - Dome Syndicate crews hacking at tendrils with plasma cutters
+  tension_level: 0.6
+  escalation:
+    - at: 0.25
+      event: >-
+        Darty Ironlung's excavation crew at the Rusted Junction reports
+        their dig site is being consumed overnight. Roots thick as arms
+        are growing through solid pre-war concrete. The Greenfolk say
+        the Understory is claiming what belongs to it.
+      npcs_involved: [Darty Ironlung, Päan Sporecap]
+      stakes: The Dome Syndicate's new salvage operation is threatened.
+    - at: 0.5
+      event: >-
+        A rain-catcher array in a border settlement fails — roots have
+        grown through the moisture harvester, replacing its filters with
+        living tissue that produces something that isn't quite water.
+        The Dome Syndicate sends Odige personally to assess damages.
+      npcs_involved: [Odige Fuseborn, Päan Sporecap]
+      stakes: The water monopoly is threatened. Settlements may have to choose sides.
+    - at: 0.75
+      event: >-
+        The Understory breaches Tood's Dome itself. Roots emerge through
+        the floor of the main market. Päan Sporecap arrives and kneels
+        before them, weeping with joy. Odige orders them cut. The
+        Greenfolk block the way.
+      npcs_involved: [Odige Fuseborn, Päan Sporecap]
+      stakes: Open conflict between the Dome Syndicate and the Greenfolk.
+    - at: 1.0
+      event: >-
+        The Understory speaks — not in words, but in growth patterns that
+        form symbols the Drifter singers recognize as pre-war machine code.
+        The fungal network and the Long Signal are connected. Kuinem's
+        Great Sowing wasn't agriculture. It was wiring.
+      npcs_involved: [Päan Sporecap, Åych Przysåuchkin]
+      stakes: The two great mysteries of the Reach are one. Everything changes.
+  passive_progression:
+    rate_per_turn: 0.01
+    rate_per_day: 0.03
+    accelerators: [root, fungus, growth, spore, understory, green]
+    decelerators: [burn, cut, prune, seal, dome]
+    accelerator_bonus: 0.04
+    decelerator_penalty: 0.03
+  tags: [nature, factions, technology, mystery, greenfolk]
+
+- id: vault_heresy
+  name: The Vault Heresy
+  description: >-
+    Which-seven's pamphlet declaring surface life a sin has split Silent
+    Vault's leadership. A faction within wants to unseal — to finally
+    emerge after twelve centuries. The Protocols say stay below. But
+    someone has been smuggling surface goods into the vault, and the
+    young Vaultborn are asking questions their elders can't answer.
+  category: conflict
+  triggers:
+    - encountering a Vaultborn on the surface
+    - learning about divisions within Silent Vault
+    - finding smuggled surface goods marked for vault delivery
+    - hearing about the Protocols being questioned
+  narrative_hints:
+    - sealed vault doors showing signs of recent use
+    - surface traders with suspiciously pure-bred customers
+    - pamphlets arguing for or against emergence scattered at trade posts
+    - Vaultborn scouts in unfamiliar surface gear, clearly terrified
+  tension_level: 0.5
+  escalation:
+    - at: 0.25
+      event: >-
+        A young Vaultborn appears at the trade post, blinking in sunlight
+        they've never seen. They carry a sealed message for "anyone who
+        trades with the Dome Syndicate" and refuse to say more until
+        they're certain no vault security followed them out.
+      npcs_involved: [The Vaultborn Emissary]
+      stakes: Silent Vault's isolation is cracking. Someone inside wants contact.
+    - at: 0.5
+      event: >-
+        Which-seven sends vault security to the surface — something they
+        haven't done in centuries. They're looking for the Emissary and
+        anyone who spoke to them. They're armed with pre-war weapons
+        that still work perfectly.
+      npcs_involved: [Which-seven, The Vaultborn Emissary]
+      stakes: The vault's internal conflict is spilling onto the surface.
+    - at: 0.75
+      event: >-
+        The reformist faction seizes a vault section and partially unseals
+        a secondary entrance. For the first time in twelve centuries,
+        the surface can see into Silent Vault — and what's inside is
+        both more advanced and more fragile than anyone imagined.
+      npcs_involved: [Which-seven, The Vaultborn Emissary]
+      stakes: The vault is open. The Protocols are broken. Every faction will want what's inside.
+    - at: 1.0
+      event: >-
+        Which-seven activates the vault's final Protocol — a containment
+        measure designed to prevent exactly this. Silo Prime's reactor
+        signature flickers in sympathy. The black glass plain begins
+        to hum a new note. The Third Conclave's mistake is about to
+        repeat itself.
+      npcs_involved: [Which-seven]
+      stakes: Silo Prime. The reactor. The same choice that created the black glass plain.
+  passive_progression:
+    rate_per_turn: 0.008
+    rate_per_day: 0.02
+    accelerators: [vault, protocol, unseal, emerge, vaultborn]
+    decelerators: [seal, isolate, below, underground]
+    accelerator_bonus: 0.04
+    decelerator_penalty: 0.03
+  tags: [factions, conflict, vaultborn, politics]
+
+- id: scrapborn_empire
+  name: The Scrapborn Empire
+  description: >-
+    Odige Fuseborn's ambitions have outgrown Tood's Dome. The second
+    atmospheric processor at the Rusted Junction could double the Dome
+    Syndicate's water production — and their leverage over every settlement
+    in the Reach. Other factions are noticing.
+  category: conflict
+  triggers:
+    - learning about the Dome Syndicate's expansion plans
+    - seeing Syndicate crews fortifying new positions
+    - settlements complaining about increased water tariffs
+    - encountering Syndicate mercenaries in unusual territory
+  narrative_hints:
+    - new Syndicate flags flying at border outposts
+    - traders grumbling about price increases
+    - Darty Ironlung's crews working double shifts at the Junction
+    - settlements quietly stockpiling water in case of embargo
+  tension_level: 0.5
+  escalation:
+    - at: 0.25
+      event: >-
+        Odige raises water tariffs by thirty percent. She claims
+        maintenance costs. Everyone knows it's leverage. Three border
+        settlements are considering forming a coalition to resist.
+      npcs_involved: [Odige Fuseborn]
+      stakes: The Reach's water economy is being squeezed.
+    - at: 0.5
+      event: >-
+        The second atmospheric processor is partially operational.
+        Odige offers settlements a choice — exclusive supply contracts
+        at the old price, or market rate from both processors. It's
+        a monopolist's deal. Some take it. Some don't.
+      npcs_involved: [Odige Fuseborn, Darty Ironlung]
+      stakes: The Dome Syndicate is becoming an empire. Resistance is forming.
+    - at: 0.75
+      event: >-
+        The coalition of border settlements refuses Odige's terms.
+        She cuts their water. Three days later, they're desperate.
+        Someone suggests raiding the Rusted Junction directly.
+      npcs_involved: [Odige Fuseborn, Darty Ironlung]
+      stakes: War between the Syndicate and the settlements. Water is the weapon.
+    - at: 1.0
+      event: >-
+        The raid on the Rusted Junction triggers a cascade. Odige
+        activates the second processor's defense systems — Ancient
+        tech nobody knew was still armed. The Junction becomes a
+        fortress. The Reach must decide: submit or unite.
+      npcs_involved: [Odige Fuseborn, Darty Ironlung]
+      stakes: The Reach's future — feudal water empire or free coalition.
+  passive_progression:
+    rate_per_turn: 0.01
+    rate_per_day: 0.025
+    accelerators: [syndicate, monopoly, water, tariff, dome, odige]
+    decelerators: [negotiate, share, coalition, peace]
+    accelerator_bonus: 0.04
+    decelerator_penalty: 0.03
+  tags: [factions, politics, conflict, scrapborn, economics]

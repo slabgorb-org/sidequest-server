@@ -1,0 +1,61 @@
+- id: desperate_survival
+  archetype: survival
+  situation: >-
+    The player wakes into immediate danger — radiation sickness, a collapsed
+    structure, or something stalking them in the dust. The first priority is
+    staying alive, not finding a quest-giver. No one is coming to help.
+  tone: urgent, visceral
+  avoid:
+    - helpful NPC explaining the world
+    - settlement arrival
+    - fetch quests
+  first_turn_seed: >-
+    Something is wrong. Your head pounds. Dust cakes your throat. You're
+    half-buried in rubble and something is moving in the dark nearby.
+
+- id: scavenger_race
+  archetype: challenge
+  situation: >-
+    A competitive scavenging run is underway. Other wastelanders are racing
+    toward the same cache. The player isn't being briefed — they're already
+    in motion, making split-second decisions about routes and risks.
+  tone: competitive, frantic
+  avoid:
+    - leisurely exploration
+    - NPC exposition
+    - standing around talking
+  first_turn_seed: >-
+    The signal went up ten minutes ago — a pre-war cache, cracked open by
+    last night's tremor. You're not the only one who saw it.
+
+- id: territorial_defense
+  archetype: standoff
+  situation: >-
+    The player's camp or shelter is under threat — raiders, mutant fauna,
+    or a rival faction pushing into their territory. This is a defensive
+    scenario, not an errand. The player must decide what to protect and
+    what to sacrifice.
+  tone: tense, defiant
+  avoid:
+    - fetch quests
+    - meeting new NPCs at market stalls
+    - calm exploration
+  first_turn_seed: >-
+    The barricade won't hold. Three of them, maybe four, working the east
+    wall. Your supplies are behind you. Your weapon is in your hand.
+
+- id: contamination_event
+  archetype: mystery
+  situation: >-
+    Something has gone wrong with the local water, air, or food supply.
+    People are getting sick. The source is unknown and the clock is ticking.
+    The player must investigate, not wait to be told what to do.
+  tone: creeping dread, investigative
+  avoid:
+    - quest-giver NPCs
+    - fetch and carry errands
+    - casual settlement tour
+  first_turn_seed: >-
+    The water tastes wrong this morning. Copper and something else — something
+    alive. Two people didn't wake up. Nobody's saying it yet, but everyone
+    knows.

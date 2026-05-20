@@ -1,0 +1,198 @@
+- id: ruin_fever
+  name: Ruin Fever
+  description: >-
+    An Ancient ruin has been cracked open — or is about to be. Whatever
+    is inside could change the balance of power in the region. Scavengers,
+    cults, and warlords are already circling. The player is drawn in by
+    rumor, necessity, or sheer proximity.
+  category: exploration
+  triggers:
+    - discovering an entrance to pre-collapse ruins
+    - hearing rumors of Ancient technology surfacing
+    - being hired to retrieve something from a sealed vault
+  narrative_hints:
+    - scavengers whispering about a big find
+    - strange lights or sounds from a previously dead structure
+    - traders suddenly flush with tech they can't explain
+  tension_level: 0.5
+  resolution_hints:
+    - claim the ruin's prize and deal with the consequences
+    - seal it back up before something worse gets out
+    - trade the location to a faction for protection
+    - destroy the prize so no one can weaponize it
+  tags: [ruins, technology, scavenging, ancients]
+  escalation:
+    - at: 0.2
+      event: >-
+        A scavenger stumbles into camp half-dead, clutching a piece of
+        Ancient tech that still glows. They babble about a sealed door,
+        something humming behind it, and the things that chased them out.
+      npcs_involved: [The Scavenger]
+      stakes: Someone found something. Word is already spreading.
+    - at: 0.4
+      event: >-
+        A well-armed faction arrives in the area. They have a map — or
+        claim to. They're not sharing, and they're not subtle about
+        warning people away from the ruin's general direction.
+      npcs_involved: [The Warlord's Lieutenant]
+      stakes: The ruin is contested. Getting in means getting past them.
+    - at: 0.6
+      event: >-
+        The ruin is breached. The outer chambers are stripped, but the
+        core is still sealed and defended by Ancient security — drones,
+        traps, or something biological that shouldn't still be alive.
+      npcs_involved: [The Scavenger, The Warlord's Lieutenant]
+      stakes: The real prize is deeper in, and the defenses are active.
+    - at: 0.8
+      event: >-
+        The core is open. What's inside is more dangerous than anyone
+        expected — a reactor, a weapon, a sealed biolab. Factions converge.
+        Everyone wants it. Nobody can be trusted.
+      npcs_involved: [The Warlord's Lieutenant]
+      stakes: Whoever controls this controls the region for a generation.
+    - at: 1.0
+      event: >-
+        The prize activates, destabilizes, or hatches. The ruin itself
+        becomes the danger. Everyone inside must decide — grab what they
+        can and run, or try to contain what's been unleashed.
+      npcs_involved: [The Scavenger, The Warlord's Lieutenant]
+      stakes: The ruin's legacy — salvation or catastrophe — is decided now.
+  passive_progression:
+    rate_per_turn: 0.0125
+    rate_per_day: 0.03
+    accelerators: [ruin, vault, ancient, technology, artifact]
+    decelerators: [retreat, hide, seal, leave]
+    accelerator_bonus: 0.05
+    decelerator_penalty: 0.03
+
+- id: mutation_tide
+  name: Mutation Tide
+  description: >-
+    Something is accelerating mutations in the region — a leaking reactor,
+    tainted water, spore clouds from the deep waste. People are changing
+    faster than they can adapt. Some see opportunity. Others see the end.
+  category: mystery
+  triggers:
+    - encountering rapidly mutating creatures or people
+    - discovering a contamination source
+    - being affected by an unexpected mutation surge
+  narrative_hints:
+    - livestock born with extra limbs or strange growths
+    - water that glows or tastes of metal
+    - travelers avoiding a particular stretch of road
+  tension_level: 0.6
+  resolution_hints:
+    - find and neutralize the contamination source
+    - harness the mutations for the community's benefit
+    - evacuate the region before it becomes uninhabitable
+    - adapt and accept the changes as the new normal
+  tags: [mutation, contamination, survival, mystery]
+  escalation:
+    - at: 0.2
+      event: >-
+        A settlement's healer reports an uptick in strange births and
+        sudden mutations in adults. People are scared but don't know
+        the cause. The healer suspects the water.
+      npcs_involved: [The Healer]
+      stakes: Something is changing people. It may already be too late for some.
+    - at: 0.4
+      event: >-
+        A patrol finds the source — or one of them. A cracked containment
+        vessel, a breached underground pipe, a crater that shouldn't exist.
+        The area around it is lush with twisted growth.
+      npcs_involved: [The Healer, The Warden]
+      stakes: The contamination is spreading. Containment is still possible.
+    - at: 0.6
+      event: >-
+        A faction emerges that sees the mutations as a gift. They drink
+        the water willingly, expose themselves to the source. They're
+        stronger — and less recognizably human.
+      npcs_involved: [The Changed One]
+      stakes: The community splits. Resist the change or embrace it.
+    - at: 0.8
+      event: >-
+        The tide reaches critical mass. Structures warp. The landscape
+        itself shifts. The contamination zone is expanding faster than
+        anyone can outrun on foot.
+      npcs_involved: [The Healer, The Changed One, The Warden]
+      stakes: The region may be lost entirely if nothing is done now.
+    - at: 1.0
+      event: >-
+        The source must be confronted directly. The heart of the
+        contamination is alive, or awake, or was always something more
+        than chemicals. Whatever it is, it knows you're here.
+      npcs_involved: [The Changed One, The Healer]
+      stakes: End the tide or become part of it.
+  passive_progression:
+    rate_per_turn: 0.008
+    rate_per_day: 0.02
+    accelerators: [mutation, contamination, glow, radiation, change]
+    decelerators: [purify, filter, shelter, distance]
+    accelerator_bonus: 0.04
+    decelerator_penalty: 0.03
+
+- id: dead_signal
+  name: Dead Signal
+  description: >-
+    An Ancient broadcast has started up again — a repeating signal from
+    somewhere deep in the waste. It could be a beacon, a warning, or a
+    trap. Everyone who's heard it wants to find the source.
+  category: mystery
+  triggers:
+    - detecting or hearing an unexplained signal or broadcast
+    - finding a device that responds to a mysterious frequency
+    - meeting someone obsessed with following a signal
+  narrative_hints:
+    - static-filled voices on salvaged radios
+    - tech that activates unprompted near certain locations
+    - birds and creatures avoiding a specific direction
+  tension_level: 0.4
+  resolution_hints:
+    - reach the signal source and learn what it is
+    - destroy the transmitter before it draws worse attention
+    - decode the message and use the information
+    - follow the signal into a trap and fight your way out
+  tags: [signal, ancients, mystery, technology]
+  escalation:
+    - at: 0.2
+      event: >-
+        A trader shows you a salvaged radio. It picks up something that
+        shouldn't exist — a repeating pattern, clearly artificial, clearly
+        old. The signal is stronger to the north.
+      npcs_involved: [The Signal Chaser]
+      stakes: Something Ancient is broadcasting. It wasn't before.
+    - at: 0.4
+      event: >-
+        Others have heard it. A small expedition is forming — scavengers,
+        a self-proclaimed scholar, and someone with military-grade gear
+        who won't say where they got it.
+      npcs_involved: [The Signal Chaser, The Scholar]
+      stakes: You're not the only one looking. Competition is forming.
+    - at: 0.6
+      event: >-
+        The signal leads to a structure buried under waste — intact,
+        powered, and sealed. The signal is coming from inside. Something
+        responds when you approach.
+      npcs_involved: [The Signal Chaser, The Scholar]
+      stakes: The source is real and active. Opening it is a choice.
+    - at: 0.8
+      event: >-
+        Inside, the technology is beyond anything you've seen. The signal
+        isn't a beacon — it's a handshake. Something inside is waiting
+        for a response. The Scholar thinks they can provide one.
+      npcs_involved: [The Scholar]
+      stakes: Responding could unlock Ancient knowledge — or wake something up.
+    - at: 1.0
+      event: >-
+        The response triggers a cascade. Systems come online across the
+        waste. Other signals answer. Whatever this place was, it was part
+        of a network — and you just turned it back on.
+      npcs_involved: [The Signal Chaser, The Scholar]
+      stakes: The Ancient network is live. The world just changed.
+  passive_progression:
+    rate_per_turn: 0.017
+    rate_per_day: 0.04
+    accelerators: [signal, broadcast, radio, frequency, ancient, transmit]
+    decelerators: [ignore, destroy radio, silence, jam]
+    accelerator_bonus: 0.05
+    decelerator_penalty: 0.03

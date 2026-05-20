@@ -1,0 +1,286 @@
+currency:
+  name: Salvage
+  abbreviation: S
+  description: >-
+    There is no minted currency. Value is measured in salvage — useful
+    material, clean water, ammunition, working tech. A functioning
+    battery is worth more than a bag of gold. Barter is the norm.
+    When people say something costs "ten salvage," they mean ten units
+    of tradeable goods roughly equivalent to a day's clean water.
+  secondary:
+    - name: Favor
+      abbreviation: Fv
+      description: >-
+        Debts owed and debts earned. The wasteland's social currency.
+        A Scrapborn mechanic who owes you a favor is worth more than
+        a crate of batteries. Tracked per NPC/faction, not as a number.
+
+item_catalog:
+  - id: sharpened_rebar
+    name: Sharpened Rebar
+    description: "A length of rebar ground to a point. It works."
+    category: weapon
+    value: 1
+    weight: 1.5
+    rarity: common
+    power_level: 1
+    tags: [melee, improvised]
+    lore: The most common weapon in the wastes. Ugly and effective.
+    narrative_weight: 0.0
+
+  - id: pipe_wrench
+    name: Heavy Pipe Wrench
+    description: "A two-foot pipe wrench. Tool first, weapon second. Good at both."
+    category: weapon
+    value: 3
+    weight: 2.0
+    rarity: common
+    power_level: 1
+    tags: [melee, blunt, tool]
+    lore: Scrapborn carry these the way old-world people carried keys.
+    narrative_weight: 0.1
+
+  - id: crossbow_salvage
+    name: Salvage Crossbow
+    description: "Jury-rigged crossbow made from car parts and cable. Fires sharpened bolts."
+    category: weapon
+    value: 8
+    weight: 2.0
+    rarity: uncommon
+    power_level: 2
+    tags: [ranged, bolt, silent]
+    lore: Quiet, reusable ammo, and doesn't need gunpowder. The wasteland's sensible choice.
+    narrative_weight: 0.2
+
+  - id: sawed_off
+    name: Sawed-Off Shotgun
+    description: "Two barrels, short range, dramatic effect. Ammo is the real cost."
+    category: weapon
+    value: 12
+    weight: 1.5
+    rarity: uncommon
+    power_level: 2
+    tags: [ranged, firearm, loud]
+    lore: Every shot announces your position to everything within a mile.
+    narrative_weight: 0.2
+
+  - id: scrap_armor
+    name: Scrap Armor
+    description: "Sheet metal plates riveted over leather. Heavy, loud, and better than skin."
+    category: armor
+    value: 6
+    weight: 8.0
+    rarity: common
+    power_level: 1
+    tags: [armor, heavy, salvage]
+    lore: A Scrapborn rite of passage is building your first set from junk.
+    narrative_weight: 0.1
+
+  - id: water_canteen
+    name: Canteen (1 day)
+    description: "A sealed container of clean water. One day's supply for one person."
+    category: consumable
+    value: 2
+    weight: 0.5
+    rarity: common
+    power_level: 0
+    tags: [survival, water]
+    lore: The most valuable thing you can carry. Don't let anyone see how full it is.
+    narrative_weight: 0.1
+
+  - id: rad_pills
+    name: Rad Pills (3 doses)
+    description: "Chalky tablets that reduce radiation absorption. Taste like metal."
+    category: consumable
+    value: 5
+    weight: 0.1
+    rarity: uncommon
+    power_level: 1
+    tags: [medical, radiation]
+    lore: Vaultborn manufacture. Everyone else pays through the nose.
+    narrative_weight: 0.1
+
+  - id: medkit_crude
+    name: Crude Medkit
+    description: "Bandages, a needle, gut-thread, and a bottle of something that burns."
+    category: consumable
+    value: 4
+    weight: 0.5
+    rarity: common
+    power_level: 1
+    tags: [medical, healing]
+    lore: It won't save your life, but it'll buy you time to save yourself.
+    narrative_weight: 0.1
+
+  - id: glow_rod
+    name: Glow Rod
+    description: "A pre-war chemical light stick. Snap it and you get four hours of sickly green light."
+    category: tool
+    value: 3
+    weight: 0.2
+    rarity: common
+    power_level: 0
+    tags: [light, salvage]
+    lore: Nobody makes these anymore. The supply is finite and everyone knows it.
+    narrative_weight: 0.1
+
+  - id: tool_kit_basic
+    name: Basic Tool Kit
+    description: "Wrenches, screwdrivers, pliers, wire cutters. The essentials."
+    category: tool
+    value: 8
+    weight: 2.0
+    rarity: common
+    power_level: 1
+    tags: [tool, repair, salvage]
+    lore: Worth more than weapons in most settlements.
+    narrative_weight: 0.1
+
+  - id: geiger_clicker
+    name: Geiger Clicker
+    description: "A salvaged radiation detector. Clicks faster when you should be running."
+    category: tool
+    value: 15
+    weight: 0.5
+    rarity: uncommon
+    power_level: 2
+    tags: [tool, detection, salvage]
+    lore: The ones that still work are worth killing for. The batteries are worth more.
+    narrative_weight: 0.3
+
+  - id: ancient_artifact
+    name: Unknown Artifact
+    description: "A pre-war device of uncertain function. It hums when you hold it."
+    category: treasure
+    value: 30
+    weight: 0.5
+    rarity: rare
+    power_level: 3
+    tags: [ancient, mysterious, valuable]
+    lore: Could be a weapon, a tool, or a fancy paperweight. Finding out is the adventure.
+    narrative_weight: 0.7
+
+  # Playtest 2026-04-11: chargen artifact catalog entries.
+  # The mutant_wasteland chargen "The Thing You Found" step (char_creation.yaml
+  # `artifact` scene) gave players five artifact choices via `item_hint:` fields,
+  # but NONE of those ids existed in this catalog. Result: every artifact-bearing
+  # character (e.g., Vex with the Ancient Screen) had their artifact created via
+  # the inventory extractor's fallback path, which defaulted unknown items to
+  # `category: weapon`. Vex's datapad was showing under the `weapon` heading even
+  # though "she flicks the datapad at the humming gap" is a sensor-use action,
+  # not a strike. Adding all five entries with `category: tool` so the chargen
+  # → catalog lookup succeeds and the items land in the right inventory bucket.
+  #
+  # All five are tagged `[ancient, artifact]` so future taxonomy work (a
+  # dedicated `artifact` category, a "mysterious item" badge, etc.) has a single
+  # surface to grep. Per Keith's bug report: "It should be in `tool` or a
+  # dedicated `artifact` category, not `weapon`." `tool` is the existing
+  # category that best fits all five, especially since none of them are used
+  # to hit anything mechanically.
+
+  - id: datapad
+    name: Ancient Screen
+    description: "A flat glass rectangle that sometimes shows pictures of the old world. You can't control what it shows."
+    category: tool
+    value: 25
+    weight: 0.5
+    rarity: rare
+    power_level: 1
+    tags: [ancient, artifact, sensor, display]
+    lore: Pre-war glass that occasionally flickers awake with images of cities, faces, schematics. Vault Dwellers prize them for the fragments of lost knowledge they reveal.
+    narrative_weight: 0.6
+
+  - id: growth_wand
+    name: Growth Wand
+    description: "A humming metal rod that makes plants grow faster when you point it at them. The plants don't always grow right."
+    category: tool
+    value: 28
+    weight: 0.7
+    rarity: rare
+    power_level: 1
+    tags: [ancient, artifact, agricultural]
+    lore: Some kind of pre-war agritech relic. The plants it grows are sometimes useful, sometimes monstrous, sometimes both.
+    narrative_weight: 0.6
+
+  - id: purifier
+    name: Screaming Purifier
+    description: "A small box that purifies any liquid poured into it. The catch: it takes a day, and it screams while working."
+    category: tool
+    value: 35
+    weight: 1.0
+    rarity: rare
+    power_level: 1
+    tags: [ancient, artifact, water, survival]
+    lore: A box that makes any liquid drinkable. The scream — high, mechanical, almost a wail — is the cost of safe water in the wastes.
+    narrative_weight: 0.6
+
+  - id: power_glove
+    name: Power Glove
+    description: "A glove that makes your hand incredibly strong but only for about ten seconds. Then it needs to rest for an hour."
+    # Category: weapon (corrected during playtest 2026-04-11 audit). The
+    # other four chargen artifacts (datapad, growth_wand, purifier,
+    # mystery_compass) are tools because none of them hit anyone — Keith's
+    # rule. The Power Glove explicitly does: 10 seconds of crushing
+    # strength is a punch, a chain-rip, a hatch-tear. When combat resolution
+    # looks at the weapon slot, this is what should be there.
+    category: weapon
+    value: 32
+    weight: 1.0
+    rarity: rare
+    power_level: 2
+    tags: [ancient, artifact, augmentation, wearable, melee]
+    lore: A pre-war exo-glove with a battery cell that has somehow survived the centuries. Ten seconds of crushing strength then a full hour of useless cooldown. Tearing through a hatch, ripping a chain, breaking a jaw — short bursts only.
+    narrative_weight: 0.6
+
+  - id: mystery_compass
+    name: Mystery Compass
+    description: "A compass that doesn't point north. It points at something, but you haven't figured out what yet."
+    category: tool
+    value: 22
+    weight: 0.3
+    rarity: rare
+    power_level: 1
+    tags: [ancient, artifact, navigation, mysterious]
+    lore: The needle is always aligned to the same unknown referent. Some carriers say it's a person, some say a place, some say a future. The compass has no opinion.
+    narrative_weight: 0.6
+
+starting_equipment:
+  Scavenger:
+    - pipe_wrench
+    - tool_kit_basic
+    - water_canteen
+    - glow_rod
+  Mutant:
+    - sharpened_rebar
+    - water_canteen
+    - medkit_crude
+  Pureblood:
+    - rad_pills
+    - medkit_crude
+    - water_canteen
+    - glow_rod
+  Synth:
+    - tool_kit_basic
+    - glow_rod
+    - water_canteen
+  Beastkin:
+    - sharpened_rebar
+    - water_canteen
+    - water_canteen
+  Tinker:
+    - tool_kit_basic
+    - glow_rod
+    - water_canteen
+
+starting_gold:
+  Scavenger: 8
+  Mutant: 3
+  Pureblood: 15
+  Synth: 5
+  Beastkin: 2
+  Tinker: 10
+
+philosophy:
+  carry_limit: 20
+  restricted_categories: []
+  progression_gates: {}

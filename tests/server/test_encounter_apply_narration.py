@@ -191,6 +191,12 @@ def test_confrontation_trigger_with_populated_npcs_present_does_not_fire_span(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    "legacy scanner deleted in Task 9; replaced by intent-validator dispatch "
+    "(spec 2026-05-20 confrontation-intent-validator step 5). "
+    "The skipped_with_trigger_keywords watcher event no longer fires; "
+    "confrontation.intent_mismatch span takes over. Task 9 deletes this test."
+)
 def test_confrontation_trigger_keywords_with_no_confrontation_fires_lie_detector(
     cac_snap, monkeypatch
 ) -> None:

@@ -1,0 +1,20 @@
+# ProjectionFilter rules for mutant_wasteland.
+#
+# Fog-of-war is load-bearing for this genre: a scavenger who hasn't seen
+# an enemy yet should not see that enemy's intent or internal state leak
+# into their narration. The core invariants handle targeting and
+# self-echo; this file layers in the flavor-appropriate redactions.
+#
+# Kinds available in v1: NARRATION, CONFRONTATION. Extend as more kinds
+# flow through _emit_event.
+#
+# Validate with:
+#   python -m sidequest.cli.validate.projection_check \
+#       sidequest-content/genre_packs/mutant_wasteland
+
+rules: []
+# Intentionally empty for now — waiting for CONFRONTATION / STATE_UPDATE
+# payload schemas to stabilize before authoring redactions. The empty
+# file is still meaningful: it opts this genre into the ComposedFilter
+# pipeline (no-genre-rules fallback applies) and unblocks future rule
+# authoring without a code change.

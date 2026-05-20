@@ -1,0 +1,8 @@
+genre_key: intent_test_pack
+default_reversibility: permanent
+verdicts_on_zero_edge:
+  pc: dead
+  npc: dead
+soul_md_constraint: "genre_truth:fixture_default_lethal"
+must_narrate: "Fixture default: describe the end with specificity."
+must_not_narrate: "invent rescue; narrate survival"

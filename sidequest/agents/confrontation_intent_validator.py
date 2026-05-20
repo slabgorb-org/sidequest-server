@@ -13,6 +13,8 @@ byte-identical tokenization rules.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
 
 # Conservative stopword set. The goal is to drop function words that add
 # no semantic signal, not to do NLP.
@@ -50,3 +52,106 @@ def tokenize(text: str) -> frozenset[str]:
     lowered = text.lower()
     raw = (t for t in _TOKEN_SPLIT.split(lowered) if t)
     return frozenset(_strip_suffix(t) for t in raw if t not in _STOPWORDS)
+
+
+# ---------------------------------------------------------------------------
+# Severity type
+# ---------------------------------------------------------------------------
+
+Severity = Literal["warn", "soft_suggest", "reprompt"]
+
+
+# ---------------------------------------------------------------------------
+# ValidationResult
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """Result of a confrontation intent vs declared-type check.
+
+    Always represents a flagged mismatch. The validator returns None when
+    there is nothing to flag.
+    """
+
+    matched_type: str
+    declared: str | None
+    severity: Severity
+    matched_tokens: tuple[str, ...]
+
+
+# ---------------------------------------------------------------------------
+# Protocols (duck-typed — no concrete model imports at runtime)
+# ---------------------------------------------------------------------------
+
+
+class _ConfrontationDefLike(Protocol):
+    confrontation_type: str
+    on_intent_mismatch: str
+    intent_verb_set: frozenset[str]
+
+
+class _PackLike(Protocol):
+    rules: Any
+
+
+# ---------------------------------------------------------------------------
+# validate()
+# ---------------------------------------------------------------------------
+
+
+def validate(
+    action_rewrite: Any,
+    declared_confrontation: str | None,
+    pack: _PackLike | None,
+    *,
+    active_encounter: bool,
+) -> ValidationResult | None:
+    """Compare narrator-declared intent against declared confrontation.
+
+    Returns ``None`` for any non-flag case (no intent, encounter active,
+    declared matches inferred, nothing matches, pack missing). Never raises.
+    """
+    if pack is None:
+        return None
+    rules = getattr(pack, "rules", None)
+    if rules is None:
+        return None
+    if active_encounter:
+        return None
+    if action_rewrite is None:
+        return None
+    intent = (getattr(action_rewrite, "intent", "") or "").strip()
+    if not intent:
+        return None
+
+    intent_tokens = tokenize(intent)
+    if not intent_tokens:
+        return None
+
+    defs = getattr(rules, "confrontations", None) or []
+    scored: list[tuple[int, int, _ConfrontationDefLike, frozenset[str]]] = []
+    for idx, cdef in enumerate(defs):
+        verbs = getattr(cdef, "intent_verb_set", None) or frozenset()
+        if not verbs:
+            continue
+        overlap = intent_tokens & verbs
+        if overlap:
+            scored.append((len(overlap), idx, cdef, overlap))
+
+    if not scored:
+        return None
+
+    # Most overlap wins; ties broken by pack-declaration order (lower idx first).
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    _, _, best_cdef, best_overlap = scored[0]
+
+    if declared_confrontation == best_cdef.confrontation_type:
+        return None
+
+    return ValidationResult(
+        matched_type=best_cdef.confrontation_type,
+        declared=declared_confrontation,
+        severity=best_cdef.on_intent_mismatch,  # type: ignore[arg-type]
+        matched_tokens=tuple(sorted(best_overlap)),
+    )

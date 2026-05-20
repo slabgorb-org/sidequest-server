@@ -161,7 +161,7 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
 
     orchestrator = Orchestrator.__new__(Orchestrator)
     store = SqliteStore.open_in_memory()
-    store.init_session("caverns_and_claudes", "caverns_sunden")
+    store.init_session("caverns_and_claudes", "beneath_sunden")
 
     sd = _SessionData(
         genre_slug="caverns_and_claudes",

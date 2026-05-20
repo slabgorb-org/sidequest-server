@@ -39,6 +39,8 @@ class ScriptedResponse:
     model: str
     tool_uses: list[ToolUseBlock] = field(default_factory=list)
     stream_deltas: list[str] = field(default_factory=list)
+    cached_input_write_5m_tokens: int = 0
+    cached_input_write_1h_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +125,8 @@ class FakeAnthropicSdkClient:
                     model=response.model,
                     tool_calls=all_tool_calls,
                     cumulative_cost_usd=cumulative_cost_usd,
+                    cached_input_write_5m_tokens=response.cached_input_write_5m_tokens,
+                    cached_input_write_1h_tokens=response.cached_input_write_1h_tokens,
                 )
 
             if tool_dispatch is None:

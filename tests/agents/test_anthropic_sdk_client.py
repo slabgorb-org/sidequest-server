@@ -87,11 +87,18 @@ def test_invalid_cache_ttl_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @dataclass(frozen=True)
+class _CacheCreation:
+    ephemeral_5m_input_tokens: int = 0
+    ephemeral_1h_input_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class _Usage:
     input_tokens: int
     output_tokens: int
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation: _CacheCreation | None = None
 
 
 @dataclass(frozen=True)
@@ -418,3 +425,239 @@ async def test_complete_with_tools_records_cost(
 async def test_complete_with_tools_imports_anthropic_sdk_error_types() -> None:
     """Ensure AnthropicSdkClientError exists and is wired."""
     assert issubclass(AnthropicSdkClientError, Exception)
+
+
+def test_tooling_result_has_ttl_breakdown_fields() -> None:
+    """ToolingResult exposes per-TTL write breakdowns so the orchestrator
+    can attribute 5m vs 1h cache writes onto narration.turn spans."""
+    from sidequest.agents.tooling_protocol import ToolingResult
+
+    result = ToolingResult(
+        text="ok",
+        stop_reason="end_turn",
+        input_tokens=10,
+        output_tokens=2,
+        cached_input_read_tokens=0,
+        cached_input_write_tokens=0,
+        model="claude-sonnet-4-6",
+        cached_input_write_5m_tokens=100,
+        cached_input_write_1h_tokens=200,
+    )
+    assert result.cached_input_write_5m_tokens == 100
+    assert result.cached_input_write_1h_tokens == 200
+
+
+def test_tooling_result_breakdown_fields_default_to_zero() -> None:
+    """Legacy test fixtures that construct ToolingResult by hand without
+    the new fields keep working."""
+    from sidequest.agents.tooling_protocol import ToolingResult
+
+    result = ToolingResult(
+        text="ok",
+        stop_reason="end_turn",
+        input_tokens=10,
+        output_tokens=2,
+        cached_input_read_tokens=0,
+        cached_input_write_tokens=0,
+        model="claude-sonnet-4-6",
+    )
+    assert result.cached_input_write_5m_tokens == 0
+    assert result.cached_input_write_1h_tokens == 0
+
+
+async def test_ttl_breakdown_flows_into_tooling_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """usage.cache_creation.ephemeral_{5m,1h}_input_tokens reach ToolingResult."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk_response = _SdkResponse(
+        content=[_SdkContentTextBlock(type="text", text="ok")],
+        stop_reason="end_turn",
+        usage=_Usage(
+            input_tokens=10,
+            output_tokens=2,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=300,
+            cache_creation=_CacheCreation(
+                ephemeral_5m_input_tokens=100,
+                ephemeral_1h_input_tokens=200,
+            ),
+        ),
+        model="claude-sonnet-4-6",
+    )
+    fake = _FakeAsyncSdk(responses=[sdk_response])
+    client = AnthropicSdkClient(sdk=fake)
+    result = await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        model="claude-sonnet-4-6",
+    )
+    assert result.cached_input_write_5m_tokens == 100
+    assert result.cached_input_write_1h_tokens == 200
+    # Aggregate stays unchanged.
+    assert result.cached_input_write_tokens == 300
+
+
+async def test_ttl_breakdown_defaults_zero_when_field_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SDK-version-drift case: older SDKs return no `cache_creation` object.
+    The breakdown silently goes to 0; the aggregate field stays correct."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk_response = _SdkResponse(
+        content=[_SdkContentTextBlock(type="text", text="ok")],
+        stop_reason="end_turn",
+        usage=_Usage(
+            input_tokens=10,
+            output_tokens=2,
+            cache_creation_input_tokens=500,
+            cache_creation=None,  # older SDK shape
+        ),
+        model="claude-sonnet-4-6",
+    )
+    fake = _FakeAsyncSdk(responses=[sdk_response])
+    client = AnthropicSdkClient(sdk=fake)
+    result = await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        model="claude-sonnet-4-6",
+    )
+    assert result.cached_input_write_5m_tokens == 0
+    assert result.cached_input_write_1h_tokens == 0
+    assert result.cached_input_write_tokens == 500
+
+
+async def test_per_iter_log_line_includes_ttl_breakdown(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """narrator.sdk.usage log line gains `5m=N 1h=N` columns so cache
+    breakdown is visible in /tmp/sidequest-server.log without a WS tap."""
+    import logging
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk_response = _SdkResponse(
+        content=[_SdkContentTextBlock(type="text", text="ok")],
+        stop_reason="end_turn",
+        usage=_Usage(
+            input_tokens=10,
+            output_tokens=2,
+            cache_creation_input_tokens=300,
+            cache_creation=_CacheCreation(
+                ephemeral_5m_input_tokens=100,
+                ephemeral_1h_input_tokens=200,
+            ),
+        ),
+        model="claude-sonnet-4-6",
+    )
+    fake = _FakeAsyncSdk(responses=[sdk_response])
+    client = AnthropicSdkClient(sdk=fake)
+    with caplog.at_level(logging.INFO, logger="sidequest.agents.anthropic_sdk_client"):
+        await client.complete_with_tools(
+            system_blocks=[CacheableBlock(text="x", cache=True)],
+            messages=[Message(role="user", content="hi")],
+            tools=[],
+            model="claude-sonnet-4-6",
+        )
+    usage_records = [r for r in caplog.records if "narrator.sdk.usage" in r.getMessage()]
+    assert usage_records, "expected at least one narrator.sdk.usage log line"
+    msg = usage_records[0].getMessage()
+    assert "5m=100" in msg, f"expected '5m=100' in log line; got: {msg}"
+    assert "1h=200" in msg, f"expected '1h=200' in log line; got: {msg}"
+
+
+async def test_last_tool_gets_cache_control_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The last tool definition carries a cache_control marker with the
+    client's configured TTL. Earlier tools do not. This converts the
+    tools array (byte-stable across every turn) into an explicit 1h
+    cache prefix instead of relying on Anthropic's default 5m auto-cache."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake = _FakeAsyncSdk(
+        responses=[
+            _SdkResponse(
+                content=[_SdkContentTextBlock(type="text", text="ok")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=fake, cache_ttl="1h")
+    tools = [
+        ToolDefinition(name="alpha", description="a", input_schema={"type": "object"}),
+        ToolDefinition(name="beta", description="b", input_schema={"type": "object"}),
+        ToolDefinition(name="gamma", description="c", input_schema={"type": "object"}),
+    ]
+    await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=tools,
+        model="claude-sonnet-4-6",
+    )
+    sent_tools = fake.messages.calls[0]["tools"]
+    assert len(sent_tools) == 3
+    assert "cache_control" not in sent_tools[0]
+    assert "cache_control" not in sent_tools[1]
+    assert sent_tools[2]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
+async def test_last_tool_marker_inherits_5m_ttl_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No parallel TTL config — the tools marker echoes the same
+    self.cache_ttl as the system-block marker."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake = _FakeAsyncSdk(
+        responses=[
+            _SdkResponse(
+                content=[_SdkContentTextBlock(type="text", text="ok")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=fake, cache_ttl="5m")
+    tools = [
+        ToolDefinition(name="alpha", description="a", input_schema={"type": "object"}),
+    ]
+    await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=tools,
+        model="claude-sonnet-4-6",
+    )
+    sent_tools = fake.messages.calls[0]["tools"]
+    assert sent_tools[0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+
+
+async def test_empty_tools_array_skips_marker_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test fixtures sometimes pass tools=[]. The marker is best-effort
+    opt-in; an empty array must not raise. Production has 27 tools."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake = _FakeAsyncSdk(
+        responses=[
+            _SdkResponse(
+                content=[_SdkContentTextBlock(type="text", text="ok")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=fake, cache_ttl="1h")
+    # Must not raise.
+    await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        model="claude-sonnet-4-6",
+    )
+    sent_tools = fake.messages.calls[0]["tools"]
+    assert sent_tools == []

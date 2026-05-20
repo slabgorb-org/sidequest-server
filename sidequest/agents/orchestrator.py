@@ -3133,6 +3133,24 @@ class Orchestrator:
                 system_blocks.append(CacheableBlock(text=valley_text, cache=False))
             if recency_text:
                 system_blocks.append(CacheableBlock(text=recency_text, cache=False))
+
+            # Stability-audit diagnostic — per-block token estimate using the
+            # project's standard char/4 approximation (see orchestrator.py
+            # token-estimate pattern). Tools size is computed from the
+            # registry's serialized JSON. Drift in the 'stable' region
+            # surfaces as a growing value across turns of one session.
+            tools_payload = json.dumps(
+                [
+                    {"name": t.name, "description": t.description, "input_schema": t.input_schema}
+                    for t in default_registry.tool_definitions()
+                ]
+            )
+            system_block_sizes = {
+                "stable": len(stable_text) // 4,
+                "valley": len(valley_text) // 4,
+                "recency": len(recency_text) // 4,
+                "tools": len(tools_payload) // 4,
+            }
             messages = [Message(role="user", content=user_message)]
 
             model = resolve_model(CallType.NARRATION)
@@ -3220,6 +3238,18 @@ class Orchestrator:
                 )
                 span.set_attribute(
                     "narration.turn.cache_write_tokens", result.cached_input_write_tokens
+                )
+                span.set_attribute(
+                    "narration.turn.cache_write_5m_tokens",
+                    result.cached_input_write_5m_tokens,
+                )
+                span.set_attribute(
+                    "narration.turn.cache_write_1h_tokens",
+                    result.cached_input_write_1h_tokens,
+                )
+                span.set_attribute(
+                    "narration.turn.system_block_sizes_json",
+                    json.dumps(system_block_sizes),
                 )
                 # Cache TTL the client is configured with, so the GM panel
                 # can prove the 1h fix engaged and compute write

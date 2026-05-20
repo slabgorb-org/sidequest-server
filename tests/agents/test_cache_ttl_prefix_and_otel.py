@@ -19,6 +19,7 @@ Two guarantees the 1h ephemeral-cache restore depends on:
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -116,11 +117,18 @@ async def test_sdk_path_emits_zone_aligned_cacheable_blocks(
 
 
 @dataclass
+class _CacheCreation:
+    ephemeral_5m_input_tokens: int = 0
+    ephemeral_1h_input_tokens: int = 0
+
+
+@dataclass
 class _Usage:
     input_tokens: int
     output_tokens: int
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation: _CacheCreation | None = None
 
 
 @dataclass
@@ -243,3 +251,118 @@ async def test_narration_turn_span_carries_total_cost_usd(
     line = usage_lines[0]
     for needle in ("iter=1", "input=500", "output=80", "cache_read=12000", "cost_usd="):
         assert needle in line, f"missing {needle!r} in usage line: {line!r}"
+
+
+@pytest.mark.asyncio
+async def test_narration_turn_span_carries_ttl_breakdown(
+    simple_turn_context,
+    otel_capture: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """narration.turn span exposes 5m vs 1h write breakdown so the GM
+    panel can verify the tools-cache fix engaged."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk = _Sdk(
+        responses=[
+            _Resp(
+                content=[_TextBlock(type="text", text="The torch sputters.")],
+                stop_reason="end_turn",
+                usage=_Usage(
+                    input_tokens=300,
+                    output_tokens=40,
+                    cache_read_input_tokens=10000,
+                    cache_creation_input_tokens=15000,
+                    cache_creation=_CacheCreation(
+                        ephemeral_5m_input_tokens=0,
+                        ephemeral_1h_input_tokens=15000,
+                    ),
+                ),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
+    orch = Orchestrator(client=client)
+
+    await orch.run_narration_turn("look around", simple_turn_context)
+
+    turn_spans = [s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"]
+    assert turn_spans, "expected a narration.turn span"
+    attrs = dict(turn_spans[0].attributes or {})
+    assert attrs.get("narration.turn.cache_write_5m_tokens") == 0, (
+        f"expected 0; got {attrs.get('narration.turn.cache_write_5m_tokens')!r}"
+    )
+    assert attrs.get("narration.turn.cache_write_1h_tokens") == 15000, (
+        f"expected 15000; got {attrs.get('narration.turn.cache_write_1h_tokens')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_narration_turn_span_carries_system_block_sizes_json(
+    simple_turn_context,
+    otel_capture: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stability-audit diagnostic — span carries per-block token sizes
+    so drift in 'stable' zones surfaces in the GM panel."""
+    import json as _json
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk = _Sdk(
+        responses=[
+            _Resp(
+                content=[_TextBlock(type="text", text="ok")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
+    orch = Orchestrator(client=client)
+
+    await orch.run_narration_turn("look around", simple_turn_context)
+
+    turn_spans = [s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"]
+    assert turn_spans, "expected a narration.turn span"
+    attrs = dict(turn_spans[0].attributes or {})
+    raw = attrs.get("narration.turn.system_block_sizes_json")
+    assert isinstance(raw, str), f"expected JSON string; got {type(raw).__name__}"
+    sizes = _json.loads(raw)
+    # Required keys — all four regions must report a size even if zero.
+    assert set(sizes.keys()) == {"stable", "valley", "recency", "tools"}, (
+        f"unexpected key set: {sorted(sizes.keys())}"
+    )
+    # Each size is a non-negative int (token estimate via char-count / 4).
+    for name, value in sizes.items():
+        assert isinstance(value, int) and value >= 0, (
+            f"{name}={value!r} must be a non-negative int"
+        )
+    # Stable region must be non-empty on a real narration turn.
+    assert sizes["stable"] > 0, "stable region must carry content"
+
+
+def test_tool_definitions_json_byte_identical_across_calls() -> None:
+    """Tools-region cache marker (added 2026-05-20) only buys 1h caching if
+    the serialized tools array is byte-identical across calls. This regression
+    test asserts that — if it ever fails, the tools cache will silently re-mint
+    every turn even with the marker present."""
+    from sidequest.agents.tool_registry import default_registry
+
+    snapshots: list[str] = []
+    for _ in range(3):
+        payload = json.dumps(
+            [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                }
+                for t in default_registry.tool_definitions()
+            ]
+        )
+        snapshots.append(payload)
+
+    assert snapshots[0] == snapshots[1] == snapshots[2], (
+        "tool_definitions() JSON drifted across calls — tools cache will re-mint"
+    )

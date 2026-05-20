@@ -72,6 +72,12 @@ class ToolingResult:
     # loop. Defaults to 0.0 so legacy test doubles that construct
     # ToolingResult by hand keep working — production paths populate it.
     cumulative_cost_usd: float = 0.0
+    # Per-TTL breakdown of `cached_input_write_tokens` from
+    # `usage.cache_creation.ephemeral_{5m,1h}_input_tokens`. Default to 0
+    # for SDK-version drift (<0.51 didn't expose the breakdown) and for
+    # legacy fixtures.
+    cached_input_write_5m_tokens: int = 0
+    cached_input_write_1h_tokens: int = 0
 
 
 # Handler signature the registry exposes to the client.

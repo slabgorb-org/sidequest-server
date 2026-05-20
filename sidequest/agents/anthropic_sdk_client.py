@@ -116,6 +116,8 @@ class AnthropicSdkClient:
         cumulative_out = 0
         cumulative_cache_read = 0
         cumulative_cache_write = 0
+        cumulative_cache_write_5m = 0
+        cumulative_cache_write_1h = 0
         cumulative_cost_usd = 0.0
         last_model = model
 
@@ -143,10 +145,28 @@ class AnthropicSdkClient:
                 output_tokens = int(getattr(usage, "output_tokens", 0))
                 cache_read = int(getattr(usage, "cache_read_input_tokens", 0))
                 cache_write = int(getattr(usage, "cache_creation_input_tokens", 0))
+                # Per-TTL breakdown — exposed by anthropic-python>=0.51 via the
+                # nested cache_creation object. Older SDKs return no nested
+                # object; we keep aggregate-only behavior and report 0 for the
+                # breakdown so the operator can see "SDK doesn't expose it"
+                # rather than guessing.
+                cache_creation = getattr(usage, "cache_creation", None)
+                cache_write_5m = (
+                    int(getattr(cache_creation, "ephemeral_5m_input_tokens", 0))
+                    if cache_creation
+                    else 0
+                )
+                cache_write_1h = (
+                    int(getattr(cache_creation, "ephemeral_1h_input_tokens", 0))
+                    if cache_creation
+                    else 0
+                )
                 cumulative_in += input_tokens
                 cumulative_out += output_tokens
                 cumulative_cache_read += cache_read
                 cumulative_cache_write += cache_write
+                cumulative_cache_write_5m += cache_write_5m
+                cumulative_cache_write_1h += cache_write_1h
                 last_model = response.model
 
                 cost = compute_cost_usd(
@@ -171,12 +191,14 @@ class AnthropicSdkClient:
                 # hit/miss is visible without a WS tap (Task B3).
                 logger.info(
                     "narrator.sdk.usage iter=%d input=%d output=%d "
-                    "cache_read=%d cache_write=%d cost_usd=%.6f",
+                    "cache_read=%d cache_write=%d 5m=%d 1h=%d cost_usd=%.6f",
                     iteration,
                     input_tokens,
                     output_tokens,
                     cache_read,
                     cache_write,
+                    cache_write_5m,
+                    cache_write_1h,
                     cost,
                 )
 
@@ -197,6 +219,8 @@ class AnthropicSdkClient:
                     model=last_model,
                     tool_calls=all_tool_uses,
                     cumulative_cost_usd=cumulative_cost_usd,
+                    cached_input_write_5m_tokens=cumulative_cache_write_5m,
+                    cached_input_write_1h_tokens=cumulative_cache_write_1h,
                 )
 
             if tool_dispatch is None:
@@ -256,7 +280,7 @@ class AnthropicSdkClient:
         return out
 
     def _build_tools_array(self, tools: list[ToolDefinition]) -> list[dict[str, Any]]:
-        return [
+        out: list[dict[str, Any]] = [
             {
                 "name": t.name,
                 "description": t.description,
@@ -264,6 +288,16 @@ class AnthropicSdkClient:
             }
             for t in tools
         ]
+        # The tools array is byte-stable across every turn — 27 definitions,
+        # ~7.6K tokens, no per-turn drift. Without an explicit cache_control
+        # marker, Anthropic auto-caches it at default 5m TTL and re-writes
+        # the whole block every time the 5m timer expires (which the
+        # submit-and-wait MP cadence routinely outlives). A marker on the
+        # last entry caches the whole tools array at the configured TTL
+        # (1h by default). See ADR-101 four-region cache layout amendment.
+        if out:
+            out[-1]["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
+        return out
 
     @staticmethod
     def _split_content(

@@ -978,9 +978,11 @@ def _maybe_emit_location_overlay_changed(
     The payload carries the FULL post-transition overlay set — on
     activate that's one item, on deactivate that's an empty list. The UI
     replaces its overlay slice rather than reconciling diffs (54-9). The
-    bare ``location_overlay_changed.emitted`` watcher event surfaces the
-    transition on the GM panel until 54-8 wraps it in a dedicated OTEL
-    span.
+    dedicated ``location.overlay.{activate,deactivate}`` OTEL spans
+    (Story 54-8) carry the same fields through the ``SPAN_ROUTES``
+    fan-out (``component="location"``, ``state_transition`` event), so
+    the prior bare ``_watcher_publish("location_overlay_changed.emitted", ...)``
+    is no longer needed and has been removed.
     """
     from contextlib import AbstractContextManager
 

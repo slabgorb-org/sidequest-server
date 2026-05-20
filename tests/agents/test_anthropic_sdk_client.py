@@ -527,3 +527,42 @@ async def test_ttl_breakdown_defaults_zero_when_field_missing(
     assert result.cached_input_write_5m_tokens == 0
     assert result.cached_input_write_1h_tokens == 0
     assert result.cached_input_write_tokens == 500
+
+
+async def test_per_iter_log_line_includes_ttl_breakdown(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """narrator.sdk.usage log line gains `5m=N 1h=N` columns so cache
+    breakdown is visible in /tmp/sidequest-server.log without a WS tap."""
+    import logging
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk_response = _SdkResponse(
+        content=[_SdkContentTextBlock(type="text", text="ok")],
+        stop_reason="end_turn",
+        usage=_Usage(
+            input_tokens=10,
+            output_tokens=2,
+            cache_creation_input_tokens=300,
+            cache_creation=_CacheCreation(
+                ephemeral_5m_input_tokens=100,
+                ephemeral_1h_input_tokens=200,
+            ),
+        ),
+        model="claude-sonnet-4-6",
+    )
+    fake = _FakeAsyncSdk(responses=[sdk_response])
+    client = AnthropicSdkClient(sdk=fake)
+    with caplog.at_level(logging.INFO, logger="sidequest.agents.anthropic_sdk_client"):
+        await client.complete_with_tools(
+            system_blocks=[CacheableBlock(text="x", cache=True)],
+            messages=[Message(role="user", content="hi")],
+            tools=[],
+            model="claude-sonnet-4-6",
+        )
+    usage_records = [r for r in caplog.records if "narrator.sdk.usage" in r.getMessage()]
+    assert usage_records, "expected at least one narrator.sdk.usage log line"
+    msg = usage_records[0].getMessage()
+    assert "5m=100" in msg, f"expected '5m=100' in log line; got: {msg}"
+    assert "1h=200" in msg, f"expected '1h=200' in log line; got: {msg}"

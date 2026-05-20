@@ -191,12 +191,14 @@ class AnthropicSdkClient:
                 # hit/miss is visible without a WS tap (Task B3).
                 logger.info(
                     "narrator.sdk.usage iter=%d input=%d output=%d "
-                    "cache_read=%d cache_write=%d cost_usd=%.6f",
+                    "cache_read=%d cache_write=%d 5m=%d 1h=%d cost_usd=%.6f",
                     iteration,
                     input_tokens,
                     output_tokens,
                     cache_read,
                     cache_write,
+                    cache_write_5m,
+                    cache_write_1h,
                     cost,
                 )
 

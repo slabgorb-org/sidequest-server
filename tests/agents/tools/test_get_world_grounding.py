@@ -40,7 +40,7 @@ from sidequest.agents.tool_registry import (
     default_registry,
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
-from sidequest.agents.tools import get_world_grounding as _mod  # noqa: F401
+from sidequest.agents.tools import get_world_grounding as _get_world_grounding_module  # noqa: F401
 from sidequest.game.weather import WeatherState
 
 # ---------------------------------------------------------------------------

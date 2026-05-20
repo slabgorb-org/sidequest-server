@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     )
     from sidequest.game.lore_store import LoreStore
     from sidequest.game.monster_manual import MonsterManual
+    from sidequest.game.weather import WeatherState
     from sidequest.genre.names.generator import NameGenerator
 
 
@@ -128,6 +129,17 @@ class ToolContext:
     # production call site; Phase C tools tolerate ``None`` (generate_name
     # returns an empty list with ``name_generators_wired=False``).
     name_generators: dict[str, NameGenerator] | None = None
+    # Story 24-6 amendment: world-grounding data for the get_world_grounding
+    # tool. Three optional plain-data fields — current WeatherState (from the
+    # 24-5 generator), demographics dict (24-3 YAML), calendar dict (24-4
+    # YAML, backlog at story-creation time). The session handler loads these
+    # at session bootstrap and stamps them on every ToolContext. Tools
+    # tolerate ``None`` (get_world_grounding returns ``section=None`` and
+    # stamps ``tool.grounding.<section>_present=False`` on the dispatch span
+    # — explicit absence, no silent fallback per CLAUDE.md).
+    weather_state: WeatherState | None = None
+    world_demographics: dict[str, Any] | None = None
+    world_calendar: dict[str, Any] | None = None
 
 
 _ArgsT = TypeVar("_ArgsT", bound=BaseModel)

@@ -294,3 +294,48 @@ async def test_narration_turn_span_carries_ttl_breakdown(
     assert attrs.get("narration.turn.cache_write_1h_tokens") == 15000, (
         f"expected 15000; got {attrs.get('narration.turn.cache_write_1h_tokens')!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_narration_turn_span_carries_system_block_sizes_json(
+    simple_turn_context,
+    otel_capture: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stability-audit diagnostic — span carries per-block token sizes
+    so drift in 'stable' zones surfaces in the GM panel."""
+    import json as _json
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sdk = _Sdk(
+        responses=[
+            _Resp(
+                content=[_TextBlock(type="text", text="ok")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
+    orch = Orchestrator(client=client)
+
+    await orch.run_narration_turn("look around", simple_turn_context)
+
+    turn_spans = [s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"]
+    assert turn_spans, "expected a narration.turn span"
+    attrs = dict(turn_spans[0].attributes or {})
+    raw = attrs.get("narration.turn.system_block_sizes_json")
+    assert isinstance(raw, str), f"expected JSON string; got {type(raw).__name__}"
+    sizes = _json.loads(raw)
+    # Required keys — all four regions must report a size even if zero.
+    assert set(sizes.keys()) == {"stable", "valley", "recency", "tools"}, (
+        f"unexpected key set: {sorted(sizes.keys())}"
+    )
+    # Each size is a non-negative int (token estimate via char-count / 4).
+    for name, value in sizes.items():
+        assert isinstance(value, int) and value >= 0, (
+            f"{name}={value!r} must be a non-negative int"
+        )
+    # Stable region must be non-empty on a real narration turn.
+    assert sizes["stable"] > 0, "stable region must carry content"

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import pytest
 
 from sidequest.agents.confrontation_intent_validator import (
-    ValidationResult,  # noqa: F401 — public API surface test
+    ValidationResult,
     tokenize,
     validate,
 )
@@ -94,10 +94,6 @@ class _FakeConfrontationDef:
 @dataclass
 class _FakeRules:
     confrontations: list[_FakeConfrontationDef]
-
-    @property
-    def intent_verbs_by_type(self) -> dict[str, frozenset[str]]:
-        return {c.confrontation_type: c.intent_verb_set for c in self.confrontations}
 
 
 @dataclass
@@ -273,5 +269,6 @@ def test_validation_result_is_frozen() -> None:
         active_encounter=False,
     )
     assert result is not None
-    with pytest.raises((AttributeError, Exception)):
+    assert isinstance(result, ValidationResult)
+    with pytest.raises(AttributeError):
         result.matched_type = "other"  # type: ignore[misc]

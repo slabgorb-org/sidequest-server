@@ -87,7 +87,7 @@ class ValidationResult:
 
 class _ConfrontationDefLike(Protocol):
     confrontation_type: str
-    on_intent_mismatch: str
+    on_intent_mismatch: Severity
     intent_verb_set: frozenset[str]
 
 
@@ -152,6 +152,6 @@ def validate(
     return ValidationResult(
         matched_type=best_cdef.confrontation_type,
         declared=declared_confrontation,
-        severity=best_cdef.on_intent_mismatch,  # type: ignore[arg-type]
+        severity=best_cdef.on_intent_mismatch,
         matched_tokens=tuple(sorted(best_overlap)),
     )

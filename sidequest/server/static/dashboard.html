@@ -454,6 +454,9 @@ function selectTurn(i) {
   if (nt) {
     const read = nt['narration.turn.cache_read_tokens'] || 0;
     const write = nt['narration.turn.cache_write_tokens'] || 0;
+    const write5m = nt['narration.turn.cache_write_5m_tokens'] || 0;
+    const write1h = nt['narration.turn.cache_write_1h_tokens'] || 0;
+    const blockSizesJson = nt['narration.turn.system_block_sizes_json'];
     const inTok = nt['narration.turn.total_input_tokens'] || 0;
     // Hit-rate as a share of total input-side tokens (fresh + cache_read).
     // cache_write is excluded — that's the prefix-mint event, not a hit.
@@ -466,7 +469,9 @@ function selectTurn(i) {
     cacheRow = `
     <br>· <b>Cost:</b> <span style="color:var(--accent)">${costStr}</span>
     &nbsp; <b>Cache:</b> <span style="color:${hitColor}">${hitPct.toFixed(0)}%</span>
-    (read ${read} / write ${write}) &nbsp; <b>TTL:</b> ${esc(String(ttl))}`;
+    (read ${read} / write ${write}) &nbsp; <b>TTL:</b> ${esc(String(ttl))}
+    <br>· <b>Cache write breakdown:</b> <span style="color:var(--muted)">5m=${write5m} / 1h=${write1h}</span>
+    <br>· <b>System block sizes (tokens):</b> <span style="color:var(--muted)">${blockSizesJson ? esc(String(blockSizesJson)) : '—'}</span>`;
   }
 
   document.getElementById('turn-meta-body').innerHTML = `

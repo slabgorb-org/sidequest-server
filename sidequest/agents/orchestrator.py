@@ -1364,48 +1364,54 @@ class Orchestrator:
                     ),
                 )
 
-            # Extraction — every tier
+            # Extraction — every tier. ADR-112 / Story 57-3 re-zoned from
+            # Valley → Early so the content lands in ``system_blocks[0]``
+            # (the cache-marked block) rather than the uncached Valley
+            # follow-on block, realising the cache rebate ADR-112 promises.
             if gp.extraction:
                 registry.register_section(
                     agent_name,
                     PromptSection.new(
                         "genre_extraction",
                         f"<genre-extraction>\n{gp.extraction}\n</genre-extraction>",
-                        AttentionZone.Valley,
+                        AttentionZone.Early,
                         SectionCategory.Genre,
                     ),
                 )
 
-            # ADR-098: formerly Full-tier-only; now fire every turn
+            # ADR-098: formerly Full-tier-only; now fire every turn.
+            # ADR-112 / Story 57-3 re-zoned Valley → Early — see comment above.
             if gp.keeper_monologue:
                 registry.register_section(
                     agent_name,
                     PromptSection.new(
                         "genre_keeper_monologue",
                         f"<genre-keeper>\n{gp.keeper_monologue}\n</genre-keeper>",
-                        AttentionZone.Valley,
+                        AttentionZone.Early,
                         SectionCategory.Genre,
                     ),
                 )
 
+            # ADR-112 / Story 57-3 re-zoned Valley → Early — see comment above.
             if gp.town:
                 registry.register_section(
                     agent_name,
                     PromptSection.new(
                         "genre_town",
                         f"<genre-town>\n{gp.town}\n</genre-town>",
-                        AttentionZone.Valley,
+                        AttentionZone.Early,
                         SectionCategory.Genre,
                     ),
                 )
 
+            # ADR-112 / Story 57-3 re-zoned Valley → Early — see comment above.
             if gp.chargen:
                 registry.register_section(
                     agent_name,
                     PromptSection.new(
                         "genre_chargen",
                         f"<genre-chargen>\n{gp.chargen}\n</genre-chargen>",
-                        AttentionZone.Valley,
+                        AttentionZone.Early,
                         SectionCategory.Genre,
                     ),
                 )

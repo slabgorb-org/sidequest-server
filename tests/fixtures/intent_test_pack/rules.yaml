@@ -1,0 +1,54 @@
+tone: test
+lethality: low
+magic_level: none
+stat_generation: point_buy
+point_buy_budget: 27
+ability_score_names:
+  - STR
+  - DEX
+  - CON
+  - INT
+  - WIS
+  - CHA
+allowed_classes: []
+allowed_races: []
+
+confrontations:
+  - type: negotiation_warn
+    label: Haggling Match
+    category: social
+    player_metric: { name: leverage, threshold: 5 }
+    opponent_metric: { name: patience, threshold: 5 }
+    beats:
+      - id: b1
+        label: Bargain
+        stat_check: cha
+        kind: push
+    intent_verbs: [bargain, haggle, deal]
+    on_intent_mismatch: warn
+
+  - type: negotiation_soft
+    label: Gentle Haggling Match
+    category: social
+    player_metric: { name: leverage, threshold: 5 }
+    opponent_metric: { name: patience, threshold: 5 }
+    beats:
+      - id: b1
+        label: Persuade
+        stat_check: cha
+        kind: push
+    intent_verbs: [persuade, convince, sway]
+    on_intent_mismatch: soft_suggest
+
+  - type: combat_reprompt
+    label: Combat
+    category: combat
+    player_metric: { name: hp, threshold: 10 }
+    opponent_metric: { name: hp, threshold: 10 }
+    beats:
+      - id: b1
+        label: Strike
+        stat_check: str
+        kind: push
+    intent_verbs: [strike, attack, fight]
+    on_intent_mismatch: reprompt

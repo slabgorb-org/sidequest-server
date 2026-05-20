@@ -1,20 +1,22 @@
 """Story 50-2 — prompt-engineering RED tests.
 
 Source: 2026-05-13 pingpong-archive triage. PR #177 added the OTEL warning
-span ``confrontation.skipped_with_trigger_keywords`` but the implicit
-"fixed" work — actually steering the narrator to emit ``confrontation``
-on trigger prose for every confrontation category the genre offers —
-was never done. The warning currently fires as steady-state on Victoria
-turns because the prompt's TRIGGER CRITERIA enumeration is missing the
-Victoria-pack social types (scandal, social_duel, trial, auction) and
-the Recency-zone restatement also omits them.
+span for confrontation mismatch, but the implicit "fixed" work — actually
+steering the narrator to emit ``confrontation`` on trigger prose for every
+confrontation category the genre offers — was never done. The warning
+currently fires as steady-state on Victoria turns because the prompt's
+TRIGGER CRITERIA enumeration is missing the Victoria-pack social types
+(scandal, social_duel, trial, auction) and the Recency-zone restatement
+also omits them.
 
 Scope (per session SM Assessment):
 - The fix is the prompt, NOT the keyword detector.
-- No keyword-list editing in ``_CONFRONTATION_TRIGGER_PATTERNS``.
-- The OTEL warning span flips role from "fix indicator" to
-  "regression detector". These tests pin the prompt content so the
-  flip is real.
+- The keyword scanner was deleted 2026-05-20 (replaced by
+  confrontation_intent_validator). This test still pins the prompt content
+  so the narrator emits ``confrontation`` proactively.
+- The OTEL confrontation.intent_mismatch span is the post-deletion
+  regression detector. These tests pin the prompt content so the
+  guardrail is real.
 
 AC trigger keywords from the story: chase, intercept, scandal,
 negotiation, social_duel, trial, auction. The seven cover the union of
@@ -42,9 +44,9 @@ _SEVEN_AC_TRIGGER_TYPES: tuple[str, ...] = (
     "trial",
     "auction",
 )
-# "intercept" is a regex-label (PR #177's _CONFRONTATION_TRIGGER_PATTERNS)
-# AND a prose pattern that should resolve to ship_combat/chase. Tracked
-# in the Recency-zone-phrases test below.
+# "intercept" is a prose pattern that should resolve to ship_combat/chase.
+# Documented in the CONFRONTATION_TRIGGER_CONSTRAINT prompt text directly.
+# Tracked in the Recency-zone-phrases test below.
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ Port of sidequest-genre/src/models/rules.rs.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -353,6 +353,10 @@ class ConfrontationDef(BaseModel):
     # other than ``opposed_check``.
     opponent_default_stats: dict[str, int] | None = None
     morale: MoraleDef | None = None
+    intent_verbs: list[str] | None = None
+    on_intent_mismatch: Literal["warn", "soft_suggest", "reprompt"] = "warn"
+    # Derived at construction time; excluded from serialization.
+    intent_verb_set: frozenset[str] = Field(default_factory=frozenset, exclude=True, init=False)
 
     @model_validator(mode="before")
     @classmethod
@@ -386,6 +390,20 @@ class ConfrontationDef(BaseModel):
                     f"confrontation '{self.confrontation_type}' has duplicate beat id '{beat.id}'"
                 )
             seen.add(beat.id)
+        # Derive intent vocabulary from label + every beat label, unioned
+        # with any declared intent_verbs. Tokenization is shared with the
+        # validator — both call confrontation_intent_validator.tokenize so
+        # vocabularies are byte-for-byte identical between load and runtime.
+        from sidequest.agents.confrontation_intent_validator import tokenize
+
+        verbs: set[str] = set()
+        verbs.update(tokenize(self.label))
+        for beat in self.beats:
+            verbs.update(tokenize(beat.label))
+        if self.intent_verbs:
+            for v in self.intent_verbs:
+                verbs.update(tokenize(v))
+        object.__setattr__(self, "intent_verb_set", frozenset(verbs))
         return self
 
 
@@ -602,3 +620,13 @@ class RulesConfig(BaseModel):
     reputation_factions: list[ReputationFaction] = Field(default_factory=list)
     reputation_effects: ReputationEffects | None = None
     luck_rules: LuckRules | None = None
+
+    @property
+    def intent_verbs_by_type(self) -> dict[str, frozenset[str]]:
+        """Mapping of confrontation_type -> derived intent verb set.
+
+        Consumed by sidequest.agents.confrontation_intent_validator.validate
+        (Task 3). The frozensets themselves are shared with each
+        ConfrontationDef.intent_verb_set so this property is cheap to call.
+        """
+        return {cd.confrontation_type: cd.intent_verb_set for cd in self.confrontations}

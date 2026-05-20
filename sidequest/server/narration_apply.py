@@ -414,90 +414,6 @@ def _apply_flee_consequences(
     )
 
 
-# Pingpong 2026-05-03 [BUG] — narrator described "patrol cutter spinning
-# her reactor up from cold-soak" with confrontation=None; no encounter
-# fired. High-precision regex set targeting the prose patterns the
-# narrator uses for combat / chase / boarding triggers — these are the
-# shapes that should ALWAYS pair with a ``confrontation`` emission.
-# Negotiation triggers are intentionally excluded: persuasion vocabulary
-# overlaps too heavily with ordinary dialogue prose to scan reliably,
-# and the playtest evidence is that the narrator *over*-fires negotiation,
-# not under-fires it. If a future playtest shows negotiation under-firing,
-# add patterns here.
-#
-# Each entry is (label, compiled_pattern). The label surfaces in the
-# warning + watcher event so Sebastien's GM panel can see WHY the
-# detector fired.
-_CONFRONTATION_TRIGGER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # Dogfight / chase preludes — hostile chassis preparing to pursue
-    (
-        "reactor_spin_up",
-        re.compile(
-            r"\bspin(?:ning|s)?\s+(?:her\s+|his\s+|their\s+|its\s+|the\s+)?"
-            r"(?:reactor|drive|engine)s?\s+up\b",
-            re.IGNORECASE,
-        ),
-    ),
-    ("intercept", re.compile(r"\bintercept(?:ing|ion|s)?\b", re.IGNORECASE)),
-    ("pursuit", re.compile(r"\bpursu(?:e|ed|er|ers|ing|it)\b", re.IGNORECASE)),
-    ("boarding", re.compile(r"\bboarding\b", re.IGNORECASE)),
-    (
-        "weapons_hot",
-        re.compile(r"\bweapons?\s+(?:hot|drawn|charged|live)\b", re.IGNORECASE),
-    ),
-    (
-        "permission_to_engage",
-        re.compile(r"\bpermission\s+to\s+(?:engage|fire|pursue|board)\b", re.IGNORECASE),
-    ),
-    (
-        "chase_keyword",
-        re.compile(r"\bchas(?:e|ed|ing|er|es)\b", re.IGNORECASE),
-    ),
-    # Combat preludes — antagonist actively committing
-    ("opens_fire", re.compile(r"\bopens?\s+fire\b", re.IGNORECASE)),
-    (
-        "weapon_drawn",
-        re.compile(
-            r"\bdraws?\s+(?:a\s+|her\s+|his\s+|their\s+|its\s+|the\s+)?"
-            r"(?:knife|sword|gun|pistol|sidearm|blade|rifle|blaster|"
-            r"weapon|firearm)s?\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "weapon_leveled",
-        re.compile(
-            r"\blevels?\s+(?:a\s+|her\s+|his\s+|their\s+|its\s+|the\s+)?"
-            r"(?:gun|pistol|rifle|sidearm|blaster|weapon|firearm)s?\b",
-            re.IGNORECASE,
-        ),
-    ),
-)
-
-
-def _scan_for_confrontation_trigger_keywords(narration: str) -> list[str]:
-    """Return labels of any high-precision confrontation-trigger phrases
-    in ``narration``. Empty list ⇔ no trigger keywords matched.
-
-    The lie-detector at ``_apply_narration_result_to_snapshot`` calls
-    this when ``result.confrontation`` is None; a non-empty return value
-    means the prose described an engagement that should have fired an
-    encounter. The labels surface in the watcher event so the GM panel
-    shows WHY the detector flagged the turn.
-
-    Pattern set is conservative (high-precision over high-recall) — false
-    positives erode the GM panel signal and would pressure a re-prompt
-    loop that may be unnecessary. False negatives (genuine triggers that
-    don't match) are addressed by adding patterns when later playtests
-    surface them.
-    """
-    if not narration:
-        return []
-    return [
-        label for label, pattern in _CONFRONTATION_TRIGGER_PATTERNS if pattern.search(narration)
-    ]
-
-
 def _gate_applies_to_encounter(encounter, pack) -> bool:
     """The SOUL gate fires for legacy apply_beat encounters only.
 
@@ -678,6 +594,19 @@ class MagicApplyResult:
         return self.apply.crossings
 
 
+@dataclass(frozen=True)
+class RepromptRequest:
+    """Returned by the apply step when validator severity is 'reprompt'.
+
+    Carries the directive string the orchestrator should inject into the
+    second narrator call's recency zone. Spec 2026-05-20.
+    """
+
+    matched_type: str
+    declared: str | None
+    directive: str
+
+
 @dataclass
 class NarrationApplyOutcome:
     """Aggregate result of applying a NarrationTurnResult to a snapshot.
@@ -702,6 +631,8 @@ class NarrationApplyOutcome:
 
     sealed_letter: SealedLetterOutcome | None = None
     magic: MagicApplyResult | None = None
+    reprompt_request: RepromptRequest | None = None
+    classified_intent: str = "unspecified"
 
 
 def apply_magic_working(*, snapshot: GameSnapshot, patch_field: dict) -> MagicApplyResult:
@@ -1707,6 +1638,7 @@ def _apply_narration_result_to_snapshot(
     opposed_player_beat_id: str | None = None,
     opposed_player_actor: str | None = None,
     acting_character_name: str | None = None,
+    already_reprompted: bool = False,
 ) -> NarrationApplyOutcome:
     """Apply narrator-extracted fields to the snapshot.
 
@@ -1739,6 +1671,14 @@ def _apply_narration_result_to_snapshot(
     from sidequest.agents.orchestrator import NarrationTurnResult
 
     outcome = NarrationApplyOutcome()
+    # Default classified_intent from raw action_rewrite.intent — the
+    # validator dispatch below may overwrite with matched_type on mismatch.
+    _initial_intent = ""
+    if isinstance(result, NarrationTurnResult):
+        ar = getattr(result, "action_rewrite", None)
+        if ar is not None:
+            _initial_intent = (getattr(ar, "intent", "") or "").strip()
+    outcome.classified_intent = _initial_intent or "unspecified"
 
     if not isinstance(result, NarrationTurnResult):
         return outcome
@@ -2500,6 +2440,9 @@ def _apply_narration_result_to_snapshot(
 
     # Encounter lifecycle (dual-track momentum, spec 2026-04-25)
     if pack is not None:
+        # Spec 2026-05-20 — ActionRewrite.intent is the authoritative signal.
+        # ADR-067's inference site, finally wired via confrontation_intent_validator.
+        from sidequest.agents.confrontation_intent_validator import validate as _validate_intent
         from sidequest.game.beat_kinds import apply_beat
         from sidequest.server.dispatch.confrontation import find_confrontation_def
         from sidequest.server.dispatch.encounter_lifecycle import (
@@ -2513,43 +2456,76 @@ def _apply_narration_result_to_snapshot(
             encounter_resolved_span,
         )
 
-        # Pingpong 2026-05-03 [BUG] — narrator wrote a chase-firing beat
-        # ("patrol cutter spinning her reactor up from cold-soak") with
-        # confrontation=None and no encounter fired. The architectural
-        # commitment is narrator-emission (ADR-033, ADR-077) — we don't
-        # auto-fire from server-side keyword inference because that is
-        # exactly the silent fallback CLAUDE.md prohibits. Instead, scan
-        # for high-precision trigger phrases when the narrator skipped
-        # emission AND no encounter is currently active, and fire the
-        # lie-detector so the GM panel and Sebastien can see the gap. The
-        # paired prompt fix (``confrontation_trigger_constraint``) is
-        # what closes the loop; this warning surfaces regressions if the
-        # narrator drifts again.
-        if (
-            not result.confrontation
-            and (snapshot.encounter is None or snapshot.encounter.resolved)
-            and result.narration
-        ):
-            matched_triggers = _scan_for_confrontation_trigger_keywords(result.narration)
-            if matched_triggers:
-                _watcher_publish(
-                    "state_transition",
-                    {
-                        "field": "confrontation",
-                        "op": "skipped_with_trigger_keywords",
-                        "matched_keywords": matched_triggers,
-                        "player_name": player_name,
-                    },
-                    component="confrontation",
-                    severity="warning",
+        _mismatch = _validate_intent(
+            getattr(result, "action_rewrite", None),
+            result.confrontation,
+            pack,
+            active_encounter=snapshot.encounter is not None
+            and not snapshot.encounter.resolved,
+        )
+
+        _intent_text = (
+            (getattr(getattr(result, "action_rewrite", None), "intent", "") or "").strip()
+        )
+        _classified_intent_value = _intent_text or "unspecified"
+
+        if _mismatch is not None:
+            _effective_severity = _mismatch.severity
+            _outcome_label: str | None = None
+            if already_reprompted and _effective_severity == "reprompt":
+                _effective_severity = "warn"  # bounded retry, fall through
+                _outcome_label = "fall_through"
+
+            _classified_intent_value = _mismatch.matched_type
+
+            from sidequest.telemetry.spans import confrontation_intent_mismatch_span
+
+            with confrontation_intent_mismatch_span(
+                matched_type=_mismatch.matched_type,
+                declared_type=_mismatch.declared,
+                severity=_effective_severity,
+                matched_tokens=_mismatch.matched_tokens,
+                reprompt_attempted=already_reprompted,
+                outcome=_outcome_label,
+            ):
+                pass
+
+            if _effective_severity == "soft_suggest":
+                snapshot.next_turn_directives.append(
+                    f"Last turn's intent suggested {_mismatch.matched_type}. "
+                    f"If this scene is in fact a {_mismatch.matched_type}, open the "
+                    f"encounter on this turn."
                 )
-                logger.warning(
-                    "confrontation.skipped_with_trigger_keywords keywords=%s player=%s — "
-                    "narrator described a confrontation trigger in prose but emitted "
-                    "confrontation=None; encounter not instantiated",
-                    matched_triggers,
-                    player_name,
+            elif _effective_severity == "reprompt":
+                # Spec 2026-05-20 — build the directive, attach to outcome,
+                # return early so the orchestrator can re-invoke the narrator
+                # with extra_directive=<directive> and re-apply with
+                # already_reprompted=True.
+                #
+                # CAVEAT: by this point the apply has already mutated
+                # location, lore, NPCs, inventory, magic_working, etc.
+                # The early return only skips the ENCOUNTER/BEAT
+                # application below. The second-attempt apply will re-run
+                # those pre-validator mutations against the second
+                # narration's fields, which may double-add NPCs or
+                # overwrite location. The double-apply risk is rare in
+                # practice (requires the second narration to mention the
+                # same NPCs/items) and per-spec; revisit if playtest
+                # surfaces concrete regressions.
+                outcome.reprompt_request = RepromptRequest(
+                    matched_type=_mismatch.matched_type,
+                    declared=_mismatch.declared,
+                    directive=(
+                        f"Previous attempt described a {_mismatch.matched_type} "
+                        f"(intent: '{_intent_text}') but did not open one. "
+                        f"Either set confrontation={_mismatch.matched_type} "
+                        f"or rewrite without {_mismatch.matched_type}-shaped language."
+                    ),
                 )
+                outcome.classified_intent = _classified_intent_value
+                return outcome
+
+        outcome.classified_intent = _classified_intent_value
 
         # (a) Narrator-initiated encounter
         if result.confrontation and (snapshot.encounter is None or snapshot.encounter.resolved):

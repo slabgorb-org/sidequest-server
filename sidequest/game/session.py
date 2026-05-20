@@ -565,6 +565,13 @@ class GameSnapshot(BaseModel):
     # StructuredEncounter (ADR-033 confrontation engine) — typed in story 42-1.
     encounter: StructuredEncounter | None = None
 
+    # Spec 2026-05-20 confrontation-intent-validator — directive queue
+    # populated by the soft_suggest dispatch branch; consumed and cleared
+    # by orchestrator prompt assembly at the start of the next turn.
+    # Shared-world by design (a missed confrontation affects the whole
+    # table). Per-player scoping would revisit per ADR-037 / ADR-104.
+    next_turn_directives: list[str] = Field(default_factory=list)
+
     # P2-deferred: trope engine state
     active_tropes: list[TropeState] = Field(default_factory=list)
 

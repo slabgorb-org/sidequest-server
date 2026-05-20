@@ -1,0 +1,14 @@
+primary: ""
+secondary: ""
+accent: ""
+background: ""
+surface: ""
+text: ""
+border_style: ""
+web_font_family: ""
+dinkus:
+  enabled: false
+  cooldown: 0
+  default_weight: ""
+session_opener:
+  enabled: false

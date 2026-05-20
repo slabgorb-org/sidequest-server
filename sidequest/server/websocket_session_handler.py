@@ -2541,6 +2541,30 @@ class WebSocketSessionHandler:
                             "error": str(exc),
                         },
                     )
+            elif (
+                world is not None
+                and world.cartography.navigation_mode == NavigationMode.region
+                and sd.snapshot.current_region
+            ):
+                # Playtest 2026-05-20 — Story 54-2 / ADR-109 chargen seam
+                # only fired for room_graph mode, so region-mode worlds
+                # (beneath_sunden surface, glenross, etc.) never received
+                # an opening LOCATION_DESCRIPTION → the UI Location tab
+                # never appears. Emit one here using current_region as the
+                # room_id. The emit's Path-2 cartography fallback resolves
+                # the prose + entities from ``cartography.regions``. No
+                # tactical grid — that's room-graph / cavern territory.
+                def _chargen_emit_region_location(msg: object, _kind: str) -> None:
+                    out.append(msg)
+
+                _maybe_emit_location_description(
+                    self,
+                    sd=sd,
+                    snapshot=sd.snapshot,
+                    actor=None,
+                    emit_fn=_chargen_emit_region_location,
+                    room_id_override=sd.snapshot.current_region,
+                )
         else:
             # MP second commit. ADR-037 Python port: sd.snapshot is the
             # canonical room snapshot (already populated by the first
@@ -3187,6 +3211,15 @@ class WebSocketSessionHandler:
                 prior_encounter = snapshot.encounter
                 prior_live = prior_encounter is not None and not prior_encounter.resolved
                 prior_type = prior_encounter.encounter_type if prior_encounter else None
+
+                # Playtest 2026-05-20 — capture current_region BEFORE the
+                # narration patch applies so the region-mode
+                # LOCATION_DESCRIPTION emit branch can detect a true
+                # change (e.g. ropefoot → the_dropmouth on
+                # beneath_sunden surface). Character-level
+                # ``result.location`` is room-graph territory; region
+                # moves arrive via the ``current_region`` patch.
+                prior_current_region = snapshot.current_region
 
                 # Unified dispatch — passes the pack so encounter instantiation /
                 # beat application / resolution happen in one place (emits the
@@ -4532,6 +4565,32 @@ class WebSocketSessionHandler:
                             snapshot=snapshot,
                             actor=_acting_for_render_trigger,
                             emit_fn=_emit_shared_world_frame,
+                        )
+                    # Playtest 2026-05-20 — per-turn LOCATION_DESCRIPTION
+                    # on region change for region-mode worlds. The
+                    # ``if result.location`` branch above is character-
+                    # level (room_graph territory). For region-mode
+                    # (beneath_sunden surface, glenross, ...) the region
+                    # patch is the only signal — emit when it changed
+                    # this turn so the Location tab tracks ropefoot →
+                    # the_dropmouth. Idempotent for non-region worlds
+                    # (skipped on the world.cartography.navigation_mode
+                    # check) and for unchanged regions.
+                    _world_for_region_emit = sd.genre_pack.worlds.get(sd.world_slug)
+                    if (
+                        _world_for_region_emit is not None
+                        and _world_for_region_emit.cartography.navigation_mode
+                        == NavigationMode.region
+                        and snapshot.current_region
+                        and snapshot.current_region != prior_current_region
+                    ):
+                        _maybe_emit_location_description(
+                            self,
+                            sd=sd,
+                            snapshot=snapshot,
+                            actor=None,
+                            emit_fn=_emit_shared_world_frame,
+                            room_id_override=snapshot.current_region,
                         )
                     # Beneath Sünden BETTER fix (seam 3): project the live
                     # region graph to the UI Map tab every turn (NOT gated

@@ -261,6 +261,40 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
             return None
 
         if not current_region or current_region not in graph.nodes:
+            # Playtest 2026-05-20: a third face surfaced — current_region
+            # is a deliberately-authored CARTOGRAPHY region (e.g.
+            # beneath_sunden's surface ``ropefoot`` waiting-camp), NOT a
+            # phantom and NOT a graph node. The player is genuinely on
+            # the surface; the procedural dungeon graph is the
+            # *underground* lane. Self-healing this case to ``entrance``
+            # silently teleports the player into the dungeon every turn
+            # AND mutates the persisted snapshot, destroying the
+            # narrative anchor. Distinguish the two:
+            #
+            #   (a) current_region is a cartography region → outside the
+            #       graph lane is correct. Return None gracefully, no
+            #       projection, no mutation. Span carries
+            #       outcome=cartography_region so the GM panel sees the
+            #       turn ran without procedural geography (intentional,
+            #       not a failure).
+            #   (b) current_region is blank OR a phantom → original
+            #       SELF-HEAL applies (bind to graph entrance, mutate
+            #       snapshot, error-log the recovery).
+            world_obj = sd.genre_pack.worlds.get(sd.world_slug)
+            cartography_regions: set[str] = set()
+            if world_obj is not None:
+                cart = getattr(world_obj, "cartography", None)
+                if cart is not None and getattr(cart, "regions", None):
+                    cartography_regions = set(cart.regions.keys())
+            if current_region and current_region in cartography_regions:
+                span.set_attribute("outcome", "cartography_region")
+                span.set_attribute(
+                    "reason",
+                    f"current_region={current_region!r} is a static "
+                    f"cartography region (surface lane), not a node of "
+                    f"the procedural dungeon graph — no projection",
+                )
+                return None
             # Two faces of ONE disease: a fully materialized dungeon whose
             # current_region is not a real graph node — either blank (the
             # #314 entrance-bind seam never fired; OQ-1's 2026-05-17
@@ -268,7 +302,7 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
             # connect.py's attach call site, so a RESUMED beneath_sunden
             # save has a materialized dungeon but a blank current_region
             # forever) OR a PHANTOM (narration title-parsing wrote a prose
-            # name like 'ropefoot' into current_region — not a node id;
+            # name not in cartography — not a node id;
             # this fired dungeon.region_projection FAILED every single
             # turn until the constrained-move-vocab seam lands). Both
             # cases mean the same thing here and have the same only-safe

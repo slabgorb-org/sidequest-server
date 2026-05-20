@@ -37,6 +37,20 @@ STABLE_SECTION_NAMES: frozenset[str] = frozenset(
         "genre_world_state",
         "narrator_vocabulary",
         "genre_transition_hints",
+        # ADR-112 / Story 57-3 — unconditional, session-static genre prose
+        # sourced from per-pack ``prompts.yaml`` (gp.extraction / gp.keeper_
+        # monologue / gp.town / gp.chargen). All four are registered on
+        # every narrator turn at ``orchestrator.py:1368..1411`` with
+        # ``AttentionZone.Early`` (re-zoned from Valley as part of the same
+        # change so the content actually lands in ``system_blocks[0]``, the
+        # cache-marked block — see Story 57-3 Dev deviation log).
+        # Promotion DOES NOT apply to ``genre_combat_voice`` /
+        # ``genre_chase_voice`` (ADR-112 §Defer: conditional registration
+        # would thrash the cache root at every encounter boundary).
+        "genre_extraction",
+        "genre_keeper_monologue",
+        "genre_town",
+        "genre_chargen",
     }
 )
 

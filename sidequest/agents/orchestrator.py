@@ -424,6 +424,12 @@ class TurnContext:
     narrator_verbosity: str = "standard"  # concise | standard | verbose
     narrator_vocabulary: str = "literary"  # accessible | literary | epic
 
+    # Spec 2026-05-20 confrontation-intent-validator — per-call directive
+    # injected by the reprompt loop. When set, prompt assembly registers a
+    # recency-zone guardrail telling the narrator what to fix from the
+    # first attempt. None on the normal first-call path.
+    extra_directive: str | None = None
+
     # Genre identity (Primacy zone — every tier)
     genre: str | None = None
 
@@ -990,6 +996,22 @@ def _render_recent_narrative_window(entries: list[NarrativeEntry]) -> str:
             )
         blocks.append(f"[Round {e.round} — {e.author}]\n{content}")
     return "\n\n".join(blocks)
+
+
+def _consume_next_turn_directives(snapshot: GameSnapshot) -> str:
+    """Render snapshot.next_turn_directives into a recency-zone string and clear.
+
+    Returns empty string when the queue is empty. Spec 2026-05-20: the
+    list is populated by the validator's soft_suggest branch
+    (narration_apply._apply_narration_result_to_snapshot) and consumed
+    once per turn here. The same one-shot pattern as
+    snapshot.pending_time_skip_summary.
+    """
+    if not snapshot.next_turn_directives:
+        return ""
+    rendered = "\n".join(f"- {d}" for d in snapshot.next_turn_directives)
+    snapshot.next_turn_directives.clear()
+    return rendered
 
 
 def _build_verbosity_section(verbosity: str) -> str:
@@ -1882,6 +1904,40 @@ class Orchestrator:
         # migration target is the ``generate_encounter`` tool description,
         # cached as part of the tools=array root. On the legacy ``claude -p``
         # path the Recency-zone registration stays.
+
+        # Spec 2026-05-20 — soft_suggest directives from the prior turn.
+        # Consumed + cleared in one shot (same pattern as time_skip_block).
+        # Only fires when snapshot is available (production path); ignored on
+        # legacy fixture paths that never went through _build_turn_context.
+        if snapshot is not None:
+            _intent_directive_block = _consume_next_turn_directives(snapshot)
+            if _intent_directive_block:
+                registry.register_section(
+                    agent_name,
+                    PromptSection.new(
+                        "intent_directives",
+                        f"GM-NOTE: One or more inferred intent suggestions from "
+                        f"the previous turn:\n{_intent_directive_block}",
+                        AttentionZone.Recency,
+                        SectionCategory.Guardrail,
+                    ),
+                )
+
+        # Spec 2026-05-20 — per-call directive from the reprompt loop.
+        # Set when run_narration_turn was invoked with extra_directive=... ;
+        # injects a recency-zone guardrail telling the narrator what to
+        # fix from the first attempt.
+        if context.extra_directive:
+            registry.register_section(
+                agent_name,
+                PromptSection.new(
+                    "reprompt_directive",
+                    f"REPROMPT DIRECTIVE: {context.extra_directive}",
+                    AttentionZone.Recency,
+                    SectionCategory.Guardrail,
+                ),
+            )
+
         self._maybe_register_legacy_guardrail(
             registry,
             agent_name,
@@ -2253,6 +2309,7 @@ class Orchestrator:
         context: TurnContext,
         *,
         room: object | None = None,
+        extra_directive: str | None = None,
     ) -> NarrationTurnResult:
         """Process a player action through the Phase 1 narration pipeline.
 
@@ -2265,7 +2322,18 @@ class Orchestrator:
             context: Turn context (world state, genre prompts, etc.).
             room: Optional SessionRoom for streaming delta fan-out. Only
                   consumed by the streaming path; the sync path ignores it.
+            extra_directive: Per-call reprompt directive injected by the
+                  reprompt loop (spec 2026-05-20 step 7). When set, the
+                  directive is stored on context so build_narrator_prompt
+                  registers it as a Recency-zone guardrail. None on the
+                  normal first-call path.
         """
+        # Spec 2026-05-20 step 7: thread extra_directive into context so
+        # build_narrator_prompt can register it as a Recency-zone guardrail.
+        # TurnContext is per-turn-scoped (not reused), so mutation is safe.
+        if extra_directive is not None:
+            context.extra_directive = extra_directive
+
         # Phase D Task 1: when the configured client is a tooling-capable
         # LLM (AnthropicSdkClient — the ADR-101 default), route through
         # complete_with_tools so the 26-tool registry is exposed to the

@@ -3218,10 +3218,10 @@ class WebSocketSessionHandler:
                     encounter_unresolved_before = (
                         snapshot.encounter is not None and not snapshot.encounter.resolved
                     )
-                    applied_outcome = _apply_narration_result_to_snapshot(
-                        snapshot,
-                        result,
-                        sd.player_name,
+                    # Spec 2026-05-20 step 7 — pull apply kwargs into a dict
+                    # so both the first apply and the reprompt-loop re-apply
+                    # share the same kwargs without duplication.
+                    _apply_kwargs = dict(
                         room=sd._room,
                         pack=sd.genre_pack,
                         dice_failed=dice_failed,
@@ -3231,6 +3231,59 @@ class WebSocketSessionHandler:
                         opposed_player_actor=dice_actor,
                         acting_character_name=_resolve_acting_character_name(sd, sd._room),
                     )
+                    first_result = result
+                    applied_outcome = _apply_narration_result_to_snapshot(
+                        snapshot,
+                        result,
+                        sd.player_name,
+                        **_apply_kwargs,
+                    )
+
+                    # Spec 2026-05-20 step 7 — one-iteration reprompt loop.
+                    # When the validator's reprompt severity fires, give the
+                    # narrator exactly one chance to restructure the turn.
+                    # Bounded to ONE retry; on second-narrator failure, apply
+                    # the FIRST attempt's narration.
+                    if applied_outcome.reprompt_request is not None:
+                        _directive = applied_outcome.reprompt_request.directive
+                        _matched = applied_outcome.reprompt_request.matched_type
+                        logger.info(
+                            "confrontation.intent_mismatch_reprompting "
+                            "matched_type=%s directive=%r",
+                            _matched,
+                            _directive,
+                        )
+                        try:
+                            second_result = await sd.orchestrator.run_narration_turn(
+                                action,
+                                turn_context,
+                                room=self._room,
+                                extra_directive=_directive,
+                            )
+                            applied_outcome = _apply_narration_result_to_snapshot(
+                                snapshot,
+                                second_result,
+                                sd.player_name,
+                                already_reprompted=True,
+                                **_apply_kwargs,
+                            )
+                            result = second_result
+                        except Exception:
+                            logger.exception(
+                                "confrontation.intent_mismatch_reprompt_failed "
+                                "matched_type=%s",
+                                _matched,
+                            )
+                            # Fall through: apply the first attempt's narration.
+                            applied_outcome = _apply_narration_result_to_snapshot(
+                                snapshot,
+                                first_result,
+                                sd.player_name,
+                                already_reprompted=True,
+                                **_apply_kwargs,
+                            )
+                            result = first_result
+
                     encounter_resolved_this_turn = encounter_unresolved_before and (
                         snapshot.encounter is None or snapshot.encounter.resolved
                     )

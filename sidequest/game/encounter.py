@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from sidequest.game.encounter_tag import EncounterTag
 from sidequest.game.taunt import TauntState
+from sidequest.protocol.models import EncounterLocationOverlay
 
 
 class RigType(StrEnum):
@@ -177,6 +178,14 @@ class StructuredEncounter(BaseModel):
     # Always present (default_factory) so callers can always read/write
     # without a None guard. See sidequest/game/taunt.py and spec §8.
     taunt: TauntState = Field(default_factory=TauntState)
+
+    # Story 54-7 / ADR-109: per-encounter location overlay. When set,
+    # bound_room_id names the region/room whose manifest and prose the
+    # overlay contributes to. Read-time merge in
+    # sidequest.game.location_view layers entity_delta and prose_suffix
+    # on top of the authored base; base never mutates. None for
+    # encounters that have nothing to add to the room description.
+    location_overlay: EncounterLocationOverlay | None = None
 
     @model_validator(mode="before")
     @classmethod

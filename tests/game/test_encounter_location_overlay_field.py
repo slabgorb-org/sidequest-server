@@ -15,9 +15,7 @@ from sidequest.protocol.models import (
 def _base_kwargs() -> dict:
     return {
         "encounter_type": "tavern_brawl",
-        "player_metric": EncounterMetric(
-            name="composure", current=10, starting=10, threshold=20
-        ),
+        "player_metric": EncounterMetric(name="composure", current=10, starting=10, threshold=20),
         "opponent_metric": EncounterMetric(
             name="brawl_energy", current=10, starting=10, threshold=20
         ),

@@ -27,17 +27,11 @@ def _authored() -> list[LocationEntity]:
     ]
 
 
-def _enc_with_overlay(
-    bound_room: str, *, resolved: bool = False
-) -> StructuredEncounter:
+def _enc_with_overlay(bound_room: str, *, resolved: bool = False) -> StructuredEncounter:
     return StructuredEncounter(
         encounter_type="tavern_brawl",
-        player_metric=EncounterMetric(
-            name="composure", current=10, starting=10, threshold=20
-        ),
-        opponent_metric=EncounterMetric(
-            name="brawl_energy", current=10, starting=10, threshold=20
-        ),
+        player_metric=EncounterMetric(name="composure", current=10, starting=10, threshold=20),
+        opponent_metric=EncounterMetric(name="brawl_energy", current=10, starting=10, threshold=20),
         resolved=resolved,
         location_overlay=EncounterLocationOverlay(
             bound_room_id=bound_room,
@@ -83,12 +77,8 @@ def test_active_overlays_for_empty_when_encounter_has_no_overlay():
     snapshot = MagicMock()
     snapshot.encounter = StructuredEncounter(
         encounter_type="tavern_brawl",
-        player_metric=EncounterMetric(
-            name="composure", current=10, starting=10, threshold=20
-        ),
-        opponent_metric=EncounterMetric(
-            name="brawl_energy", current=10, starting=10, threshold=20
-        ),
+        player_metric=EncounterMetric(name="composure", current=10, starting=10, threshold=20),
+        opponent_metric=EncounterMetric(name="brawl_energy", current=10, starting=10, threshold=20),
     )
     assert active_overlays_for(snapshot, region_id="glenross_pub") == []
 
@@ -143,9 +133,7 @@ def test_get_location_prose_appends_suffix():
         authored_description="The pub door is ajar.",
         snapshot=snapshot,
     )
-    assert prose == (
-        "The pub door is ajar.\n\nA chair lies in splinters by the door."
-    )
+    assert prose == ("The pub door is ajar.\n\nA chair lies in splinters by the door.")
 
 
 def test_get_location_prose_empty_authored_with_overlay():

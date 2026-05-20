@@ -412,12 +412,8 @@ def test_emit_includes_active_overlay_in_payload(tmp_path, monkeypatch):
 
     enc = StructuredEncounter(
         encounter_type="tavern_brawl",
-        player_metric=EncounterMetric(
-            name="composure", current=10, starting=10, threshold=20
-        ),
-        opponent_metric=EncounterMetric(
-            name="brawl_energy", current=10, starting=10, threshold=20
-        ),
+        player_metric=EncounterMetric(name="composure", current=10, starting=10, threshold=20),
+        opponent_metric=EncounterMetric(name="brawl_energy", current=10, starting=10, threshold=20),
         resolved=False,
         location_overlay=EncounterLocationOverlay(
             bound_room_id="test_room",

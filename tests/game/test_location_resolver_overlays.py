@@ -21,9 +21,7 @@ def _authored() -> list[LocationEntity]:
             id="bar",
             label="the bar",
             tier="real_object",
-            binding=LocationEntityBinding(
-                kind="location_feature", ref="glenross_arms_bar"
-            ),
+            binding=LocationEntityBinding(kind="location_feature", ref="glenross_arms_bar"),
         ),
         LocationEntity(id="cobwebs", label="cobwebs", tier="flavor_only"),
     ]
@@ -52,9 +50,7 @@ def test_overlay_entity_delta_appends_to_manifest():
             ),
         ],
     )
-    out = _build_effective_manifest(
-        authored=_authored(), promotions=[], overlays=[overlay]
-    )
+    out = _build_effective_manifest(authored=_authored(), promotions=[], overlays=[overlay])
     ids = [e.id for e, _ in out]
     assert ids == ["bar", "cobwebs", "overturned_table"]
 
@@ -71,9 +67,7 @@ def test_overlay_entities_tagged_not_from_promotion():
             ),
         ],
     )
-    out = _build_effective_manifest(
-        authored=_authored(), promotions=[], overlays=[overlay]
-    )
+    out = _build_effective_manifest(authored=_authored(), promotions=[], overlays=[overlay])
     by_id = {e.id: from_promo for e, from_promo in out}
     assert by_id["overturned_table"] is False
 
@@ -150,9 +144,7 @@ def test_overlay_entity_does_not_persist_to_promotions_table(store):
         turn_number=5,
         overlays=[overlay],
     )
-    rows = store.list_location_promotions(
-        save_id="default", region_id="the_glenross_arms"
-    )
+    rows = store.list_location_promotions(save_id="default", region_id="the_glenross_arms")
     assert rows == []
 
 

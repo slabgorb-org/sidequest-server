@@ -71,46 +71,22 @@ def test_message_roundtrip():
 
 
 def test_dispatch_registry_includes_location_overlay_changed():
-    """Wiring: the dispatch table that decodes incoming messages must
-    list LOCATION_OVERLAY_CHANGED → LocationOverlayChangedMessage. Without
-    this entry the message is unaddressable from a client even though the
-    class exists."""
-    import sidequest.protocol.messages as messages_mod
+    """Wiring: the GameMessage discriminated union must include
+    LocationOverlayChangedMessage so the type=LOCATION_OVERLAY_CHANGED
+    wire payload decodes to the right class.
 
-    # Find the dispatch table by name patterns used by 54-2 + earlier stories.
-    # The registry maps the enum string value to the message class.
-    candidate_tables = []
-    for name in dir(messages_mod):
-        obj = getattr(messages_mod, name)
-        if isinstance(obj, dict) and obj:
-            sample = next(iter(obj.values()))
-            if isinstance(sample, type) and name.lower().endswith(
-                ("messages", "registry", "_map", "by_type")
-            ):
-                candidate_tables.append((name, obj))
+    Post-port this codebase uses a pydantic discriminated union
+    (``Field(discriminator="type")``) instead of a dict registry — that
+    IS the dispatch.
+    """
+    from sidequest.protocol.messages import GameMessage
 
-    # Fall back to a source-text grep if no convention-named table is found —
-    # the dispatch entry must exist somewhere in the messages module.
-    if not candidate_tables:
-        from pathlib import Path
-
-        src = Path(messages_mod.__file__).read_text()
-        assert '"LOCATION_OVERLAY_CHANGED": LocationOverlayChangedMessage' in src, (
-            "expected dispatch registration "
-            '"LOCATION_OVERLAY_CHANGED": LocationOverlayChangedMessage '
-            "in sidequest/protocol/messages.py"
-        )
-        return
-
-    matched = False
-    for _, table in candidate_tables:
-        if (
-            "LOCATION_OVERLAY_CHANGED" in table
-            and table["LOCATION_OVERLAY_CHANGED"] is LocationOverlayChangedMessage
-        ):
-            matched = True
-            break
-    assert matched, (
-        "no dispatch table maps LOCATION_OVERLAY_CHANGED → "
-        "LocationOverlayChangedMessage"
+    msg_in = LocationOverlayChangedMessage(
+        payload=LocationOverlayChangedPayload(region_id="glenross_pub", overlays=[]),
+        player_id="",
     )
+    wire = GameMessage(root=msg_in).to_json()
+    decoded = GameMessage.parse_json(wire)
+    assert isinstance(decoded.root, LocationOverlayChangedMessage)
+    assert decoded.root.type == MessageType.LOCATION_OVERLAY_CHANGED
+    assert decoded.root.payload.region_id == "glenross_pub"

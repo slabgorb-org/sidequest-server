@@ -19,20 +19,13 @@ from sidequest.protocol.models import (
     EncounterLocationOverlay,
     LocationEntity,
 )
-from sidequest.server.websocket_session_handler import (
-    _maybe_emit_location_overlay_changed,
-)
 
 
 def _enc(*, resolved: bool = False) -> StructuredEncounter:
     return StructuredEncounter(
         encounter_type="tavern_brawl",
-        player_metric=EncounterMetric(
-            name="composure", current=10, starting=10, threshold=20
-        ),
-        opponent_metric=EncounterMetric(
-            name="brawl_energy", current=10, starting=10, threshold=20
-        ),
+        player_metric=EncounterMetric(name="composure", current=10, starting=10, threshold=20),
+        opponent_metric=EncounterMetric(name="brawl_energy", current=10, starting=10, threshold=20),
         resolved=resolved,
         location_overlay=EncounterLocationOverlay(
             bound_room_id="glenross_pub",
@@ -49,6 +42,10 @@ def _enc(*, resolved: bool = False) -> StructuredEncounter:
 
 
 def test_activate_emits_with_overlay_in_payload():
+    from sidequest.server.websocket_session_handler import (
+        _maybe_emit_location_overlay_changed,
+    )
+
     emit_fn = MagicMock()
     sd = MagicMock()
     sd.genre_slug = "tea_and_murder"
@@ -79,6 +76,10 @@ def test_activate_emits_with_overlay_in_payload():
 def test_deactivate_emits_with_empty_overlay_list():
     """When the encounter has just resolved, payload.overlays is empty —
     the UI replaces its overlay slice rather than reconciling diffs."""
+    from sidequest.server.websocket_session_handler import (
+        _maybe_emit_location_overlay_changed,
+    )
+
     emit_fn = MagicMock()
     sd = MagicMock()
     sd.genre_slug = "tea_and_murder"
@@ -112,6 +113,10 @@ def test_deactivate_emits_with_empty_overlay_list():
 
 def test_activate_skips_when_encounter_has_no_overlay():
     """Encounters without location_overlay never emit."""
+    from sidequest.server.websocket_session_handler import (
+        _maybe_emit_location_overlay_changed,
+    )
+
     emit_fn = MagicMock()
     sd = MagicMock()
     sd.genre_slug = "tea_and_murder"
@@ -120,12 +125,8 @@ def test_activate_skips_when_encounter_has_no_overlay():
     snapshot = MagicMock()
     snapshot.encounter = StructuredEncounter(
         encounter_type="tavern_brawl",
-        player_metric=EncounterMetric(
-            name="composure", current=10, starting=10, threshold=20
-        ),
-        opponent_metric=EncounterMetric(
-            name="brawl_energy", current=10, starting=10, threshold=20
-        ),
+        player_metric=EncounterMetric(name="composure", current=10, starting=10, threshold=20),
+        opponent_metric=EncounterMetric(name="brawl_energy", current=10, starting=10, threshold=20),
     )
 
     _maybe_emit_location_overlay_changed(
@@ -142,6 +143,10 @@ def test_activate_skips_when_encounter_is_resolved():
     """A resolved encounter does not fire an activate emit even if it
     carries an overlay — activation is the live edge, not the post-resolve
     state."""
+    from sidequest.server.websocket_session_handler import (
+        _maybe_emit_location_overlay_changed,
+    )
+
     emit_fn = MagicMock()
     sd = MagicMock()
     sd.genre_slug = "tea_and_murder"
@@ -161,6 +166,10 @@ def test_activate_skips_when_encounter_is_resolved():
 
 
 def test_deactivate_skips_when_no_prior_overlay():
+    from sidequest.server.websocket_session_handler import (
+        _maybe_emit_location_overlay_changed,
+    )
+
     emit_fn = MagicMock()
     sd = MagicMock()
     sd.genre_slug = "tea_and_murder"
@@ -197,6 +206,5 @@ def test_overlay_emit_called_from_encounter_transition_dispatch():
     call_count = handler_src.count("_maybe_emit_location_overlay_changed(")
     # 1 def + 2 call sites (activate, deactivate) = 3 minimum.
     assert call_count >= 3, (
-        f"expected definition + activate + deactivate call sites, "
-        f"found {call_count} mentions"
+        f"expected definition + activate + deactivate call sites, found {call_count} mentions"
     )

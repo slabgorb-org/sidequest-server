@@ -33,7 +33,6 @@ from sidequest.game.weather import (
     WeatherState,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -258,7 +257,9 @@ def test_generator_determinism_same_seed_same_output(minimal_weather_yaml: Path)
 def test_generator_different_seeds_eventually_diverge(minimal_weather_yaml: Path) -> None:
     """Different seeds across a 50-sample sweep must produce >1 distinct condition."""
     gen = WeatherGenerator(minimal_weather_yaml)
-    conditions = {gen.generate(zone="testzone", season="winter", seed=s).condition for s in range(50)}
+    conditions = {
+        gen.generate(zone="testzone", season="winter", seed=s).condition for s in range(50)
+    }
     # The winter palette has two conditions with 70/30 weights — both must appear in 50 draws.
     assert len(conditions) == 2, f"expected both conditions across 50 seeds, got {conditions}"
 
@@ -347,7 +348,7 @@ def test_generator_uses_yaml_safe_load_not_full_load(tmp_path: Path) -> None:
     # An attacker-authored climate YAML that tries to exec via !!python/object/apply
     # would only succeed under yaml.load() — yaml.safe_load() raises.
     yaml_path.write_text(
-        "climate_zones: !!python/object/apply:os.system [\"echo PWN\"]\n",
+        'climate_zones: !!python/object/apply:os.system ["echo PWN"]\n',
         encoding="utf-8",
     )
     with pytest.raises((yaml.YAMLError, ValidationError, TypeError)):
@@ -503,9 +504,7 @@ def test_cli_unknown_zone_exits_nonzero_with_named_zone(content_dir: Path) -> No
         "--seed",
         "1",
     )
-    assert result.returncode != 0, (
-        f"CLI silently accepted unknown zone (stdout: {result.stdout!r})"
-    )
+    assert result.returncode != 0, f"CLI silently accepted unknown zone (stdout: {result.stdout!r})"
     assert "atlantis" in (result.stderr + result.stdout), (
         "CLI must name the offending zone in its error output"
     )

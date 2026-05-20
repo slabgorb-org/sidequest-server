@@ -433,6 +433,120 @@ class EdgeConfig(BaseModel):
     display_fields: list[str] = Field(default_factory=list)
 
 
+class StandoffPhase(BaseModel):
+    """One phase of a multi-phase standoff (sizing_up, focus_or_draw, nerve_break, ...).
+
+    Each phase carries authored prose (``description``) plus phase-specific
+    fields — ``check`` (stat to roll), ``contested`` (opposed?), ``threshold``
+    (failure margin), and bonus deltas (``focus_bonus_hit``, etc). The exact
+    field set varies by phase, so ``extra: allow`` keeps the per-phase shape
+    open without sacrificing the required ``description`` contract.
+
+    No engine consumer reads these yet — the standoff confrontation is wired
+    via ``ConfrontationDef`` in ``rules.yaml``; this block carries pre-combat
+    sizing-up flavor + tunables for a future state machine that runs *before*
+    the per-beat dial advances. TODO(spaghetti-western): wire as a
+    confrontation kind alongside dogfight (ADR-077) and edge/composure
+    (ADR-078). See ``docs/content-drift-triage.md`` for triage rationale.
+    """
+
+    model_config = {"extra": "allow"}
+
+    description: str
+
+
+class ReputationFaction(BaseModel):
+    """One faction in the per-genre reputation track.
+
+    spaghetti_western models a -100..+100 reputation score per faction
+    (outlaws, law, merchants, ...). Each faction has an ``id`` used as a
+    key in the future per-character reputation map, plus a display ``name``
+    and a short ``description`` injected into narrator context. No engine
+    consumer reads these yet. TODO(spaghetti-western): wire as a per-faction
+    reputation track with NPC-disposition effects at the high/low
+    ``ReputationEffects`` thresholds. See ``docs/content-drift-triage.md``.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    id: str
+    name: str
+    description: str
+
+
+class ReputationEffects(BaseModel):
+    """Narrative effects fired at the high/neutral/low reputation bands.
+
+    These are *prose hooks* — they tell the narrator what NPCs of a faction
+    DO when the player is in good/neutral/bad standing. No mechanical
+    bonuses are encoded; the mechanical effect lives in the narrator
+    context injection. TODO(spaghetti-western): wire alongside
+    ``ReputationFaction``. See ``docs/content-drift-triage.md``.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    high: list[str] = Field(default_factory=list)
+    neutral: list[str] = Field(default_factory=list)
+    low: list[str] = Field(default_factory=list)
+
+
+class LuckSpendEffect(BaseModel):
+    """One named luck-spend effect (Cheat Death, Lucky Break, ...).
+
+    ``cost`` is the luck-pool debit; ``effect`` is the narrator prose +
+    mechanical hint. No engine consumer reads these yet — the luck
+    resource is declared in ``rules.yaml > resources`` (a generic per-actor
+    pool) but its *spend menu* needs the narrator to surface options to
+    the player. TODO(spaghetti-western): wire as a narrator tool (one tool
+    per spend effect, gated on pool ≥ cost). See
+    ``docs/content-drift-triage.md``.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    cost: int
+    effect: str
+
+
+class LuckRecovery(BaseModel):
+    """Luck-pool recovery cadence.
+
+    ``per_session`` adds N to every actor's luck at session start (clamped
+    to ``max_luck``). ``bonus_triggers`` are narrator prose hooks — events
+    that should refresh luck mid-session. TODO(spaghetti-western): wire
+    per_session at session-start hook + map bonus_triggers to narrator
+    tool emissions.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    per_session: int = 0
+    bonus_triggers: list[str] = Field(default_factory=list)
+
+
+class LuckRules(BaseModel):
+    """Top-level luck-as-resource configuration.
+
+    spaghetti_western signature resource — the "lucky drifter" archetype.
+    Each character starts with ``starting_luck``, capped at ``max_luck``.
+    Spend menu lives in ``spend_effects``. The numeric pool itself is
+    declared (and currently the *only* hooked-up bit) in
+    ``rules.yaml > resources`` as a ``ResourceDeclaration`` named ``luck``;
+    this block adds the *menu* and *recovery* that the narrator needs to
+    expose. TODO(spaghetti-western): wire luck-spend as a narrator tool.
+    See ``docs/content-drift-triage.md``.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    starting_luck: int = 0
+    max_luck: int = 0
+    spend_effects: list[LuckSpendEffect] = Field(default_factory=list)
+    recovery: LuckRecovery | None = None
+
+
 class RulesConfig(BaseModel):
     """Game rules configuration."""
 
@@ -477,9 +591,14 @@ class RulesConfig(BaseModel):
     confrontations: list[ConfrontationDef] = Field(default_factory=list)
     xp_affinity: str | None = None
     initiative_rules: dict[str, InitiativeRule] = Field(default_factory=dict)
-    # spaghetti_western authored mechanics — Rust dropped them; accepted as
-    # pass-through until a consumer wires the standoff / reputation systems.
-    standoff_rules: dict[str, Any] = Field(default_factory=dict)
-    reputation_factions: list[dict[str, Any]] = Field(default_factory=list)
-    reputation_effects: dict[str, Any] = Field(default_factory=dict)
-    luck_rules: dict[str, Any] = Field(default_factory=dict)
+    # spaghetti_western authored mechanics — typed-but-unconsumed.
+    # The pack ships fully-detailed standoff phases, faction reputation
+    # bands, and a luck-spend menu. The engine does NOT yet read any of
+    # them; they're loaded so the pack passes strict pydantic validation
+    # and so future consumer-wiring stories have a contract to code
+    # against. See ``docs/content-drift-triage.md`` ("Triage notes —
+    # spaghetti_western") for the wiring backlog.
+    standoff_rules: dict[str, StandoffPhase] = Field(default_factory=dict)
+    reputation_factions: list[ReputationFaction] = Field(default_factory=list)
+    reputation_effects: ReputationEffects | None = None
+    luck_rules: LuckRules | None = None

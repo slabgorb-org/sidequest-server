@@ -1,20 +1,14 @@
-primary: '#4a7c2e'
-secondary: '#8b4513'
-accent: '#ff6600'
-background: '#1a1a0e'
-surface: '#2a2a1a'
-text: '#c8d6a0'
-border_style: heavy
-web_font_family: Special Elite
-
+primary: ""
+secondary: ""
+accent: ""
+background: ""
+surface: ""
+text: ""
+border_style: ""
+web_font_family: ""
 dinkus:
-  enabled: true
-  cooldown: 2
-  default_weight: medium
-  glyph:
-    light: "·  ☢  ·"
-    medium: "☢  ☢  ☢"
-    heavy: "☢ ☣ ☢"
-
+  enabled: false
+  cooldown: 0
+  default_weight: ""
 session_opener:
-  enabled: true
+  enabled: false

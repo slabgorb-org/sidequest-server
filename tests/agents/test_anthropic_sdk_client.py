@@ -566,3 +566,70 @@ async def test_per_iter_log_line_includes_ttl_breakdown(
     msg = usage_records[0].getMessage()
     assert "5m=100" in msg, f"expected '5m=100' in log line; got: {msg}"
     assert "1h=200" in msg, f"expected '1h=200' in log line; got: {msg}"
+
+
+async def test_last_tool_gets_cache_control_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The last tool definition carries a cache_control marker with the
+    client's configured TTL. Earlier tools do not. This converts the
+    tools array (byte-stable across every turn) into an explicit 1h
+    cache prefix instead of relying on Anthropic's default 5m auto-cache."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake = _FakeAsyncSdk(
+        responses=[
+            _SdkResponse(
+                content=[_SdkContentTextBlock(type="text", text="ok")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=fake, cache_ttl="1h")
+    tools = [
+        ToolDefinition(name="alpha", description="a", input_schema={"type": "object"}),
+        ToolDefinition(name="beta", description="b", input_schema={"type": "object"}),
+        ToolDefinition(name="gamma", description="c", input_schema={"type": "object"}),
+    ]
+    await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=tools,
+        model="claude-sonnet-4-6",
+    )
+    sent_tools = fake.messages.calls[0]["tools"]
+    assert len(sent_tools) == 3
+    assert "cache_control" not in sent_tools[0]
+    assert "cache_control" not in sent_tools[1]
+    assert sent_tools[2]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
+async def test_last_tool_marker_inherits_5m_ttl_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No parallel TTL config — the tools marker echoes the same
+    self.cache_ttl as the system-block marker."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake = _FakeAsyncSdk(
+        responses=[
+            _SdkResponse(
+                content=[_SdkContentTextBlock(type="text", text="ok")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    client = AnthropicSdkClient(sdk=fake, cache_ttl="5m")
+    tools = [
+        ToolDefinition(name="alpha", description="a", input_schema={"type": "object"}),
+    ]
+    await client.complete_with_tools(
+        system_blocks=[CacheableBlock(text="x", cache=True)],
+        messages=[Message(role="user", content="hi")],
+        tools=tools,
+        model="claude-sonnet-4-6",
+    )
+    sent_tools = fake.messages.calls[0]["tools"]
+    assert sent_tools[0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}

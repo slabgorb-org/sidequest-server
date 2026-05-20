@@ -280,7 +280,7 @@ class AnthropicSdkClient:
         return out
 
     def _build_tools_array(self, tools: list[ToolDefinition]) -> list[dict[str, Any]]:
-        return [
+        out: list[dict[str, Any]] = [
             {
                 "name": t.name,
                 "description": t.description,
@@ -288,6 +288,16 @@ class AnthropicSdkClient:
             }
             for t in tools
         ]
+        # The tools array is byte-stable across every turn — 27 definitions,
+        # ~7.6K tokens, no per-turn drift. Without an explicit cache_control
+        # marker, Anthropic auto-caches it at default 5m TTL and re-writes
+        # the whole block every time the 5m timer expires (which the
+        # submit-and-wait MP cadence routinely outlives). A marker on the
+        # last entry caches the whole tools array at the configured TTL
+        # (1h by default). See ADR-101 four-region cache layout amendment.
+        if out:
+            out[-1]["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
+        return out
 
     @staticmethod
     def _split_content(

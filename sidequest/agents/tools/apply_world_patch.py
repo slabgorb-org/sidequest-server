@@ -67,6 +67,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from sidequest.agents.narrator_guardrails import LOCATION_PATCH_CONSTRAINT
 from sidequest.agents.tool_registry import (
     ToolCategory,
     ToolContext,
@@ -137,7 +138,13 @@ def _path_kind(path: str) -> str:
         "Apply a JSON-patch-style mutation to world state. Escape hatch "
         "only — prefer a typed tool when one exists. Heavily logged; "
         "deprecation criterion is zero spans across 10 consecutive "
-        "playtests."
+        "playtests.\n\n"
+        # ADR-111 (story 57-4): the location_patch guardrail migrated from
+        # the per-turn Recency zone into this tool's description, the
+        # cache-key surface adjacent to the artifact it governs
+        # (``WorldStatePatch.location``). Single source of truth:
+        # sidequest.agents.narrator_guardrails.LOCATION_PATCH_CONSTRAINT.
+        f"{LOCATION_PATCH_CONSTRAINT}"
     ),
     category=ToolCategory.WRITE,
 )

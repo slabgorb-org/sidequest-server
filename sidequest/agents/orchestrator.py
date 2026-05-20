@@ -52,6 +52,13 @@ from sidequest.agents.claude_client import (
     TimeoutError as _ClaudeTimeoutError,
 )
 from sidequest.agents.narrator import NarratorAgent, is_streaming_enabled
+from sidequest.agents.narrator_guardrails import (
+    ALL_GUARDRAILS,
+    CONFRONTATION_TRIGGER_CONSTRAINT,
+    LOCATION_PATCH_CONSTRAINT,
+    NPC_EXTRACTION_CONSTRAINT,
+    NPC_INTRO_VISUAL_CONSTRAINT,
+)
 from sidequest.agents.prompt_framework.core import PromptRegistry
 from sidequest.agents.prompt_framework.types import (
     AttentionZone,
@@ -1761,33 +1768,22 @@ class Orchestrator:
         # classifies this turn as NPC_INTRO whenever any NpcMention has
         # ``is_new=True``; this section makes the narrator hold up its end
         # of the contract by always including the matching visual_scene.
-        registry.register_section(
-            agent_name,
-            PromptSection.new(
-                "npc_intro_visual_constraint",
-                (
-                    "<npc-intro-visual>\n"
-                    "When you introduce a NEW named NPC for the first time "
-                    "this session — i.e. you set ``is_new: true`` on their "
-                    "entry in ``npcs_met`` — your game_patch MUST also "
-                    "include a ``visual_scene`` whose ``subject`` describes "
-                    "that NPC (their appearance, posture, and the moment "
-                    'the player is meeting them). Use tier ``"portrait"`` '
-                    'for a single character close-up, or ``"landscape"`` '
-                    "when the introduction is inseparable from the place "
-                    "(a foreman silhouetted against the rig, a customs "
-                    "officer at the freight stair). If multiple NPCs are "
-                    "introduced in the same turn, pick the one whose "
-                    "introduction carries the most narrative weight — the "
-                    "visual is the diamond on that introduction. Recurring "
-                    "NPCs (``is_new: false``) do NOT require a fresh "
-                    "visual_scene; this rule fires only on the first reveal.\n"
-                    "</npc-intro-visual>"
+        #
+        # ADR-111 (story 57-4): backend-gated. On the SDK tool-use path the
+        # migration target is the slimmed-sidecar Primacy/Stable cached
+        # prose at ``narrator_prompts/output_only_sdk.md`` (cached on every
+        # turn). On the legacy ``claude -p`` path the Recency-zone
+        # registration stays — that backend cannot host tool descriptions.
+        if not isinstance(self._client, ToolingLlmClient):
+            registry.register_section(
+                agent_name,
+                PromptSection.new(
+                    "npc_intro_visual_constraint",
+                    NPC_INTRO_VISUAL_CONSTRAINT,
+                    AttentionZone.Recency,
+                    SectionCategory.Guardrail,
                 ),
-                AttentionZone.Recency,
-                SectionCategory.Guardrail,
-            ),
-        )
+            )
 
         # Plot-a-course (plot-a-course design). The narrator can plot a
         # course to any body in the prompted set; rejection is OTEL-loud
@@ -1848,73 +1844,21 @@ class Orchestrator:
         # keywords stays loud if the narrator skips again — together they
         # close the gap without taking the architectural step of server-side
         # auto-firing (which would be a silent fallback).
-        registry.register_section(
-            agent_name,
-            PromptSection.new(
-                "confrontation_trigger_constraint",
-                (
-                    "<confrontation-trigger>\n"
-                    "If your prose this turn describes any stake-binding "
-                    "engagement — physical, social, or reputational — "
-                    "your ``game_patch`` MUST populate ``confrontation`` "
-                    "with the matching type from AVAILABLE ENCOUNTER "
-                    "TYPES. Pick the MOST SPECIFIC type the genre offers; "
-                    "never default to a generic ``combat`` when "
-                    "``ship_combat``, ``dogfight``, ``social_duel``, or "
-                    "another specialized type applies. Spell the type "
-                    "exactly as it appears in the available list "
-                    "(lowercase, snake_case where compound).\n"
-                    "Combat / pursuit triggers (``combat``, "
-                    "``ship_combat``, ``dogfight``, ``chase``): a hostile "
-                    "chassis spinning its reactor up, a patrol or pursuer "
-                    "requesting permission to engage, weapons drawn / "
-                    "charged / going hot, an intercept order, a boarding "
-                    "action, an antagonist drawing a weapon, opening "
-                    "fire, or otherwise making a hostile commit against "
-                    "the party.\n"
-                    "Social triggers (``negotiation``, ``trial``, "
-                    "``auction``, ``social_duel``, ``scandal``): a price "
-                    "named and a counter-offer expected (``negotiation``); "
-                    "a summons served, the docket called, a witness "
-                    "sworn before the magistrate (``trial``); an "
-                    "auctioneer calling the lot, paddles raised, "
-                    '"going once" (``auction``); a card declined, the '
-                    "cut direct, seconds appointed, a formal challenge "
-                    "issued (``social_duel``); a rumour reaching print, "
-                    "exposure in the society pages, a blackmail letter "
-                    "on the salver (``scandal``). Social-pack triggers "
-                    "are NOT optional — a scandal breaking in print is "
-                    "exactly as mechanically binding as a weapon drawn.\n"
-                    "The mechanical commit belongs to the turn the "
-                    "trigger appears in fiction. Do NOT defer it to the "
-                    "next turn — there is no retroactive crediting. If "
-                    "the cutter spins up THIS turn, fire ``chase`` THIS "
-                    "turn. If a hostile draws a weapon THIS turn, fire "
-                    "``combat`` THIS turn. If the auctioneer calls the "
-                    "lot THIS turn, fire ``auction`` THIS turn. The "
-                    "system handles de-escalation gracefully if the "
-                    "resolution swerves; an unfired encounter cannot "
-                    "be created later.\n"
-                    "Edge cases: if the engagement is described as the "
-                    "uniform / pursuer ASKING someone else (a tower, a "
-                    "command channel) for permission — fire the "
-                    "encounter NOW. The asking IS the trigger. Waiting "
-                    'for the explicit "go" produces a turn of prose '
-                    "with no mechanical track, and the Diamonds-and-Coal "
-                    "promise is broken (ADR-014). Same rule on the "
-                    "social side: when the writ is served, fire "
-                    "``trial`` now — do not wait for the court to "
-                    "convene.\n"
-                    "Only emit ``confrontation`` on the turn the "
-                    "encounter STARTS; once it is active, use "
-                    "``beat_selections`` for subsequent rounds."
-                    "\n</confrontation-trigger>"
+        #
+        # ADR-111 (story 57-4): backend-gated. On the SDK tool-use path the
+        # migration target is the ``generate_encounter`` tool description,
+        # cached as part of the tools=array root. On the legacy ``claude -p``
+        # path the Recency-zone registration stays.
+        if not isinstance(self._client, ToolingLlmClient):
+            registry.register_section(
+                agent_name,
+                PromptSection.new(
+                    "confrontation_trigger_constraint",
+                    CONFRONTATION_TRIGGER_CONSTRAINT,
+                    AttentionZone.Recency,
+                    SectionCategory.Guardrail,
                 ),
-                AttentionZone.Recency,
-                SectionCategory.Guardrail,
-            ),
-        )
-
+            )
         # Story 49-2 — NPC extraction constraint (Recency zone Guardrail).
         # Paired with the server-side prose-only auto-minter
         # (sidequest.server.session_helpers._auto_mint_prose_only_npcs).
@@ -1931,43 +1875,20 @@ class Orchestrator:
         # rule per-turn in Recency-zone Guardrail attention. The
         # server-side auto-minter is the post-hoc safety net; this
         # section is the narration-time prevention.
-        registry.register_section(
-            agent_name,
-            PromptSection.new(
-                "npc_extraction_constraint",
-                (
-                    "<npc-extraction>\n"
-                    "Any person named or role-named in this turn's "
-                    "prose — including patients, parents, children, "
-                    "siblings, and recurring townsfolk — MUST appear "
-                    "in ``npcs_present``. If your prose names "
-                    "``Father``, ``Mother``, ``the doctor``, ``the "
-                    "Reverend``, ``Mrs. <Name>``, ``Mr. <Name>``, "
-                    "``Dr. <Name>``, or any other role-named or "
-                    "honorific-named individual, they MUST be emitted "
-                    "with a ``name``, ``role``, and ``pronouns`` in "
-                    "``npcs_present`` — even if they don't speak this "
-                    "turn, even if they're only mentioned in passing.\n"
-                    "Patients on a sickbed count. Parents at a hearth "
-                    "count. Children at a doorway count. Siblings in "
-                    "the next room count. The grieving widow, the "
-                    "stable-boy holding the lantern, the apothecary's "
-                    "apprentice — all count.\n"
-                    "This is how the roster stays consistent across "
-                    "turns. A name or role mentioned only in prose, "
-                    "never emitted in ``npcs_present``, is invisible "
-                    "to the next turn's reasoning — and the gap "
-                    "invites a slip (gender flip, role flip, name "
-                    "drift). The server runs a catch-loop that auto-"
-                    "mints prose-only first-mentions, but the catch-"
-                    "loop is a safety net, not the source of truth — "
-                    "you are."
-                    "\n</npc-extraction>"
+        #
+        # ADR-111 (story 57-4): backend-gated. SDK path migration target
+        # is the slimmed-sidecar Primacy/Stable prose (cached); legacy
+        # path keeps the Recency-zone registration.
+        if not isinstance(self._client, ToolingLlmClient):
+            registry.register_section(
+                agent_name,
+                PromptSection.new(
+                    "npc_extraction_constraint",
+                    NPC_EXTRACTION_CONSTRAINT,
+                    AttentionZone.Recency,
+                    SectionCategory.Guardrail,
                 ),
-                AttentionZone.Recency,
-                SectionCategory.Guardrail,
-            ),
-        )
+            )
 
         # Story 49-3 — location-patch constraint (Recency zone Guardrail).
         # Paired with the server-side drift-repair backstop in
@@ -1986,37 +1907,46 @@ class Orchestrator:
         # Same disease as the confrontation_trigger / npc_extraction
         # guardrails above; same cure: a Recency-zone restatement so
         # the rule lives in high-attention space every turn.
-        registry.register_section(
-            agent_name,
-            PromptSection.new(
-                "location_patch_constraint",
-                (
-                    "<location-patch>\n"
-                    "If your prose this turn opens a new scene with a "
-                    "bold room header (``**Title**`` or ``## **Title**``) "
-                    "OR your prose moves the party into a different named "
-                    "space, your ``game_patch.location`` MUST be set to "
-                    "the new room.\n"
-                    "State must not lag prose. A bold title with no "
-                    "matching ``location`` field leaves the GM panel "
-                    "and the canonical ``character_locations`` map "
-                    "pointing at the prior room while the players are "
-                    "reading the new one — the same Illusionism failure "
-                    "mode SOUL.md warns against.\n"
-                    "If the scene has NOT changed and you are continuing "
-                    "in the same room, omit ``location`` (or set it to "
-                    "the current value). The server runs a drift-repair "
-                    "backstop that auto-promotes leading bold titles "
-                    "into ``character_locations`` and emits a WARNING-"
-                    "level ``narrator.location_drift_repaired`` span — "
-                    "but the backstop is a safety net, not the source "
-                    "of truth. You are."
-                    "\n</location-patch>"
+        #
+        # ADR-111 (story 57-4): backend-gated. SDK path migration target
+        # is the ``apply_world_patch`` tool's ``description`` field
+        # (cached as part of the tools=array root); legacy path keeps
+        # the Recency-zone registration.
+        if not isinstance(self._client, ToolingLlmClient):
+            registry.register_section(
+                agent_name,
+                PromptSection.new(
+                    "location_patch_constraint",
+                    LOCATION_PATCH_CONSTRAINT,
+                    AttentionZone.Recency,
+                    SectionCategory.Guardrail,
                 ),
-                AttentionZone.Recency,
-                SectionCategory.Guardrail,
-            ),
+            )
+
+        # ADR-111 §Observability — emit the migration cutover span so the
+        # GM panel can verify on every turn whether the Recency-zone
+        # registrations actually skipped (SDK path) or fired (legacy).
+        # Constant-emit shape: the span fires on every prompt-build so
+        # absence-of-span is unambiguous (= the migration call site is
+        # missing entirely), not "the legacy path".
+        _tool_backend = isinstance(self._client, ToolingLlmClient)
+        _guardrails_skipped: tuple[str, ...] = (
+            tuple(name for name, _ in ALL_GUARDRAILS) if _tool_backend else ()
         )
+        _bytes_saved = (
+            sum(len(prose) for _, prose in ALL_GUARDRAILS) if _tool_backend else 0
+        )
+        from sidequest.telemetry.spans.span import Span as _GuardrailSpan
+
+        with _GuardrailSpan.open(
+            "narrator.recency_guardrails_skipped",
+            {
+                "tool_backend": _tool_backend,
+                "guardrails_skipped": _guardrails_skipped,
+                "bytes_saved": _bytes_saved,
+            },
+        ):
+            pass
 
         # Recent-narrative window (Recency zone, Story 49-1).
         # ADR-098 dropped --resume; the narrator lost its conversational

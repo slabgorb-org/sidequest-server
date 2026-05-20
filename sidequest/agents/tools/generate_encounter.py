@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from sidequest.agents.narrator_guardrails import CONFRONTATION_TRIGGER_CONSTRAINT
 from sidequest.agents.tool_registry import (
     ToolCategory,
     ToolContext,
@@ -91,7 +92,14 @@ class GenerateEncounterArgs(BaseModel):
     name="generate_encounter",
     description=(
         "Generate an encounter seed (combatant types + difficulty rating "
-        "+ suggested terrain features)."
+        "+ suggested terrain features).\n\n"
+        # ADR-111 (story 57-4): the confrontation_trigger guardrail
+        # migrated from the per-turn Recency zone into this tool's
+        # description — start-of-encounter is where the model is weighing
+        # the call, and the tools=array description rides in the cache
+        # key root. Single source of truth:
+        # sidequest.agents.narrator_guardrails.CONFRONTATION_TRIGGER_CONSTRAINT.
+        f"{CONFRONTATION_TRIGGER_CONSTRAINT}"
     ),
     category=ToolCategory.GENERATE,
 )

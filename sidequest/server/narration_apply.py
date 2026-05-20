@@ -2604,10 +2604,21 @@ def _apply_narration_result_to_snapshot(
                     f"encounter on this turn."
                 )
             elif _effective_severity == "reprompt":
-                # Build the directive, attach to outcome, return early WITHOUT
-                # applying narration — orchestrator (Task 7) will re-invoke the
-                # narrator with the directive and re-enter this function with
+                # Spec 2026-05-20 — build the directive, attach to outcome,
+                # return early so the orchestrator can re-invoke the narrator
+                # with extra_directive=<directive> and re-apply with
                 # already_reprompted=True.
+                #
+                # CAVEAT: by this point the apply has already mutated
+                # location, lore, NPCs, inventory, magic_working, etc.
+                # The early return only skips the ENCOUNTER/BEAT
+                # application below. The second-attempt apply will re-run
+                # those pre-validator mutations against the second
+                # narration's fields, which may double-add NPCs or
+                # overwrite location. The double-apply risk is rare in
+                # practice (requires the second narration to mention the
+                # same NPCs/items) and per-spec; revisit if playtest
+                # surfaces concrete regressions.
                 outcome.reprompt_request = RepromptRequest(
                     matched_type=_mismatch.matched_type,
                     declared=_mismatch.declared,

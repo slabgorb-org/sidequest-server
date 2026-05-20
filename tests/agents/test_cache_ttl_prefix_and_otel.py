@@ -342,6 +342,150 @@ async def test_narration_turn_span_carries_system_block_sizes_json(
     assert sizes["stable"] > 0, "stable region must carry content"
 
 
+# --- ADR-112 / Story 57-3: promoted genre prose rides the cached System block --
+
+
+def _prompts_with_all_promotions() -> Any:
+    """Construct an in-memory ``Prompts`` model with every Story-57-3-
+    promoted section populated by a marker string the tests can grep for.
+
+    Inline construction avoids depending on a specific genre pack's
+    ``prompts.yaml`` content being loaded into the test environment.
+    Required ``narrator``/``combat``/``npc``/``world_state`` fields are
+    given placeholder text; only the four promoted optional fields
+    carry the assertable marker strings.
+    """
+    from sidequest.genre.models.narrative import Prompts
+
+    return Prompts(
+        narrator="(test) narrator voice",
+        combat="(test) combat voice",
+        npc="(test) npc voice",
+        world_state="(test) world state",
+        extraction="(test) extraction prose — STORY_57_3_EXTRACTION",
+        keeper_monologue="(test) keeper monologue prose — STORY_57_3_KEEPER",
+        town="(test) town prose — STORY_57_3_TOWN",
+        chargen="(test) chargen prose — STORY_57_3_CHARGEN",
+    )
+
+
+@pytest.mark.asyncio
+async def test_promoted_genre_prose_lands_in_cached_system_block(
+    simple_turn_context,
+) -> None:
+    """ADR-112 / Story 57-3 — the four promoted genre prose sections ride
+    the cached ``system_blocks[0]`` block, not the per-turn user message
+    or any uncached follow-on system block.
+
+    This is the direct cache evidence path (see Story 57-3 brief, 2026-05-20):
+    the per-turn ``narration.turn.system_block_sizes_json["stable"]``
+    attribute is expected to grow by the four sections' size (≈ their
+    combined char count / 4 tokens) on every turn after promotion.
+
+    Pre-promotion the four sections register at ``orchestrator.py:1368..1411``
+    with ``AttentionZone.Valley`` and ``SectionBucket.User``, so their
+    content (wrapped in ``<genre-extraction>``, ``<genre-keeper>``,
+    ``<genre-town>``, ``<genre-chargen>`` tags) lands in the per-turn
+    user message — uncached.
+
+    Post-promotion (allowlist contains the four section names) the bucket
+    classifier returns ``SectionBucket.System`` for each, so the
+    four marker tags MUST appear in the cached block —
+    ``recorded_requests[0].system_blocks[0].text`` — and MUST NOT appear
+    in any user message content.
+
+    Hand-built ``Prompts`` is injected on the ``TurnContext.genre_prompts``
+    slot so the registration sites at ``orchestrator.py:1304..1411`` fire
+    deterministically without relying on a specific pack's
+    ``prompts.yaml`` being loaded by the test environment.
+    """
+    ctx = replace(simple_turn_context, genre_prompts=_prompts_with_all_promotions())
+
+    fake = FakeAnthropicSdkClient(responses=[_end_turn("ok")])
+    orch = Orchestrator(client=fake)
+    await orch.run_narration_turn("look around", ctx)
+
+    assert len(fake.recorded_requests) == 1, (
+        f"expected exactly one recorded SDK request; got {len(fake.recorded_requests)}"
+    )
+    request = fake.recorded_requests[0]
+
+    cached_block_text = request.system_blocks[0].text
+    other_system_text = "\n".join(b.text for b in request.system_blocks[1:])
+    user_message_text = "\n".join(m.content for m in request.messages if m.role == "user")
+
+    promoted_markers = (
+        "<genre-extraction>",
+        "<genre-keeper>",
+        "<genre-town>",
+        "<genre-chargen>",
+    )
+    for marker in promoted_markers:
+        assert marker in cached_block_text, (
+            f"{marker!r} did not land in the cached system_blocks[0].text. "
+            f"ADR-112 promotion routes these four sections into the Stable "
+            f"(cached) block; if the marker is missing here, the cache "
+            f"savings ADR-112 promises are not materializing — likely the "
+            f"section is still registered against AttentionZone.Valley and "
+            f"the zone-aligned cache split (orchestrator.py:3112-3135) is "
+            f"keeping it out of system_blocks[0]. "
+            f"Found instead in system_blocks[1:]: {marker in other_system_text}; "
+            f"found in user message: {marker in user_message_text}."
+        )
+        assert marker not in user_message_text, (
+            f"{marker!r} still appears in the per-turn user message — "
+            f"the User→System bucket migration did not take effect for "
+            f"this section. Check STABLE_SECTION_NAMES in "
+            f"prompt_framework/bucket.py."
+        )
+        assert marker not in other_system_text, (
+            f"{marker!r} landed in an uncached system block, not the "
+            f"cached system_blocks[0]. ADR-112 §Consequences:Positive "
+            f"requires the content to be cached for the amortization "
+            f"claim to hold."
+        )
+
+
+@pytest.mark.asyncio
+async def test_deferred_combat_voice_does_not_ride_cached_system_block(
+    simple_turn_context,
+) -> None:
+    """ADR-112 §Defer regression guard — even if ``genre_combat_voice``
+    is conditionally registered (here: turn-0 peace, NOT registered),
+    a future author who unconditionally registers it AND promotes it
+    must not land it in the cached block. This pairs with the
+    bucket-classifier unit test and catches the "promoted AND made
+    unconditional in the same change" failure mode.
+
+    On a turn-0 peace context the ``<genre-combat>`` and ``<genre-chase>``
+    marker tags must not appear in *any* part of the prompt — they
+    aren't registered. If they appear in ``system_blocks[0]``, the
+    Defer rationale (cache thrash at every combat boundary) has been
+    silently violated.
+    """
+    ctx = replace(simple_turn_context, genre_prompts=_prompts_with_all_promotions())
+
+    fake = FakeAnthropicSdkClient(responses=[_end_turn("ok")])
+    orch = Orchestrator(client=fake)
+    await orch.run_narration_turn("look around", ctx)
+
+    request = fake.recorded_requests[0]
+    full_prompt = "\n".join(
+        [b.text for b in request.system_blocks]
+        + [m.content for m in request.messages if m.role == "user"]
+    )
+
+    for marker in ("<genre-combat>", "<genre-chase>"):
+        assert marker not in full_prompt, (
+            f"{marker!r} appeared in the prompt on a turn-0 peace context. "
+            f"The conditional registration guards at "
+            f"orchestrator.py:1344..1356 must continue to gate these "
+            f"sections on context.in_combat / context.in_chase — and the "
+            f"bucket classifier must continue to route them to "
+            f"SectionBucket.User if/when they do register (ADR-112 §Defer)."
+        )
+
+
 def test_tool_definitions_json_byte_identical_across_calls() -> None:
     """Tools-region cache marker (added 2026-05-20) only buys 1h caching if
     the serialized tools array is byte-identical across calls. This regression

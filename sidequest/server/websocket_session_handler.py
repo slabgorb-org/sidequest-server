@@ -982,14 +982,21 @@ def _maybe_emit_location_overlay_changed(
     transition on the GM panel until 54-8 wraps it in a dedicated OTEL
     span.
     """
+    from contextlib import AbstractContextManager
+
     from sidequest.protocol.messages import LocationOverlayChangedMessage
     from sidequest.protocol.models import (
         LocationDescriptionOverlaySummary,
         LocationOverlayChangedPayload,
     )
+    from sidequest.telemetry.spans import (
+        location_overlay_activate_span,
+        location_overlay_deactivate_span,
+    )
 
     region_id: str
     overlay_summaries: list[LocationDescriptionOverlaySummary]
+    span_cm: AbstractContextManager[object]
 
     if transition == "activate":
         enc = getattr(snapshot, "encounter", None)
@@ -1007,11 +1014,26 @@ def _maybe_emit_location_overlay_changed(
                 entity_delta_count=len(overlay.entity_delta),
             )
         ]
+        span_cm = location_overlay_activate_span(
+            region_id=region_id,
+            encounter_id=encounter_id_str,
+            delta_count=len(overlay.entity_delta),
+            suffix_chars=len(overlay.prose_suffix),
+        )
     elif transition == "deactivate":
         if prior_overlay is None:
             return
         region_id = prior_overlay.bound_room_id
         overlay_summaries = []
+        # delta_count=0 reflects the post-transition state (the overlay
+        # has just cleared). suffix_chars carries the prior suffix length
+        # so the GM panel can still see what was just removed.
+        span_cm = location_overlay_deactivate_span(
+            region_id=region_id,
+            encounter_id="",
+            delta_count=0,
+            suffix_chars=len(prior_overlay.prose_suffix),
+        )
     else:
         raise ValueError(f"transition must be 'activate' or 'deactivate', got {transition!r}")
 
@@ -1023,24 +1045,18 @@ def _maybe_emit_location_overlay_changed(
         payload=payload,
         player_id=getattr(sd, "player_id", ""),
     )
-    _watcher_publish(
-        "location_overlay_changed.emitted",
-        {
-            "genre": getattr(sd, "genre_slug", ""),
-            "world": getattr(sd, "world_slug", ""),
-            "region_id": region_id,
-            "transition": transition,
-            "overlay_count": len(overlay_summaries),
-        },
-        component="location",
-    )
-    logger.info(
-        "location_overlay_changed.emitted region=%s transition=%s overlays=%d",
-        region_id,
-        transition,
-        len(overlay_summaries),
-    )
-    emit_fn(msg, "LOCATION_OVERLAY_CHANGED")  # type: ignore[operator]
+    # 54-8: the dedicated span carries the same fields through the
+    # SPAN_ROUTES fan-out (component='location', state_transition event),
+    # so the bare _watcher_publish('location_overlay_changed.emitted', ...)
+    # that 54-7 published is removed — the dual emit was redundant.
+    with span_cm:
+        logger.info(
+            "location_overlay_changed.emitted region=%s transition=%s overlays=%d",
+            region_id,
+            transition,
+            len(overlay_summaries),
+        )
+        emit_fn(msg, "LOCATION_OVERLAY_CHANGED")  # type: ignore[operator]
 
 
 def _maybe_emit_dungeon_map(

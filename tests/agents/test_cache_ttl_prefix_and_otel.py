@@ -19,6 +19,7 @@ Two guarantees the 1h ephemeral-cache restore depends on:
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -339,3 +340,29 @@ async def test_narration_turn_span_carries_system_block_sizes_json(
         )
     # Stable region must be non-empty on a real narration turn.
     assert sizes["stable"] > 0, "stable region must carry content"
+
+
+def test_tool_definitions_json_byte_identical_across_calls() -> None:
+    """Tools-region cache marker (added 2026-05-20) only buys 1h caching if
+    the serialized tools array is byte-identical across calls. This regression
+    test asserts that — if it ever fails, the tools cache will silently re-mint
+    every turn even with the marker present."""
+    from sidequest.agents.tool_registry import default_registry
+
+    snapshots: list[str] = []
+    for _ in range(3):
+        payload = json.dumps(
+            [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                }
+                for t in default_registry.tool_definitions()
+            ]
+        )
+        snapshots.append(payload)
+
+    assert snapshots[0] == snapshots[1] == snapshots[2], (
+        "tool_definitions() JSON drifted across calls — tools cache will re-mint"
+    )

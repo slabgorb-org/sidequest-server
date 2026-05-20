@@ -650,6 +650,10 @@ def _maybe_emit_tactical_grid(
         )
         return
 
+    # Story 52-5: discriminator on tactical_grid.emitted so the GM panel
+    # (Sebastien) can distinguish runtime-generated cavern PNGs from
+    # statically authored ones without correlating sibling OTEL spans.
+    source = "static"
     try:
         payload = load_room_payload(world_dir, room_id, genre_slug=sd.genre_slug)
     except RoomNotFoundError:
@@ -663,6 +667,7 @@ def _maybe_emit_tactical_grid(
         runtime_payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id)
         if runtime_payload is not None:
             payload = runtime_payload
+            source = "runtime"
         else:
             # Per CLAUDE.md no-silent-fallback: log at debug so the
             # absence IS visible to Keith/Sebastien at low verbosity,
@@ -742,6 +747,7 @@ def _maybe_emit_tactical_grid(
             "room_id": room_id,
             "room_type": payload.room_type,
             "room_name": payload.room_name,
+            "source": source,
         },
         component="cavern_renderer",
     )

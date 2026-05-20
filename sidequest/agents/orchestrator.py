@@ -53,11 +53,12 @@ from sidequest.agents.claude_client import (
 )
 from sidequest.agents.narrator import NarratorAgent, is_streaming_enabled
 from sidequest.agents.narrator_guardrails import (
-    ALL_GUARDRAILS,
     CONFRONTATION_TRIGGER_CONSTRAINT,
+    GUARDRAIL_NAMES,
     LOCATION_PATCH_CONSTRAINT,
     NPC_EXTRACTION_CONSTRAINT,
     NPC_INTRO_VISUAL_CONSTRAINT,
+    TOTAL_PROSE_BYTES,
 )
 from sidequest.agents.prompt_framework.core import PromptRegistry
 from sidequest.agents.prompt_framework.types import (
@@ -1164,6 +1165,36 @@ class Orchestrator:
             tokens[name] = toks
         return tokens
 
+    def _maybe_register_legacy_guardrail(
+        self,
+        registry: PromptRegistry,
+        agent_name: str,
+        name: str,
+        content: str,
+    ) -> None:
+        """Register a Recency-zone guardrail PromptSection on the legacy backend only.
+
+        ADR-111 (story 57-4): on the SDK tool-use path
+        (``isinstance(self._client, ToolingLlmClient)``) the four guardrail
+        prose blocks live at their migration targets — the
+        ``tools=`` array's ``description`` field (for tool-owned artifacts)
+        or the slimmed-sidecar Primacy/Stable cached prose (for sidecar-
+        owned artifacts). On the legacy ``claude -p`` / Ollama paths the
+        Recency-zone registration stays byte-identical to pre-111. This
+        helper centralises the gate so the four registration sites in
+        ``build_narrator_prompt`` collapse from ~10 lines each to one call.
+        """
+        if not isinstance(self._client, ToolingLlmClient):
+            registry.register_section(
+                agent_name,
+                PromptSection.new(
+                    name,
+                    content,
+                    AttentionZone.Recency,
+                    SectionCategory.Guardrail,
+                ),
+            )
+
     # ------------------------------------------------------------------
     # Prompt assembly
     # ------------------------------------------------------------------
@@ -1774,16 +1805,12 @@ class Orchestrator:
         # prose at ``narrator_prompts/output_only_sdk.md`` (cached on every
         # turn). On the legacy ``claude -p`` path the Recency-zone
         # registration stays — that backend cannot host tool descriptions.
-        if not isinstance(self._client, ToolingLlmClient):
-            registry.register_section(
-                agent_name,
-                PromptSection.new(
-                    "npc_intro_visual_constraint",
-                    NPC_INTRO_VISUAL_CONSTRAINT,
-                    AttentionZone.Recency,
-                    SectionCategory.Guardrail,
-                ),
-            )
+        self._maybe_register_legacy_guardrail(
+            registry,
+            agent_name,
+            "npc_intro_visual_constraint",
+            NPC_INTRO_VISUAL_CONSTRAINT,
+        )
 
         # Plot-a-course (plot-a-course design). The narrator can plot a
         # course to any body in the prompted set; rejection is OTEL-loud
@@ -1849,16 +1876,12 @@ class Orchestrator:
         # migration target is the ``generate_encounter`` tool description,
         # cached as part of the tools=array root. On the legacy ``claude -p``
         # path the Recency-zone registration stays.
-        if not isinstance(self._client, ToolingLlmClient):
-            registry.register_section(
-                agent_name,
-                PromptSection.new(
-                    "confrontation_trigger_constraint",
-                    CONFRONTATION_TRIGGER_CONSTRAINT,
-                    AttentionZone.Recency,
-                    SectionCategory.Guardrail,
-                ),
-            )
+        self._maybe_register_legacy_guardrail(
+            registry,
+            agent_name,
+            "confrontation_trigger_constraint",
+            CONFRONTATION_TRIGGER_CONSTRAINT,
+        )
         # Story 49-2 — NPC extraction constraint (Recency zone Guardrail).
         # Paired with the server-side prose-only auto-minter
         # (sidequest.server.session_helpers._auto_mint_prose_only_npcs).
@@ -1879,16 +1902,12 @@ class Orchestrator:
         # ADR-111 (story 57-4): backend-gated. SDK path migration target
         # is the slimmed-sidecar Primacy/Stable prose (cached); legacy
         # path keeps the Recency-zone registration.
-        if not isinstance(self._client, ToolingLlmClient):
-            registry.register_section(
-                agent_name,
-                PromptSection.new(
-                    "npc_extraction_constraint",
-                    NPC_EXTRACTION_CONSTRAINT,
-                    AttentionZone.Recency,
-                    SectionCategory.Guardrail,
-                ),
-            )
+        self._maybe_register_legacy_guardrail(
+            registry,
+            agent_name,
+            "npc_extraction_constraint",
+            NPC_EXTRACTION_CONSTRAINT,
+        )
 
         # Story 49-3 — location-patch constraint (Recency zone Guardrail).
         # Paired with the server-side drift-repair backstop in
@@ -1912,38 +1931,31 @@ class Orchestrator:
         # is the ``apply_world_patch`` tool's ``description`` field
         # (cached as part of the tools=array root); legacy path keeps
         # the Recency-zone registration.
-        if not isinstance(self._client, ToolingLlmClient):
-            registry.register_section(
-                agent_name,
-                PromptSection.new(
-                    "location_patch_constraint",
-                    LOCATION_PATCH_CONSTRAINT,
-                    AttentionZone.Recency,
-                    SectionCategory.Guardrail,
-                ),
-            )
+        self._maybe_register_legacy_guardrail(
+            registry,
+            agent_name,
+            "location_patch_constraint",
+            LOCATION_PATCH_CONSTRAINT,
+        )
 
         # ADR-111 §Observability — emit the migration cutover span so the
         # GM panel can verify on every turn whether the Recency-zone
         # registrations actually skipped (SDK path) or fired (legacy).
         # Constant-emit shape: the span fires on every prompt-build so
         # absence-of-span is unambiguous (= the migration call site is
-        # missing entirely), not "the legacy path".
+        # missing entirely), not "the legacy path". ``GUARDRAIL_NAMES``
+        # and ``TOTAL_PROSE_BYTES`` are precomputed at module load time
+        # — derived from the static ``ALL_GUARDRAILS`` tuple, they never
+        # change after import and don't need per-turn recomputation.
         _tool_backend = isinstance(self._client, ToolingLlmClient)
-        _guardrails_skipped: tuple[str, ...] = (
-            tuple(name for name, _ in ALL_GUARDRAILS) if _tool_backend else ()
-        )
-        _bytes_saved = (
-            sum(len(prose) for _, prose in ALL_GUARDRAILS) if _tool_backend else 0
-        )
         from sidequest.telemetry.spans.span import Span as _GuardrailSpan
 
         with _GuardrailSpan.open(
             "narrator.recency_guardrails_skipped",
             {
                 "tool_backend": _tool_backend,
-                "guardrails_skipped": _guardrails_skipped,
-                "bytes_saved": _bytes_saved,
+                "guardrails_skipped": GUARDRAIL_NAMES if _tool_backend else (),
+                "bytes_saved": TOTAL_PROSE_BYTES if _tool_backend else 0,
             },
         ):
             pass

@@ -191,3 +191,11 @@ ALL_GUARDRAILS: tuple[tuple[str, str], ...] = (
     ("npc_extraction_constraint", NPC_EXTRACTION_CONSTRAINT),
     ("location_patch_constraint", LOCATION_PATCH_CONSTRAINT),
 )
+
+# Precomputed views of ``ALL_GUARDRAILS`` for hot-path consumers.
+# ``Orchestrator.build_narrator_prompt`` emits the
+# ``narrator.recency_guardrails_skipped`` span on every turn; computing
+# these from the tuple every time is wasted work since the values are
+# static after module load.
+GUARDRAIL_NAMES: tuple[str, ...] = tuple(name for name, _ in ALL_GUARDRAILS)
+TOTAL_PROSE_BYTES: int = sum(len(prose) for _, prose in ALL_GUARDRAILS)

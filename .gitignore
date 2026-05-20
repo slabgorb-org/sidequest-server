@@ -58,6 +58,7 @@ coverage.xml
 logs/
 .session/
 .envrc.local
+.claude/
 
 # Test scratch (pf solo / benchmark write-out targets)
 tests/server/_tmp_solo_new/

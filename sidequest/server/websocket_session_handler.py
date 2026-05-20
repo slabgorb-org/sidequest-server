@@ -3267,6 +3267,14 @@ class WebSocketSessionHandler:
                                 already_reprompted=True,
                                 **_apply_kwargs,
                             )
+                            if applied_outcome.reprompt_request is None:
+                                from sidequest.telemetry.spans import (
+                                    confrontation_intent_mismatch_resolved_span,
+                                )
+                                with confrontation_intent_mismatch_resolved_span(
+                                    matched_type=_matched,
+                                ):
+                                    pass
                             result = second_result
                         except Exception:
                             logger.exception(
@@ -3274,6 +3282,13 @@ class WebSocketSessionHandler:
                                 "matched_type=%s",
                                 _matched,
                             )
+                            from sidequest.telemetry.spans import (
+                                confrontation_intent_mismatch_reprompt_failed_span,
+                            )
+                            with confrontation_intent_mismatch_reprompt_failed_span(
+                                matched_type=_matched,
+                            ):
+                                pass
                             # Fall through: apply the first attempt's narration.
                             applied_outcome = _apply_narration_result_to_snapshot(
                                 snapshot,

@@ -719,30 +719,6 @@ class NarrationApplyOutcome:
     classified_intent: str = "unspecified"
 
 
-def _emit_confrontation_intent_mismatch_span(
-    *,
-    matched_type: str,
-    declared: str | None,
-    severity: str,
-    matched_tokens: tuple[str, ...],
-    reprompt_attempted: bool = False,
-    outcome: str | None = None,
-) -> None:
-    """OTEL span emission for confrontation.intent_mismatch.
-
-    Stubbed here; the canonical implementation lands in
-    sidequest.telemetry.spans (Task 8). Keep in sync until that task
-    deletes this wrapper and replaces with a direct span import.
-    """
-    # Lazy import — Task 8 will add the real span. For now we just
-    # log so the wiring is testable via monkeypatch.
-    logger.info(
-        "confrontation.intent_mismatch matched_type=%s declared=%s severity=%s "
-        "matched_tokens=%s reprompt_attempted=%s outcome=%s",
-        matched_type, declared, severity, matched_tokens, reprompt_attempted, outcome,
-    )
-
-
 def apply_magic_working(*, snapshot: GameSnapshot, patch_field: dict) -> MagicApplyResult:
     """Parse a ``game_patch.magic_working`` dict, validate, and apply.
 
@@ -2588,14 +2564,17 @@ def _apply_narration_result_to_snapshot(
 
             _classified_intent_value = _mismatch.matched_type
 
-            _emit_confrontation_intent_mismatch_span(
+            from sidequest.telemetry.spans import confrontation_intent_mismatch_span
+
+            with confrontation_intent_mismatch_span(
                 matched_type=_mismatch.matched_type,
-                declared=_mismatch.declared,
+                declared_type=_mismatch.declared,
                 severity=_effective_severity,
                 matched_tokens=_mismatch.matched_tokens,
                 reprompt_attempted=already_reprompted,
                 outcome=_outcome_label,
-            )
+            ):
+                pass
 
             if _effective_severity == "soft_suggest":
                 snapshot.next_turn_directives.append(

@@ -2,10 +2,17 @@
 
 Covers warn / soft_suggest / reprompt severities and the classified_intent
 single-exit invariant. Spec 2026-05-20 confrontation-intent-validator step 5.
+
+Task 8 update: monkeypatch target is now the real span context manager on the
+spans module (sidequest.telemetry.spans.confrontation_intent_mismatch_span).
+The dispatch site does a lazy `from sidequest.telemetry.spans import ...`
+inside the function body so the monkeypatched attribute is evaluated each
+call.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -36,24 +43,26 @@ def _snapshot() -> GameSnapshot:
     return GameSnapshot(genre_slug="intent_test_pack", encounter=None)
 
 
+def _capture(spans_sink: list[dict]):
+    """Return a fake context manager that records kwargs in spans_sink."""
+    @contextmanager
+    def fake_span(**kwargs):
+        spans_sink.append(kwargs)
+        yield None
+    return fake_span
+
+
 def test_no_mismatch_classifies_from_action_rewrite_intent(pack, monkeypatch) -> None:
-    from sidequest.server import narration_apply
+    import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
     result = _result(intent="look around quietly", confrontation=None)
     room = MagicMock()
 
-    # Stub the span helper to avoid OTEL setup in unit test.
     spans: list[dict] = []
-    monkeypatch.setattr(
-        narration_apply,
-        "_emit_confrontation_intent_mismatch_span",
-        lambda **kw: spans.append(kw),
-    )
+    monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture(spans))
 
-    outcome = narration_apply._apply_narration_result_to_snapshot(
-        snap, result, "Player1", room=room, pack=pack
-    )
+    outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
     assert outcome.classified_intent == "look around quietly"
     assert outcome.reprompt_request is None
@@ -62,21 +71,15 @@ def test_no_mismatch_classifies_from_action_rewrite_intent(pack, monkeypatch) ->
 
 
 def test_warn_severity_emits_span_classifies_matched_type(pack, monkeypatch) -> None:
-    from sidequest.server import narration_apply
+    import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
     result = _result(intent="bargain hard for the price", confrontation=None)
     room = MagicMock()
     spans: list[dict] = []
-    monkeypatch.setattr(
-        narration_apply,
-        "_emit_confrontation_intent_mismatch_span",
-        lambda **kw: spans.append(kw),
-    )
+    monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture(spans))
 
-    outcome = narration_apply._apply_narration_result_to_snapshot(
-        snap, result, "Player1", room=room, pack=pack
-    )
+    outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
     assert len(spans) == 1
     assert spans[0]["severity"] == "warn"
@@ -87,21 +90,15 @@ def test_warn_severity_emits_span_classifies_matched_type(pack, monkeypatch) -> 
 
 
 def test_soft_suggest_severity_enqueues_directive(pack, monkeypatch) -> None:
-    from sidequest.server import narration_apply
+    import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
     result = _result(intent="persuade the magistrate", confrontation=None)
     room = MagicMock()
     spans: list[dict] = []
-    monkeypatch.setattr(
-        narration_apply,
-        "_emit_confrontation_intent_mismatch_span",
-        lambda **kw: spans.append(kw),
-    )
+    monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture(spans))
 
-    outcome = narration_apply._apply_narration_result_to_snapshot(
-        snap, result, "Player1", room=room, pack=pack
-    )
+    outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
     assert outcome.reprompt_request is None
     assert outcome.classified_intent == "negotiation_soft"
@@ -113,18 +110,14 @@ def test_soft_suggest_severity_enqueues_directive(pack, monkeypatch) -> None:
 def test_reprompt_severity_returns_request_does_not_apply_narration(
     pack, monkeypatch
 ) -> None:
-    from sidequest.server import narration_apply
+    import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
     result = _result(intent="strike the bandit dead", confrontation=None)
     room = MagicMock()
-    monkeypatch.setattr(
-        narration_apply, "_emit_confrontation_intent_mismatch_span", lambda **kw: None
-    )
+    monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture([]))
 
-    outcome = narration_apply._apply_narration_result_to_snapshot(
-        snap, result, "Player1", room=room, pack=pack
-    )
+    outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
     assert outcome.reprompt_request is not None
     assert outcome.reprompt_request.matched_type == "combat_reprompt"
@@ -133,21 +126,15 @@ def test_reprompt_severity_returns_request_does_not_apply_narration(
 
 
 def test_already_reprompted_degrades_reprompt_to_warn(pack, monkeypatch) -> None:
-    from sidequest.server import narration_apply
+    import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
     result = _result(intent="strike again", confrontation=None)
     room = MagicMock()
     spans: list[dict] = []
-    monkeypatch.setattr(
-        narration_apply,
-        "_emit_confrontation_intent_mismatch_span",
-        lambda **kw: spans.append(kw),
-    )
+    monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture(spans))
 
-    outcome = narration_apply._apply_narration_result_to_snapshot(
-        snap, result, "Player1", room=room, pack=pack, already_reprompted=True
-    )
+    outcome = _apply(snap, result, "Player1", room=room, pack=pack, already_reprompted=True)
 
     assert outcome.reprompt_request is None  # degraded
     assert spans[0]["severity"] == "warn"
@@ -157,7 +144,7 @@ def test_already_reprompted_degrades_reprompt_to_warn(pack, monkeypatch) -> None
 
 def test_active_encounter_short_circuits_validator(pack, monkeypatch) -> None:
     """When an encounter is live the validator returns None; no span fires."""
-    from sidequest.server import narration_apply
+    import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
     # Use a real StructuredEncounter if convenient, or MagicMock that
@@ -167,15 +154,9 @@ def test_active_encounter_short_circuits_validator(pack, monkeypatch) -> None:
     result = _result(intent="strike the bandit", confrontation=None)
     room = MagicMock()
     spans: list[dict] = []
-    monkeypatch.setattr(
-        narration_apply,
-        "_emit_confrontation_intent_mismatch_span",
-        lambda **kw: spans.append(kw),
-    )
+    monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture(spans))
 
-    outcome = narration_apply._apply_narration_result_to_snapshot(
-        snap, result, "Player1", room=room, pack=pack
-    )
+    outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
     assert spans == []
     assert outcome.reprompt_request is None
@@ -184,18 +165,14 @@ def test_active_encounter_short_circuits_validator(pack, monkeypatch) -> None:
 
 
 def test_empty_intent_classifies_as_unspecified(pack, monkeypatch) -> None:
-    from sidequest.server import narration_apply
+    import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
     result = _result(intent="", confrontation=None)
     room = MagicMock()
-    monkeypatch.setattr(
-        narration_apply, "_emit_confrontation_intent_mismatch_span", lambda **kw: None
-    )
+    monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture([]))
 
-    outcome = narration_apply._apply_narration_result_to_snapshot(
-        snap, result, "Player1", room=room, pack=pack
-    )
+    outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
     assert outcome.classified_intent == "unspecified"
     assert outcome.classified_intent != "unknown"
@@ -212,3 +189,12 @@ def test_non_narration_turn_result_classifies_as_unspecified(pack) -> None:
     )
     assert outcome.classified_intent == "unspecified"
     assert outcome.reprompt_request is None
+
+
+# ---------------------------------------------------------------------------
+# Internal helper — keeps test bodies terse
+# ---------------------------------------------------------------------------
+
+def _apply(snap, result, player, **kwargs):
+    from sidequest.server import narration_apply
+    return narration_apply._apply_narration_result_to_snapshot(snap, result, player, **kwargs)

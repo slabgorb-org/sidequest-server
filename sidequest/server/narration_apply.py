@@ -414,90 +414,6 @@ def _apply_flee_consequences(
     )
 
 
-# Pingpong 2026-05-03 [BUG] — narrator described "patrol cutter spinning
-# her reactor up from cold-soak" with confrontation=None; no encounter
-# fired. High-precision regex set targeting the prose patterns the
-# narrator uses for combat / chase / boarding triggers — these are the
-# shapes that should ALWAYS pair with a ``confrontation`` emission.
-# Negotiation triggers are intentionally excluded: persuasion vocabulary
-# overlaps too heavily with ordinary dialogue prose to scan reliably,
-# and the playtest evidence is that the narrator *over*-fires negotiation,
-# not under-fires it. If a future playtest shows negotiation under-firing,
-# add patterns here.
-#
-# Each entry is (label, compiled_pattern). The label surfaces in the
-# warning + watcher event so Sebastien's GM panel can see WHY the
-# detector fired.
-_CONFRONTATION_TRIGGER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # Dogfight / chase preludes — hostile chassis preparing to pursue
-    (
-        "reactor_spin_up",
-        re.compile(
-            r"\bspin(?:ning|s)?\s+(?:her\s+|his\s+|their\s+|its\s+|the\s+)?"
-            r"(?:reactor|drive|engine)s?\s+up\b",
-            re.IGNORECASE,
-        ),
-    ),
-    ("intercept", re.compile(r"\bintercept(?:ing|ion|s)?\b", re.IGNORECASE)),
-    ("pursuit", re.compile(r"\bpursu(?:e|ed|er|ers|ing|it)\b", re.IGNORECASE)),
-    ("boarding", re.compile(r"\bboarding\b", re.IGNORECASE)),
-    (
-        "weapons_hot",
-        re.compile(r"\bweapons?\s+(?:hot|drawn|charged|live)\b", re.IGNORECASE),
-    ),
-    (
-        "permission_to_engage",
-        re.compile(r"\bpermission\s+to\s+(?:engage|fire|pursue|board)\b", re.IGNORECASE),
-    ),
-    (
-        "chase_keyword",
-        re.compile(r"\bchas(?:e|ed|ing|er|es)\b", re.IGNORECASE),
-    ),
-    # Combat preludes — antagonist actively committing
-    ("opens_fire", re.compile(r"\bopens?\s+fire\b", re.IGNORECASE)),
-    (
-        "weapon_drawn",
-        re.compile(
-            r"\bdraws?\s+(?:a\s+|her\s+|his\s+|their\s+|its\s+|the\s+)?"
-            r"(?:knife|sword|gun|pistol|sidearm|blade|rifle|blaster|"
-            r"weapon|firearm)s?\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "weapon_leveled",
-        re.compile(
-            r"\blevels?\s+(?:a\s+|her\s+|his\s+|their\s+|its\s+|the\s+)?"
-            r"(?:gun|pistol|rifle|sidearm|blaster|weapon|firearm)s?\b",
-            re.IGNORECASE,
-        ),
-    ),
-)
-
-
-def _scan_for_confrontation_trigger_keywords(narration: str) -> list[str]:
-    """Return labels of any high-precision confrontation-trigger phrases
-    in ``narration``. Empty list ⇔ no trigger keywords matched.
-
-    The lie-detector at ``_apply_narration_result_to_snapshot`` calls
-    this when ``result.confrontation`` is None; a non-empty return value
-    means the prose described an engagement that should have fired an
-    encounter. The labels surface in the watcher event so the GM panel
-    shows WHY the detector flagged the turn.
-
-    Pattern set is conservative (high-precision over high-recall) — false
-    positives erode the GM panel signal and would pressure a re-prompt
-    loop that may be unnecessary. False negatives (genuine triggers that
-    don't match) are addressed by adding patterns when later playtests
-    surface them.
-    """
-    if not narration:
-        return []
-    return [
-        label for label, pattern in _CONFRONTATION_TRIGGER_PATTERNS if pattern.search(narration)
-    ]
-
-
 def _gate_applies_to_encounter(encounter, pack) -> bool:
     """The SOUL gate fires for legacy apply_beat encounters only.
 
@@ -2524,10 +2440,8 @@ def _apply_narration_result_to_snapshot(
 
     # Encounter lifecycle (dual-track momentum, spec 2026-04-25)
     if pack is not None:
-        # Spec 2026-05-20 confrontation-intent-validator — single mechanism.
-        # ActionRewrite.intent is the authoritative signal. ADR-067's
-        # inference site, finally wired. Legacy _CONFRONTATION_TRIGGER_PATTERNS
-        # scanner is dead code in this branch — Task 9 deletes the module.
+        # Spec 2026-05-20 — ActionRewrite.intent is the authoritative signal.
+        # ADR-067's inference site, finally wired via confrontation_intent_validator.
         from sidequest.agents.confrontation_intent_validator import validate as _validate_intent
         from sidequest.game.beat_kinds import apply_beat
         from sidequest.server.dispatch.confrontation import find_confrontation_def

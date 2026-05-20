@@ -48,11 +48,11 @@ NPC_INTRO_VISUAL_CONSTRAINT: str = (
 # Guardrail 2 — confrontation_trigger_constraint
 # ---------------------------------------------------------------------------
 # Pingpong 2026-05-03 [BUG] — narrator wrote a textbook chase-firing beat
-# but the game_patch carried ``confrontation=None``. The lie-detector in
-# narration_apply._scan_for_confrontation_trigger_keywords stays loud
-# if the narrator skips again — together they close the gap without
-# taking the architectural step of server-side auto-firing (which would
-# be a silent fallback).
+# but the game_patch carried ``confrontation=None``. This prompt guardrail
+# steers the narrator to emit ``confrontation`` proactively. The validator
+# (confrontation_intent_validator) catches post-hoc mismatches and emits
+# confrontation.intent_mismatch spans to the GM panel. Together they close
+# the gap without server-side auto-firing (which would be a silent fallback).
 CONFRONTATION_TRIGGER_CONSTRAINT: str = (
     "<confrontation-trigger>\n"
     "If your prose this turn describes any stake-binding "

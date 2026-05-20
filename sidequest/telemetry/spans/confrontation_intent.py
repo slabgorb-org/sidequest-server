@@ -5,9 +5,8 @@ validator dispatch in sidequest.server.narration_apply and the reprompt
 loop in sidequest.server.websocket_session_handler._execute_narration_turn.
 
 The intent_mismatch span is the ADR-067 inference-site emission promised
-in the unified-narrator-agent design. Replaces the legacy
-state_transition field=confrontation op=skipped_with_trigger_keywords
-watcher event (deleted in Task 9).
+in the unified-narrator-agent design. Replaces the legacy prose-regex
+lie-detector (deleted 2026-05-20).
 """
 
 from __future__ import annotations

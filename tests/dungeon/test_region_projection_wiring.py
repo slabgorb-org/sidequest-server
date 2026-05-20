@@ -88,6 +88,18 @@ class _FakeSessionData:
         self.genre_slug = genre
         self.world_slug = world
         self.player_id = "p1"
+        # Playtest 2026-05-20 — cartography-aware SELF-HEAL reads
+        # ``sd.genre_pack`` to detect "this is a valid cartography region,
+        # not a phantom; don't heal it into the dungeon". Tests now
+        # exercise that branch, so the duck-typed session needs the
+        # pack handle. Loaded lazily because the real pack is heavy.
+        self._genre_pack_cache: Any = None
+
+    @property
+    def genre_pack(self) -> Any:
+        if self._genre_pack_cache is None:
+            self._genre_pack_cache = _real_pack()
+        return self._genre_pack_cache
 
 
 async def _attach(store: Any, snap: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
@@ -284,18 +296,22 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
 ) -> None:
     """OQ-1 2026-05-17 live regression (closes the keystone-test gap).
 
-    beneath_sunden's static ``cartography.starting_region`` is ``ropefoot``
-    (cartography.yaml:16). chargen ``init_region_location`` persists that
-    into ``current_region`` — NOT blank, and NOT a node in the materialized
-    procedural graph (``entrance``/``exp001.r*``). The per-turn projection
-    heal is in-memory only (SQLite is the dungeon SSOT — never mirrored
-    onto the persisted snapshot), so EVERY turn reloads the same phantom.
+    A TRUE phantom — a name the narrator improvised that lives in
+    neither ``cartography.regions`` nor the materialized procedural
+    dungeon graph — must self-heal on EVERY sequential turn, not just
+    turn 1. The per-turn projection heal is in-memory only (SQLite is
+    the dungeon SSOT — never mirrored onto the persisted snapshot), so
+    every turn reloads the same phantom. A single-turn keystone test
+    passes while the live game fails on turn 2+.
 
-    The blank-only heal skipped non-blank phantoms, so the live session
-    logged ``dungeon.region_projection FAILED region='ropefoot'`` ×12 and
-    the narrator improvised the entire 80-minute crawl. The seam must
-    self-heal the phantom on EVERY sequential turn, not just turn 1 — a
-    single-turn keystone test passes while the live game fails on turn 2+.
+    Playtest 2026-05-20 amendment: the original phantom value was
+    ``"ropefoot"`` — but ropefoot is the surface waiting-camp listed in
+    ``cartography.yaml`` as ``starting_region``. The cartography-aware
+    heal in ``_project_current_region`` now correctly recognizes
+    cartography regions and does NOT teleport the player into the
+    dungeon (see ``test_cartography_region_is_not_self_healed``). Use a
+    name that is neither in cartography nor the graph so this test
+    keeps protecting the original disease.
     """
     import sidequest.telemetry.spans as _spans_module
     from sidequest.agents.orchestrator import Orchestrator, TurnContext
@@ -307,8 +323,10 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
         SPAN_DUNGEON_REGION_PROJECTION,
     )
 
-    # beneath_sunden cartography.starting_region — non-blank, not a graph node.
-    phantom = "ropefoot"
+    # A name no cartography region claims and no graph node uses — a
+    # true narrator-improvised phantom (the kind ADR-106's constrained
+    # move vocabulary is meant to suppress).
+    phantom = "windswept_overlook_of_lost_names"
 
     store = SqliteStore.open_in_memory()
     snap = GameSnapshot(
@@ -377,6 +395,84 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
         assert all(
             (s.attributes or {}).get("healed_from") == phantom for s in healed
         ), "span must record the phantom healed-from for GM-panel forensics"
+    finally:
+        _spans_module.tracer = original  # type: ignore[method-assign]
+        await session_integration.detach_dungeon_from_session(handle)
+
+
+async def test_cartography_region_is_not_self_healed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Playtest 2026-05-20 regression — beneath_sunden's surface
+    ``ropefoot`` waiting-camp is a deliberately-authored CARTOGRAPHY
+    region (cartography.yaml ``starting_region``), NOT a phantom and
+    NOT a node of the procedural dungeon graph (the dungeon lives
+    underground, below ``the_dropmouth``). The pre-fix heal treated it
+    as a phantom and teleported the player into the dungeon
+    ``entrance`` every turn — destroying the surface narrative anchor
+    AND mutating the persisted snapshot.
+
+    Correct behavior: per-turn projection returns ``None`` (no
+    procedural projection on the surface), does NOT mutate the
+    snapshot, and the span carries ``outcome=cartography_region`` so
+    the GM panel sees the turn ran intentionally without dungeon
+    geography.
+    """
+    import sidequest.telemetry.spans as _spans_module
+    from sidequest.dungeon import session_integration
+    from sidequest.game.persistence import SqliteStore
+    from sidequest.game.session import GameSnapshot
+    from sidequest.server.session_helpers import _project_current_region
+    from sidequest.telemetry.spans.dungeon_region_projection import (
+        SPAN_DUNGEON_REGION_PROJECTION,
+    )
+
+    store = SqliteStore.open_in_memory()
+    snap = GameSnapshot(
+        genre_slug="caverns_and_claudes", world_slug="beneath_sunden"
+    )
+    exporter, _provider, real_tracer = _otel_in_memory()
+    original = _spans_module.tracer
+    _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
+    handle = None
+    try:
+        handle = await _attach(store, snap, monkeypatch)
+        sd = _FakeSessionData(
+            store, genre="caverns_and_claudes", world="beneath_sunden"
+        )
+
+        # The surface waiting camp — a real cartography region, never a
+        # graph node. Two turns to prove the per-turn behavior is
+        # stable (not just turn-1).
+        snap.current_region = "ropefoot"
+        snap.discovered_regions = ["ropefoot"]
+
+        for turn in (1, 2):
+            proj = _project_current_region(sd, snap)
+
+            assert proj is None, (
+                f"turn {turn}: surface cartography region projected as "
+                "if it were a dungeon node — the narrator would receive "
+                "underground 'YOU ARE HERE' geography for a surface scene"
+            )
+            assert snap.current_region == "ropefoot", (
+                f"turn {turn}: cartography region was rewritten to a "
+                f"dungeon node {snap.current_region!r} — the player has "
+                "been teleported underground against narrative intent"
+            )
+
+        cart_spans = [
+            s
+            for s in exporter.get_finished_spans()
+            if s.name == SPAN_DUNGEON_REGION_PROJECTION
+            and (s.attributes or {}).get("outcome") == "cartography_region"
+        ]
+        assert len(cart_spans) >= 2, (
+            "GM panel cannot distinguish 'on the surface, no dungeon "
+            "projection by design' from 'projection failed' — both "
+            "would look like silent skips. Expected 2 "
+            f"outcome=cartography_region spans; got {len(cart_spans)}"
+        )
     finally:
         _spans_module.tracer = original  # type: ignore[method-assign]
         await session_integration.detach_dungeon_from_session(handle)

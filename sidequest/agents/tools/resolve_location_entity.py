@@ -122,6 +122,16 @@ def _authored_entities_for(ctx: ToolContext, region_id: str) -> list[LocationEnt
     category=ToolCategory.WRITE,
 )
 async def resolve_location_entity(args: ResolveLocationEntityArgs, ctx: ToolContext) -> ToolResult:
+    # Imported inside the function: keeps the resolver tool's import-time
+    # surface minimal (the spans module pulls in opentelemetry) and matches
+    # the pattern already used by _maybe_emit_location_overlay_changed in
+    # the session handler.
+    from sidequest.telemetry.spans import (
+        location_entity_minted_span,
+        location_entity_promoted_span,
+        location_entity_resolve_span,
+    )
+
     authored = _authored_entities_for(ctx, args.region_id)
     if authored is None:
         return ToolResult.not_found(
@@ -141,6 +151,9 @@ async def resolve_location_entity(args: ResolveLocationEntityArgs, ctx: ToolCont
         turn_number=ctx.turn_number,
     )
 
+    # 54-6 side-channel: keep the legacy ctx.otel_span attributes for
+    # tool-dispatch introspection. Other write tools rely on the same
+    # pattern; the dedicated spans (below) coexist for GM-panel routing.
     span = ctx.otel_span
     span.set_attribute("location.region_id", args.region_id)
     span.set_attribute("location.label", args.label)
@@ -154,6 +167,53 @@ async def resolve_location_entity(args: ResolveLocationEntityArgs, ctx: ToolCont
         span.set_attribute("location.entity_tier", resolution.entity.tier)
         if resolution.entity.binding is not None:
             span.set_attribute("location.binding_kind", resolution.entity.binding.kind)
+
+    # 54-8: dedicated GM-panel span on every call. The route extractor
+    # in telemetry/spans/location.py reads these attributes and sets the
+    # explicit is_lie_detector boolean the GM panel keys on.
+    entity_id = resolution.entity.id if resolution.entity is not None else None
+    tier = resolution.entity.tier if resolution.entity is not None else None
+    binding_kind = (
+        resolution.entity.binding.kind
+        if resolution.entity is not None and resolution.entity.binding is not None
+        else None
+    )
+    with location_entity_resolve_span(
+        region_id=args.region_id,
+        label=args.label,
+        mode=args.mode,
+        engagement_kind=args.engagement_kind,
+        resolved=resolution.resolved,
+        mode_outcome=resolution.mode_outcome,
+        from_promotion=resolution.from_promotion,
+        entity_id=entity_id,
+        tier=tier,
+        binding_kind=binding_kind,
+    ):
+        pass
+
+    # Mint / promotion side-effects each get their own dedicated span so
+    # the GM panel can render them as positive-canon (blue) rows
+    # independent of the resolve span's lie-detector signal.
+    if resolution.mode_outcome == "minted" and resolution.entity is not None:
+        with location_entity_minted_span(
+            region_id=args.region_id,
+            entity_id=resolution.entity.id,
+            label=resolution.entity.label,
+            canon=resolution.entity.promoted_canon or resolution.entity.label,
+            turn=ctx.turn_number,
+        ):
+            pass
+    elif resolution.mode_outcome == "promoted" and resolution.entity is not None:
+        with location_entity_promoted_span(
+            region_id=args.region_id,
+            entity_id=resolution.entity.id,
+            from_tier="flavor_only",
+            to_tier=resolution.entity.tier,
+            canon=resolution.entity.promoted_canon or resolution.entity.label,
+            turn=ctx.turn_number,
+        ):
+            pass
 
     if not resolution.resolved:
         return ToolResult.not_found(

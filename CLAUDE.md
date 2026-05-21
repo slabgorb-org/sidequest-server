@@ -97,11 +97,14 @@ tell whether it's engaged or whether Claude is just improvising.
 
 ```bash
 uv sync                            # Install deps
-uv run pytest -v                   # Tests
+uv run pytest -v                   # Tests (parallel by default: -n auto via addopts)
+uv run pytest -n0 -v               # Tests (serial; for breakpoint debugging / race-isolation)
 uv run ruff check .                # Lint
 uv run ruff format .               # Format
 uv run pyright                     # Type check
 ```
+
+The unit suite runs under pytest-xdist (`-n auto`) by default — full suite is ~20-30 s on a 10-core machine. Pass `-n0` to override for interactive debugging where you need a single process and predictable test ordering.
 
 From the orchestrator root: `just server`, `just server-test`, `just server-check`, `just server-fmt`.
 

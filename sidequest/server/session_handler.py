@@ -49,6 +49,7 @@ from sidequest.game.session import (
 from sidequest.game.shared_world_delta import (
     SharedWorldDelta,
 )
+from sidequest.game.weather import WeatherState
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.scenario import ScenarioPack
 from sidequest.protocol.messages import (
@@ -590,6 +591,21 @@ class _SessionData:
     # sessions whose pack ships no history still construct cleanly —
     # the recompute helper is a graceful no-op on an empty chapter list.
     cached_history_chapters: list[HistoryChapter] = field(default_factory=list)
+    # Story 24-10: world-grounding state loaded once at session bootstrap
+    # (sidequest.game.world_grounding_loader) and stamped onto every turn's
+    # ToolContext so the get_world_grounding tool returns real data instead
+    # of None. ``weather_state`` is the single per-session WeatherState
+    # produced by one WeatherGenerator.generate() call at connect time (the
+    # generator reads the pack-level weather.yaml); ``world_demographics`` /
+    # ``world_calendar`` are the authored world-level YAML dicts loaded
+    # verbatim. All three stay None for a pack/world that authored no
+    # grounding (legitimate absence — get_world_grounding returns null
+    # sections and the 24-6 ``tool.grounding.<section>_present=False`` attrs
+    # surface, no silent fallback). Same Phase-E lifecycle as ``lore_store``
+    # / ``monster_manual``: in-memory, NOT persisted to the SQLite save.
+    weather_state: WeatherState | None = None
+    world_demographics: dict[str, Any] | None = None
+    world_calendar: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

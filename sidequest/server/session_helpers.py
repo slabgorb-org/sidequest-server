@@ -720,6 +720,13 @@ def _build_turn_context(
         store=sd.store,
         lore_store=sd.lore_store,
         monster_manual=sd.monster_manual,
+        # Story 24-10: world-grounding pass-through (same Phase-E seam as
+        # lore_store / monster_manual). Loaded once at session bootstrap and
+        # stamped on every turn so get_world_grounding returns real data
+        # instead of None. None on a pack/world with no grounding authored.
+        weather_state=sd.weather_state,
+        world_demographics=sd.world_demographics,
+        world_calendar=sd.world_calendar,
         turn_number=snapshot.turn_manager.interaction,
         character_name=char_name,
         current_location=(

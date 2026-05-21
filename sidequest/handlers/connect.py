@@ -26,6 +26,7 @@ from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 from sidequest.game.session import GameSnapshot
+from sidequest.game.world_grounding_bootstrap import load_world_grounding
 from sidequest.genre.loader import GenreLoader
 from sidequest.protocol.messages import (
     ChapterMarkerMessage,
@@ -411,6 +412,51 @@ class ConnectHandler:
                 )
                 return [_error_msg(f"Failed to load genre pack '{row.genre_slug}': {exc}")]
 
+            # Story 24-10: world-grounding bootstrap (Epic 24 wiring). Read
+            # the pack-level weather.yaml + world-level demographics/calendar
+            # once at connect time, construct a WeatherGenerator and sample a
+            # single WeatherState, and stash all three on _SessionData below
+            # so every turn's ToolContext carries them (get_world_grounding
+            # returns real data instead of None). Absent files → None (a pack
+            # that declared no grounding). Malformed/invalid files fail LOUD
+            # here (No Silent Fallbacks) — surfaced as a typed connect error
+            # rather than a silent None and a downstream "weather grounding
+            # mysteriously absent" symptom three turns in.
+            try:
+                pack_dir = loader.find(row.genre_slug)
+                world_grounding = load_world_grounding(
+                    pack_dir=pack_dir,
+                    world_dir=world_dir,
+                    genre_slug=row.genre_slug,
+                    seed_source=slug,
+                )
+            except Exception as exc:
+                logger.error(
+                    "session.world_grounding_load_failed genre=%s world=%s "
+                    "slug=%s error=%s",
+                    row.genre_slug,
+                    row.world_slug,
+                    slug,
+                    exc,
+                )
+                _watcher_publish(
+                    "world_grounding_load_failed",
+                    {
+                        "genre_slug": row.genre_slug,
+                        "world_slug": row.world_slug,
+                        "slug": slug,
+                        "error": str(exc),
+                    },
+                    component="world_grounding",
+                    severity="error",
+                )
+                return [
+                    _error_msg(
+                        f"Failed to load world-grounding for "
+                        f"'{row.genre_slug}/{row.world_slug}': {exc}"
+                    )
+                ]
+
             # Restore saved snapshot, or start fresh (Bug 2 fix: resume semantics).
             try:
                 saved = store.load()
@@ -747,6 +793,49 @@ class ConnectHandler:
                     if GameMode(row.mode) == GameMode.MULTIPLAYER
                     else ImagePacingThrottle.for_solo()
                 ),
+            )
+
+            # Story 24-10: stamp the world-grounding state assembled above
+            # onto the session. _build_turn_context reads these every turn
+            # and passes them through to the get_world_grounding ToolContext.
+            session._session_data.weather_state = world_grounding.weather_state
+            session._session_data.world_demographics = world_grounding.demographics
+            session._session_data.world_calendar = world_grounding.calendar
+            # OTEL lie-detector: prove the grounding wiring engaged at
+            # bootstrap (CLAUDE.md mandate). The GM panel pairs this with the
+            # per-turn tool.grounding.<section>_present attrs to confirm the
+            # narrator actually receives what bootstrap loaded.
+            _watcher_publish(
+                "world_grounding_loaded",
+                {
+                    "genre_slug": row.genre_slug,
+                    "world_slug": row.world_slug,
+                    "slug": slug,
+                    "weather_present": world_grounding.weather_state is not None,
+                    "demographics_present": world_grounding.demographics is not None,
+                    "calendar_present": world_grounding.calendar is not None,
+                    "weather_zone": (
+                        world_grounding.weather_state.zone
+                        if world_grounding.weather_state is not None
+                        else None
+                    ),
+                    "weather_season": (
+                        world_grounding.weather_state.season
+                        if world_grounding.weather_state is not None
+                        else None
+                    ),
+                },
+                component="world_grounding",
+            )
+            logger.info(
+                "session.world_grounding_loaded genre=%s world=%s slug=%s "
+                "weather=%s demographics=%s calendar=%s",
+                row.genre_slug,
+                row.world_slug,
+                slug,
+                world_grounding.weather_state is not None,
+                world_grounding.demographics is not None,
+                world_grounding.calendar is not None,
             )
 
             # Beneath Sünden Plan 7 (§8): wire the live dungeon look-ahead

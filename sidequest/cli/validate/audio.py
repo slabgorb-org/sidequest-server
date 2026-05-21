@@ -41,6 +41,7 @@ from typing import Any, Literal
 
 import click
 import yaml
+from pydantic import ValidationError
 
 from sidequest.cli.validate.common import packs_in
 from sidequest.genre.models.audio import MAX_ALIAS_HOPS, AudioConfig
@@ -93,25 +94,30 @@ def _chain_resolves_to_track(mood: str, tracks: dict[str, Any], aliases: dict[st
 def _load_audio_config(pack_dir: Path, result: ValidationResult) -> AudioConfig | None:
     """Construct an ``AudioConfig`` from ``pack_dir/audio.yaml``.
 
-    Two failure modes catch as ``AUDIO_LOAD_FAILURE``:
+    Three failure modes catch as ``AUDIO_LOAD_FAILURE``:
 
-    - ``yaml.YAMLError`` — the file is not valid YAML (truncation mid-write,
-      hand-edit syntax error, mixed indentation). Without this catch, a
-      malformed audio.yaml would crash the whole ``validate_packs`` walk
-      and defeat the "broken pack doesn't suppress siblings" guarantee.
-    - ``ValueError`` — pydantic ``_validate_mood_aliases`` rejected a
-      declared alias chain (cycle / broken target / depth exceeded), or
-      another field-level constraint fired.
+    - ``UnicodeDecodeError`` — the file's bytes are not valid UTF-8
+      (mojibake, wrong-encoding edit, binary garbage). Caught explicitly
+      rather than letting it bubble as a generic ValueError so triage
+      doesn't mistake it for a schema failure.
+    - ``yaml.YAMLError`` — the file is not valid YAML (truncation
+      mid-write, hand-edit syntax error, mixed indentation).
+    - ``pydantic.ValidationError`` — the pydantic ``_validate_mood_aliases``
+      validator rejected a declared alias chain (cycle / broken target /
+      depth exceeded), or another field-level constraint fired.
 
-    Either way the error is wrapped as an ``AUDIO_LOAD_FAILURE`` Issue
-    naming the offender and ``None`` returned so the per-pack walk skips
-    the mood-resolution check that needs a constructed config.
+    Each is caught explicitly rather than via a broad ``except ValueError``
+    so an unrelated ValueError sneaking through model_validate doesn't get
+    mislabeled, and ``str(exc)`` preserves the per-type message. The error
+    is wrapped as an ``AUDIO_LOAD_FAILURE`` Issue naming the offender and
+    ``None`` returned so the per-pack walk skips the mood-resolution check
+    that needs a constructed config.
     """
     path = pack_dir / "audio.yaml"
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         return AudioConfig.model_validate(raw)
-    except (yaml.YAMLError, ValueError) as exc:
+    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as exc:
         result.record(
             Issue(
                 code="AUDIO_LOAD_FAILURE",
@@ -141,7 +147,7 @@ def _check_rules_moods(pack_dir: Path, cfg: AudioConfig, result: ValidationResul
         return
     try:
         raw = yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
         result.record(
             Issue(
                 code="RULES_LOAD_FAILURE",

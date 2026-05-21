@@ -46,6 +46,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from sidequest.cli.validate.audio import (
     Issue,
     ValidationResult,
@@ -297,12 +299,24 @@ def test_cli_audio_subcommand_is_registered() -> None:
     assert "audio" in result.stdout.lower()
 
 
-def test_cli_audio_exits_zero_on_clean_pack() -> None:
-    """End-to-end exit-code contract: a clean pack root yields returncode 0.
-    Without this test, a regression that hardcoded ``ctx.exit(0)`` would
-    still pass the ``--help`` wiring test. CI / ``pf check`` keys off the
-    exit code, so the contract has to be proven through the documented
-    entry point, not just the in-process API."""
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_returncode"),
+    [
+        ("audio_ok", 0),
+        ("audio_broken_declared_alias", 1),
+    ],
+    ids=["clean_pack_exits_zero", "broken_pack_exits_one"],
+)
+def test_cli_audio_exit_code_matches_result_success(
+    fixture_name: str, expected_returncode: int
+) -> None:
+    """End-to-end exit-code contract: ``ctx.exit(0 if result.success else 1)``
+    must hold through the documented CLI entry point. Without this test, a
+    regression that hardcoded ``ctx.exit(0)`` would still pass the
+    ``--help`` wiring test — CI / ``pf check`` keys off the exit code, so
+    the contract has to be proven through subprocess, not just the
+    in-process API. Two fixtures: a clean pack (must exit 0) and a pack
+    with a declared-broken alias chain (must exit 1)."""
     result = subprocess.run(
         [
             sys.executable,
@@ -310,41 +324,17 @@ def test_cli_audio_exits_zero_on_clean_pack() -> None:
             "sidequest.cli.validate",
             "audio",
             "--genre-packs-root",
-            str(FIXTURES / "audio_ok"),
+            str(FIXTURES / fixture_name),
         ],
         cwd=SERVER_ROOT,
         capture_output=True,
         text=True,
         timeout=15,
     )
-    assert result.returncode == 0, (
-        f"clean pack must exit 0; got returncode={result.returncode} "
-        f"stdout={result.stdout!r} stderr={result.stderr!r}"
-    )
-
-
-def test_cli_audio_exits_nonzero_when_errors_present() -> None:
-    """End-to-end exit-code contract: a pack root containing an error
-    (AUDIO_LOAD_FAILURE) yields returncode 1. The complement of the
-    clean-pack test — together they prove the ``ctx.exit(0 if
-    result.success else 1)`` wiring is correct end-to-end."""
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "sidequest.cli.validate",
-            "audio",
-            "--genre-packs-root",
-            str(FIXTURES / "audio_broken_declared_alias"),
-        ],
-        cwd=SERVER_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    assert result.returncode == 1, (
-        f"pack with errors must exit 1; got returncode={result.returncode} "
-        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    assert result.returncode == expected_returncode, (
+        f"fixture {fixture_name!r} must exit {expected_returncode}; "
+        f"got returncode={result.returncode} stdout={result.stdout!r} "
+        f"stderr={result.stderr!r}"
     )
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sidequest.game.ability import AbilitySource
 from sidequest.game.character import AbilityDefinition
-from sidequest.protocol.models import CharacterSheetDetails
+from sidequest.protocol.models import CharacterSheetDetails, ClassMove
 
 
 def _ab(name: str, source: AbilitySource = AbilitySource.Class) -> AbilityDefinition:
@@ -17,6 +17,10 @@ def _ab(name: str, source: AbilitySource = AbilitySource.Class) -> AbilityDefini
     )
 
 
+def _move(beat_id: str, label: str, description: str | None = None) -> ClassMove:
+    return ClassMove(id=beat_id, label=label, description=description)
+
+
 def test_abilities_serializes_as_full_objects_not_strings():
     sheet = CharacterSheetDetails(
         race="Human",
@@ -25,7 +29,7 @@ def test_abilities_serializes_as_full_objects_not_strings():
         backstory="Backstory",
         personality="Devout",
         equipment=[],
-        class_moves=["pray", "shield_bash", "turn_undead"],
+        class_moves=[_move("turn_undead", "Turn Undead")],
     )
     dumped = sheet.model_dump()
     assert isinstance(dumped["abilities"], list)
@@ -34,7 +38,9 @@ def test_abilities_serializes_as_full_objects_not_strings():
     assert dumped["abilities"][0]["genre_description"] == "Turn Undead prose."
 
 
-def test_class_moves_field_exists_and_is_list_of_str():
+def test_class_moves_serialize_as_resolved_objects():
+    """class_moves carry id + label + description so the UI renders human
+    labels and tooltips, not raw snake_case beat ids."""
     sheet = CharacterSheetDetails(
         race="Human",
         stats={},
@@ -42,9 +48,18 @@ def test_class_moves_field_exists_and_is_list_of_str():
         backstory="x",
         personality="y",
         equipment=[],
-        class_moves=["pray", "shield_bash"],
+        class_moves=[
+            _move("pray", "Pray", "Beseech your deity."),
+            _move("shield_bash", "Shield Bash"),
+        ],
     )
-    assert sheet.class_moves == ["pray", "shield_bash"]
+    # ProtocolBase omits None fields on dump (wire optimization) — a move with
+    # no description serializes without the key; the UI reads it as undefined.
+    dumped = sheet.model_dump()
+    assert dumped["class_moves"] == [
+        {"id": "pray", "label": "Pray", "description": "Beseech your deity."},
+        {"id": "shield_bash", "label": "Shield Bash"},
+    ]
 
 
 def test_views_build_filters_universal_beats_and_autofilled():

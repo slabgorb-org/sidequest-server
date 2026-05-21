@@ -218,6 +218,26 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
     current_region = snapshot.current_region or ""
     with dungeon_region_projection_span(current_region=current_region) as span:
         if not applies_to(sd.genre_slug, sd.world_slug):
+            # Not the procedural megadungeon — but cartography region-mode
+            # worlds (e.g. tea_and_murder/glenross) have an authored region
+            # graph in cartography.yaml. Project from it so the narrator gets
+            # the same YOU-ARE-HERE section + MOVEMENT RULE and emits
+            # current_region (the frozen-Location-panel fix, 2026-05-21).
+            from sidequest.server.cartography_region_projection import (
+                project_cartography_region,
+            )
+
+            world_obj = sd.genre_pack.worlds.get(sd.world_slug)
+            cartography_projection = project_cartography_region(
+                world_obj, current_region
+            )
+            if cartography_projection is not None:
+                span.set_attribute("outcome", "cartography_projection")
+                span.set_attribute("source", "cartography")
+                span.set_attribute("region_id", cartography_projection.region_id)
+                span.set_attribute("exit_count", len(cartography_projection.exits))
+                return cartography_projection
+
             span.set_attribute("outcome", "no_dungeon")
             span.set_attribute(
                 "reason",

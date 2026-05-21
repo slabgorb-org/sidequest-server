@@ -4589,21 +4589,49 @@ class WebSocketSessionHandler:
                     # (skipped on the world.cartography.navigation_mode
                     # check) and for unchanged regions.
                     _world_for_region_emit = sd.genre_pack.worlds.get(sd.world_slug)
-                    if (
+                    _is_region_mode_world = (
                         _world_for_region_emit is not None
                         and _world_for_region_emit.cartography.navigation_mode
                         == NavigationMode.region
-                        and snapshot.current_region
-                        and snapshot.current_region != prior_current_region
-                    ):
-                        _maybe_emit_location_description(
-                            self,
-                            sd=sd,
-                            snapshot=snapshot,
-                            actor=None,
-                            emit_fn=_emit_shared_world_frame,
-                            room_id_override=snapshot.current_region,
+                    )
+                    if _is_region_mode_world:
+                        # Lie-detector (symmetric to room_graph's
+                        # ``narrator.location_drift_repaired``): on EVERY
+                        # region-mode turn, record whether the narrator
+                        # declared/changed ``current_region``. "Prose moved
+                        # the party but current_region did not" is the
+                        # frozen-Location-panel failure mode (playtest
+                        # 2026-05-21) — the GM panel must see it directly, not
+                        # infer it from a stale panel. Fires every turn so a
+                        # future regression (narrator stops emitting
+                        # current_region) is visible, not silent.
+                        _region_changed = bool(
+                            snapshot.current_region
+                            and snapshot.current_region != prior_current_region
                         )
+                        _watcher_publish(
+                            "narrator.region_patch_check",
+                            {
+                                "genre": sd.genre_slug,
+                                "world": sd.world_slug,
+                                "current_region": snapshot.current_region or "",
+                                "prior_current_region": prior_current_region or "",
+                                "current_region_present": bool(
+                                    snapshot.current_region
+                                ),
+                                "region_changed": _region_changed,
+                            },
+                            component="location",
+                        )
+                        if _region_changed:
+                            _maybe_emit_location_description(
+                                self,
+                                sd=sd,
+                                snapshot=snapshot,
+                                actor=None,
+                                emit_fn=_emit_shared_world_frame,
+                                room_id_override=snapshot.current_region,
+                            )
                     # Beneath Sünden BETTER fix (seam 3): project the live
                     # region graph to the UI Map tab every turn (NOT gated
                     # on result.location — region moves arrive via the

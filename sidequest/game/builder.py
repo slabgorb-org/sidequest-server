@@ -217,6 +217,12 @@ class SceneResult:
     anchors_added: list[LoreAnchor] = field(default_factory=list)
     choice_description: str | None = None
     choice_label: str | None = None
+    # Display-only vocation label derived from freeform text on a
+    # class-selecting scene (every canned choice carries class_hint, but the
+    # freeform path carries none). Feeds the {class} prose slot WITHOUT
+    # setting the mechanical class_hint — so the starting-loadout class match
+    # keeps resolving to the pack default. Symmetric with background_label.
+    freeform_class_label: str | None = None
     # Optional source-scene id. Populated by paths that need to identify
     # which scene produced this result without indexing back through the
     # scene list (e.g. the_story's StoryInput dispatch). Older paths leave
@@ -244,6 +250,11 @@ class AccumulatedChoices:
     """
 
     class_hint: str | None = None
+    # Display-only vocation label from a freeform answer on a class-selecting
+    # scene. Used by {class} prose substitution when the mechanical class_hint
+    # is absent (free-text path). The mechanical char_class still resolves via
+    # class_hint-or-default. Symmetric with background_label.
+    class_label: str | None = None
     race_hint: str | None = None
     personality_trait: str | None = None
     item_hints: list[str] = field(default_factory=list)
@@ -642,6 +653,39 @@ def find_unrecognized_tokens(rendered: str) -> list[str]:
     return out
 
 
+_CLASS_LABEL_DELIMITERS = ("—", "–", " - ", "\n", ".", ";", ",")
+_CLASS_LABEL_ARTICLES = ("a ", "an ", "the ")
+
+
+def derive_class_label(text: str) -> str:
+    """Derive a short vocation label from freeform chargen text.
+
+    The {class} prose slot expects a noun phrase ("a {class}'s working life").
+    A freeform vocation answer is often a full sentence with flavor — e.g.
+    "A vegetarian and temperance lecturer — earnest, melancholy, forever
+    ignored." This trims to the leading role phrase: cut at the first
+    delimiter (em/en-dash, " - ", newline, period, semicolon, comma), strip a
+    leading article (so the template's own "a {class}" doesn't double up), and
+    collapse internal whitespace.
+
+    Returns "" when the text yields no role phrase (caller decides whether to
+    fall through to class_hint).
+    """
+    label = text.strip()
+    cut = len(label)
+    for delim in _CLASS_LABEL_DELIMITERS:
+        idx = label.find(delim)
+        if idx != -1:
+            cut = min(cut, idx)
+    label = " ".join(label[:cut].split())
+    lowered = label.lower()
+    for article in _CLASS_LABEL_ARTICLES:
+        if lowered.startswith(article):
+            label = label[len(article) :].lstrip()
+            break
+    return label
+
+
 # ---------------------------------------------------------------------------
 # CharacterBuilder — the state machine
 # ---------------------------------------------------------------------------
@@ -993,6 +1037,10 @@ class CharacterBuilder:
             # Single-value hints — last one wins.
             if eff.class_hint is not None:
                 acc.class_hint = eff.class_hint
+            # Freeform vocation display label (class-selecting scene answered
+            # with free text). Last-wins, display-only.
+            if result.freeform_class_label is not None:
+                acc.class_label = result.freeform_class_label
             if eff.race_hint is not None:
                 acc.race_hint = eff.race_hint
             if eff.personality_trait is not None:
@@ -1111,7 +1159,9 @@ class CharacterBuilder:
 
         acc = self.accumulated()
         name = self.character_name() or self._lobby_name or ""
-        class_ = acc.class_hint or ""
+        # Freeform vocation label (player's own words) wins for the prose slot;
+        # canned classes fall through to class_hint.
+        class_ = acc.class_label or acc.class_hint or ""
         race = acc.race_hint or ""
 
         had_name = "{name}" in text
@@ -1432,6 +1482,29 @@ class CharacterBuilder:
         hooks = extract_hooks(scene.id, effects)
         anchors = extract_anchors(scene.id, effects)
 
+        # Class-selecting scene answered with free text: every canned choice
+        # carries a class_hint, but the freeform answer carries none. Capture
+        # the player's words as a display-only label for the {class} prose
+        # slot — the mechanical char_class still resolves via class_hint or the
+        # pack default, so the starting-loadout class match doesn't regress.
+        freeform_class_label: str | None = None
+        is_class_scene = bool(scene.choices) and all(
+            c.mechanical_effects.class_hint for c in scene.choices
+        )
+        if is_class_scene:
+            derived = derive_class_label(text)
+            if derived:
+                freeform_class_label = derived
+                trace.get_current_span().add_event(
+                    "chargen.freeform_class_label_derived",
+                    {
+                        "action": "freeform_class_label_derived",
+                        "scene_id": scene.id,
+                        "label": derived,
+                        "severity": "info",
+                    },
+                )
+
         self._results.append(
             SceneResult(
                 input_type=FreeformInput(text=text),
@@ -1439,6 +1512,7 @@ class CharacterBuilder:
                 hooks_added=hooks,
                 anchors_added=anchors,
                 choice_description=None,
+                freeform_class_label=freeform_class_label,
             )
         )
 

@@ -42,6 +42,7 @@ from typing import Any, Literal
 import click
 import yaml
 
+from sidequest.cli.validate.common import packs_in
 from sidequest.genre.models.audio import MAX_ALIAS_HOPS, AudioConfig
 
 Severity = Literal["error", "warning"]
@@ -87,21 +88,6 @@ def _chain_resolves_to_track(mood: str, tracks: dict[str, Any], aliases: dict[st
         cur = aliases[cur]
         depth += 1
     return True
-
-
-def _packs_in(root: Path) -> list[Path]:
-    """Return every directory under ``root`` that looks like a genre pack.
-
-    Two shapes are accepted: ``root`` is itself a pack (``pack.yaml``
-    present at ``root``), or ``root`` is a directory containing many packs
-    (each child with its own ``pack.yaml``). Mirrors
-    ``locations._packs_in`` so the two validators share discovery shape.
-    """
-    if not root.is_dir():
-        return []
-    if (root / "pack.yaml").is_file():
-        return [root]
-    return sorted(p for p in root.iterdir() if p.is_dir() and (p / "pack.yaml").is_file())
 
 
 def _load_audio_config(pack_dir: Path, result: ValidationResult) -> AudioConfig | None:
@@ -197,7 +183,7 @@ def validate_packs(pack_roots: list[Path]) -> ValidationResult:
     """
     result = ValidationResult()
     for root in pack_roots:
-        for pack in _packs_in(root):
+        for pack in packs_in(root):
             per_pack = validate_audio_in_pack(pack)
             for issue in per_pack.errors:
                 result.record(issue)

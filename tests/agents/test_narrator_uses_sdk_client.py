@@ -4,7 +4,7 @@ When the orchestrator's LlmClient is a ToolingLlmClient (an
 AnthropicSdkClient in production), ``run_narration_turn`` must:
 
 * Go through ``AnthropicSdkClient.complete_with_tools``.
-* Pass the full 27-tool array from ``default_registry``.
+* Pass the full 28-tool array from ``default_registry``.
 * Open a ``narration.turn`` cost-rollup span and seed the rollup
   attributes (model, token totals, tool-call count).
 * Return a ``NarrationTurnResult`` whose ``narration`` field matches the
@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-# Importing the tools package wires the 26 adapters onto default_registry.
+# Importing the tools package wires the 28 adapters onto default_registry.
 import sidequest.agents.tools  # noqa: F401
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter

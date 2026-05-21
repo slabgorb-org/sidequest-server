@@ -414,6 +414,51 @@ class TropeState(BaseModel):
     last_fired_turn: int | None = None
 
 
+class SeedGhost(BaseModel):
+    """An expired seed trope, retained for cross-session callbacks (Epic 22).
+
+    Record-only and immutable (``frozen=True``): ghosts carry no resolution
+    mechanics in this story (22-3). ``extra="ignore"`` keeps old saves loadable.
+    """
+
+    model_config = {"extra": "ignore", "frozen": True}
+
+    id: str = ""
+    name: str = ""
+    expired_at_turn: int = 0
+    delivery_hints: list[str] = Field(default_factory=list)
+
+
+class SeedState(BaseModel):
+    """An active seed trope tracked on the snapshot (Epic 22).
+
+    Round-trippable JSON with no side effects on load. ``extra="ignore"``
+    mirrors TropeState for forward-compatible saves.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    id: str = ""
+    name: str = ""
+    activated_at_turn: int = 0
+    flavor_tags: list[str] = Field(default_factory=list)
+    lifespan_turns: int = 0
+    delivery_hints: list[str] = Field(default_factory=list)
+
+    def is_expired(self, current_turn: int) -> bool:
+        """True once ``current_turn`` reaches the expiry turn (inclusive)."""
+        return current_turn >= self.activated_at_turn + self.lifespan_turns
+
+    def to_ghost(self, current_turn: int) -> SeedGhost:
+        """Migrate this active seed into a retained ghost record."""
+        return SeedGhost(
+            id=self.id,
+            name=self.name,
+            expired_at_turn=current_turn,
+            delivery_hints=list(self.delivery_hints),
+        )
+
+
 class GenieWish(BaseModel):
     """Genie wish entry — power-grab with ironic consequences (F9).
 
@@ -574,6 +619,11 @@ class GameSnapshot(BaseModel):
 
     # P2-deferred: trope engine state
     active_tropes: list[TropeState] = Field(default_factory=list)
+
+    # Epic 22 — seed trope engine. Active seeds dealt this session and the
+    # ghosts of expired ones, both persisted via snapshot_json (ADR-023).
+    active_seeds: list[SeedState] = Field(default_factory=list)
+    seed_ghosts: list[SeedGhost] = Field(default_factory=list)
 
     # Story 50-4 — in-game day counter and time-skip beat summary.
     # ``days_elapsed`` is monotonic, advances by clamp(days_advanced, 0, 14)

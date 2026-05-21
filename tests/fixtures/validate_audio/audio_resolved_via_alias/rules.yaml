@@ -1,0 +1,9 @@
+confrontations:
+  - id: misadventure
+    name: Misadventure
+    description: A pratfall scene.
+    mood: comedic
+  - id: heist
+    name: Heist
+    description: A two-hop chain — caper -> comedic -> exploration.
+    mood: caper

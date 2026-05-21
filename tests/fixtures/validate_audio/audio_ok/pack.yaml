@@ -1,0 +1,7 @@
+name: audio_ok
+description: "Fixture pack: every rules.yaml mood is in mood_tracks. Zero issues."
+version: "0.1.0"
+recommended_players:
+  min: 1
+  max: 4
+  sweet_spot: 2

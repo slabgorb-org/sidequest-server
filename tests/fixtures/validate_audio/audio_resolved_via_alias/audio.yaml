@@ -1,0 +1,16 @@
+mood_tracks:
+  exploration:
+    - path: explore.ogg
+      title: explore
+      bpm: 90
+  tension:
+    - path: tension.ogg
+      title: tension
+      bpm: 110
+mood_aliases:
+  comedic: exploration
+  caper: comedic
+mixer:
+  music_volume: 0.4
+  sfx_volume: 0.4
+  crossfade_default_ms: 2000

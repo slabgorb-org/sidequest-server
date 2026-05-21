@@ -1,0 +1,7 @@
+name: audio_resolved_via_alias
+description: "Fixture pack: rules.yaml mood: 'comedic' resolves via alias chain to 'exploration'."
+version: "0.1.0"
+recommended_players:
+  min: 1
+  max: 4
+  sweet_spot: 2

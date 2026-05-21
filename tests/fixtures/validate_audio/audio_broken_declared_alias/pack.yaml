@@ -1,0 +1,7 @@
+name: audio_broken_declared_alias
+description: "Fixture pack: audio.yaml declares an alias whose target does not exist."
+version: "0.1.0"
+recommended_players:
+  min: 1
+  max: 4
+  sweet_spot: 2

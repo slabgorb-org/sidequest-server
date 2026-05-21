@@ -1,0 +1,9 @@
+confrontations:
+  - id: brawl
+    name: Brawl
+    description: A bar fight.
+    mood: combat
+  - id: standoff
+    name: Standoff
+    description: A tense face-off.
+    mood: tension

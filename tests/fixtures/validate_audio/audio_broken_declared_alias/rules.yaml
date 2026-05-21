@@ -1,0 +1,5 @@
+confrontations:
+  - id: standoff
+    name: Standoff
+    description: Placeholder.
+    mood: exploration

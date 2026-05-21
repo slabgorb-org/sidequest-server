@@ -25,8 +25,21 @@ def _create_mock_genre_pack(
     genre_slug: str,
     world_slug: str,
     cover_poi: str | None = None,
+    *,
+    cartography: bool | str = False,
 ) -> None:
-    """Write minimal pack.yaml + world/world.yaml under packs_dir."""
+    """Write minimal pack.yaml + world/world.yaml under packs_dir.
+
+    ``cartography`` controls the sibling cartography.yaml that the lobby
+    reads to derive a world's navigation_mode (location capability):
+      - ``False`` (default): no cartography.yaml — world has no location
+        capability, so /api/genres reports ``navigation_mode: None``.
+      - ``True``: write a cartography.yaml WITHOUT an explicit
+        ``navigation_mode`` key, exercising the CartographyConfig default
+        (``region``).
+      - a string (e.g. ``"room_graph"``): write cartography.yaml with that
+        explicit ``navigation_mode``.
+    """
     genre_dir = packs_dir / genre_slug
     genre_dir.mkdir(parents=True, exist_ok=True)
 
@@ -63,6 +76,17 @@ def _create_mock_genre_pack(
     if cover_poi is not None:
         world_yaml["cover_poi"] = cover_poi
     (world_dir / "world.yaml").write_text(yaml.dump(world_yaml), encoding="utf-8")
+
+    if cartography:
+        cart_yaml: dict[str, object] = {
+            "world_name": world_yaml["name"],
+            "starting_region": "town_square",
+        }
+        if isinstance(cartography, str):
+            cart_yaml["navigation_mode"] = cartography
+        (world_dir / "cartography.yaml").write_text(
+            yaml.dump(cart_yaml), encoding="utf-8"
+        )
 
 
 def _make_app(tmp_path: Path) -> TestClient:
@@ -126,6 +150,51 @@ def test_list_genres_has_worlds(tmp_path):
     assert world["era"] == "1878"
     assert world["setting"] == "The frontier"
     assert world["inspirations"] == ["Tombstone", "High Noon"]
+
+
+def test_list_genres_navigation_mode_none_without_cartography(tmp_path):
+    """A world with no sibling cartography.yaml has no location capability,
+    so /api/genres reports navigation_mode: null. The lobby uses this to
+    keep the Location tab hidden for non-cartography worlds.
+    """
+    client = _make_app(tmp_path)
+    world = client.get("/api/genres").json()["spaghetti_western"]["worlds"][0]
+    assert world["navigation_mode"] is None
+
+
+def test_list_genres_navigation_mode_defaults_region_with_cartography(tmp_path):
+    """A world WITH cartography.yaml but no explicit navigation_mode key
+    inherits the CartographyConfig default of 'region' — region-mode worlds
+    are location-capable and must surface a stable Location tab.
+    """
+    packs_dir = tmp_path / "genre_packs"
+    packs_dir.mkdir()
+    _create_mock_genre_pack(
+        packs_dir, "tea_and_murder", "glenross", cartography=True
+    )
+    saves_dir = tmp_path / "saves"
+    saves_dir.mkdir()
+    app = create_app(genre_pack_search_paths=[packs_dir], save_dir=saves_dir)
+    client = TestClient(app)
+    world = client.get("/api/genres").json()["tea_and_murder"]["worlds"][0]
+    assert world["navigation_mode"] == "region"
+
+
+def test_list_genres_navigation_mode_room_graph_passthrough(tmp_path):
+    """An explicit navigation_mode in cartography.yaml is surfaced verbatim
+    so room_graph worlds (e.g. the megadungeon) are location-capable too.
+    """
+    packs_dir = tmp_path / "genre_packs"
+    packs_dir.mkdir()
+    _create_mock_genre_pack(
+        packs_dir, "caverns_and_claudes", "beneath_sunden", cartography="room_graph"
+    )
+    saves_dir = tmp_path / "saves"
+    saves_dir.mkdir()
+    app = create_app(genre_pack_search_paths=[packs_dir], save_dir=saves_dir)
+    client = TestClient(app)
+    world = client.get("/api/genres").json()["caverns_and_claudes"]["worlds"][0]
+    assert world["navigation_mode"] == "room_graph"
 
 
 def test_list_genres_skips_symlinked_world_aliases(tmp_path):

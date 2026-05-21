@@ -60,6 +60,13 @@ class WorldMeta(BaseModel):
     inspirations: list[str] = []
     axis_snapshot: dict[str, float] = {}
     hero_image: str | None = None
+    # Stable location-capability signal for the lobby/GameBoard. Derived from
+    # the world's sibling cartography.yaml: the file's ``navigation_mode``
+    # (``region`` by CartographyConfig default), or ``None`` when the world
+    # has no cartography.yaml at all (no location capability). The UI gates
+    # the Location tab on this so the tab is stable per session rather than
+    # blinking with transient LOCATION_DESCRIPTION traffic.
+    navigation_mode: str | None = None
 
 
 class GenreMeta(BaseModel):
@@ -225,6 +232,31 @@ def create_rest_router() -> APIRouter:
                             world_slug,
                         )
 
+                    # Location capability — read the sibling cartography.yaml.
+                    # Present file → its navigation_mode (default "region" per
+                    # CartographyConfig). Absent file → None (no location
+                    # capability). A malformed cartography.yaml is logged loudly
+                    # and treated as no-capability rather than dropping the
+                    # otherwise-playable world from the lobby.
+                    navigation_mode: str | None = None
+                    cart_yaml_path = world_entry / "cartography.yaml"
+                    if cart_yaml_path.exists():
+                        try:
+                            craw = yaml.safe_load(
+                                cart_yaml_path.read_text(encoding="utf-8")
+                            )
+                            navigation_mode = str(
+                                (craw or {}).get("navigation_mode", "region")
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "list_genres: cartography.yaml parse failed for "
+                                "%s/%s — Location tab disabled: %s",
+                                genre_slug,
+                                world_slug,
+                                exc,
+                            )
+
                     worlds.append(
                         {
                             "slug": world_slug,
@@ -235,6 +267,7 @@ def create_rest_router() -> APIRouter:
                             "inspirations": winsp,
                             "axis_snapshot": waxis,
                             "hero_image": hero_image,
+                            "navigation_mode": navigation_mode,
                         }
                     )
 

@@ -1,4 +1,4 @@
-"""RED — Story 24-10 AC1 + AC8: world-grounding YAML loaders.
+"""Story 24-10 AC1 + AC8: world-grounding YAML loaders.
 
 The three loaders bridge authored pack/world YAML to the runtime grounding
 fields. Per Story 24-10 AC1 each loader:
@@ -25,11 +25,9 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from sidequest.game.weather import ClimateRulesFile
-
-# The module under test does not exist yet — this import fails in RED, which
-# is correct: every test below is pending Dev's GREEN implementation.
 from sidequest.game.world_grounding_loader import (
     load_pack_weather,
     load_world_calendar,
@@ -120,7 +118,7 @@ def test_load_pack_weather_raises_on_malformed_yaml(tmp_path: Path) -> None:
     pack_dir = tmp_path / "synth_pack"
     _write(pack_dir / "weather.yaml", _MALFORMED_YAML)
 
-    with pytest.raises(Exception):  # noqa: B017 — Dev picks the typed class; RED only pins "loud"
+    with pytest.raises(yaml.YAMLError):
         load_pack_weather(pack_dir)
 
 
@@ -145,7 +143,7 @@ def test_load_pack_weather_raises_on_schema_invalid_yaml(tmp_path: Path) -> None
     pack_dir = tmp_path / "synth_pack"
     _write(pack_dir / "weather.yaml", bad)
 
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(ValidationError):
         load_pack_weather(pack_dir)
 
 
@@ -180,7 +178,7 @@ def test_load_world_demographics_raises_on_malformed_yaml(tmp_path: Path) -> Non
     world_dir = tmp_path / "synth_pack" / "worlds" / "synth_world"
     _write(world_dir / "demographics.yaml", "parish: [unterminated\n : : :\n")
 
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(yaml.YAMLError):
         load_world_demographics(world_dir)
 
 
@@ -214,7 +212,7 @@ def test_load_world_calendar_raises_on_malformed_yaml(tmp_path: Path) -> None:
     world_dir = tmp_path / "synth_pack" / "worlds" / "synth_world"
     _write(world_dir / "calendar.yaml", "current: {month: October\n : : :\n")
 
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(yaml.YAMLError):
         load_world_calendar(world_dir)
 
 
@@ -237,3 +235,20 @@ def test_demographics_is_world_level_not_pack_level(tmp_path: Path) -> None:
     # World loader pointed at the (empty) world dir must not reach up to the
     # pack-root file.
     assert load_world_demographics(world_dir) is None
+
+
+def test_calendar_is_world_level_not_pack_level(tmp_path: Path) -> None:
+    """calendar.yaml is a WORLD-level file (same invariant as demographics).
+    A calendar.yaml misfiled at the PACK root must NOT be picked up by the
+    world loader pointed at the world dir — honours the pack-vs-world split
+    (AC1 guardrail). Reading the misfiled file would be a silent wrong-path
+    fallback."""
+    pack_dir = tmp_path / "synth_pack"
+    world_dir = pack_dir / "worlds" / "synth_world"
+    world_dir.mkdir(parents=True)
+    # Misfiled at pack root, NOT in the world dir.
+    _write(pack_dir / "calendar.yaml", _VALID_CALENDAR)
+
+    # World loader pointed at the (empty) world dir must not reach up to the
+    # pack-root file.
+    assert load_world_calendar(world_dir) is None

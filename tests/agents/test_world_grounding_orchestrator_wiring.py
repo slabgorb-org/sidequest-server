@@ -1,14 +1,14 @@
-"""RED — Story 24-10 AC5/AC6: TurnContext grounding reaches the tool via the orchestrator.
+"""Story 24-10 AC5/AC6: TurnContext grounding reaches the tool via the orchestrator.
 
 This is the load-bearing wiring test the story context flags as "the single
 most load-bearing AC" (24-10 Risk section). It drives the **real**
 ``Orchestrator.run_narration_turn`` SDK path with a fake Anthropic SDK client
 that emits a ``get_world_grounding`` tool call, then lets the **real**
 ``default_registry.dispatch`` run the actual tool handler. Nothing about the
-ToolContext is hand-built: the orchestrator constructs it at
-``orchestrator.py:3259`` from the ``TurnContext`` we pass in, exactly as it
-does in production. That is the seam Story 24-10 wires (AC5) — three new
-kwargs alongside the existing ``lore_store`` / ``monster_manual`` lines.
+ToolContext is hand-built: the orchestrator constructs it at its
+``ToolContext(...)`` construction site from the ``TurnContext`` we pass in,
+exactly as it does in production. That is the seam Story 24-10 wires (AC5) —
+three new kwargs alongside the existing ``lore_store`` / ``monster_manual`` lines.
 
 Two production hops are proven end-to-end here:
 
@@ -17,7 +17,7 @@ Two production hops are proven end-to-end here:
 * **AC6** — the real ``get_world_grounding`` handler returns non-null
   weather/demographics/calendar AND fires the ``world_grounding.weather_used``
   + ``world_grounding.demographics_injected`` spans (the GM-panel lie-detector
-  signal). With the wiring absent (RED) the ToolContext fields default None,
+  signal). Without the wiring the ToolContext fields default None,
   the payload sections are null, and neither span fires.
 
 Mirrors the established fake-SDK harness in
@@ -188,9 +188,9 @@ async def test_grounded_turn_context_reaches_tool_context_at_construction_site(
     otel_capture: InMemorySpanExporter,
 ) -> None:
     """AC5: a TurnContext carrying grounding must reach the ToolContext the
-    orchestrator builds at orchestrator.py:3259. With the wiring absent (RED)
-    the ToolContext fields default None even though the TurnContext carried
-    the data."""
+    orchestrator builds at its ToolContext(...) construction site. Without the
+    wiring the ToolContext fields default None even though the TurnContext
+    carried the data."""
     monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     _patch_prompt(monkeypatch)
@@ -212,8 +212,8 @@ async def test_grounded_turn_context_reaches_tool_context_at_construction_site(
     assert len(captured_ctx) == 1, "get_world_grounding must have been dispatched once"
     tool_ctx = captured_ctx[0]
     assert tool_ctx.weather_state is _WEATHER, (
-        "ToolContext.weather_state is None — orchestrator.py:3259 did not thread "
-        "context.weather_state through (AC5 wiring missing)"
+        "ToolContext.weather_state is None — the ToolContext construction site did "
+        "not thread context.weather_state through (AC5 wiring missing)"
     )
     assert tool_ctx.world_demographics == _DEMOGRAPHICS
     assert tool_ctx.world_calendar == _CALENDAR

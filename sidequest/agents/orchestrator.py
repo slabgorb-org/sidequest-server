@@ -720,7 +720,7 @@ class TurnContext:
     # Story 24-10: world-grounding carrier fields. Loaded once at session
     # bootstrap (connect handler → load_world_grounding) onto _SessionData,
     # copied here by _build_turn_context, and threaded to the ToolContext at
-    # orchestrator.py:3259 so the get_world_grounding tool returns real data
+    # the construction site below so the get_world_grounding tool returns real data
     # instead of three null sections. None for packs/worlds that authored no
     # weather.yaml / demographics.yaml / calendar.yaml (graceful path — the
     # tool stamps *_present=False and the 24-7 spans stay dark).

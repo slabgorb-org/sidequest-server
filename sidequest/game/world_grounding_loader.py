@@ -43,6 +43,9 @@ _DEMOGRAPHICS_FILENAME = "demographics.yaml"
 _CALENDAR_FILENAME = "calendar.yaml"
 
 
+# Returns dict[str, Any] (Any per python.md #3): YAML payloads are structurally
+# heterogeneous (str/int/float/list/nested-dict) and have no Pydantic model at
+# the demographics/calendar tier — AC1 specifies a plain dict, not a typed model.
 def _load_mapping(path: Path) -> dict[str, Any]:
     """Parse a YAML file that must deserialize to a mapping.
 
@@ -71,6 +74,8 @@ def load_pack_weather(pack_dir: Path) -> ClimateRulesFile | None:
     return ClimateRulesFile.model_validate(_load_mapping(path))
 
 
+# Returns dict[str, Any] (Any per python.md #3): heterogeneous YAML, no schema
+# model at this tier (AC1 specifies dict).
 def load_world_demographics(world_dir: Path) -> dict[str, Any] | None:
     """Load world-level ``demographics.yaml`` into a plain dict.
 
@@ -85,6 +90,8 @@ def load_world_demographics(world_dir: Path) -> dict[str, Any] | None:
     return _load_mapping(path)
 
 
+# Returns dict[str, Any] (Any per python.md #3): heterogeneous YAML, no schema
+# model at this tier (AC1 specifies dict).
 def load_world_calendar(world_dir: Path) -> dict[str, Any] | None:
     """Load world-level ``calendar.yaml`` into a plain dict.
 
@@ -104,6 +111,8 @@ class WorldGrounding:
     """
 
     weather_state: WeatherState | None
+    # Any per python.md #3: heterogeneous YAML payloads, no schema model at this
+    # tier (AC1 specifies dict). None when the pack/world authored no such file.
     world_demographics: dict[str, Any] | None
     world_calendar: dict[str, Any] | None
 
@@ -128,10 +137,13 @@ def load_world_grounding(
 
     Demographics and calendar load independently of weather.
     """
-    weather_path = pack_dir / _WEATHER_FILENAME
+    # Gate weather through load_pack_weather: it owns presence (None when the
+    # file is absent) AND schema validation (raises loudly on malformed). This
+    # keeps the public loader on the production path instead of a parallel
+    # presence check. The generator re-reads the (now validated) file to sample.
     weather_state: WeatherState | None = None
-    if weather_path.exists():
-        generator = WeatherGenerator(weather_path)
+    if load_pack_weather(pack_dir) is not None:
+        generator = WeatherGenerator(pack_dir / _WEATHER_FILENAME)
         weather_state = generator.generate(zone=zone, season=season, seed=seed)
 
     return WorldGrounding(

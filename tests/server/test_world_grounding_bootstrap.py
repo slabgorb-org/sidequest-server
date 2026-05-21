@@ -1,4 +1,4 @@
-"""RED — Story 24-10 AC2/AC3/AC4: bootstrap loads grounding + threads it to TurnContext.
+"""Story 24-10 AC2/AC3/AC4: bootstrap loads grounding + threads it to TurnContext.
 
 Three hops of the wiring chain are exercised here, all through real
 production functions (no source-text greps, per CLAUDE.md "No Source-Text
@@ -34,6 +34,7 @@ import dataclasses
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 import yaml
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -43,7 +44,7 @@ from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.game.weather import WeatherState
 
-# Module under test — does not exist yet (RED).
+# Module under test.
 from sidequest.game.world_grounding_loader import load_world_grounding
 from sidequest.genre.loader import load_genre_pack
 from sidequest.server.session_handler import _build_turn_context, _SessionData
@@ -80,6 +81,12 @@ _VALID_CALENDAR: dict = {
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+def _write_text(path: Path, text: str) -> None:
+    """Write raw (possibly malformed) text — for the loud-fail tests."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def _grounded_pack(tmp_path: Path) -> tuple[Path, Path]:
@@ -185,6 +192,28 @@ def test_load_world_grounding_no_weather_yaml_leaves_weather_none_no_span(
         if s.name == "world_grounding.weather_proposed"
     ]
     assert proposed == [], "weather_proposed must not fire when no weather.yaml is authored"
+
+
+def test_load_world_grounding_raises_on_malformed_weather_yaml(tmp_path: Path) -> None:
+    """AC8 at the *orchestration* layer: a present-but-malformed weather.yaml
+    must make ``load_world_grounding`` raise loudly, not silently leave
+    ``weather_state`` None. This proves the No-Silent-Fallbacks contract
+    survives the bootstrap orchestration (not just the unit loader) — the
+    connect handler relies on this exception to surface a typed ERROR rather
+    than booting a session with mysteriously-absent weather."""
+    pack_dir = tmp_path / "synth_pack"
+    world_dir = pack_dir / "worlds" / "synth_world"
+    world_dir.mkdir(parents=True)
+    _write_text(pack_dir / "weather.yaml", "climate_zones: [unterminated\n  : : :\n")
+
+    with pytest.raises(yaml.YAMLError):
+        load_world_grounding(
+            pack_dir=pack_dir,
+            world_dir=world_dir,
+            zone="glen_floor",
+            season="autumn",
+            seed=42,
+        )
 
 
 # ---------------------------------------------------------------------------

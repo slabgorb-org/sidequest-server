@@ -1,0 +1,7 @@
+name: audio_malformed_yaml
+description: "Fixture pack: audio.yaml contains a YAML syntax error. Validator must record AUDIO_LOAD_FAILURE and keep walking."
+version: "0.1.0"
+recommended_players:
+  min: 1
+  max: 4
+  sweet_spot: 2

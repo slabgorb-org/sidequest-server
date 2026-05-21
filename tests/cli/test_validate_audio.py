@@ -1,4 +1,4 @@
-"""RED tests for ``pf validate audio`` — Story 50-9 / ADR-033 Pillar 3 Steps 1-3.
+"""Tests for ``pf validate audio`` — Story 50-9 / ADR-033 Pillar 3 Steps 1-3.
 
 **Architectural premise:** the mood_aliases *mechanism* is fully covered by
 ``tests/audio/test_mood_alias_chain.py`` (21 fixture-driven behavior tests,
@@ -16,11 +16,14 @@ is unit-tested here via purpose-built fixture packs under
 
 Issue codes (Dev — these are the contract):
 
-- ``AUDIO_LOAD_FAILURE`` (error)   — ``audio.yaml`` fails to construct an
-  ``AudioConfig`` (e.g. a declared alias chain that doesn't terminate in a
-  ``mood_tracks`` key). Wraps the loud pydantic ValueError in an Issue so
-  the validator can keep walking other packs instead of bombing on the
-  first bad one.
+- ``AUDIO_LOAD_FAILURE`` (error) — ``audio.yaml`` fails to parse
+  (``yaml.YAMLError``) or fails pydantic validation (e.g. a declared
+  alias chain that doesn't terminate in a ``mood_tracks`` key). Both
+  failures are caught and wrapped as Issues so the validator can keep
+  walking sibling packs instead of bombing on the first bad one.
+- ``RULES_LOAD_FAILURE`` (error) — same shape for ``rules.yaml`` YAML
+  parse failures. Dedicated code so triage output distinguishes the
+  offending file.
 - ``UNRESOLVED_RULES_MOOD`` (warning) — a confrontation ``mood:`` in
   ``rules.yaml`` is neither a ``mood_tracks`` key nor a declared alias that
   resolves to one. Will fall back to ``exploration`` at runtime with a
@@ -177,7 +180,9 @@ def test_issue_carries_source_file_for_ide_jumps() -> None:
     contract."""
     res = _pack_result("audio_unresolved_rules_mood")
     warnings = [i for i in res.warnings if i.code == "UNRESOLVED_RULES_MOOD"]
-    assert warnings
+    assert len(warnings) == 1, (
+        f"expected exactly one UNRESOLVED_RULES_MOOD warning; got {len(warnings)}"
+    )
     assert all("rules.yaml" in i.file for i in warnings), (
         f"UNRESOLVED_RULES_MOOD must cite rules.yaml; got files: {[i.file for i in warnings]}"
     )
@@ -188,7 +193,7 @@ def test_load_failure_cites_audio_yaml() -> None:
     for the declared bad alias chain."""
     res = _pack_result("audio_broken_declared_alias")
     failures = [i for i in res.errors if i.code == "AUDIO_LOAD_FAILURE"]
-    assert failures
+    assert len(failures) == 1, f"expected exactly one AUDIO_LOAD_FAILURE; got {len(failures)}"
     assert all("audio.yaml" in i.file for i in failures), (
         f"AUDIO_LOAD_FAILURE must cite audio.yaml; got files: {[i.file for i in failures]}"
     )
@@ -205,11 +210,16 @@ def test_validate_packs_walks_a_root_of_multiple_packs() -> None:
     point exists and isolates per-pack failures — a broken pack must not
     suppress diagnostics for sibling packs."""
     res = validate_packs([FIXTURES])
-    # All four fixture packs should have contributed:
+    # Every fixture pack contributes its declared diagnostics:
     # - audio_ok: 0 issues
+    # - audio_missing: 0 issues (no audio.yaml — legitimate text-only stub)
     # - audio_unresolved_rules_mood: 1 UNRESOLVED_RULES_MOOD warning
     # - audio_resolved_via_alias: 0 issues
-    # - audio_broken_declared_alias: 1 AUDIO_LOAD_FAILURE error
+    # - audio_broken_declared_alias: 1 AUDIO_LOAD_FAILURE error (pydantic)
+    # - audio_malformed_yaml: 1 AUDIO_LOAD_FAILURE error (yaml.YAMLError)
+    # - rules_malformed_yaml: 1 RULES_LOAD_FAILURE error
+    # See test_validate_packs_does_not_crash_on_any_fixture_root below for
+    # the exhaustive assertion across all error families.
     assert any(i.pack == "audio_unresolved_rules_mood" for i in res.warnings), (
         "multi-pack walk must surface the unresolved-mood pack's warning"
     )
@@ -285,3 +295,123 @@ def test_cli_audio_subcommand_is_registered() -> None:
         f"`validate audio --help` failed: stdout={result.stdout!r} stderr={result.stderr!r}"
     )
     assert "audio" in result.stdout.lower()
+
+
+def test_cli_audio_exits_zero_on_clean_pack() -> None:
+    """End-to-end exit-code contract: a clean pack root yields returncode 0.
+    Without this test, a regression that hardcoded ``ctx.exit(0)`` would
+    still pass the ``--help`` wiring test. CI / ``pf check`` keys off the
+    exit code, so the contract has to be proven through the documented
+    entry point, not just the in-process API."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "sidequest.cli.validate",
+            "audio",
+            "--genre-packs-root",
+            str(FIXTURES / "audio_ok"),
+        ],
+        cwd=SERVER_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, (
+        f"clean pack must exit 0; got returncode={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def test_cli_audio_exits_nonzero_when_errors_present() -> None:
+    """End-to-end exit-code contract: a pack root containing an error
+    (AUDIO_LOAD_FAILURE) yields returncode 1. The complement of the
+    clean-pack test — together they prove the ``ctx.exit(0 if
+    result.success else 1)`` wiring is correct end-to-end."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "sidequest.cli.validate",
+            "audio",
+            "--genre-packs-root",
+            str(FIXTURES / "audio_broken_declared_alias"),
+        ],
+        cwd=SERVER_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 1, (
+        f"pack with errors must exit 1; got returncode={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Robustness — missing audio.yaml + malformed YAML must not crash the walk
+# ---------------------------------------------------------------------------
+
+
+def test_pack_without_audio_yaml_returns_empty_result() -> None:
+    """``audio_missing`` has a pack.yaml but no audio.yaml — legitimate
+    state for a text-only / stub pack. The validator must return an empty
+    ValidationResult (zero errors, zero warnings), NOT crash and NOT emit
+    a spurious AUDIO_LOAD_FAILURE. Guards against an inverted-guard
+    regression at validate_audio_in_pack's early-return branch."""
+    res = _pack_result("audio_missing")
+    assert res.errors == [], (
+        f"audio-less pack must not produce errors; got {[i.code for i in res.errors]}"
+    )
+    assert res.warnings == [], (
+        f"audio-less pack must not produce warnings; got {[i.code for i in res.warnings]}"
+    )
+    assert res.success is True
+
+
+def test_malformed_audio_yaml_records_load_failure_and_does_not_crash() -> None:
+    """A syntactically broken audio.yaml must be caught and reported as
+    AUDIO_LOAD_FAILURE — never allowed to raise yaml.YAMLError out of the
+    per-pack walk. Without this, the audit would crash mid-walk on the
+    first content-team-laptop pack that was being edited at validate
+    time, defeating the multi-pack robustness guarantee that
+    ``test_one_broken_pack_does_not_suppress_others`` claims for the
+    pydantic-rejected case but did not actually prove for YAML parse
+    failures."""
+    res = _pack_result("audio_malformed_yaml")
+    failures = [i for i in res.errors if i.code == "AUDIO_LOAD_FAILURE"]
+    assert len(failures) == 1, (
+        f"expected exactly one AUDIO_LOAD_FAILURE; got errors {[i.code for i in res.errors]}"
+    )
+    assert "audio.yaml" in failures[0].file
+
+
+def test_malformed_rules_yaml_records_load_failure_and_does_not_crash() -> None:
+    """Symmetric to malformed-audio: a syntactically broken rules.yaml
+    must be caught and reported as RULES_LOAD_FAILURE (the dedicated
+    code distinguishes the offending file in triage output) rather than
+    allowed to crash the walk."""
+    res = _pack_result("rules_malformed_yaml")
+    failures = [i for i in res.errors if i.code == "RULES_LOAD_FAILURE"]
+    assert len(failures) == 1, (
+        f"expected exactly one RULES_LOAD_FAILURE; got errors {[i.code for i in res.errors]}"
+    )
+    assert "rules.yaml" in failures[0].file
+
+
+def test_validate_packs_does_not_crash_on_any_fixture_root() -> None:
+    """The multi-pack walk must complete and accumulate diagnostics from
+    every fixture pack even when several are individually broken in
+    different ways (declared-alias-cycle, malformed-audio-yaml,
+    malformed-rules-yaml, unresolved-rules-mood, audio-missing). No
+    exception escapes; sibling-isolation guarantee proven for every
+    failure mode we know about."""
+    res = validate_packs([FIXTURES])
+    # Each broken pack contributes its own error code; ensure we see
+    # representatives of all three error families plus the warning.
+    error_codes = {(i.code, i.pack) for i in res.errors}
+    warning_codes = {(i.code, i.pack) for i in res.warnings}
+    assert ("AUDIO_LOAD_FAILURE", "audio_broken_declared_alias") in error_codes
+    assert ("AUDIO_LOAD_FAILURE", "audio_malformed_yaml") in error_codes
+    assert ("RULES_LOAD_FAILURE", "rules_malformed_yaml") in error_codes
+    assert ("UNRESOLVED_RULES_MOOD", "audio_unresolved_rules_mood") in warning_codes

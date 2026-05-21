@@ -2,27 +2,27 @@
 
 Story 50-9 / ADR-033 Pillar 3 Steps 1-3.
 
-Two checks:
+Issue codes:
 
-1. **Pack load (hard error):** building ``AudioConfig`` from ``audio.yaml``
-   must succeed. The pydantic ``_validate_mood_aliases`` validator already
-   rejects declared alias chains that cycle, break, or exceed depth — this
-   validator catches that loud ValueError and wraps it as an
-   ``AUDIO_LOAD_FAILURE`` issue so the audit keeps walking sibling packs
-   instead of crashing on the first bad one.
-
-2. **Rules mood resolution (warning):** every ``confrontations[*].mood``
-   in ``rules.yaml`` must resolve to a ``mood_tracks`` key — either directly
-   or via the ``mood_aliases`` chain. References that don't resolve fall to
-   the universal ``exploration`` fallback at runtime with a
-   ``music.mood_alias_failed`` span; surfacing them here lets content
-   authors add an alias before the silent-ish fallback ships.
+- ``AUDIO_LOAD_FAILURE`` (error) — ``audio.yaml`` failed to parse
+  (``yaml.YAMLError``) or failed pydantic validation (e.g. a declared
+  ``mood_aliases`` chain that cycles, breaks, or exceeds depth). Caught
+  and wrapped so the audit keeps walking sibling packs instead of
+  crashing on the first bad one.
+- ``RULES_LOAD_FAILURE`` (error) — same shape for ``rules.yaml`` YAML
+  parse failures. Same "broken pack doesn't suppress siblings" guarantee.
+- ``UNRESOLVED_RULES_MOOD`` (warning) — every ``confrontations[*].mood``
+  in ``rules.yaml`` must resolve to a ``mood_tracks`` key, either directly
+  or via the ``mood_aliases`` chain. References that don't resolve fall
+  to the universal ``exploration`` fallback at runtime with a
+  ``music.mood_alias_failed`` span; surfacing them here lets content
+  authors add an alias before the silent-ish fallback ships.
 
 Severity choice: ``UNRESOLVED_RULES_MOOD`` is a warning, not an error.
 Runtime has a graceful, observable fallback; hard-erroring at validate
 time would block ship on any narrator-likely mood a content author hasn't
-anticipated. ``AUDIO_LOAD_FAILURE`` IS an error because the pack will
-refuse to load at server startup.
+anticipated. Load failures ARE errors because the pack will refuse to
+load at server startup.
 
 The runtime track-selection resolver (``resolve_mood_to_track_key`` in
 ``sidequest/audio/library_backend.py``) emits OTEL spans as a side effect
@@ -93,17 +93,25 @@ def _chain_resolves_to_track(mood: str, tracks: dict[str, Any], aliases: dict[st
 def _load_audio_config(pack_dir: Path, result: ValidationResult) -> AudioConfig | None:
     """Construct an ``AudioConfig`` from ``pack_dir/audio.yaml``.
 
-    On ValueError (the pydantic ``_validate_mood_aliases`` loud failure for
-    declared cycles / broken targets / depth-exceeded chains), record an
-    ``AUDIO_LOAD_FAILURE`` error naming the offending alias and return
-    ``None`` so the per-pack walk skips the mood-resolution check that
-    needs a constructed config.
+    Two failure modes catch as ``AUDIO_LOAD_FAILURE``:
+
+    - ``yaml.YAMLError`` — the file is not valid YAML (truncation mid-write,
+      hand-edit syntax error, mixed indentation). Without this catch, a
+      malformed audio.yaml would crash the whole ``validate_packs`` walk
+      and defeat the "broken pack doesn't suppress siblings" guarantee.
+    - ``ValueError`` — pydantic ``_validate_mood_aliases`` rejected a
+      declared alias chain (cycle / broken target / depth exceeded), or
+      another field-level constraint fired.
+
+    Either way the error is wrapped as an ``AUDIO_LOAD_FAILURE`` Issue
+    naming the offender and ``None`` returned so the per-pack walk skips
+    the mood-resolution check that needs a constructed config.
     """
     path = pack_dir / "audio.yaml"
-    raw = yaml.safe_load(path.read_text()) or {}
     try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         return AudioConfig.model_validate(raw)
-    except ValueError as exc:
+    except (yaml.YAMLError, ValueError) as exc:
         result.record(
             Issue(
                 code="AUDIO_LOAD_FAILURE",
@@ -120,11 +128,30 @@ def _check_rules_moods(pack_dir: Path, cfg: AudioConfig, result: ValidationResul
     """Scan ``rules.yaml`` for confrontation moods that don't resolve to a
     track (directly or via the alias chain). Each unresolved mood produces
     one ``UNRESOLVED_RULES_MOOD`` warning.
+
+    A syntactically broken ``rules.yaml`` is caught and reported as a
+    ``RULES_LOAD_FAILURE`` error rather than allowed to crash the walk —
+    same "broken pack doesn't suppress siblings" guarantee as the audio
+    side. A missing ``rules.yaml`` is silently OK (some workshopping
+    packs may not have authored it yet; the loader catches that at server
+    startup, not the validator's concern).
     """
     rules_path = pack_dir / "rules.yaml"
     if not rules_path.is_file():
         return
-    raw = yaml.safe_load(rules_path.read_text()) or {}
+    try:
+        raw = yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        result.record(
+            Issue(
+                code="RULES_LOAD_FAILURE",
+                severity="error",
+                message=str(exc),
+                pack=pack_dir.name,
+                file="rules.yaml",
+            )
+        )
+        return
     confrontations = raw.get("confrontations") or []
     for conf in confrontations:
         if not isinstance(conf, dict):
@@ -162,8 +189,14 @@ def _check_rules_moods(pack_dir: Path, cfg: AudioConfig, result: ValidationResul
 
 
 def validate_audio_in_pack(pack_dir: Path) -> ValidationResult:
-    """Per-pack programmatic entry. Runs both checks on a single pack
-    directory and returns the accumulated diagnostics."""
+    """Per-pack programmatic entry. Returns the accumulated diagnostics.
+
+    Returns an empty result immediately if ``audio.yaml`` is absent (some
+    text-only / stub packs legitimately have no audio to validate). Skips
+    the mood-resolution check if the config fails to load — the load
+    failure is itself recorded as an ``AUDIO_LOAD_FAILURE`` error, so it
+    is never silent.
+    """
     result = ValidationResult()
     if not (pack_dir / "audio.yaml").is_file():
         return result

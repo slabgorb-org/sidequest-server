@@ -1,0 +1,7 @@
+confrontations:
+  - id: brawl
+    name: Brawl
+    mood: combat
+    # Deliberately malformed: unclosed flow-sequence + invalid indent.
+    beats: [{id: hit, label: "Hit
+       bad_key: value

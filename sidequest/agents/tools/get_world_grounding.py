@@ -21,9 +21,12 @@ The session handler loads each section at session bootstrap and stamps it
 on every :class:`~sidequest.agents.tool_registry.ToolContext` it builds
 (see the three ``ToolContext`` fields: ``weather_state``,
 ``world_demographics``, ``world_calendar``). This handler is a pure
-reader — it never loads YAML or runs the generator. The story-24-7
-follow-up will add the WeatherState-proposed-vs-used spans over the
-generator side; this handler covers the tool-call surface.
+reader — it never loads YAML or runs the generator. Story 24-7 added
+two ``world_grounding.*`` state_transition spans here
+(``weather_used`` and ``demographics_injected``) and a paired
+``weather_proposed`` span at the generator seam in
+:mod:`sidequest.game.weather` — together they feed the GM dashboard's
+proposed-vs-used lie-detector view.
 
 Missing-data behavior
 ~~~~~~~~~~~~~~~~~~~~~
@@ -119,5 +122,30 @@ async def get_world_grounding(
         "tool.grounding.demographics_present", demographics_present
     )
     ctx.otel_span.set_attribute("tool.grounding.calendar_present", calendar_present)
+
+    # Story 24-7: world_grounding.* state_transition spans fire only when
+    # data is actually returned to the narrator (requested AND wired).
+    # These pair with world_grounding.weather_proposed (emitted from the
+    # generator) and feed the GM panel's proposed-vs-used lie detector.
+    if "weather" in args.include and ctx.weather_state is not None:
+        from sidequest.telemetry.spans import emit_weather_used_span
+
+        emit_weather_used_span(
+            zone=ctx.weather_state.zone,
+            season=ctx.weather_state.season,
+            condition=ctx.weather_state.condition,
+            seed=ctx.weather_state.seed,
+            world_id=ctx.world_id,
+            perspective_pc=ctx.perspective_pc,
+        )
+
+    if "demographics" in args.include and ctx.world_demographics is not None:
+        from sidequest.telemetry.spans import emit_demographics_injected_span
+
+        emit_demographics_injected_span(
+            world_id=ctx.world_id,
+            demographics=ctx.world_demographics,
+            perspective_pc=ctx.perspective_pc,
+        )
 
     return ToolResult.ok(payload)

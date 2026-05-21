@@ -6,13 +6,16 @@ weather.schema.json), validates it through Pydantic, and samples a typed
 
 The generator is deterministic: ``generate(zone, season, seed)`` returns the
 same ``WeatherState`` for identical arguments. Same-seed reproducibility is
-what makes the narrator-side state injection auditable; OTEL ``proposed vs
-used`` spans over this seam are a future epic-24 deliverable, not part of
-this module yet.
+what makes the narrator-side state injection auditable. Every ``generate()``
+call emits a ``world_grounding.weather_proposed`` OTEL span (Story 24-7,
+see :mod:`sidequest.telemetry.spans.world_grounding`) so the GM dashboard
+can diff the proposed state against the ``world_grounding.weather_used``
+span fired by the ``get_world_grounding`` tool — that pair is the
+"narrator improvised weather" lie detector.
 
-Narrator-side wiring (prompt-zone injection that surfaces the WeatherState
-to the LLM) is also a downstream deliverable. The CLI in
-``sidequest.cli.weathergen`` is the current production consumer.
+Narrator-side wiring goes through the ``get_world_grounding`` tool call
+(Story 24-6, ADR-102/103). The CLI in ``sidequest.cli.weathergen`` is the
+standalone production consumer.
 """
 
 from __future__ import annotations
@@ -293,7 +296,7 @@ class WeatherGenerator:
         )
         precipitation = rng.random() < precip_chance
 
-        return WeatherState(
+        state = WeatherState(
             zone=zone,
             season=season,
             condition=condition,
@@ -303,3 +306,10 @@ class WeatherGenerator:
             effects=list(fired_event.effects) if fired_event is not None else [],
             seed=seed,
         )
+        # Story 24-7: OTEL lie-detector signal for the GM panel. The
+        # dashboard pairs this with world_grounding.weather_used (emitted
+        # from the grounding tool) to detect narrator-improvised weather.
+        from sidequest.telemetry.spans import emit_weather_proposed_span
+
+        emit_weather_proposed_span(state)
+        return state

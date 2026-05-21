@@ -16,7 +16,7 @@ are gated by TYPE_CHECKING so the registry is still importable.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 from sidequest.agents.prompt_framework.types import (
     AttentionZone,
@@ -25,6 +25,7 @@ from sidequest.agents.prompt_framework.types import (
 )
 
 if TYPE_CHECKING:
+    from sidequest.dungeon.region_projection import RegionProjection
     from sidequest.game.chassis import ChassisInstance
     from sidequest.game.npc_pool import NpcPoolMember
     from sidequest.game.session import Npc, PartyPeer
@@ -580,13 +581,16 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         if region_projection is None:
             return
 
-        rp = region_projection
+        rp = cast("RegionProjection", region_projection)
         lines = [
             "## YOU ARE HERE — Current Region (canonical; do not contradict)",
             f"Region: {rp.theme_display} [{rp.region_id}]",
-            f"Register: {rp.register}",
-            f"Flavor: {rp.flavor}",
         ]
+        # Register is a procedural-theme field; cartography region-mode worlds
+        # leave it blank. Omit the line rather than render a dangling "Register:".
+        if rp.register:
+            lines.append(f"Register: {rp.register}")
+        lines.append(f"Flavor: {rp.flavor}")
         if rp.motifs:
             lines.append("Motifs: " + ", ".join(rp.motifs))
         if rp.depth_score is not None:
@@ -636,29 +640,36 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         # directive inside the canonical region block, the same register as
         # the MOVEMENT RULE above — the narrator never learns it is a
         # re-projected graph.
-        depth = rp.depth_score if rp.depth_score is not None else 0.0
-        pressure = (
-            "near the threshold — but Sünden is wrong even at its mouth "
-            "(the Watcher waited at Moria's gate): the dark reaches UP for "
-            "those who linger"
-            if depth < 1.0
-            else "deep — the press of stone and the things that own it is "
-            "constant; survival, not scenery, is the question every beat"
-        )
-        lines.append(
-            "THE DUNGEON IS ALIVE AND HOSTILE (act on this every turn): "
-            f"the party is {pressure}. Draw on the Monster Manual already "
-            "in this prompt — its wandering horrors, its apex dweller — and "
-            "make the dark PUSH BACK: tracks then sound then the thing "
-            "itself; pursuit, ambush from a side passage, a scavenger drawn "
-            "by blood or light, the deep stirring at noise. Telegraph "
-            "(Diamonds and Coal — bait the hook, then let it bite), escalate "
-            "with depth, and never let a delve beat pass with no pressure, "
-            "discovery, or cost. This is not a monster-mash: it is grave, "
-            "earned, Moria-as-tragedy dread that PAYS OFF. If the last beats "
-            "were quiet, the next must not be — something in Sünden has "
-            "found them."
-        )
+        #
+        # Gated on is_dungeon: this is procedural-megadungeon genre truth.
+        # Cartography region-mode worlds (e.g. tea_and_murder/glenross) reuse
+        # the same YOU-ARE-HERE section + MOVEMENT RULE above but must NOT
+        # inherit "the dark hunts you" — a cosy-mystery narrator told it is in
+        # a lethal dungeon is its own Illusionism failure.
+        if rp.is_dungeon:
+            depth = rp.depth_score if rp.depth_score is not None else 0.0
+            pressure = (
+                "near the threshold — but Sünden is wrong even at its mouth "
+                "(the Watcher waited at Moria's gate): the dark reaches UP for "
+                "those who linger"
+                if depth < 1.0
+                else "deep — the press of stone and the things that own it is "
+                "constant; survival, not scenery, is the question every beat"
+            )
+            lines.append(
+                "THE DUNGEON IS ALIVE AND HOSTILE (act on this every turn): "
+                f"the party is {pressure}. Draw on the Monster Manual already "
+                "in this prompt — its wandering horrors, its apex dweller — and "
+                "make the dark PUSH BACK: tracks then sound then the thing "
+                "itself; pursuit, ambush from a side passage, a scavenger drawn "
+                "by blood or light, the deep stirring at noise. Telegraph "
+                "(Diamonds and Coal — bait the hook, then let it bite), escalate "
+                "with depth, and never let a delve beat pass with no pressure, "
+                "discovery, or cost. This is not a monster-mash: it is grave, "
+                "earned, Moria-as-tragedy dread that PAYS OFF. If the last beats "
+                "were quiet, the next must not be — something in Sünden has "
+                "found them."
+            )
 
         self.register_section(
             agent_name,

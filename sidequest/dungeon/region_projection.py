@@ -100,6 +100,12 @@ class RegionProjection:
     motifs: list[str] = field(default_factory=list)
     depth_score: float | None = None
     exits: list[RegionExit] = field(default_factory=list)
+    # True only for the procedural megadungeon. Gates the render's
+    # "THE DUNGEON IS ALIVE AND HOSTILE" lethality directive so cartography
+    # region-mode worlds (e.g. tea_and_murder/glenross) reuse the same
+    # YOU-ARE-HERE section + MOVEMENT RULE without inheriting Moria-grade
+    # dread. Default False keeps cartography projections cosy.
+    is_dungeon: bool = False
 
 
 def project_region(
@@ -164,4 +170,5 @@ def project_region(
         motifs=list(theme.narrator.motifs),
         depth_score=node.depth_score,
         exits=exits,
+        is_dungeon=True,
     )

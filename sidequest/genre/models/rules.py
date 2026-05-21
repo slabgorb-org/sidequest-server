@@ -113,6 +113,13 @@ class BeatDef(BaseModel):
     target_tag: str | None = None
     stat_check: str
     risk: str | None = None  # narrator prose cue only — does not drive engine
+    # One-line italic flavor hint for the BeatTile (D2 confrontation panel,
+    # 2026-05-13). Optional — when absent the UI either renders no flavor
+    # row or falls back to its per-beat-id default library (the legacy hint
+    # set the panel shipped with). Authoring this in pack YAML lets a genre
+    # author key flavor to specific beat definitions instead of relying on
+    # the shared id→string map.
+    flavor: str | None = None
     reveals: str | None = None
     resolution: bool | None = (
         None  # legacy "always-resolves" flag (still useful for declarative pushes)

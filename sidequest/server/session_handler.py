@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from sidequest.dungeon.lookahead_worker import LookaheadWorkerHandle
     from sidequest.game.monster_manual import MonsterManual
     from sidequest.game.persistence import GameMode
+    from sidequest.game.weather import WeatherState
     from sidequest.server.session_room import SessionRoom
 
 from sidequest.agents.orchestrator import Orchestrator
@@ -590,6 +591,15 @@ class _SessionData:
     # sessions whose pack ships no history still construct cleanly —
     # the recompute helper is a graceful no-op on an empty chapter list.
     cached_history_chapters: list[HistoryChapter] = field(default_factory=list)
+    # Story 24-10: world-grounding carrier fields, loaded once at connect
+    # via ``load_world_grounding`` and stamped here (mirroring lore_store /
+    # monster_manual). ``_build_turn_context`` copies them onto every
+    # per-turn TurnContext so the get_world_grounding tool returns real data.
+    # None for packs/worlds that authored no weather/demographics/calendar —
+    # the graceful path keeps the tool returning null sections, no crash.
+    weather_state: WeatherState | None = None
+    world_demographics: dict[str, Any] | None = None
+    world_calendar: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

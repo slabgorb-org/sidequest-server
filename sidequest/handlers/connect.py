@@ -70,6 +70,16 @@ from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
 
+# Story 24-10 / 24-8 playtest: hardcoded weather sample point for the
+# tea_and_murder/glenross session. The generator is deterministic — these
+# pin the (zone, season, seed) the bootstrap samples once at connect.
+# Calendar-driven season advancement and per-zone selection are follow-up
+# stories; kept here (not buried in the loader) so the playtest's chosen
+# point is visible at the call site.
+_GROUNDING_WEATHER_ZONE = "glen_floor"
+_GROUNDING_WEATHER_SEASON = "autumn"
+_GROUNDING_WEATHER_SEED = 1908
+
 
 def _mint_replay_footnote_fact_ids(msg: object) -> tuple[object, int]:
     """ADR-100 Seam C, replay/backfill path.
@@ -401,7 +411,8 @@ class ConnectHandler:
                 # World directory used by orbital-tier loader at room
                 # bind time. ``loader.find`` raises if the pack is gone,
                 # but the ``loader.load`` above already validated it.
-                world_dir = loader.find(row.genre_slug) / "worlds" / row.world_slug
+                pack_dir = loader.find(row.genre_slug)
+                world_dir = pack_dir / "worlds" / row.world_slug
             except Exception as exc:
                 logger.error(
                     "session.genre_load_failed genre=%s slug=%s error=%s",
@@ -768,6 +779,43 @@ class ConnectHandler:
                 world_slug=row.world_slug,
                 world_dir=world_dir,
             )
+
+            # Story 24-10: load world-grounding (weather / demographics /
+            # calendar) once at connect and stamp it on the session carrier.
+            # _build_turn_context threads it onto every TurnContext so the
+            # get_world_grounding tool returns real data. Packs/worlds with
+            # no authored grounding files yield None sections (graceful).
+            # Per CLAUDE.md "No Silent Fallbacks": a present-but-malformed
+            # grounding file raises here and is surfaced as a typed ERROR to
+            # the UI, never degraded to a silent None.
+            from sidequest.game.world_grounding_loader import load_world_grounding
+
+            try:
+                grounding = load_world_grounding(
+                    pack_dir=pack_dir,
+                    world_dir=world_dir,
+                    zone=_GROUNDING_WEATHER_ZONE,
+                    season=_GROUNDING_WEATHER_SEASON,
+                    seed=_GROUNDING_WEATHER_SEED,
+                )
+            except Exception as exc:
+                logger.error(
+                    "session.world_grounding_load_failed genre=%s world=%s "
+                    "slug=%s error=%s",
+                    row.genre_slug,
+                    row.world_slug,
+                    slug,
+                    exc,
+                )
+                return [
+                    _error_msg(
+                        f"Failed to load world grounding for "
+                        f"'{row.genre_slug}/{row.world_slug}': {exc}"
+                    )
+                ]
+            session._session_data.weather_state = grounding.weather_state
+            session._session_data.world_demographics = grounding.world_demographics
+            session._session_data.world_calendar = grounding.world_calendar
 
             # Slug-resume LoreStore re-seed (exposed by commit 72750db).
             # ``_SessionData.lore_store`` is an in-memory

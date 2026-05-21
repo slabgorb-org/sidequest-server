@@ -720,6 +720,13 @@ def _build_turn_context(
         store=sd.store,
         lore_store=sd.lore_store,
         monster_manual=sd.monster_manual,
+        # Story 24-10: thread world-grounding off the session carrier onto
+        # the per-turn context, exactly like lore_store / monster_manual.
+        # Without this hop the bootstrap-loaded grounding never reaches the
+        # ToolContext and get_world_grounding returns null every turn.
+        weather_state=sd.weather_state,
+        world_demographics=sd.world_demographics,
+        world_calendar=sd.world_calendar,
         turn_number=snapshot.turn_manager.interaction,
         character_name=char_name,
         current_location=(

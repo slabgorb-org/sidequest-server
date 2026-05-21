@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from sidequest.game.lore_store import LoreStore
     from sidequest.game.monster_manual import MonsterManual
     from sidequest.game.session import GameSnapshot
+    from sidequest.game.weather import WeatherState
 
 # Importing this package wires the 26 tool adapters onto default_registry at
 # module import time. Required for the SDK path; the streaming/sync ClaudeClient
@@ -715,6 +716,17 @@ class TurnContext:
     # dataclass free of a sidequest.dungeon import (dungeon depends on game
     # models — mirrors the ``encounter: Any`` / ``snapshot`` precedent).
     region_projection: Any = None  # runtime: sidequest.dungeon.region_projection.RegionProjection | None
+
+    # Story 24-10: world-grounding carrier fields. Loaded once at session
+    # bootstrap (connect handler → load_world_grounding) onto _SessionData,
+    # copied here by _build_turn_context, and threaded to the ToolContext at
+    # orchestrator.py:3259 so the get_world_grounding tool returns real data
+    # instead of three null sections. None for packs/worlds that authored no
+    # weather.yaml / demographics.yaml / calendar.yaml (graceful path — the
+    # tool stamps *_present=False and the 24-7 spans stay dark).
+    weather_state: WeatherState | None = None
+    world_demographics: dict[str, Any] | None = None
+    world_calendar: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -3270,6 +3282,15 @@ class Orchestrator:
                     lore_store=context.lore_store,
                     # Same Phase-E seam: lookup_monster reads this.
                     monster_manual=context.monster_manual,
+                    # Story 24-10 wiring: world-grounding fields the
+                    # get_world_grounding tool reads. Loaded at session
+                    # bootstrap and threaded through TurnContext — without
+                    # these three lines the tool returns null weather/
+                    # demographics/calendar on every turn and the 24-7
+                    # spans never fire.
+                    weather_state=context.weather_state,
+                    world_demographics=context.world_demographics,
+                    world_calendar=context.world_calendar,
                 )
 
                 # Positive wiring confirmation (CLAUDE.md OTEL principle —

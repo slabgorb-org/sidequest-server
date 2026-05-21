@@ -58,6 +58,38 @@ Unit tests prove a component works in isolation. That's not enough. Every set of
 must include at least one integration test that verifies the component is wired into the
 system — imported, called, and reachable from production code paths.
 
+### No Source-Text Wiring Tests
+**Never grep production source code as a wiring assertion.** Tests like "assert
+`_my_function(` appears N times in handler.py" or "assert this regex matches the
+source of narrator.py" test *implementation shape*, not *behavior* — they pass when
+the literal happens to be present even if the wiring is broken, and they fail on every
+harmless refactor. Worse, regexes with `re.DOTALL` plus `.*?` quantifiers against
+large source files can catastrophically backtrack inside C code that holds the GIL,
+defeating `pytest-timeout` and turning a test into a true hang.
+
+When you want to prevent a call-site regression, reach for one of:
+
+1. **OTEL span assertions** — every subsystem decision emits a span (CLAUDE.md OTEL
+   Observability Principle, ADR-031 / ADR-090 / ADR-103). Drive the flow, assert the
+   span fired. Survives refactor, fails on real wiring breakage.
+2. **Fixture-driven behavior tests** — construct a synthetic state that should hit the
+   path, fire the dispatch through the real handler, assert the message went out. See
+   `tests/server/test_location_description_emit.py::test_emit_sends_message_when_room_has_manifest`
+   for the canonical shape — synthetic genre pack + snapshot fixture + real
+   `_maybe_emit_location_description` invocation + assertion on the emitted typed
+   message.
+3. **Registry / decorator dispatch** for load-bearing wiring — `@on_chargen_complete(...)`
+   instead of nested `if/elif` blocks deep in a handler. Then a unit test enumerates the
+   registry. Refactor-stable. Heaviest lift; only worth it when the wiring keeps slipping.
+
+The legitimate exception is **reflection-based dataclass / type checks** (e.g.,
+"`_SessionData` does not yet have a `dungeon_store` field — `inspect.fields(...)`")
+because those interrogate runtime types, not source strings. That's the "tripwire"
+pattern in `tests/dungeon/test_setpiece_attach_wiring.py`'s assertion 4 — fine.
+
+If you find yourself reaching for `handler_path.read_text()` in a test, stop. The
+infrastructure to do it properly already exists in the codebase.
+
 ### Backend Language
 This server is Python/FastAPI per ADR-082, ported from a Rust prototype in 2026-04.
 The Rust codebase is preserved read-only at <https://github.com/slabgorb/sidequest-api>
@@ -97,11 +129,14 @@ tell whether it's engaged or whether Claude is just improvising.
 
 ```bash
 uv sync                            # Install deps
-uv run pytest -v                   # Tests
+uv run pytest -v                   # Tests (parallel by default: -n auto via addopts)
+uv run pytest -n0 -v               # Tests (serial; for breakpoint debugging / race-isolation)
 uv run ruff check .                # Lint
 uv run ruff format .               # Format
 uv run pyright                     # Type check
 ```
+
+The unit suite runs under pytest-xdist (`-n auto`) by default — full suite is ~20-30 s on a 10-core machine. Pass `-n0` to override for interactive debugging where you need a single process and predictable test ordering.
 
 From the orchestrator root: `just server`, `just server-test`, `just server-check`, `just server-fmt`.
 

@@ -3,6 +3,7 @@
 Dispatches to one of:
 
 * ``locations`` — Story 54-3 location-manifest validator.
+* ``audio`` — Story 50-9 audio.yaml + rules.yaml mood-reference audit.
 * ``projection-check`` — projection.yaml audit (legacy single-genre).
 
 Direct module entry remains available for backwards compatibility:
@@ -15,6 +16,7 @@ import sys
 
 import click
 
+from sidequest.cli.validate.audio import main as audio_main
 from sidequest.cli.validate.locations import main as locations_main
 from sidequest.cli.validate.projection_check import main as projection_check_main
 
@@ -24,8 +26,9 @@ def cli() -> None:
     """SideQuest content validators."""
 
 
-# ``locations`` is a click.command — register the underlying object directly.
+# ``locations`` and ``audio`` are click.commands — register directly.
 cli.add_command(locations_main, name="locations")
+cli.add_command(audio_main, name="audio")
 
 
 @cli.command(name="projection-check")

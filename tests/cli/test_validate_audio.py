@@ -121,8 +121,7 @@ def test_single_hop_alias_silences_unresolved_warning() -> None:
     that would re-flag valid aliases."""
     res = _pack_result("audio_resolved_via_alias")
     comedic_warnings = [
-        i for i in res.warnings
-        if i.code == "UNRESOLVED_RULES_MOOD" and "comedic" in i.message
+        i for i in res.warnings if i.code == "UNRESOLVED_RULES_MOOD" and "comedic" in i.message
     ]
     assert comedic_warnings == [], (
         f"alias 'comedic' -> 'exploration' must silence the unresolved warning; "
@@ -136,8 +135,7 @@ def test_multi_hop_alias_chain_silences_unresolved_warning() -> None:
     Guards against a depth-1 lookup that would treat ``caper`` as broken."""
     res = _pack_result("audio_resolved_via_alias")
     caper_warnings = [
-        i for i in res.warnings
-        if i.code == "UNRESOLVED_RULES_MOOD" and "caper" in i.message
+        i for i in res.warnings if i.code == "UNRESOLVED_RULES_MOOD" and "caper" in i.message
     ]
     assert caper_warnings == [], (
         f"two-hop alias 'caper' -> 'comedic' -> 'exploration' must silence "

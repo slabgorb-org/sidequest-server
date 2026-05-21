@@ -18,8 +18,6 @@ import re
 import tomllib
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # sidequest-server/
 ORCHESTRATOR_ROOT = REPO_ROOT.parent  # oq-1/
 
@@ -27,10 +25,21 @@ PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 JUSTFILE_PATH = ORCHESTRATOR_ROOT / "justfile"
 REPOS_YAML_PATH = ORCHESTRATOR_ROOT / ".pennyfarthing" / "repos.yaml"
 
+# Matches `-n auto`, `-n2`, `-n 4`, or `--numprocesses=auto`/`--numprocesses 4`.
+# Used to assert that an invocation surface engages pytest-xdist parallel mode.
+_PARALLEL_FLAG_RE = re.compile(
+    r"(?:^|\s)(?:-n\s*(?:auto|\d+)|--numprocesses[\s=](?:auto|\d+))(?:\s|$)"
+)
+
 
 def _load_pyproject() -> dict:
     with PYPROJECT_PATH.open("rb") as f:
         return tomllib.load(f)
+
+
+def _pytest_addopts() -> str:
+    config = _load_pyproject()
+    return config.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("addopts", "")
 
 
 # --- AC-1 / wiring: dependency surface ----------------------------------
@@ -43,12 +52,8 @@ def test_pytest_xdist_in_dev_dependencies() -> None:
     wiring is dead.
     """
     config = _load_pyproject()
-    dev_deps = (
-        config.get("project", {}).get("optional-dependencies", {}).get("dev", [])
-    )
-    has_xdist = any(
-        re.match(r"^pytest-xdist(\s|>=|==|<|>|;|$)", dep) for dep in dev_deps
-    )
+    dev_deps = config.get("project", {}).get("optional-dependencies", {}).get("dev", [])
+    has_xdist = any(re.match(r"^pytest-xdist(\s|>=|==|<|>|;|$)", dep) for dep in dev_deps)
     assert has_xdist, (
         f"pytest-xdist not found in [project.optional-dependencies].dev. "
         f"Current dev deps: {dev_deps}"
@@ -79,17 +84,10 @@ def test_pytest_addopts_engages_parallel_mode() -> None:
     and therefore `uv run pytest`, `just server-test`, and `pf check` — fan
     out across workers without each recipe needing to re-specify the flag.
     """
-    config = _load_pyproject()
-    addopts = config.get("tool", {}).get("pytest", {}).get("ini_options", {}).get(
-        "addopts", ""
-    )
+    addopts = _pytest_addopts()
     assert addopts, "pyproject.toml [tool.pytest.ini_options].addopts is empty"
 
-    # Match `-n auto`, `-n2`, `-n 4`, or `--numprocesses=auto`.
-    parallel_re = re.compile(
-        r"(?:^|\s)(?:-n\s*(?:auto|\d+)|--numprocesses[\s=](?:auto|\d+))(?:\s|$)"
-    )
-    assert parallel_re.search(addopts), (
+    assert _PARALLEL_FLAG_RE.search(addopts), (
         f"addopts does not engage pytest-xdist parallel mode. "
         f"Expected `-n auto` (or numeric/--numprocesses variant) in addopts. "
         f"Current addopts: {addopts!r}"
@@ -137,21 +135,8 @@ def test_orchestrator_justfile_server_test_recipe_uses_parallel() -> None:
         f"server-test recipe does not invoke pytest. Recipe: {recipe_text!r}"
     )
 
-    has_explicit_n = bool(
-        re.search(r"(?:^|\s)(?:-n\s*(?:auto|\d+)|--numprocesses)", recipe_text)
-    )
-    # Fall back to addopts inheritance.
-    config = _load_pyproject()
-    addopts = config.get("tool", {}).get("pytest", {}).get("ini_options", {}).get(
-        "addopts", ""
-    )
-    addopts_has_n = bool(
-        re.search(
-            r"(?:^|\s)(?:-n\s*(?:auto|\d+)|--numprocesses[\s=](?:auto|\d+))",
-            addopts,
-        )
-    )
-    assert has_explicit_n or addopts_has_n, (
+    addopts = _pytest_addopts()
+    assert _PARALLEL_FLAG_RE.search(recipe_text) or _PARALLEL_FLAG_RE.search(addopts), (
         f"server-test recipe relies on addopts for `-n` but addopts is "
         f"missing it too. Recipe: {recipe_text!r}, addopts: {addopts!r}"
     )
@@ -177,23 +162,8 @@ def test_pf_check_server_invokes_parallel_unit_suite() -> None:
         repos = yaml.safe_load(f)
     server_cmd = repos.get("repos", {}).get("server", {}).get("test_command", "")
 
-    has_explicit_n = bool(
-        re.search(
-            r"(?:^|\s)(?:-n\s*(?:auto|\d+)|--numprocesses[\s=](?:auto|\d+))",
-            server_cmd,
-        )
-    )
-    config = _load_pyproject()
-    addopts = config.get("tool", {}).get("pytest", {}).get("ini_options", {}).get(
-        "addopts", ""
-    )
-    addopts_has_n = bool(
-        re.search(
-            r"(?:^|\s)(?:-n\s*(?:auto|\d+)|--numprocesses[\s=](?:auto|\d+))",
-            addopts,
-        )
-    )
-    assert has_explicit_n or addopts_has_n, (
+    addopts = _pytest_addopts()
+    assert _PARALLEL_FLAG_RE.search(server_cmd) or _PARALLEL_FLAG_RE.search(addopts), (
         f"pf check for server would not engage parallel mode. "
         f"repos.yaml server.test_command={server_cmd!r}, "
         f"pyproject addopts={addopts!r}. One must contain `-n auto`."

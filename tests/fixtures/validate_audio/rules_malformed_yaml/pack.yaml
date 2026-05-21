@@ -1,0 +1,7 @@
+name: rules_malformed_yaml
+description: "Fixture pack: audio.yaml is fine, rules.yaml has YAML syntax error. Validator must record RULES_LOAD_FAILURE and keep walking."
+version: "0.1.0"
+recommended_players:
+  min: 1
+  max: 4
+  sweet_spot: 2

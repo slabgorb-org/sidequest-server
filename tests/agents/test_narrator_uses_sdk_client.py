@@ -4,7 +4,7 @@ When the orchestrator's LlmClient is a ToolingLlmClient (an
 AnthropicSdkClient in production), ``run_narration_turn`` must:
 
 * Go through ``AnthropicSdkClient.complete_with_tools``.
-* Pass the full 27-tool array from ``default_registry``.
+* Pass the full 28-tool array from ``default_registry``.
 * Open a ``narration.turn`` cost-rollup span and seed the rollup
   attributes (model, token totals, tool-call count).
 * Return a ``NarrationTurnResult`` whose ``narration`` field matches the
@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-# Importing the tools package wires the 26 adapters onto default_registry.
+# Importing the tools package wires the 28 adapters onto default_registry.
 import sidequest.agents.tools  # noqa: F401
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
@@ -185,10 +185,11 @@ async def test_orchestrator_routes_narration_through_sdk(
     # 1. The SDK was hit — two iterations (tool_use → end_turn).
     assert len(sdk.messages.calls) == 2
 
-    # 2. The full 27-tool catalog was sent on every iteration.
+    # 2. The full 28-tool catalog was sent on every iteration.
     sent_tools = sdk.messages.calls[0]["tools"]
     # Story 54-6 added resolve_location_entity (27th tool); ADR-109 §5.3.
-    assert len(sent_tools) == len(default_registry.list_names()) == 27
+    # Story 24-6 added get_world_grounding (28th tool); ADR-024 grounding.
+    assert len(sent_tools) == len(default_registry.list_names()) == 28
 
     # 3. The result carries the SDK's text.
     assert result.narration == fake_response_text

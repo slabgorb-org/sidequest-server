@@ -1,0 +1,12 @@
+mood_tracks:
+  exploration:
+    - path: explore.ogg
+      title: explore
+      bpm: 90
+mixer:
+  music_volume: 0.4
+  sfx_volume: 0.4
+  crossfade_default_ms: 2000
+# Deliberately malformed: unclosed flow-mapping brace + bad indent.
+mood_aliases: { broken: "unterminated
+   bad_indent_key: value

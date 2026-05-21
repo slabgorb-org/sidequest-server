@@ -1,0 +1,17 @@
+mood_tracks:
+  exploration:
+    - path: explore.ogg
+      title: explore
+      bpm: 90
+  combat:
+    - path: combat.ogg
+      title: combat
+      bpm: 140
+  tension:
+    - path: tension.ogg
+      title: tension
+      bpm: 110
+mixer:
+  music_volume: 0.4
+  sfx_volume: 0.4
+  crossfade_default_ms: 2000

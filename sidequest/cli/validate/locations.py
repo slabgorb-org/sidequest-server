@@ -34,6 +34,7 @@ from typing import Any, Literal
 import click
 import yaml
 
+from sidequest.cli.validate.common import packs_in
 from sidequest.protocol.models import LocationEntity
 
 Severity = Literal["error", "warning"]
@@ -88,20 +89,6 @@ def _strip_article(phrase: str) -> str:
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
-
-
-def _packs_in(root: Path) -> list[Path]:
-    """Return every directory under ``root`` that looks like a genre pack.
-
-    Two shapes are accepted: ``root`` is itself a pack (``pack.yaml``
-    present at ``root``), or ``root`` is a directory containing many
-    packs (each child with its own ``pack.yaml``).
-    """
-    if not root.is_dir():
-        return []
-    if (root / "pack.yaml").is_file():
-        return [root]
-    return sorted(p for p in root.iterdir() if p.is_dir() and (p / "pack.yaml").is_file())
 
 
 def _worlds_in(pack: Path) -> list[Path]:
@@ -515,7 +502,7 @@ def validate_packs(pack_roots: list[Path]) -> ValidationResult:
     """
     result = ValidationResult()
     for root in pack_roots:
-        for pack in _packs_in(root):
+        for pack in packs_in(root):
             allowlist = _load_allowlist(pack)
             for world_dir in _worlds_in(pack):
                 _validate_one_world(

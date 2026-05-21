@@ -33,12 +33,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 
 from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
 from sidequest.agents.tool_registry import ToolContext, default_registry
+from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import (  # noqa: F401 — registers the tool
     get_world_grounding as _get_world_grounding_module,
 )
-from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.game.weather import WeatherState
-
 
 # ---------------------------------------------------------------------------
 # Builders

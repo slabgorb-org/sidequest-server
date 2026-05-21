@@ -293,7 +293,7 @@ class WeatherGenerator:
         )
         precipitation = rng.random() < precip_chance
 
-        return WeatherState(
+        state = WeatherState(
             zone=zone,
             season=season,
             condition=condition,
@@ -303,3 +303,10 @@ class WeatherGenerator:
             effects=list(fired_event.effects) if fired_event is not None else [],
             seed=seed,
         )
+        # Story 24-7: OTEL lie-detector signal for the GM panel. The
+        # dashboard pairs this with world_grounding.weather_used (emitted
+        # from the grounding tool) to detect narrator-improvised weather.
+        from sidequest.telemetry.spans import emit_weather_proposed_span
+
+        emit_weather_proposed_span(state)
+        return state

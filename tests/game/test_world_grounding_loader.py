@@ -47,7 +47,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
+import yaml
+from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
 # Module-presence sentinel — collects as RED until the loader module exists.
@@ -70,7 +71,6 @@ from sidequest.game.world_grounding_loader import (  # noqa: E402
     load_world_calendar,
     load_world_demographics,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures — real authored pack content + a malformed/missing scratch dir
@@ -237,7 +237,7 @@ def test_load_pack_weather_raises_on_schema_violation(tmp_path: Path) -> None:
         "climate_zones:\n  - just_a_list_entry\n",
         encoding="utf-8",
     )
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, yaml.YAMLError, ValidationError)):
         load_pack_weather(pack)
 
 
@@ -250,7 +250,7 @@ def test_load_world_demographics_raises_on_malformed_yaml(tmp_path: Path) -> Non
         "this is not: : : valid yaml [",
         encoding="utf-8",
     )
-    with pytest.raises(Exception):
+    with pytest.raises((yaml.YAMLError, ValueError)):
         load_world_demographics(world)
 
 
@@ -262,7 +262,7 @@ def test_load_world_calendar_raises_on_malformed_yaml(tmp_path: Path) -> None:
         "still not: : : valid yaml [",
         encoding="utf-8",
     )
-    with pytest.raises(Exception):
+    with pytest.raises((yaml.YAMLError, ValueError)):
         load_world_calendar(world)
 
 

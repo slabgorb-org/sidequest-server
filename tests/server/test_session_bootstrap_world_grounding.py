@@ -38,10 +38,10 @@ import yaml
 
 # Importing the tools package wires the 26 adapters onto default_registry.
 import sidequest.agents.tools  # noqa: F401
+from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
 from sidequest.agents.tool_registry import ToolContext, ToolResultStatus, default_registry
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
-from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
 from sidequest.game.persistence import (
     GameMode,
     SqliteStore,

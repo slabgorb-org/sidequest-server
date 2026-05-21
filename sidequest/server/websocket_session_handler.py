@@ -2180,6 +2180,15 @@ class WebSocketSessionHandler:
         player_id: str,
         span: trace.Span,
     ) -> list[object]:
+        # Outbound accumulator must be bound BEFORE any nested emit closure
+        # (e.g. _chargen_emit_tactical_grid / _chargen_emit_region_location)
+        # is invoked — those fire on the room_graph and region init seams,
+        # well before the CharacterCreationMessage is computed below. Binding
+        # it here (rather than mid-method) keeps `out` from becoming an
+        # unbound free variable in those closures (Playtest 2026-05-21
+        # region-mode NameError crash).
+        out: list[object] = []
+
         # Name resolution: scene > lobby > "Player". Do NOT fall back to
         # payload.choice — that's the UI button index (e.g. "1"), not a
         # name (Rust comment at connect.rs:1607).
@@ -2887,7 +2896,10 @@ class WebSocketSessionHandler:
             total_scenes=builder.total_scenes(),
             character=character.model_dump(mode="json"),
         )
-        out: list[object] = [CharacterCreationMessage(payload=payload, player_id=player_id)]
+        # Prepend (not re-bind) so the CharacterCreationMessage stays first in
+        # the returned list while preserving any LOCATION_DESCRIPTION /
+        # TACTICAL_GRID messages already appended by the init closures above.
+        out.insert(0, CharacterCreationMessage(payload=payload, player_id=player_id))
 
         # PARTY_STATUS snapshot (Slice H / connect.rs:2533). Lands the
         # Character tab populated at session-start. MP: also broadcast

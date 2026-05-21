@@ -445,7 +445,7 @@ async def test_slug_connect_chargen_gate_logs_branch_decision(tmp_path: Path, ca
         player_id="P2",
         payload=SessionEventPayload(event="connect", game_slug=slug),
     )
-    with caplog.at_level(logging.INFO, logger="sidequest.server.session_handler"):
+    with caplog.at_level(logging.INFO, logger="sidequest.handlers.connect"):
         await handler.handle_message(msg)
 
     gate_records = [r for r in caplog.records if "session.chargen_gate" in r.getMessage()]
@@ -517,7 +517,7 @@ async def test_mp_legacy_save_routes_new_joiner_to_chargen(tmp_path: Path, caplo
             player_name="Squiggy",
         ),
     )
-    with caplog.at_level(logging.INFO, logger="sidequest.server.session_handler"):
+    with caplog.at_level(logging.INFO, logger="sidequest.handlers.connect"):
         outbound = await handler.handle_message(msg)
 
     connected_msgs = [
@@ -599,7 +599,7 @@ async def test_mp_legacy_save_resumes_original_player_by_name(tmp_path: Path, ca
             player_name="Laverne",
         ),
     )
-    with caplog.at_level(logging.INFO, logger="sidequest.server.session_handler"):
+    with caplog.at_level(logging.INFO, logger="sidequest.handlers.connect"):
         outbound = await handler.handle_message(msg)
 
     connected_msgs = [
@@ -702,7 +702,7 @@ async def test_mp_joiner_suppresses_opening_seed(
             player_name="Joiner",
         ),
     )
-    with caplog.at_level(logging.INFO, logger="sidequest.server.session_handler"):
+    with caplog.at_level(logging.INFO, logger="sidequest.handlers.connect"):
         await handler.handle_message(msg)
 
     # The session-data we just constructed must have None for both opening
@@ -797,7 +797,7 @@ async def test_slug_connect_backfills_presence_for_existing_peers(seeded_game: P
     )
 
     # P2 connects with caplog capturing the back-fill log line.
-    with caplog.at_level(logging.INFO, logger="sidequest.server.session_handler"):
+    with caplog.at_level(logging.INFO, logger="sidequest.handlers.connect"):
         await _connect(h2, "P2", "Bob")
 
     # P2's queue must now contain a PRESENCE{P1, connected} back-fill.

@@ -79,6 +79,7 @@ from sidequest.game.creature_core import CreatureCore
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import NarrativeEntry, Npc, PartyPeer
 from sidequest.game.tension_tracker import PacingHint
+from sidequest.game.weather import WeatherState
 from sidequest.genre.models.lethality import LethalityPolicy
 from sidequest.genre.models.narrative import Prompts
 from sidequest.protocol.dice import RollOutcome
@@ -715,6 +716,18 @@ class TurnContext:
     # dataclass free of a sidequest.dungeon import (dungeon depends on game
     # models — mirrors the ``encounter: Any`` / ``snapshot`` precedent).
     region_projection: Any = None  # runtime: sidequest.dungeon.region_projection.RegionProjection | None
+
+    # Story 24-10: world-grounding state, the per-turn carrier for the three
+    # ToolContext grounding fields (24-6). Populated by ``_build_turn_context``
+    # from ``_SessionData.weather_state`` / ``world_demographics`` /
+    # ``world_calendar`` (loaded once at session bootstrap), passed straight
+    # through to the ToolContext at the SDK construction site so
+    # get_world_grounding returns real data. None for a pack/world that
+    # authored no grounding (legitimate absence — no silent fallback). Typed
+    # ``Any`` for the dicts is unnecessary; they are plain authored YAML.
+    weather_state: WeatherState | None = None
+    world_demographics: dict[str, Any] | None = None
+    world_calendar: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -3270,6 +3283,14 @@ class Orchestrator:
                     lore_store=context.lore_store,
                     # Same Phase-E seam: lookup_monster reads this.
                     monster_manual=context.monster_manual,
+                    # Story 24-10: world-grounding pass-through — the fix for
+                    # get_world_grounding returning null sections. Same seam:
+                    # loaded once at session bootstrap, carried on TurnContext,
+                    # read by the get_world_grounding tool. None when the
+                    # pack/world authored no grounding (no silent fallback).
+                    weather_state=context.weather_state,
+                    world_demographics=context.world_demographics,
+                    world_calendar=context.world_calendar,
                 )
 
                 # Positive wiring confirmation (CLAUDE.md OTEL principle —

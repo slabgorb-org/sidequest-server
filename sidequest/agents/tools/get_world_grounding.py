@@ -21,9 +21,12 @@ The session handler loads each section at session bootstrap and stamps it
 on every :class:`~sidequest.agents.tool_registry.ToolContext` it builds
 (see the three ``ToolContext`` fields: ``weather_state``,
 ``world_demographics``, ``world_calendar``). This handler is a pure
-reader — it never loads YAML or runs the generator. The story-24-7
-follow-up will add the WeatherState-proposed-vs-used spans over the
-generator side; this handler covers the tool-call surface.
+reader — it never loads YAML or runs the generator. Story 24-7 added
+two ``world_grounding.*`` state_transition spans here
+(``weather_used`` and ``demographics_injected``) and a paired
+``weather_proposed`` span at the generator seam in
+:mod:`sidequest.game.weather` — together they feed the GM dashboard's
+proposed-vs-used lie-detector view.
 
 Missing-data behavior
 ~~~~~~~~~~~~~~~~~~~~~

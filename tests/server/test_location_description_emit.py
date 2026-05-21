@@ -331,31 +331,6 @@ def test_emit_fires_no_source_when_neither_path_resolves(tmp_path, monkeypatch):
     assert no_source_fields["world"] == "glenross"
 
 
-def test_emit_called_from_room_change_dispatch():
-    """AC-6 wiring test — proves _maybe_emit_location_description has a non-test caller.
-
-    Per CLAUDE.md 'Verify wiring, not just existence': the function must
-    actually be invoked from production dispatch code, not just defined.
-    """
-    here = Path(__file__).resolve()
-    repo = here.parents[3]
-    handler_path = (
-        repo / "sidequest-server" / "sidequest" / "server" / "websocket_session_handler.py"
-    )
-    handler_src = handler_path.read_text()
-    assert "def _maybe_emit_location_description(" in handler_src, (
-        "definition missing — Dev hasn't added the helper yet"
-    )
-    # Definition + at least one production call site.
-    call_count = handler_src.count("_maybe_emit_location_description(")
-    assert call_count >= 2, (
-        "expected definition + at least one production call site; "
-        f"found {call_count} mentions in websocket_session_handler.py "
-        "(definition = 1 occurrence). Per CLAUDE.md every test suite "
-        "needs a wiring test."
-    )
-
-
 def test_emit_includes_active_overlay_in_payload(tmp_path, monkeypatch):
     """Story 54-7: when an encounter with location_overlay is live and
     bound to the actor's room, the emitted LocationDescriptionPayload

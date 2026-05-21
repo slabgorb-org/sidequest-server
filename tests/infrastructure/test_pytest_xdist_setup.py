@@ -18,6 +18,8 @@ import re
 import tomllib
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # sidequest-server/
 ORCHESTRATOR_ROOT = REPO_ROOT.parent  # oq-1/
 
@@ -106,7 +108,7 @@ def test_orchestrator_justfile_server_test_recipe_uses_parallel() -> None:
     Either way, the effective invocation must produce a parallel run.
     """
     assert JUSTFILE_PATH.exists(), f"justfile not found at {JUSTFILE_PATH}"
-    lines = JUSTFILE_PATH.read_text().splitlines()
+    lines = JUSTFILE_PATH.read_text(encoding="utf-8").splitlines()
 
     # Locate the `server-test:` recipe header.
     recipe_idx = None
@@ -155,8 +157,6 @@ def test_pf_check_server_invokes_parallel_unit_suite() -> None:
       (a) `repos.yaml` server.test_command contains `-n`, OR
       (b) pyproject's addopts contains `-n` (inherited by every pytest call).
     """
-    import yaml  # repos.yaml is YAML
-
     assert REPOS_YAML_PATH.exists(), f"repos.yaml not found at {REPOS_YAML_PATH}"
     with REPOS_YAML_PATH.open("r", encoding="utf-8") as f:
         repos = yaml.safe_load(f)

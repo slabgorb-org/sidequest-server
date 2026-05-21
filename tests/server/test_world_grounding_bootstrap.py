@@ -34,7 +34,6 @@ import dataclasses
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 import yaml
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -43,11 +42,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.game.weather import WeatherState
-from sidequest.genre.loader import load_genre_pack
-from sidequest.server.session_handler import _SessionData, _build_turn_context
 
 # Module under test — does not exist yet (RED).
 from sidequest.game.world_grounding_loader import load_world_grounding
+from sidequest.genre.loader import load_genre_pack
+from sidequest.server.session_handler import _build_turn_context, _SessionData
 
 _GROUNDING_FIELDS = {"weather_state", "world_demographics", "world_calendar"}
 

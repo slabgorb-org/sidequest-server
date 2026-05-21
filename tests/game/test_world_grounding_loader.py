@@ -26,6 +26,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from sidequest.game.weather import ClimateRulesFile
+
 # The module under test does not exist yet — this import fails in RED, which
 # is correct: every test below is pending Dev's GREEN implementation.
 from sidequest.game.world_grounding_loader import (
@@ -33,7 +35,6 @@ from sidequest.game.world_grounding_loader import (
     load_world_calendar,
     load_world_demographics,
 )
-from sidequest.game.weather import ClimateRulesFile
 
 # ---------------------------------------------------------------------------
 # Synthetic YAML payloads (valid shapes)

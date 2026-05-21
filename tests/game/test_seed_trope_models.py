@@ -13,9 +13,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from sidequest.genre.models.tropes import SeedTrope
 from sidequest.game.session import SeedGhost, SeedState
-
+from sidequest.genre.models.tropes import SeedTrope
 
 # ---------------------------------------------------------------------------
 # AC1 — SeedTrope schema

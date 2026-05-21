@@ -14,10 +14,10 @@ column.
 
 from __future__ import annotations
 
-from sidequest.genre.models.tropes import SeedTrope
 from sidequest.game.persistence import SqliteStore
 from sidequest.game.seed_deck import SeedDeck
 from sidequest.game.session import GameSnapshot, SeedGhost, SeedState
+from sidequest.genre.models.tropes import SeedTrope
 
 
 def _snapshot_with_seeds() -> GameSnapshot:

@@ -17,10 +17,8 @@ a test-design deviation.)
 
 from __future__ import annotations
 
-import pytest
-
-from sidequest.genre.models.tropes import SeedTrope
 from sidequest.game.seed_deck import SeedDeck
+from sidequest.genre.models.tropes import SeedTrope
 
 
 def _seeds(n: int) -> list[SeedTrope]:
@@ -72,16 +70,23 @@ def test_draw_is_without_replacement_no_id_repeats():
     assert set(drawn) == {f"seed-{i}" for i in range(10)}  # all seeds dealt
 
 
+def _draw_all(deck: SeedDeck) -> list[str]:
+    out: list[str] = []
+    while (s := deck.draw()) is not None:
+        out.append(s.id)
+    return out
+
+
 def test_same_session_id_produces_same_draw_order():
-    order_a = [s.id for s in iter(lambda: _make_deck(_seeds(10), "fixed-session").draw(), None)]
-    order_b = [s.id for s in iter(lambda: _make_deck(_seeds(10), "fixed-session").draw(), None)]
+    order_a = _draw_all(_make_deck(_seeds(10), "fixed-session"))
+    order_b = _draw_all(_make_deck(_seeds(10), "fixed-session"))
     assert order_a == order_b
     assert len(order_a) == 10
 
 
 def test_different_session_id_produces_different_draw_order():
-    order_a = [s.id for s in iter(lambda: _make_deck(_seeds(10), "session-alpha").draw(), None)]
-    order_b = [s.id for s in iter(lambda: _make_deck(_seeds(10), "session-beta").draw(), None)]
+    order_a = _draw_all(_make_deck(_seeds(10), "session-alpha"))
+    order_b = _draw_all(_make_deck(_seeds(10), "session-beta"))
     # With 10! orderings, collision is ~1/3.6M — a real shuffle differs.
     assert order_a != order_b
 

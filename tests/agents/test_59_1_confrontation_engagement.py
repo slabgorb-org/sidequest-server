@@ -98,37 +98,44 @@ def test_advance_confrontation_is_not_the_engagement_writer() -> None:
 
 def test_live_engagement_tool_description_carries_social_triggers() -> None:
     """AC3: The social trigger criteria must ride on the LIVE engagement tool's
-    description (recommended: apply_world_patch). SDK selection keys on the tool
-    description (ADR-111).
+    description. SDK selection keys on the tool description (ADR-111).
 
-    FAILS today: the social criteria live in CONFRONTATION_TRIGGER_CONSTRAINT,
-    which is embedded only in generate_encounter's description — a dead stub.
-    apply_world_patch's description does not mention the social types.
+    Dev deviated from the Architect's reuse-first recommendation (extend
+    apply_world_patch): the engagement writer is the dedicated
+    ``begin_confrontation`` tool instead, because apply_world_patch is a
+    deprecation-targeted escape hatch (ADR-011, target = zero spans) and
+    bolting a load-bearing engagement path onto it is the wrong home. See the
+    59-1 session-file Design Deviation. The contract is unchanged: the social
+    trigger criteria ride on whichever LIVE tool the narrator calls to START a
+    confrontation.
     """
-    d = _defs_by_name()["apply_world_patch"]
+    d = _defs_by_name()["begin_confrontation"]
     desc = d.description.lower()  # type: ignore[attr-defined]
     missing = [t for t in _SOCIAL_TYPES if t not in desc]
     assert not missing, (
-        "apply_world_patch (the recommended engagement-field writer) description "
-        f"is missing social trigger types {missing}. The narrator reads tool "
-        "descriptions to decide engagement (ADR-111); social triggers are stranded "
-        "on the generate_encounter stub instead."
+        "begin_confrontation (the engagement writer) description is missing "
+        f"social trigger types {missing}. The narrator reads tool descriptions "
+        "to decide engagement (ADR-111); the social criteria must ride on the "
+        "live start-confrontation tool, not a dead stub."
     )
 
 
 def test_generate_encounter_cannot_be_the_engagement_path() -> None:
     """AC3 (negative): generate_encounter is a stub that always returns a fatal
-    error, so engagement must NOT depend on it. Its description self-declares the
-    unwired state — assert that, proving it cannot create an encounter.
+    error, so engagement must NOT route through it. Story 59-1 relocated the
+    social trigger criteria OFF this stub onto begin_confrontation (the dead
+    stub mis-routed the SDK narrator — that was the engagement-regression root
+    cause). Assert structurally that engagement does not depend on it:
+    generate_encounter exposes no confrontation-engagement field, so it is not
+    among AC2's engagement writers.
     """
     d = _defs_by_name()["generate_encounter"]
-    desc = d.description  # type: ignore[attr-defined]
-    # The handler returns ToolResult.error("... NOT wired ...", recoverable=False).
-    # The trigger criteria are stranded here today (CONFRONTATION_TRIGGER_CONSTRAINT),
-    # but the tool can never engage. This documents the stranding.
-    assert any(t in desc.lower() for t in _SOCIAL_TYPES), (
-        "Precondition: generate_encounter currently carries the stranded social "
-        "criteria. If this fails, the criteria have moved — re-check AC3 home."
+    props = d.input_schema.get("properties", {})  # type: ignore[attr-defined]
+    assert not any(field in props for field in _ENGAGEMENT_FIELD_NAMES), (
+        "generate_encounter must NOT expose a confrontation engagement field "
+        f"({_ENGAGEMENT_FIELD_NAMES}) — it is an always-erroring stub that "
+        "cannot create an encounter. Engagement routes through "
+        f"begin_confrontation. generate_encounter props: {sorted(props)}"
     )
 
 

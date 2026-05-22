@@ -215,7 +215,10 @@ def test_player_check_rule_is_sdk_path_specific_not_legacy_only() -> None:
         # §4 confrontation forbiddance must survive — proves we did not
         # achieve "forbid player resolution" by gutting the existing
         # confrontation forbiddance and reusing its text loosely.
-        "Do NOT resolve these narratively without `advance_confrontation`",
+        # Story 59-1 corrected the named tool: STARTING a confrontation
+        # routes to begin_confrontation (advance_confrontation cannot start
+        # one). The forbiddance is unchanged; only the tool name moved.
+        "Do NOT resolve these narratively without `begin_confrontation`",
     ],
 )
 def test_existing_confrontation_forbiddance_survives(legacy_anchor: str) -> None:

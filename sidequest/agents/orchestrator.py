@@ -464,6 +464,13 @@ class TurnContext:
     # SqliteStore — kept ``Any`` to avoid a circular import (mirrors
     # ``ToolContext.store``'s "kept Any to avoid coupling" rationale).
     store: Any = None
+    # Active GenrePack — kept ``Any`` (same circular-import rationale as
+    # ``confrontation_def``/``encounter`` above). Story 59-1: the SDK
+    # ToolContext stamps this so ``begin_confrontation`` can resolve the
+    # Confrontation Def and instantiate the encounter during tool dispatch.
+    # ``None`` on legacy fixture paths that never went through
+    # ``_build_turn_context``; the tool fails loudly when it is missing.
+    pack: Any = None
     # Narrator-private LoreStore (lives on the session handler, not on the
     # save layer) — query_lore reads this. Quoted/TYPE_CHECKING import:
     # ``from __future__ import annotations`` keeps this annotation a string,
@@ -3291,6 +3298,12 @@ class Orchestrator:
                     weather_state=context.weather_state,
                     world_demographics=context.world_demographics,
                     world_calendar=context.world_calendar,
+                    # Story 59-1: the begin_confrontation tool resolves the
+                    # Confrontation Def off this pack and instantiates the
+                    # encounter during dispatch. None until _build_turn_context
+                    # stamps context.pack — begin_confrontation fails loudly
+                    # rather than silently no-opping if it is missing.
+                    genre_pack=context.pack,
                 )
 
                 # Positive wiring confirmation (CLAUDE.md OTEL principle —

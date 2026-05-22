@@ -185,11 +185,12 @@ async def test_orchestrator_routes_narration_through_sdk(
     # 1. The SDK was hit — two iterations (tool_use → end_turn).
     assert len(sdk.messages.calls) == 2
 
-    # 2. The full 28-tool catalog was sent on every iteration.
+    # 2. The full 29-tool catalog was sent on every iteration.
     sent_tools = sdk.messages.calls[0]["tools"]
     # Story 54-6 added resolve_location_entity (27th tool); ADR-109 §5.3.
     # Story 24-6 added get_world_grounding (28th tool); ADR-024 grounding.
-    assert len(sent_tools) == len(default_registry.list_names()) == 28
+    # Story 59-1 added begin_confrontation (29th tool); SDK engagement writer.
+    assert len(sent_tools) == len(default_registry.list_names()) == 29
 
     # 3. The result carries the SDK's text.
     assert result.narration == fake_response_text

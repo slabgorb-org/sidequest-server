@@ -2451,6 +2451,7 @@ def _apply_narration_result_to_snapshot(
             instantiate_encounter_from_trigger,
         )
         from sidequest.telemetry.spans import (
+            confrontation_unengaged_turn_span,
             encounter_beat_skipped_span,
             encounter_empty_actor_list_span,
             encounter_resolved_span,
@@ -2468,6 +2469,28 @@ def _apply_narration_result_to_snapshot(
             (getattr(getattr(result, "action_rewrite", None), "intent", "") or "").strip()
         )
         _classified_intent_value = _intent_text or "unspecified"
+
+        # Story 59-1 — no-emission lie-detector. The intent-mismatch path below
+        # only fires when the narrator emitted an ``action_rewrite.intent`` to
+        # tokenize. The 2026-05-21 Glenross playtest hit the OTHER blind spot:
+        # a textbook standoff in prose with NO confrontation field, NO active
+        # encounter, AND NO intent — so ``_validate_intent`` returned None and
+        # nothing engaged, silently. Emit a STRUCTURAL watcher (no engagement +
+        # no intent) so the GM panel sees the miss. NOT prose keyword-scanning
+        # (the deleted ``_CONFRONTATION_TRIGGER_PATTERNS`` regex stays dead).
+        _no_active_encounter = snapshot.encounter is None or snapshot.encounter.resolved
+        if not result.confrontation and _no_active_encounter and not _intent_text:
+            with confrontation_unengaged_turn_span(
+                player_name=player_name,
+                genre_slug=snapshot.genre_slug or "",
+            ):
+                logger.warning(
+                    "confrontation.unengaged_turn player=%s genre=%s — turn "
+                    "engaged no confrontation and emitted no intent (validator "
+                    "blind spot); GM panel should review for a winged standoff",
+                    player_name,
+                    snapshot.genre_slug or "",
+                )
 
         if _mismatch is not None:
             _effective_severity = _mismatch.severity

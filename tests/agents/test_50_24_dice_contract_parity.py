@@ -168,7 +168,9 @@ def test_dice_section_enumerates_triggers() -> None:
         "you MUST call `apply_status`",  # §1
         "CRITICAL LOCATION RULE",  # §2
         "you MUST call",  # §3/§4 generic obligation
-        "Do NOT resolve these narratively without `advance_confrontation`",  # §4
+        # Story 59-1: §4 STARTING routes to begin_confrontation (the SDK
+        # engagement writer); advance_confrontation cannot start an encounter.
+        "Do NOT resolve these narratively without `begin_confrontation`",  # §4
         "you MUST call `tick_tropes`",  # §5
     ],
 )

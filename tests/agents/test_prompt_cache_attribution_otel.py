@@ -135,6 +135,10 @@ async def _run_turn(
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
     orch = Orchestrator(client=fake)
     await orch.run_narration_turn(action, context)
+    # watcher_hub.publish_event dispatches to subscribers via
+    # run_coroutine_threadsafe on the bound loop; yield briefly so the
+    # _FakeSocket.send_json callbacks land before we read sock.events
+    # (same settle pattern as tests/agents/test_prompt_zones_dashboard.py).
     await asyncio.sleep(0.05)
 
 
@@ -248,7 +252,7 @@ async def test_cache_usage_is_explicit_na_when_sdk_usage_unavailable(
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
     orch = Orchestrator(client=_CannedClient())
     await orch.build_narrator_prompt("look around", simple_turn_context)
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)  # let the watcher fan-out settle (see _run_turn)
 
     events = [e for e in sock.events if e.get("event_type") == "prompt_assembled"]
     assert events, "no prompt_assembled event published on the build path"
@@ -322,7 +326,7 @@ async def test_stable_block_digest_stable_across_unchanging_turns(
     orch = Orchestrator(client=fake)
     await orch.run_narration_turn("turn one action", simple_turn_context)
     await orch.run_narration_turn("turn two action", simple_turn_context_turn_three)
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)  # let the watcher fan-out settle (see _run_turn)
 
     enriched = [
         e

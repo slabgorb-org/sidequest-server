@@ -186,10 +186,13 @@ def _compute_zones_payload(sections: list[PromptSection]) -> list[dict[str, Any]
 def _compute_cache_blocks(
     *, stable_text: str, valley_text: str, recency_text: str, tools_payload: str
 ) -> list[dict[str, Any]]:
-    """Per-cacheable-block content digests, computed from the ACTUAL block
-    texts the SDK path sent. ``stable`` and ``tools`` carry cache markers;
-    valley/recency ride uncached follow-on blocks (and are omitted when empty,
-    mirroring ``system_blocks`` assembly)."""
+    """Per-cacheable-block content digests for the provided block texts.
+
+    ``stable`` and ``tools`` carry cache markers; valley/recency ride uncached
+    follow-on blocks (and are omitted when empty, mirroring ``system_blocks``
+    assembly). The single-source-of-truth guarantee — that these are the SAME
+    texts the SDK client received — lives at the call site
+    (``_run_narration_turn_sdk``), which passes the assembled block strings."""
     blocks: list[dict[str, Any]] = [
         {"label": "stable", "digest": _content_digest(stable_text), "cached": True}
     ]
@@ -2371,10 +2374,13 @@ class Orchestrator:
 
         Used by both the build-time emission (above) and the SDK post-call
         emission (``_run_narration_turn_sdk``) so the GM panel sees one
-        consistent shape. Callers attach ``cache_usage`` (and, on the SDK path,
-        ``cache_blocks``) before publishing. The PascalCase zone names match the
-        dashboard's ZONE_COLORS map; ``agent`` aliases ``agent_name`` for
-        pre-fix consumers (playtest 2026-04-30 #1A).
+        consistent shape. The returned dict contains: agent_name, agent,
+        turn_number, section_count, prompt_len, system_len, user_len, bounded,
+        total_tokens, zones. ``cache_usage`` (always) and ``cache_blocks`` (SDK
+        path only) are NOT included — callers must set them before publishing.
+        The PascalCase zone names match the dashboard's ZONE_COLORS map;
+        ``agent`` aliases ``agent_name`` for pre-fix consumers (playtest
+        2026-04-30 #1A).
         """
         from sidequest.agents.prompt_framework.bucket import (
             SectionBucket,

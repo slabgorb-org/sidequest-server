@@ -484,7 +484,14 @@ def test_sdk_tool_owned_partition_is_explicit_and_documented() -> None:
     assert "status_changes" in _SDK_TOOL_OWNED_FIELDS
     assert "location" in _SDK_TOOL_OWNED_FIELDS
     assert "magic_working" in _SDK_TOOL_OWNED_FIELDS
-    assert "confrontation" in _SDK_TOOL_OWNED_FIELDS
+    # Story 59-1: ``confrontation`` (encounter START) is intentionally NOT in
+    # the zeroed partition. A tool cannot create the encounter on the SDK path
+    # (its ctx.store write is clobbered by room.save of the canonical snapshot),
+    # so begin_confrontation is a signal and _assemble_turn_result_sdk SETS
+    # result.confrontation from the tool-call ledger; narration_apply then
+    # creates the encounter on the canonical snapshot. Zeroing it would discard
+    # the signal.
+    assert "confrontation" not in _SDK_TOOL_OWNED_FIELDS
     assert "beat_selections" in _SDK_TOOL_OWNED_FIELDS
     assert "days_advanced" in _SDK_TOOL_OWNED_FIELDS
     assert "affinity_progress" in _SDK_TOOL_OWNED_FIELDS

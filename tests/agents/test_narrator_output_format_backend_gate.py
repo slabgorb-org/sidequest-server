@@ -86,7 +86,11 @@ _FIELD_TO_TOOLS: dict[str, tuple[str, ...]] = {
     "status_changes": ("apply_status", "apply_damage"),
     "location": ("apply_world_patch",),
     "magic_working": ("apply_spell_effect", "update_resource_pool"),
-    "confrontation": ("advance_confrontation", "advance_encounter_beat"),
+    # Story 59-1: ``confrontation`` (encounter START) is no longer a zeroed,
+    # tool-owned field — begin_confrontation is a signal and the assembler sets
+    # result.confrontation from the ledger; narration_apply creates the
+    # encounter on the canonical snapshot. So it is absent from both this map
+    # and _SDK_TOOL_OWNED_FIELDS (the two key-sets must stay equal).
     "beat_selections": ("advance_encounter_beat", "advance_confrontation"),
     "days_advanced": ("tick_tropes",),
     "affinity_progress": ("update_resource_pool", "update_npc_disposition"),

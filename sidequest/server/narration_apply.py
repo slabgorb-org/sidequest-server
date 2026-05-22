@@ -2475,19 +2475,35 @@ def _apply_narration_result_to_snapshot(
         # tokenize. The 2026-05-21 Glenross playtest hit the OTHER blind spot:
         # a textbook standoff in prose with NO confrontation field, NO active
         # encounter, AND NO intent — so ``_validate_intent`` returned None and
-        # nothing engaged, silently. Emit a STRUCTURAL watcher (no engagement +
-        # no intent) so the GM panel sees the miss. NOT prose keyword-scanning
-        # (the deleted ``_CONFRONTATION_TRIGGER_PATTERNS`` regex stays dead).
+        # nothing engaged, silently. Emit a STRUCTURAL watcher so the GM panel
+        # sees the miss. NOT prose keyword-scanning (the deleted
+        # ``_CONFRONTATION_TRIGGER_PATTERNS`` regex stays dead).
+        #
+        # Precision (no false-positive storm): the structural confrontation-
+        # shape signal is an OPPONENT-side actor in ``npcs_present`` — the
+        # narrator named an adversary but engaged nothing and emitted no intent.
+        # A quiet travel/dialogue/rest turn has no opponent actor and does not
+        # fire. Guarded on ``not already_reprompted`` so the reprompt-loop
+        # re-apply cannot double-emit for one player turn.
         _no_active_encounter = snapshot.encounter is None or snapshot.encounter.resolved
-        if not result.confrontation and _no_active_encounter and not _intent_text:
+        _named_opponent = any(
+            getattr(m, "side", "neutral") == "opponent" for m in result.npcs_present
+        )
+        if (
+            not result.confrontation
+            and _no_active_encounter
+            and not _intent_text
+            and _named_opponent
+            and not already_reprompted
+        ):
             with confrontation_unengaged_turn_span(
                 player_name=player_name,
                 genre_slug=snapshot.genre_slug or "",
             ):
                 logger.warning(
-                    "confrontation.unengaged_turn player=%s genre=%s — turn "
-                    "engaged no confrontation and emitted no intent (validator "
-                    "blind spot); GM panel should review for a winged standoff",
+                    "confrontation.unengaged_turn player=%s genre=%s — turn named "
+                    "an opponent but engaged no confrontation and emitted no intent "
+                    "(validator blind spot); GM panel should review for a winged standoff",
                     player_name,
                     snapshot.genre_slug or "",
                 )

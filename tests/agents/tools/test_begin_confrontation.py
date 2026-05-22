@@ -1,16 +1,18 @@
 """Tests for the begin_confrontation tool — Story 59-1.
 
-WRITE tool. The SDK engagement writer the narrator backend was missing:
-on the default ``anthropic_sdk`` path no tool could START a confrontation
-(advance_confrontation only advances an active one; generate_encounter is a
-fatal stub). begin_confrontation creates the StructuredEncounter during the
-tool-dispatch loop, reusing ``instantiate_encounter_from_trigger`` — the same
-helper the legacy narration_apply consumer calls.
+WRITE tool. The SDK engagement SIGNAL the narrator backend was missing. The
+tool does NOT create the encounter itself — an SDK tool's ctx.store write is
+clobbered at turn end by room.save() of the canonical snapshot (the tool only
+ever touches a fresh ctx.store.load() copy). Instead it validates the requested
+type + active-encounter state, emits OTEL, and returns; the orchestrator copies
+the type onto result.confrontation from the tool-call ledger and narration_apply
+creates the encounter on the CANONICAL snapshot (the round-trip is proven in
+tests/agents/test_59_1_confrontation_engagement.py and tests/server/...).
 
-Covers: registration, the AC2 engagement-field schema, the encounter-creation
-happy path, the already-active guard, fail-loud on missing pack/PC, and the
-mandatory registry-dispatch wiring test. Fixtures are synthetic — never a live
-genre_packs/* pack (project rule).
+Covers: registration, the AC2 engagement-field schema, the validate-and-signal
+happy path (no store mutation), the already-active guard, the unknown-type
+guard, fail-loud on missing pack, and the registry-dispatch wiring. Fixtures
+are synthetic — never a live genre_packs/* pack (project rule).
 """
 
 from __future__ import annotations
@@ -100,7 +102,7 @@ def _make_ctx(
     )
 
 
-async def _call(arguments: dict, ctx: ToolContext) -> ToolResult:
+async def _call(arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     registered = default_registry._tools["begin_confrontation"]
     args = registered.args_model.model_validate(arguments)
     return await registered.handler(args, ctx)
@@ -132,28 +134,32 @@ def test_begin_confrontation_exposes_engagement_field() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Happy path — creates the StructuredEncounter during dispatch
+# Validate-and-signal happy path — accepts the type WITHOUT mutating the store
 # ---------------------------------------------------------------------------
 
 
-async def test_begin_confrontation_creates_encounter() -> None:
-    """The handler instantiates a StructuredEncounter of the requested social
-    type on the loaded snapshot and persists it — the SDK engagement path."""
+async def test_begin_confrontation_signals_without_creating_encounter() -> None:
+    """The tool validates + returns ok with signalled=True, and crucially does
+    NOT create an encounter on the store (engagement is applied later by
+    narration_apply on the canonical snapshot — a store write here would be
+    clobbered by room.save). Proves the tool is a pure signal, not a writer."""
     store = _store_with(_snapshot())
     ctx = _make_ctx(store, pack=_negotiation_pack())
 
     r = await _call({"confrontation_type": "negotiation", "reason": "standoff"}, ctx)
 
     assert r.status is ToolResultStatus.OK
+    assert r.payload is not None and r.payload["signalled"] is True
+    # No encounter was written to the store by the tool.
     saved = store.load()
-    assert saved is not None
-    assert saved.snapshot.encounter is not None
-    assert saved.snapshot.encounter.encounter_type == "negotiation"
-    assert saved.snapshot.encounter.resolved is False
-
+    assert saved is not None and saved.snapshot.encounter is None, (
+        "begin_confrontation must NOT write an encounter to the store — that "
+        "write is clobbered by room.save of the canonical snapshot. Engagement "
+        "is applied by narration_apply via result.confrontation."
+    )
     recorded = _otel(ctx)
     assert recorded["tool.begin_confrontation.type"] == "negotiation"
-    assert recorded["tool.begin_confrontation.created"] is True
+    assert recorded["tool.begin_confrontation.signalled"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +181,23 @@ async def test_begin_confrontation_refuses_when_encounter_active() -> None:
 
     assert r.status is ToolResultStatus.ERROR_RECOVERABLE
     assert "already active" in (r.message or "")
-    assert _otel(ctx)["tool.begin_confrontation.created"] is False
+    assert _otel(ctx)["tool.begin_confrontation.signalled"] is False
+
+
+# ---------------------------------------------------------------------------
+# Unknown-type guard — recoverable feedback to the narrator (C5)
+# ---------------------------------------------------------------------------
+
+
+async def test_begin_confrontation_rejects_unknown_type() -> None:
+    store = _store_with(_snapshot())
+    ctx = _make_ctx(store, pack=_negotiation_pack())
+
+    r = await _call({"confrontation_type": "not_a_real_type"}, ctx)
+
+    assert r.status is ToolResultStatus.ERROR_RECOVERABLE
+    assert "not offered by this genre" in (r.message or "")
+    assert _otel(ctx)["tool.begin_confrontation.signalled"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -193,25 +215,17 @@ async def test_begin_confrontation_fails_loud_without_pack() -> None:
     assert "no genre pack" in (r.message or "")
 
 
-async def test_begin_confrontation_fails_loud_without_perspective_pc() -> None:
-    store = _store_with(_snapshot())
-    ctx = _make_ctx(store, pack=_negotiation_pack(), perspective_pc=None)
-
-    r = await _call({"confrontation_type": "negotiation"}, ctx)
-
-    assert r.status is ToolResultStatus.ERROR_FATAL
-    assert "no perspective PC" in (r.message or "")
-
-
 # ---------------------------------------------------------------------------
 # Wiring test (CLAUDE.md mandate) — reachable through the real dispatch path
 # ---------------------------------------------------------------------------
 
 
-async def test_begin_confrontation_dispatched_through_registry_engages() -> None:
-    """Drive the tool through ``default_registry.dispatch`` (the production
-    SDK tool-dispatch entry) and assert it surfaces success AND mutated state —
-    proving the engagement writer is wired, not just registered."""
+async def test_begin_confrontation_dispatched_through_registry_signals() -> None:
+    """Drive the tool through ``default_registry.dispatch`` (the production SDK
+    tool-dispatch entry) and assert it surfaces success — proving the signal is
+    wired and reachable. The encounter creation round-trip (assembler ->
+    result.confrontation -> narration_apply -> canonical) is proven in
+    test_59_1_confrontation_engagement.py."""
     store = _store_with(_snapshot())
     ctx = _make_ctx(store, pack=_negotiation_pack())
 
@@ -225,6 +239,6 @@ async def test_begin_confrontation_dispatched_through_registry_engages() -> None
     )
 
     assert out.is_error is False
+    # The tool did not mutate the store (no clobber-prone write).
     saved = store.load()
-    assert saved is not None and saved.snapshot.encounter is not None
-    assert saved.snapshot.encounter.encounter_type == "negotiation"
+    assert saved is not None and saved.snapshot.encounter is None

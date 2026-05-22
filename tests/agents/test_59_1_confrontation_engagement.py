@@ -164,8 +164,215 @@ def test_sdk_prompt_does_not_route_starting_through_advance_confrontation() -> N
     # Normalize whitespace so markdown line-wrapping doesn't hide the phrase
     # (the source wraps "BEGINS this\n   turn" across lines).
     normalized = " ".join(_SDK_PROMPT.read_text(encoding="utf-8").split())
-    assert "advance_confrontation` (when ANY structured encounter BEGINS this turn" not in normalized, (
+    assert (
+        "advance_confrontation` (when ANY structured encounter BEGINS this turn" not in normalized
+    ), (
         "output_only_sdk.md still tells the narrator to call advance_confrontation "
         "when an encounter BEGINS — but that tool cannot start one. STARTING must "
         "route to the engagement-field writer; advance_confrontation is advance-only."
     )
+
+
+# ---------------------------------------------------------------------------
+# C1 (rework) — SDK assembler wiring: a begin_confrontation tool call sets
+# result.confrontation so narration_apply (not the tool's clobbered store
+# write) creates the encounter on the canonical snapshot.
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass  # noqa: E402
+from typing import Any  # noqa: E402
+
+import pytest  # noqa: E402
+
+from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient  # noqa: E402
+from sidequest.agents.orchestrator import Orchestrator, TurnContext  # noqa: E402
+from sidequest.agents.tooling_protocol import ToolResultBlock, ToolUseBlock  # noqa: E402
+
+
+@dataclass
+class _Usage:
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+@dataclass
+class _TextBlock:
+    type: str
+    text: str
+
+
+@dataclass
+class _ToolUseSdkBlock:
+    type: str
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+@dataclass
+class _Resp:
+    content: list[Any]
+    stop_reason: str
+    usage: _Usage
+    model: str
+
+
+class _Msgs:
+    def __init__(self, responses: list[_Resp]) -> None:
+        self._responses = responses
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, **kwargs: Any) -> _Resp:
+        self.calls.append(kwargs)
+        return self._responses.pop(0)
+
+
+class _Sdk:
+    def __init__(self, responses: list[_Resp]) -> None:
+        self.messages = _Msgs(responses)
+
+
+class _FakeRegistry:
+    def compose_split(self, agent_name: str) -> tuple[str, str]:
+        return ("system text", "user text")
+
+    def compose_split_by_zone(self, agent_name: str):
+        from sidequest.agents.prompt_framework.types import AttentionZone
+
+        return ({AttentionZone.Primacy: "system text"}, "user text")
+
+
+@pytest.mark.asyncio
+async def test_sdk_begin_confrontation_call_sets_result_confrontation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the SDK narrator calls begin_confrontation with a type the genre
+    offers, the assembled NarrationTurnResult must carry that type on
+    ``confrontation`` — so narration_apply's consumer creates the encounter on
+    the CANONICAL snapshot (the tool's own ctx.store write would be clobbered
+    by room.save). This is the load-bearing C1 wiring: tool call -> ledger ->
+    result.confrontation.
+    """
+    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    sdk = _Sdk(
+        responses=[
+            _Resp(
+                content=[
+                    _ToolUseSdkBlock(
+                        type="tool_use",
+                        id="toolu_bc",
+                        name="begin_confrontation",
+                        input={"confrontation_type": "negotiation"},
+                    )
+                ],
+                stop_reason="tool_use",
+                usage=_Usage(input_tokens=200, output_tokens=12),
+                model="claude-sonnet-4-6",
+            ),
+            _Resp(
+                content=[_TextBlock(type="text", text="The terms are named.")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=210, output_tokens=20),
+                model="claude-sonnet-4-6",
+            ),
+        ]
+    )
+    orch = Orchestrator(client=AnthropicSdkClient(sdk=sdk))
+
+    # Spy dispatch so the real handler (needs a live store/pack) isn't required —
+    # the ledger still records the begin_confrontation call, which is what the
+    # assembler reads.
+    async def _spy_dispatch(block: ToolUseBlock, ctx: object) -> ToolResultBlock:
+        return ToolResultBlock(tool_use_id=block.id, content="ok", is_error=False)
+
+    from sidequest.agents.tool_registry import default_registry as _dr
+
+    monkeypatch.setattr(_dr, "dispatch", _spy_dispatch)
+
+    async def _fake_build_prompt(
+        self: Orchestrator, action: str, context: TurnContext
+    ) -> tuple[str, _FakeRegistry]:
+        return ("prompt-text", _FakeRegistry())
+
+    monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
+
+    ctx = TurnContext(
+        character_name="Neil",
+        genre="tea_and_murder",
+        turn_number=3,
+        # The assembler validates the requested type against the offered menu
+        # before routing it to result.confrontation.
+        available_confrontations=[("negotiation", "Negotiation", "social")],
+    )
+
+    result = await orch.run_narration_turn("name your client", ctx)
+
+    assert result.confrontation == "negotiation", (
+        "begin_confrontation tool call must set result.confrontation via the "
+        f"assembler ledger scan; got {result.confrontation!r}. Without this the "
+        "encounter never reaches narration_apply / the canonical snapshot."
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_unknown_begin_confrontation_type_is_not_routed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A begin_confrontation call with a type the genre does NOT offer must not
+    set result.confrontation — otherwise narration_apply would raise on the
+    unknown type. The assembler validates against the offered menu."""
+    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    sdk = _Sdk(
+        responses=[
+            _Resp(
+                content=[
+                    _ToolUseSdkBlock(
+                        type="tool_use",
+                        id="toolu_bad",
+                        name="begin_confrontation",
+                        input={"confrontation_type": "not_a_real_type"},
+                    )
+                ],
+                stop_reason="tool_use",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            ),
+            _Resp(
+                content=[_TextBlock(type="text", text="...")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            ),
+        ]
+    )
+    orch = Orchestrator(client=AnthropicSdkClient(sdk=sdk))
+
+    async def _spy_dispatch(block: ToolUseBlock, ctx: object) -> ToolResultBlock:
+        return ToolResultBlock(tool_use_id=block.id, content="err", is_error=True)
+
+    from sidequest.agents.tool_registry import default_registry as _dr
+
+    monkeypatch.setattr(_dr, "dispatch", _spy_dispatch)
+
+    async def _fake_build_prompt(
+        self: Orchestrator, action: str, context: TurnContext
+    ) -> tuple[str, _FakeRegistry]:
+        return ("prompt-text", _FakeRegistry())
+
+    monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
+
+    ctx = TurnContext(
+        character_name="Neil",
+        genre="tea_and_murder",
+        turn_number=3,
+        available_confrontations=[("negotiation", "Negotiation", "social")],
+    )
+
+    result = await orch.run_narration_turn("do a thing", ctx)
+    assert result.confrontation is None

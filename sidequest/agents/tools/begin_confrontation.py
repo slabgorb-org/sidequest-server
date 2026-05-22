@@ -1,13 +1,13 @@
 """Tool: begin_confrontation — START a structured confrontation (Story 59-1).
 
-The engagement writer the SDK narrator backend was missing
------------------------------------------------------------
+The SDK engagement SIGNAL the narrator backend was missing
+----------------------------------------------------------
 Engagement = creating a :class:`~sidequest.game.encounter.StructuredEncounter`
 from a Confrontation Def when the prose introduces a stake-binding engagement
 (physical, social, or reputational). On the legacy ``claude -p`` backend the
 narrator populated the ``confrontation`` sidecar field and the server consumed
 it in ``narration_apply`` to instantiate the encounter. The default
-``anthropic_sdk`` backend (ADR-101/102) had NO tool that could do this:
+``anthropic_sdk`` backend (ADR-101/102) had NO path that could do this:
 
 * ``advance_confrontation`` only ADVANCES an already-active dial and "fails
   fatally if no encounter is active" — it cannot START one.
@@ -17,28 +17,34 @@ it in ``narration_apply`` to instantiate the encounter. The default
   engagement path.
 
 So a tea_and_murder social standoff produced convincing prose with
-``confrontation=None`` every turn (2026-05-21 Glenross playtest). This tool
-closes that gap: the narrator calls ``begin_confrontation`` on the turn the
-trigger appears in fiction, and the handler creates the encounter during the
-SDK tool-dispatch loop (mutate + ``ctx.store.save``), the same single-authority
-pattern every other SDK WRITE tool follows. ``narration_apply`` then sees an
-active encounter and does not double-create.
+``confrontation=None`` every turn (2026-05-21 Glenross playtest).
 
-It reuses ``instantiate_encounter_from_trigger`` — the same helper the legacy
-consumer calls — so encounter creation has ONE mechanism across both backends.
+Why this tool does NOT create the encounter itself
+--------------------------------------------------
+An SDK tool cannot create the encounter on the live snapshot: ``ctx.store.load()``
+returns a FRESH deserialized snapshot, and the tool's ``ctx.store.save`` is
+clobbered at turn end by ``room.save()``, which persists the room's CANONICAL
+in-memory snapshot — the object the tool never touched (verified: persistence.py
+``load`` deserializes fresh; session_room.py ``save`` writes the canonical;
+nothing reloads it after the dispatch loop). So this tool is the narrator-facing
+SIGNAL + validator: it validates the requested type against the genre and the
+active-encounter state, emits OTEL, and returns. ``_assemble_turn_result_sdk``
+copies the requested type onto ``result.confrontation`` from the tool-call
+ledger, and ``narration_apply``'s consumer creates the encounter on the
+CANONICAL snapshot IN PLACE — the SAME single mechanism the legacy backend uses.
+Actors come from the narrator's sidecar ``npcs_present`` (presentation field on
+both backends), exactly as on the legacy path.
 
 OTEL attributes
 ~~~~~~~~~~~~~~~
 * ``tool.begin_confrontation.type`` — requested confrontation type.
-* ``tool.begin_confrontation.player`` — perspective PC the encounter seats.
-* ``tool.begin_confrontation.created`` — bool; True iff a new encounter was
-  written this call. False when an encounter was already active (the narrator
-  should ``advance_confrontation`` instead).
+* ``tool.begin_confrontation.reason`` — narrator audit note (may be empty).
+* ``tool.begin_confrontation.signalled`` — bool; True iff a valid, startable
+  type was accepted (engagement is then applied by narration_apply). False on a
+  rejected call (already-active encounter, unknown type, or wiring fault).
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -75,12 +81,13 @@ class BeginConfrontationArgs(BaseModel):
     name="begin_confrontation",
     description=(
         "START a structured confrontation when your prose this turn introduces "
-        "a stake-binding engagement. Creates the encounter from the genre's "
-        "Confrontation Def; use advance_confrontation / advance_encounter_beat "
-        "for subsequent rounds once it is active. Fails (recoverable) if an "
-        "encounter is already active.\n\n"
+        "a stake-binding engagement. The encounter is created from the genre's "
+        "Confrontation Def using the npcs_present you emit this turn; use "
+        "advance_confrontation / advance_encounter_beat for subsequent rounds "
+        "once it is active. Fails (recoverable) if an encounter is already "
+        "active or the type is not offered by this genre.\n\n"
         # Story 59-1: the confrontation_trigger guardrail lives on THIS tool's
-        # description — the live engagement writer the SDK narrator reads when
+        # description — the live engagement signal the SDK narrator reads when
         # weighing the call (ADR-111: SDK selection keys on tool descriptions).
         # Relocated off the always-erroring generate_encounter stub. Single
         # source of truth: narrator_guardrails.CONFRONTATION_TRIGGER_CONSTRAINT.
@@ -99,10 +106,11 @@ async def begin_confrontation(args: BeginConfrontationArgs, ctx: ToolContext) ->
     ctx.otel_span.set_attribute("tool.begin_confrontation.reason", args.reason)
 
     # An active, unresolved encounter already owns the turn — advancing it is
-    # advance_confrontation's job, not ours. Recoverable so the narrator can
-    # re-cast on the next tool call (No Silent Fallbacks: say why, loudly).
+    # advance_confrontation's job. Recoverable so the narrator can re-cast (No
+    # Silent Fallbacks: say why, loudly). narration_apply's consumer guards on
+    # the same condition, so this is also narrator-feedback, not the authority.
     if snapshot.encounter is not None and not snapshot.encounter.resolved:
-        ctx.otel_span.set_attribute("tool.begin_confrontation.created", False)
+        ctx.otel_span.set_attribute("tool.begin_confrontation.signalled", False)
         return ToolResult.error(
             "an encounter is already active — use advance_confrontation to "
             "advance its dial or advance_encounter_beat for beat selections; "
@@ -115,75 +123,39 @@ async def begin_confrontation(args: BeginConfrontationArgs, ctx: ToolContext) ->
         # The pack is wired onto ToolContext at the SDK dispatch site
         # (orchestrator). Its absence is a wiring fault, not a recoverable
         # narrator choice — fail loudly (CLAUDE.md: no silent fallback).
-        ctx.otel_span.set_attribute("tool.begin_confrontation.created", False)
+        ctx.otel_span.set_attribute("tool.begin_confrontation.signalled", False)
         return ToolResult.error(
-            "begin_confrontation: no genre pack on ToolContext — cannot resolve "
-            "the Confrontation Def. This is a server wiring fault.",
+            "begin_confrontation: no genre pack on ToolContext — cannot validate "
+            "the confrontation type. This is a server wiring fault.",
             recoverable=False,
         )
 
-    player_name = ctx.perspective_pc
-    if not player_name:
-        ctx.otel_span.set_attribute("tool.begin_confrontation.created", False)
+    # Validate the type against the genre so a narrator typo gets immediate,
+    # recoverable feedback rather than silently failing to engage. The
+    # assembler re-checks against the offered types before routing the value
+    # to narration_apply, so an unknown type can never reach the consumer.
+    from sidequest.server.dispatch.confrontation import find_confrontation_def
+
+    defs = pack.rules.confrontations if pack.rules else []
+    if find_confrontation_def(defs, args.confrontation_type) is None:
+        ctx.otel_span.set_attribute("tool.begin_confrontation.signalled", False)
+        offered = sorted(
+            (getattr(d, "confrontation_type", None) or getattr(d, "type", "")) for d in defs
+        )
         return ToolResult.error(
-            "begin_confrontation: no perspective PC on ToolContext — cannot seat "
-            "the player actor. This is a server wiring fault.",
-            recoverable=False,
+            f"confrontation type {args.confrontation_type!r} is not offered by this "
+            f"genre. Offered types: {offered!r}. Pick the most specific applicable type.",
+            recoverable=True,
         )
 
-    ctx.otel_span.set_attribute("tool.begin_confrontation.player", player_name)
-
-    # Bundled-MP turns: seat every other seated PC alongside the submitter,
-    # mirroring the narration_apply consumer (playtest 2026-05-03 widget fix).
-    additional_pc_names = [
-        name for name in snapshot.player_seats.values() if name and name != player_name
-    ]
-
-    from sidequest.server.dispatch.encounter_lifecycle import (
-        NoOpponentAvailableError,
-        instantiate_encounter_from_trigger,
+    # Accepted. Engagement is applied by narration_apply from result.confrontation
+    # (set in _assemble_turn_result_sdk from this tool call); the encounter lands
+    # on the canonical snapshot, clobber-free.
+    ctx.otel_span.set_attribute("tool.begin_confrontation.signalled", True)
+    return ToolResult.ok(
+        {
+            "confrontation_type": args.confrontation_type,
+            "signalled": True,
+            "reason": args.reason,
+        }
     )
-
-    try:
-        # npcs_present=[] lets the lifecycle fall back to registry NPCs at the
-        # player's location (the narrator hasn't run npc extraction yet at
-        # tool-dispatch time). Unknown-type / bad-side ValueErrors PROPAGATE —
-        # those are config/extraction faults the suite asserts crash the turn.
-        encounter = instantiate_encounter_from_trigger(
-            snapshot=snapshot,
-            pack=pack,
-            encounter_type=args.confrontation_type,
-            player_name=player_name,
-            npcs_present=[],
-            genre_slug=snapshot.genre_slug,
-            additional_player_names=additional_pc_names,
-        )
-    except NoOpponentAvailableError as exc:
-        # Story 45-33 guard: a combat encounter with zero resolvable opponents.
-        # The lifecycle already emitted its OTEL span; surface a recoverable
-        # error so the turn stays resilient and the narrator can re-cast.
-        ctx.otel_span.set_attribute("tool.begin_confrontation.created", False)
-        return ToolResult.error(
-            f"begin_confrontation: no opponent available for {args.confrontation_type!r}: {exc}",
-            recoverable=True,
-        )
-
-    if encounter is None:
-        # instantiate returns None only when an active encounter already
-        # exists — guarded above, so this is defensive against a race.
-        ctx.otel_span.set_attribute("tool.begin_confrontation.created", False)
-        return ToolResult.error(
-            "begin_confrontation: an encounter already exists; not replaced.",
-            recoverable=True,
-        )
-
-    ctx.store.save(snapshot)
-    ctx.otel_span.set_attribute("tool.begin_confrontation.created", True)
-
-    result: dict[str, Any] = {
-        "confrontation_type": args.confrontation_type,
-        "player_name": player_name,
-        "created": True,
-        "reason": args.reason,
-    }
-    return ToolResult.ok(result)

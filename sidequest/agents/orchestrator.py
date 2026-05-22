@@ -959,9 +959,17 @@ _SDK_TOOL_OWNED_FIELDS: dict[str, str] = {
     # magic_effects (apply_spell_effect) + patches_resource_pool
     # (update_resource_pool) — narration_apply.apply_magic_working.
     "magic_working": "magic_effects / patches_resource_pool",
-    # confrontation_advances (advance_confrontation) +
-    # encounter_advances (advance_encounter_beat) — encounter trigger.
-    "confrontation": "confrontation_advances / encounter_advances",
+    # NOTE: ``confrontation`` (encounter START) is intentionally NOT owned
+    # here. Story 59-1: a tool CANNOT create the encounter on the SDK path —
+    # ``ctx.store.load()`` returns a fresh deserialized snapshot, and the
+    # tool's ``ctx.store.save`` is clobbered at turn end by ``room.save()``,
+    # which persists the room's CANONICAL in-memory snapshot (the tool never
+    # touched it). So engagement is routed through ``result.confrontation``
+    # (set in ``_assemble_turn_result_sdk`` from the begin_confrontation tool
+    # call) and applied by ``narration_apply``'s consumer, which mutates the
+    # canonical snapshot IN PLACE — the single creation mechanism on BOTH
+    # backends. ``begin_confrontation`` is the narrator-facing signal +
+    # validator, not the state writer.
     # encounter_advances (advance_encounter_beat) +
     # confrontation_advances (advance_confrontation) — beat apply loop.
     "beat_selections": "encounter_advances / confrontation_advances",
@@ -1915,13 +1923,15 @@ class Orchestrator:
         # in the System zone where attention has decayed by turn 20.
         # Same disease as ``npc_intro_visual_constraint`` above; same cure:
         # restate the rule per-turn in Recency-zone Guardrail attention.
-        # The lie-detector in narration_apply._scan_for_confrontation_trigger_
-        # keywords stays loud if the narrator skips again — together they
-        # close the gap without taking the architectural step of server-side
-        # auto-firing (which would be a silent fallback).
+        # The lie-detector is now the ``confrontation.unengaged_turn`` OTEL
+        # span (Story 59-1, narration_apply) — it fires when the narrator names
+        # an opponent but engages nothing and emits no intent; together they
+        # close the gap without server-side auto-firing (a silent fallback).
+        # (The legacy keyword scanner ``_scan_for_confrontation_trigger_keywords``
+        # was deleted in the Epic-50 declared-intent migration.)
         #
         # ADR-111 (story 57-4): backend-gated. On the SDK tool-use path the
-        # migration target is the ``generate_encounter`` tool description,
+        # migration target is the ``begin_confrontation`` tool description,
         # cached as part of the tools=array root. On the legacy ``claude -p``
         # path the Recency-zone registration stays.
 
@@ -3083,9 +3093,29 @@ class Orchestrator:
             token_count_out=result.output_tokens,
         )
 
+        # Story 59-1: confrontation ENGAGEMENT signal. begin_confrontation
+        # cannot create the encounter itself (its ctx.store write is clobbered
+        # by room.save of the canonical snapshot — see _SDK_TOOL_OWNED_FIELDS
+        # note). Route the requested type onto result.confrontation here so
+        # narration_apply's consumer creates the encounter on the CANONICAL
+        # snapshot, in place, the same single mechanism the legacy backend
+        # uses. Validate against the genre's offered types so a narrator typo
+        # cannot reach narration_apply (which raises on an unknown type); an
+        # invalid type means the tool already returned a recoverable error.
+        _valid_confrontations = {t for (t, _label, _cat) in context.available_confrontations}
+        for _tc in result.tool_calls:
+            if _tc.name != "begin_confrontation":
+                continue
+            _ctype = (_tc.arguments or {}).get("confrontation_type")
+            if isinstance(_ctype, str) and _ctype in _valid_confrontations:
+                shared["confrontation"] = _ctype
+                break
+
         # No key in _SDK_TOOL_OWNED_FIELDS is added — the shared helper
         # cannot emit one (structural guarantee). The tools own + persisted
-        # those categories during dispatch; only the ledger is SDK-specific.
+        # those categories during dispatch; the ledger is SDK-specific, and
+        # ``confrontation`` (no longer owned) is set above when the narrator
+        # called begin_confrontation.
         assembled = NarrationTurnResult(**shared, tool_calls=tool_calls_ledger)
 
         # Fail-loud backstop (CLAUDE.md no silent fallbacks): the tool-owned

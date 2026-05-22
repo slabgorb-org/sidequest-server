@@ -12,6 +12,7 @@ AC5 (no-emission watcher) and AC6 (end-to-end) drive the corrected behavior.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from unittest.mock import MagicMock
 
 import pytest
@@ -77,7 +78,7 @@ def _snapshot() -> GameSnapshot:
 
 
 @pytest.fixture
-def otel_capture():
+def otel_capture() -> Generator[InMemorySpanExporter, None, None]:
     from sidequest.telemetry.setup import init_tracer
 
     init_tracer()
@@ -204,14 +205,19 @@ def test_unengaged_confrontation_turn_emits_watcher_span(otel_capture) -> None:
     snap = _snapshot()
     pack = _negotiation_pack()
     snap.character_locations["Neil"] = "The Bridge"
-    # Confrontation-shaped prose, but the narrator emitted NO confrontation field,
-    # NO beats, and NO structured intent — the exact silent-miss case.
+    # Confrontation-shaped: the narrator NAMED AN OPPONENT (the structural
+    # confrontation-shape signal) but emitted NO confrontation field, NO beats,
+    # and NO structured intent — the exact silent-miss case.
     result = NarrationTurnResult(
         narration=(
             "Neil blocks the young man's path and calls the bluff; the solicitor "
             "makes no move to go around him, but answers nothing further."
         ),
         confrontation=None,
+        npcs_present=[
+            NpcMention(name="Neil", role="investigator", side="player"),
+            NpcMention(name="Solicitor Ewan Forbes", role="opposition", side="opponent"),
+        ],
     )
     _apply_narration_result_to_snapshot(
         snapshot=snap,
@@ -223,7 +229,68 @@ def test_unengaged_confrontation_turn_emits_watcher_span(otel_capture) -> None:
     names = [s.name for s in otel_capture.get_finished_spans()]
     assert _UNENGAGED_SPAN in names, (
         f"Expected a non-keyword watcher span {_UNENGAGED_SPAN!r} on a "
-        f"confrontation-shaped, unengaged, no-intent turn. Finished spans: {names!r}"
+        f"confrontation-shaped (opponent named), unengaged, no-intent turn. "
+        f"Finished spans: {names!r}"
+    )
+
+
+def test_quiet_turn_does_not_emit_unengaged_watcher_span(otel_capture) -> None:
+    """AC5 (precision, no false-positive storm): a plain narrative turn with no
+    opponent actor, no confrontation, and no intent must NOT fire the watcher.
+    The structural confrontation-shape signal is an opponent-side NPC; an
+    ordinary travel/dialogue/rest turn has none. Guards against the watcher
+    firing on every quiet turn."""
+    snap = _snapshot()
+    pack = _negotiation_pack()
+    snap.character_locations["Neil"] = "The Bridge"
+    result = NarrationTurnResult(
+        narration="Neil thanks the publican and steps back into the rain.",
+        confrontation=None,
+        npcs_present=[
+            NpcMention(name="The Publican", role="bystander", side="neutral"),
+        ],
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        player_name="Neil",
+        room=room_for(snapshot=snap),
+    )
+    names = [s.name for s in otel_capture.get_finished_spans()]
+    assert _UNENGAGED_SPAN not in names, (
+        f"{_UNENGAGED_SPAN!r} fired on a quiet, opponent-free turn (false-positive "
+        f"storm). Finished spans: {names!r}"
+    )
+
+
+def test_reprompt_reapply_does_not_double_emit_unengaged_span(otel_capture) -> None:
+    """AC5 (C2): the reprompt-loop second apply (already_reprompted=True) must
+    NOT re-emit the watcher for the same logical player turn — even on a
+    confrontation-shaped, unengaged, no-intent result."""
+    snap = _snapshot()
+    pack = _negotiation_pack()
+    snap.character_locations["Neil"] = "The Bridge"
+    result = NarrationTurnResult(
+        narration="Neil blocks the path again; the solicitor still says nothing.",
+        confrontation=None,
+        npcs_present=[
+            NpcMention(name="Neil", role="investigator", side="player"),
+            NpcMention(name="Solicitor Ewan Forbes", role="opposition", side="opponent"),
+        ],
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        player_name="Neil",
+        room=room_for(snapshot=snap),
+        already_reprompted=True,
+    )
+    names = [s.name for s in otel_capture.get_finished_spans()]
+    assert _UNENGAGED_SPAN not in names, (
+        f"{_UNENGAGED_SPAN!r} fired on a reprompt re-apply (double-emit for one "
+        f"turn). Finished spans: {names!r}"
     )
 
 
@@ -254,3 +321,57 @@ def test_engaged_turn_does_not_emit_unengaged_watcher_span(otel_capture) -> None
         f"{_UNENGAGED_SPAN!r} fired on a properly-engaged turn (false positive). "
         f"Finished spans: {names!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# C1 (rework) — clobber-free round-trip: narration_apply creates the encounter
+# on the CANONICAL snapshot, and persisting that canonical (what room.save does)
+# keeps it. This is the path begin_confrontation routes engagement through,
+# instead of a tool ctx.store write that room.save would clobber.
+# ---------------------------------------------------------------------------
+
+
+def test_confrontation_engagement_survives_canonical_persist() -> None:
+    """Setting result.confrontation drives narration_apply to create the
+    encounter on the in-place canonical snapshot; saving THAT canonical (the
+    object room.save persists) keeps the encounter. Proves engagement is not
+    clobbered — the failure mode that a tool-only ctx.store write would hit."""
+    from sidequest.game.persistence import SqliteStore
+
+    canonical = _snapshot()
+    canonical.character_locations["Neil"] = "The Bridge"
+    pack = _negotiation_pack()
+
+    store = SqliteStore.open_in_memory()
+    store.initialize()
+    store.init_session(genre_slug=canonical.genre_slug, world_slug=canonical.world_slug)
+    store.save(canonical)  # disk == canonical at turn start
+
+    result = NarrationTurnResult(
+        narration="'Name your client, Mr Forbes.'",
+        confrontation="negotiation",
+        npcs_present=[
+            NpcMention(name="Neil", role="investigator", side="player"),
+            NpcMention(name="Solicitor Ewan Forbes", role="opposition", side="opponent"),
+        ],
+    )
+    # narration_apply mutates the CANONICAL snapshot in place (this is what the
+    # session handler passes; room.save persists this same object).
+    _apply_narration_result_to_snapshot(
+        snapshot=canonical,
+        result=result,
+        pack=pack,
+        player_name="Neil",
+        room=room_for(snapshot=canonical),
+    )
+    assert canonical.encounter is not None
+    assert canonical.encounter.encounter_type == "negotiation"
+
+    # End-of-turn persistence (room.save -> store.save(canonical)) keeps it.
+    store.save(canonical)
+    reloaded = store.load()
+    assert reloaded is not None and reloaded.snapshot.encounter is not None, (
+        "the engaged encounter must survive persisting the canonical snapshot; "
+        "if None, the engagement was clobbered (the tool-store-write failure mode)."
+    )
+    assert reloaded.snapshot.encounter.encounter_type == "negotiation"

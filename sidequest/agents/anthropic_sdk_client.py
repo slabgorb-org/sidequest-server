@@ -63,8 +63,19 @@ class AnthropicSdkClient:
 
         # Operative default is 1h: submit-and-wait MP cadence routinely
         # exceeds the 5m window, so a 5m write is re-paid almost every
-        # turn. A 1h write is 2x base but amortizes across an ~85-turn
-        # session. Operators can still opt back to 5m via the env var.
+        # turn. A 1h write is 2x base and is INTENDED to amortize across
+        # an ~85-turn session. Operators can still opt back to 5m via the
+        # env var.
+        #
+        # KNOWN ISSUE (Story 60-3, measured 2026-05-22): the 1h amortization
+        # does NOT currently materialize. The narrator runs a tool-use loop;
+        # the first call caches the prefix at 1h, but every continuation call
+        # (carrying tool_use/tool_result) re-mints the whole ~11.7k cached
+        # prefix at the default 5m — because the growing tool-use conversation
+        # has no cache_control breakpoint (markers sit only on system_blocks[0]
+        # + the tools array, which precede the messages). 60-4 fixes this by
+        # adding a moving 1h breakpoint on the last continuation message. See
+        # the Story 60-3 Dev Diagnosis in sprint/archive/60-3-session.md.
         resolved_ttl = (
             cache_ttl
             if cache_ttl is not None
@@ -289,12 +300,16 @@ class AnthropicSdkClient:
             for t in tools
         ]
         # The tools array is byte-stable across every turn — 27 definitions,
-        # ~7.6K tokens, no per-turn drift. Without an explicit cache_control
-        # marker, Anthropic auto-caches it at default 5m TTL and re-writes
-        # the whole block every time the 5m timer expires (which the
-        # submit-and-wait MP cadence routinely outlives). A marker on the
-        # last entry caches the whole tools array at the configured TTL
-        # (1h by default). See ADR-101 four-region cache layout amendment.
+        # ~7.6K tokens, no per-turn drift. A marker on the last entry requests
+        # caching of the whole tools array at the configured TTL (1h by
+        # default). See ADR-101 four-region cache layout amendment.
+        #
+        # NOTE (Story 60-3): this marker alone does NOT secure the 1h rebate
+        # in practice. On tool-use continuation calls the API re-mints the
+        # tools+system prefix at 5m regardless of this marker, because the
+        # appended tool_use/tool_result messages are not covered by any
+        # breakpoint. The fix lives at the continuation-append site in
+        # complete_with_tools (60-4), not here.
         if out:
             out[-1]["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
         return out

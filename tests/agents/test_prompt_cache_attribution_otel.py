@@ -1,14 +1,26 @@
 """RED tests for Story 60-2 — per-system-block cache attribution on the
 ``prompt_assembled`` watcher event (the GM-panel Prompt-tab "eyes").
 
-Epic 60 root cause (2026-05-22): the wasted ``cache_write`` is
-``system_blocks[0]`` (Primacy+Early, ``cache=True``) being re-written every
-turn because three ``state``-category sections
+Epic 60 ORIGINAL hypothesis (2026-05-22): the wasted ``cache_write`` was
+believed to be ``system_blocks[0]`` (Primacy+Early, ``cache=True``) being
+re-written every turn because three ``state``-category sections
 (``narrator_available_confrontations``, ``trope_beat_directives``,
-``npc_roster``) are mis-zoned into the cached Early zone. The bug hid for
-weeks because today's Prompt-tab Zone Breakdown is built from a separate
-char/4 estimate path, decoupled from the real ``system_blocks`` and the real
-API ``cache_read/cache_write``. So the lie-detector itself was lying.
+``npc_roster``) were mis-zoned into the cached Early zone.
+
+CORRECTION (Story 60-3, measured later the same day): that hypothesis is
+WRONG. Those three sections are User-bucket → ride the *uncached* user
+message → never touch ``system_blocks[0]``. The cached prefix is byte-stable
+(no drift). The real cause is the tool-use loop: continuation calls re-mint
+the prefix at 5m because the growing conversation has no cache breakpoint
+(60-4 fixes). These eyes (built here in 60-2) are still correct and were what
+*enabled* 60-3 to disprove the hypothesis — but note the ``mis_zoned`` flag
+below is zone-only/bucket-blind and false-positives on those User-bucket
+sections; trust the per-section ``cached`` field. See 60-3 session.
+
+The original Prompt-tab Zone Breakdown hid the cost because it was built from
+a separate char/4 estimate path, decoupled from the real ``system_blocks`` and
+the real API ``cache_read/cache_write``. So the lie-detector itself was lying;
+60-2 (these tests) rebuilt it from the actual blocks.
 
 These tests build the eyes. They assert that the ``prompt_assembled`` event,
 emitted on a *real* narration turn, carries:
@@ -22,7 +34,9 @@ emitted on a *real* narration turn, carries:
 * AC-3 — a per-cacheable-block content digest (``sha256[:8]``) so the UI can
   show drift vs the previous turn.
 * AC-4 — a ``mis_zoned`` flag on any ``state``-category section that landed
-  in a cached zone — the specific lie-detector for the block-0 churn bug.
+  in a cached *zone*. (Per 60-3: this flag is zone-only/bucket-blind — it
+  does NOT prove the section rides the cached block; it false-positives on
+  User-bucket state sections. It was NOT the real block-0 cost driver.)
 * AC-5 — ACCURACY: the emitted partition + digests match the ACTUAL
   ``system_blocks`` the SDK client received on the same turn. The display
   cannot claim "stable" while the real prompt drifted.
@@ -352,10 +366,16 @@ async def test_stable_block_digest_stable_across_unchanging_turns(
 async def test_state_section_in_cached_zone_is_flagged_miszoned(
     bound_hub: WatcherHub, simple_turn_context: TurnContext
 ) -> None:
-    """A ``state``-category section that lands in a cached zone (Early) is the
-    block-0 churn bug signature and MUST be flagged ``mis_zoned: true``. Drives
-    the real registration of ``narrator_available_confrontations`` (Early /
-    State) by setting ``available_confrontations`` on a peace context."""
+    """A ``state``-category section that lands in a cached *zone* (Early) MUST
+    be flagged ``mis_zoned: true``. Drives the real registration of
+    ``narrator_available_confrontations`` (Early / State) by setting
+    ``available_confrontations`` on a peace context.
+
+    NOTE (60-3): ``mis_zoned`` is a zone-only heuristic — this section is
+    User-bucket, so it does NOT actually ride ``system_blocks[0]`` and was NOT
+    the block-0 cost driver. The flag is retained as a zoning smell, but the
+    per-section ``cached`` field is the authoritative "rides the cached block"
+    signal. See sprint/archive/60-3-session.md."""
     ctx = replace(
         simple_turn_context,
         available_confrontations=[("negotiation", "Parley with the Sheriff", "social")],

@@ -14,6 +14,15 @@ Two guarantees the 1h ephemeral-cache restore depends on:
    ``narration.turn.cache_ttl`` so the GM panel can compute write
    amortization (paired with the already-emitted
    ``narration.turn.cache_write_tokens``) and prove the fix engaged.
+
+NOTE (Story 60-3, 2026-05-22): byte-stability (gate #1) is NECESSARY but
+NOT SUFFICIENT for the 1h rebate to materialize. The prefix is confirmed
+byte-identical, yet the narrator's tool-use loop still re-mints it at 5m on
+every continuation call (the appended tool_use/tool_result messages carry no
+cache breakpoint), so the "amortization" in #2 does not yet hold in practice.
+60-4 adds a moving 1h breakpoint on the continuation. These tests remain valid
+as the stability + wiring gate; they do NOT prove the rebate is realized. See
+sprint/archive/60-3-session.md.
 """
 
 from __future__ import annotations

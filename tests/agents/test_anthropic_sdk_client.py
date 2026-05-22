@@ -51,8 +51,13 @@ def test_implements_tooling_protocol(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_default_cache_ttl_is_1_hour(monkeypatch: pytest.MonkeyPatch) -> None:
     """Submit-and-wait MP cadence exceeds the 5m window; the operative
-    default is 1h so the ~30k stable system prefix amortizes across an
-    ~85-turn session instead of being re-written almost every turn."""
+    default is 1h, INTENDED to let the stable system prefix amortize across
+    an ~85-turn session instead of being re-written almost every turn.
+
+    NOTE (Story 60-3): the 1h default is correct, but amortization does not
+    yet materialize — the tool-use loop continuation re-mints the prefix at
+    5m every turn (no cache breakpoint on the growing conversation). 60-4
+    fixes that; this test only asserts the default value, not the rebate."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-1")
     monkeypatch.delenv("SIDEQUEST_ANTHROPIC_CACHE_TTL", raising=False)
     client = AnthropicSdkClient()

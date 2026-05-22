@@ -142,9 +142,18 @@ def _compute_zones_payload(sections: list[PromptSection]) -> list[dict[str, Any]
 
     Each zone carries ``cached`` (does this zone feed the cached block region)
     and each section carries ``cached`` (does THIS section actually ride
-    ``system_blocks[0]`` — bucket-aware) plus ``mis_zoned`` (a volatile
-    ``state``-category section sitting in a cached zone — the block-0 churn
-    smell that Story 60-4 will fix by re-zoning).
+    ``system_blocks[0]`` — bucket-aware) plus ``mis_zoned`` (a ``state``-category
+    section sitting in a cached *zone*).
+
+    WARNING (Story 60-3): ``mis_zoned`` is **zone-only / bucket-blind** — it
+    is ``zone_cached AND category=="state"`` and does NOT check the section's
+    bucket. ``state`` sections are User-bucket, so they ride the *uncached*
+    user message, NOT ``system_blocks[0]``. A ``mis_zoned=True, cached=False``
+    row is therefore a FALSE ALARM for cache churn — trust the per-section
+    ``cached`` field, not ``mis_zoned``. This false positive misled Epic 60's
+    original "three mis-zoned state sections churn block 0" hypothesis;
+    60-3 disproved it (the real cost is the tool-loop continuation re-minting
+    the prefix at 5m — see sprint/archive/60-3-session.md).
     """
     zone_buckets: dict[str, list[PromptSection]] = {}
     for s in sections:
@@ -1534,7 +1543,10 @@ class Orchestrator:
             # Extraction — every tier. ADR-112 / Story 57-3 re-zoned from
             # Valley → Early so the content lands in ``system_blocks[0]``
             # (the cache-marked block) rather than the uncached Valley
-            # follow-on block, realising the cache rebate ADR-112 promises.
+            # follow-on block, intended to realise the cache rebate ADR-112
+            # promises. (NOTE per Story 60-3: that rebate is not yet realized
+            # in practice — the tool-use loop continuation re-mints the prefix
+            # at 5m; 60-4 fixes it. This zoning is still correct and required.)
             if gp.extraction:
                 registry.register_section(
                     agent_name,
@@ -3346,6 +3358,14 @@ class Orchestrator:
             # tests/agents/test_cache_ttl_prefix_and_otel.py protects
             # system_blocks[0] across turns; the uncached blocks are free
             # to mutate.
+            #
+            # NOTE (Story 60-3): block-0 byte-stability is necessary but NOT
+            # sufficient for the cache rebate. The stable prefix is confirmed
+            # byte-identical across turns, yet the narrator's tool-use loop
+            # still re-mints it at 5m on every continuation call (the appended
+            # tool_use/tool_result messages carry no cache breakpoint). The
+            # rebate is realized only once 60-4 adds a moving 1h breakpoint on
+            # the continuation. See sprint/archive/60-3-session.md.
             stable_text = "\n\n".join(
                 t
                 for t in (

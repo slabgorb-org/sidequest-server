@@ -3340,11 +3340,13 @@ class Orchestrator:
                     weather_state=context.weather_state,
                     world_demographics=context.world_demographics,
                     world_calendar=context.world_calendar,
-                    # Story 59-1: the begin_confrontation tool resolves the
-                    # Confrontation Def off this pack and instantiates the
-                    # encounter during dispatch. None until _build_turn_context
-                    # stamps context.pack — begin_confrontation fails loudly
-                    # rather than silently no-opping if it is missing.
+                    # Story 59-1: begin_confrontation validates the requested
+                    # confrontation type against this pack and SIGNALS via
+                    # result.confrontation; narration_apply creates the encounter
+                    # on the canonical snapshot (the tool does NOT instantiate it
+                    # during dispatch). None until _build_turn_context stamps
+                    # context.pack — begin_confrontation fails loudly rather than
+                    # silently no-opping if it is missing.
                     genre_pack=context.pack,
                 )
 

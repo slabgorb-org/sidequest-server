@@ -419,6 +419,14 @@ async def test_advance_confrontation_call_does_not_set_result_confrontation(
     )
 
     result = await orch.run_narration_turn("advance the dial", ctx)
+    # Ledger guard (mirrors the unknown-type test): prove the assembler actually
+    # saw the advance_confrontation call and chose not to route it — otherwise
+    # `result.confrontation is None` would pass on the dataclass default even if
+    # the assembler routing code were absent.
+    assert any(tc["name"] == "advance_confrontation" for tc in result.tool_calls), (
+        "advance_confrontation must appear in the tool-call ledger — proving the "
+        "assembler ran and made the decision not to route it to result.confrontation."
+    )
     assert result.confrontation is None, (
         "advance_confrontation must NOT start an encounter — only begin_confrontation "
         "sets result.confrontation. STARTING does not route through advance_confrontation."

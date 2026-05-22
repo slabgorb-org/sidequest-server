@@ -45,15 +45,33 @@ SPAN_ROUTES[SPAN_CONFRONTATION_INTENT_MISMATCH_RESOLVED] = SpanRoute(
     },
 )
 
-SPAN_CONFRONTATION_INTENT_MISMATCH_REPROMPT_FAILED = (
-    "confrontation.intent_mismatch_reprompt_failed"
-)
+SPAN_CONFRONTATION_INTENT_MISMATCH_REPROMPT_FAILED = "confrontation.intent_mismatch_reprompt_failed"
 SPAN_ROUTES[SPAN_CONFRONTATION_INTENT_MISMATCH_REPROMPT_FAILED] = SpanRoute(
     event_type="state_transition",
     component="confrontation",
     extract=lambda span: {
         "field": "confrontation.intent_mismatch_reprompt_failed",
         "matched_type": (span.attributes or {}).get("matched_type", ""),
+    },
+)
+
+# Story 59-1 — no-emission lie-detector. The intent_mismatch span above only
+# fires when the narrator emitted an ``action_rewrite.intent`` to tokenize.
+# The 2026-05-21 Glenross playtest hit the OTHER blind spot: the narrator
+# wrote a textbook standoff but emitted NO confrontation field, NO beats,
+# AND NO intent — so ``validate()`` returned None and nothing engaged,
+# silently. This span covers that case so the GM panel ("lie detector") sees
+# a confrontation-shaped turn that produced zero mechanical backing. It is a
+# STRUCTURAL signal (no engagement + no intent), not prose keyword-scanning
+# (the deleted ``_CONFRONTATION_TRIGGER_PATTERNS`` regex stays dead).
+SPAN_CONFRONTATION_UNENGAGED_TURN = "confrontation.unengaged_turn"
+SPAN_ROUTES[SPAN_CONFRONTATION_UNENGAGED_TURN] = SpanRoute(
+    event_type="state_transition",
+    component="confrontation",
+    extract=lambda span: {
+        "field": "confrontation.unengaged_turn",
+        "player_name": (span.attributes or {}).get("player_name", ""),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
     },
 )
 
@@ -117,6 +135,32 @@ def confrontation_intent_mismatch_reprompt_failed_span(
     span_attrs = {"matched_type": matched_type, **attrs}
     with Span.open(
         SPAN_CONFRONTATION_INTENT_MISMATCH_REPROMPT_FAILED,
+        span_attrs,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def confrontation_unengaged_turn_span(
+    *,
+    player_name: str,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Emitted when a turn engages no confrontation AND emits no intent.
+
+    Story 59-1 no-emission lie-detector. Fires from
+    ``sidequest.server.narration_apply`` when, with a pack loaded and no
+    active encounter, the narrator set no ``confrontation`` field and no
+    ``action_rewrite.intent`` — the validator's blind spot, where it cannot
+    even tokenize an intent to flag a mismatch. The GM panel reads this so a
+    winged (prose-only) confrontation cannot regress silently.
+    """
+    span_attrs = {"player_name": player_name, "genre_slug": genre_slug, **attrs}
+    with Span.open(
+        SPAN_CONFRONTATION_UNENGAGED_TURN,
         span_attrs,
         tracer_override=_tracer,
     ) as span:

@@ -40,7 +40,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from sidequest.agents.narrator_guardrails import CONFRONTATION_TRIGGER_CONSTRAINT
 from sidequest.agents.tool_registry import (
     ToolCategory,
     ToolContext,
@@ -91,15 +90,16 @@ class GenerateEncounterArgs(BaseModel):
 @tool(
     name="generate_encounter",
     description=(
+        # Story 59-1: the confrontation_trigger guardrail was relocated OFF
+        # this description onto begin_confrontation (the live engagement
+        # writer). generate_encounter is an always-erroring stub — keying the
+        # SDK narrator's start-confrontation criteria to a tool that can never
+        # create an encounter mis-routed the call (the engagement-regression
+        # root cause). This tool only ever seeds combatants, once wired.
         "Generate an encounter seed (combatant types + difficulty rating "
-        "+ suggested terrain features).\n\n"
-        # ADR-111 (story 57-4): the confrontation_trigger guardrail
-        # migrated from the per-turn Recency zone into this tool's
-        # description — start-of-encounter is where the model is weighing
-        # the call, and the tools=array description rides in the cache
-        # key root. Single source of truth:
-        # sidequest.agents.narrator_guardrails.CONFRONTATION_TRIGGER_CONSTRAINT.
-        f"{CONFRONTATION_TRIGGER_CONSTRAINT}"
+        "+ suggested terrain features). NOTE: this subsystem is not wired — "
+        "it returns a hard error. To START a confrontation, call "
+        "begin_confrontation."
     ),
     category=ToolCategory.GENERATE,
 )

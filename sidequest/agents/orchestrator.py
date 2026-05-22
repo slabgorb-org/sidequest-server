@@ -576,6 +576,16 @@ class TurnContext:
     # SqliteStore — kept ``Any`` to avoid a circular import (mirrors
     # ``ToolContext.store``'s "kept Any to avoid coupling" rationale).
     store: Any = None
+    # Active GenrePack — kept ``Any`` (same circular-import rationale as
+    # ``confrontation_def``/``encounter`` above). Story 59-1: the SDK
+    # ToolContext stamps this so ``begin_confrontation`` can VALIDATE the
+    # requested confrontation type against the genre. The tool does NOT
+    # instantiate the encounter — it signals, ``_assemble_turn_result_sdk``
+    # routes the type to ``result.confrontation``, and ``narration_apply``
+    # creates the encounter on the canonical snapshot. ``None`` on legacy
+    # fixture paths that never went through ``_build_turn_context``; the tool
+    # fails loudly when it is missing.
+    pack: Any = None
     # Narrator-private LoreStore (lives on the session handler, not on the
     # save layer) — query_lore reads this. Quoted/TYPE_CHECKING import:
     # ``from __future__ import annotations`` keeps this annotation a string,
@@ -1066,9 +1076,17 @@ _SDK_TOOL_OWNED_FIELDS: dict[str, str] = {
     # magic_effects (apply_spell_effect) + patches_resource_pool
     # (update_resource_pool) — narration_apply.apply_magic_working.
     "magic_working": "magic_effects / patches_resource_pool",
-    # confrontation_advances (advance_confrontation) +
-    # encounter_advances (advance_encounter_beat) — encounter trigger.
-    "confrontation": "confrontation_advances / encounter_advances",
+    # NOTE: ``confrontation`` (encounter START) is intentionally NOT owned
+    # here. Story 59-1: a tool CANNOT create the encounter on the SDK path —
+    # ``ctx.store.load()`` returns a fresh deserialized snapshot, and the
+    # tool's ``ctx.store.save`` is clobbered at turn end by ``room.save()``,
+    # which persists the room's CANONICAL in-memory snapshot (the tool never
+    # touched it). So engagement is routed through ``result.confrontation``
+    # (set in ``_assemble_turn_result_sdk`` from the begin_confrontation tool
+    # call) and applied by ``narration_apply``'s consumer, which mutates the
+    # canonical snapshot IN PLACE — the single creation mechanism on BOTH
+    # backends. ``begin_confrontation`` is the narrator-facing signal +
+    # validator, not the state writer.
     # encounter_advances (advance_encounter_beat) +
     # confrontation_advances (advance_confrontation) — beat apply loop.
     "beat_selections": "encounter_advances / confrontation_advances",
@@ -2022,13 +2040,15 @@ class Orchestrator:
         # in the System zone where attention has decayed by turn 20.
         # Same disease as ``npc_intro_visual_constraint`` above; same cure:
         # restate the rule per-turn in Recency-zone Guardrail attention.
-        # The lie-detector in narration_apply._scan_for_confrontation_trigger_
-        # keywords stays loud if the narrator skips again — together they
-        # close the gap without taking the architectural step of server-side
-        # auto-firing (which would be a silent fallback).
+        # The lie-detector is now the ``confrontation.unengaged_turn`` OTEL
+        # span (Story 59-1, narration_apply) — it fires when the narrator names
+        # an opponent but engages nothing and emits no intent; together they
+        # close the gap without server-side auto-firing (a silent fallback).
+        # (The legacy keyword scanner ``_scan_for_confrontation_trigger_keywords``
+        # was deleted in the Epic-50 declared-intent migration.)
         #
         # ADR-111 (story 57-4): backend-gated. On the SDK tool-use path the
-        # migration target is the ``generate_encounter`` tool description,
+        # migration target is the ``begin_confrontation`` tool description,
         # cached as part of the tools=array root. On the legacy ``claude -p``
         # path the Recency-zone registration stays.
 
@@ -3174,9 +3194,38 @@ class Orchestrator:
             token_count_out=result.output_tokens,
         )
 
+        # Story 59-1: confrontation ENGAGEMENT signal. begin_confrontation
+        # cannot create the encounter itself (its ctx.store write is clobbered
+        # by room.save of the canonical snapshot — see _SDK_TOOL_OWNED_FIELDS
+        # note). Route the requested type onto result.confrontation here so
+        # narration_apply's consumer creates the encounter on the CANONICAL
+        # snapshot, in place, the same single mechanism the legacy backend
+        # uses. Two gates mirror begin_confrontation's own checks so the
+        # assembler honors a call the tool rejected:
+        #   (a) skip if an encounter is already active — the tool returns a
+        #       recoverable error in that case; routing the type would set a
+        #       confrontation that narration_apply silently drops, masking the
+        #       misfire from the watcher/telemetry;
+        #   (b) validate against the genre's offered types so a narrator typo
+        #       cannot reach narration_apply (which raises on an unknown type).
+        _encounter_active = context.encounter is not None and not getattr(
+            context.encounter, "resolved", False
+        )
+        if not _encounter_active:
+            _valid_confrontations = {t for (t, _label, _cat) in context.available_confrontations}
+            for _tc in result.tool_calls:
+                if _tc.name != "begin_confrontation":
+                    continue
+                _ctype = _tc.arguments.get("confrontation_type")
+                if isinstance(_ctype, str) and _ctype in _valid_confrontations:
+                    shared["confrontation"] = _ctype
+                    break
+
         # No key in _SDK_TOOL_OWNED_FIELDS is added — the shared helper
         # cannot emit one (structural guarantee). The tools own + persisted
-        # those categories during dispatch; only the ledger is SDK-specific.
+        # those categories during dispatch; the ledger is SDK-specific, and
+        # ``confrontation`` (no longer owned) is set above when the narrator
+        # called begin_confrontation.
         assembled = NarrationTurnResult(**shared, tool_calls=tool_calls_ledger)
 
         # Fail-loud backstop (CLAUDE.md no silent fallbacks): the tool-owned
@@ -3390,6 +3439,14 @@ class Orchestrator:
                     weather_state=context.weather_state,
                     world_demographics=context.world_demographics,
                     world_calendar=context.world_calendar,
+                    # Story 59-1: begin_confrontation validates the requested
+                    # confrontation type against this pack and SIGNALS via
+                    # result.confrontation; narration_apply creates the encounter
+                    # on the canonical snapshot (the tool does NOT instantiate it
+                    # during dispatch). None until _build_turn_context stamps
+                    # context.pack — begin_confrontation fails loudly rather than
+                    # silently no-opping if it is missing.
+                    genre_pack=context.pack,
                 )
 
                 # Positive wiring confirmation (CLAUDE.md OTEL principle —

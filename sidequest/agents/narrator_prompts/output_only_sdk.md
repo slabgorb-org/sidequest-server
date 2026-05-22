@@ -94,12 +94,14 @@ recording it: a tool you don't call is a mechanic that never happened.
    Better to under-emit and be corrected than to mint a phantom cost.
 
 4. STARTING / ADVANCING A CONFRONTATION OR ENCOUNTER, BEAT SELECTIONS →
-   call `advance_confrontation` (when ANY structured encounter BEGINS this
-   turn — pick the MOST SPECIFIC type the genre offers, never default to
-   generic `combat` when `ship_combat`, `dogfight`, `social_duel`, or
-   another specialized type applies) and `advance_encounter_beat` (beat
-   selections once an encounter is active).
-   TRIGGER CRITERIA — you MUST call `advance_confrontation` on the SAME turn
+   call `begin_confrontation` to START one (when ANY structured encounter
+   BEGINS this turn — pick the MOST SPECIFIC type the genre offers, never
+   default to generic `combat` when `ship_combat`, `dogfight`, `social_duel`,
+   or another specialized type applies); call `advance_confrontation` to
+   advance an ALREADY-ACTIVE encounter's dial, and `advance_encounter_beat`
+   for beat selections once an encounter is active. `advance_confrontation`
+   cannot start an encounter — it errors when none is active.
+   TRIGGER CRITERIA — you MUST call `begin_confrontation` on the SAME turn
    your prose introduces ANY of these. There is no retroactive crediting:
    - Physical violence, threats, intimidation, a hostile draw → `combat` /
      `brawl`
@@ -116,7 +118,7 @@ recording it: a tool you don't call is a mechanic that never happened.
    - Reputational exposure — a scandal breaking, blackmail delivered →
      `scandal`
    - Any tense standoff where outcomes should be mechanically resolved
-   Do NOT resolve these narratively without `advance_confrontation`. Err on
+   Do NOT resolve these narratively without `begin_confrontation`. Err on
    the side of triggering — the system de-escalates gracefully. Once active,
    call `advance_encounter_beat` for EVERY actor (player AND NPCs) every
    encounter turn, each with the outcome tier the prose describes (CritFail,

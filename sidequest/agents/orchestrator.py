@@ -466,10 +466,13 @@ class TurnContext:
     store: Any = None
     # Active GenrePack — kept ``Any`` (same circular-import rationale as
     # ``confrontation_def``/``encounter`` above). Story 59-1: the SDK
-    # ToolContext stamps this so ``begin_confrontation`` can resolve the
-    # Confrontation Def and instantiate the encounter during tool dispatch.
-    # ``None`` on legacy fixture paths that never went through
-    # ``_build_turn_context``; the tool fails loudly when it is missing.
+    # ToolContext stamps this so ``begin_confrontation`` can VALIDATE the
+    # requested confrontation type against the genre. The tool does NOT
+    # instantiate the encounter — it signals, ``_assemble_turn_result_sdk``
+    # routes the type to ``result.confrontation``, and ``narration_apply``
+    # creates the encounter on the canonical snapshot. ``None`` on legacy
+    # fixture paths that never went through ``_build_turn_context``; the tool
+    # fails loudly when it is missing.
     pack: Any = None
     # Narrator-private LoreStore (lives on the session handler, not on the
     # save layer) — query_lore reads this. Quoted/TYPE_CHECKING import:
@@ -3099,17 +3102,26 @@ class Orchestrator:
         # note). Route the requested type onto result.confrontation here so
         # narration_apply's consumer creates the encounter on the CANONICAL
         # snapshot, in place, the same single mechanism the legacy backend
-        # uses. Validate against the genre's offered types so a narrator typo
-        # cannot reach narration_apply (which raises on an unknown type); an
-        # invalid type means the tool already returned a recoverable error.
-        _valid_confrontations = {t for (t, _label, _cat) in context.available_confrontations}
-        for _tc in result.tool_calls:
-            if _tc.name != "begin_confrontation":
-                continue
-            _ctype = (_tc.arguments or {}).get("confrontation_type")
-            if isinstance(_ctype, str) and _ctype in _valid_confrontations:
-                shared["confrontation"] = _ctype
-                break
+        # uses. Two gates mirror begin_confrontation's own checks so the
+        # assembler honors a call the tool rejected:
+        #   (a) skip if an encounter is already active — the tool returns a
+        #       recoverable error in that case; routing the type would set a
+        #       confrontation that narration_apply silently drops, masking the
+        #       misfire from the watcher/telemetry;
+        #   (b) validate against the genre's offered types so a narrator typo
+        #       cannot reach narration_apply (which raises on an unknown type).
+        _encounter_active = context.encounter is not None and not getattr(
+            context.encounter, "resolved", False
+        )
+        if not _encounter_active:
+            _valid_confrontations = {t for (t, _label, _cat) in context.available_confrontations}
+            for _tc in result.tool_calls:
+                if _tc.name != "begin_confrontation":
+                    continue
+                _ctype = _tc.arguments.get("confrontation_type")
+                if isinstance(_ctype, str) and _ctype in _valid_confrontations:
+                    shared["confrontation"] = _ctype
+                    break
 
         # No key in _SDK_TOOL_OWNED_FIELDS is added — the shared helper
         # cannot emit one (structural guarantee). The tools own + persisted

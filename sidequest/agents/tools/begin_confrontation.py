@@ -139,9 +139,9 @@ async def begin_confrontation(args: BeginConfrontationArgs, ctx: ToolContext) ->
     defs = pack.rules.confrontations if pack.rules else []
     if find_confrontation_def(defs, args.confrontation_type) is None:
         ctx.otel_span.set_attribute("tool.begin_confrontation.signalled", False)
-        offered = sorted(
-            (getattr(d, "confrontation_type", None) or getattr(d, "type", "")) for d in defs
-        )
+        # ``confrontation_type`` is a required ConfrontationDef field (``type``
+        # is its input alias) — match find_confrontation_def's own access.
+        offered = sorted(d.confrontation_type for d in defs)
         return ToolResult.error(
             f"confrontation type {args.confrontation_type!r} is not offered by this "
             f"genre. Offered types: {offered!r}. Pick the most specific applicable type.",

@@ -190,7 +190,9 @@ def test_social_engagement_end_to_end_non_none_state() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unengaged_confrontation_turn_emits_watcher_span(otel_capture) -> None:
+def test_unengaged_confrontation_turn_emits_watcher_span(
+    otel_capture: InMemorySpanExporter,
+) -> None:
     """AC5: a confrontation-shaped turn that engages NOTHING — no confrontation
     field, no beats, and no structured intent — must emit a non-keyword watcher
     span so the GM panel sees the miss. The existing confrontation_intent_validator
@@ -234,7 +236,9 @@ def test_unengaged_confrontation_turn_emits_watcher_span(otel_capture) -> None:
     )
 
 
-def test_quiet_turn_does_not_emit_unengaged_watcher_span(otel_capture) -> None:
+def test_quiet_turn_does_not_emit_unengaged_watcher_span(
+    otel_capture: InMemorySpanExporter,
+) -> None:
     """AC5 (precision, no false-positive storm): a plain narrative turn with no
     opponent actor, no confrontation, and no intent must NOT fire the watcher.
     The structural confrontation-shape signal is an opponent-side NPC; an
@@ -264,7 +268,9 @@ def test_quiet_turn_does_not_emit_unengaged_watcher_span(otel_capture) -> None:
     )
 
 
-def test_reprompt_reapply_does_not_double_emit_unengaged_span(otel_capture) -> None:
+def test_reprompt_reapply_does_not_double_emit_unengaged_span(
+    otel_capture: InMemorySpanExporter,
+) -> None:
     """AC5 (C2): the reprompt-loop second apply (already_reprompted=True) must
     NOT re-emit the watcher for the same logical player turn — even on a
     confrontation-shaped, unengaged, no-intent result."""
@@ -294,7 +300,9 @@ def test_reprompt_reapply_does_not_double_emit_unengaged_span(otel_capture) -> N
     )
 
 
-def test_engaged_turn_does_not_emit_unengaged_watcher_span(otel_capture) -> None:
+def test_engaged_turn_does_not_emit_unengaged_watcher_span(
+    otel_capture: InMemorySpanExporter,
+) -> None:
     """AC5 (no false positive): when the turn properly engages (confrontation
     field set -> encounter created), the unengaged watcher must NOT fire.
     """

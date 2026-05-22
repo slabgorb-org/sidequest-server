@@ -739,8 +739,10 @@ def _build_turn_context(
         session_id=sd.game_slug,
         store=sd.store,
         # Story 59-1: the SDK ToolContext stamps this so begin_confrontation
-        # can resolve the Confrontation Def and instantiate the encounter
-        # during tool dispatch (the SDK engagement path the narrator lacked).
+        # can validate the requested confrontation type against the genre. The
+        # tool signals; narration_apply creates the encounter on the canonical
+        # snapshot via result.confrontation (the SDK engagement path the
+        # narrator lacked).
         pack=sd.genre_pack,
         lore_store=sd.lore_store,
         monster_manual=sd.monster_manual,

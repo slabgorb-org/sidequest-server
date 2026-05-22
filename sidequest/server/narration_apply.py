@@ -2486,9 +2486,7 @@ def _apply_narration_result_to_snapshot(
         # fire. Guarded on ``not already_reprompted`` so the reprompt-loop
         # re-apply cannot double-emit for one player turn.
         _no_active_encounter = snapshot.encounter is None or snapshot.encounter.resolved
-        _named_opponent = any(
-            getattr(m, "side", "neutral") == "opponent" for m in result.npcs_present
-        )
+        _named_opponent = any(m.side == "opponent" for m in result.npcs_present)
         if (
             not result.confrontation
             and _no_active_encounter

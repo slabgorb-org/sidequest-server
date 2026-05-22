@@ -26,8 +26,6 @@ update these + log a Design Deviation.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 # Importing the tools package wires the 26 adapters onto default_registry.
 import sidequest.agents.tools  # noqa: F401
 from sidequest.agents.tool_registry import default_registry
@@ -140,37 +138,13 @@ def test_generate_encounter_cannot_be_the_engagement_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC4 — the SDK prompt must not route STARTING through advance_confrontation.
+# AC4 — STARTING routes to begin_confrontation, NOT advance_confrontation.
+# Tested BEHAVIORALLY in test_advance_confrontation_call_does_not_set_result_confrontation
+# below (drives the orchestrator), not by reading output_only_sdk.md source text
+# (banned: CLAUDE.md "No Source-Text Wiring Tests"). AC3
+# (test_live_engagement_tool_description_carries_social_triggers) covers the
+# trigger criteria living on begin_confrontation's registry description.
 # ---------------------------------------------------------------------------
-
-_SDK_PROMPT = (
-    Path(__file__).resolve().parents[1].parent
-    / "sidequest"
-    / "agents"
-    / "narrator_prompts"
-    / "output_only_sdk.md"
-)
-
-
-def test_sdk_prompt_does_not_route_starting_through_advance_confrontation() -> None:
-    """AC4: output_only_sdk.md section 4 must not instruct the narrator to START
-    a confrontation by calling advance_confrontation (which errors with no active
-    encounter). advance_confrontation is for ADVANCING an active encounter.
-
-    FAILS today: section 4 reads "STARTING / ADVANCING A CONFRONTATION OR
-    ENCOUNTER ... call advance_confrontation (when ANY structured encounter
-    BEGINS this turn ...)".
-    """
-    # Normalize whitespace so markdown line-wrapping doesn't hide the phrase
-    # (the source wraps "BEGINS this\n   turn" across lines).
-    normalized = " ".join(_SDK_PROMPT.read_text(encoding="utf-8").split())
-    assert (
-        "advance_confrontation` (when ANY structured encounter BEGINS this turn" not in normalized
-    ), (
-        "output_only_sdk.md still tells the narrator to call advance_confrontation "
-        "when an encounter BEGINS — but that tool cannot start one. STARTING must "
-        "route to the engagement-field writer; advance_confrontation is advance-only."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +212,7 @@ class _FakeRegistry:
     def compose_split(self, agent_name: str) -> tuple[str, str]:
         return ("system text", "user text")
 
-    def compose_split_by_zone(self, agent_name: str):
+    def compose_split_by_zone(self, agent_name: str) -> tuple[dict[Any, str], str]:
         from sidequest.agents.prompt_framework.types import AttentionZone
 
         return ({AttentionZone.Primacy: "system text"}, "user text")
@@ -375,4 +349,77 @@ async def test_sdk_unknown_begin_confrontation_type_is_not_routed(
     )
 
     result = await orch.run_narration_turn("do a thing", ctx)
+    # The begin_confrontation call IS in the ledger (proving the assembler ran
+    # and made a filtering decision) — but the unknown type was NOT routed.
+    # Without the ledger assertion this test would pass vacuously on the
+    # NarrationTurnResult default even if the assembler routing were absent.
+    assert any(tc["name"] == "begin_confrontation" for tc in result.tool_calls), (
+        "begin_confrontation should appear in the tool-call ledger even when the "
+        "type is invalid — the assembler must have seen it and chosen not to route it."
+    )
     assert result.confrontation is None
+
+
+@pytest.mark.asyncio
+async def test_advance_confrontation_call_does_not_set_result_confrontation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC4 (behavioral): STARTING routes through begin_confrontation, NOT
+    advance_confrontation. An advance_confrontation tool call must NOT set
+    result.confrontation — only begin_confrontation does. This replaces the
+    banned source-text read of output_only_sdk.md with a behavioral assertion.
+    """
+    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    sdk = _Sdk(
+        responses=[
+            _Resp(
+                content=[
+                    _ToolUseSdkBlock(
+                        type="tool_use",
+                        id="toolu_adv",
+                        name="advance_confrontation",
+                        input={"axis": "player", "delta": 1},
+                    )
+                ],
+                stop_reason="tool_use",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            ),
+            _Resp(
+                content=[_TextBlock(type="text", text="...")],
+                stop_reason="end_turn",
+                usage=_Usage(input_tokens=10, output_tokens=2),
+                model="claude-sonnet-4-6",
+            ),
+        ]
+    )
+    orch = Orchestrator(client=AnthropicSdkClient(sdk=sdk))
+
+    async def _spy_dispatch(block: ToolUseBlock, ctx: object) -> ToolResultBlock:
+        return ToolResultBlock(tool_use_id=block.id, content="ok", is_error=False)
+
+    from sidequest.agents.tool_registry import default_registry as _dr
+
+    monkeypatch.setattr(_dr, "dispatch", _spy_dispatch)
+
+    async def _fake_build_prompt(
+        self: Orchestrator, action: str, context: TurnContext
+    ) -> tuple[str, _FakeRegistry]:
+        return ("prompt-text", _FakeRegistry())
+
+    monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
+
+    ctx = TurnContext(
+        character_name="Neil",
+        genre="tea_and_murder",
+        turn_number=3,
+        available_confrontations=[("negotiation", "Negotiation", "social")],
+    )
+
+    result = await orch.run_narration_turn("advance the dial", ctx)
+    assert result.confrontation is None, (
+        "advance_confrontation must NOT start an encounter — only begin_confrontation "
+        "sets result.confrontation. STARTING does not route through advance_confrontation."
+    )

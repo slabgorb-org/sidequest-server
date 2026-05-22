@@ -27,6 +27,7 @@ Out of scope (Phase 2+):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -93,6 +94,117 @@ from sidequest.telemetry.spans import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Prompt-tab cache attribution (Story 60-2 — the GM-panel "eyes")
+# ---------------------------------------------------------------------------
+#
+# The SDK path assembles ``system_blocks[0]`` (cache=True) from the
+# System-bucket sections in the Primacy + Early zones (see
+# ``_run_narration_turn_sdk`` and ``compose_split_by_zone``). A section therefore
+# rides the cached prefix iff BOTH its bucket is System AND its zone is
+# Primacy/Early. The zone alone is NOT sufficient: Primacy/Early also hold
+# User-bucket guardrails that land in the per-turn user message (uncached).
+# These helpers compute that attribution from the SAME inputs the SDK path uses,
+# so the panel cannot drift from reality.
+
+# Zones whose System-bucket content rides the cached ``system_blocks[0]`` prefix.
+_CACHED_ZONE_VALUES: frozenset[str] = frozenset(
+    {AttentionZone.Primacy.value, AttentionZone.Early.value}
+)
+
+
+def _content_digest(text: str) -> str:
+    """Short content digest used for per-turn cache-drift detection."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def _section_rides_cache(name: str, zone_value: str) -> bool:
+    """True iff a section's content lands in the cached ``system_blocks[0]``.
+
+    Requires BOTH a System bucket (in ``STABLE_SECTION_NAMES``) and a
+    Primacy/Early zone — mirrors the SDK assembly exactly.
+    """
+    from sidequest.agents.prompt_framework.bucket import (
+        SectionBucket,
+        default_bucket_for_section,
+    )
+
+    return (
+        default_bucket_for_section(name) == SectionBucket.System
+        and zone_value in _CACHED_ZONE_VALUES
+    )
+
+
+def _compute_zones_payload(sections: list[PromptSection]) -> list[dict[str, Any]]:
+    """Build the Prompt-tab Zone Breakdown rows with cache attribution.
+
+    Each zone carries ``cached`` (does this zone feed the cached block region)
+    and each section carries ``cached`` (does THIS section actually ride
+    ``system_blocks[0]`` — bucket-aware) plus ``mis_zoned`` (a volatile
+    ``state``-category section sitting in a cached zone — the block-0 churn
+    smell that Story 60-4 will fix by re-zoning).
+    """
+    zone_buckets: dict[str, list[PromptSection]] = {}
+    for s in sections:
+        zone_buckets.setdefault(s.zone.value, []).append(s)
+
+    payload: list[dict[str, Any]] = []
+    for zone_value in (
+        AttentionZone.Primacy.value,
+        AttentionZone.Early.value,
+        AttentionZone.Valley.value,
+        AttentionZone.Late.value,
+        AttentionZone.Recency.value,
+    ):
+        bucket = zone_buckets.get(zone_value, [])
+        if not bucket:
+            continue
+        zone_cached = zone_value in _CACHED_ZONE_VALUES
+        payload.append(
+            {
+                "zone": zone_value.title(),
+                "total_tokens": sum(s.token_estimate() for s in bucket),
+                "cached": zone_cached,
+                "sections": [
+                    {
+                        "name": s.name,
+                        "token_estimate": s.token_estimate(),
+                        "category": s.category.value,
+                        "content": s.content,
+                        "cached": _section_rides_cache(s.name, zone_value),
+                        "mis_zoned": zone_cached and s.category.value == "state",
+                    }
+                    for s in bucket
+                ],
+            }
+        )
+    return payload
+
+
+def _compute_cache_blocks(
+    *, stable_text: str, valley_text: str, recency_text: str, tools_payload: str
+) -> list[dict[str, Any]]:
+    """Per-cacheable-block content digests for the provided block texts.
+
+    ``stable`` and ``tools`` carry cache markers; valley/recency ride uncached
+    follow-on blocks (and are omitted when empty, mirroring ``system_blocks``
+    assembly). The single-source-of-truth guarantee — that these are the SAME
+    texts the SDK client received — lives at the call site
+    (``_run_narration_turn_sdk``), which passes the assembled block strings."""
+    blocks: list[dict[str, Any]] = [
+        {"label": "stable", "digest": _content_digest(stable_text), "cached": True}
+    ]
+    if valley_text:
+        blocks.append({"label": "valley", "digest": _content_digest(valley_text), "cached": False})
+    if recency_text:
+        blocks.append(
+            {"label": "recency", "digest": _content_digest(recency_text), "cached": False}
+        )
+    blocks.append({"label": "tools", "digest": _content_digest(tools_payload), "cached": True})
+    return blocks
+
 
 # ---------------------------------------------------------------------------
 # Narrator constants
@@ -715,7 +827,9 @@ class TurnContext:
     # non-beneath_sunden turn (zero-byte leak). Typed Any to keep this
     # dataclass free of a sidequest.dungeon import (dungeon depends on game
     # models — mirrors the ``encounter: Any`` / ``snapshot`` precedent).
-    region_projection: Any = None  # runtime: sidequest.dungeon.region_projection.RegionProjection | None
+    region_projection: Any = (
+        None  # runtime: sidequest.dungeon.region_projection.RegionProjection | None
+    )
 
     # Story 24-10: world-grounding state, the per-turn carrier for the three
     # ToolContext grounding fields (24-6). Populated by ``_build_turn_context``
@@ -2225,92 +2339,76 @@ class Orchestrator:
                 "turn.agent_llm.prompt_build section_count=%d",
                 section_count,
             )
-            # Dashboard Prompt tab consumes `prompt_assembled`. The hub
-            # lives in `sidequest.telemetry.watcher_hub` — importing from
-            # `sidequest.server.watcher` would drag in uvicorn's logging
-            # reconfiguration and break every caplog-based test.
-            from sidequest.telemetry.watcher_hub import publish_event as _pub
+            # Dashboard Prompt tab consumes `prompt_assembled`. The build-time
+            # emission carries the Zone Breakdown + cache attribution that is
+            # knowable WITHOUT an API call; `cache_usage` is None here (no SDK
+            # response yet — shown as "n/a" loudly per No-Silent-Fallbacks).
+            # On the SDK path (ToolingLlmClient → _run_narration_turn_sdk) this
+            # build-time emit is suppressed: that path re-emits ONE enriched
+            # event post-call with real usage + block digests, so the GM panel
+            # gets a single coherent entry per turn rather than two.
+            if not isinstance(self._client, ToolingLlmClient):
+                from sidequest.telemetry.watcher_hub import publish_event as _pub
 
-            # Build per-zone breakdown for the Prompt tab Zone Breakdown
-            # bars. The dashboard expects `zones: [{zone, total_tokens,
-            # sections: [{name, token_estimate, category}]}]` keyed by the
-            # PascalCase zone names that match the dashboard's ZONE_COLORS
-            # map (Primacy/Early/Valley/Late/Recency). Per playtest
-            # 2026-04-30 #1B the publish shipped only flat aggregates and
-            # the dashboard rendered an empty Zone Breakdown body even
-            # though the registry had everything needed.
-            sections = registry.registry(agent_name)
-            _zone_buckets: dict[str, list] = {}
-            for s in sections:
-                _zone_buckets.setdefault(s.zone.value, []).append(s)
-            zones_payload = []
-            for zone_name in ("primacy", "early", "valley", "late", "recency"):
-                bucket = _zone_buckets.get(zone_name, [])
-                if not bucket:
-                    continue
-                zones_payload.append(
-                    {
-                        # Title-case to match the dashboard's ZONE_COLORS
-                        # keys (Primacy/Early/Valley/Late/Recency).
-                        "zone": zone_name.title(),
-                        "total_tokens": sum(s.token_estimate() for s in bucket),
-                        "sections": [
-                            {
-                                "name": s.name,
-                                "token_estimate": s.token_estimate(),
-                                "category": s.category.value,
-                                "content": s.content,
-                            }
-                            for s in bucket
-                        ],
-                    }
+                payload = self._build_prompt_event_payload(
+                    agent_name=agent_name,
+                    context=context,
+                    prompt_text=prompt_text,
+                    section_count=section_count,
+                    sections=registry.registry(agent_name),
                 )
-
-            # Rough token estimate from char count (1 token ≈ 4 chars per
-            # the standard Claude tokenizer heuristic). Surfaced as
-            # `total_tokens` for the dashboard Prompt tab dropdown
-            # ("T3 · narrator · 11210 tokens"); the dashboard pre-fix
-            # read `total_tokens` and `agent` directly off the event,
-            # so we ship `agent` as an alias of `agent_name` to keep
-            # both old and new consumers happy (playtest 2026-04-30 #1A).
-            # Compute system/user split lengths for telemetry. The actual
-            # send-time split happens in process_action via compose_split;
-            # here we mirror the same bucketing logic for the OTEL payload
-            # so the GM panel Prompt tab can show the system/user breakdown
-            # without waiting for a full narration turn.
-            from sidequest.agents.prompt_framework.bucket import (
-                SectionBucket,
-                default_bucket_for_section,
-            )
-
-            system_chars = sum(
-                len(s.content)
-                for s in sections
-                if not s.is_empty() and default_bucket_for_section(s.name) == SectionBucket.System
-            )
-            user_chars = sum(
-                len(s.content)
-                for s in sections
-                if not s.is_empty() and default_bucket_for_section(s.name) == SectionBucket.User
-            )
-
-            _pub(
-                "prompt_assembled",
-                {
-                    "agent_name": agent_name,
-                    "agent": agent_name,
-                    "turn_number": context.turn_number,
-                    "section_count": section_count,
-                    "prompt_len": len(prompt_text),
-                    "system_len": system_chars,
-                    "user_len": user_chars,
-                    "bounded": True,
-                    "total_tokens": max(1, len(prompt_text) // 4),
-                    "zones": zones_payload,
-                },
-                component="prompt_builder",
-            )
+                payload["cache_usage"] = None
+                _pub("prompt_assembled", payload, component="prompt_builder")
         return prompt_text, registry
+
+    def _build_prompt_event_payload(
+        self,
+        *,
+        agent_name: str,
+        context: TurnContext,
+        prompt_text: str,
+        section_count: int,
+        sections: list[PromptSection],
+    ) -> dict[str, Any]:
+        """Shared base payload for the ``prompt_assembled`` event.
+
+        Used by both the build-time emission (above) and the SDK post-call
+        emission (``_run_narration_turn_sdk``) so the GM panel sees one
+        consistent shape. The returned dict contains: agent_name, agent,
+        turn_number, section_count, prompt_len, system_len, user_len, bounded,
+        total_tokens, zones. ``cache_usage`` (always) and ``cache_blocks`` (SDK
+        path only) are NOT included — callers must set them before publishing.
+        The PascalCase zone names match the dashboard's ZONE_COLORS map;
+        ``agent`` aliases ``agent_name`` for pre-fix consumers (playtest
+        2026-04-30 #1A).
+        """
+        from sidequest.agents.prompt_framework.bucket import (
+            SectionBucket,
+            default_bucket_for_section,
+        )
+
+        system_chars = sum(
+            len(s.content)
+            for s in sections
+            if not s.is_empty() and default_bucket_for_section(s.name) == SectionBucket.System
+        )
+        user_chars = sum(
+            len(s.content)
+            for s in sections
+            if not s.is_empty() and default_bucket_for_section(s.name) == SectionBucket.User
+        )
+        return {
+            "agent_name": agent_name,
+            "agent": agent_name,
+            "turn_number": context.turn_number,
+            "section_count": section_count,
+            "prompt_len": len(prompt_text),
+            "system_len": system_chars,
+            "user_len": user_chars,
+            "bounded": True,
+            "total_tokens": max(1, len(prompt_text) // 4),
+            "zones": _compute_zones_payload(sections),
+        }
 
     # ------------------------------------------------------------------
     # Main turn entrypoint
@@ -3184,6 +3282,9 @@ class Orchestrator:
         with orchestrator_process_action_span(action_len=len(action)):
             agent_name = self._narrator.name()
 
+            # build_narrator_prompt skips its build-time prompt_assembled on the
+            # SDK path (ToolingLlmClient); the enriched event with real cache
+            # usage + block digests is emitted post-call below (Story 60-2).
             prompt_text, registry = await self.build_narrator_prompt(action, context)
             zone_text, user_message = registry.compose_split_by_zone(agent_name)
 
@@ -3213,9 +3314,7 @@ class Orchestrator:
                 )
                 if t
             )
-            system_blocks: list[CacheableBlock] = [
-                CacheableBlock(text=stable_text, cache=True)
-            ]
+            system_blocks: list[CacheableBlock] = [CacheableBlock(text=stable_text, cache=True)]
             if valley_text:
                 system_blocks.append(CacheableBlock(text=valley_text, cache=False))
             if recency_text:
@@ -3357,9 +3456,7 @@ class Orchestrator:
                 # across every tool-loop iteration. Documented at
                 # telemetry/spans/cost.py:15; the GM panel reads this to
                 # show $/turn next to cache hit-rate (Task B1).
-                span.set_attribute(
-                    "narration.turn.total_cost_usd", result.cumulative_cost_usd
-                )
+                span.set_attribute("narration.turn.total_cost_usd", result.cumulative_cost_usd)
                 span.set_attribute("narration.turn.tool_call_count", len(result.tool_calls))
 
                 # ADR-103 / CLAUDE.md OTEL principle: emit the per-call
@@ -3375,6 +3472,38 @@ class Orchestrator:
                 span.set_attribute("narration.turn.tool_calls_json", json.dumps(tool_calls_ledger))
 
             elapsed_ms = int((time.monotonic() - call_start) * 1000)
+
+            # Story 60-2 — emit the enriched prompt_assembled now that the real
+            # API cache usage and the assembled blocks are both in hand. The
+            # cache_blocks digests hash the SAME `stable_text`/`valley_text`/
+            # `recency_text`/`tools_payload` that built `system_blocks` above, so
+            # the panel's "stable / drifted" claim cannot diverge from what was
+            # actually sent (single source of truth — see context-story-60-2).
+            from sidequest.telemetry.watcher_hub import publish_event as _pub_prompt
+
+            _prompt_sections = registry.registry(agent_name)
+            _prompt_payload = self._build_prompt_event_payload(
+                agent_name=agent_name,
+                context=context,
+                prompt_text=prompt_text,
+                section_count=len(_prompt_sections),
+                sections=_prompt_sections,
+            )
+            _prompt_payload["cache_blocks"] = _compute_cache_blocks(
+                stable_text=stable_text,
+                valley_text=valley_text,
+                recency_text=recency_text,
+                tools_payload=tools_payload,
+            )
+            _prompt_payload["cache_usage"] = {
+                "cache_read": result.cached_input_read_tokens,
+                "cache_write": result.cached_input_write_tokens,
+                "cache_write_5m": result.cached_input_write_5m_tokens,
+                "cache_write_1h": result.cached_input_write_1h_tokens,
+                "cost_usd": result.cumulative_cost_usd,
+                "cache_ttl": getattr(self._client, "cache_ttl", "n/a"),
+            }
+            _pub_prompt("prompt_assembled", _prompt_payload, component="prompt_builder")
 
             # Task E1.5-B — hybrid split. The WRITE tools already mutated +
             # persisted (``ctx.store.save``) every tool-owned state category

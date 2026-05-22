@@ -154,13 +154,14 @@ async def test_zones_carry_cache_boundary_flag(
     zones = _enriched_event(sock)["fields"]["zones"]
     assert zones, "zones must be non-empty for a real prompt build"
 
+    sections_by_name: dict[str, dict[str, Any]] = {}
     seen_cached = False
     for z in zones:
         assert "cached" in z, f"zone {z.get('zone')!r} missing `cached` flag"
         assert isinstance(z["cached"], bool)
         if z["zone"] in CACHED_ZONES:
             assert z["cached"] is True, (
-                f"{z['zone']} rides system_blocks[0] and MUST be marked cached"
+                f"{z['zone']} feeds the cached block region and MUST be marked cached"
             )
             seen_cached = True
         elif z["zone"] in UNCACHED_ZONES:
@@ -168,7 +169,23 @@ async def test_zones_carry_cache_boundary_flag(
                 f"{z['zone']} rides an uncached follow-on block and MUST be "
                 f"marked uncached; got cached=True"
             )
+        for s in z["sections"]:
+            assert "cached" in s, f"section {s['name']!r} missing per-section `cached`"
+            sections_by_name[s["name"]] = s
     assert seen_cached, "expected at least one cached zone (Primacy/Early)"
+
+    # Per-section accuracy: the zone-level flag is a rollup, but a section only
+    # rides system_blocks[0] when its bucket is System (in STABLE_SECTION_NAMES)
+    # AND its zone is Primacy/Early. In a real turn, Primacy holds BOTH a
+    # System-bucket identity section and User-bucket guardrails — they must NOT
+    # share a `cached` verdict.
+    assert sections_by_name["narrator_identity"]["cached"] is True, (
+        "narrator_identity is System-bucket in Primacy — it rides the cached block"
+    )
+    assert sections_by_name["narrator_constraints"]["cached"] is False, (
+        "narrator_constraints is a User-bucket guardrail — it lands in the per-turn "
+        "user message, NOT the cached system_blocks[0], even though it sits in Primacy"
+    )
 
 
 # --- AC-2: real usage joined + n/a loudly ---------------------------------
@@ -197,8 +214,7 @@ async def test_cache_usage_carries_real_sdk_numbers_not_estimates(
 
     usage = _enriched_event(sock)["fields"]["cache_usage"]
     assert isinstance(usage, dict), (
-        f"cache_usage must be a dict of real SDK numbers on an SDK turn; got "
-        f"{type(usage).__name__}"
+        f"cache_usage must be a dict of real SDK numbers on an SDK turn; got {type(usage).__name__}"
     )
     assert usage["cache_read"] == 11168, f"got {usage['cache_read']!r}"
     assert usage["cache_write"] == 12281, f"got {usage['cache_write']!r}"
@@ -207,8 +223,7 @@ async def test_cache_usage_carries_real_sdk_numbers_not_estimates(
     # Real spend, computed from the pricing table — strictly positive when
     # tokens were consumed; never a fabricated/estimated stand-in.
     assert isinstance(usage["cost_usd"], float) and usage["cost_usd"] > 0.0, (
-        f"cost_usd must be a positive float from the SDK cost rollup; got "
-        f"{usage['cost_usd']!r}"
+        f"cost_usd must be a positive float from the SDK cost rollup; got {usage['cost_usd']!r}"
     )
     # cache_ttl reflects the client's configured TTL (FakeAnthropicSdkClient
     # has no configurable TTL → the orchestrator's getattr fallback yields
@@ -440,15 +455,19 @@ async def test_emitted_partition_matches_real_system_blocks(
         f"expected={expected_stable_digest!r}"
     )
 
-    # Partition accuracy: cached-zone section content rides system_blocks[0];
-    # uncached-zone section content does not.
-    uncached_text = "\n".join(b.text for b in real_blocks[1:])
+    # Partition accuracy (per-section): a section marked cached MUST have its
+    # content inside the REAL cached block; a section marked uncached MUST NOT.
+    # The check is per-section (not per-zone) because a cached zone mixes
+    # System-bucket content (→ system_blocks[0]) with User-bucket guardrails
+    # (→ the per-turn user message). The user message is not a system block, so
+    # we assert only the cached-prefix membership — that is the property the
+    # "stable vs drifted" claim depends on.
     for z in fields["zones"]:
         for s in z["sections"]:
             content = s.get("content")
             if not content:
                 continue
-            if z["cached"]:
+            if s["cached"]:
                 assert content in real_stable_text, (
                     f"section {s['name']!r} is marked cached but its content "
                     f"is NOT inside the real cached block — the partition is a "
@@ -458,10 +477,6 @@ async def test_emitted_partition_matches_real_system_blocks(
                 assert content not in real_stable_text, (
                     f"section {s['name']!r} is marked uncached but its content "
                     f"IS inside the real cached block — the partition is a lie."
-                )
-                assert content in uncached_text, (
-                    f"section {s['name']!r} marked uncached but its content is "
-                    f"not in any uncached follow-on block either"
                 )
 
 

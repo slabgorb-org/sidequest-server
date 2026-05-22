@@ -268,6 +268,11 @@ class _FakeRegistry:
 
         return ({AttentionZone.Primacy: "system text"}, "user text")
 
+    def registry(self, agent_name: str) -> list:
+        # Story 60-2: the SDK path emits an enriched prompt_assembled post-call
+        # that reads registry sections; this stub registers none.
+        return []
+
 
 async def _run_sdk_and_capture_tool_ctx(
     monkeypatch: pytest.MonkeyPatch,

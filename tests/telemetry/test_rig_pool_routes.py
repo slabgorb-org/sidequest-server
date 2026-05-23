@@ -30,8 +30,14 @@ class _FakeSpan:
     The SpanRoute extract lambdas read only ``.attributes`` and possibly
     ``.name`` — they never touch timing / status. Keeping the stub
     smaller than ``MagicMock(spec=ReadableSpan)`` makes the failure
-    surface narrower.
+    surface narrower. ``attributes`` is typed as the protocol's union
+    (``dict | None``) so pyright accepts this as a structural match for
+    ``_SpanLike`` — the protocol declares the field invariant because
+    it's mutable, and a narrower ``dict[str, Any]`` would not satisfy it.
     """
+
+    name: str
+    attributes: dict[str, Any] | None
 
     def __init__(self, name: str, attributes: dict[str, Any]):
         self.name = name

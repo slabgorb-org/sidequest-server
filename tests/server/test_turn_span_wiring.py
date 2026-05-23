@@ -10,7 +10,7 @@ be rooted in a ``turn`` span for the dashboard to group by turn.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -21,24 +21,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from sidequest.agents.orchestrator import NarrationTurnResult
-from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.setup import init_tracer
 from tests.server.conftest import _build_turn_context_for_test
-
-
-def _fake_dispatch_package(turn_id: str = "t-test") -> DispatchPackage:
-    return DispatchPackage(
-        turn_id=turn_id,
-        per_player=[],
-        cross_player=[],
-        confidence_global=0.0,
-    )
-
-
-def _fake_local_dm(turn_id: str = "t-test") -> MagicMock:
-    fake_dm = MagicMock()
-    fake_dm.decompose = AsyncMock(return_value=_fake_dispatch_package(turn_id))
-    return fake_dm
 
 
 @pytest.fixture

@@ -27,7 +27,6 @@ import pytest
 
 from sidequest.agents.orchestrator import NarrationTurnResult
 from sidequest.game.session import NarrativeEntry
-from sidequest.protocol.dispatch import DispatchPackage
 from tests.server.conftest import _build_turn_context_for_test
 
 # ---------------------------------------------------------------------------
@@ -69,21 +68,6 @@ class TestNarrativeEntryAuthorValidator:
 # ---------------------------------------------------------------------------
 # Layer 2 — Wire tests on _execute_narration_turn (AC1, AC2, AC3)
 # ---------------------------------------------------------------------------
-
-
-def _fake_dispatch_package(turn_id: str = "t-test") -> DispatchPackage:
-    return DispatchPackage(
-        turn_id=turn_id,
-        per_player=[],
-        cross_player=[],
-        confidence_global=0.0,
-    )
-
-
-def _fake_local_dm(turn_id: str = "t-test") -> MagicMock:
-    fake_dm = MagicMock()
-    fake_dm.decompose = AsyncMock(return_value=_fake_dispatch_package(turn_id))
-    return fake_dm
 
 
 def _captured_narrative_entries(sd) -> list[NarrativeEntry]:

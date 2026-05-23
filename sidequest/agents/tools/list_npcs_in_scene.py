@@ -46,6 +46,7 @@ from sidequest.agents.tool_registry import (
     ToolResult,
     tool,
 )
+from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.session import Npc
 
 
@@ -97,9 +98,29 @@ async def list_npcs_in_scene(args: ListNpcsInSceneArgs, ctx: ToolContext) -> Too
 
     matched: list[Npc]
     if eff is None:
+        # No scene context (no perspective_pc, or PC not in snapshot, or
+        # PC has no current_room) — return the full roster. This is the
+        # omniscient / debug-caller fallback documented in this module's
+        # docstring; it intentionally bypasses ``is_npc_in_scene`` so a
+        # PC who has not yet been placed sees everyone rather than an
+        # empty scene.
         matched = list(snapshot.npcs)
     else:
-        matched = [n for n in snapshot.npcs if n.current_room == eff or n.location == eff]
+        # Story 61-7 unification: delegate per-NPC scene membership to
+        # ``sidequest.game.npc_scene.is_npc_in_scene`` so the snapshot
+        # projection (``_apply_phase_c_projections``) and this tool reach
+        # IDENTICAL verdicts on every NPC. Carries the previous
+        # ``current_room or location`` structured-field union, adds the
+        # ``last_seen_location`` prose fallback (when both structured
+        # fields are unset), and propagates the unresolved-encounter
+        # actor-membership branch (previously projection-only) to the
+        # tool path.
+        encounter = snapshot.encounter
+        matched = [
+            n
+            for n in snapshot.npcs
+            if is_npc_in_scene(n, current_room=eff, encounter=encounter)
+        ]
 
     payload: dict[str, Any] = {
         "scene_id": eff,

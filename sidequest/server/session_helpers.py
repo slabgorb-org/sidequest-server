@@ -25,6 +25,7 @@ from sidequest.agents.orchestrator import (
 from sidequest.game.builder import humanize_snake_case
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.session import (
     GameSnapshot,
@@ -79,42 +80,6 @@ _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
 # determinism — open question #3 in red-phase notes settled here).
 _KNOWN_FACTS_TAIL_K = 8
 _DISCOVERED_CLUES_CAP = 12
-
-
-def _npc_in_scene(
-    npc: object,
-    snapshot: GameSnapshot,
-    *,
-    current_room: str | None,
-) -> bool:
-    """Predicate for the 61-2 in-scene NPC projection.
-
-    An NPC is "in scene" iff either:
-
-    * ``last_seen_location`` equals the acting PC's current room
-      (passed in as ``current_room`` — resolved ONCE by the caller from
-      ``snapshot.party_location(perspective=...)`` so the per-NPC loop
-      does not fan out N+1 ``snapshot.party_location_query`` OTEL spans
-      and drown the GM panel's lie-detector signal), or
-    * The NPC is named in an unresolved encounter's actor list
-      (``snapshot.encounter.actors[*].name``).
-
-    The second branch covers structured combat / chase / social
-    encounters where the participants are not strictly co-located in
-    room terms (e.g. a chase across multiple rooms). Off-stage NPCs
-    (those failing both predicates) are dropped from
-    ``state_summary["npcs"]`` but remain identifiable via
-    ``state_summary["npc_pool"]`` (gaslighting-doctrine anchor).
-    """
-    last_seen = getattr(npc, "last_seen_location", None)
-    if current_room and last_seen and last_seen == current_room:
-        return True
-    encounter = snapshot.encounter
-    if encounter is not None and not encounter.resolved:
-        name = getattr(getattr(npc, "core", None), "name", None)
-        if name and any(actor.name == name for actor in encounter.actors):
-            return True
-    return False
 
 
 def _apply_phase_c_projections(
@@ -182,10 +147,14 @@ def _apply_phase_c_projections(
         counts["room_states_dropped"] = before - len(payload["room_states"])
 
         # npcs — in-scene-only projection + nested belief_state strip.
+        # Story 61-7 unifies the in-scene predicate with the
+        # ``list_npcs_in_scene`` tool — see
+        # ``sidequest.game.npc_scene.is_npc_in_scene``.
+        encounter = snapshot.encounter
         npcs_payload = payload.get("npcs", [])
         in_scene_names: set[str] = set()
         for npc in snapshot.npcs:
-            if _npc_in_scene(npc, snapshot, current_room=current_room_id):
+            if is_npc_in_scene(npc, current_room=current_room_id, encounter=encounter):
                 name = getattr(getattr(npc, "core", None), "name", None)
                 if name:
                     in_scene_names.add(name)

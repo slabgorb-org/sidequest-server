@@ -190,8 +190,7 @@ def _compute_zones_payload(sections: list[PromptSection]) -> list[dict[str, Any]
                         # ACTUALLY ride the cached block (bucket=System AND
                         # zone in {Primacy, Early}) AND are volatile state.
                         "mis_zoned": (
-                            _section_rides_cache(s.name, zone_value)
-                            and s.category.value == "state"
+                            _section_rides_cache(s.name, zone_value) and s.category.value == "state"
                         ),
                     }
                     for s in bucket
@@ -2964,42 +2963,77 @@ class Orchestrator:
                 "_invoke_with_retry_once: loop exhausted without return — should be unreachable"
             )
 
-    def _maybe_emit_oversized_canary(
+    def _check_oversized_prompt(
         self,
         system_prompt: str,
         user_message: str,
         registry: PromptRegistry,
         agent_name: str,
-    ) -> None:
-        """Soft canary for unbounded growth regressions (ADR-098 §Bound canary)."""
+    ) -> bool:
+        """Hard-cap canary (Story 61-3 — promotes ADR-098 §Bound canary).
+
+        When ``len(system_prompt) + len(user_message) > SOFT_PROMPT_BUDGET_BYTES``
+        (~2 MB ≈ 500K tokens, half of Opus 4.7's 1M window), refuses the
+        narrator turn. The 2026-05-23 incident burned $313 in 48h while a
+        SOFT warning scrolled past unread overnight; the hard refuse stops
+        the SDK call from billing and the LOUD emit pages the operator.
+
+        Loudness contract (locked design B):
+
+        * ``logger.error`` (was ``logger.warning``) — red-band log filters
+          surface this during long sessions.
+        * Watcher event ``prompt_oversized_hard`` with ``severity="error"``
+          — GM panel can red-band filter on a stable event name.
+        * Exactly one emit per refused turn (callers must not loop).
+
+        :returns: ``True`` when the prompt exceeds the budget and the caller
+            MUST refuse the SDK call. ``False`` when the prompt is within
+            budget and the caller should proceed normally. Control flow stays
+            in the caller — this method does not raise.
+        """
         total = len(system_prompt) + len(user_message)
         if total <= SOFT_PROMPT_BUDGET_BYTES:
-            return
+            return False
         from sidequest.telemetry.watcher_hub import publish_event as _pub
 
         breakdown = [
             {"name": s.name, "chars": len(s.content)} for s in registry.registry(agent_name)
         ]
-        logger.warning(
-            "narrator.prompt_oversized total_bytes=%d budget=%d sections=%d",
+        logger.error(
+            "narrator.prompt_oversized total_bytes=%d budget=%d sections=%d action=refuse",
             total,
             SOFT_PROMPT_BUDGET_BYTES,
             len(breakdown),
         )
         _pub(
-            "prompt_oversized",
+            "prompt_oversized_hard",
             {
                 "total_bytes": total,
                 "budget": SOFT_PROMPT_BUDGET_BYTES,
                 "sections": breakdown,
+                "action": "refuse",
             },
             component="orchestrator",
+            severity="error",
         )
+        return True
 
-    def _degraded_result(self, *, action: str, context: TurnContext) -> NarrationTurnResult:
-        """Render the in-fiction stall on unrecoverable narrator failure."""
+    def _degraded_result(
+        self,
+        *,
+        action: str,
+        context: TurnContext,
+        narration: str = "The world holds its breath.",
+    ) -> NarrationTurnResult:
+        """Render the in-fiction stall on unrecoverable narrator failure.
+
+        :param narration: Override the default in-fiction stall text. Story
+            61-3 uses a distinct line (``"[narrator-overload — operator paged]"``)
+            on budget-refuse so session-recording grep can distinguish
+            budget-refuse from SDK-error-refuse.
+        """
         return NarrationTurnResult(
-            narration="The world holds its breath.",
+            narration=narration,
             is_degraded=True,
             agent_name=self._narrator.name(),
         )
@@ -3327,7 +3361,15 @@ class Orchestrator:
             prompt_text, registry = await self.build_narrator_prompt(action, context)
             system_prompt, user_message = registry.compose_split(agent_name)
 
-            self._maybe_emit_oversized_canary(system_prompt, user_message, registry, agent_name)
+            if self._check_oversized_prompt(system_prompt, user_message, registry, agent_name):
+                # Story 61-3: hard refuse short-circuits the SDK call. The
+                # loud emit inside _check_oversized_prompt pages the operator;
+                # the degraded result keeps the player surface alive.
+                return self._degraded_result(
+                    action=action,
+                    context=context,
+                    narration="[narrator-overload — operator paged]",
+                )
 
             logger.info(
                 "narrator.stateless_turn action=%r system_len=%d user_len=%d",
@@ -3439,6 +3481,27 @@ class Orchestrator:
                 system_blocks.append(CacheableBlock(text=valley_text, cache=False))
             if recency_text:
                 system_blocks.append(CacheableBlock(text=recency_text, cache=False))
+
+            # Story 61-3: hard-cap oversized-prompt canary on the SDK path.
+            # The 2026-05-23 incident burned $313 in 48h while a SOFT warning
+            # on the SYNCHRONOUS path (the wrong path — ADR-101 default is
+            # the SDK path) scrolled past unread. Refuse before the SDK call
+            # bills, page the operator via a LOUD watcher event with
+            # severity="error", and return a distinct degraded narration
+            # ("[narrator-overload — operator paged]") so the player surface
+            # doesn't hang and session-recording grep can distinguish
+            # budget-refuse from SDK-error-refuse.
+            system_prompt_total = "\n\n".join(
+                t for t in (stable_text, valley_text, recency_text) if t
+            )
+            if self._check_oversized_prompt(
+                system_prompt_total, user_message, registry, agent_name
+            ):
+                return self._degraded_result(
+                    action=action,
+                    context=context,
+                    narration="[narrator-overload — operator paged]",
+                )
 
             # Stability-audit diagnostic — per-block token estimate using the
             # project's standard char/4 approximation (see orchestrator.py

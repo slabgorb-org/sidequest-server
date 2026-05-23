@@ -767,3 +767,105 @@ def test_npc_in_scene_predicate_divergence_from_list_npcs_in_scene_tool() -> Non
         "`current_room` agreement — which would be the 61-7 follow-up "
         "landing, and this test should be updated in lockstep."
     )
+
+
+# ---------------------------------------------------------------------------
+# Reviewer SHOULD-FIX (gaslighting-doctrine) — projection MUST skip
+# room_states / npcs when actor location is unresolvable, AND the
+# actor_location_empty warning MUST fire before the projection (so the
+# GM panel sees the degraded-location signal next to the projection-
+# skip outcome rather than after the damage is already done).
+#
+# Without this guard, ``party_location(perspective=acting_pc) == None``
+# (mid-session split, missing seat, pre-chargen reentry) causes the
+# room_states projection to strip every room to `{}` and the npcs
+# projection to drop every NPC — the narrator then improvises into an
+# empty world (the exact pattern
+# ``project_narrator_gaslighting_doctrine.md`` warns against: don't
+# strip state silently when the narrator depends on it).
+# ---------------------------------------------------------------------------
+
+
+def test_projection_skips_room_states_and_npcs_when_actor_location_unresolvable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When ``party_location(perspective=char_name)`` returns None the
+    projection MUST noop on ``room_states`` and ``npcs`` (pass through
+    the original snapshot data) AND the ``actor_location_empty``
+    warning MUST fire before the state_summary is built.
+
+    Degraded actor location is NOT the same as "no rooms / no NPCs
+    exist". The projection-as-gaslighter pattern (stripping state
+    silently when the narrator depends on it) is exactly what
+    project_narrator_gaslighting_doctrine.md tells us NOT to do.
+    """
+    import logging
+
+    snap = _make_snapshot(rooms=5, npcs_in_scene=2, npcs_off_stage=3)
+    # Wipe the seat → character map so party_location(perspective=Alice)
+    # returns None (no entry in character_locations for the acting PC).
+    snap.character_locations.clear()
+
+    with caplog.at_level(logging.WARNING, logger="sidequest.server.session_helpers"):
+        payload = _state_summary_payload(snap)
+
+    # Warning fired before projection ran.
+    warnings = [r for r in caplog.records if "actor_location_empty" in r.getMessage()]
+    assert warnings, (
+        "actor_location_empty warning did NOT fire on a snapshot with "
+        "unresolvable acting-PC location. Without this the GM panel "
+        "cannot tell that the projection skipped vs. that there was "
+        "nothing to project. The warning must precede the projection "
+        "(gaslighting-doctrine signal-before-strip ordering)."
+    )
+
+    # room_states NOT stripped — every room from the snapshot survives.
+    room_states = payload.get("room_states")
+    assert isinstance(room_states, dict) and len(room_states) == 5, (
+        f"Gaslighting-doctrine violation: room_states was stripped to "
+        f"{room_states!r} despite the actor location being unresolvable. "
+        "Degraded location != no rooms exist. The projection MUST noop "
+        "on room_states when current_room_id is None/empty so the "
+        "narrator sees the real geography rather than an empty world."
+    )
+
+    # npcs NOT stripped — every NPC from the snapshot survives.
+    npcs = payload.get("npcs")
+    assert isinstance(npcs, list) and len(npcs) == 5, (
+        f"Gaslighting-doctrine violation: npcs was stripped to "
+        f"{len(npcs) if isinstance(npcs, list) else npcs!r} despite the "
+        "actor location being unresolvable. Degraded location != no "
+        "NPCs exist. The projection MUST noop on npcs when "
+        "current_room_id is None/empty so the narrator can still cite "
+        "the off-stage cast (via the unfiltered npcs list AND npc_pool)."
+    )
+
+
+def test_projection_still_runs_known_facts_and_clues_when_actor_location_unresolvable() -> None:
+    """The PC/scenario-scoped projections (``known_facts`` tail,
+    ``discovered_clues`` cap) MUST still run when actor location is
+    unresolvable — they don't depend on location at all and the
+    cost-runaway pressure they relieve doesn't go away just because
+    the seat map is degraded.
+    """
+    snap = _make_snapshot(known_facts_per_pc=25, clues=30)
+    snap.character_locations.clear()
+
+    payload = _state_summary_payload(snap)
+
+    chars = payload.get("characters") or []
+    assert chars, "fixture broken: no characters in state_summary"
+    facts = chars[0].get("known_facts") or []
+    assert len(facts) <= 8, (
+        f"known_facts projection skipped when actor location was "
+        f"unresolvable: PC has {len(facts)} facts (expected ≤ 8). "
+        "PC-scoped projections must run regardless of actor location."
+    )
+
+    sc = payload.get("scenario_state") or {}
+    clues = sc.get("discovered_clues") or []
+    assert len(clues) <= 12, (
+        f"discovered_clues projection skipped when actor location was "
+        f"unresolvable: {len(clues)} clues (expected ≤ 12). "
+        "Scenario-scoped projections must run regardless of actor location."
+    )

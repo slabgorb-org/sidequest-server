@@ -85,14 +85,17 @@ def _npc_in_scene(
     npc: object,
     snapshot: GameSnapshot,
     *,
-    perspective: str,
+    current_room: str | None,
 ) -> bool:
     """Predicate for the 61-2 in-scene NPC projection.
 
     An NPC is "in scene" iff either:
 
     * ``last_seen_location`` equals the acting PC's current room
-      (``snapshot.party_location(perspective=perspective)``), or
+      (passed in as ``current_room`` — resolved ONCE by the caller from
+      ``snapshot.party_location(perspective=...)`` so the per-NPC loop
+      does not fan out N+1 ``snapshot.party_location_query`` OTEL spans
+      and drown the GM panel's lie-detector signal), or
     * The NPC is named in an unresolved encounter's actor list
       (``snapshot.encounter.actors[*].name``).
 
@@ -103,7 +106,6 @@ def _npc_in_scene(
     ``state_summary["npcs"]`` but remain identifiable via
     ``state_summary["npc_pool"]`` (gaslighting-doctrine anchor).
     """
-    current_room = snapshot.party_location(perspective=perspective)
     last_seen = getattr(npc, "last_seen_location", None)
     if current_room and last_seen and last_seen == current_room:
         return True
@@ -119,26 +121,37 @@ def _apply_phase_c_projections(
     snapshot: GameSnapshot,
     payload: dict,
     *,
-    perspective: str,
+    current_room_id: str | None,
 ) -> dict[str, int]:
     """Mutate ``payload`` in place to apply the 61-2 per-field projections.
+
+    ``current_room_id`` is resolved ONCE by the caller from
+    ``snapshot.party_location(perspective=...)``; the caller is also
+    responsible for emitting the ``actor_location_empty`` warning (and
+    deciding whether the turn is salvageable). This split exists because
+    a per-NPC ``snapshot.party_location(...)`` call would fan out N+1
+    ``snapshot.party_location_query`` OTEL spans per turn and drown
+    Sebastien's lie-detector signal in the GM panel.
+
+    When ``current_room_id`` is ``None`` or empty the ``room_states``
+    and ``npcs`` projections are SKIPPED — degraded actor location is
+    NOT the same as "no rooms exist" / "no NPCs exist" and silently
+    stripping them is the projection-as-gaslighter pattern this story
+    exists to NOT introduce. The ``known_facts`` and
+    ``discovered_clues`` projections are PC/scenario-scoped and still
+    run (they don't depend on actor location).
 
     Returns a dict of projection counts (for the
     ``prompt.game_state.bytes`` span attributes — the GM-panel
     lie-detector contract):
 
     * ``room_states_dropped`` — count of room ids removed from
-      ``payload["room_states"]``.
+      ``payload["room_states"]`` (zero when the projection was skipped).
     * ``npcs_dropped`` — count of NPCs filtered out by the in-scene
-      predicate.
+      predicate (zero when the projection was skipped).
     * ``known_facts_truncated_total`` — sum across PCs of facts
       truncated past the tail-K window.
     * ``clues_truncated`` — count of ``discovered_clues`` over the cap.
-
-    No silent fallbacks: if a field is structurally malformed (e.g.
-    ``room_states`` is unexpectedly a list), the projection skips it
-    and leaves a zero count so the GM panel surfaces the gap rather
-    than masking it.
     """
     counts: dict[str, int] = {
         "room_states_dropped": 0,
@@ -148,39 +161,37 @@ def _apply_phase_c_projections(
     }
 
     # ---------------------------------------------------------------
-    # room_states — keep only the acting PC's current room.
+    # room_states + npcs — both depend on actor location. When the
+    # caller couldn't resolve it (and has already logged the
+    # actor_location_empty warning), skip both projections rather than
+    # gaslight the narrator with "no rooms / no NPCs". The pass-through
+    # path costs a few more bytes; the alternative is the narrator
+    # confabulating into an empty world.
     # ---------------------------------------------------------------
-    current_room_id = snapshot.party_location(perspective=perspective) or ""
-    room_states = payload.get("room_states")
-    if isinstance(room_states, dict):
+    if current_room_id:
+        # room_states — keep only the acting PC's current room.
+        room_states = payload.get("room_states", {})
         before = len(room_states)
-        if current_room_id and current_room_id in room_states:
+        if current_room_id in room_states:
             payload["room_states"] = {current_room_id: room_states[current_room_id]}
         else:
-            # Current room is blank OR absent from the dumped room_states
-            # (no container retrieval state has been recorded for it
-            # yet). Surface the empty case explicitly — narrator gets an
-            # empty dict (still a structural anchor), every other room
-            # is dropped.
+            # current_room_id is set but no RoomState exists for it yet
+            # (no container retrieval recorded). Empty dict preserves
+            # the structural anchor; every other room id is dropped.
             payload["room_states"] = {}
         counts["room_states_dropped"] = before - len(payload["room_states"])
 
-    # ---------------------------------------------------------------
-    # npcs — in-scene-only projection + nested belief_state strip.
-    # ---------------------------------------------------------------
-    npcs_payload = payload.get("npcs")
-    if isinstance(npcs_payload, list):
+        # npcs — in-scene-only projection + nested belief_state strip.
+        npcs_payload = payload.get("npcs", [])
         in_scene_names: set[str] = set()
         for npc in snapshot.npcs:
-            if _npc_in_scene(npc, snapshot, perspective=perspective):
+            if _npc_in_scene(npc, snapshot, current_room=current_room_id):
                 name = getattr(getattr(npc, "core", None), "name", None)
                 if name:
                     in_scene_names.add(name)
         before = len(npcs_payload)
         kept: list[dict] = []
         for entry in npcs_payload:
-            if not isinstance(entry, dict):
-                continue
             core = entry.get("core")
             entry_name = core.get("name") if isinstance(core, dict) else entry.get("name")
             if entry_name in in_scene_names:
@@ -192,24 +203,23 @@ def _apply_phase_c_projections(
         counts["npcs_dropped"] = before - len(kept)
 
     # ---------------------------------------------------------------
-    # characters[*].known_facts — per-PC tail-K projection.
+    # characters[*].known_facts — per-PC tail-K projection. PC-scoped,
+    # runs regardless of actor location.
     # ---------------------------------------------------------------
-    chars_payload = payload.get("characters")
-    if isinstance(chars_payload, list):
-        truncated_total = 0
-        for char_entry in chars_payload:
-            if not isinstance(char_entry, dict):
-                continue
-            facts = char_entry.get("known_facts")
-            if isinstance(facts, list) and len(facts) > _KNOWN_FACTS_TAIL_K:
-                truncated_total += len(facts) - _KNOWN_FACTS_TAIL_K
-                char_entry["known_facts"] = facts[-_KNOWN_FACTS_TAIL_K:]
-        counts["known_facts_truncated_total"] = truncated_total
+    chars_payload = payload.get("characters", [])
+    truncated_total = 0
+    for char_entry in chars_payload:
+        facts = char_entry.get("known_facts")
+        if isinstance(facts, list) and len(facts) > _KNOWN_FACTS_TAIL_K:
+            truncated_total += len(facts) - _KNOWN_FACTS_TAIL_K
+            char_entry["known_facts"] = facts[-_KNOWN_FACTS_TAIL_K:]
+    counts["known_facts_truncated_total"] = truncated_total
 
     # ---------------------------------------------------------------
     # scenario_state.discovered_clues — size cap (ordered by clue id
     # for determinism; the field is a set in the source so insertion
-    # order is not preserved).
+    # order is not preserved). Scenario-scoped, runs regardless of
+    # actor location.
     # ---------------------------------------------------------------
     scenario_payload = payload.get("scenario_state")
     if isinstance(scenario_payload, dict):
@@ -742,6 +752,32 @@ def _build_turn_context(
                 else entry.get("name") == char_name
             )
         ]
+    # Resolve the acting PC's current room ONCE for both the 61-2
+    # projection seam and the 45-13 room-state-injection span below.
+    # Single resolution avoids fan-out of ``snapshot.party_location_query``
+    # OTEL spans (party_location emits one per call; the previous shape
+    # called it once per NPC inside the projection loop = N+1 spans per
+    # turn, drowning the GM panel's lie-detector signal).
+    current_room_id = snapshot.party_location(perspective=char_name)
+    if not current_room_id:
+        # No silent fallback (CLAUDE.md): a turn without a canonical
+        # actor location renders both the room-state injection gate
+        # (45-13) AND the 61-2 room_states/npcs projection unsafe —
+        # projecting "current room only" when there IS no current room
+        # would strip every room and every NPC from the narrator's
+        # <game_state>, which is the projection-as-gaslighter pattern
+        # (see ``project_narrator_gaslighting_doctrine.md``: don't
+        # strip state silently when the narrator depends on it).
+        # Fire the warning HERE — before the projection seam — and
+        # pass ``None`` into ``_apply_phase_c_projections`` so the
+        # room_states/npcs branches noop and the original snapshot
+        # data rides through. Other 61-2 projections (known_facts,
+        # discovered_clues) are PC/scenario-scoped and still run.
+        logger.warning(
+            "state.room_state_injected_unreachable reason=actor_location_empty interaction=%d",
+            snapshot.turn_manager.interaction,
+        )
+
     # Story 61-2 / ADR-110 Phase C — projections for the four growing
     # snapshot fields that 57-5's Phase B missed: room_states (project to
     # acting PC's current room), npcs (in-scene only + drop nested
@@ -752,7 +788,7 @@ def _build_turn_context(
     _projection_counts = _apply_phase_c_projections(
         snapshot,
         state_summary_payload,
-        perspective=char_name,
+        current_room_id=current_room_id,
     )
 
     state_summary_payload["party_formation"] = [
@@ -768,24 +804,12 @@ def _build_turn_context(
     # lie-detector must be able to distinguish "gate engaged with
     # nothing to report" from "gate not engaged at all". Per Wave 2B
     # (story 45-48), the room is keyed off the acting PC's location
-    # (``snapshot.party_location(perspective=char_name)``) — there is
-    # no party-level snapshot.location anymore. The retrieved-container
-    # payload also flows into ``state_summary_payload`` automatically
-    # because line 312 already serializes the full ``snapshot`` (which
-    # includes ``room_states``) into the narrator's <game_state> block.
-    current_room_id = snapshot.party_location(perspective=char_name)
+    # (``snapshot.party_location(perspective=char_name)``, resolved
+    # above and reused here). The retrieved-container payload also
+    # flows into ``state_summary_payload`` automatically because
+    # ``snapshot.room_states`` was serialized above (and projected to
+    # the current room only when actor location was resolvable).
     if not current_room_id:
-        # No silent fallback (CLAUDE.md): a turn without a canonical
-        # location renders the room-state gate unreachable — the span
-        # would fire with ``room_id=""`` and look indistinguishable from
-        # a valid empty room. Log a warning so the GM panel can spot
-        # the configuration gap. The span still fires below (so
-        # Sebastien's lie-detector keeps its no-op case) but with
-        # ``room_id=""`` AND a logged warning.
-        logger.warning(
-            "state.room_state_injected_unreachable reason=actor_location_empty interaction=%d",
-            snapshot.turn_manager.interaction,
-        )
         current_room_id = ""
     current_room_state = snapshot.room_states.get(current_room_id)
     retrieved_container_count = (

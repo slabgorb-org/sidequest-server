@@ -25,7 +25,10 @@ from sidequest.agents.orchestrator import (
 from sidequest.game.builder import humanize_snake_case
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.npc_scene import is_npc_in_scene
+from sidequest.game.npc_scene import (
+    is_npc_anchored_by_encounter,
+    is_npc_in_scene,
+)
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.session import (
     GameSnapshot,
@@ -123,6 +126,12 @@ def _apply_phase_c_projections(
         "npcs_dropped": 0,
         "known_facts_truncated_total": 0,
         "clues_truncated": 0,
+        # Story 61-7 (review-fix round 2) — OTEL Observability Principle:
+        # the GM panel must distinguish NPCs kept by location match from
+        # NPCs kept by the encounter-actor override branch. ``npcs_dropped``
+        # alone is silent on which branch fired. See
+        # ``sidequest.game.npc_scene.is_npc_anchored_by_encounter``.
+        "encounter_anchored_count": 0,
     }
 
     # ---------------------------------------------------------------
@@ -149,13 +158,23 @@ def _apply_phase_c_projections(
         # npcs — in-scene-only projection + nested belief_state strip.
         # Story 61-7 unifies the in-scene predicate with the
         # ``list_npcs_in_scene`` tool — see
-        # ``sidequest.game.npc_scene.is_npc_in_scene``.
+        # ``sidequest.game.npc_scene.is_npc_in_scene``. ``npc.core.name``
+        # is guaranteed non-empty by ``CreatureCore.name_non_blank``
+        # field validator (``sidequest/game/creature_core.py:239``);
+        # the set-add cannot silently collapse identities under the
+        # current model invariant. See
+        # ``test_upstream_creaturecore_validator_blocks_empty_npc_names``
+        # for the regression guard that pins the invariant.
         encounter = snapshot.encounter
+        encounter_anchored = 0
         npcs_payload = payload.get("npcs", [])
         in_scene_names: set[str] = set()
         for npc in snapshot.npcs:
             if is_npc_in_scene(npc, current_room=current_room_id, encounter=encounter):
                 in_scene_names.add(npc.core.name)
+                if is_npc_anchored_by_encounter(npc, encounter):
+                    encounter_anchored += 1
+        counts["encounter_anchored_count"] = encounter_anchored
         before = len(npcs_payload)
         kept: list[dict] = []
         for entry in npcs_payload:

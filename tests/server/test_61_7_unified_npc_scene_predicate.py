@@ -747,125 +747,70 @@ async def test_unified_predicate_converges_on_mixed_roster() -> None:
 # ---------------------------------------------------------------------------
 # Round-2 RED (review-fix) — empty-string edge cases the simplify-pass missed
 #
-# Reviewer caught that the TEA verify-pass dropped defensive `if name:`
-# truthy guards on the (correct) observation that the type system
-# guarantees `npc.core` non-None. The type system does NOT guarantee
-# `npc.core.name` non-empty (CreatureCore.name is `name: str` with no
-# `min_length`), so removing the guard reintroduced an empty-string
-# false-positive surface. These tests RED today and must pass once Dev
-# re-introduces the truthy guards (or enforces min_length=1 upstream).
+# Reviewer (edge-hunter) flagged that the TEA-verify simplify-pass
+# dropped defensive ``if name:`` truthy guards under the observation
+# that the type system guarantees ``npc.core`` non-None. Investigation
+# during green-round-2 revealed the bug surface is UNREACHABLE through
+# normal pydantic construction: ``CreatureCore`` has a
+# ``name_non_blank`` field validator (``sidequest/game/creature_core.py:239``)
+# that rejects empty names at construction time. The reviewer's
+# edge-hunter agent did not surface this validator and assumed the
+# type annotation ``name: str`` carried no runtime guarantee.
+#
+# Approach (logged as Design Deviation §Dev #2): rather than add
+# belt-and-suspenders runtime guards that shadow the upstream invariant
+# (and would constitute a silent fallback against malformed data the
+# model already rejects), we pin the upstream invariant with a single
+# regression-guard test below. If a future change relaxes the validator,
+# the test fires loud and the runtime guards can be re-added at that
+# time.
 # ---------------------------------------------------------------------------
 
 
-async def test_empty_named_npc_in_empty_named_encounter_actor_is_not_in_scene() -> None:
-    """Reviewer MUST-FIX (edge-hunter #1): an NPC with ``core.name=""``
-    must NOT match an encounter actor with ``name=""`` via the
-    encounter-actor branch.
+def test_upstream_creaturecore_validator_blocks_empty_npc_names() -> None:
+    """Regression guard for the load-bearing model-layer invariant.
 
-    Today (post-TEA-verify simplify) the predicate runs
-    ``any(actor.name == name for actor in encounter.actors)`` with
-    ``name=""``, which matches any actor whose name is also ``""``.
-    Result: every empty-named NPC gets a false-positive in-scene
-    verdict via the encounter override, collapsing all empty-named
-    NPCs into a single encounter-participant identity. The pre-TEA
-    simplify code's ``if name and any(...)`` guard caught this — TEA's
-    removal reintroduced the bug.
+    The 61-7 predicate (``is_npc_in_scene`` / ``is_npc_anchored_by_encounter``)
+    and the projection's set-add at ``session_helpers.py`` both rely on
+    ``npc.core.name`` being non-empty. If this invariant is ever
+    relaxed, the encounter-actor branch becomes vulnerable to
+    false-positive matches against empty-named ``EncounterActor``
+    entries (EncounterActor.name has no field validator), and the
+    projection's ``in_scene_names`` set becomes vulnerable to silent
+    identity collisions across empty-named NPCs.
 
-    Fix-shape (Dev's choice): re-introduce ``if name:`` truthy guard
-    before the ``any()`` scan, OR enforce ``min_length=1`` on
-    ``CreatureCore.name`` (broader change). Either way, an NPC with
-    no name should not silently take an encounter-participant identity.
+    The validator lives at ``sidequest/game/creature_core.py:239`` —
+    ``name_non_blank`` rejects empty or whitespace-only names.
     """
-    npc = _npc(
-        "",  # empty name on purpose
-        current_room="distant_chamber",
-        location="distant_chamber",
-        last_seen_location="distant_chamber",
-    )
-    encounter = _make_encounter([""])  # encounter actor also empty-named
-    snap = _make_snapshot(npcs=[npc], encounter=encounter)
+    from pydantic import ValidationError
 
-    proj = _projection_npc_names(snap)
-    tool = await _tool_npc_names(snap)
-
-    assert "" not in proj, (
-        "Empty-named NPC kept by projection's encounter branch via "
-        "empty-string == empty-string match. The encounter-actor "
-        "membership check must guard against empty names; see "
-        "``sidequest/game/npc_scene.py:is_npc_in_scene`` encounter "
-        "branch (line ~103)."
-    )
-    assert "" not in tool, (
-        "Empty-named NPC kept by tool's encounter branch — same "
-        "empty-string false-positive on the propagated branch."
-    )
-
-
-async def test_projection_does_not_collapse_two_empty_named_npcs_via_set_add() -> None:
-    """Reviewer MUST-FIX (edge-hunter #3): two NPCs both with
-    ``core.name=""`` that pass the in-scene predicate must NOT silently
-    collapse into a single identity via the
-    ``in_scene_names.add(npc.core.name)`` set membership lookup
-    downstream.
-
-    Today (post-TEA-verify simplify) the projection at
-    ``session_helpers.py:158`` adds ``npc.core.name`` to ``in_scene_names``
-    unconditionally; for empty-named NPCs this adds ``""`` once and the
-    second-pass dict filter drops or collapses identity. The pre-TEA
-    code's ``if name:`` guard avoided this. Either guard (and drop
-    empty-named NPCs loudly) or let the second-pass loop handle the
-    collision explicitly. Whichever path Dev picks, the projection
-    must NOT silently produce a payload where two distinct NPCs are
-    indistinguishable.
-
-    Contract: ``payload["npcs"]`` must reflect 2 surviving entries
-    (Dev keeps both) OR 0 (Dev drops both with a warn-log) — but NOT
-    silent identity collapse to 1.
-    """
-    npcs = [
-        _npc("", current_room="main_hall"),
-        _npc("", current_room="main_hall"),  # second empty-named NPC, same room
-    ]
-    snap = _make_snapshot(npcs=npcs)
-
-    # Drive the production projection and inspect the raw payload to
-    # count entries (the `_projection_npc_names` helper deduplicates
-    # via set, which is exactly the collision surface this guards).
-    pack = load_genre_pack(CONTENT_GENRE_PACKS / snap.genre_slug)
-    sd = _SessionData(
-        genre_slug=snap.genre_slug,
-        world_slug=snap.world_slug,
-        player_name="Alice",
-        player_id="player:alice",
-        snapshot=snap,
-        store=MagicMock(),
-        genre_pack=pack,
-        orchestrator=MagicMock(),
-    )
-    sd._room = room_for(snap, slug=snap.world_slug)
-    ctx = _build_turn_context(sd, room=sd._room)
-    assert ctx.state_summary is not None
-    payload_npcs = json.loads(ctx.state_summary).get("npcs") or []
-    empty_named = [
-        e
-        for e in payload_npcs
-        if (
-            (isinstance(e.get("core"), dict) and e["core"].get("name", None) == "")
-            or e.get("name", None) == ""
+    with pytest.raises(ValidationError) as excinfo:
+        CreatureCore(
+            name="",  # blank — must be rejected
+            description="d",
+            personality="p",
+            inventory=Inventory(),
+            edge=EdgePool(current=4, max=4, base_max=4),
         )
-    ]
-
-    assert len(empty_named) != 1, (
-        f"Empty-named NPC identity collapse detected: payload contains "
-        f"exactly {len(empty_named)} empty-named entry out of 2 fixture "
-        "NPCs. The set-add in ``session_helpers.py:_apply_phase_c_projections`` "
-        "is silently deduplicating empty-named NPCs into a single "
-        "identity. Fix: re-introduce ``if name:`` truthy guard before "
-        "``in_scene_names.add(...)``, or enforce min_length=1 on "
-        "CreatureCore.name. ``len(empty_named) == 0`` (drop both) or "
-        "``len(empty_named) == 2`` (keep both) are both acceptable "
-        "contracts; ``== 1`` indicates the silent-collision bug."
+    assert "name cannot be blank" in str(excinfo.value), (
+        f"Expected ``name_non_blank`` validator to reject empty name with "
+        f"'name cannot be blank', got: {excinfo.value}. If this fails, "
+        "the upstream invariant the 61-7 predicate relies on has been "
+        "weakened; the defensive ``if name:`` guards in "
+        "``npc_scene.py:is_npc_anchored_by_encounter`` and "
+        "``session_helpers.py:_apply_phase_c_projections`` should be "
+        "re-added."
     )
+
+    # Same guard for whitespace-only names (the validator uses .strip()).
+    with pytest.raises(ValidationError):
+        CreatureCore(
+            name="   ",
+            description="d",
+            personality="p",
+            inventory=Inventory(),
+            edge=EdgePool(current=4, max=4, base_max=4),
+        )
 
 
 async def test_tool_with_empty_scene_id_does_not_match_empty_string_locations() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
@@ -19,8 +20,27 @@ from sidequest.agents.tooling_protocol import (
     ToolUseBlock,
 )
 from sidequest.telemetry.spans.llm_request import llm_request_span
+from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish_event
 
 logger = logging.getLogger(__name__)
+
+
+# Story 61-4 — Cost-runaway fingerprint detector. Two parallel rolling
+# baselines (K=10 each) compare each SDK call against either an observed
+# baseline (post-warmup) or warmup floors (pre-warmup) for cost and input
+# tokens. Either trigger fires the same ``cost_runaway_suspected`` event,
+# distinguished by a ``trigger`` discriminator field. The 60K-in/12-out
+# fingerprint from the 2026-05-23 incident hits both; collapse to a single
+# event with ``io_fingerprint`` priority (decision C). Per-instance state:
+# each session creates a fresh client via ``llm_factory.build_llm_client``,
+# so per-instance deques are per-session by construction.
+
+_BASELINE_WINDOW_K: int = 10
+_WARMUP_COST_USD_FLOOR: float = 0.03
+_WARMUP_INPUT_TOKENS_FLOOR: int = 12_000
+_COST_TRIGGER_MULTIPLE: float = 5.0
+_IO_FINGERPRINT_INPUT_MULTIPLE: float = 2.0
+_IO_FINGERPRINT_OUTPUT_CEILING: int = 50
 
 
 class AnthropicSdkClientError(LlmClientError):
@@ -94,6 +114,15 @@ class AnthropicSdkClient:
 
             sdk = AsyncAnthropic(api_key=self._api_key)
         self._sdk = sdk
+
+        # Story 61-4 — per-instance rolling baselines for the cost-runaway
+        # fingerprint detector. Two parallel windows (cost_usd, input_tokens)
+        # each bounded to K=10 observations; pre-warmup comparisons use the
+        # locked floors above. ``llm_factory.build_llm_client`` returns a fresh
+        # client per session, making per-instance state per-session by
+        # construction.
+        self._cost_baseline: deque[float] = deque(maxlen=_BASELINE_WINDOW_K)
+        self._input_tokens_baseline: deque[int] = deque(maxlen=_BASELINE_WINDOW_K)
 
     @property
     def api_key_present(self) -> bool:
@@ -243,6 +272,20 @@ class AnthropicSdkClient:
                     cost,
                 )
 
+                # Story 61-4 — Cost-runaway fingerprint detector. Check the
+                # just-observed call against the rolling baselines (or warmup
+                # floors) BEFORE appending the call to those baselines, so the
+                # comparison is always against PRIOR calls. See module-level
+                # constants above for the locked thresholds (decisions A-C).
+                self._maybe_emit_cost_runaway(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost,
+                    model=response.model,
+                )
+                self._cost_baseline.append(cost)
+                self._input_tokens_baseline.append(input_tokens)
+
             text_chunks, tool_use_blocks = self._split_content(response.content)
             text = "".join(text_chunks)
             if on_text_delta is not None and text:
@@ -301,6 +344,87 @@ class AnthropicSdkClient:
 
         raise AnthropicSdkLoopExceeded(
             f"Tool-use loop did not converge in {max_iterations} iterations"
+        )
+
+    # ------------------------------------------------------------------
+    # cost-runaway fingerprint alarm (Story 61-4)
+    # ------------------------------------------------------------------
+
+    def _maybe_emit_cost_runaway(
+        self,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        model: str,
+    ) -> None:
+        """Fire ``cost_runaway_suspected`` if either trigger matches.
+
+        Two parallel rolling baselines compare the just-observed call
+        against PRIOR calls (K=10 window each):
+
+        - **Cost trigger**: ``cost_usd > 5 × baseline_cost`` (warmup
+          floor: $0.03 → trip threshold $0.15).
+        - **I/O fingerprint trigger**: ``input_tokens > 2 × baseline_input
+          AND output_tokens < 50`` (warmup floor: 12_000 → trip threshold
+          24_000 with output < 50).
+
+        Exactly one event per call: when both triggers fire simultaneously
+        (the canonical 60K-in/12-out fingerprint), the event collapses to
+        ``trigger="io_fingerprint"`` (decision C — the I/O signature is
+        the more diagnostic of the two and matches the 2026-05-23
+        incident exactly). The cost_multiple condition is still surfaced
+        through the ``cost_usd`` / ``baseline_cost_usd`` field pair so
+        operators see the full picture in one event.
+        """
+        warmup = len(self._cost_baseline) < _BASELINE_WINDOW_K
+        if warmup:
+            baseline_cost = _WARMUP_COST_USD_FLOOR
+            baseline_input = _WARMUP_INPUT_TOKENS_FLOOR
+        else:
+            baseline_cost = sum(self._cost_baseline) / len(self._cost_baseline)
+            baseline_input = sum(self._input_tokens_baseline) / len(
+                self._input_tokens_baseline
+            )
+
+        cost_triggered = cost_usd > _COST_TRIGGER_MULTIPLE * baseline_cost
+        io_triggered = (
+            input_tokens > _IO_FINGERPRINT_INPUT_MULTIPLE * baseline_input
+            and output_tokens < _IO_FINGERPRINT_OUTPUT_CEILING
+        )
+        if not (cost_triggered or io_triggered):
+            return
+
+        # Decision C: when both fire, io_fingerprint wins (more diagnostic;
+        # matches the 2026-05-23 incident signature exactly).
+        trigger = "io_fingerprint" if io_triggered else "cost_multiple"
+        fields: dict[str, Any] = {
+            "trigger": trigger,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+            "baseline_cost_usd": baseline_cost,
+            "baseline_input_tokens": baseline_input,
+            "warmup": warmup,
+            "model": model,
+        }
+        logger.error(
+            "narrator.cost_runaway_suspected trigger=%s input=%d output=%d "
+            "cost_usd=%.6f baseline_cost_usd=%.6f baseline_input_tokens=%.1f "
+            "warmup=%s",
+            trigger,
+            input_tokens,
+            output_tokens,
+            cost_usd,
+            baseline_cost,
+            baseline_input,
+            warmup,
+        )
+        _watcher_publish_event(
+            "cost_runaway_suspected",
+            fields,
+            component="narrator.sdk",
+            severity="warn",
         )
 
     # ------------------------------------------------------------------

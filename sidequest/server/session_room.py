@@ -8,6 +8,7 @@ and re-seat).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -325,14 +326,33 @@ class SessionRoom:
         Called by ``RoomRegistry`` (or last-disconnect cleanup) so the
         underlying SQLite handle is released. Safe to call when never
         bound.
+
+        Story 61-4 (Architect spec-check A): this is also the slug-
+        recycle seam for resetting the narrator's cost-runaway rolling
+        baselines. ``RoomRegistry`` never evicts a slug, so the
+        ``AnthropicSdkClient`` backing the orchestrator lives for the
+        process lifetime per slug; without a reset the rolling baseline
+        can self-train onto a sustained runaway and silence the alarm.
+        Resetting here ensures the next session starts cold. The reset
+        is best-effort — if the orchestrator is unbound, never created,
+        or its client lacks ``reset_baselines`` (e.g. claude -p / Ollama
+        backends), we no-op rather than crash teardown.
         """
         with self._lock:
-            if self._store is None:
-                return
-            try:
-                self._store.close()
-            finally:
-                self._store = None
+            if self._store is not None:
+                try:
+                    self._store.close()
+                finally:
+                    self._store = None
+
+            orch = self._orchestrator
+            if orch is not None:
+                client = getattr(orch, "_client", None)
+                reset = getattr(client, "reset_baselines", None)
+                if callable(reset):
+                    # Never crash teardown on a baseline reset failure.
+                    with contextlib.suppress(Exception):
+                        reset()
 
     def connect(self, player_id: str, *, socket_id: str) -> None:
         # Multi-socket bookkeeping: each WS for a player_id is tracked in

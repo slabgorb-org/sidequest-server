@@ -607,3 +607,235 @@ async def test_both_triggers_active_simultaneously_emit_single_event_with_io_pri
         "2026-05-23 incident signature exactly). Got "
         f"trigger={fields.get('trigger')!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. Architect spec-check A — reset_baselines() clears rolling state
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reset_baselines_clears_rolling_state(
+    monkeypatch: pytest.MonkeyPatch,
+    bound_hub: WatcherHub,
+) -> None:
+    """``RoomRegistry`` never evicts a slug (session_room.py:774-786), so
+    ``AnthropicSdkClient`` lives for the process lifetime per slug. Without
+    a reset on slug recycle, the rolling baseline can self-train onto a
+    sustained runaway and silence the alarm. ``reset_baselines()`` MUST
+    clear both deques so the next session starts cold (warmup floor active
+    again).
+
+    Sequence: warm baseline to K=10 with healthy calls. Confirm next call
+    sees the OBSERVED baseline (warmup=False). Call ``reset_baselines()``.
+    Confirm the very next call sees warmup floors (warmup=True) again.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sock = _FakeSocket()
+    await bound_hub.subscribe(sock)  # type: ignore[arg-type]
+
+    # 10 healthy warmup calls + 1 post-warmup probe that trips io_fingerprint
+    # so we capture warmup=False; then a post-reset probe at the same shape
+    # that MUST report warmup=True.
+    responses = (
+        [_healthy() for _ in range(10)]
+        + [_resp(input_tokens=25_000, output_tokens=12)]   # probe pre-reset
+        + [_resp(input_tokens=25_000, output_tokens=12)]   # probe post-reset
+    )
+    sdk = _Sdk(responses=responses)
+    client = _build_client(sdk)
+
+    # Warm baseline to K=10 + first probe (post-warmup).
+    for _ in range(11):
+        await client.complete_with_tools(
+            system_blocks=_system_blocks(),
+            messages=_user_msg(),
+            tools=_tools_empty(),
+            model="claude-sonnet-4-6",
+        )
+    await asyncio.sleep(0.05)
+
+    # Sanity: deques are full at K=10 (the eleventh probe already evicted
+    # the oldest entry; deque maxlen=10).
+    assert len(client._cost_baseline) == 10, (  # noqa: SLF001
+        f"K=10 deque should hold 10 entries after 11 calls; got "
+        f"{len(client._cost_baseline)}"  # noqa: SLF001
+    )
+
+    # First probe (call #11) should have reported warmup=False.
+    pre_reset_events = [
+        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
+    ]
+    assert len(pre_reset_events) >= 1, (
+        "Pre-reset probe at 25K-in/12-out MUST trip alarm with observed "
+        f"baseline. Got {len(pre_reset_events)} events."
+    )
+    assert pre_reset_events[-1]["fields"]["warmup"] is False, (
+        "Pre-reset probe MUST report warmup=False (baseline is observed)."
+    )
+
+    # The reset.
+    client.reset_baselines()
+    assert len(client._cost_baseline) == 0, (  # noqa: SLF001
+        f"reset_baselines() MUST clear cost deque; got "
+        f"{len(client._cost_baseline)}"  # noqa: SLF001
+    )
+    assert len(client._input_tokens_baseline) == 0, (  # noqa: SLF001
+        f"reset_baselines() MUST clear input_tokens deque; got "
+        f"{len(client._input_tokens_baseline)}"  # noqa: SLF001
+    )
+
+    # Post-reset probe MUST see warmup floors again (warmup=True).
+    sock.events.clear()
+    await client.complete_with_tools(
+        system_blocks=_system_blocks(),
+        messages=_user_msg(),
+        tools=_tools_empty(),
+        model="claude-sonnet-4-6",
+    )
+    await asyncio.sleep(0.05)
+
+    post_reset_events = [
+        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
+    ]
+    assert len(post_reset_events) == 1, (
+        f"Post-reset probe MUST trip alarm (25K > 2 × 12_000 warmup floor "
+        f"AND output<50). Got {len(post_reset_events)} events."
+    )
+    assert post_reset_events[0]["fields"]["warmup"] is True, (
+        "After reset_baselines(), the next call MUST report warmup=True "
+        "(rolling state cleared, warmup floor active again). Got "
+        f"warmup={post_reset_events[0]['fields'].get('warmup')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8. Architect spec-check A — absolute cost floor fires when baseline is high
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_absolute_cost_floor_fires_when_baseline_is_high(
+    monkeypatch: pytest.MonkeyPatch,
+    bound_hub: WatcherHub,
+) -> None:
+    """The rolling baseline can self-train onto a sustained runaway,
+    silencing the cost_multiple trigger. The ``$0.30`` absolute floor is
+    the safety net: it MUST fire even when the offending call is sub-5x
+    the (high) rolling baseline.
+
+    Sequence: train the cost baseline up to ~$0.18/call across K=10
+    consecutive runaway-shaped turns (60K-in / 500-out costs ~$0.1875 — we
+    use 500 output to keep the I/O fingerprint silent so the only trigger
+    that could speak is cost-related). After K=10 the baseline is ~$0.187.
+    Then fire a $0.31 call (input ~100K, output 500): 0.31 / 0.187 ≈ 1.66
+    — sub-5x baseline (cost_multiple silent) but > $0.30 absolute floor.
+    MUST emit one event with ``trigger="cost_absolute"``.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sock = _FakeSocket()
+    await bound_hub.subscribe(sock)  # type: ignore[arg-type]
+
+    # 10 sustained runaways at 60K in / 500 out (cost ≈ $0.1875 each) +
+    # one $0.31-shaped probe (100K in / 500 out ≈ $0.3075).
+    sustained = _resp(input_tokens=60_000, output_tokens=500)
+    probe = _resp(input_tokens=100_000, output_tokens=500)
+    sdk = _Sdk(responses=[sustained for _ in range(10)] + [probe])
+    client = _build_client(sdk)
+
+    for _ in range(11):
+        await client.complete_with_tools(
+            system_blocks=_system_blocks(),
+            messages=_user_msg(),
+            tools=_tools_empty(),
+            model="claude-sonnet-4-6",
+        )
+    await asyncio.sleep(0.05)
+
+    # The 10 warmup calls each trip cost_multiple (>$0.15 warmup floor)
+    # AND every call after warmup that exceeds $0.30 trips cost_absolute.
+    # Filter to events from the 11th call (post-warmup probe).
+    events = [
+        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
+    ]
+    post_warmup = [e for e in events if e["fields"]["warmup"] is False]
+    assert len(post_warmup) == 1, (
+        "Exactly one post-warmup event expected from the $0.31 probe; got "
+        f"{len(post_warmup)} (all post-warmup events: {post_warmup})."
+    )
+    fields = post_warmup[0]["fields"]
+    # The probe at $0.3075 with a baseline of ~$0.1875 is only ~1.64x
+    # baseline — well below the 5x cost_multiple threshold. The ONLY way
+    # this event can fire is the absolute floor.
+    assert fields["trigger"] == "cost_absolute", (
+        "Post-warmup $0.31 call with high (~$0.19) trained baseline is "
+        "sub-5x baseline (cost_multiple should be silent) AND output>=50 "
+        "(io_fingerprint silent). The only remaining trigger is the "
+        f"$0.30 absolute floor. Got trigger={fields['trigger']!r}, "
+        f"cost_usd={fields['cost_usd']!r}, "
+        f"baseline_cost_usd={fields['baseline_cost_usd']!r}"
+    )
+    assert fields["cost_usd"] > _ABSOLUTE_COST_USD_FLOOR_PROBE, (
+        f"Probe must exceed the absolute floor. Got "
+        f"cost_usd={fields['cost_usd']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. Architect spec-check A — io_fingerprint priority preserved over absolute
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_absolute_floor_does_not_re_fire_io_fingerprint_priority(
+    monkeypatch: pytest.MonkeyPatch,
+    bound_hub: WatcherHub,
+) -> None:
+    """When io_fingerprint AND the new absolute cost floor would BOTH
+    trigger on the same call, the event MUST collapse to a single event
+    with ``trigger="io_fingerprint"`` (preserves the original decision C
+    priority — io_fingerprint is the most diagnostic shape and matches
+    the 2026-05-23 incident exactly).
+
+    Sequence: a fresh client, then one 60K-in / 12-out call. That single
+    call trips:
+    - io_fingerprint (60K > 2 × 12K floor AND output<50)
+    - cost_multiple (~$0.18 > 5 × $0.03 warmup floor)
+    - cost_absolute would NOT trip on the warmup-shape (0.18 < 0.30), so
+      this test specifically sizes the call so it trips ALL three: 200K
+      input / 12 output. Cost ≈ $0.60 (>$0.30 absolute) AND output<50
+      with input>>floor (io_fingerprint) AND >>5x floor (cost_multiple).
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sock = _FakeSocket()
+    await bound_hub.subscribe(sock)  # type: ignore[arg-type]
+
+    # 200K input / 12 output trips all three triggers simultaneously.
+    sdk = _Sdk(responses=[_resp(input_tokens=200_000, output_tokens=12)])
+    client = _build_client(sdk)
+    await client.complete_with_tools(
+        system_blocks=_system_blocks(),
+        messages=_user_msg(),
+        tools=_tools_empty(),
+        model="claude-sonnet-4-6",
+    )
+    await asyncio.sleep(0.05)
+
+    events = [
+        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
+    ]
+    assert len(events) == 1, (
+        "Triple-trigger call (io_fingerprint + cost_multiple + "
+        "cost_absolute) MUST collapse to one event (no double-spam). "
+        f"Got {len(events)}."
+    )
+    assert events[0]["fields"]["trigger"] == "io_fingerprint", (
+        "Priority order is io_fingerprint > cost_multiple > "
+        "cost_absolute. When all three fire, io_fingerprint wins "
+        f"(decision C, preserved). Got trigger={events[0]['fields']['trigger']!r}"
+    )
+
+
+# Probe constant — kept local to this module so the test asserts against
+# the documented floor rather than re-importing the implementation detail.
+_ABSOLUTE_COST_USD_FLOOR_PROBE: float = 0.30

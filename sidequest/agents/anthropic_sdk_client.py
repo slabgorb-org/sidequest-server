@@ -41,6 +41,16 @@ _WARMUP_INPUT_TOKENS_FLOOR: int = 12_000
 _COST_TRIGGER_MULTIPLE: float = 5.0
 _IO_FINGERPRINT_INPUT_MULTIPLE: float = 2.0
 _IO_FINGERPRINT_OUTPUT_CEILING: int = 50
+# Architect spec-check A: absolute ceiling that fires REGARDLESS of the
+# rolling baseline. The rolling baseline can self-train onto a sustained
+# runaway — if 10 consecutive turns bill at $0.12 each, the baseline
+# averages to ~$0.12 and call 11 at $0.18 is only 1.5x baseline (sub-5x
+# threshold → silent). The May-23 incident, if it had run continuously,
+# would have calibrated the alarm into silence within 10 calls. The
+# absolute floor at $0.30/call (10x the $0.03 healthy-turn target) is the
+# safety net for that case. Symmetric with the I/O fingerprint trigger,
+# which already has an absolute output<50 floor.
+_ABSOLUTE_COST_USD_FLOOR: float = 0.30
 
 
 class AnthropicSdkClientError(LlmClientError):
@@ -350,6 +360,25 @@ class AnthropicSdkClient:
     # cost-runaway fingerprint alarm (Story 61-4)
     # ------------------------------------------------------------------
 
+    def reset_baselines(self) -> None:
+        """Clear both rolling baselines so the next call uses warmup floors.
+
+        Architect spec-check A: ``RoomRegistry`` (session_room.py:774-786)
+        never evicts a slug — the ``AnthropicSdkClient`` instance backing
+        a slug's orchestrator therefore lives for the server process
+        lifetime, not per-session. Without this reset, the rolling
+        baseline can self-train onto a sustained runaway: 10 consecutive
+        $0.12 turns calibrate the baseline to ~$0.12, after which an
+        $0.18 follow-up at 1.5x baseline is below the 5x trigger and
+        passes silently. Call this from the slug-recycle path
+        (``SessionRoom.close_store``) so the next session starts cold.
+        The absolute floor at $0.30/call (``_ABSOLUTE_COST_USD_FLOOR``)
+        is the in-session safety net for the same trained-into-silence
+        failure mode.
+        """
+        self._cost_baseline.clear()
+        self._input_tokens_baseline.clear()
+
     def _maybe_emit_cost_runaway(
         self,
         *,
@@ -358,7 +387,7 @@ class AnthropicSdkClient:
         cost_usd: float,
         model: str,
     ) -> None:
-        """Fire ``cost_runaway_suspected`` if either trigger matches.
+        """Fire ``cost_runaway_suspected`` if any trigger matches.
 
         Two parallel rolling baselines compare the just-observed call
         against PRIOR calls (K=10 window each):
@@ -368,14 +397,23 @@ class AnthropicSdkClient:
         - **I/O fingerprint trigger**: ``input_tokens > 2 × baseline_input
           AND output_tokens < 50`` (warmup floor: 12_000 → trip threshold
           24_000 with output < 50).
+        - **Absolute cost floor** (Architect spec-check A): ``cost_usd >
+          $0.30`` ALWAYS fires, regardless of baseline. The rolling
+          baseline can self-train onto a sustained runaway (10 turns at
+          $0.12 → baseline averages ~$0.12 → next $0.18 turn is sub-5x
+          and silent). The absolute floor at 10x the $0.03 healthy-turn
+          target is the safety net. Symmetric with the I/O fingerprint
+          trigger, which already has an absolute output<50 floor.
+          Baselines also reset on slug recycle — see ``reset_baselines``
+          and ``SessionRoom.close_store``.
 
-        Exactly one event per call: when both triggers fire simultaneously
-        (the canonical 60K-in/12-out fingerprint), the event collapses to
-        ``trigger="io_fingerprint"`` (decision C — the I/O signature is
-        the more diagnostic of the two and matches the 2026-05-23
-        incident exactly). The cost_multiple condition is still surfaced
+        Exactly one event per call: when multiple triggers fire
+        simultaneously, priority is io_fingerprint > cost_multiple >
+        cost_absolute (decision C, extended by spec-check A — the I/O
+        signature is the most diagnostic, matching the 2026-05-23
+        incident exactly; the cost_multiple condition is still surfaced
         through the ``cost_usd`` / ``baseline_cost_usd`` field pair so
-        operators see the full picture in one event.
+        operators see the full picture in one event).
         """
         warmup = len(self._cost_baseline) < _BASELINE_WINDOW_K
         if warmup:
@@ -392,12 +430,24 @@ class AnthropicSdkClient:
             input_tokens > _IO_FINGERPRINT_INPUT_MULTIPLE * baseline_input
             and output_tokens < _IO_FINGERPRINT_OUTPUT_CEILING
         )
-        if not (cost_triggered or io_triggered):
+        # Architect spec-check A: absolute floor — fires regardless of how
+        # high the rolling baseline has self-trained. Safety net for the
+        # "trained-into-silence" case where a sustained runaway calibrates
+        # the rolling baseline upward.
+        absolute_triggered = cost_usd > _ABSOLUTE_COST_USD_FLOOR
+        if not (cost_triggered or io_triggered or absolute_triggered):
             return
 
-        # Decision C: when both fire, io_fingerprint wins (more diagnostic;
-        # matches the 2026-05-23 incident signature exactly).
-        trigger = "io_fingerprint" if io_triggered else "cost_multiple"
+        # Priority order (decision C, extended by spec-check A):
+        # 1. io_fingerprint (most diagnostic; matches 2026-05-23 shape)
+        # 2. cost_multiple (rolling-baseline-relative; existing trigger)
+        # 3. cost_absolute (safety net for trained-into-silence baseline)
+        if io_triggered:
+            trigger = "io_fingerprint"
+        elif cost_triggered:
+            trigger = "cost_multiple"
+        else:
+            trigger = "cost_absolute"
         fields: dict[str, Any] = {
             "trigger": trigger,
             "input_tokens": input_tokens,

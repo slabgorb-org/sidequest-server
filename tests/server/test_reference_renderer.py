@@ -5,7 +5,14 @@ is pure (input dict/list/scalar → output str); no IO, no globals.
 """
 import yaml as _yaml
 
-from sidequest.server.reference_renderer import render_node, slugify
+from sidequest.server.reference_renderer import (
+    EXCLUDED_FILES,
+    LORE_PACK_FLAVOR_FILES,
+    LORE_WORLD_FILES,
+    RULES_FILES,
+    render_node,
+    slugify,
+)
 
 
 def test_slugify_lowercases_and_hyphenates():
@@ -202,3 +209,52 @@ def test_below_depth_cap_renders_normally():
     html = render_node(nested)
     assert "<pre>" not in html
     assert "<p>deep_enough</p>" in html
+
+
+def test_rules_files_in_documented_order():
+    assert RULES_FILES == (
+        "archetypes.yaml",
+        "classes.yaml",
+        "rules.yaml",
+        "progression.yaml",
+        "magic.yaml",
+        "power_tiers.yaml",
+        "achievements.yaml",
+        "tropes.yaml",
+        "equipment_tables.yaml",
+        "inventory.yaml",
+        "beat_vocabulary.yaml",
+    )
+
+
+def test_lore_world_files_in_documented_order():
+    assert LORE_WORLD_FILES == (
+        "world.yaml",
+        "cultures.yaml",
+        "history.yaml",
+        "calendar.yaml",
+        "demographics.yaml",
+        "legends.yaml",
+        "openings.yaml",
+        "lore.yaml",
+    )
+
+
+def test_lore_pack_flavor_files_in_documented_order():
+    assert LORE_PACK_FLAVOR_FILES == (
+        "cultures.yaml",
+        "lore.yaml",
+        "history.yaml",
+    )
+
+
+def test_npcs_and_seed_tropes_are_excluded():
+    assert "npcs.yaml" in EXCLUDED_FILES
+    assert "seed_tropes.yaml" in EXCLUDED_FILES
+    assert "prompts.yaml" in EXCLUDED_FILES
+
+
+def test_no_overlap_between_included_and_excluded():
+    included = set(RULES_FILES) | set(LORE_WORLD_FILES) | set(LORE_PACK_FLAVOR_FILES)
+    overlap = included & EXCLUDED_FILES
+    assert overlap == set(), f"file appears in both included and excluded: {overlap}"

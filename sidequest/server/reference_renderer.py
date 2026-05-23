@@ -115,3 +115,55 @@ def _render_list(items: list, depth: int) -> str:
         else:
             parts.append(render_node(item, depth + 1))
     return "".join(parts)
+
+
+# --- File mapping ---
+# File-to-page mapping (see spec: 2026-05-23-reference-pages-design.md §File-to-Page Mapping)
+RULES_FILES: tuple[str, ...] = (
+    "archetypes.yaml",
+    "classes.yaml",
+    "rules.yaml",
+    "progression.yaml",
+    "magic.yaml",
+    "power_tiers.yaml",
+    "achievements.yaml",
+    "tropes.yaml",
+    "equipment_tables.yaml",
+    "inventory.yaml",
+    "beat_vocabulary.yaml",
+)
+
+LORE_WORLD_FILES: tuple[str, ...] = (
+    "world.yaml",
+    "cultures.yaml",
+    "history.yaml",
+    "calendar.yaml",
+    "demographics.yaml",
+    "legends.yaml",
+    "openings.yaml",
+    "lore.yaml",
+)
+
+LORE_PACK_FLAVOR_FILES: tuple[str, ...] = (
+    "cultures.yaml",
+    "lore.yaml",
+    "history.yaml",
+)
+
+EXCLUDED_FILES: frozenset[str] = frozenset({
+    # Spoiler-bearing — see iteration 2 of the spec
+    "npcs.yaml",
+    "seed_tropes.yaml",
+    # System-tier / metadata / asset config (not player-facing content)
+    "prompts.yaml",
+    "pack.yaml",
+    "theme.yaml",
+    "visual_style.yaml",
+    "audio.yaml",
+    "portrait_manifest.yaml",
+    "cartography.yaml",
+    "axes.yaml",
+    "lethality_policy.yaml",
+    "visibility_baseline.yaml",
+    "char_creation.yaml",
+})

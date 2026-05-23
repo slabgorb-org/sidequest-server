@@ -329,3 +329,94 @@ def test_pc_with_no_current_room_skips_npcs_projection() -> None:
         "the gaslighting failure mode this §D4 path exists to prevent."
     )
     assert "OtherFarNpc" in npc_names
+
+
+# ---------------------------------------------------------------------------
+# §D1 — unresolvable-name drop counter (split from npcs_dropped)
+# ---------------------------------------------------------------------------
+
+
+def test_unresolvable_name_drops_counted_separately_from_off_scene_drops() -> None:
+    """Story 61-8 §D1 (review-fix round 2) — the new
+    ``npcs_unresolvable_name_dropped`` counter must increment on entries
+    whose ``core.name`` / top-level ``name`` extraction yields a falsy
+    value, and those entries must NOT inflate ``npcs_dropped`` (which is
+    reserved for legitimately off-scene NPCs).
+
+    Drives ``_apply_phase_c_projections`` directly with a hand-built
+    payload that contains a malformed entry — the production
+    ``CreatureCore.name_non_blank`` validator blocks empty names at
+    pydantic construction, so this branch is only reachable when the
+    serialization itself drifts. The test simulates that drift by
+    injecting the malformed payload directly.
+    """
+    from sidequest.server.session_helpers import _apply_phase_c_projections
+
+    # In-scene NPC (valid), off-scene NPC (valid name, wrong room),
+    # malformed payload entry (None name) — three entries; one kept,
+    # one off-scene, one unresolvable-name.
+    npc_in_scene = _npc("InScene", current_room="main_hall")
+    npc_off_stage = _npc("OffStage", current_room="distant_chamber")
+    snap = _make_snapshot(npcs=[npc_in_scene, npc_off_stage])
+
+    # Hand-build the payload as if from snapshot.model_dump(), then
+    # inject a malformed entry to exercise the §D1 branch.
+    payload: dict[str, Any] = {
+        "npcs": [
+            {"core": {"name": "InScene"}},
+            {"core": {"name": "OffStage"}},
+            # Malformed: core present but name=None — the §D1 branch
+            # must catch this and route to npcs_unresolvable_name_dropped.
+            {"core": {"name": None}, "disposition": 0},
+        ],
+        "room_states": {"main_hall": {"room_id": "main_hall"}},
+        "characters": [],
+    }
+
+    counts = _apply_phase_c_projections(snap, payload, current_room_id="main_hall")
+
+    assert counts["npcs_unresolvable_name_dropped"] == 1, (
+        f"Expected exactly 1 unresolvable-name drop; got "
+        f"{counts['npcs_unresolvable_name_dropped']}. The §D1 branch "
+        "at session_helpers.py:_apply_phase_c_projections must catch "
+        "the malformed entry (core.name=None) and increment the "
+        "dedicated counter, not roll it into npcs_dropped."
+    )
+    # The off-stage NPC IS a legitimate drop; assert npcs_dropped
+    # carries that count and NOTHING ELSE — i.e. the malformed entry
+    # is not double-counted into npcs_dropped.
+    assert counts["npcs_dropped"] == 1, (
+        f"npcs_dropped expected 1 (just OffStage); got {counts['npcs_dropped']}. "
+        "The unresolvable-name drop must be excluded from npcs_dropped "
+        "to keep the GM-panel signals distinguishable."
+    )
+    # And the in-scene NPC survives.
+    assert any((e.get("core") or {}).get("name") == "InScene" for e in payload["npcs"])
+
+
+# ---------------------------------------------------------------------------
+# §D3 — direct unit test for is_npc_anchored_by_encounter(empty_actors)
+# ---------------------------------------------------------------------------
+
+
+def test_is_npc_anchored_by_encounter_returns_false_for_empty_actors() -> None:
+    """Story 61-8 §D3 (review-fix round 2) — direct predicate unit
+    test. The convergence integration tests above verify both call
+    sites give the same answer, but a future change that desyncs the
+    predicates while both happening to return False would still
+    converge. This unit test isolates the predicate itself: an
+    unresolved encounter with ``actors=[]`` must return False for
+    every NPC regardless of name. Guards the §D3 contract at the
+    predicate boundary, independent of call-site wiring.
+    """
+    from sidequest.game.npc_scene import is_npc_anchored_by_encounter
+
+    encounter = _empty_actors_encounter()
+    npc = _npc("Anyone")
+
+    assert is_npc_anchored_by_encounter(npc, encounter) is False, (
+        "is_npc_anchored_by_encounter returned True for an NPC against "
+        "an empty-actors encounter. An empty actors list must NEVER "
+        "function as a blanket in-scene grant; the predicate must "
+        "require explicit actor membership."
+    )

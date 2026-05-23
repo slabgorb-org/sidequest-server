@@ -3547,6 +3547,15 @@ class Orchestrator:
             # sees it — post-wiring this should essentially never fire.
             world_id = context.world_id or "unknown"
             session_id = context.session_id or "adhoc"
+            # Story 61-8 §A (review-fix round 2): both partial-wiring
+            # guards now publish watcher events alongside logger.warning
+            # so the GM panel sees the regressions distinctly (CLAUDE.md
+            # OTEL Observability Principle — log-only is invisible to the
+            # panel). The pre-existing umbrella ``context_missing_ids``
+            # had the same gap; closing both here is the reviewer audit
+            # ask filed as a small additional fix on the §A commit.
+            from sidequest.telemetry.watcher_hub import publish_event as _pub_watcher
+
             if world_id == "unknown" or session_id == "adhoc":
                 logger.warning(
                     "narrator.sdk_path.context_missing_ids — world_id=%s "
@@ -3554,6 +3563,12 @@ class Orchestrator:
                     "_build_turn_context (should never fire in production).",
                     world_id,
                     session_id,
+                )
+                _pub_watcher(
+                    "narrator_context_missing_ids",
+                    {"world_id": world_id, "session_id": session_id},
+                    component="orchestrator",
+                    severity="warn",
                 )
             # Story 61-8 §A: defense-in-depth on the Phase-E lore_store
             # seam. The umbrella ``context_missing_ids`` guard above only
@@ -3563,8 +3578,8 @@ class Orchestrator:
             # present, ``query_lore`` would silently return
             # ``lore_store_wired=False``, and the narrator would
             # confabulate canon (the original 61-1 failure mode). Fire a
-            # separate warning so the GM panel sees the partial-wiring
-            # regression distinctly from the umbrella case.
+            # separate warning + watcher event so the GM panel sees the
+            # partial-wiring regression distinctly from the umbrella case.
             if context.lore_store is None and world_id != "unknown" and session_id != "adhoc":
                 logger.warning(
                     "narrator.sdk_path.context_missing_lore_store — "
@@ -3574,6 +3589,12 @@ class Orchestrator:
                     "thread-through of sd.lore_store.",
                     world_id,
                     session_id,
+                )
+                _pub_watcher(
+                    "narrator_context_missing_lore_store",
+                    {"world_id": world_id, "session_id": session_id},
+                    component="orchestrator",
+                    severity="warn",
                 )
 
             perception_filter = NarratorPerceptionFilter()

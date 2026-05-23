@@ -429,6 +429,54 @@ class WorldBuilder:
     # apply_npc — instantiate or update an NPC
     # ------------------------------------------------------------------
 
+    def _ensure_world_authored_pool_member(self, snap: Any, name: str) -> None:
+        """Story 61-8 §B (review-fix round 2) — pool exhaustiveness on
+        BOTH branches of ``_apply_npc``.
+
+        Round 1 only seeded the pool on the new-NPC branch, leaving
+        legacy saves and any NPC created by other code paths invisible
+        to the 61-2 projection's identity-fallback. This helper is
+        called from both branches of ``_apply_npc`` so every world-
+        authored NPC has a canonical pool entry after chapter apply.
+
+        Idempotency contract:
+
+        * No same-name member → append a new ``world_authored`` member.
+        * Existing member with ``drawn_from="dialogue_extraction"`` or
+          ``observation_pending=True`` (auto-minted from prose) →
+          PROMOTE to canonical world-authored: set
+          ``drawn_from="world_authored"`` and ``observation_pending=False``.
+          This makes the docstring-promised "world-authored NPCs override
+          a prior pending entry" contract actually hold.
+        * Existing member already canonical (``drawn_from="world_authored"``
+          or any non-prose source with ``observation_pending=False``) →
+          leave untouched. Re-applying the same chapter is a no-op.
+        """
+        existing_member = next((m for m in snap.npc_pool if m.name == name), None)
+        if existing_member is None:
+            snap.npc_pool.append(
+                NpcPoolMember(
+                    name=name,
+                    role=None,
+                    pronouns=None,
+                    appearance=None,
+                    archetype_id=None,
+                    drawn_from="world_authored",
+                    observation_pending=False,
+                )
+            )
+            return
+        # Promote prose-pending entries to canonical world-authored.
+        # Other source tags (name_generator, legacy_registry, etc.) are
+        # left alone — chapter apply is not a strict authority over
+        # entries minted by those paths, only over prose-extracted ones.
+        if (
+            existing_member.observation_pending
+            or existing_member.drawn_from == "dialogue_extraction"
+        ):
+            existing_member.drawn_from = "world_authored"
+            existing_member.observation_pending = False
+
     def _apply_npc(self, snap: Any, npc_data: ChapterNpc) -> None:
         """Upsert an NPC by name.
 
@@ -436,13 +484,15 @@ class WorldBuilder:
         disposition, description, personality, location in place. New
         NPC → append a new ``Npc`` with chapter data and defaults for
         Phase-1-deferred fields (OCEAN, belief state, resolution tier,
-        archetype axes), AND register an identity-only
-        ``NpcPoolMember`` so the 61-2 npcs projection can drop the NPC
-        from the prompt's in-scene list without losing identity (Story
-        61-8 §B — closes the exhaustiveness gap that the 61-2 review
-        flagged: off-stage NPCs the projection drops must retain
-        identity in ``snap.npc_pool`` so the narrator can still cite
-        them by name).
+        archetype axes). In BOTH branches, ensure ``snap.npc_pool``
+        carries an identity-only ``NpcPoolMember`` (Story 61-8 §B —
+        closes the exhaustiveness gap that the 61-2 review flagged: the
+        61-2 projection drops off-stage NPCs from ``snap.npcs`` and
+        falls back to ``snap.npc_pool`` for identity; every world-
+        authored NPC must have a pool entry regardless of which branch
+        of ``_apply_npc`` it traversed, including legacy saves where
+        the NPC already exists in ``snap.npcs`` but pre-dates §B's
+        pool-seed code).
         """
         if not npc_data.name:
             return
@@ -457,6 +507,11 @@ class WorldBuilder:
                 existing.location = npc_data.location
             if npc_data.personality:
                 existing.core.personality = npc_data.personality
+            # Story 61-8 §B (review-fix round 2): pool exhaustiveness
+            # MUST run for legacy saves where snap.npcs has the NPC but
+            # snap.npc_pool does not (the §B round-1 fix only covered
+            # the new-NPC branch below).
+            self._ensure_world_authored_pool_member(snap, npc_data.name)
             return
 
         core = CreatureCore(
@@ -491,26 +546,7 @@ class WorldBuilder:
                 resolved_archetype=None,
             )
         )
-        # Story 61-8 §B — npc_pool exhaustiveness. Append an
-        # identity-only pool member whenever we mint a new ``Npc`` so
-        # the prompt-projection's drop branch always has a fallback
-        # identity to cite. Idempotent vs the same name (auto-mint
-        # path may have added a pending entry from prose; world-
-        # authored NPCs override that with ``observation_pending=False``
-        # since they are canonical at chapter-apply time).
-        existing_member = next((m for m in snap.npc_pool if m.name == npc_data.name), None)
-        if existing_member is None:
-            snap.npc_pool.append(
-                NpcPoolMember(
-                    name=npc_data.name,
-                    role=None,
-                    pronouns=None,
-                    appearance=None,
-                    archetype_id=None,
-                    drawn_from="world_authored",
-                    observation_pending=False,
-                )
-            )
+        self._ensure_world_authored_pool_member(snap, npc_data.name)
 
     # ------------------------------------------------------------------
     # apply_trope — upsert a trope state by definition id

@@ -50,7 +50,7 @@ from sidequest.genre.models.rigs_world import ChassisInstanceConfig
 from sidequest.genre.models.rules import RulesConfig, SavingThrowsTable
 from sidequest.genre.models.scenario import ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
-from sidequest.genre.models.tropes import TropeDefinition
+from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.visibility import VisibilityBaseline
 from sidequest.genre.models.world import CartographyConfig, WorldConfig
 
@@ -173,6 +173,11 @@ class GenrePack(BaseModel):
     cultures: list[Culture] = Field(default_factory=list)
     prompts: Prompts
     tropes: list[TropeDefinition] = Field(default_factory=list)
+    # Epic 22 — seed trope deck. Sibling to ``tropes`` (macro arcs);
+    # loaded from ``<pack>/seed_tropes.yaml`` by ``load_genre_pack``.
+    # Empty when the file is absent — no silent fallback to a shared
+    # default deck.
+    seed_tropes: list[SeedTrope] = Field(default_factory=list)
     beat_vocabulary: BeatVocabulary | None = None
     chassis_classes: ChassisClassesConfig | None = None
     achievements: list[Achievement] = Field(default_factory=list)

@@ -1917,6 +1917,48 @@ class Orchestrator:
                 ),
             )
 
+        # Seed tropes (Valley zone) — Epic 22, Story 22-3. Active seeds
+        # surface their full authored prose; expired seeds surface as
+        # [Faded] callbacks. The span fires every build (even on empty
+        # state) so the GM panel can distinguish "no seeds this turn"
+        # from "renderer not invoked".
+        from sidequest.agents.seed_context_builder import build_seed_context_block
+        from sidequest.telemetry.spans import SPAN_NARRATOR_SEED_CONTEXT, Span
+
+        snapshot_for_seeds = context.snapshot
+        active_seeds_list = (
+            list(snapshot_for_seeds.active_seeds) if snapshot_for_seeds is not None else []
+        )
+        seed_ghosts_list = (
+            list(snapshot_for_seeds.seed_ghosts) if snapshot_for_seeds is not None else []
+        )
+        with Span.open(
+            SPAN_NARRATOR_SEED_CONTEXT,
+            {
+                "active_count": len(active_seeds_list),
+                "ghost_count": len(seed_ghosts_list),
+            },
+        ):
+            if active_seeds_list or seed_ghosts_list:
+                seed_trope_by_id = {
+                    s.id: s
+                    for s in (getattr(context.pack, "seed_tropes", []) or [])
+                    if s.id is not None
+                }
+                seed_block = build_seed_context_block(
+                    active_seeds_list, seed_ghosts_list, seed_trope_by_id
+                )
+                if seed_block:
+                    registry.register_section(
+                        agent_name,
+                        PromptSection.new(
+                            "seed_context",
+                            seed_block,
+                            AttentionZone.Valley,
+                            SectionCategory.State,
+                        ),
+                    )
+
         # SFX library (Valley zone) — ADR-098: fires every turn
         if context.available_sfx:
             sfx_list = ", ".join(context.available_sfx)

@@ -3204,6 +3204,34 @@ class WebSocketSessionHandler:
                     # flag logs a false negative (playtest 2026-05-17).
                     turn_context.monster_manual = sd.monster_manual
 
+                # Story 22-3: bootstrap the seed-trope deck for a fresh
+                # session before the narrator builds its prompt. Idempotent —
+                # no-op once any seed has been drawn (either lives on
+                # snapshot.active_seeds or has ghosted). Uses the room
+                # slug (preferred, slug-connect path) or sd.game_slug,
+                # falling back to a deterministic id assembled from the
+                # session's bound identifiers so non-slug-connect paths
+                # still get a stable, reproducible draw.
+                from sidequest.game.seed_tick import ensure_initial_draw  # noqa: PLC0415
+
+                if self._room is not None:
+                    seed_session_id = self._room.slug
+                elif sd.game_slug is not None:
+                    seed_session_id = sd.game_slug
+                else:
+                    seed_session_id = f"{sd.genre_slug}::{sd.world_slug}::{sd.player_id}"
+                ensure_initial_draw(
+                    snapshot,
+                    sd.genre_pack,
+                    session_id=seed_session_id,
+                    now_turn=snapshot.turn_manager.interaction,
+                )
+                # Refresh TurnContext from the post-bootstrap snapshot
+                # so build_narrator_prompt sees the freshly drawn seeds.
+                # Mirrors the monster_manual.injected refresh pattern at
+                # ``turn_context.npcs = list(snapshot.npcs)`` above.
+                turn_context.snapshot = snapshot
+
                 with orchestrator_process_action_span(action_len=len(action)):
                     result = await sd.orchestrator.run_narration_turn(
                         action, turn_context, room=self._room
@@ -3510,6 +3538,18 @@ class WebSocketSessionHandler:
                         sd.genre_pack,
                         now_turn=snapshot.turn_manager.interaction,
                         days_advanced=result.days_advanced,  # Story 50-4 — Pass A2 time skip
+                    )
+
+                    # Story 22-3: seed trope engine — migrate any active seed
+                    # whose lifespan_turns elapsed into a [Faded] ghost. Wired
+                    # next to tick_tropes (same lifecycle beat) so both share
+                    # the post-bump interaction value as ``now_turn``.
+                    from sidequest.game.seed_tick import tick_seeds  # noqa: PLC0415
+
+                    tick_seeds(
+                        snapshot,
+                        sd.genre_pack,
+                        now_turn=snapshot.turn_manager.interaction,
                     )
 
                     # Story 45-20: trope-resolution handshake. Diffs the

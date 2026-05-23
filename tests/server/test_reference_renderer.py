@@ -3,8 +3,6 @@
 Renderer must produce stable, escaped HTML from arbitrary YAML trees. The walker
 is pure (input dict/list/scalar → output str); no IO, no globals.
 """
-import pytest
-
 from sidequest.server.reference_renderer import render_node, slugify
 
 
@@ -42,12 +40,6 @@ def test_render_flat_dict_emits_section_per_key():
     assert '<section id="tier">' in html
 
 
-def test_render_node_list_raises_until_task_2():
-    with pytest.raises(NotImplementedError) as exc:
-        render_node(["alpha", "beta"])
-    assert "Task 2" in str(exc.value)
-
-
 def test_render_nested_dict_recurses_as_section():
     """Locks down intentional behavior: nested dicts produce nested <section>.
 
@@ -83,3 +75,52 @@ def test_render_multiline_escapes_html_content():
 def test_render_none_emits_placeholder():
     """YAML null renders as a labeled placeholder, not as silent empty <p>."""
     assert render_node(None) == "<p><em>(none)</em></p>"
+
+
+def test_render_list_of_scalars_emits_ul():
+    html = render_node(["alpha", "beta", "gamma"])
+    assert "<ul>" in html
+    assert "<li>alpha</li>" in html
+    assert "<li>beta</li>" in html
+    assert "<li>gamma</li>" in html
+    assert "</ul>" in html
+
+
+def test_render_list_of_dicts_with_name_uses_h3_anchor():
+    html = render_node([
+        {"name": "Sleuth", "description": "Investigates."},
+        {"name": "Detective", "description": "Investigates harder."},
+    ])
+    assert '<section id="sleuth">' in html
+    assert "<h3>Sleuth</h3>" in html
+    assert '<section id="detective">' in html
+
+
+def test_render_list_of_dicts_falls_through_id_title_then_index():
+    html = render_node([
+        {"id": "tier-1", "value": "low"},
+        {"title": "Tier Two", "value": "mid"},
+        {"value": "high"},
+    ])
+    assert '<section id="tier-1">' in html
+    assert "<h3>tier-1</h3>" in html
+    assert '<section id="tier-two">' in html
+    assert "<h3>Tier Two</h3>" in html
+    assert '<section id="item-3">' in html
+    assert "<h3>Item 3</h3>" in html
+
+
+def test_render_nested_dict_inside_list_recurses():
+    html = render_node([{"name": "A", "stats": {"hp": 5, "atk": 2}}])
+    assert "<h3>A</h3>" in html
+    assert "<h2>stats</h2>" in html
+    assert "<p>5</p>" in html
+    assert "<p>2</p>" in html
+
+
+def test_render_empty_list_emits_em_placeholder():
+    assert render_node([]) == "<p><em>(empty)</em></p>"
+
+
+def test_render_empty_dict_emits_em_placeholder():
+    assert render_node({}) == "<p><em>(empty)</em></p>"

@@ -24,18 +24,13 @@ def slugify(text: str) -> str:
 def render_node(node: object) -> str:
     """Render a parsed-YAML node to an HTML fragment.
 
-    Handles: dict (recursively as nested <section>), scalar (str/int/float/bool/None).
-    Lists raise NotImplementedError until Task 2 of the reference-pages plan
-    replaces this with real <ul>/<section> handling — failing loud per CLAUDE.md
-    "no silent fallbacks" doctrine in the brief window before Task 2 lands.
+    Handles: dict (recursive nested <section>), list (ul for scalars, sectioned
+    for dicts), scalar (str/int/float/bool/None).
     """
-    if isinstance(node, list):
-        raise NotImplementedError(
-            "render_node: list handling is implemented in Task 2 of the "
-            "reference-pages plan (see docs/superpowers/plans/2026-05-23-reference-pages.md)"
-        )
     if isinstance(node, dict):
-        return _render_dict(node)
+        return _render_dict(node) if node else "<p><em>(empty)</em></p>"
+    if isinstance(node, list):
+        return _render_list(node) if node else "<p><em>(empty)</em></p>"
     return _render_scalar(node)
 
 
@@ -59,4 +54,34 @@ def _render_dict(node: dict) -> str:
         parts.append(f"<h2>{escape(str(key))}</h2>")
         parts.append(render_node(value))
         parts.append("</section>")
+    return "".join(parts)
+
+
+_NAME_FIELDS = ("name", "id", "title")
+
+
+def _heading_for_item(item: dict, index: int) -> tuple[str, str]:
+    """Return (slug, display) for a list-of-dict item heading."""
+    for field in _NAME_FIELDS:
+        if field in item and item[field] is not None:
+            value = str(item[field])
+            return slugify(value), value
+    fallback = f"Item {index + 1}"
+    return slugify(fallback), fallback
+
+
+def _render_list(items: list) -> str:
+    if all(not isinstance(item, (dict, list)) for item in items):
+        lis = "".join(f"<li>{escape(str(item))}</li>" for item in items)
+        return f"<ul>{lis}</ul>"
+    parts: list[str] = []
+    for index, item in enumerate(items):
+        if isinstance(item, dict):
+            slug, display = _heading_for_item(item, index)
+            parts.append(f'<section id="{slug}">')
+            parts.append(f"<h3>{escape(display)}</h3>")
+            parts.append(render_node(item))
+            parts.append("</section>")
+        else:
+            parts.append(render_node(item))
     return "".join(parts)

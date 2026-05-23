@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
+from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -17,31 +17,7 @@ from sidequest.telemetry.spans.reference import (
 )
 
 
-@pytest.fixture
-def exporter() -> InMemorySpanExporter:
-    """Isolated in-memory exporter + tracer for each test.
-
-    Uses the same direct _tracer injection pattern as test_asset_url_span.py —
-    avoids touching the global TracerProvider so tests are safe under -n auto.
-    """
-    exp = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exp))
-    return exp
-
-
-def _tracer(exporter: InMemorySpanExporter) -> object:
-    """Return the tracer bound to the per-test exporter."""
-    # Retrieve the provider via the processor chain is fragile; instead we
-    # keep a reference to the provider in the fixture. Easier: build a fresh
-    # tracer from a fresh provider each time. We reconstruct here from the
-    # same exporter that was passed in.
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    return provider.get_tracer("test")
-
-
-def _make_tracer() -> tuple[InMemorySpanExporter, object]:
+def _make_tracer() -> tuple[InMemorySpanExporter, trace.Tracer]:
     """Return (exporter, tracer) pair bound together."""
     exp = InMemorySpanExporter()
     provider = TracerProvider()

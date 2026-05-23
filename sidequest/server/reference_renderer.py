@@ -12,7 +12,11 @@ from __future__ import annotations
 import re
 from html import escape
 
+import yaml
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+_DEPTH_CAP = 6
 
 
 def slugify(text: str) -> str:
@@ -21,16 +25,21 @@ def slugify(text: str) -> str:
     return _SLUG_RE.sub("-", lowered).strip("-")
 
 
-def render_node(node: object) -> str:
+def render_node(node: object, depth: int = 0) -> str:
     """Render a parsed-YAML node to an HTML fragment.
 
     Handles: dict (recursive nested <section>), list (ul for scalars, sectioned
-    for dicts), scalar (str/int/float/bool/None).
+    for dicts), scalar (str/int/float/bool/None). When ``depth`` reaches
+    ``_DEPTH_CAP`` for a non-empty container, the subtree is dumped as YAML
+    inside a ``<pre>`` block instead of recursing into runaway markup.
     """
+    if depth >= _DEPTH_CAP and isinstance(node, (dict, list)) and node:
+        dumped = yaml.safe_dump(node, sort_keys=False, default_flow_style=False)
+        return f"<pre>{escape(dumped)}</pre>"
     if isinstance(node, dict):
-        return _render_dict(node) if node else "<p><em>(empty)</em></p>"
+        return _render_dict(node, depth) if node else "<p><em>(empty)</em></p>"
     if isinstance(node, list):
-        return _render_list(node) if node else "<p><em>(empty)</em></p>"
+        return _render_list(node, depth) if node else "<p><em>(empty)</em></p>"
     return _render_scalar(node)
 
 
@@ -46,13 +55,13 @@ def _render_scalar(value: object) -> str:
 # Note: nested dicts recurse into nested <section> elements via render_node, not
 # <dl>/<dt>/<dd>. This is intentional per the plan; the spec design doc's
 # <dl> note is out of date and will be reconciled to match.
-def _render_dict(node: dict) -> str:
+def _render_dict(node: dict, depth: int) -> str:
     parts: list[str] = []
     for key, value in node.items():
         slug = slugify(str(key))
         parts.append(f'<section id="{slug}">')
         parts.append(f"<h2>{escape(str(key))}</h2>")
-        parts.append(render_node(value))
+        parts.append(render_node(value, depth + 1))
         parts.append("</section>")
     return "".join(parts)
 
@@ -91,7 +100,7 @@ def _heading_for_item(item: dict, index: int) -> tuple[str, str]:
 # TODO(reference v2): two list items with the same name produce duplicate id
 # attributes; acceptable for v1, fix with per-list seen-set when authoring
 # friction surfaces it.
-def _render_list(items: list) -> str:
+def _render_list(items: list, depth: int) -> str:
     if all(not isinstance(item, (dict, list)) for item in items):
         lis = "".join(f"<li>{escape(str(item))}</li>" for item in items)
         return f"<ul>{lis}</ul>"
@@ -101,8 +110,8 @@ def _render_list(items: list) -> str:
             slug, display = _heading_for_item(item, index)
             parts.append(f'<section id="{slug}">')
             parts.append(f"<h3>{escape(display)}</h3>")
-            parts.append(render_node(item))
+            parts.append(render_node(item, depth + 1))
             parts.append("</section>")
         else:
-            parts.append(render_node(item))
+            parts.append(render_node(item, depth + 1))
     return "".join(parts)

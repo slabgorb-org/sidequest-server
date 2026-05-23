@@ -3,6 +3,8 @@
 Renderer must produce stable, escaped HTML from arbitrary YAML trees. The walker
 is pure (input dict/list/scalar → output str); no IO, no globals.
 """
+import yaml as _yaml
+
 from sidequest.server.reference_renderer import render_node, slugify
 
 
@@ -174,3 +176,29 @@ def test_render_list_item_name_priority_skips_falsy_intermediate():
     html = render_node([{"name": "", "id": "fallback-id", "value": "x"}])
     assert '<section id="fallback-id">' in html
     assert "<h3>fallback-id</h3>" in html
+
+
+def test_render_at_depth_cap_falls_back_to_pre():
+    # Build a 7-deep nested dict, one level past the cap (6).
+    deep = {"k": "leaf"}
+    for _ in range(7):
+        deep = {"k": deep}
+    html = render_node(deep)
+    assert "<pre>" in html
+    assert "</pre>" in html
+
+
+def test_pre_fallback_contains_yaml_redump():
+    deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": "leaf"}}}}}}}
+    html = render_node(deep)
+    # The yaml redump should appear inside the <pre> for the deepest sub-tree
+    assert "leaf" in html
+    # Sanity check that the redump is valid yaml (uses the _yaml alias).
+    assert _yaml.safe_load("leaf: 1") == {"leaf": 1}
+
+
+def test_below_depth_cap_renders_normally():
+    nested = {"a": {"b": {"c": "deep_enough"}}}
+    html = render_node(nested)
+    assert "<pre>" not in html
+    assert "<p>deep_enough</p>" in html

@@ -28,7 +28,6 @@ The fake-SDK shape mirrors ``test_narrator_sdk_hybrid_split.py`` exactly.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path

@@ -28,7 +28,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # AC-7: IntentRouter is importable + constructible.
 # ---------------------------------------------------------------------------
@@ -124,7 +123,7 @@ def test_intent_router_model_resolves_via_call_type_classification() -> None:
     from sidequest.agents.model_routing import CallType, resolve_model
 
     resolved = resolve_model(CallType.CLASSIFICATION)
-    assert llm_factory._INTENT_ROUTER_MODEL == resolved, (
+    assert resolved == llm_factory._INTENT_ROUTER_MODEL, (
         f"_INTENT_ROUTER_MODEL ({llm_factory._INTENT_ROUTER_MODEL!r}) "
         f"must equal resolve_model(CallType.CLASSIFICATION) "
         f"({resolved!r})"
@@ -167,9 +166,7 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
     # Anthropic SDK response has ``.content`` as a list of blocks, each
     # block has ``.type`` and ``.text``. We synthesize the minimum
     # shape the adapter can extract.
-    text_block = type(
-        "Block", (), {"type": "text", "text": '{"ok": true}'}
-    )()
+    text_block = type("Block", (), {"type": "text", "text": '{"ok": true}'})()
     fake_response.content = [text_block]
     fake_client_instance.messages.create = AsyncMock(return_value=fake_response)
 
@@ -178,10 +175,10 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
         await llm.complete(system="sys", user="usr")
 
     assert fake_client_instance.messages.create.await_count == 1
-    call_kwargs = fake_client_instance.messages.create.await_args.kwargs
+    await_args = fake_client_instance.messages.create.await_args
+    assert await_args is not None
+    call_kwargs = await_args.kwargs
     assert call_kwargs["model"] == "claude-haiku-4-5-20251001", (
         f"SDK adapter must call AsyncAnthropic.messages.create with "
         f"model=claude-haiku-4-5-20251001; got model={call_kwargs.get('model')!r}"
     )
-
-

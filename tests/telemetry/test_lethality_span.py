@@ -14,7 +14,7 @@ from sidequest.agents.subsystems import BankResult
 from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
 from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroEdge
 from sidequest.protocol.dispatch import DispatchPackage, PlayerDispatch
-from sidequest.telemetry.spans import SPAN_LOCAL_DM_LETHALITY_ARBITRATE
+from sidequest.telemetry.spans import SPAN_INTENT_ROUTER_LETHALITY_ARBITRATE
 
 
 @pytest.fixture
@@ -77,7 +77,9 @@ def test_arbitrate_emits_span_with_verdict_count(otel_capture):
     )
 
     spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == SPAN_LOCAL_DM_LETHALITY_ARBITRATE
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == SPAN_INTENT_ROUTER_LETHALITY_ARBITRATE
     ]
     assert len(spans) == 1
     span = spans[0]
@@ -102,7 +104,9 @@ def test_arbitrate_no_verdict_still_emits_span(otel_capture):
         npc_cores_by_name={},
     )
     spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == SPAN_LOCAL_DM_LETHALITY_ARBITRATE
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == SPAN_INTENT_ROUTER_LETHALITY_ARBITRATE
     ]
     assert len(spans) == 1
     assert spans[0].attributes["verdict_count"] == 0

@@ -85,3 +85,45 @@ class _AsideLlm:
 def build_aside_llm() -> _AsideLlm:
     """Build the Haiku-tier LLM for out-of-band aside resolution (ADR-107)."""
     return _AsideLlm()
+
+
+# ADR-113 Intent Router producer: pre-narrator classification call. Mirrors
+# the ``_AsideLlm`` pattern verbatim — single-shot Haiku via SDK, fails loud
+# on missing API key, no fallback adapter. Model id flows from the per-call
+# routing ladder (``CallType.CLASSIFICATION``) so a future ladder revision
+# moves the constant with it.
+_INTENT_ROUTER_MODEL = "claude-haiku-4-5-20251001"
+
+
+class _IntentRouterLlm:
+    """Single-shot Haiku adapter satisfying the Intent Router's ``IntentRouterLLM``.
+
+    Same shape as :class:`_AsideLlm` — eagerly constructs an
+    ``AsyncAnthropic`` so the build-time environment check fires loudly
+    (memory rule ``feedback_no_fallbacks_hard``).
+    """
+
+    def __init__(self) -> None:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise LlmClientError(
+                "ANTHROPIC_API_KEY not set — required for the Intent Router "
+                "producer (ADR-113). No silent fallback."
+            )
+        from anthropic import AsyncAnthropic
+
+        self._sdk = AsyncAnthropic(api_key=api_key)
+
+    async def complete(self, *, system: str, user: str) -> str:
+        resp = await self._sdk.messages.create(
+            model=_INTENT_ROUTER_MODEL,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            max_tokens=2048,
+        )
+        return "".join(block.text for block in resp.content if block.type == "text")
+
+
+def build_intent_router_llm() -> _IntentRouterLlm:
+    """Build the Haiku-tier LLM for the Intent Router producer (ADR-113)."""
+    return _IntentRouterLlm()

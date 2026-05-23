@@ -55,8 +55,6 @@ def _make_package(per_player_dispatches: list[list[SubsystemDispatch]]) -> Dispa
         ],
         cross_player=[],
         confidence_global=1.0,
-        degraded=False,
-        degraded_reason=None,
     )
 
 
@@ -118,8 +116,6 @@ async def test_run_dispatch_bank_directives_include_decomposer_authored():
         ],
         cross_player=[],
         confidence_global=1.0,
-        degraded=False,
-        degraded_reason=None,
     )
     res = await run_dispatch_bank(pkg)
     payloads = [d.payload for d in res.directives]
@@ -271,8 +267,6 @@ async def test_run_dispatch_bank_empty_package_still_returns_authored_directives
         ],
         cross_player=[],
         confidence_global=1.0,
-        degraded=False,
-        degraded_reason=None,
     )
     res = await run_dispatch_bank(pkg)
     assert any(d.payload == "lone directive" for d in res.directives)
@@ -323,7 +317,7 @@ async def test_run_dispatch_bank_cycle_in_depends_on_records_bank_error(otel_cap
 
     # Bank span records the cycle-abort reason so GM panel can filter it.
     bank_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "local_dm.dispatch_bank"
+        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.dispatch_bank"
     ]
     assert len(bank_spans) == 1
     assert dict(bank_spans[0].attributes or {}).get("error") == "topo_sort_failure"
@@ -343,8 +337,8 @@ async def test_run_dispatch_bank_dangling_depends_on_is_ignored():
 
 @pytest.mark.asyncio
 async def test_run_dispatch_bank_emits_bank_and_subsystem_spans(otel_capture):
-    """run_dispatch_bank emits one local_dm.dispatch_bank span and one
-    local_dm.subsystem span per dispatch. Sebastien's lie detector: an
+    """run_dispatch_bank emits one intent_router.dispatch_bank span and one
+    intent_router.subsystem span per dispatch. Sebastien's lie detector: an
     absent span == the subsystem never ran, no matter what the narrator says."""
     a = _make_dispatch("reflect_absence", "k1")
     b = _make_dispatch(
@@ -360,8 +354,8 @@ async def test_run_dispatch_bank_emits_bank_and_subsystem_spans(otel_capture):
     assert "k2" in res.outputs_by_key
 
     spans = otel_capture.get_finished_spans()
-    bank_spans = [s for s in spans if s.name == "local_dm.dispatch_bank"]
-    sub_spans = [s for s in spans if s.name == "local_dm.subsystem"]
+    bank_spans = [s for s in spans if s.name == "intent_router.dispatch_bank"]
+    sub_spans = [s for s in spans if s.name == "intent_router.subsystem"]
 
     assert len(bank_spans) == 1
     bank_attrs = dict(bank_spans[0].attributes or {})
@@ -386,7 +380,7 @@ async def test_run_dispatch_bank_emits_bank_and_subsystem_spans(otel_capture):
 
 @pytest.mark.asyncio
 async def test_run_dispatch_bank_subsystem_span_records_error(otel_capture):
-    """When a subsystem raises, its local_dm.subsystem span records the
+    """When a subsystem raises, its intent_router.subsystem span records the
     error type and produced_directives=0 — no clean span for a broken run.
 
     See ``test_run_dispatch_bank_subsystem_exception_is_caught`` for the
@@ -405,7 +399,7 @@ async def test_run_dispatch_bank_subsystem_span_records_error(otel_capture):
         assert len(res.errors) == 1
 
         spans = otel_capture.get_finished_spans()
-        sub_spans = [s for s in spans if s.name == "local_dm.subsystem"]
+        sub_spans = [s for s in spans if s.name == "intent_router.subsystem"]
         assert len(sub_spans) == 1
         attrs = dict(sub_spans[0].attributes or {})
         assert attrs["subsystem"] == "__test_raises_span"
@@ -424,11 +418,9 @@ async def test_run_dispatch_bank_span_fires_on_empty_package(otel_capture):
         per_player=[],
         cross_player=[],
         confidence_global=1.0,
-        degraded=False,
-        degraded_reason=None,
     )
     await run_dispatch_bank(pkg)
     spans = otel_capture.get_finished_spans()
-    bank_spans = [s for s in spans if s.name == "local_dm.dispatch_bank"]
+    bank_spans = [s for s in spans if s.name == "intent_router.dispatch_bank"]
     assert len(bank_spans) == 1
     assert dict(bank_spans[0].attributes or {})["dispatch_count"] == 0

@@ -77,8 +77,6 @@ def _fake_dispatch_package(turn_id: str = "t-test") -> DispatchPackage:
         per_player=[],
         cross_player=[],
         confidence_global=0.0,
-        degraded=False,
-        degraded_reason=None,
     )
 
 
@@ -114,11 +112,9 @@ class TestPlayerTurnAuthorWiring:
         sd.orchestrator.run_narration_turn = AsyncMock(
             return_value=NarrationTurnResult(
                 narration="The torch flickers as you approach.",
-                is_degraded=False,
                 agent_duration_ms=1,
             )
         )
-        sd.local_dm = _fake_local_dm("t-author")
 
         mock_validator = MagicMock()
         mock_validator.submit = AsyncMock()
@@ -164,11 +160,9 @@ class TestPlayerTurnAuthorWiring:
         sd.orchestrator.run_narration_turn = AsyncMock(
             return_value=NarrationTurnResult(
                 narration="…",
-                is_degraded=False,
                 agent_duration_ms=1,
             )
         )
-        sd.local_dm = _fake_local_dm("t-speaker")
 
         mock_validator = MagicMock()
         mock_validator.submit = AsyncMock()
@@ -197,11 +191,9 @@ class TestPlayerTurnAuthorWiring:
         sd.orchestrator.run_narration_turn = AsyncMock(
             return_value=NarrationTurnResult(
                 narration="…",
-                is_degraded=False,
                 agent_duration_ms=1,
             )
         )
-        sd.local_dm = _fake_local_dm("t-round")
 
         mock_validator = MagicMock()
         mock_validator.submit = AsyncMock()
@@ -234,11 +226,9 @@ class TestOpeningTurnSkipsPlayerAppend:
         sd.orchestrator.run_narration_turn = AsyncMock(
             return_value=NarrationTurnResult(
                 narration="The dome looms ahead.",
-                is_degraded=False,
                 agent_duration_ms=1,
             )
         )
-        sd.local_dm = _fake_local_dm("t-opening")
 
         mock_validator = MagicMock()
         mock_validator.submit = AsyncMock()

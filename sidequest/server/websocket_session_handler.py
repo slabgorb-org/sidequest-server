@@ -3147,10 +3147,11 @@ class WebSocketSessionHandler:
                 world=sd.world_slug,
                 action_len=len(action),
             ):
-                # LocalDM is dormant on the live turn path as of 2026-04-28
-                # (docs/superpowers/specs/2026-04-28-localdm-offline-only-design.md).
-                # turn_context.dispatch_package stays None; build_narrator_prompt's
-                # is-None guards skip redaction and the dispatch bank.
+                # Intent Router (renamed from LocalDM by Story 59-2; per ADR-113)
+                # is not yet on the live turn path — Story 59-4 wires it in.
+                # Until then, turn_context.dispatch_package stays None and
+                # build_narrator_prompt's is-None guards skip redaction and the
+                # dispatch bank.
 
                 # Monster Manual injection (ADR-059, port of Rust
                 # dispatch/mod.rs:643-681). Materialize Manual NPCs and
@@ -4140,9 +4141,10 @@ class WebSocketSessionHandler:
                     # delivers the same per-player frame to every connected peer
                     # (mirrors how NARRATION is emitted at the line above). The
                     # kind is already registered in ``_KIND_TO_MESSAGE_CLS``.
-                    # Independent of the multi-target parse-failure (#5) — that
-                    # lives in local_dm and degrades the dispatch package, but
-                    # the missing broadcast here is the sole cause of peer freeze.
+                    # Independent of the multi-target parse-failure (#5): the
+                    # missing broadcast here is the sole cause of peer freeze.
+                    # (Producer-side parse failures now raise IntentRouterFailure
+                    # per ADR-113 rather than degrading the DispatchPackage.)
                     confrontation_msg: object | None = None
                     confrontation_payload: ConfrontationPayload | None = None
                     confrontation_event_attrs: dict[str, object] | None = None

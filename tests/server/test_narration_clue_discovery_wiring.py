@@ -64,8 +64,6 @@ def _fake_local_dm(turn_id: str = "t-clue") -> MagicMock:
             per_player=[],
             cross_player=[],
             confidence_global=0.0,
-            degraded=False,
-            degraded_reason=None,
         )
     )
     return fake_dm
@@ -119,7 +117,6 @@ async def test_narration_turn_discovers_matching_clue_and_mints_known_fact(
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="You find the brass library key on the desk.",
-            is_degraded=False,
             agent_duration_ms=1,
             footnotes=[
                 {
@@ -176,7 +173,6 @@ async def test_narration_turn_without_scenario_does_not_emit_or_mint(
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="The desk is dusty.",
-            is_degraded=False,
             agent_duration_ms=1,
             footnotes=[
                 {
@@ -221,7 +217,6 @@ async def test_narration_turn_with_non_matching_fact_id_is_silent(
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="The wind howls outside.",
-            is_degraded=False,
             agent_duration_ms=1,
             footnotes=[
                 {
@@ -281,7 +276,6 @@ async def test_narration_turn_mints_fact_id_when_narrator_omits(
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration=("Brother Hesh studies the bond [1]. The courier [2] never speaks."),
-            is_degraded=False,
             agent_duration_ms=1,
             footnotes=[
                 {
@@ -347,7 +341,6 @@ async def test_narration_turn_preserves_narrator_supplied_fact_id(
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="You find the brass library key on the desk.",
-            is_degraded=False,
             agent_duration_ms=1,
             footnotes=[
                 {

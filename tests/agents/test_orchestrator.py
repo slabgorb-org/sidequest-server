@@ -783,8 +783,6 @@ def test_turn_context_accepts_dispatch_package():
         per_player=[],
         cross_player=[],
         confidence_global=1.0,
-        degraded=False,
-        degraded_reason=None,
     )
     tc = TurnContext(dispatch_package=pkg)
     assert tc.dispatch_package is pkg
@@ -835,8 +833,6 @@ async def test_build_narrator_prompt_registers_narrator_directives_when_present(
         ],
         cross_player=[],
         confidence_global=1.0,
-        degraded=False,
-        degraded_reason=None,
     )
     ctx = TurnContext(dispatch_package=pkg)
 

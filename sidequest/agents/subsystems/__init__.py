@@ -27,8 +27,8 @@ from sidequest.protocol.dispatch import (
     SubsystemDispatch,
 )
 from sidequest.telemetry.spans import (
-    local_dm_dispatch_bank_span,
-    local_dm_subsystem_span,
+    intent_router_dispatch_bank_span,
+    intent_router_subsystem_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,7 +179,7 @@ async def run_dispatch_bank(
     for ca in package.cross_player:
         all_dispatches.extend(ca.dispatch)
 
-    with local_dm_dispatch_bank_span(
+    with intent_router_dispatch_bank_span(
         turn_id=package.turn_id,
         dispatch_count=len(all_dispatches),
     ) as bank_span:
@@ -207,7 +207,7 @@ async def run_dispatch_bank(
                 continue
             seen.add(d.idempotency_key)
 
-            with local_dm_subsystem_span(
+            with intent_router_subsystem_span(
                 subsystem=d.subsystem,
                 idempotency_key=d.idempotency_key,
             ) as sub_span:

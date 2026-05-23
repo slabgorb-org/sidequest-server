@@ -515,8 +515,6 @@ def _fake_local_dm() -> MagicMock:
             per_player=[],
             cross_player=[],
             confidence_global=0.0,
-            degraded=False,
-            degraded_reason=None,
         )
     )
     return fake_dm

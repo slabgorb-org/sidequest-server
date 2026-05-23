@@ -426,9 +426,7 @@ class AnthropicSdkClient:
             baseline_input = _WARMUP_INPUT_TOKENS_FLOOR
         else:
             baseline_cost = sum(self._cost_baseline) / len(self._cost_baseline)
-            baseline_input = sum(self._input_tokens_baseline) / len(
-                self._input_tokens_baseline
-            )
+            baseline_input = sum(self._input_tokens_baseline) / len(self._input_tokens_baseline)
 
         # Note: cost-multiple trigger erodes if a sustained runaway trains
         # the baseline. The absolute floor (>$0.30/call) is the safety net

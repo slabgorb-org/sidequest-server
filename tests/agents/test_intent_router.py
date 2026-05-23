@@ -35,7 +35,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fixtures — synthetic Haiku responses matching the post-cleanup
 # DispatchPackage schema (NO ``degraded`` / ``degraded_reason`` fields).
@@ -263,8 +262,7 @@ async def test_intent_router_fail_loud_on_timeout(otel_capture) -> None:
         s for s in otel_capture.get_finished_spans() if s.name == "intent_router.failed"
     ]
     assert len(failed_spans) == 2, (
-        f"expected two intent_router.failed ERROR spans (attempt + retry); "
-        f"got {len(failed_spans)}"
+        f"expected two intent_router.failed ERROR spans (attempt + retry); got {len(failed_spans)}"
     )
     attrs = dict(failed_spans[0].attributes or {})
     assert "timeout" in str(attrs.get("reason", "")).lower(), (
@@ -319,9 +317,7 @@ async def test_intent_router_fail_loud_on_unparseable_output(otel_capture) -> No
     assert len(failed_spans) == 2
     attrs = dict(failed_spans[0].attributes or {})
     preview = str(attrs.get("raw_preview", ""))
-    assert "not json" in preview, (
-        f"unparseable failure must record raw_preview; got attrs={attrs}"
-    )
+    assert "not json" in preview, f"unparseable failure must record raw_preview; got attrs={attrs}"
 
 
 @pytest.mark.asyncio
@@ -384,8 +380,7 @@ async def test_intent_router_retry_succeeds_does_not_raise(
     spans = otel_capture.get_finished_spans()
     decompose_spans = [s for s in spans if s.name == "intent_router.decompose"]
     assert len(decompose_spans) == 1, (
-        "exactly one success span must fire when retry succeeds; "
-        f"got {len(decompose_spans)}"
+        f"exactly one success span must fire when retry succeeds; got {len(decompose_spans)}"
     )
     attrs = dict(decompose_spans[0].attributes or {})
     assert attrs.get("retry_count") == 1, (
@@ -455,8 +450,7 @@ async def test_intent_router_emits_decompose_span_with_required_attrs(
     spans = otel_capture.get_finished_spans()
     decompose_spans = [s for s in spans if s.name == "intent_router.decompose"]
     assert len(decompose_spans) == 1, (
-        f"exactly one intent_router.decompose span must fire on success; "
-        f"got {len(decompose_spans)}"
+        f"exactly one intent_router.decompose span must fire on success; got {len(decompose_spans)}"
     )
     attrs = dict(decompose_spans[0].attributes or {})
     # Required attribute coverage. (Latency value will be small but must
@@ -470,18 +464,15 @@ async def test_intent_router_emits_decompose_span_with_required_attrs(
         "confidence_global",
     ):
         assert required_key in attrs, (
-            f"intent_router.decompose missing required attr {required_key!r}; "
-            f"attrs={attrs}"
+            f"intent_router.decompose missing required attr {required_key!r}; attrs={attrs}"
         )
     assert attrs["action_length"] == len(action)
     assert attrs["retry_count"] == 0, "happy path must record retry_count=0"
     assert attrs["dispatch_count"] == 0, (
-        "quiet-turn fixture has no dispatches; "
-        f"got dispatch_count={attrs['dispatch_count']}"
+        f"quiet-turn fixture has no dispatches; got dispatch_count={attrs['dispatch_count']}"
     )
     assert "claude-haiku-4-5" in str(attrs["model"]), (
-        f"intent_router.decompose must record the Haiku model id; "
-        f"got model={attrs['model']!r}"
+        f"intent_router.decompose must record the Haiku model id; got model={attrs['model']!r}"
     )
 
 

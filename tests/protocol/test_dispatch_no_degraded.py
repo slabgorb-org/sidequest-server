@@ -24,7 +24,6 @@ from pydantic import ValidationError
 
 from sidequest.protocol.dispatch import DispatchPackage
 
-
 # ---------------------------------------------------------------------------
 # AC-2: ``degraded`` and ``degraded_reason`` fields removed.
 # ---------------------------------------------------------------------------
@@ -117,8 +116,5 @@ def test_dispatch_package_no_degraded_validator_attached() -> None:
     """
     # No leftover validator method by that legacy name.
     assert not hasattr(DispatchPackage, "_degraded_requires_reason"), (
-        "_degraded_requires_reason validator must be removed alongside "
-        "the degraded field (ADR-113)"
+        "_degraded_requires_reason validator must be removed alongside the degraded field (ADR-113)"
     )
-
-

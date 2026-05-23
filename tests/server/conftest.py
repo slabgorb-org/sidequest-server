@@ -354,15 +354,12 @@ def _default_archetype_hints(monkeypatch):
 # ---------------------------------------------------------------------------
 # ClaudeClient guard — autouse. Prevents any server test from spawning a
 # real ``claude -p`` subprocess. Without this guard, every test that runs
-# through ``_handle_player_action`` fires two real Claude subprocesses per
-# turn (Orchestrator's narrator + LocalDM's decomposer), each with its own
-# multi-second startup, blowing the 30s suite budget by 20x.
+# through ``_handle_player_action`` fires a real Claude subprocess for the
+# narrator path, each with its own multi-second startup.
 #
-# The fake dispatches by model: ``"haiku"`` → canned DispatchPackage JSON
-# (LocalDM's decomposer), anything else → canned narration text with an
-# empty ``game_patch`` fence (Orchestrator's narrator). Tests that already
-# mock ``Orchestrator.run_narration_turn`` via ``patch.object`` shadow this
-# guard on the narrator path; LocalDM still routes through the fake.
+# The Intent Router producer (renamed from LocalDM by Story 59-2) does NOT
+# need this guard — it lives behind the Anthropic SDK adapter, not behind
+# ``claude -p``, and isn't on the live turn path until Story 59-4.
 # ---------------------------------------------------------------------------
 
 
@@ -374,12 +371,8 @@ _FAKE_NARRATION_TEXT = (
 
 
 def _fake_dispatch_package_json(turn_id: str = "t-fake") -> str:
-    """Minimum valid DispatchPackage JSON for LocalDM.model_validate_json."""
-    return (
-        '{"turn_id":"' + turn_id + '",'
-        '"per_player":[],"cross_player":[],'
-        '"confidence_global":0.0,"degraded":false,"degraded_reason":null}'
-    )
+    """Minimum valid DispatchPackage JSON for the producer fake."""
+    return '{"turn_id":"' + turn_id + '","per_player":[],"cross_player":[],"confidence_global":0.0}'
 
 
 class _FakeClaudeClient:
@@ -442,11 +435,10 @@ def _mock_claude_client(monkeypatch):
 
     ``from sidequest.agents.claude_client import ClaudeClient`` creates a
     fresh per-module binding, so ``monkeypatch.setattr`` on the original
-    module does NOT propagate to consumers. Patch the three sites that
+    module does NOT propagate to consumers. Patch the two sites that
     instantiate one inline:
 
     - ``orchestrator.ClaudeClient`` — Orchestrator's default narrator client
-    - ``local_dm.ClaudeClient`` — LocalDM's default decomposer client
     - ``websocket_session_handler.ClaudeClient`` — the factory default in
       ``WebSocketSessionHandler`` (defined in ``websocket_session_handler``,
       which reads its own module-level ``ClaudeClient`` binding at the
@@ -461,10 +453,6 @@ def _mock_claude_client(monkeypatch):
     """
     monkeypatch.setattr(
         "sidequest.agents.orchestrator.ClaudeClient",
-        _FakeClaudeClient,
-    )
-    monkeypatch.setattr(
-        "sidequest.agents.local_dm.ClaudeClient",
         _FakeClaudeClient,
     )
     monkeypatch.setattr(
@@ -508,8 +496,8 @@ def make_mock_claude_client(
     ``send_stateless`` wired to yield a canned :class:`ClaudeResponse`.
 
     Post-ADR-098 the narrator uses ``send_stateless``; ``send_with_session``
-    is preserved here for ``local_dm.py`` (the LocalDM preprocessor still
-    uses the session-bearing API).
+    is preserved here for backward compatibility with tests that still
+    drive that API.
 
     Tests that want to inspect the prompt sent to Claude can access either
     ``mock.send_stateless`` or ``mock.send_with_session`` (both are
@@ -721,7 +709,6 @@ def session_handler_factory(tmp_path):
 def session_fixture():
     """Return ``(sd, handler)`` — a minimal in-memory _SessionData + its handler.
 
-    ``sd.local_dm`` is populated by the default_factory added in Task 10.
     ``sd.orchestrator`` is a ``MagicMock`` — tests that exercise the narrator
     path override ``run_narration_turn`` via ``patch.object``.
 

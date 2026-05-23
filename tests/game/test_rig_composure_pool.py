@@ -534,18 +534,36 @@ def test_rig_pool_span_constants_exist() -> None:
     assert SPAN_RIG_POOL_ZERO_CROSSING == "rig_pool.zero_crossing"
 
 
-def test_rig_pool_spans_are_flat_only() -> None:
-    """Per the rig.py precedent, these are flat-only spans (not routed)."""
+def test_rig_pool_spans_are_routed_state_transition() -> None:
+    """Story 53-4 (ADR-031): the three pool-lifecycle spans are routed to
+    typed ``state_transition`` events with ``component="rig"`` so the GM
+    panel sees them on the Subsystems tab rather than only as generic
+    ``agent_span_close`` events on the firehose.
+
+    Before 53-4 these were FLAT_ONLY (the 53-1 ship state). The migration
+    to ``SPAN_ROUTES`` is the wiring this story owns.
+    """
     from sidequest.telemetry.spans import (
         FLAT_ONLY_SPANS,
         SPAN_RIG_POOL_CREATED,
         SPAN_RIG_POOL_DELTA,
         SPAN_RIG_POOL_ZERO_CROSSING,
+        SPAN_ROUTES,
     )
 
-    assert SPAN_RIG_POOL_CREATED in FLAT_ONLY_SPANS
-    assert SPAN_RIG_POOL_DELTA in FLAT_ONLY_SPANS
-    assert SPAN_RIG_POOL_ZERO_CROSSING in FLAT_ONLY_SPANS
+    for name in (SPAN_RIG_POOL_CREATED, SPAN_RIG_POOL_DELTA, SPAN_RIG_POOL_ZERO_CROSSING):
+        assert name in SPAN_ROUTES, f"{name!r} must be registered in SPAN_ROUTES"
+        assert name not in FLAT_ONLY_SPANS, (
+            f"{name!r} must not be in FLAT_ONLY_SPANS now that it is routed"
+        )
+        route = SPAN_ROUTES[name]
+        assert route.event_type == "state_transition", (
+            f"{name!r} route.event_type should be 'state_transition' "
+            f"(audio.py / chargen.py precedent), got {route.event_type!r}"
+        )
+        assert route.component == "rig", (
+            f"{name!r} route.component should be 'rig', got {route.component!r}"
+        )
 
 
 def test_rig_pool_construction_emits_created_span(monkeypatch) -> None:

@@ -47,7 +47,10 @@ from typing import Any
 
 import pytest
 
-from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
+from sidequest.agents.anthropic_sdk_client import (
+    _BASELINE_COST_CEILING,
+    AnthropicSdkClient,
+)
 from sidequest.agents.tooling_protocol import (
     CacheableBlock,
     Message,
@@ -432,18 +435,21 @@ async def test_first_call_uses_floor_and_can_trip_cost_trigger(
     """AC3 + decision B: before K=10 calls accumulate, comparison uses
     fixed floors ($0.03/turn for cost, 12_000 input tokens for I/O).
 
-    Cost trigger fires when cost_usd > 5 × $0.03 = $0.15. A single call
-    with 60K input + 100 output (no cache) costs ≈ 60K × $3/M + 100 ×
-    $15/M = $0.180 + $0.0015 = $0.1815 > $0.15 floor → fire.
+    Cost trigger fires when cost_usd > 5 × $0.03 = $0.15.
 
-    Output is 100 (>= 50), so the I/O fingerprint trigger does NOT fire
-    — this isolates the cost_multiple trigger against the warmup floor.
+    61-followup-D probe revision (2026-05-23): the original probe of
+    60K-in/100-out fires both cost_multiple AND the new ``input_absolute``
+    trigger (60K > 40K floor), so input_absolute wins on priority. To
+    isolate cost_multiple, use input ≤ 40K AND cost > $0.15: 30K-in /
+    5_000-out costs 30K × $3/M + 5_000 × $15/M = $0.090 + $0.075 = $0.165
+    > $0.15 floor, with input_absolute silent (30K ≤ 40K) and
+    io_fingerprint silent (output 5000 ≥ 50). Only cost_multiple fires.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sock = _FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
-    sdk = _Sdk(responses=[_resp(input_tokens=60_000, output_tokens=100)])
+    sdk = _Sdk(responses=[_resp(input_tokens=30_000, output_tokens=5_000)])
     client = _build_client(sdk)
     await client.complete_with_tools(
         system_blocks=_system_blocks(),
@@ -455,12 +461,13 @@ async def test_first_call_uses_floor_and_can_trip_cost_trigger(
 
     events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert len(events) == 1, (
-        "First call at 60K-in/100-out costs ~$0.18 > $0.15 warmup floor; "
+        "First call at 30K-in/5_000-out costs ~$0.165 > $0.15 warmup floor; "
         f"MUST fire cost_runaway_suspected. Got {len(events)} events."
     )
     fields = events[0].get("fields", {})
     assert fields.get("trigger") == "cost_multiple", (
-        "Output=100 (>=50) precludes io_fingerprint; trigger MUST be "
+        "Output=5_000 (>=50) precludes io_fingerprint AND input=30K "
+        "(<=40K) precludes input_absolute; trigger MUST be "
         f"'cost_multiple'. Got trigger={fields.get('trigger')!r}"
     )
     assert fields.get("warmup") is True, (
@@ -716,18 +723,22 @@ async def test_absolute_cost_floor_fires_when_baseline_is_high(
     consecutive runaway-shaped turns (60K-in / 500-out costs ~$0.1875 — we
     use 500 output to keep the I/O fingerprint silent so the only trigger
     that could speak is cost-related). After K=10 the baseline is ~$0.187.
-    Then fire a $0.31 call (input ~100K, output 500): 0.31 / 0.187 ≈ 1.66
-    — sub-5x baseline (cost_multiple silent) but > $0.30 absolute floor.
-    MUST emit one event with ``trigger="cost_absolute"``.
+    Then fire a $0.31 call: must hit cost_absolute (>$0.30) WITHOUT
+    firing input_absolute (61-followup-D §B, input>40K precondition).
+    Probe shape: 35K-in / 13_500-out = $0.105 + $0.2025 = $0.3075.
+    Input 35K ≤ 40K → input_absolute silent. Output 13_500 ≥ 50 →
+    io_fingerprint silent. Cost $0.3075 < 5 × clamped baseline $0.09 =
+    $0.45 → cost_multiple silent. Only cost_absolute fires.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sock = _FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 10 sustained runaways at 60K in / 500 out (cost ≈ $0.1875 each) +
-    # one $0.31-shaped probe (100K in / 500 out ≈ $0.3075).
+    # one $0.31-shaped probe shaped to isolate cost_absolute:
+    # 35K in / 13_500 out (cost ≈ $0.3075).
     sustained = _resp(input_tokens=60_000, output_tokens=500)
-    probe = _resp(input_tokens=100_000, output_tokens=500)
+    probe = _resp(input_tokens=35_000, output_tokens=13_500)
     sdk = _Sdk(responses=[sustained for _ in range(10)] + [probe])
     client = _build_client(sdk)
 
@@ -755,8 +766,9 @@ async def test_absolute_cost_floor_fires_when_baseline_is_high(
     # this event can fire is the absolute floor.
     assert fields["trigger"] == "cost_absolute", (
         "Post-warmup $0.31 call with high (~$0.19) trained baseline is "
-        "sub-5x baseline (cost_multiple should be silent) AND output>=50 "
-        "(io_fingerprint silent). The only remaining trigger is the "
+        "sub-5x clamped baseline ($0.45 → cost_multiple silent) AND "
+        "output>=50 (io_fingerprint silent) AND input ≤ 40K "
+        "(input_absolute silent). The only remaining trigger is the "
         f"$0.30 absolute floor. Got trigger={fields['trigger']!r}, "
         f"cost_usd={fields['cost_usd']!r}, "
         f"baseline_cost_usd={fields['baseline_cost_usd']!r}"
@@ -850,10 +862,16 @@ async def test_tea_adversarial_a_attack_baseline_self_training(
     Per Sonnet rates ($3/MTok input, $15/MTok output): a 40K-in / 500-out
     call costs $0.120 + $0.0075 ≈ $0.1275 — *under* the $0.15 warmup
     floor, so cost_multiple stays silent during warmup. After 10 such
-    calls the rolling baseline is ~$0.1275. Then probe at 102K-in /
-    500-out ≈ $0.3135: 0.3135 / 0.1275 ≈ 2.46x baseline (sub-5x →
-    cost_multiple still silent), output=500 (io_fingerprint silent),
-    but $0.3135 > $0.30 absolute floor → cost_absolute MUST fire.
+    calls the rolling baseline is ~$0.1275. Then probe at 35K-in /
+    13_500-out ≈ $0.3075 — > $0.30 absolute floor but input ≤ 40K
+    (so the 61-followup-D input_absolute trigger stays silent),
+    output ≥ 50 (io_fingerprint silent), and cost is sub-5×clamped
+    baseline ($0.45 → cost_multiple silent). Only cost_absolute fires.
+
+    61-followup-D probe revision (2026-05-23): the original 102K-in /
+    500-out probe now fires input_absolute (102K > 40K) on the new
+    priority order, so it's been replaced with an input-bounded shape
+    that isolates cost_absolute.
 
     Negative half of the contract: ZERO cost_multiple events MAY appear
     across the whole sequence. This is the part the existing
@@ -865,10 +883,13 @@ async def test_tea_adversarial_a_attack_baseline_self_training(
     sock = _FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
-    # 10 "sub-warmup-floor" calls at 40K/500 (~$0.1275 each) +
-    # 1 probe at 102K/500 (~$0.3135).
+    # 10 "sub-warmup-floor" calls at 40K/500 (~$0.1275 each, AND input
+    # exactly at the input_absolute boundary — 40K is NOT > 40K so
+    # input_absolute stays silent) + 1 probe at 35K/13_500 (~$0.3075,
+    # input under input_absolute floor, output over io_fingerprint
+    # floor, cost over cost_absolute).
     sustained = _resp(input_tokens=40_000, output_tokens=500)
-    probe = _resp(input_tokens=102_000, output_tokens=500)
+    probe = _resp(input_tokens=35_000, output_tokens=13_500)
     sdk = _Sdk(responses=[sustained for _ in range(10)] + [probe])
     client = _build_client(sdk)
 
@@ -899,10 +920,16 @@ async def test_tea_adversarial_a_attack_baseline_self_training(
     assert fields["cost_usd"] > _ABSOLUTE_COST_USD_FLOOR_PROBE, (
         f"Probe cost_usd must exceed $0.30 absolute floor; got cost_usd={fields['cost_usd']!r}"
     )
-    # Baseline must reflect the trained $0.1275, not the warmup floor.
-    assert 0.10 <= fields["baseline_cost_usd"] <= 0.15, (
-        "Baseline must reflect 10 trained calls (~$0.1275), not the "
-        f"$0.03 warmup floor. Got baseline_cost_usd={fields['baseline_cost_usd']!r}"
+    # 61-followup-D §A clamp revision: the reported baseline reflects
+    # the clamped value (3× warmup floor = $0.09), NOT the unclamped
+    # trained mean (~$0.1275). The original assertion checked the
+    # baseline was observed (not warmup-floored) — that contract still
+    # holds: $0.09 IS the post-clamp observed baseline, distinct from
+    # the $0.03 pre-warmup floor.
+    assert fields["baseline_cost_usd"] == pytest.approx(_BASELINE_COST_CEILING), (
+        "Baseline must reflect the 61-followup-D §A clamp value "
+        f"($0.09, the 3× warmup ceiling). Got "
+        f"baseline_cost_usd={fields['baseline_cost_usd']!r}"
     )
 
     # Negative: ZERO cost_multiple events anywhere in the 11-call sequence.

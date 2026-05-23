@@ -72,6 +72,7 @@ class FakeAnthropicSdkClient:
         model: str,
         max_iterations: int = 8,
         on_text_delta: Callable[[str], None] | None = None,
+        session_id: str | None = None,  # noqa: ARG002 — Story 61-followup-D protocol surface; fake does not track per-session cost
     ) -> ToolingResult:
         all_tool_calls: list[ToolUseBlock] = []
         iterations = 0

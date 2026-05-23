@@ -105,4 +105,18 @@ class ToolingLlmClient(Protocol):
         max_iterations: int = 8,
         max_tokens: int = 4096,
         on_text_delta: Callable[[str], None] | None = None,
-    ) -> ToolingResult: ...
+        session_id: str | None = None,
+    ) -> ToolingResult:
+        """Drive one narrator turn through the tool-use loop.
+
+        ``session_id`` (Story 61-followup-D §C.1): opaque session
+        identifier forwarded from ``TurnContext.session_id``. The
+        Anthropic SDK backend keys per-session cumulative cost against
+        this value to enforce the $10 hard kill. Pass ``None`` for
+        non-narrator codepaths (``claude -p`` curate, tests without a
+        session) to bypass the per-session tracker entirely — do NOT
+        substitute a sentinel string, which would corrupt the tracker
+        by sharing a single key across unrelated callers. Backends
+        that do not track per-session cost accept and ignore the kwarg.
+        """
+        ...

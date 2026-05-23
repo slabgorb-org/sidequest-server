@@ -278,8 +278,8 @@ async def test_rig_pool_zero_crossing_re_fires_after_repair_and_re_damage(
     value, then is damaged to 0 again MUST publish a second
     ``zero_crossing`` event. The crossing is edge-triggered on the
     downward transition; a regression that tracks "has ever crossed" as
-    a one-way flag would silence the second crash and break the GM
-    dashboard's repeat-encounter signal.
+    a one-way flag would silence the second zero_crossing event and
+    break the GM dashboard's repeat-encounter signal.
 
     The hazard this test guards against: a buggy refactor that promotes
     ``zero_crossed`` to a persistent ``has_crossed_zero`` field on the

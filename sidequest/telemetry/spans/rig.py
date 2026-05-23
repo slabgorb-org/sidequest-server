@@ -31,12 +31,13 @@ SPAN_RIG_CONFRONTATION_OUTCOME = "rig.confrontation_outcome"
 SPAN_ROOM_ENTRY_SKIPPED = "room.entry_skipped"
 SPAN_ROOM_ENTRY_EVALUATED = "room.entry_evaluated"
 
-# Story 53-1 / 53-4: RigComposurePool emits these three on construct /
-# delta / zero-crossing. Story 53-4 routes them through SPAN_ROUTES so
-# the GM dashboard's Subsystems tab renders them as typed
-# state_transition events with component="rig" — same pattern as audio,
-# chargen, cavern_room, NPC auto-register, lore_established. The
-# {field, op, …} envelope mirrors audio.py.
+# Story 53-1 / 53-4: RigComposurePool emits the next three (created,
+# delta, zero_crossing) on construct / delta / zero-crossing; rig_crash.py
+# emits the fourth (crash_event) when the handler runs. Story 53-4 routes
+# all four through SPAN_ROUTES so the GM dashboard's Subsystems tab
+# renders them as typed state_transition events with component="rig" —
+# same pattern as audio, chargen, cavern_room, NPC auto-register,
+# lore_established. The {field, op, …} envelope mirrors audio.py.
 SPAN_RIG_POOL_CREATED = "rig_pool.created"
 SPAN_ROUTES[SPAN_RIG_POOL_CREATED] = SpanRoute(
     event_type="state_transition",

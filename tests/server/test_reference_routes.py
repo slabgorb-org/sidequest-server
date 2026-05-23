@@ -89,3 +89,37 @@ def test_no_search_paths_configured_returns_500(tmp_path):
     r = client.get("/reference/rules/demo")
     assert r.status_code == 500
     assert "search paths" in r.text.lower()
+
+
+def test_missing_search_root_returns_404_not_500(tmp_path):
+    """Spec contract: missing search root must produce a friendly 404 with
+    'Valid packs: (none)', not an unhandled FileNotFoundError 500.
+    """
+    missing = tmp_path / "does-not-exist"
+    app = FastAPI()
+    app.state.genre_pack_search_paths = [missing]
+    app.include_router(create_reference_router())
+    client = TestClient(app)
+
+    r = client.get("/reference/rules/demo")
+    assert r.status_code == 404
+    assert "(none)" in r.text
+
+
+def test_malformed_yaml_returns_500_with_filename(tmp_path, monkeypatch):
+    """When assemble_rules_page raises ValueError (malformed YAML), the route
+    must wrap it as 500 with the filename in the detail. Locks the from-exc
+    chain.
+    """
+    from sidequest.server import reference_routes
+
+    def _boom(pack: str, pack_dir: Path) -> str:
+        raise ValueError("archetypes.yaml: malformed YAML: bad indent")
+
+    _seed_pack(tmp_path)
+    monkeypatch.setattr(reference_routes, "assemble_rules_page", _boom)
+    client = _build_app(tmp_path)
+
+    r = client.get("/reference/rules/demo")
+    assert r.status_code == 500
+    assert "archetypes.yaml" in r.text

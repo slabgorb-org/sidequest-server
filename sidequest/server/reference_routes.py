@@ -42,8 +42,9 @@ def _resolve_pack_dir(request: Request, pack: str) -> Path:
     valid = sorted({
         entry.name
         for root in paths
+        if Path(root).is_dir()
         for entry in Path(root).iterdir()
-        if Path(root).is_dir() and entry.is_dir() and _SAFE_SLUG.match(entry.name)
+        if entry.is_dir() and _SAFE_SLUG.match(entry.name)
     })
     raise HTTPException(
         status_code=404,
@@ -60,8 +61,8 @@ def _resolve_world_dir(pack_dir: Path, world: str) -> Path:
     worlds_root = pack_dir / "worlds"
     valid = sorted(
         entry.name for entry in worlds_root.iterdir()
-        if worlds_root.is_dir() and entry.is_dir() and _SAFE_SLUG.match(entry.name)
-    ) if worlds_root.exists() else []
+        if entry.is_dir() and _SAFE_SLUG.match(entry.name)
+    ) if worlds_root.is_dir() else []
     raise HTTPException(
         status_code=404,
         detail=(

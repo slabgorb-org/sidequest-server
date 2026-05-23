@@ -28,12 +28,12 @@ Pricing (Anthropic public, 2026-05-15 snapshot):
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 
 import pytest
 
 from sidequest.agents.anthropic_cost import compute_cost_usd, model_pricing
-
 
 # --- AC-5: ModelPricing exposes the 1h-write rate -------------------------
 
@@ -53,7 +53,7 @@ def test_sonnet_4_6_one_hour_write_rate_is_2x_input() -> None:
     assert one_hour_attr is not None, (
         "ModelPricing must expose a 1h cache_write rate. Looked for an "
         "attribute matching /1h.*write|write.*1h/ on "
-        f"{type(p).__name__} fields={[f for f in vars(p).keys()]!r}. "
+        f"{type(p).__name__} fields={[f for f in vars(p)]!r}. "
         "Without it, the SDK client cannot price 1h writes correctly and "
         "the GM-panel cost_usd understates the real bill."
     )
@@ -225,10 +225,17 @@ def _find_one_hour_write_rate(pricing_obj: object) -> str | None:
       - one_hour_cache_write_per_mtok_usd
       - cache_write_1h_per_mtok_usd
     without locking the test to one specific naming.
+
+    Enumerates via ``dataclasses.fields`` (handles ``slots=True`` dataclasses)
+    with a ``dir`` fallback for non-dataclass objects.
     """
+    if dataclasses.is_dataclass(pricing_obj):
+        field_names: list[str] = [f.name for f in dataclasses.fields(pricing_obj)]
+    else:
+        field_names = [n for n in dir(pricing_obj) if not n.startswith("_")]
     candidates = [
         name
-        for name in vars(pricing_obj).keys()
+        for name in field_names
         if "1h" in name and ("write" in name or "creation" in name)
     ]
     if not candidates:

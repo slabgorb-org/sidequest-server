@@ -143,17 +143,20 @@ def _compute_zones_payload(sections: list[PromptSection]) -> list[dict[str, Any]
     Each zone carries ``cached`` (does this zone feed the cached block region)
     and each section carries ``cached`` (does THIS section actually ride
     ``system_blocks[0]`` — bucket-aware) plus ``mis_zoned`` (a ``state``-category
-    section sitting in a cached *zone*).
+    section that ACTUALLY rides the cached block — bucket-aware).
 
-    WARNING (Story 60-3): ``mis_zoned`` is **zone-only / bucket-blind** — it
-    is ``zone_cached AND category=="state"`` and does NOT check the section's
-    bucket. ``state`` sections are User-bucket, so they ride the *uncached*
-    user message, NOT ``system_blocks[0]``. A ``mis_zoned=True, cached=False``
-    row is therefore a FALSE ALARM for cache churn — trust the per-section
-    ``cached`` field, not ``mis_zoned``. This false positive misled Epic 60's
-    original "three mis-zoned state sections churn block 0" hypothesis;
-    60-3 disproved it (the real cost is the tool-loop continuation re-minting
-    the prefix at 5m — see sprint/archive/60-3-session.md).
+    Story 60-4 (2026-05-23) corrected ``mis_zoned`` to AND-with-bucket:
+    the flag now fires iff ``_section_rides_cache(name, zone) AND
+    category == "state"`` — i.e., the section both rides ``system_blocks[0]``
+    (System-bucket + Primacy/Early zone) AND is volatile state. The old
+    bucket-blind shape (``zone_cached AND category == "state"``) produced
+    false positives on the three User-bucket suspect sections
+    (``narrator_available_confrontations``, ``trope_beat_directives``,
+    ``npc_roster``), which misled Epic 60's original "three mis-zoned state
+    sections churn block 0" hypothesis. 60-3 disproved that hypothesis by
+    measurement (User-bucket → uncached user message → never touches block 0);
+    60-4 closes the false-positive loop. See ``sprint/archive/60-3-session.md``
+    and ``sprint/archive/60-4-session.md``.
     """
     zone_buckets: dict[str, list[PromptSection]] = {}
     for s in sections:
@@ -183,7 +186,13 @@ def _compute_zones_payload(sections: list[PromptSection]) -> list[dict[str, Any]
                         "category": s.category.value,
                         "content": s.content,
                         "cached": _section_rides_cache(s.name, zone_value),
-                        "mis_zoned": zone_cached and s.category.value == "state",
+                        # Story 60-4: AND-with-bucket. Only flag sections that
+                        # ACTUALLY ride the cached block (bucket=System AND
+                        # zone in {Primacy, Early}) AND are volatile state.
+                        "mis_zoned": (
+                            _section_rides_cache(s.name, zone_value)
+                            and s.category.value == "state"
+                        ),
                     }
                     for s in bucket
                 ],

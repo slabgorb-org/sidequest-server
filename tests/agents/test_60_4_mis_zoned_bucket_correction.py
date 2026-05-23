@@ -24,8 +24,6 @@ See: ``sprint/archive/60-3-session.md`` → "Dev Diagnosis (60-3 — FINAL)".
 
 from __future__ import annotations
 
-import pytest
-
 from sidequest.agents.orchestrator import _compute_zones_payload
 from sidequest.agents.prompt_framework.bucket import STABLE_SECTION_NAMES
 from sidequest.agents.prompt_framework.types import (

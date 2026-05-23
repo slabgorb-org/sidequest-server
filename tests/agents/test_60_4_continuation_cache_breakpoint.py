@@ -35,7 +35,6 @@ from sidequest.agents.tooling_protocol import (
     ToolUseBlock,
 )
 
-
 # --- SDK-shape fakes -------------------------------------------------------
 
 

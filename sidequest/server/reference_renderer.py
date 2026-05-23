@@ -7,23 +7,17 @@ HTML fragments.
 Headings get stable slugified ``id`` attributes so future deep-link work can
 target them without schema changes.
 """
+
 from __future__ import annotations
 
-import re
 from html import escape
 from pathlib import Path
 
 import yaml
 
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
+from sidequest.server.reference_slug import slugify
 
 _DEPTH_CAP = 6
-
-
-def slugify(text: str) -> str:
-    """Lowercase ASCII slug. Non-ASCII chars become separators; runs collapse."""
-    lowered = text.lower()
-    return _SLUG_RE.sub("-", lowered).strip("-")
 
 
 def render_node(node: object, depth: int = 0) -> str:
@@ -151,23 +145,25 @@ LORE_PACK_FLAVOR_FILES: tuple[str, ...] = (
     "history.yaml",
 )
 
-EXCLUDED_FILES: frozenset[str] = frozenset({
-    # Spoiler-bearing — see iteration 2 of the spec
-    "npcs.yaml",
-    "seed_tropes.yaml",
-    # System-tier / metadata / asset config (not player-facing content)
-    "prompts.yaml",
-    "pack.yaml",
-    "theme.yaml",
-    "visual_style.yaml",
-    "audio.yaml",
-    "portrait_manifest.yaml",
-    "cartography.yaml",
-    "axes.yaml",
-    "lethality_policy.yaml",
-    "visibility_baseline.yaml",
-    "char_creation.yaml",
-})
+EXCLUDED_FILES: frozenset[str] = frozenset(
+    {
+        # Spoiler-bearing — see iteration 2 of the spec
+        "npcs.yaml",
+        "seed_tropes.yaml",
+        # System-tier / metadata / asset config (not player-facing content)
+        "prompts.yaml",
+        "pack.yaml",
+        "theme.yaml",
+        "visual_style.yaml",
+        "audio.yaml",
+        "portrait_manifest.yaml",
+        "cartography.yaml",
+        "axes.yaml",
+        "lethality_policy.yaml",
+        "visibility_baseline.yaml",
+        "char_creation.yaml",
+    }
+)
 
 
 # --- Page assemblers ---
@@ -185,10 +181,7 @@ def _render_file(path: Path) -> str:
     body = "<p><em>(empty file)</em></p>" if data is None else render_node(data)
     file_slug = slugify(path.stem)
     return (
-        f'<section class="file" id="file-{file_slug}">'
-        f"<h1>{escape(path.name)}</h1>"
-        f"{body}"
-        "</section>"
+        f'<section class="file" id="file-{file_slug}"><h1>{escape(path.name)}</h1>{body}</section>'
     )
 
 
@@ -232,9 +225,7 @@ def assemble_rules_page(pack: str, pack_dir: Path) -> str:
     return _wrap_document(f"{pack} — Rules", body)
 
 
-def assemble_lore_page(
-    pack: str, world: str, pack_dir: Path, world_dir: Path
-) -> str:
+def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -> str:
     """Build the /reference/lore/<pack>/<world> HTML document."""
     body_parts: list[str] = []
     for filename in LORE_WORLD_FILES:

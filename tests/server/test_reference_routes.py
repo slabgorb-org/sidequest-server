@@ -131,6 +131,31 @@ def test_stylesheet_route_rejects_bad_filenames(tmp_path, evil):
     assert r.status_code == 404, f"Expected 404 for {evil!r}, got {r.status_code}"
 
 
+def test_reference_router_registered_in_real_app(tmp_path):
+    """Wiring test: the production app.py registers create_reference_router().
+
+    Per CLAUDE.md doctrine — every test suite needs at least one test that
+    verifies the component is reachable from production code paths.
+
+    Uses ``create_app(genre_pack_search_paths=[tmp_path])`` (Option A) — the
+    factory exposes a ``genre_pack_search_paths`` parameter directly, so we
+    don't need to override ``app.state`` after construction or monkeypatch
+    ``SIDEQUEST_GENRE_PACKS``.
+    """
+    from sidequest.server.app import create_app
+
+    # Seed a minimal valid pack so the route returns 200.
+    pack = tmp_path / "demo"
+    pack.mkdir()
+    (pack / "archetypes.yaml").write_text("kinds:\n  - sleuth\n")
+
+    app = create_app(genre_pack_search_paths=[tmp_path])
+    client = TestClient(app)
+    r = client.get("/reference/rules/demo")
+    assert r.status_code == 200
+    assert "sleuth" in r.text
+
+
 def test_malformed_yaml_returns_500_with_filename(tmp_path, monkeypatch):
     """When assemble_rules_page raises ValueError (malformed YAML), the route
     must wrap it as 500 with the filename in the detail. Locks the from-exc

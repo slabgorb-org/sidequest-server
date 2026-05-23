@@ -3,6 +3,9 @@
 Renderer must produce stable, escaped HTML from arbitrary YAML trees. The walker
 is pure (input dict/list/scalar → output str); no IO, no globals.
 """
+from pathlib import Path
+
+import pytest
 import yaml as _yaml
 
 from sidequest.server.reference_renderer import (
@@ -258,3 +261,86 @@ def test_no_overlap_between_included_and_excluded():
     included = set(RULES_FILES) | set(LORE_WORLD_FILES) | set(LORE_PACK_FLAVOR_FILES)
     overlap = included & EXCLUDED_FILES
     assert overlap == set(), f"file appears in both included and excluded: {overlap}"
+
+
+def _write_pack(tmp_path: Path, pack: str, files: dict[str, str]) -> Path:
+    pack_dir = tmp_path / pack
+    pack_dir.mkdir(parents=True)
+    for name, contents in files.items():
+        (pack_dir / name).write_text(contents)
+    return pack_dir
+
+
+def test_assemble_rules_page_includes_listed_files_in_order(tmp_path):
+    from sidequest.server.reference_renderer import assemble_rules_page
+
+    pack_dir = _write_pack(tmp_path, "demo", {
+        "archetypes.yaml": "a: 1\n",
+        "classes.yaml": "b: 2\n",
+        "rules.yaml": "c: 3\n",
+    })
+    html = assemble_rules_page("demo", pack_dir)
+
+    assert "<title>demo — Rules</title>" in html
+    # Section order matches RULES_FILES ordering
+    a_pos = html.index("archetypes.yaml")
+    b_pos = html.index("classes.yaml")
+    c_pos = html.index("rules.yaml")
+    assert a_pos < b_pos < c_pos
+
+
+def test_assemble_rules_page_skips_missing_optional_files(tmp_path):
+    from sidequest.server.reference_renderer import assemble_rules_page
+
+    pack_dir = _write_pack(tmp_path, "demo", {"archetypes.yaml": "a: 1\n"})
+    html = assemble_rules_page("demo", pack_dir)
+
+    assert "archetypes.yaml" in html
+    assert "magic.yaml" not in html  # silently absent
+
+
+def test_assemble_rules_page_never_renders_excluded_files(tmp_path):
+    from sidequest.server.reference_renderer import assemble_rules_page
+
+    pack_dir = _write_pack(tmp_path, "demo", {
+        "archetypes.yaml": "a: 1\n",
+        "npcs.yaml": "secret_villain: thedoctor\n",
+        "seed_tropes.yaml": "spoilers: yes\n",
+    })
+    html = assemble_rules_page("demo", pack_dir)
+
+    assert "thedoctor" not in html
+    assert "seed_tropes" not in html.lower()
+
+
+def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
+    from sidequest.server.reference_renderer import assemble_lore_page
+
+    pack_dir = tmp_path / "demo"
+    world_dir = pack_dir / "worlds" / "demoworld"
+    world_dir.mkdir(parents=True)
+    (pack_dir / "lore.yaml").write_text("pack_flavor: yes\n")
+    (pack_dir / "cultures.yaml").write_text("genre_cultures: yes\n")
+    (world_dir / "world.yaml").write_text("world_name: Demoworld\n")
+    (world_dir / "legends.yaml").write_text("legend: a tale\n")
+
+    html = assemble_lore_page("demo", "demoworld", pack_dir, world_dir)
+
+    assert "<title>demo / demoworld — Lore</title>" in html
+    assert "Demoworld" in html
+    assert "a tale" in html
+    assert "pack_flavor" in html
+    assert "genre_cultures" in html
+    # World tier must precede pack flavor
+    assert html.index("world.yaml") < html.index("(genre)")
+
+
+def test_assemble_handles_malformed_yaml_with_loud_marker(tmp_path):
+    from sidequest.server.reference_renderer import assemble_rules_page
+
+    pack_dir = _write_pack(tmp_path, "demo", {
+        "archetypes.yaml": ":\n  - this is: : not valid\n",
+    })
+    with pytest.raises(ValueError) as exc:
+        assemble_rules_page("demo", pack_dir)
+    assert "archetypes.yaml" in str(exc.value)

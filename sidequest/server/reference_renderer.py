@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from html import escape
+from pathlib import Path
 
 import yaml
 
@@ -167,3 +168,82 @@ EXCLUDED_FILES: frozenset[str] = frozenset({
     "visibility_baseline.yaml",
     "char_creation.yaml",
 })
+
+
+# --- Page assemblers ---
+_STYLESHEET_HREF = "/reference/static/reference.css"
+
+
+def _render_file(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        with path.open() as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{path.name}: malformed YAML: {exc}") from exc
+    body = "<p><em>(empty file)</em></p>" if data is None else render_node(data)
+    file_slug = slugify(path.stem)
+    return (
+        f'<section class="file" id="file-{file_slug}">'
+        f"<h1>{escape(path.name)}</h1>"
+        f"{body}"
+        "</section>"
+    )
+
+
+def _render_file_with_label(path: Path, label: str) -> str:
+    """Like _render_file but appends a parenthetical label to the file heading."""
+    rendered = _render_file(path)
+    if not rendered:
+        return ""
+    return rendered.replace(
+        f"<h1>{escape(path.name)}</h1>",
+        f"<h1>{escape(path.name)} <small>{escape(label)}</small></h1>",
+        1,
+    )
+
+
+def _wrap_document(title: str, body: str) -> str:
+    return (
+        "<!doctype html>"
+        '<html lang="en">'
+        "<head>"
+        '<meta charset="utf-8">'
+        f"<title>{escape(title)}</title>"
+        f'<link rel="stylesheet" href="{_STYLESHEET_HREF}">'
+        "</head>"
+        "<body>"
+        f'<h1 class="doc-title">{escape(title)}</h1>'
+        f"{body}"
+        "</body>"
+        "</html>"
+    )
+
+
+def assemble_rules_page(pack: str, pack_dir: Path) -> str:
+    """Build the /reference/rules/<pack> HTML document."""
+    body_parts: list[str] = []
+    for filename in RULES_FILES:
+        if filename in EXCLUDED_FILES:
+            continue
+        body_parts.append(_render_file(pack_dir / filename))
+    body = "".join(body_parts)
+    return _wrap_document(f"{pack} — Rules", body)
+
+
+def assemble_lore_page(
+    pack: str, world: str, pack_dir: Path, world_dir: Path
+) -> str:
+    """Build the /reference/lore/<pack>/<world> HTML document."""
+    body_parts: list[str] = []
+    for filename in LORE_WORLD_FILES:
+        if filename in EXCLUDED_FILES:
+            continue
+        body_parts.append(_render_file(world_dir / filename))
+    for filename in LORE_PACK_FLAVOR_FILES:
+        if filename in EXCLUDED_FILES:
+            continue
+        body_parts.append(_render_file_with_label(pack_dir / filename, "(genre)"))
+    body = "".join(body_parts)
+    return _wrap_document(f"{pack} / {world} — Lore", body)

@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from sidequest.server.reference_renderer import (
     assemble_lore_page,
@@ -23,6 +23,8 @@ from sidequest.server.reference_renderer import (
 
 _LOG = logging.getLogger(__name__)
 _SAFE_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# Static-asset filename: lowercase alnum with one extension. No "..", no slashes.
+_SAFE_STATIC_FILENAME = re.compile(r"^[a-z0-9][a-z0-9_-]*\.[a-z0-9]+$")
 
 
 def _resolve_pack_dir(request: Request, pack: str) -> Path:
@@ -74,6 +76,23 @@ def _resolve_world_dir(pack_dir: Path, world: str) -> Path:
 
 def create_reference_router() -> APIRouter:
     router = APIRouter(prefix="/reference", tags=["reference"])
+
+    static_dir = Path(__file__).parent / "static"
+
+    # NOTE: We expose /reference/static/* via explicit APIRoutes rather than
+    # router.mount(StaticFiles(...)), because FastAPI's APIRouter.include_router
+    # silently drops Mount routes from sub-routers (only APIRoute / Route /
+    # WebSocketRoute propagate). The HTML's
+    # <link href="/reference/static/reference.css"> still resolves correctly.
+    @router.get("/static/{filename}", include_in_schema=False)
+    async def static_file(filename: str) -> FileResponse:
+        if not _SAFE_STATIC_FILENAME.match(filename):
+            raise HTTPException(status_code=404, detail=f"Unknown static asset: {filename}")
+        candidate = static_dir / filename
+        if not candidate.is_file():
+            raise HTTPException(status_code=404, detail=f"Unknown static asset: {filename}")
+        media_type = "text/css" if filename.endswith(".css") else None
+        return FileResponse(str(candidate), media_type=media_type)
 
     @router.get("/rules/{pack}", response_class=HTMLResponse)
     async def rules_page(request: Request, pack: str) -> HTMLResponse:

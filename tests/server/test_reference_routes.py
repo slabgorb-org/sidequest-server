@@ -106,6 +106,15 @@ def test_missing_search_root_returns_404_not_500(tmp_path):
     assert "(none)" in r.text
 
 
+def test_stylesheet_route_serves_css(tmp_path):
+    _seed_pack(tmp_path)
+    client = _build_app(tmp_path)
+    r = client.get("/reference/static/reference.css")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/css")
+    assert "body" in r.text
+
+
 def test_malformed_yaml_returns_500_with_filename(tmp_path, monkeypatch):
     """When assemble_rules_page raises ValueError (malformed YAML), the route
     must wrap it as 500 with the filename in the detail. Locks the from-exc

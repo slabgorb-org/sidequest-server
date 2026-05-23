@@ -682,41 +682,42 @@ def test_prompt_game_state_bytes_span_carries_projection_counts(
 
 
 # ---------------------------------------------------------------------------
-# Adversarial probe — _npc_in_scene vs list_npcs_in_scene divergence
+# Convergence guard — projection drops stale-prose NPCs when structured
+# fields disagree (post-61-7 unification).
 #
-# Measurement-only test for the 61-7 follow-up Architect proposed during the
-# 61-2 spec check. NOT a regression guard; NOT a bug. Documents that the
-# 61-2 projection predicate (`last_seen_location == party_location()`) and
-# the existing `list_npcs_in_scene` tool predicate (`current_room == eff or
-# location == eff`) use different fields and therefore CAN diverge on a
-# legitimate fixture shape — narrator-declared NPCs where the prose moves
-# the NPC into a room (updates `last_seen_location`) without the structured
-# state update path setting `location` / `current_room`.
+# Predecessor: this test started life in 61-2 verify-phase as an
+# adversarial divergence probe that MEASURED the gap between the
+# pre-61-7 ``session_helpers._npc_in_scene`` (last_seen_location only —
+# function removed in 61-7) and the ``list_npcs_in_scene`` tool
+# (current_room or location). The probe's docstring explicitly
+# anticipated that 61-7 would flip its contract from "measure
+# divergence" to "guard convergence." Post-61-7 both call sites
+# delegate to ``sidequest.game.npc_scene.is_npc_in_scene``.
 #
-# The probe asserts the 61-2 contract: an NPC seen-last-at the acting PC's
-# room IS kept by the projection even when its `location` / `current_room`
-# disagree. The corresponding `list_npcs_in_scene` behavior is documented
-# in the test docstring but NOT asserted here — that's the 61-7 story's
-# job. This test should pass today and is expected to keep passing until
-# 61-7 unifies the predicates.
+# Post-61-7 (commit landing the unified ``is_npc_in_scene`` in
+# ``sidequest.game.npc_scene``): when structured fields (current_room,
+# location) carry authoritative state pointing AWAY from the acting
+# PC's room, a stale ``last_seen_location`` pointing AT the PC's room
+# does NOT override them. The NPC has structurally moved and the
+# narrator's roster should reflect that — feeding the narrator a ghost
+# (stale prose) is the gaslighting-doctrine failure the projection
+# exists to prevent.
 # ---------------------------------------------------------------------------
 
 
-def test_npc_in_scene_predicate_divergence_from_list_npcs_in_scene_tool() -> None:
-    """Adversarial probe: NPC where `last_seen_location` agrees with the
+def test_npc_in_scene_predicate_converges_with_list_npcs_in_scene_tool() -> None:
+    """Convergence guard: NPC where `last_seen_location` agrees with the
     acting PC's room but `location` / `current_room` point elsewhere.
 
-    Per the 61-2 contract (`session_helpers._npc_in_scene`), this NPC IS
-    in-scene — `last_seen_location` is the sole co-location signal the
-    projection uses. The existing `list_npcs_in_scene` tool would NOT
-    treat the same NPC as in-scene (it matches `current_room` or
-    `location`, not `last_seen_location`). That divergence is the
-    Architect-flagged 61-7 follow-up; it is measured here, not fixed.
+    Post-61-7 unification, the projection drops this NPC — structured
+    state (current_room=distant_chamber, location=distant_chamber)
+    overrides the stale prose hint (last_seen_location=main_hall).
+    Both the projection AND the ``list_npcs_in_scene`` tool reach the
+    same verdict; that convergence is what 61-7 delivered.
 
-    This test does not assert the tool's behavior. It asserts only that
-    the 61-2 projection behaves as the test contract specifies, so that
-    if 61-7 later unifies the predicates and the projection changes
-    semantics, this test will surface the change.
+    If this assertion regresses (NPC kept by projection again), the
+    unification has been broken and the narrator may be fed stale
+    prose hints as present-scene ground truth.
     """
     snap = _make_snapshot(npcs_in_scene=0, npcs_off_stage=0)
 
@@ -758,14 +759,15 @@ def test_npc_in_scene_predicate_divergence_from_list_npcs_in_scene_tool() -> Non
         for entry in npcs
     }
 
-    assert "DivergentSignal" in names, (
-        "61-2 contract violated: NPC with last_seen_location == acting "
-        "PC's current room was dropped from state_summary['npcs']. The "
-        "`_npc_in_scene` predicate is documented to use last_seen_location "
-        "as the primary signal; if this assertion now fails it means the "
-        "predicate has been changed to also require `location` / "
-        "`current_room` agreement — which would be the 61-7 follow-up "
-        "landing, and this test should be updated in lockstep."
+    assert "DivergentSignal" not in names, (
+        "61-7 convergence guard violated: NPC with conflicting "
+        "structured / prose location fields was kept by the projection. "
+        "Structured-state writes (current_room, location) must override "
+        "stale narrator-prose observations (last_seen_location); a "
+        "stale-prose ghost in the present-scene roster is the "
+        "gaslighting-doctrine failure 61-7 closed. See "
+        "``sidequest.game.npc_scene.is_npc_in_scene`` for the unified "
+        "predicate."
     )
 
 

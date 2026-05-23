@@ -25,6 +25,10 @@ from sidequest.agents.orchestrator import (
 from sidequest.game.builder import humanize_snake_case
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.game.npc_scene import (
+    is_npc_anchored_by_encounter,
+    is_npc_in_scene,
+)
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.session import (
     GameSnapshot,
@@ -81,42 +85,6 @@ _KNOWN_FACTS_TAIL_K = 8
 _DISCOVERED_CLUES_CAP = 12
 
 
-def _npc_in_scene(
-    npc: object,
-    snapshot: GameSnapshot,
-    *,
-    current_room: str | None,
-) -> bool:
-    """Predicate for the 61-2 in-scene NPC projection.
-
-    An NPC is "in scene" iff either:
-
-    * ``last_seen_location`` equals the acting PC's current room
-      (passed in as ``current_room`` — resolved ONCE by the caller from
-      ``snapshot.party_location(perspective=...)`` so the per-NPC loop
-      does not fan out N+1 ``snapshot.party_location_query`` OTEL spans
-      and drown the GM panel's lie-detector signal), or
-    * The NPC is named in an unresolved encounter's actor list
-      (``snapshot.encounter.actors[*].name``).
-
-    The second branch covers structured combat / chase / social
-    encounters where the participants are not strictly co-located in
-    room terms (e.g. a chase across multiple rooms). Off-stage NPCs
-    (those failing both predicates) are dropped from
-    ``state_summary["npcs"]`` but remain identifiable via
-    ``state_summary["npc_pool"]`` (gaslighting-doctrine anchor).
-    """
-    last_seen = getattr(npc, "last_seen_location", None)
-    if current_room and last_seen and last_seen == current_room:
-        return True
-    encounter = snapshot.encounter
-    if encounter is not None and not encounter.resolved:
-        name = getattr(getattr(npc, "core", None), "name", None)
-        if name and any(actor.name == name for actor in encounter.actors):
-            return True
-    return False
-
-
 def _apply_phase_c_projections(
     snapshot: GameSnapshot,
     payload: dict,
@@ -158,6 +126,12 @@ def _apply_phase_c_projections(
         "npcs_dropped": 0,
         "known_facts_truncated_total": 0,
         "clues_truncated": 0,
+        # Story 61-7 (review-fix round 2) — OTEL Observability Principle:
+        # the GM panel must distinguish NPCs kept by location match from
+        # NPCs kept by the encounter-actor override branch. ``npcs_dropped``
+        # alone is silent on which branch fired. See
+        # ``sidequest.game.npc_scene.is_npc_anchored_by_encounter``.
+        "encounter_anchored_count": 0,
     }
 
     # ---------------------------------------------------------------
@@ -182,13 +156,25 @@ def _apply_phase_c_projections(
         counts["room_states_dropped"] = before - len(payload["room_states"])
 
         # npcs — in-scene-only projection + nested belief_state strip.
+        # Story 61-7 unifies the in-scene predicate with the
+        # ``list_npcs_in_scene`` tool — see
+        # ``sidequest.game.npc_scene.is_npc_in_scene``. ``npc.core.name``
+        # is guaranteed non-empty by ``CreatureCore.name_non_blank``
+        # field validator (``sidequest/game/creature_core.py:239``);
+        # the set-add cannot silently collapse identities under the
+        # current model invariant. See
+        # ``test_upstream_creaturecore_validator_blocks_empty_npc_names``
+        # for the regression guard that pins the invariant.
+        encounter = snapshot.encounter
+        encounter_anchored = 0
         npcs_payload = payload.get("npcs", [])
         in_scene_names: set[str] = set()
         for npc in snapshot.npcs:
-            if _npc_in_scene(npc, snapshot, current_room=current_room_id):
-                name = getattr(getattr(npc, "core", None), "name", None)
-                if name:
-                    in_scene_names.add(name)
+            if is_npc_in_scene(npc, current_room=current_room_id, encounter=encounter):
+                in_scene_names.add(npc.core.name)
+                if is_npc_anchored_by_encounter(npc, encounter):
+                    encounter_anchored += 1
+        counts["encounter_anchored_count"] = encounter_anchored
         before = len(npcs_payload)
         kept: list[dict] = []
         for entry in npcs_payload:

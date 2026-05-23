@@ -46,6 +46,10 @@ from sidequest.agents.tool_registry import (
     ToolResult,
     tool,
 )
+from sidequest.game.npc_scene import (
+    is_npc_anchored_by_encounter,
+    is_npc_in_scene,
+)
 from sidequest.game.session import Npc
 
 
@@ -94,12 +98,45 @@ async def list_npcs_in_scene(args: ListNpcsInSceneArgs, ctx: ToolContext) -> Too
 
     snapshot = session.snapshot
     eff = _resolve_scene_id(args, ctx, snapshot.characters)
+    # Empty-string scene id is treated as no-scene-context (review-fix
+    # round 2): a narrator-supplied ``scene_id=""`` is non-None and
+    # would otherwise reach the predicate as ``current_room=""`` and
+    # spuriously match NPCs whose serialized location fields happen to
+    # be empty. Coerce to None to fall into the omniscient/debug
+    # fallback branch below — consistent with the tool's documented
+    # "no scene context → full roster" semantic.
+    if not eff:
+        eff = None
 
+    encounter = snapshot.encounter
     matched: list[Npc]
+    encounter_anchored_count = 0
     if eff is None:
+        # No scene context (no perspective_pc, or PC not in snapshot, or
+        # PC has no current_room, or caller passed empty scene_id) —
+        # return the full roster. Bypass ``is_npc_in_scene`` so a PC
+        # who has not yet been placed sees everyone rather than an
+        # empty scene; the encounter-anchored count is 0 (the branch
+        # didn't get a chance to fire).
         matched = list(snapshot.npcs)
     else:
-        matched = [n for n in snapshot.npcs if n.current_room == eff or n.location == eff]
+        # Story 61-7 unification: delegate per-NPC scene membership to
+        # ``sidequest.game.npc_scene.is_npc_in_scene`` so the snapshot
+        # projection (``_apply_phase_c_projections``) and this tool reach
+        # IDENTICAL verdicts on every NPC. Carries the previous
+        # ``current_room or location`` structured-field union, adds the
+        # ``last_seen_location`` prose fallback (when both structured
+        # fields are unset), and propagates the unresolved-encounter
+        # actor-membership branch (previously projection-only) to the
+        # tool path. Per-branch counts (``encounter_anchored_count``)
+        # are emitted as OTEL attributes so the GM panel can verify
+        # which branch fired (CLAUDE.md OTEL Observability Principle).
+        matched = []
+        for n in snapshot.npcs:
+            if is_npc_in_scene(n, current_room=eff, encounter=encounter):
+                matched.append(n)
+                if is_npc_anchored_by_encounter(n, encounter):
+                    encounter_anchored_count += 1
 
     payload: dict[str, Any] = {
         "scene_id": eff,
@@ -107,5 +144,8 @@ async def list_npcs_in_scene(args: ListNpcsInSceneArgs, ctx: ToolContext) -> Too
     }
 
     ctx.otel_span.set_attribute("tool.npcs.count", len(matched))
+    ctx.otel_span.set_attribute(
+        "tool.npcs.encounter_anchored_count", encounter_anchored_count
+    )
 
     return ToolResult.ok(payload)

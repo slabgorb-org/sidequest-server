@@ -14,7 +14,7 @@ OTEL doesn't drop them.
 
 from __future__ import annotations
 
-from ._core import FLAT_ONLY_SPANS
+from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
 from .span import Span
 
 SPAN_RIG_BOND_EVENT = "rig.bond_event"
@@ -23,18 +23,77 @@ SPAN_RIG_CONFRONTATION_OUTCOME = "rig.confrontation_outcome"
 SPAN_ROOM_ENTRY_SKIPPED = "room.entry_skipped"
 SPAN_ROOM_ENTRY_EVALUATED = "room.entry_evaluated"
 
-# Story 53-1: RigComposurePool emits these three on construct / delta /
-# zero-crossing. The crash handler (story 53-3) subscribes to
-# rig_pool.zero_crossing to fire injury tags + Edge loss + dismount.
+# Story 53-1 / 53-4: RigComposurePool emits these three on construct /
+# delta / zero-crossing. Story 53-4 routes them through SPAN_ROUTES so
+# the GM dashboard's Subsystems tab renders them as typed
+# state_transition events with component="rig" — same pattern as audio,
+# chargen, cavern_room, NPC auto-register, lore_established. The
+# {field, op, …} envelope mirrors audio.py.
 SPAN_RIG_POOL_CREATED = "rig_pool.created"
+SPAN_ROUTES[SPAN_RIG_POOL_CREATED] = SpanRoute(
+    event_type="state_transition",
+    component="rig",
+    extract=lambda span: {
+        "field": "rig_pool",
+        "op": "created",
+        "character_id": (span.attributes or {}).get("character_id", ""),
+        "chassis_id": (span.attributes or {}).get("chassis_id", ""),
+        "current": (span.attributes or {}).get("current", 0),
+        "max": (span.attributes or {}).get("max", 0),
+    },
+)
 SPAN_RIG_POOL_DELTA = "rig_pool.delta"
+SPAN_ROUTES[SPAN_RIG_POOL_DELTA] = SpanRoute(
+    event_type="state_transition",
+    component="rig",
+    extract=lambda span: {
+        "field": "rig_pool",
+        "op": "delta",
+        "character_id": (span.attributes or {}).get("character_id", ""),
+        "chassis_id": (span.attributes or {}).get("chassis_id", ""),
+        "delta": (span.attributes or {}).get("delta", 0),
+        "old_current": (span.attributes or {}).get("old_current", 0),
+        "new_current": (span.attributes or {}).get("new_current", 0),
+    },
+)
 SPAN_RIG_POOL_ZERO_CROSSING = "rig_pool.zero_crossing"
+SPAN_ROUTES[SPAN_RIG_POOL_ZERO_CROSSING] = SpanRoute(
+    event_type="state_transition",
+    component="rig",
+    extract=lambda span: {
+        "field": "rig_pool",
+        "op": "zero_crossing",
+        "character_id": (span.attributes or {}).get("character_id", ""),
+        "chassis_id": (span.attributes or {}).get("chassis_id", ""),
+        "old_current": (span.attributes or {}).get("old_current", 0),
+        "new_current": (span.attributes or {}).get("new_current", 0),
+    },
+)
 
-# Story 53-3: rig crash handler emits crash_event when Composure→0
-# triggers the injury + Edge -1 + dismount consequences. Attrs include
-# character_id, chassis_id, location, attacker per road_warrior rules.yaml
-# rig_composure_spec.
+# Story 53-3 / 53-4: rig crash handler emits crash_event when
+# Composure→0 triggers the injury + Edge -1 + dismount consequences.
+# Inputs (character_id, chassis_id, location, attacker) PLUS the
+# realized consequences (edge_delta, edge_after, injury_status_text,
+# dismounted_status_text) per ADR-031 Layer-2 — the span captures what
+# was decided, not just the inputs, so the GM dashboard renders the
+# crash deterministically without re-reading core state.
 SPAN_RIG_POOL_CRASH_EVENT = "rig_pool.crash_event"
+SPAN_ROUTES[SPAN_RIG_POOL_CRASH_EVENT] = SpanRoute(
+    event_type="state_transition",
+    component="rig",
+    extract=lambda span: {
+        "field": "rig_pool",
+        "op": "crash_event",
+        "character_id": (span.attributes or {}).get("character_id", ""),
+        "chassis_id": (span.attributes or {}).get("chassis_id", ""),
+        "location": (span.attributes or {}).get("location", ""),
+        "attacker": (span.attributes or {}).get("attacker", ""),
+        "edge_delta": (span.attributes or {}).get("edge_delta", 0),
+        "edge_after": (span.attributes or {}).get("edge_after", 0),
+        "injury_status_text": (span.attributes or {}).get("injury_status_text", ""),
+        "dismounted_status_text": (span.attributes or {}).get("dismounted_status_text", ""),
+    },
+)
 
 FLAT_ONLY_SPANS.update(
     {
@@ -43,10 +102,6 @@ FLAT_ONLY_SPANS.update(
         SPAN_RIG_CONFRONTATION_OUTCOME,
         SPAN_ROOM_ENTRY_SKIPPED,
         SPAN_ROOM_ENTRY_EVALUATED,
-        SPAN_RIG_POOL_CREATED,
-        SPAN_RIG_POOL_DELTA,
-        SPAN_RIG_POOL_ZERO_CROSSING,
-        SPAN_RIG_POOL_CRASH_EVENT,
     }
 )
 

@@ -138,10 +138,7 @@ def _make_snapshot(
     in_scene_location = "main_hall"
 
     # PC with N known_facts so the tail-K projection has something to truncate.
-    known = [
-        KnownFact(content=f"fact #{i}", learned_turn=i + 1)
-        for i in range(known_facts_per_pc)
-    ]
+    known = [KnownFact(content=f"fact #{i}", learned_turn=i + 1) for i in range(known_facts_per_pc)]
     pcs = [_character(acting_pc, known_facts=known)]
 
     # NPC roster: ``npcs_in_scene`` at the acting PC's location, the rest
@@ -380,9 +377,7 @@ def test_npcs_projection_drops_belief_state_from_in_scene_entries() -> None:
         belief = entry.get("belief_state")
         # ``exclude_defaults=True`` makes a default BeliefState absent;
         # any non-empty belief_state surviving in the dump is a leak.
-        assert not belief or (
-            isinstance(belief, dict) and not belief.get("beliefs")
-        ), (
+        assert not belief or (isinstance(belief, dict) and not belief.get("beliefs")), (
             f"npc entry retains belief_state in state_summary: "
             f"name={entry.get('core', {}).get('name') or entry.get('name')!r} "
             f"belief_state={belief!r}. Strip belief_state from each surviving "
@@ -410,9 +405,7 @@ def test_known_facts_truncated_to_tail_eight_per_pc() -> None:
     payload = _state_summary_payload(snap)
 
     chars = payload.get("characters")
-    assert isinstance(chars, list) and chars, (
-        "fixture broken: no characters in state_summary"
-    )
+    assert isinstance(chars, list) and chars, "fixture broken: no characters in state_summary"
     facts = chars[0].get("known_facts") or []
     assert len(facts) <= 8, (
         f"known_facts tail-K projection missing: PC has {len(facts)} "
@@ -551,8 +544,7 @@ def test_anchor_preserved_quest_log_after_projections() -> None:
     snap = _make_snapshot()
     payload = _state_summary_payload(snap)
     assert "quest_log" in payload, (
-        "Mission anchor stripped by 61-2 projections: ``quest_log`` "
-        "is absent from state_summary."
+        "Mission anchor stripped by 61-2 projections: ``quest_log`` is absent from state_summary."
     )
 
 
@@ -602,7 +594,13 @@ def test_61_2_extra_byte_reduction_on_late_session_fixture() -> None:
         exclude_defaults=True,
         exclude_none=True,
     )
-    for f in ("active_tropes", "axis_values", "genie_wishes", "achievement_tracker", "narrative_log"):
+    for f in (
+        "active_tropes",
+        "axis_values",
+        "genie_wishes",
+        "achievement_tracker",
+        "narrative_log",
+    ):
         baseline_payload.pop(f, None)
     baseline_text = json.dumps(baseline_payload, separators=(",", ":"))
     bytes_before = len(baseline_text.encode("utf-8"))
@@ -681,3 +679,91 @@ def test_prompt_game_state_bytes_span_carries_projection_counts(
             "Principle) requires these counts so the human can verify "
             "the cut is engaging the right fields."
         )
+
+
+# ---------------------------------------------------------------------------
+# Adversarial probe — _npc_in_scene vs list_npcs_in_scene divergence
+#
+# Measurement-only test for the 61-7 follow-up Architect proposed during the
+# 61-2 spec check. NOT a regression guard; NOT a bug. Documents that the
+# 61-2 projection predicate (`last_seen_location == party_location()`) and
+# the existing `list_npcs_in_scene` tool predicate (`current_room == eff or
+# location == eff`) use different fields and therefore CAN diverge on a
+# legitimate fixture shape — narrator-declared NPCs where the prose moves
+# the NPC into a room (updates `last_seen_location`) without the structured
+# state update path setting `location` / `current_room`.
+#
+# The probe asserts the 61-2 contract: an NPC seen-last-at the acting PC's
+# room IS kept by the projection even when its `location` / `current_room`
+# disagree. The corresponding `list_npcs_in_scene` behavior is documented
+# in the test docstring but NOT asserted here — that's the 61-7 story's
+# job. This test should pass today and is expected to keep passing until
+# 61-7 unifies the predicates.
+# ---------------------------------------------------------------------------
+
+
+def test_npc_in_scene_predicate_divergence_from_list_npcs_in_scene_tool() -> None:
+    """Adversarial probe: NPC where `last_seen_location` agrees with the
+    acting PC's room but `location` / `current_room` point elsewhere.
+
+    Per the 61-2 contract (`session_helpers._npc_in_scene`), this NPC IS
+    in-scene — `last_seen_location` is the sole co-location signal the
+    projection uses. The existing `list_npcs_in_scene` tool would NOT
+    treat the same NPC as in-scene (it matches `current_room` or
+    `location`, not `last_seen_location`). That divergence is the
+    Architect-flagged 61-7 follow-up; it is measured here, not fixed.
+
+    This test does not assert the tool's behavior. It asserts only that
+    the 61-2 projection behaves as the test contract specifies, so that
+    if 61-7 later unifies the predicates and the projection changes
+    semantics, this test will surface the change.
+    """
+    snap = _make_snapshot(npcs_in_scene=0, npcs_off_stage=0)
+
+    # Construct an NPC whose signals disagree on purpose:
+    #   - last_seen_location == "main_hall" (acting PC's current room)
+    #   - location           == "distant_chamber" (somewhere else entirely)
+    #   - current_room       == "distant_chamber" (chassis interior, also elsewhere)
+    divergent = Npc(
+        core=CreatureCore(
+            name="DivergentSignal",
+            description="prose-mentioned ghost",
+            personality="elusive",
+            inventory=Inventory(),
+            edge=EdgePool(current=5, max=5, base_max=5),
+        ),
+        last_seen_location="main_hall",
+        location="distant_chamber",
+        current_room="distant_chamber",
+        belief_state=BeliefState(),
+    )
+    snap.npcs.append(divergent)
+    snap.npc_pool.append(
+        NpcPoolMember(
+            name="DivergentSignal",
+            role="bystander",
+            pronouns="they/them",
+            drawn_from="world_authored",
+        )
+    )
+
+    payload = _state_summary_payload(snap)
+    npcs = payload.get("npcs") or []
+    names = {
+        (
+            entry.get("core", {}).get("name", "")
+            if isinstance(entry.get("core"), dict)
+            else entry.get("name", "")
+        )
+        for entry in npcs
+    }
+
+    assert "DivergentSignal" in names, (
+        "61-2 contract violated: NPC with last_seen_location == acting "
+        "PC's current room was dropped from state_summary['npcs']. The "
+        "`_npc_in_scene` predicate is documented to use last_seen_location "
+        "as the primary signal; if this assertion now fails it means the "
+        "predicate has been changed to also require `location` / "
+        "`current_room` agreement — which would be the 61-7 follow-up "
+        "landing, and this test should be updated in lockstep."
+    )

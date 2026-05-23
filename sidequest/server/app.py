@@ -26,6 +26,7 @@ from sidequest.agents.tooling_protocol import ToolingLlmClient
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS
 from sidequest.server.dashboard import dashboard_router
 from sidequest.server.forensics import forensics_router
+from sidequest.server.reference_routes import create_reference_router
 from sidequest.server.rest import create_rest_router
 from sidequest.server.session_handler import WebSocketSessionHandler
 from sidequest.server.session_room import RoomRegistry
@@ -267,6 +268,9 @@ def create_app(
     # --- REST routes ---
     rest_router = create_rest_router()
     app.include_router(rest_router)
+
+    # --- Reference pages (/reference/rules/*, /reference/lore/*) ---
+    app.include_router(create_reference_router())
 
     # --- Dev-gated scene-harness route (ADR-092). ---
     # Strictly ``DEV_SCENES=1`` enables. Any other value (``0``, ``""``,

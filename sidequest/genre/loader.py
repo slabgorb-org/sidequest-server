@@ -61,7 +61,7 @@ from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldCo
 from sidequest.genre.models.rules import RulesConfig
 from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
-from sidequest.genre.models.tropes import TropeDefinition
+from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.world import CartographyConfig, NavigationMode, WorldConfig
 from sidequest.genre.resolve import resolve_trope_inheritance
 
@@ -995,6 +995,17 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         else []
     )
 
+    # Epic 22 — optional seed trope deck. File is per-pack, not per-world
+    # (Phase 1 dogfoods tea_and_murder only; other packs ship without
+    # the file and get an empty list — no silent fallback to a shared
+    # default deck).
+    seed_tropes_raw = _load_yaml_raw_optional(path / "seed_tropes.yaml")
+    seed_tropes: list[SeedTrope] = (
+        [SeedTrope.model_validate(s) for s in seed_tropes_raw]
+        if isinstance(seed_tropes_raw, list)
+        else []
+    )
+
     # Load optional files
     achievements_raw = _load_yaml_raw_optional(path / "achievements.yaml")
     achievements: list[Achievement] = (
@@ -1151,6 +1162,7 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         cultures=cultures,
         prompts=prompts,
         tropes=genre_tropes,
+        seed_tropes=seed_tropes,
         beat_vocabulary=beat_vocabulary,
         chassis_classes=chassis_classes,
         achievements=achievements,

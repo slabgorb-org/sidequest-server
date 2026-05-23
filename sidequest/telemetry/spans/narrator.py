@@ -26,11 +26,18 @@ SPAN_NARRATOR_UNRECOVERABLE = "narrator.unrecoverable"
 # WARNING-level lie-detector signal the operator iterates the prompt on.
 SPAN_NARRATOR_LOCATION_DRIFT_REPAIRED = "narrator.location_drift_repaired"
 
+# Story 22-3: seed-context renderer span. Fires every narrator prompt
+# build, even when both seed lists are empty — silence-by-absence is
+# indistinguishable from renderer-not-invoked, so the always-emit signal
+# is what lets the GM panel (22-4) prove injection engaged.
+SPAN_NARRATOR_SEED_CONTEXT = "narrator.seed_context"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_NARRATOR_SEALED_ROUND,
         SPAN_NARRATOR_SESSION_ROTATED,
         SPAN_NARRATOR_UNRECOVERABLE,
+        SPAN_NARRATOR_SEED_CONTEXT,
     }
 )
 
@@ -146,6 +153,7 @@ def location_drift_repaired_span(
 __all__ = [
     "SPAN_NARRATOR_LOCATION_DRIFT_REPAIRED",
     "SPAN_NARRATOR_SEALED_ROUND",
+    "SPAN_NARRATOR_SEED_CONTEXT",
     "SPAN_NARRATOR_SESSION_ROTATED",
     "SPAN_NARRATOR_UNRECOVERABLE",
     "location_drift_repaired_span",

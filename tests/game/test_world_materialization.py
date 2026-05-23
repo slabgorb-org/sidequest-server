@@ -349,6 +349,212 @@ class TestWorldBuilderBuild:
         # description from Fresh persists (Early didn't declare one)
         assert drakul.core.description == "A sage."
 
+    def test_npc_chapter_apply_also_seeds_npc_pool(self) -> None:
+        """Story 61-8 §B — npc_pool exhaustiveness.
+
+        ``_apply_phase_c_projections`` drops off-stage NPCs from the
+        prompt's in-scene list (Story 61-2). Identity preservation
+        depends on ``snap.npc_pool`` carrying every NPC the projection
+        might drop. Pre-§B, ``_apply_npc`` populated ``snap.npcs`` only
+        and the auto-mint-from-prose path was the sole writer to
+        ``npc_pool`` — meaning world-authored NPCs the projection
+        dropped were invisible to the narrator until they happened to be
+        prose-cited.
+        """
+        snap = (
+            WorldBuilder()
+            .with_chapters(
+                [
+                    _fresh_chapter(
+                        npcs=[
+                            ChapterNpc(name="Drakul", description="A sage."),
+                            ChapterNpc(name="Mira", description="A scout."),
+                        ]
+                    ),
+                ]
+            )
+            .build()
+        )
+        pool_names = {m.name for m in snap.npc_pool}
+        assert "Drakul" in pool_names, (
+            "World-authored NPC Drakul missing from npc_pool — the "
+            "61-2 projection's off-scene drop branch would lose this "
+            "NPC's identity entirely."
+        )
+        assert "Mira" in pool_names
+        drakul_member = next(m for m in snap.npc_pool if m.name == "Drakul")
+        assert drakul_member.drawn_from == "world_authored", (
+            "World-authored pool member must carry drawn_from="
+            "'world_authored' so the auto-mint pipeline can distinguish "
+            "canonical chapter NPCs from prose-extracted ones."
+        )
+        assert drakul_member.observation_pending is False, (
+            "World-authored NPCs enter the pool already ratified — "
+            "they are canonical at chapter-apply time, not prose-"
+            "auto-minted."
+        )
+
+    def test_npc_chapter_apply_seeds_pool_on_existing_npc_branch(self) -> None:
+        """Story 61-8 §B (review-fix round 2) — pool exhaustiveness must
+        run when the NPC already exists in ``snap.npcs`` but NOT in
+        ``snap.npc_pool``. This is the legacy-save scenario: an NPC
+        was minted by ``_apply_npc`` before §B existed, so
+        ``snap.npcs`` carries the NPC but ``snap.npc_pool`` does not.
+        Re-running ``_apply_npc`` (e.g. on chapter re-apply or
+        re-materialization) must reach the pool-seed code on the
+        existing-NPC branch.
+
+        Round 1 of §B only seeded the pool inside the new-NPC branch,
+        which returned early on existing NPCs — leaving the legacy
+        case unfixed. The Reviewer's edge-hunter caught this; round 2
+        moves pool-seeding to fire on both branches via
+        ``_ensure_world_authored_pool_member``.
+        """
+        from sidequest.game.creature_core import (
+            CreatureCore,
+            Inventory,
+            placeholder_edge_pool,
+        )
+        from sidequest.game.session import GameSnapshot, Npc
+        from sidequest.game.turn import TurnManager
+        from sidequest.game.world_materialization import WorldBuilder
+
+        # Construct a snapshot the legacy-save way: Npc directly on
+        # snap.npcs, snap.npc_pool empty. WorldBuilder's _apply_npc
+        # must seed the pool on the existing-NPC branch.
+        snap = GameSnapshot(turn_manager=TurnManager(interaction=0))
+        snap.npcs.append(
+            Npc(
+                core=CreatureCore(
+                    name="LegacyDrakul",
+                    description="From a save predating §B.",
+                    personality="Neutral.",
+                    edge=placeholder_edge_pool(),
+                    inventory=Inventory(),
+                ),
+                disposition=0,
+            )
+        )
+        # Sanity: pre-condition is the legacy-save shape.
+        assert not any(m.name == "LegacyDrakul" for m in snap.npc_pool)
+
+        builder = WorldBuilder()
+        builder._apply_npc(snap, ChapterNpc(name="LegacyDrakul", disposition=3))
+
+        assert any(m.name == "LegacyDrakul" for m in snap.npc_pool), (
+            "Existing-NPC branch of _apply_npc did NOT seed npc_pool — "
+            "the 61-2 projection's identity-fallback would lose this "
+            "NPC on the legacy-save path. Round-2 §B fix must call "
+            "_ensure_world_authored_pool_member on both branches."
+        )
+        # And the in-place disposition update from ChapterNpc still
+        # applies (regression guard against the refactor breaking the
+        # pre-existing update semantics).
+        legacy = next(n for n in snap.npcs if n.core.name == "LegacyDrakul")
+        assert legacy.disposition == 3
+
+    def test_npc_chapter_apply_promotes_prose_pending_pool_entry(self) -> None:
+        """Story 61-8 §B (review-fix round 2) — the docstring claims
+        ``world-authored NPCs override that with observation_pending=False
+        since they are canonical at chapter-apply time``. The original
+        implementation skipped instead of overriding; the round-2 fix
+        promotes a prior prose-extracted pending entry to canonical
+        world-authored when a chapter apply hits the same name.
+        """
+        from sidequest.game.npc_pool import NpcPoolMember
+        from sidequest.game.session import GameSnapshot
+        from sidequest.game.turn import TurnManager
+        from sidequest.game.world_materialization import WorldBuilder
+
+        snap = GameSnapshot(turn_manager=TurnManager(interaction=0))
+        # Pre-existing prose-extracted pending entry.
+        snap.npc_pool.append(
+            NpcPoolMember(
+                name="Mrs. Gow",
+                role="housekeeper",
+                pronouns="she/her",
+                drawn_from="dialogue_extraction",
+                observation_pending=True,
+            )
+        )
+
+        builder = WorldBuilder()
+        builder._apply_npc(snap, ChapterNpc(name="Mrs. Gow"))
+
+        member = next(m for m in snap.npc_pool if m.name == "Mrs. Gow")
+        assert member.drawn_from == "world_authored", (
+            "Pre-existing prose-pending entry was not promoted to "
+            "drawn_from='world_authored' on chapter apply — the §B "
+            "docstring's override-contract is not honored."
+        )
+        assert member.observation_pending is False, (
+            "Pre-existing pending entry was not ratified on chapter "
+            "apply — observation_pending stays True, suppressing any "
+            "consumer gated on canonical NPCs."
+        )
+        # Non-prose fields are NOT clobbered (the chapter ChapterNpc
+        # carried no role / pronouns; the pre-existing entry's values
+        # should survive).
+        assert member.role == "housekeeper"
+        assert member.pronouns == "she/her"
+
+    def test_npc_chapter_apply_does_not_clobber_canonical_pool_entry(self) -> None:
+        """Story 61-8 §B (review-fix round 2) — only PROSE-PENDING
+        entries are promoted. A pre-existing non-prose source
+        (e.g. ``name_generator``, ``legacy_registry``) with
+        ``observation_pending=False`` must be left untouched. Chapter
+        apply is canonical over prose-extracted entries only; it does
+        not override entries minted by other code paths.
+        """
+        from sidequest.game.npc_pool import NpcPoolMember
+        from sidequest.game.session import GameSnapshot
+        from sidequest.game.turn import TurnManager
+        from sidequest.game.world_materialization import WorldBuilder
+
+        snap = GameSnapshot(turn_manager=TurnManager(interaction=0))
+        snap.npc_pool.append(
+            NpcPoolMember(
+                name="Generated McName",
+                drawn_from="name_generator",
+                observation_pending=False,
+            )
+        )
+
+        builder = WorldBuilder()
+        builder._apply_npc(snap, ChapterNpc(name="Generated McName"))
+
+        member = next(m for m in snap.npc_pool if m.name == "Generated McName")
+        assert member.drawn_from == "name_generator", (
+            "Pre-existing name_generator pool entry was clobbered to "
+            "'world_authored' — promotion logic must only override "
+            "prose-extracted / pending entries, not all sources."
+        )
+
+    def test_npc_chapter_apply_pool_seed_is_idempotent(self) -> None:
+        """Story 61-8 §B — idempotency on repeated chapter apply.
+
+        Re-applying the same chapter (e.g. cross-chapter NPC re-citation)
+        must not duplicate the pool entry; identity stays one-to-one
+        with ``snap.npcs``.
+        """
+        snap = (
+            WorldBuilder()
+            .at_maturity(CampaignMaturity.Early)
+            .with_chapters(
+                [
+                    _fresh_chapter(npcs=[ChapterNpc(name="Drakul")]),
+                    _early_chapter(npcs=[ChapterNpc(name="Drakul", disposition=-5)]),
+                ]
+            )
+            .build()
+        )
+        drakul_members = [m for m in snap.npc_pool if m.name == "Drakul"]
+        assert len(drakul_members) == 1, (
+            f"Duplicate pool entries for Drakul: {len(drakul_members)} — "
+            "the idempotency guard in _apply_npc must skip when a member "
+            "with the same name already exists."
+        )
+
     def test_blank_npc_name_skipped(self) -> None:
         snap = (
             WorldBuilder()

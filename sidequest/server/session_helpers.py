@@ -116,10 +116,22 @@ def _apply_phase_c_projections(
     * ``room_states_dropped`` — count of room ids removed from
       ``payload["room_states"]`` (zero when the projection was skipped).
     * ``npcs_dropped`` — count of NPCs filtered out by the in-scene
-      predicate (zero when the projection was skipped).
+      predicate as legitimately off-stage (zero when the projection
+      was skipped). Excludes unresolvable-name drops (counted
+      separately below).
     * ``known_facts_truncated_total`` — sum across PCs of facts
       truncated past the tail-K window.
     * ``clues_truncated`` — count of ``discovered_clues`` over the cap.
+    * ``encounter_anchored_count`` (Story 61-7) — count of NPCs kept
+      because they appear in the active encounter's ``actors`` list,
+      not because their location matched. Zero when the projection
+      was skipped.
+    * ``npcs_unresolvable_name_dropped`` (Story 61-8 §D1) — count of
+      NPC payload entries whose ``core.name`` / top-level ``name``
+      extraction yielded a falsy value (data-shape drift,
+      GM-panel-actionable). Reported separately from ``npcs_dropped``
+      so a serialization regression doesn't masquerade as legitimate
+      off-scene filtering.
     """
     counts: dict[str, int] = {
         "room_states_dropped": 0,
@@ -132,6 +144,15 @@ def _apply_phase_c_projections(
         # alone is silent on which branch fired. See
         # ``sidequest.game.npc_scene.is_npc_anchored_by_encounter``.
         "encounter_anchored_count": 0,
+        # Story 61-8 §D1 — silent-failure-hunter follow-up. The
+        # in-scene filter loop below silently drops payload entries
+        # whose ``core.name`` / ``name`` extraction yields a falsy
+        # value (typically ``None`` from a malformed dict in the
+        # pre-projection snapshot serialization). Pre-§D1 these were
+        # rolled into ``npcs_dropped`` and indistinguishable from
+        # legitimate off-scene drops — the GM panel had no way to see
+        # data-shape drift. Now reported separately.
+        "npcs_unresolvable_name_dropped": 0,
     }
 
     # ---------------------------------------------------------------
@@ -177,16 +198,30 @@ def _apply_phase_c_projections(
         counts["encounter_anchored_count"] = encounter_anchored
         before = len(npcs_payload)
         kept: list[dict] = []
+        unresolvable_name_dropped = 0
         for entry in npcs_payload:
             core = entry.get("core")
             entry_name = core.get("name") if isinstance(core, dict) else entry.get("name")
+            # Story 61-8 §D1 — distinguish "name shape was wrong" (data
+            # drift, GM-panel actionable) from "NPC is off-scene" (the
+            # projection working as designed). A name-key that yields a
+            # falsy value (None, empty string) cannot match
+            # ``in_scene_names`` (which is sourced from
+            # ``CreatureCore.name_non_blank``-validated NPCs); count
+            # those separately so the GM panel can spot serialization
+            # regressions instead of attributing them to legitimate
+            # drops.
+            if not entry_name:
+                unresolvable_name_dropped += 1
+                continue
             if entry_name in in_scene_names:
                 # Strip nested belief_state — dispatch-side state, not
                 # prompt-side (ADR-053 gossip propagation).
                 entry.pop("belief_state", None)
                 kept.append(entry)
         payload["npcs"] = kept
-        counts["npcs_dropped"] = before - len(kept)
+        counts["npcs_dropped"] = before - len(kept) - unresolvable_name_dropped
+        counts["npcs_unresolvable_name_dropped"] = unresolvable_name_dropped
 
     # ---------------------------------------------------------------
     # characters[*].known_facts — per-PC tail-K projection. PC-scoped,
@@ -329,9 +364,25 @@ def _resolve_acting_character_name(sd: _SessionData, room: SessionRoom | None) -
     seat_lookup = getattr(room, "slot_to_player_id", None) if room is not None else None
     if callable(seat_lookup) and sd.player_id:
         seat_map = seat_lookup()
-        for slot, pid in seat_map.items():
-            if pid == sd.player_id and any(c.core.name == slot for c in snapshot.characters):
-                return slot
+        # Story 61-8 §D6 — pyright can't statically determine that the
+        # duck-typed ``slot_to_player_id`` returns a ``dict``. The
+        # ``isinstance`` narrows for the type checker AND surfaces a
+        # hook-contract bug loudly (review-fix round 2): pre-§D6 a
+        # non-dict return caused ``.items()`` to raise AttributeError;
+        # the isinstance guard alone would silently mask that. CLAUDE.md
+        # No Silent Fallbacks — log warning on the unexpected shape so
+        # the bug surfaces rather than going invisible.
+        if isinstance(seat_map, dict):
+            for slot, pid in seat_map.items():
+                if pid == sd.player_id and any(c.core.name == slot for c in snapshot.characters):
+                    return slot
+        else:
+            logger.warning(
+                "_resolve_acting_character_name.seat_lookup_non_dict — "
+                "room.slot_to_player_id() returned %s (expected dict); "
+                "falling back to player_name match. Hook contract drift.",
+                type(seat_map).__name__,
+            )
     for char in snapshot.characters:
         if char.core.name == sd.player_name:
             return char.core.name
@@ -592,7 +643,22 @@ def _build_turn_context(
     # sd.player_id so the arbiter can find the actor directly.
     pc_cores_by_player: dict[str, CreatureCore] = {}
     seat_lookup_fn = getattr(room, "slot_to_player_id", None) if room is not None else None
-    seat_map: dict[str, str] = seat_lookup_fn() if callable(seat_lookup_fn) else {}
+    # Story 61-8 §D6 — same pattern as ``_resolve_acting_character_name``:
+    # pyright can't statically prove the duck-typed callable returns a
+    # dict, so narrow before use. Review-fix round 2: surface a non-dict
+    # return as a warning rather than silently substituting an empty
+    # dict (CLAUDE.md No Silent Fallbacks).
+    _raw_seat_map = seat_lookup_fn() if callable(seat_lookup_fn) else {}
+    if not isinstance(_raw_seat_map, dict):
+        logger.warning(
+            "_build_turn_context.seat_lookup_non_dict — "
+            "room.slot_to_player_id() returned %s (expected dict); "
+            "falling back to empty seat map. Hook contract drift.",
+            type(_raw_seat_map).__name__,
+        )
+        seat_map: dict[str, str] = {}
+    else:
+        seat_map = _raw_seat_map
     char_to_player = dict(seat_map.items())
     for pc in snapshot.characters:
         owner_pid = char_to_player.get(pc.core.name)
@@ -637,6 +703,17 @@ def _build_turn_context(
             room, "playing_player_count", None
         )
         try:
+            # Story 61-8 §D6 — pyright sees ``count_method`` as
+            # ``Callable | None`` and complains. The except-Exception
+            # wrapper below catches the AttributeError when count_method
+            # is None as documented (fail-loud-default-to-safe-empty),
+            # so the assert that it's not None is correct contract-wise
+            # — but we use a defensive runtime check so the type-system
+            # narrowing is explicit and pyright stops complaining.
+            if count_method is None:
+                raise TypeError(
+                    "room exposes neither non_abandoned_player_count nor playing_player_count"
+                )
             player_count_for_gate = int(count_method())
         except Exception:  # noqa: BLE001 — fail loud on any contract drift
             logger.warning(
@@ -834,7 +911,18 @@ def _build_turn_context(
         phase_b_applied=True,
         bytes_before=_bytes_before,
         bytes_after=_bytes_after,
-        **_projection_counts,
+        # Story 61-8 §D6 (review-fix round 2): pyright emits
+        # ``reportArgumentType`` because ``**dict[str, int]`` is not
+        # statically compatible with the span's typed keyword
+        # parameters (the spread could in principle supply any key,
+        # including the keyword-only ``_tracer: Tracer | None``). At
+        # runtime the dict is constructed locally a few lines above
+        # and contains only projection-count integer keys. The
+        # ``pyright: ignore`` documents the deliberate type-check
+        # waiver; the structural fix (rename ``_tracer`` → a non-
+        # underscore-prefixed name on every span helper) is filed in
+        # this story's Delivery Findings.
+        **_projection_counts,  # pyright: ignore[reportArgumentType]
     ):
         logger.info(
             "prompt.game_state.bytes phase_a=1 phase_b=1 bytes_before=%d bytes_after=%d ratio=%.3f",
@@ -1329,7 +1417,13 @@ def _emit_auto_mint_skip(
         role=role,
         reason=reason,
         turn_number=turn_num,
-        **extra_attrs,
+        # Story 61-8 §D6 (review-fix round 2): see twin pragma above
+        # on ``prompt_game_state_bytes_span``. Same ``reportArgumentType``
+        # mechanism: ``**dict[str, object]`` is not statically
+        # compatible with the span's typed keyword parameters; at
+        # runtime ``extra_attrs`` is fed by the caller above with
+        # explicit telemetry-attribute keys.
+        **extra_attrs,  # pyright: ignore[reportArgumentType]
     ):
         logger.warning(
             "npc.auto_mint_skipped name=%r role=%r turn=%d reason=%s — %s",

@@ -27,6 +27,7 @@ The fake-SDK shape mirrors ``test_narrator_sdk_hybrid_split.py`` exactly.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -365,4 +366,156 @@ async def test_sdk_path_context_missing_ids_still_fires_when_unwired(
     assert any("context_missing_ids" in rec.message for rec in caplog.records), (
         "context_missing_ids warning did NOT fire for a genuinely unwired "
         "TurnContext — the fail-loud guard was lost"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_context_missing_lore_store_fires_when_ids_present_but_lore_unwired(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Story 61-8 §A — defense-in-depth on the Phase-E lore_store seam.
+
+    A regression in ``_build_turn_context`` that drops
+    ``lore_store=sd.lore_store`` would slip past the umbrella
+    ``context_missing_ids`` guard because world_id/session_id are still
+    populated. The dedicated ``context_missing_lore_store`` warning
+    catches this partial-wiring failure mode — the same one that
+    originally produced the 61-1 ``hit_count=0`` confabulation bug.
+    """
+    ctx = TurnContext(
+        character_name="Alice",
+        world_id="mawdeep",
+        session_id="2026-05-23-caverns_mawdeep-1",
+        turn_number=3,
+        store=MagicMock(),
+        lore_store=None,
+    )
+    with caplog.at_level(logging.WARNING):
+        await _run_sdk_and_capture_ctx(monkeypatch, ctx)
+
+    assert any("context_missing_lore_store" in rec.message for rec in caplog.records), (
+        "context_missing_lore_store warning did NOT fire even though "
+        "lore_store=None with present ids — the defense-in-depth guard "
+        "must catch a partial-wiring regression that the umbrella "
+        "context_missing_ids check would miss."
+    )
+    # The umbrella warning MUST NOT fire (ids ARE present); this is the
+    # whole point of separating the two warnings — distinct GM-panel signals.
+    assert not any("context_missing_ids" in rec.message for rec in caplog.records), (
+        "context_missing_ids fired despite ids being present — that "
+        "warning is reserved for the umbrella unwired-TurnContext case."
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_context_missing_lore_store_silent_when_fully_wired(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression guard: a fully-wired TurnContext (ids + lore_store)
+    MUST NOT fire either defense-in-depth warning. Both guards together
+    must stay quiet on the green path or they devolve into noise."""
+    ctx = TurnContext(
+        character_name="Alice",
+        world_id="mawdeep",
+        session_id="2026-05-23-caverns_mawdeep-1",
+        turn_number=3,
+        store=MagicMock(),
+        lore_store=_seeded_lore_store(),
+    )
+    with caplog.at_level(logging.WARNING):
+        await _run_sdk_and_capture_ctx(monkeypatch, ctx)
+
+    assert not any("context_missing_lore_store" in rec.message for rec in caplog.records), (
+        "lore_store warning fired despite lore_store being wired"
+    )
+    assert not any("context_missing_ids" in rec.message for rec in caplog.records), (
+        "umbrella context_missing_ids warning fired on the green path"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_unwired_ids_fire_only_umbrella_not_lore_store_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Story 61-8 §A (review-fix round 2) — boundary case: when the
+    TurnContext is genuinely unwired (world_id/session_id missing AND
+    lore_store missing), ONLY the umbrella ``context_missing_ids``
+    warning must fire — NOT the dedicated ``context_missing_lore_store``
+    warning. The lore_store warning's exclusion condition
+    ``world_id != "unknown" and session_id != "adhoc"`` is the
+    architectural pivot that keeps the two GM-panel signals distinct.
+    Without this test, a regression that drops the exclusion would
+    produce duplicate noise on every cold-start turn — the failure
+    mode the round-1 review flagged.
+    """
+    ctx = TurnContext(character_name="Alice", turn_number=0, lore_store=None)
+    with caplog.at_level(logging.WARNING):
+        await _run_sdk_and_capture_ctx(monkeypatch, ctx)
+
+    assert any("context_missing_ids" in rec.message for rec in caplog.records), (
+        "umbrella context_missing_ids warning did NOT fire on a "
+        "genuinely-unwired TurnContext — the fail-loud guard was lost"
+    )
+    assert not any("context_missing_lore_store" in rec.message for rec in caplog.records), (
+        "context_missing_lore_store fired despite ids being unwired — "
+        "the two warnings must be mutually exclusive; the exclusion "
+        "condition (world_id != 'unknown' and session_id != 'adhoc') "
+        "in orchestrator.py:3568 was bypassed."
+    )
+
+
+class _FakeSocket:
+    """Minimal `_Sendable` for watcher_hub subscription — same shape as
+    `tests/agents/test_61_3_hard_cap_oversized_canary.py::_FakeSocket`."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        self.events.append(data)
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_lore_store_warning_publishes_watcher_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Story 61-8 §A (review-fix round 2) — the warning is not just a
+    logger.warning, it MUST publish a watcher event so the GM panel
+    surfaces the partial-wiring regression (CLAUDE.md OTEL
+    Observability Principle). The logger.warning is invisible to the
+    GM panel; the watcher event is the GM-panel-actionable signal."""
+    from sidequest.telemetry.watcher_hub import watcher_hub
+
+    watcher_hub.bind_loop(asyncio.get_running_loop())
+    async with watcher_hub._lock:  # noqa: SLF001
+        watcher_hub._subscribers.clear()  # noqa: SLF001
+
+    sock = _FakeSocket()
+    await watcher_hub.subscribe(sock)  # type: ignore[arg-type]
+    try:
+        ctx = TurnContext(
+            character_name="Alice",
+            world_id="mawdeep",
+            session_id="2026-05-23-caverns_mawdeep-1",
+            turn_number=3,
+            store=MagicMock(),
+            lore_store=None,
+        )
+        await _run_sdk_and_capture_ctx(monkeypatch, ctx)
+        # Give the publish a moment to fan out via async queue.
+        await asyncio.sleep(0.05)
+    finally:
+        await watcher_hub.unsubscribe(sock)  # type: ignore[arg-type]
+
+    lore_events = [
+        e for e in sock.events if e.get("event_type") == "narrator_context_missing_lore_store"
+    ]
+    assert lore_events, (
+        "narrator_context_missing_lore_store watcher event was NOT "
+        "published — only logger.warning fired, which is invisible to "
+        "the GM panel. CLAUDE.md OTEL Observability Principle requires "
+        "the watcher event for GM-panel-actionable subsystem decisions."
     )

@@ -14,7 +14,7 @@ in the incident even if its severity had been ERROR.
 
 Story 61-3 promotes the seam to a HARD refuse on the SDK path:
 
-1. When `total_bytes > SOFT_PROMPT_BUDGET_BYTES`, the SDK call does
+1. When `total_bytes > PROMPT_BUDGET_BYTES_HARD`, the SDK call does
    NOT fire and `run_narration_turn` returns a degraded
    `NarrationTurnResult` (in-fiction stall).
 2. The emit is LOUD: `logger.error` (not WARNING) + a NEW watcher
@@ -100,7 +100,7 @@ async def test_oversized_prompt_refuses_sdk_call_and_returns_degraded(
     `NarrationTurnResult` carrying narration text (so the player
     surface doesn't hang).
     """
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     fake = FakeAnthropicSdkClient(responses=[_end_turn()])
     orch = Orchestrator(client=fake)
@@ -170,7 +170,7 @@ async def test_oversized_canary_emits_loud_event_to_gm_panel(
     sock = _FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     fake = FakeAnthropicSdkClient(responses=[_end_turn()])
     orch = Orchestrator(client=fake)
@@ -220,7 +220,7 @@ async def test_oversized_canary_logs_at_error_level_not_warning(
       - No WARNING-level record carrying the same prefix (regression guard
         against accidental `logger.warning` reintroduction).
     """
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     fake = FakeAnthropicSdkClient(responses=[_end_turn()])
     orch = Orchestrator(client=fake)
@@ -268,7 +268,7 @@ async def test_canary_emits_exactly_once_per_oversized_call(
     sock = _FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     fake = FakeAnthropicSdkClient(responses=[_end_turn(), _end_turn()])
     orch = Orchestrator(client=fake)
@@ -308,7 +308,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
 
     Architect's spec-check (61-3, answer B) verified the canary is correctly
     placed at prompt-construction time on both paths against the same
-    ``SOFT_PROMPT_BUDGET_BYTES`` measure — but did NOT measure end-to-end
+    ``PROMPT_BUDGET_BYTES_HARD`` measure — but did NOT measure end-to-end
     shape parity. This probe ratifies that finding empirically and guards
     against future drift between the two paths (e.g., a tweak to the SDK
     refuse narration that isn't mirrored on the sync path would leave the
@@ -333,7 +333,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
 
     from sidequest.agents.claude_client import ClaudeResponse
 
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     # --- SDK path ---------------------------------------------------------
     sdk_sock = _FakeSocket()
@@ -344,9 +344,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
     sdk_result = await sdk_orch.run_narration_turn("look around", simple_turn_context)
     await asyncio.sleep(0.05)
 
-    sdk_events = [
-        e for e in sdk_sock.events if e.get("event_type") == "prompt_oversized_hard"
-    ]
+    sdk_events = [e for e in sdk_sock.events if e.get("event_type") == "prompt_oversized_hard"]
 
     # Clear subscribers so the synchronous-path subscription doesn't also
     # receive any residual SDK-path events (defensive isolation).
@@ -365,9 +363,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
     sync_result = await sync_orch.run_narration_turn("look around", simple_turn_context)
     await asyncio.sleep(0.05)
 
-    sync_events = [
-        e for e in sync_sock.events if e.get("event_type") == "prompt_oversized_hard"
-    ]
+    sync_events = [e for e in sync_sock.events if e.get("event_type") == "prompt_oversized_hard"]
 
     # --- Parity assertions ------------------------------------------------
     # 1+2. Result shape: is_degraded + narration text.
@@ -414,3 +410,59 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
         f"{len(sdk_fake.recorded_requests)} request(s)."
     )
     sync_client.send_stateless.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_oversized_refuse_stamps_action_span_refused_oversized_attribute(
+    simple_turn_context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Story 61-8 §C2 (review-fix round 2) — when the hard cap fires
+    on the SDK path, the open ``orchestrator_process_action_span`` MUST
+    be stamped with ``refused_oversized=True`` so a future GM-panel
+    per-turn view can red-band-color the entire refused turn. Companion
+    to the existing ``prompt_oversized_hard`` watcher event — the
+    event flags the moment, the span attribute lets per-trace views
+    color the whole turn.
+
+    Without this regression guard, a refactor that drops the
+    ``_action_span.set_attribute(...)`` call would be invisible to the
+    test suite (the watcher-event tests above would still pass).
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from sidequest.telemetry import spans as _spans
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(_spans, "tracer", lambda: provider.get_tracer("test"))
+
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
+
+    fake = FakeAnthropicSdkClient(responses=[_end_turn()])
+    orch = Orchestrator(client=fake)
+    result = await orch.run_narration_turn("look around", simple_turn_context)
+
+    assert result.is_degraded is True
+    assert fake.recorded_requests == []
+
+    finished = exporter.get_finished_spans()
+    action_spans = [s for s in finished if s.name == "orchestrator.process_action"]
+    assert len(action_spans) == 1, (
+        f"Expected exactly one orchestrator.process_action span; "
+        f"got {len(action_spans)}. Finished spans: "
+        f"{sorted({s.name for s in finished})}"
+    )
+    attrs = action_spans[0].attributes or {}
+    assert attrs.get("refused_oversized") is True, (
+        f"orchestrator.process_action span missing or wrong "
+        f"refused_oversized attribute: got {attrs.get('refused_oversized')!r}, "
+        "expected True. The §C2 per-turn ribbon-coloring signal is "
+        "silently absent — GM-panel per-trace views cannot color the "
+        "refused turn distinctly."
+    )

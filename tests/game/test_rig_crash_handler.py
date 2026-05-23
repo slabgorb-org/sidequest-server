@@ -124,14 +124,34 @@ def test_span_rig_pool_crash_event_constant_exposed() -> None:
     assert SPAN_RIG_POOL_CRASH_EVENT == "rig_pool.crash_event"
 
 
-def test_span_rig_pool_crash_event_is_flat_only() -> None:
-    """All rig_pool.* spans are flat-only — no nested routing."""
+def test_span_rig_pool_crash_event_is_routed_state_transition() -> None:
+    """Story 53-4 (ADR-031): ``rig_pool.crash_event`` is routed to a typed
+    ``state_transition`` event with ``component="rig"`` so the GM panel's
+    Subsystems tab surfaces every crash deterministically — not just as
+    an opaque ``agent_span_close`` on the firehose.
+
+    Before 53-4 this lived in ``FLAT_ONLY_SPANS`` (the 53-3 ship state).
+    """
     from sidequest.telemetry.spans import (
         FLAT_ONLY_SPANS,
         SPAN_RIG_POOL_CRASH_EVENT,
+        SPAN_ROUTES,
     )
 
-    assert SPAN_RIG_POOL_CRASH_EVENT in FLAT_ONLY_SPANS
+    assert SPAN_RIG_POOL_CRASH_EVENT in SPAN_ROUTES, (
+        f"{SPAN_RIG_POOL_CRASH_EVENT!r} must be registered in SPAN_ROUTES"
+    )
+    assert SPAN_RIG_POOL_CRASH_EVENT not in FLAT_ONLY_SPANS, (
+        f"{SPAN_RIG_POOL_CRASH_EVENT!r} must not be in FLAT_ONLY_SPANS now "
+        "that it is routed"
+    )
+    route = SPAN_ROUTES[SPAN_RIG_POOL_CRASH_EVENT]
+    assert route.event_type == "state_transition", (
+        f"route.event_type should be 'state_transition', got {route.event_type!r}"
+    )
+    assert route.component == "rig", (
+        f"route.component should be 'rig', got {route.component!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +336,107 @@ def test_handle_rig_crash_emits_crash_event_span(monkeypatch) -> None:
     assert attrs["chassis_id"] == "rig_tier_1_prospect"
     assert attrs["location"] == "dust_canyon"
     assert attrs["attacker"] == "raider_chief"
+
+
+def test_handle_rig_crash_span_captures_consequence_outcomes(monkeypatch) -> None:
+    """Story 53-4 / ADR-031: the crash span must capture what was DECIDED,
+    not just the inputs.
+
+    Pre-53-4, the span carried ``character_id, chassis_id, location,
+    attacker`` — all inputs. The three consequences (Edge -1, injury
+    status appended, dismount status appended) were mutations on
+    ``core`` but invisible on the span, so the GM dashboard could only
+    see "a crash happened" without knowing the outcome.
+
+    Per the Layer-2 Agent Telemetry contract in ADR-031 ("structured
+    spans at every point where the system makes or executes a decision"
+    with fields "what was decided"), the span attrs MUST now also carry:
+
+    - ``edge_delta`` — the signed Edge change applied (``DRIVER_EDGE_HIT``)
+    - ``edge_after`` — the driver's Edge after the hit lands
+    - ``injury_status_text`` — the appended injury status text
+    - ``dismounted_status_text`` — the appended dismount status text
+
+    Sebastien's lie detector: these four attributes are what tell the
+    operator that the consequences fired AS A MATTER OF FACT, separate
+    from the narrator's prose about the crash.
+    """
+    from sidequest.game import handle_rig_crash
+    from sidequest.game.rig_crash import (
+        DISMOUNTED_STATUS_TEXT,
+        DRIVER_EDGE_HIT,
+        INJURY_STATUS_TEXT,
+    )
+    from sidequest.telemetry import spans as _spans
+    from sidequest.telemetry.spans import SPAN_RIG_POOL_CRASH_EVENT
+
+    provider, exporter = _fresh_provider()
+    monkeypatch.setattr(_spans, "tracer", lambda: provider.get_tracer("test"))
+
+    # Edge starts at 5; after DRIVER_EDGE_HIT (currently -1) it lands at 4.
+    core = _mounted_core(
+        name="Mira",
+        composure=0,
+        edge_current=5,
+        edge_max=5,
+        chassis_id="rig_tier_1_prospect",
+    )
+    handle_rig_crash(core, location="dust_canyon", attacker="raider_chief")
+
+    finished = exporter.get_finished_spans()
+    matching = [s for s in finished if s.name == SPAN_RIG_POOL_CRASH_EVENT]
+    assert len(matching) == 1, "exactly one crash_event span per crash"
+    attrs = matching[0].attributes
+
+    assert attrs["edge_delta"] == DRIVER_EDGE_HIT, (
+        f"edge_delta must equal DRIVER_EDGE_HIT ({DRIVER_EDGE_HIT}), got {attrs.get('edge_delta')!r}"
+    )
+    assert attrs["edge_after"] == 5 + DRIVER_EDGE_HIT, (
+        f"edge_after must reflect the post-crash Edge value, got {attrs.get('edge_after')!r}"
+    )
+    assert attrs["injury_status_text"] == INJURY_STATUS_TEXT, (
+        f"injury_status_text must match the appended status, got {attrs.get('injury_status_text')!r}"
+    )
+    assert attrs["dismounted_status_text"] == DISMOUNTED_STATUS_TEXT, (
+        f"dismounted_status_text must match the appended status, got {attrs.get('dismounted_status_text')!r}"
+    )
+
+
+def test_handle_rig_crash_span_consequences_floor_edge_at_zero(monkeypatch) -> None:
+    """Sebastien's edge case: a driver whose Edge is already 0 still
+    triggers the crash sequence, but ``edge_after`` must NOT go negative
+    — Edge pools floor at 0. The span must report ``edge_after=0`` and
+    ``edge_delta`` equal to the *realized* delta (i.e., 0 — no Edge was
+    actually subtracted because the floor swallowed it), not the
+    requested ``DRIVER_EDGE_HIT``.
+
+    Pinning this avoids a future "phantom hit" where the dashboard shows
+    edge_delta=-1 against a character who had 0 Edge to lose.
+    """
+    from sidequest.game import handle_rig_crash
+    from sidequest.telemetry import spans as _spans
+    from sidequest.telemetry.spans import SPAN_RIG_POOL_CRASH_EVENT
+
+    provider, exporter = _fresh_provider()
+    monkeypatch.setattr(_spans, "tracer", lambda: provider.get_tracer("test"))
+
+    core = _mounted_core(name="Mira", composure=0, edge_current=0, edge_max=5)
+    handle_rig_crash(core)
+
+    matching = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == SPAN_RIG_POOL_CRASH_EVENT
+    ]
+    assert len(matching) == 1
+    attrs = matching[0].attributes
+    assert attrs["edge_after"] == 0
+    # Realized delta: the floor swallowed the requested -1, so the span
+    # reports what actually happened to the Edge pool, not what was asked.
+    assert attrs["edge_delta"] == 0, (
+        "edge_delta on the span is the realized delta (after flooring), "
+        f"not the requested DRIVER_EDGE_HIT — got {attrs.get('edge_delta')!r}"
+    )
 
 
 def test_handle_rig_crash_span_handles_none_location_and_attacker(monkeypatch) -> None:

@@ -100,7 +100,14 @@ def handle_rig_crash(
     if _already_dismounted(core):
         return None
 
+    edge_before = core.edge.current
     core.apply_edge_delta(DRIVER_EDGE_HIT)
+    edge_after = core.edge.current
+    # Realized delta — the EdgePool floors at 0, so a driver at 0 Edge
+    # takes the crash but loses no Edge; the span reports what actually
+    # happened, not what was requested (story 53-4 ADR-031 Layer-2
+    # contract: capture what was decided).
+    edge_delta = edge_after - edge_before
     core.statuses.append(Status(text=INJURY_STATUS_TEXT, severity=StatusSeverity.Wound))
     core.statuses.append(Status(text=DISMOUNTED_STATUS_TEXT, severity=StatusSeverity.Scar))
 
@@ -111,6 +118,10 @@ def handle_rig_crash(
             "chassis_id": pool.chassis_id,
             "location": location or "",
             "attacker": attacker or "",
+            "edge_delta": edge_delta,
+            "edge_after": edge_after,
+            "injury_status_text": INJURY_STATUS_TEXT,
+            "dismounted_status_text": DISMOUNTED_STATUS_TEXT,
         },
     ):
         pass

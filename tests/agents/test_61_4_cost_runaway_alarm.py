@@ -839,3 +839,107 @@ async def test_absolute_floor_does_not_re_fire_io_fingerprint_priority(
 # Probe constant — kept local to this module so the test asserts against
 # the documented floor rather than re-importing the implementation detail.
 _ABSOLUTE_COST_USD_FLOOR_PROBE: float = 0.30
+
+
+# ---------------------------------------------------------------------------
+# 10. TEA verify (adversarial A-attack) — silence-prevention end-to-end
+# ---------------------------------------------------------------------------
+#
+# This is a *stronger* shape than test 8 above. Test 8 trains the baseline
+# at $0.18/call (warmup-floor-tripping shape) then fires $0.31 and asserts
+# `trigger=="cost_absolute"`. The user's A-attack spec asks the inverse:
+# train at the EXPLICITLY sub-$0.15-warmup-floor shape ($0.12/call), so
+# cost_multiple is silent both during warmup AND post-warmup, then fire a
+# $0.31 probe — and assert BOTH (a) cost_absolute fires AND (b) no
+# cost_multiple event has fired across the ENTIRE 11-call sequence. This
+# is the real-world silence-prevention claim: "sustained sub-warmup-floor
+# traffic followed by a $0.31 spike still alarms via the safety net."
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tea_adversarial_a_attack_baseline_self_training(
+    monkeypatch: pytest.MonkeyPatch,
+    bound_hub: WatcherHub,
+) -> None:
+    """Adversarial A-attack probe (TEA verify, 2026-05-23).
+
+    Per Sonnet rates ($3/MTok input, $15/MTok output): a 40K-in / 500-out
+    call costs $0.120 + $0.0075 ≈ $0.1275 — *under* the $0.15 warmup
+    floor, so cost_multiple stays silent during warmup. After 10 such
+    calls the rolling baseline is ~$0.1275. Then probe at 102K-in /
+    500-out ≈ $0.3135: 0.3135 / 0.1275 ≈ 2.46x baseline (sub-5x →
+    cost_multiple still silent), output=500 (io_fingerprint silent),
+    but $0.3135 > $0.30 absolute floor → cost_absolute MUST fire.
+
+    Negative half of the contract: ZERO cost_multiple events MAY appear
+    across the whole sequence. This is the part the existing
+    test_absolute_cost_floor_fires_when_baseline_is_high does NOT assert
+    (it only checks the post-warmup probe is cost_absolute, not that the
+    cost_multiple lane stayed dark).
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sock = _FakeSocket()
+    await bound_hub.subscribe(sock)  # type: ignore[arg-type]
+
+    # 10 "sub-warmup-floor" calls at 40K/500 (~$0.1275 each) +
+    # 1 probe at 102K/500 (~$0.3135).
+    sustained = _resp(input_tokens=40_000, output_tokens=500)
+    probe = _resp(input_tokens=102_000, output_tokens=500)
+    sdk = _Sdk(responses=[sustained for _ in range(10)] + [probe])
+    client = _build_client(sdk)
+
+    for _ in range(11):
+        await client.complete_with_tools(
+            system_blocks=_system_blocks(),
+            messages=_user_msg(),
+            tools=_tools_empty(),
+            model="claude-sonnet-4-6",
+        )
+    await asyncio.sleep(0.05)
+
+    events = [
+        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
+    ]
+
+    # Positive: exactly one cost_absolute event, on the probe.
+    cost_abs = [e for e in events if e["fields"]["trigger"] == "cost_absolute"]
+    assert len(cost_abs) == 1, (
+        "A-attack: $0.31 probe after 10x $0.12 turns MUST fire "
+        f"cost_absolute exactly once; got {len(cost_abs)} cost_absolute "
+        f"events. All events: "
+        f"{[(e['fields'].get('trigger'), e['fields'].get('cost_usd')) for e in events]}"
+    )
+    fields = cost_abs[0]["fields"]
+    assert fields["warmup"] is False, (
+        "Probe fires AFTER K=10 sustained calls — baseline is OBSERVED "
+        f"(not floor). Got warmup={fields['warmup']!r}"
+    )
+    assert fields["cost_usd"] > _ABSOLUTE_COST_USD_FLOOR_PROBE, (
+        f"Probe cost_usd must exceed $0.30 absolute floor; "
+        f"got cost_usd={fields['cost_usd']!r}"
+    )
+    # Baseline must reflect the trained $0.1275, not the warmup floor.
+    assert 0.10 <= fields["baseline_cost_usd"] <= 0.15, (
+        "Baseline must reflect 10 trained calls (~$0.1275), not the "
+        f"$0.03 warmup floor. Got baseline_cost_usd={fields['baseline_cost_usd']!r}"
+    )
+
+    # Negative: ZERO cost_multiple events anywhere in the 11-call sequence.
+    # If this fires, the sub-warmup-floor calls aren't actually sub-floor
+    # (Sonnet rates drifted) OR the probe somehow tripped cost_multiple
+    # at 2.46x baseline (5x threshold misconfigured).
+    cost_mult = [e for e in events if e["fields"]["trigger"] == "cost_multiple"]
+    assert len(cost_mult) == 0, (
+        "A-attack negative half: cost_multiple MUST stay silent. "
+        "Warmup calls at $0.1275 are under the $0.15 warmup floor; "
+        "probe at $0.31 is 2.46x baseline (sub-5x). Got "
+        f"{len(cost_mult)} cost_multiple events: "
+        f"{[(e['fields'].get('cost_usd'), e['fields'].get('baseline_cost_usd')) for e in cost_mult]}"
+    )
+    # And no io_fingerprint either — output=500 throughout.
+    io_fp = [e for e in events if e["fields"]["trigger"] == "io_fingerprint"]
+    assert len(io_fp) == 0, (
+        "A-attack: io_fingerprint MUST stay silent (output=500 >> 50). "
+        f"Got {len(io_fp)} io_fingerprint events."
+    )

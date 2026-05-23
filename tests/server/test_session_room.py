@@ -147,6 +147,52 @@ def test_close_store_when_unbound_is_noop():
     room.close_store()  # must not raise
 
 
+def test_close_store_resets_narrator_cost_baselines():
+    """Story 61-4 (Architect spec-check A) wiring test.
+
+    ``RoomRegistry`` never evicts a slug (session_room.py: get_or_create
+    only ever inserts), so the ``AnthropicSdkClient`` backing the slug's
+    orchestrator lives for the server process lifetime — without a reset
+    on slug recycle, the rolling cost baseline can self-train onto a
+    sustained runaway and silence the alarm. ``SessionRoom.close_store``
+    is the slug-recycle seam; it MUST invoke ``reset_baselines()`` on
+    the orchestrator's client when present.
+    """
+    room = SessionRoom(slug="slug", mode=GameMode.MULTIPLAYER)
+    room.bind_world(snapshot=_fresh_snapshot(), store=MagicMock())
+
+    # Stand in a fake orchestrator carrying a client with reset_baselines.
+    fake_client = MagicMock()
+    fake_orch = MagicMock()
+    fake_orch._client = fake_client
+    room._orchestrator = fake_orch  # noqa: SLF001 — direct seed for the test
+
+    room.close_store()
+
+    assert fake_client.reset_baselines.call_count == 1, (
+        "close_store MUST call reset_baselines() on the orchestrator's "
+        "client exactly once per slug recycle (61-4 spec-check A)."
+    )
+
+
+def test_close_store_tolerates_client_without_reset_baselines():
+    """Non-SDK backends (claude -p, Ollama) don't expose reset_baselines.
+    close_store MUST no-op rather than crash teardown on those clients."""
+    room = SessionRoom(slug="slug", mode=GameMode.MULTIPLAYER)
+    room.bind_world(snapshot=_fresh_snapshot(), store=MagicMock())
+
+    # Build a client object with NO reset_baselines attribute.
+    class _BareClient:
+        pass
+
+    fake_orch = MagicMock()
+    fake_orch._client = _BareClient()
+    room._orchestrator = fake_orch  # noqa: SLF001
+
+    # Must not raise.
+    room.close_store()
+
+
 # ---------------------------------------------------------------------------
 # Disconnect-save store-lifecycle invariant
 # (playtest 2026-04-25 [BUG-LOW] "Cannot operate on a closed database")

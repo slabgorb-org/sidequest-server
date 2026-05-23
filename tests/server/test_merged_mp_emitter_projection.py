@@ -337,9 +337,7 @@ async def test_production_merged_turn_threads_author_player_id(
         )
 
     narration_authors = [author for kind, author in captured if kind == "NARRATION"]
-    assert narration_authors, (
-        "production merged turn never emitted NARRATION through _emit_event"
-    )
+    assert narration_authors, "production merged turn never emitted NARRATION through _emit_event"
     assert all(a == "p2" for a in narration_authors), (
         "merged-MP NARRATION must thread author_player_id == the driving "
         f"(last-submitter) player 'p2'; got {narration_authors!r}. The "
@@ -433,9 +431,7 @@ async def test_production_emits_narration_segment_routed_to_owner(
         )
 
     segments = [
-        (payload, author)
-        for kind, payload, author in captured
-        if kind == "NARRATION_SEGMENT"
+        (payload, author) for kind, payload, author in captured if kind == "NARRATION_SEGMENT"
     ]
     assert len(segments) == 1, (
         "production merged turn must emit exactly one NARRATION_SEGMENT for "
@@ -445,8 +441,7 @@ async def test_production_emits_narration_segment_routed_to_owner(
     seg_payload, seg_author = segments[0]
     # Owner = Willes = p1 (resolved via snapshot.player_seats).
     assert seg_author == "p1", (
-        f"NARRATION_SEGMENT must be authored by the owning PC's player_id "
-        f"'p1'; got {seg_author!r}"
+        f"NARRATION_SEGMENT must be authored by the owning PC's player_id 'p1'; got {seg_author!r}"
     )
     viz = seg_payload.visibility_sidecar
     assert viz["visible_to"] == ["p1"], (
@@ -461,10 +456,8 @@ async def test_production_emits_narration_segment_routed_to_owner(
     # The public NARRATION must NOT carry the withheld content (the
     # narrator partitioned it; the firewall depends on the public blob
     # being public-safe).
-    narration_payloads = [
-        payload for kind, payload, _ in captured if kind == "NARRATION"
-    ]
+    narration_payloads = [payload for kind, payload, _ in captured if kind == "NARRATION"]
     assert narration_payloads, "production must still emit the public NARRATION"
-    assert all(
-        "ward-heat" not in str(getattr(p, "text", "")) for p in narration_payloads
-    ), "public NARRATION leaked the withheld arcane-probe result"
+    assert all("ward-heat" not in str(getattr(p, "text", "")) for p in narration_payloads), (
+        "public NARRATION leaked the withheld arcane-probe result"
+    )

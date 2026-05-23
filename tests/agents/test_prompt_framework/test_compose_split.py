@@ -106,9 +106,7 @@ def test_compose_split_by_zone_partitions_system_sections_by_zone():
 def test_compose_split_by_zone_user_bucket_unchanged():
     """Sections not on the system allowlist appear only in user_text."""
     registry = PromptRegistry()
-    registry.register_section(
-        AGENT, _section("npc_roster", "NPCS", zone=AttentionZone.Early)
-    )
+    registry.register_section(AGENT, _section("npc_roster", "NPCS", zone=AttentionZone.Early))
 
     zone_text, user_text = registry.compose_split_by_zone(AGENT)
     assert zone_text == {}

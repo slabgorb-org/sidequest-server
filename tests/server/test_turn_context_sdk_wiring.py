@@ -345,9 +345,9 @@ async def test_sdk_path_no_context_missing_ids_warning_when_ids_present(
     with caplog.at_level(logging.WARNING):
         await _run_sdk_and_capture_ctx(monkeypatch, ctx)
 
-    assert not any(
-        "context_missing_ids" in rec.message for rec in caplog.records
-    ), "context_missing_ids warning fired even though world_id/session_id were present"
+    assert not any("context_missing_ids" in rec.message for rec in caplog.records), (
+        "context_missing_ids warning fired even though world_id/session_id were present"
+    )
 
 
 @pytest.mark.asyncio

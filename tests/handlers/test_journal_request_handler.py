@@ -505,8 +505,7 @@ async def test_empty_player_id_returns_error(tmp_path: Path) -> None:
         "empty player_id must produce an error, not fall through to a default seat"
     )
     assert err.payload.code == "invalid_player_id", (
-        f"empty-player_id branch must emit code='invalid_player_id', "
-        f"got {err.payload.code!r}"
+        f"empty-player_id branch must emit code='invalid_player_id', got {err.payload.code!r}"
     )
 
 

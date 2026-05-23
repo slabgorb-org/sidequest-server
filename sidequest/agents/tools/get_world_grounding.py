@@ -118,9 +118,7 @@ async def get_world_grounding(
     # calls — a section the narrator didn't ask for is still "present" in
     # the session sense.
     ctx.otel_span.set_attribute("tool.grounding.weather_present", weather_present)
-    ctx.otel_span.set_attribute(
-        "tool.grounding.demographics_present", demographics_present
-    )
+    ctx.otel_span.set_attribute("tool.grounding.demographics_present", demographics_present)
     ctx.otel_span.set_attribute("tool.grounding.calendar_present", calendar_present)
 
     # Story 24-7: world_grounding.* state_transition spans fire only when

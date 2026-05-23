@@ -145,10 +145,7 @@ class TestProductionWiring:
         a dead module. Mirrors how Story 50-5 wired
         ``consume_clue_footnotes`` into the same handler."""
         source = _handler_source()
-        assert (
-            "scenario_accusation" in source
-            or "consume_accusation_request" in source
-        ), (
+        assert "scenario_accusation" in source or "consume_accusation_request" in source, (
             "websocket_session_handler.py must import the accusation "
             "dispatch module or its public callable. Otherwise the "
             "evaluator never fires during live play — exactly the "
@@ -236,9 +233,7 @@ class TestDispatchBehavior:
             f"got {len(result.evidence)}."
         )
 
-    def test_dispatch_emits_scenario_accusation_span(
-        self, otel_capture
-    ) -> None:
+    def test_dispatch_emits_scenario_accusation_span(self, otel_capture) -> None:
         """The dispatch path must reach the evaluator, which fires
         SPAN_SCENARIO_ACCUSATION. This is the AC-5 lie-detector check:
         if the span doesn't fire from the dispatch surface, the GM
@@ -267,11 +262,7 @@ class TestDispatchBehavior:
             active_character_name="Rux",
         )
 
-        spans = [
-            s
-            for s in otel_capture.get_finished_spans()
-            if s.name == SPAN_SCENARIO_ACCUSATION
-        ]
+        spans = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_SCENARIO_ACCUSATION]
         assert len(spans) == 1, (
             f"Dispatch shim must fire exactly one SPAN_SCENARIO_ACCUSATION; "
             f"got {len(spans)}. The GM panel reads this span — its absence "

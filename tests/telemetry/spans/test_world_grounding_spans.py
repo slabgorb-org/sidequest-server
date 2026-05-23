@@ -90,10 +90,7 @@ def test_constants_have_canonical_names() -> None:
 
     assert SPAN_WORLD_GROUNDING_WEATHER_PROPOSED == "world_grounding.weather_proposed"
     assert SPAN_WORLD_GROUNDING_WEATHER_USED == "world_grounding.weather_used"
-    assert (
-        SPAN_WORLD_GROUNDING_DEMOGRAPHICS_INJECTED
-        == "world_grounding.demographics_injected"
-    )
+    assert SPAN_WORLD_GROUNDING_DEMOGRAPHICS_INJECTED == "world_grounding.demographics_injected"
 
 
 def test_every_world_grounding_span_is_routed_as_state_transition() -> None:
@@ -122,8 +119,7 @@ def test_every_world_grounding_span_is_routed_as_state_transition() -> None:
     ):
         assert span_name in SPAN_ROUTES, f"{span_name} missing from SPAN_ROUTES"
         assert span_name not in FLAT_ONLY_SPANS, (
-            f"{span_name} must not be flat-only — the GM dashboard "
-            f"needs the typed watcher event"
+            f"{span_name} must not be flat-only — the GM dashboard needs the typed watcher event"
         )
         route = SPAN_ROUTES[span_name]
         assert route.component == "world_grounding"

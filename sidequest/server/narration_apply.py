@@ -2461,13 +2461,12 @@ def _apply_narration_result_to_snapshot(
             getattr(result, "action_rewrite", None),
             result.confrontation,
             pack,
-            active_encounter=snapshot.encounter is not None
-            and not snapshot.encounter.resolved,
+            active_encounter=snapshot.encounter is not None and not snapshot.encounter.resolved,
         )
 
         _intent_text = (
-            (getattr(getattr(result, "action_rewrite", None), "intent", "") or "").strip()
-        )
+            getattr(getattr(result, "action_rewrite", None), "intent", "") or ""
+        ).strip()
         _classified_intent_value = _intent_text or "unspecified"
 
         # Story 59-1 — no-emission lie-detector. The intent-mismatch path below

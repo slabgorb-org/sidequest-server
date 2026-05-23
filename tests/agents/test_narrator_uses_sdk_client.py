@@ -201,9 +201,7 @@ async def test_orchestrator_routes_narration_through_sdk(
     assert result.narration == fake_response_text
 
     # 4. The narration.turn span has the rollup attributes the GM panel reads.
-    narration_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"
-    ]
+    narration_spans = [s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"]
     assert len(narration_spans) == 1
     attrs = dict(narration_spans[0].attributes or {})
     assert attrs["narration.turn.model_chosen"] == "claude-sonnet-4-6"
@@ -248,9 +246,7 @@ async def test_tooling_client_takes_sdk_path_even_when_streaming_enabled(
 
     routed: list[str] = []
 
-    async def _spy_sdk(
-        self: Orchestrator, action: str, context: TurnContext
-    ) -> str:
+    async def _spy_sdk(self: Orchestrator, action: str, context: TurnContext) -> str:
         routed.append("sdk")
         return "sentinel-sdk-result"
 
@@ -265,9 +261,7 @@ async def test_tooling_client_takes_sdk_path_even_when_streaming_enabled(
         return "sentinel-streaming-result"
 
     monkeypatch.setattr(Orchestrator, "_run_narration_turn_sdk", _spy_sdk)
-    monkeypatch.setattr(
-        Orchestrator, "_run_narration_turn_streaming", _spy_streaming
-    )
+    monkeypatch.setattr(Orchestrator, "_run_narration_turn_streaming", _spy_streaming)
 
     ctx = TurnContext(
         character_name="Kael",

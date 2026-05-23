@@ -19,9 +19,7 @@ from sidequest.dungeon.interiors.grid import (
 def gen_depthfirst(width: int, height: int, seed: int) -> list[list[int]]:
     """Deterministic for a given (width, height, seed)."""
     if width < 3 or height < 3:
-        raise ValueError(
-            f"gen_depthfirst requires width>=3 and height>=3; got {width}x{height}"
-        )
+        raise ValueError(f"gen_depthfirst requires width>=3 and height>=3; got {width}x{height}")
     rng = random.Random(seed)
     grid = new_grid(width, height)
 

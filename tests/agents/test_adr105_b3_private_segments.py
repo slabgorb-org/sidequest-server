@@ -103,7 +103,7 @@ def test_both_assemblers_carry_private_prose_segments():
     src = inspect.getsource(orch.Orchestrator)
     # The streaming assembler builds the result by hand — it must pass
     # the field explicitly (the shared helper does not cover it there).
-    assert "private_prose_segments=extraction[\"private_segments\"]" in src
+    assert 'private_prose_segments=extraction["private_segments"]' in src
 
 
 # ---------------------------------------------------------------------------

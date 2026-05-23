@@ -10,11 +10,15 @@ def test_shape():
 
 
 def test_deterministic():
-    assert gen_roomcorridor(width=40, height=30, seed=2) == gen_roomcorridor(width=40, height=30, seed=2)
+    assert gen_roomcorridor(width=40, height=30, seed=2) == gen_roomcorridor(
+        width=40, height=30, seed=2
+    )
 
 
 def test_seed_variance():
-    assert gen_roomcorridor(width=40, height=30, seed=2) != gen_roomcorridor(width=40, height=30, seed=3)
+    assert gen_roomcorridor(width=40, height=30, seed=2) != gen_roomcorridor(
+        width=40, height=30, seed=3
+    )
 
 
 def test_borders_remain_walls():

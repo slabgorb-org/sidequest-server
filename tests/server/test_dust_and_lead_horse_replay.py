@@ -69,18 +69,22 @@ def spaghetti_western_pack():
 # requires a negotiation-family verb. "price" is in spaghetti_western's
 # negotiation.intent_verbs and is accurate (Ron is evaluating for purchase).
 DUST_AND_LEAD_HORSE_TURNS: list[tuple[int, int, str, str]] = [
-    (9,  5, "negotiate for a horse with the stable hand",
-     "stable hand turns slow / looks Ron over"),
-    (11, 6, "ask the price of the roan and consider the deal",
-     "walks the roan out / big-chested gelding"),
-    (13, 7, "offer fifty dollars for Bonita",
-     "'Fifty don't cover the feed she's eaten'"),
-    (15, 8, "bargain harder and counter with more bills",
-     "bills change hands and are rejected"),
-    (17, 9, "haggle for the saddle at eight dollars",
-     "'Eight dollars. Take it or leave it'"),
-    (19, 10, "accept the deal and close the negotiation",
-     "stable hand cinches the saddle, deal closed"),
+    (9, 5, "negotiate for a horse with the stable hand", "stable hand turns slow / looks Ron over"),
+    (
+        11,
+        6,
+        "ask the price of the roan and consider the deal",
+        "walks the roan out / big-chested gelding",
+    ),
+    (13, 7, "offer fifty dollars for Bonita", "'Fifty don't cover the feed she's eaten'"),
+    (15, 8, "bargain harder and counter with more bills", "bills change hands and are rejected"),
+    (17, 9, "haggle for the saddle at eight dollars", "'Eight dollars. Take it or leave it'"),
+    (
+        19,
+        10,
+        "accept the deal and close the negotiation",
+        "stable hand cinches the saddle, deal closed",
+    ),
 ]
 
 

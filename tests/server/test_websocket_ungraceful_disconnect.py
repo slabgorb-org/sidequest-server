@@ -112,13 +112,13 @@ async def test_ungraceful_drop_is_clean_info_teardown(
     # No unexpected-error signature — this is the 1712× firehose line.
     assert not any("ws.unexpected_error" in m for m in messages), messages
     # No ERROR-level record (logger.exception logs at ERROR with a trace).
-    assert not any(
-        r.levelname == "ERROR" for r in caplog.records
-    ), [(r.levelname, r.getMessage()) for r in caplog.records]
+    assert not any(r.levelname == "ERROR" for r in caplog.records), [
+        (r.levelname, r.getMessage()) for r in caplog.records
+    ]
     # A clean INFO teardown breadcrumb was emitted instead.
-    assert any(
-        "ws.disconnected" in m for m in messages
-    ), f"expected an INFO ws.disconnected* breadcrumb, got {messages}"
+    assert any("ws.disconnected" in m for m in messages), (
+        f"expected an INFO ws.disconnected* breadcrumb, got {messages}"
+    )
     # No error frame was shoved at the already-dead socket.
     assert ws.sent == [], ws.sent
     # Cleanup still ran — teardown is complete, not aborted.
@@ -142,9 +142,9 @@ async def test_runtime_error_while_connected_still_surfaces(
         await ws_endpoint(ws, handler)  # type: ignore[arg-type]
 
     messages = [r.getMessage() for r in caplog.records]
-    assert any(
-        "ws.unexpected_error" in m for m in messages
-    ), f"a still-CONNECTED RuntimeError must surface loudly, got {messages}"
+    assert any("ws.unexpected_error" in m for m in messages), (
+        f"a still-CONNECTED RuntimeError must surface loudly, got {messages}"
+    )
     # And it still surfaces a typed error frame to the (live) client.
     assert ws.sent, "expected an error frame on the still-connected socket"
     handler.cleanup.assert_awaited_once()

@@ -113,9 +113,7 @@ def mood_alias_resolved_span(
         "latency_ms": latency_ms,
         **attrs,
     }
-    with Span.open(
-        SPAN_MUSIC_MOOD_ALIAS_RESOLVED, attributes, tracer_override=_tracer
-    ) as span:
+    with Span.open(SPAN_MUSIC_MOOD_ALIAS_RESOLVED, attributes, tracer_override=_tracer) as span:
         yield span
 
 
@@ -140,9 +138,7 @@ def mood_alias_failed_span(
         "fallback_mood": fallback_mood,
         **attrs,
     }
-    with Span.open(
-        SPAN_MUSIC_MOOD_ALIAS_FAILED, attributes, tracer_override=_tracer
-    ) as span:
+    with Span.open(SPAN_MUSIC_MOOD_ALIAS_FAILED, attributes, tracer_override=_tracer) as span:
         yield span
 
 

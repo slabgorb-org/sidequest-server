@@ -417,9 +417,7 @@ def test_no_secret_routes_byte_unchanged():
     snap = _snapshot([_pc("Carl"), _pc("Donut")])
     result = NarrationTurnResult(
         narration="Carl plants a boot.",
-        action_rewrite=ActionRewrite(
-            you="You plant", named="Carl plants", intent="plant"
-        ),
+        action_rewrite=ActionRewrite(you="You plant", named="Carl plants", intent="plant"),
     )
     out = classify_narration_visibility(
         result=result,
@@ -468,9 +466,7 @@ def test_span_emits_private_segment_count(otel_capture):
     snap = _snapshot([_pc("Willes"), _pc("Narder")])
     result = NarrationTurnResult(
         narration="Willes probes the bars.",
-        action_rewrite=ActionRewrite(
-            you="You probe", named="Willes probes", intent="probe"
-        ),
+        action_rewrite=ActionRewrite(you="You probe", named="Willes probes", intent="probe"),
         secret_routes=[_redacted_dispatch("k1", ["p1"])],
     )
     classify_narration_visibility(
@@ -484,4 +480,3 @@ def test_span_emits_private_segment_count(otel_capture):
     assert attrs[0]["private_segment_count"] == 1
     assert attrs[0]["private_visible_to"] == "p1"
     assert attrs[0]["visible_to"] == "all"
-

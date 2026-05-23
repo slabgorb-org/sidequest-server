@@ -207,9 +207,7 @@ def test_narrator_guardrails_module_exposes_four_named_constants() -> None:
         ("location_patch_constraint", "State must not lag prose"),
     ],
 )
-def test_each_constant_carries_its_load_bearing_fingerprint(
-    name: str, fingerprint: str
-) -> None:
+def test_each_constant_carries_its_load_bearing_fingerprint(name: str, fingerprint: str) -> None:
     """Each constant must contain the phrase that earned the original
     Recency-zone block its place. If the implementer compressed the
     prose into a one-line rule (ADR-111 §Alternatives B, rejected),
@@ -424,9 +422,7 @@ def test_confrontation_guardrail_migrates_into_an_encounter_tool() -> None:
     tools") without over-specifying which.
     """
     descriptions = _tool_descriptions()
-    candidate_names = {
-        n for n in descriptions if "confront" in n or "encounter" in n
-    }
+    candidate_names = {n for n in descriptions if "confront" in n or "encounter" in n}
     assert candidate_names, (
         "No confrontation/encounter tools registered — cannot host the "
         "confrontation_trigger_constraint migration."
@@ -522,14 +518,11 @@ async def test_legacy_path_emits_span_with_empty_skipped_list(
     span = spans[0]
     attrs = dict(span.attributes or {})
     assert attrs.get("tool_backend") is False, (
-        f"Span tool_backend attr must be False on legacy path, "
-        f"got {attrs.get('tool_backend')!r}"
+        f"Span tool_backend attr must be False on legacy path, got {attrs.get('tool_backend')!r}"
     )
     skipped = attrs.get("guardrails_skipped")
     skipped_list = list(skipped) if skipped is not None else []
-    assert skipped_list == [], (
-        f"Legacy path emits zero skipped guardrails, got {skipped_list!r}"
-    )
+    assert skipped_list == [], f"Legacy path emits zero skipped guardrails, got {skipped_list!r}"
     assert attrs.get("bytes_saved") == 0, (
         f"Legacy path bytes_saved must be 0, got {attrs.get('bytes_saved')!r}"
     )
@@ -552,9 +545,7 @@ async def test_wiring_sdk_orchestrator_assembled_prompt_drops_all_four_sections(
     test_build_narrator_prompt_uses_sdk_prose_when_tooling_client``.
     """
     orch = _make_sdk_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "look around", simple_turn_context_turn_three
-    )
+    _, registry = await orch.build_narrator_prompt("look around", simple_turn_context_turn_three)
     registered_names = {s.name for s in registry.registry(orch._narrator.name())}
     leaked = registered_names & set(GUARDRAIL_NAMES)
     assert not leaked, (
@@ -579,9 +570,7 @@ async def test_wiring_legacy_orchestrator_assembled_prompt_keeps_all_four_sectio
     ``claude -p`` opt-in backend.
     """
     orch = _make_legacy_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "look around", simple_turn_context_turn_three
-    )
+    _, registry = await orch.build_narrator_prompt("look around", simple_turn_context_turn_three)
     registered_names = {s.name for s in registry.registry(orch._narrator.name())}
     missing = set(GUARDRAIL_NAMES) - registered_names
     assert not missing, (

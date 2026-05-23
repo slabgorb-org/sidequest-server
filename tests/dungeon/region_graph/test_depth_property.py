@@ -72,9 +72,7 @@ def test_bucket_non_decreasing_along_ordinary_paths(campaign_seed):
     buckets_by_dist: dict[int, list[int]] = {}
     for rid, node in g.nodes.items():
         assert node.depth_score is not None
-        buckets_by_dist.setdefault(dist[rid], []).append(
-            level_bucket(node.depth_score, cfg)
-        )
+        buckets_by_dist.setdefault(dist[rid], []).append(level_bucket(node.depth_score, cfg))
     prev_max = -1
     for d in sorted(buckets_by_dist):
         bs = buckets_by_dist[d]
@@ -113,8 +111,6 @@ def test_wiring_depth_consumes_real_region_graph_public_surface():
     """Wiring assertion: the depth API is reachable from the region_graph
     package's public surface and operates on real generator output."""
     g, _ = _grow(7, expansions=5)  # 5 matches the sweeps; >=4 needed to reach bucket 1
-    scores: list[float] = [
-        n.depth_score for n in g.nodes.values() if n.depth_score is not None
-    ]
+    scores: list[float] = [n.depth_score for n in g.nodes.values() if n.depth_score is not None]
     assert len(scores) == len(g.nodes)
     assert any(level_bucket(s) >= 1 for s in scores)

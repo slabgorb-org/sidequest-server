@@ -80,9 +80,7 @@ def resolve_mood_to_track_key(mood: str, cfg: AudioConfig) -> str | None:
 def _fallback(mood: str, reason: str, cfg: AudioConfig) -> str | None:
     """Emit the failed span + WARNING and return the default mood (or None)."""
     fallback = DEFAULT_FALLBACK_MOOD if DEFAULT_FALLBACK_MOOD in cfg.mood_tracks else ""
-    with mood_alias_failed_span(
-        mood_name=mood, reason=reason, fallback_mood=fallback
-    ):
+    with mood_alias_failed_span(mood_name=mood, reason=reason, fallback_mood=fallback):
         pass
     logger.warning(
         "music mood %r did not resolve to a track (%s); falling back to %r",

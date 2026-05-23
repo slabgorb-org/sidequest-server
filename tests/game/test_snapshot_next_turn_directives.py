@@ -16,13 +16,9 @@ def test_default_is_empty_list() -> None:
 
 
 def test_directives_round_trip_through_model_dump() -> None:
-    snap = GameSnapshot(
-        next_turn_directives=["Last turn suggested negotiation. Open it if true."]
-    )
+    snap = GameSnapshot(next_turn_directives=["Last turn suggested negotiation. Open it if true."])
     dumped = snap.model_dump()
-    assert dumped["next_turn_directives"] == [
-        "Last turn suggested negotiation. Open it if true."
-    ]
+    assert dumped["next_turn_directives"] == ["Last turn suggested negotiation. Open it if true."]
     restored = GameSnapshot.model_validate(dumped)
     assert restored.next_turn_directives == snap.next_turn_directives
 

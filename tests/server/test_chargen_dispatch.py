@@ -81,11 +81,7 @@ async def _connect(
     assert isinstance(connected, SessionEventMessage)
     assert connected.payload.event == "connected"
     rest = out[1:]
-    if (
-        rest
-        and isinstance(rest[0], SessionEventMessage)
-        and rest[0].payload.event == "theme_css"
-    ):
+    if rest and isinstance(rest[0], SessionEventMessage) and rest[0].payload.event == "theme_css":
         rest = rest[1:]
     assert rest == [] or isinstance(rest[0], CharacterCreationMessage)
     return connected

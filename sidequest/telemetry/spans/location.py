@@ -185,9 +185,7 @@ def location_entity_resolve_span(
         attrs["tier"] = tier
     if binding_kind is not None:
         attrs["binding_kind"] = binding_kind
-    with Span.open(
-        SPAN_LOCATION_ENTITY_RESOLVE, attrs, tracer_override=_tracer
-    ) as span:
+    with Span.open(SPAN_LOCATION_ENTITY_RESOLVE, attrs, tracer_override=_tracer) as span:
         yield span
 
 
@@ -209,9 +207,7 @@ def location_entity_minted_span(
         "canon": canon,
         "turn": turn,
     }
-    with Span.open(
-        SPAN_LOCATION_ENTITY_MINTED, attrs, tracer_override=_tracer
-    ) as span:
+    with Span.open(SPAN_LOCATION_ENTITY_MINTED, attrs, tracer_override=_tracer) as span:
         yield span
 
 
@@ -235,9 +231,7 @@ def location_entity_promoted_span(
         "canon": canon,
         "turn": turn,
     }
-    with Span.open(
-        SPAN_LOCATION_ENTITY_PROMOTED, attrs, tracer_override=_tracer
-    ) as span:
+    with Span.open(SPAN_LOCATION_ENTITY_PROMOTED, attrs, tracer_override=_tracer) as span:
         yield span
 
 
@@ -257,9 +251,7 @@ def location_overlay_activate_span(
         "delta_count": delta_count,
         "suffix_chars": suffix_chars,
     }
-    with Span.open(
-        SPAN_LOCATION_OVERLAY_ACTIVATE, attrs, tracer_override=_tracer
-    ) as span:
+    with Span.open(SPAN_LOCATION_OVERLAY_ACTIVATE, attrs, tracer_override=_tracer) as span:
         yield span
 
 
@@ -279,7 +271,5 @@ def location_overlay_deactivate_span(
         "delta_count": delta_count,
         "suffix_chars": suffix_chars,
     }
-    with Span.open(
-        SPAN_LOCATION_OVERLAY_DEACTIVATE, attrs, tracer_override=_tracer
-    ) as span:
+    with Span.open(SPAN_LOCATION_OVERLAY_DEACTIVATE, attrs, tracer_override=_tracer) as span:
         yield span

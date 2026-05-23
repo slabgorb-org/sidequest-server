@@ -389,8 +389,7 @@ def test_no_repair_when_narration_has_no_leading_bold_title() -> None:
 
     result = NarrationTurnResult(
         narration=(
-            "Ziggy lingers by the kettle. The wisteria-light dims as a "
-            "cloud crosses the sun."
+            "Ziggy lingers by the kettle. The wisteria-light dims as a cloud crosses the sun."
         ),
         location=None,
     )

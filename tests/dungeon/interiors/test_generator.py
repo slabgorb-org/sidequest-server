@@ -32,9 +32,15 @@ def test_braid_ratio_applied_for_maze_algorithms():
 
 
 def test_params_passed_through():
-    a = generate_interior("prim", width=31, height=31, seed=9, params={"density": 3, "complexity": 10})
-    b = generate_interior("prim", width=31, height=31, seed=9, params={"density": 3, "complexity": 10})
-    c = generate_interior("prim", width=31, height=31, seed=9, params={"density": 12, "complexity": 40})
+    a = generate_interior(
+        "prim", width=31, height=31, seed=9, params={"density": 3, "complexity": 10}
+    )
+    b = generate_interior(
+        "prim", width=31, height=31, seed=9, params={"density": 3, "complexity": 10}
+    )
+    c = generate_interior(
+        "prim", width=31, height=31, seed=9, params={"density": 12, "complexity": 40}
+    )
     assert a == b
     assert a != c
 

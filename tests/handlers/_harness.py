@@ -45,9 +45,7 @@ from sidequest.protocol.messages import PlayerActionMessage, PlayerActionPayload
 from sidequest.server.session_handler import _SessionData, _State
 from sidequest.server.session_room import SessionRoom
 
-_CONTENT = (
-    Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
-)
+_CONTENT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 _GENRE = "caverns_and_claudes"
 _WORLD = "test_world"
 
@@ -221,9 +219,7 @@ class MpRoomHarness:
             delivered = _real_broadcast(msg, exclude_socket_id=exclude_socket_id)
             self._captured.append(msg)
             self._last_recipients = {
-                self._name_by_pid.get(pid, pid)
-                for _sid, pid in delivered
-                if pid is not None
+                self._name_by_pid.get(pid, pid) for _sid, pid in delivered if pid is not None
             }
             return delivered
 
@@ -242,9 +238,7 @@ class MpRoomHarness:
         return len(self._snap.narrative_log)
 
     def scrapbook_count(self) -> int:
-        cur = self._store._conn.execute(
-            "SELECT count(*) FROM scrapbook_entries"
-        )
+        cur = self._store._conn.execute("SELECT count(*) FROM scrapbook_entries")
         return int(cur.fetchone()[0])
 
     def turn_round(self) -> int:
@@ -278,9 +272,7 @@ def make_mp_room(*, players: list[str], llm_aside: _FakeAsideLlm) -> MpRoomHarne
     return MpRoomHarness(players, llm_aside)
 
 
-async def submit(
-    harness: MpRoomHarness, player: str, text: str, *, aside: bool
-) -> list[Any]:
+async def submit(harness: MpRoomHarness, player: str, text: str, *, aside: bool) -> list[Any]:
     """Drive the REAL handler for ``player``; return what the table saw."""
     session = harness._sessions[player]
     msg = PlayerActionMessage(

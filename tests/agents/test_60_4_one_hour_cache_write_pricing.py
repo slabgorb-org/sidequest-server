@@ -69,9 +69,7 @@ def test_sonnet_4_6_one_hour_write_rate_is_2x_input() -> None:
 def test_haiku_4_5_one_hour_write_rate_is_2x_input() -> None:
     p = model_pricing("claude-haiku-4-5-20251001")
     one_hour_attr = _find_one_hour_write_rate(p)
-    assert one_hour_attr is not None, (
-        "ModelPricing.<haiku 4.5> must expose a 1h cache_write rate"
-    )
+    assert one_hour_attr is not None, "ModelPricing.<haiku 4.5> must expose a 1h cache_write rate"
     value = getattr(p, one_hour_attr)
     assert value == pytest.approx(2.0, rel=1e-6), (
         f"Haiku 4.5 1h-write rate must be $2.00/Mtok (2x the $1/M input "
@@ -82,9 +80,7 @@ def test_haiku_4_5_one_hour_write_rate_is_2x_input() -> None:
 def test_opus_4_7_one_hour_write_rate_is_2x_input() -> None:
     p = model_pricing("claude-opus-4-7")
     one_hour_attr = _find_one_hour_write_rate(p)
-    assert one_hour_attr is not None, (
-        "ModelPricing.<opus 4.7> must expose a 1h cache_write rate"
-    )
+    assert one_hour_attr is not None, "ModelPricing.<opus 4.7> must expose a 1h cache_write rate"
     value = getattr(p, one_hour_attr)
     assert value == pytest.approx(30.0, rel=1e-6), (
         f"Opus 4.7 1h-write rate must be $30.00/Mtok (2x the $15/M input "
@@ -157,8 +153,7 @@ def test_one_hour_write_cost_for_sonnet_is_2x_five_minute_write_cost() -> None:
         f"only the 1h path is wrong today."
     )
     assert cost_1h / cost_5m == pytest.approx(1.6, rel=1e-6), (
-        f"the 1h rate is 1.6x the 5m rate (1.25x→2x); got ratio "
-        f"{cost_1h / cost_5m!r}"
+        f"the 1h rate is 1.6x the 5m rate (1.25x→2x); got ratio {cost_1h / cost_5m!r}"
     )
 
 
@@ -234,9 +229,7 @@ def _find_one_hour_write_rate(pricing_obj: object) -> str | None:
     else:
         field_names = [n for n in dir(pricing_obj) if not n.startswith("_")]
     candidates = [
-        name
-        for name in field_names
-        if "1h" in name and ("write" in name or "creation" in name)
+        name for name in field_names if "1h" in name and ("write" in name or "creation" in name)
     ]
     if not candidates:
         return None

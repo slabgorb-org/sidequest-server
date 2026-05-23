@@ -142,16 +142,13 @@ def test_span_rig_pool_crash_event_is_routed_state_transition() -> None:
         f"{SPAN_RIG_POOL_CRASH_EVENT!r} must be registered in SPAN_ROUTES"
     )
     assert SPAN_RIG_POOL_CRASH_EVENT not in FLAT_ONLY_SPANS, (
-        f"{SPAN_RIG_POOL_CRASH_EVENT!r} must not be in FLAT_ONLY_SPANS now "
-        "that it is routed"
+        f"{SPAN_RIG_POOL_CRASH_EVENT!r} must not be in FLAT_ONLY_SPANS now that it is routed"
     )
     route = SPAN_ROUTES[SPAN_RIG_POOL_CRASH_EVENT]
     assert route.event_type == "state_transition", (
         f"route.event_type should be 'state_transition', got {route.event_type!r}"
     )
-    assert route.component == "rig", (
-        f"route.component should be 'rig', got {route.component!r}"
-    )
+    assert route.component == "rig", f"route.component should be 'rig', got {route.component!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -423,11 +420,7 @@ def test_handle_rig_crash_span_consequences_floor_edge_at_zero(monkeypatch) -> N
     core = _mounted_core(name="Mira", composure=0, edge_current=0, edge_max=5)
     handle_rig_crash(core)
 
-    matching = [
-        s
-        for s in exporter.get_finished_spans()
-        if s.name == SPAN_RIG_POOL_CRASH_EVENT
-    ]
+    matching = [s for s in exporter.get_finished_spans() if s.name == SPAN_RIG_POOL_CRASH_EVENT]
     assert len(matching) == 1
     attrs = matching[0].attributes
     assert attrs["edge_after"] == 0

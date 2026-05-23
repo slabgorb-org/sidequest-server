@@ -78,9 +78,7 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
     )
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
-    monkeypatch.setattr(
-        session_integration, "build_llm_client", _reflecting_sdk_client
-    )
+    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
 
     store = SqliteStore.open_in_memory()
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
@@ -111,7 +109,9 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
         assert before == {0, 1}, f"bootstrap did not seed expansion 0+1; got {before}"
 
         target = ds.load_frontier()[0].from_region_id
-        assert target != "entrance", "frontier edge must leave entrance for the apply_world_patch != _prev_region guard to fire"
+        assert target != "entrance", (
+            "frontier edge must leave entrance for the apply_world_patch != _prev_region guard to fire"
+        )
         snap.current_region = "entrance"
         snap.apply_world_patch(WorldStatePatch(current_region=target))
         await handle.drain()
@@ -162,6 +162,5 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
 
     assert frontier_hook.registered_observer_count() == 0, (
-        "detach did not unregister the observer (registry leak across "
-        "sessions)"
+        "detach did not unregister the observer (registry leak across sessions)"
     )

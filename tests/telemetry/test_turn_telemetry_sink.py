@@ -122,9 +122,7 @@ def test_pydantic_rootmodel_in_payload_serializes_via_tolerant_default(tmp_path)
             },
             component="footnotes",
         )
-        rows = store._conn.execute(
-            "SELECT payload_json FROM turn_telemetry"
-        ).fetchall()
+        rows = store._conn.execute("SELECT payload_json FROM turn_telemetry").fetchall()
         assert len(rows) == 1  # row persisted, not dropped
         payload = json.loads(rows[0][0])
         assert payload["summaries"] == ["silver-salts pales the smear"]

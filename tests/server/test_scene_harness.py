@@ -137,9 +137,7 @@ def test_scene_route_absent_when_dev_scenes_env_set_to_zero(
 
     client = TestClient(app)
     r = client.post("/dev/scene/combat_brawl_wasteland")
-    assert r.status_code == 404, (
-        f"DEV_SCENES=0 must keep the route absent, got {r.status_code}"
-    )
+    assert r.status_code == 404, f"DEV_SCENES=0 must keep the route absent, got {r.status_code}"
 
 
 # ── AC-1: route present + happy path ────────────────────────────────────────
@@ -275,7 +273,12 @@ def test_scene_post_persisted_snapshot_carries_fixture_character(
 
 @pytest.mark.parametrize(
     "fixture_name",
-    ["combat_brawl_wasteland", "combat_dogfight_space", "social_negotiation_tea", "social_poker_wasteland"],
+    [
+        "combat_brawl_wasteland",
+        "combat_dogfight_space",
+        "social_negotiation_tea",
+        "social_poker_wasteland",
+    ],
 )
 def test_every_canonical_fixture_can_be_loaded_via_endpoint(
     monkeypatch: pytest.MonkeyPatch,
@@ -498,15 +501,12 @@ def test_dev_scene_route_persists_four_pc_party_snapshot(
 
     save_dir = tmp_path / "saves"
     save_dir.mkdir()
-    app = _build_dev_scenes_app(
-        monkeypatch, save_dir=save_dir, fixtures_dir=fixtures_dir
-    )
+    app = _build_dev_scenes_app(monkeypatch, save_dir=save_dir, fixtures_dir=fixtures_dir)
 
     client = TestClient(app)
     r = client.post("/dev/scene/party_test")
     assert r.status_code == 200, (
-        f"multi-PC fixture must hydrate via POST /dev/scene; "
-        f"got {r.status_code} body={r.text}"
+        f"multi-PC fixture must hydrate via POST /dev/scene; got {r.status_code} body={r.text}"
     )
     slug = r.json()["slug"]
 
@@ -558,9 +558,7 @@ def test_dev_scene_route_hydrate_ok_span_reports_full_character_count(
     save_dir = tmp_path / "saves"
     save_dir.mkdir()
     captured = _capture_events(monkeypatch)
-    app = _build_dev_scenes_app(
-        monkeypatch, save_dir=save_dir, fixtures_dir=fixtures_dir
-    )
+    app = _build_dev_scenes_app(monkeypatch, save_dir=save_dir, fixtures_dir=fixtures_dir)
     client = TestClient(app)
 
     r = client.post("/dev/scene/party_three")
@@ -568,8 +566,7 @@ def test_dev_scene_route_hydrate_ok_span_reports_full_character_count(
 
     ok_events = [e for e in captured if e[0] == "scene_harness.hydrate.ok"]
     assert ok_events, (
-        f"missing scene_harness.hydrate.ok span; "
-        f"got types: {sorted({e[0] for e in captured})!r}"
+        f"missing scene_harness.hydrate.ok span; got types: {sorted({e[0] for e in captured})!r}"
     )
     fields = ok_events[0][1]
     assert fields.get("character_count") == 3, (
@@ -612,9 +609,7 @@ def test_dev_scene_route_rejects_both_character_and_characters_with_422(
 
     save_dir = tmp_path / "saves"
     save_dir.mkdir()
-    app = _build_dev_scenes_app(
-        monkeypatch, save_dir=save_dir, fixtures_dir=fixtures_dir
-    )
+    app = _build_dev_scenes_app(monkeypatch, save_dir=save_dir, fixtures_dir=fixtures_dir)
     client = TestClient(app)
 
     r = client.post("/dev/scene/both_blocks_route")
@@ -767,8 +762,7 @@ def test_dev_scene_route_persists_encounter_end_to_end(
 
     r = client.post("/dev/scene/combat_pretier_probe")
     assert r.status_code == 200, (
-        f"combat fixture with encounter must 200 at the wire; "
-        f"got {r.status_code} body={r.text}"
+        f"combat fixture with encounter must 200 at the wire; got {r.status_code} body={r.text}"
     )
     slug = r.json()["slug"]
 
@@ -979,8 +973,7 @@ def test_dev_scene_route_rejects_malformed_magic_config_with_422(
 
     r = client.post("/dev/scene/magic_badcfg_at_wire")
     assert r.status_code == 422, (
-        f"malformed magic_state.config must 422 at the wire; "
-        f"got {r.status_code} body={r.text}"
+        f"malformed magic_state.config must 422 at the wire; got {r.status_code} body={r.text}"
     )
 
 

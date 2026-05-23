@@ -190,8 +190,7 @@ def _compute_zones_payload(sections: list[PromptSection]) -> list[dict[str, Any]
                         # ACTUALLY ride the cached block (bucket=System AND
                         # zone in {Primacy, Early}) AND are volatile state.
                         "mis_zoned": (
-                            _section_rides_cache(s.name, zone_value)
-                            and s.category.value == "state"
+                            _section_rides_cache(s.name, zone_value) and s.category.value == "state"
                         ),
                     }
                     for s in bucket

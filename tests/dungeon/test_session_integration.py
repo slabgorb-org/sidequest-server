@@ -87,9 +87,7 @@ async def test_attach_seeds_and_registers_then_detach_unregisters(
     from sidequest.dungeon.persistence import DungeonStore
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
-    monkeypatch.setattr(
-        session_integration, "build_llm_client", _reflecting_sdk_client
-    )
+    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
 
     store = _sqlite_store()
     snap = _snapshot()
@@ -121,9 +119,7 @@ async def test_attach_is_idempotent_reuses_persisted_seed(
     from sidequest.dungeon.persistence import DungeonStore
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
-    monkeypatch.setattr(
-        session_integration, "build_llm_client", _reflecting_sdk_client
-    )
+    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
     store = _sqlite_store()
     kw = dict(
         store=store,
@@ -160,9 +156,7 @@ async def test_concurrent_attach_same_save_is_idempotent_then_reattaches_after_d
     from sidequest.dungeon import session_integration
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
-    monkeypatch.setattr(
-        session_integration, "build_llm_client", _reflecting_sdk_client
-    )
+    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
     store = _sqlite_store()
     kw = dict(
         store=store,
@@ -176,9 +170,7 @@ async def test_concurrent_attach_same_save_is_idempotent_then_reattaches_after_d
     assert h1 is not None
     assert frontier_hook.registered_observer_count() == 1
 
-    h_re = await session_integration.attach_dungeon_to_session(
-        **dict(kw, snapshot=_snapshot())
-    )
+    h_re = await session_integration.attach_dungeon_to_session(**dict(kw, snapshot=_snapshot()))
     assert h_re is h1, (
         "idempotent re-attach must return the SAME live handle so "
         "additional MP sockets share the one registered worker"
@@ -188,9 +180,7 @@ async def test_concurrent_attach_same_save_is_idempotent_then_reattaches_after_d
     await session_integration.detach_dungeon_from_session(h1)
     assert frontier_hook.registered_observer_count() == 0
 
-    h2 = await session_integration.attach_dungeon_to_session(
-        **dict(kw, snapshot=_snapshot())
-    )
+    h2 = await session_integration.attach_dungeon_to_session(**dict(kw, snapshot=_snapshot()))
     assert h2 is not None
     assert frontier_hook.registered_observer_count() == 1
     await session_integration.detach_dungeon_from_session(h2)

@@ -690,7 +690,9 @@ def test_generator_precipitation_true_can_fire_with_positive_chance(
     """With ``precipitation_chance=0.5``, both True and False must appear across seeds."""
     gen = WeatherGenerator(minimal_weather_yaml)
     seen = {gen.generate(zone="testzone", season="winter", seed=s).precipitation for s in range(50)}
-    assert seen == {True, False}, f"expected both precipitation outcomes across 50 seeds, got {seen}"
+    assert seen == {True, False}, (
+        f"expected both precipitation outcomes across 50 seeds, got {seen}"
+    )
 
 
 def test_generator_precipitation_defaults_false_when_chance_omitted(tmp_path: Path) -> None:

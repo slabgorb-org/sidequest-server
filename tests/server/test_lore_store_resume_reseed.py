@@ -88,9 +88,9 @@ def test_resume_helper_populates_empty_lore_store(caverns_pack: GenrePack) -> No
     # World fragments are world-scoped (skip-tolerant: a world with no
     # populated lore fields legitimately adds zero).
     if world_added:
-        assert any(
-            fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments
-        ), list(store.fragments)
+        assert any(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), list(
+            store.fragments
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -238,9 +238,7 @@ def test_shared_helper_matches_inline_genre_plus_world_pair(caverns_pack: GenreP
     inline_genre = seed_lore_from_genre_pack(via_inline, caverns_pack)
     world_obj = caverns_pack.worlds.get(world_slug)
     inline_world = (
-        seed_lore_from_world(via_inline, world_obj.lore, world_slug)
-        if world_obj is not None
-        else 0
+        seed_lore_from_world(via_inline, world_obj.lore, world_slug) if world_obj is not None else 0
     )
 
     assert helper_genre == inline_genre

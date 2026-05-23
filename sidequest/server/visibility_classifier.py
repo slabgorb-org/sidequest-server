@@ -214,14 +214,10 @@ def classify_narration_visibility(
         # without it the firewall is unobservable (the original leak
         # survived 5 turns of fluent prose).
         span.set_attribute("private_segment_count", len(private_segments))
-        private_union = union_visible_to(
-            [seg["visible_to"] for seg in private_segments]
-        )
+        private_union = union_visible_to([seg["visible_to"] for seg in private_segments])
         span.set_attribute(
             "private_visible_to",
-            ",".join(private_union)
-            if isinstance(private_union, list)
-            else str(private_union),
+            ",".join(private_union) if isinstance(private_union, list) else str(private_union),
         )
 
     return sidecar

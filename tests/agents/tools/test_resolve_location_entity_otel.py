@@ -53,9 +53,7 @@ def _authored() -> list[LocationEntity]:
             id="bar",
             label="the bar",
             tier="real_object",
-            binding=LocationEntityBinding(
-                kind="location_feature", ref="glenross_arms_bar"
-            ),
+            binding=LocationEntityBinding(kind="location_feature", ref="glenross_arms_bar"),
         ),
         LocationEntity(id="cobwebs", label="cobwebs", tier="flavor_only"),
     ]

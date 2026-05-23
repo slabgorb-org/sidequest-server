@@ -47,10 +47,7 @@ class InteriorSpec(BaseModel):
     @classmethod
     def _v_algorithm(cls, v: str) -> str:
         if v not in ALGORITHMS:
-            raise ValueError(
-                f"unknown interior algorithm {v!r}; "
-                f"known: {sorted(ALGORITHMS)}"
-            )
+            raise ValueError(f"unknown interior algorithm {v!r}; known: {sorted(ALGORITHMS)}")
         return v
 
     @field_validator("braid_ratio")
@@ -149,8 +146,7 @@ class Adjacency(BaseModel):
         for item in v:
             if not item.strip():
                 raise ValueError(
-                    "a theme cannot avoid itself / a blank id "
-                    "(empty avoids entry is nonsensical)"
+                    "a theme cannot avoid itself / a blank id (empty avoids entry is nonsensical)"
                 )
         return v
 
@@ -158,9 +154,7 @@ class Adjacency(BaseModel):
     def _v_disjoint(self) -> Adjacency:
         both = set(self.prefers) & set(self.avoids)
         if both:
-            raise ValueError(
-                f"theme id(s) in both prefers and avoids: {sorted(both)}"
-            )
+            raise ValueError(f"theme id(s) in both prefers and avoids: {sorted(both)}")
         return self
 
 
@@ -233,10 +227,7 @@ class DungeonTheme(BaseModel):
     @classmethod
     def _v_class(cls, v: str) -> str:
         if v not in _CLASS_ALGORITHM:
-            raise ValueError(
-                f"unknown generator_class {v!r}; "
-                f"known: {sorted(_CLASS_ALGORITHM)}"
-            )
+            raise ValueError(f"unknown generator_class {v!r}; known: {sorted(_CLASS_ALGORITHM)}")
         return v
 
     @model_validator(mode="after")
@@ -270,10 +261,7 @@ class ThemePalette(BaseModel):
     def get(self, theme_id: str) -> DungeonTheme:
         """Fail-loud lookup — unknown id is a bug, not an empty default."""
         if theme_id not in self.themes:
-            raise KeyError(
-                f"no theme {theme_id!r} in palette; "
-                f"have: {sorted(self.themes)}"
-            )
+            raise KeyError(f"no theme {theme_id!r} in palette; have: {sorted(self.themes)}")
         return self.themes[theme_id]
 
     def themes_for_depth(self, depth_score: float) -> list[DungeonTheme]:
@@ -316,9 +304,7 @@ def load_theme_palette(pack_dir: Path) -> ThemePalette:
     if not themes_dir.is_dir():
         raise ThemePaletteMissingError(pack_dir)
 
-    yaml_files = sorted(
-        p for p in themes_dir.glob("*.yaml") if p.is_file()
-    )
+    yaml_files = sorted(p for p in themes_dir.glob("*.yaml") if p.is_file())
     if not yaml_files:
         raise ValueError(f"no theme files (*.yaml) in {themes_dir}")
 
@@ -331,10 +317,7 @@ def load_theme_palette(pack_dir: Path) -> ThemePalette:
         except Exception as e:  # yaml.YAMLError, pydantic ValidationError, et al.
             raise ValueError(f"{path.name}: {e}") from e
         if theme.id in themes:
-            raise ValueError(
-                f"duplicate theme id {theme.id!r} "
-                f"(seen again in {path.name})"
-            )
+            raise ValueError(f"duplicate theme id {theme.id!r} (seen again in {path.name})")
         themes[theme.id] = theme
 
     # Palette-level cross-validation: affinities must resolve, and a theme

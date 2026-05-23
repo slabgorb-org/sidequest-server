@@ -255,9 +255,7 @@ async def test_narration_turn_span_carries_total_cost_usd(
 
     # Task B3 — per-iter usage line includes cache numbers and cost.
     usage_lines = [r.message for r in caplog.records if "narrator.sdk.usage" in r.message]
-    assert usage_lines, (
-        "expected at least one `narrator.sdk.usage` log line per turn"
-    )
+    assert usage_lines, "expected at least one `narrator.sdk.usage` log line per turn"
     line = usage_lines[0]
     for needle in ("iter=1", "input=500", "output=80", "cache_read=12000", "cost_usd="):
         assert needle in line, f"missing {needle!r} in usage line: {line!r}"
@@ -345,9 +343,7 @@ async def test_narration_turn_span_carries_system_block_sizes_json(
     )
     # Each size is a non-negative int (token estimate via char-count / 4).
     for name, value in sizes.items():
-        assert isinstance(value, int) and value >= 0, (
-            f"{name}={value!r} must be a non-negative int"
-        )
+        assert isinstance(value, int) and value >= 0, f"{name}={value!r} must be a non-negative int"
     # Stable region must be non-empty on a real narration turn.
     assert sizes["stable"] > 0, "stable region must carry content"
 

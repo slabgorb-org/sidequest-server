@@ -250,9 +250,7 @@ def test_tick_emits_seed_expired_span_per_migration(otel_capture):
         _active("bravo", activated_at=1, lifespan=20),  # alive
         _active("charlie", activated_at=0, lifespan=3),  # expires at turn 3
     ]
-    pack = _make_pack(
-        [_seed("alpha", 2), _seed("bravo", 20), _seed("charlie", 3)]
-    )
+    pack = _make_pack([_seed("alpha", 2), _seed("bravo", 20), _seed("charlie", 3)])
 
     fn(snap, pack, now_turn=5)
 
@@ -305,9 +303,7 @@ def test_ensure_initial_draw_emits_seed_drawn_span_per_seed(otel_capture):
         attrs = dict(span.attributes or {})
         assert attrs.get("session_id") == "session-alpha"
         assert attrs.get("activated_at_turn") == 0
-        assert attrs.get("seed_id"), (
-            f"seed.drawn must carry a non-empty seed_id; got {attrs}"
-        )
+        assert attrs.get("seed_id"), f"seed.drawn must carry a non-empty seed_id; got {attrs}"
 
 
 def test_tick_preserves_pre_existing_ghosts():

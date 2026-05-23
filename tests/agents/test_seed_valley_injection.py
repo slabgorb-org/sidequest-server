@@ -200,9 +200,7 @@ async def test_active_seed_section_lives_in_valley_zone():
     pack = _DuckPack(seed_tropes=[_seedtrope("alpha")])
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     sections = _seed_sections(registry, orch._narrator.name())
     assert sections
@@ -224,9 +222,7 @@ async def test_active_seed_section_categorized_as_state():
     pack = _DuckPack(seed_tropes=[_seedtrope("alpha")])
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     sections = _seed_sections(registry, orch._narrator.name())
     for s in sections:
@@ -254,9 +250,7 @@ async def test_active_seed_surfaces_authored_prose_fields():
     pack = _DuckPack(seed_tropes=[_seedtrope("alpha")])
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     content = _combined_seed_content(registry, orch._narrator.name())
     assert content, "No Valley seed content rendered."
@@ -288,14 +282,10 @@ async def test_multiple_active_seeds_all_render():
         _active_state("alpha"),
         _active_state("bravo"),
     ]
-    pack = _DuckPack(
-        seed_tropes=[_seedtrope("alpha"), _seedtrope("bravo")]
-    )
+    pack = _DuckPack(seed_tropes=[_seedtrope("alpha"), _seedtrope("bravo")])
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     content = _combined_seed_content(registry, orch._narrator.name())
     assert "Authored prose for alpha" in content
@@ -318,9 +308,7 @@ async def test_no_active_seeds_no_ghosts_no_section_registered():
     pack = _DuckPack(seed_tropes=[])
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     sections = _seed_sections(registry, orch._narrator.name())
     assert not sections, (
@@ -347,9 +335,7 @@ async def test_ghost_renders_with_faded_marker():
     pack = _DuckPack(seed_tropes=[])  # ghosts don't need pack lookup
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     content = _combined_seed_content(registry, orch._narrator.name())
     assert content, "Ghost-only snapshot still must produce a Valley section"
@@ -385,9 +371,7 @@ async def test_ghost_does_not_surface_narrative_hint():
     pack = _DuckPack(seed_tropes=[_seedtrope("ancestor")])
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     content = _combined_seed_content(registry, orch._narrator.name())
     assert "Ghost ancestor" in content, "Ghost name should render"
@@ -415,9 +399,7 @@ async def test_seed_context_wrapper_tag_is_balanced_for_ghost_only_render():
     pack = _DuckPack(seed_tropes=[])
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     content = _combined_seed_content(registry, orch._narrator.name())
     assert content.count("<seed-context>") == 1, (
@@ -442,9 +424,7 @@ async def test_actives_and_ghosts_coexist_in_same_zone():
     pack = _DuckPack(seed_tropes=[_seedtrope("alpha"), _seedtrope("ancestor")])
 
     orch = _make_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    _, registry = await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     content = _combined_seed_content(registry, orch._narrator.name())
     # Active surfaces with full prose
@@ -532,14 +512,10 @@ async def test_seed_injection_fires_otel_span(otel_capture):
     snap = GameSnapshot(genre_slug="x", world_slug="y")
     snap.active_seeds = [_active_state("alpha"), _active_state("bravo")]
     snap.seed_ghosts = [_ghost("ancestor")]
-    pack = _DuckPack(
-        seed_tropes=[_seedtrope("alpha"), _seedtrope("bravo"), _seedtrope("ancestor")]
-    )
+    pack = _DuckPack(seed_tropes=[_seedtrope("alpha"), _seedtrope("bravo"), _seedtrope("ancestor")])
 
     orch = _make_orchestrator()
-    await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     spans = otel_capture.get_finished_spans()
     seed_spans = [s for s in spans if "seed" in s.name.lower()]
@@ -560,9 +536,7 @@ async def test_seed_injection_fires_otel_span(otel_capture):
         "Sebastien's panel filters on these counts — wrong values "
         "either silence the panel or mis-attribute injection state."
     )
-    assert attrs.get("ghost_count") == 1, (
-        f"Expected ghost_count=1 on seed span; got attrs={attrs}"
-    )
+    assert attrs.get("ghost_count") == 1, f"Expected ghost_count=1 on seed span; got attrs={attrs}"
 
 
 @pytest.mark.asyncio
@@ -577,9 +551,7 @@ async def test_seed_span_fires_even_with_empty_lists(otel_capture):
     pack = _DuckPack(seed_tropes=[])
 
     orch = _make_orchestrator()
-    await orch.build_narrator_prompt(
-        "act", _turn_context(snapshot=snap, pack=pack)
-    )
+    await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     spans = otel_capture.get_finished_spans()
     seed_spans = [s for s in spans if "seed" in s.name.lower()]

@@ -87,9 +87,7 @@ def create_scene_harness_router() -> APIRouter:
                 component="scene_harness",
                 severity="warning",
             )
-            logger.warning(
-                "scene_harness.fixture_not_found name=%s err=%s", name, exc
-            )
+            logger.warning("scene_harness.fixture_not_found name=%s err=%s", name, exc)
             raise HTTPException(
                 status_code=404,
                 detail={
@@ -108,14 +106,14 @@ def create_scene_harness_router() -> APIRouter:
                 component="scene_harness",
                 severity="warning",
             )
-            logger.warning(
-                "scene_harness.fixture_invalid name=%s err=%s", name, exc
-            )
+            logger.warning("scene_harness.fixture_invalid name=%s err=%s", name, exc)
             raise HTTPException(
                 status_code=422,
                 detail={
                     "fixture_name": name,
-                    "field": "genre" if "genre" in str(exc).lower() else "world"
+                    "field": "genre"
+                    if "genre" in str(exc).lower()
+                    else "world"
                     if "world" in str(exc).lower()
                     else "snapshot",
                     "message": str(exc),

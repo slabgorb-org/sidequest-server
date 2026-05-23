@@ -163,9 +163,7 @@ async def test_stamped_player_id_serializes_without_pydantic_warning() -> None:
         if "PydanticSerializationUnexpectedValue" in str(w.message)
         and "player_id" in str(w.message)
     ]
-    assert not offending, (
-        f"player_id serialized with a Pydantic type-contract warning: {offending}"
-    )
+    assert not offending, f"player_id serialized with a Pydantic type-contract warning: {offending}"
 
 
 @pytest.mark.asyncio

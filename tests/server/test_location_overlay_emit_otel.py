@@ -45,12 +45,8 @@ def exporter(monkeypatch: pytest.MonkeyPatch) -> InMemorySpanExporter:
 def _enc(*, resolved: bool) -> StructuredEncounter:
     return StructuredEncounter(
         encounter_type="tavern_brawl",
-        player_metric=EncounterMetric(
-            name="composure", current=10, starting=10, threshold=20
-        ),
-        opponent_metric=EncounterMetric(
-            name="brawl_energy", current=10, starting=10, threshold=20
-        ),
+        player_metric=EncounterMetric(name="composure", current=10, starting=10, threshold=20),
+        opponent_metric=EncounterMetric(name="brawl_energy", current=10, starting=10, threshold=20),
         resolved=resolved,
         location_overlay=EncounterLocationOverlay(
             bound_room_id="glenross_pub",
@@ -103,9 +99,7 @@ def test_activate_fires_overlay_activate_span(
     assert attrs["region_id"] == "glenross_pub"
     assert attrs["encounter_id"] == "tavern_brawl@glenross_pub"
     assert attrs["delta_count"] == 1
-    assert attrs["suffix_chars"] == len(
-        "A chair lies in splinters by the door."
-    )
+    assert attrs["suffix_chars"] == len("A chair lies in splinters by the door.")
 
 
 def test_deactivate_fires_overlay_deactivate_span(
@@ -142,9 +136,7 @@ def test_deactivate_fires_overlay_deactivate_span(
     # On deactivate the overlay count is 0 (post-transition state) per
     # 54-7's deactivate branch shape.
     assert attrs["delta_count"] == 0
-    assert attrs["suffix_chars"] == len(
-        "A chair lies in splinters by the door."
-    )
+    assert attrs["suffix_chars"] == len("A chair lies in splinters by the door.")
 
 
 def test_activate_no_op_when_encounter_resolved_does_not_emit_span(
@@ -172,7 +164,4 @@ def test_activate_no_op_when_encounter_resolved_does_not_emit_span(
     )
 
     assert emit_fn.call_count == 0
-    assert not any(
-        s.name.startswith("location.overlay.")
-        for s in exporter.get_finished_spans()
-    )
+    assert not any(s.name.startswith("location.overlay.") for s in exporter.get_finished_spans())

@@ -24,8 +24,19 @@ def test_quoted_dialogue_broadcast_attributed_to_speaking_pc() -> None:
     calls: list[tuple[object, dict]] = []
     room.broadcast.side_effect = lambda msg, **kw: calls.append((msg, kw)) or []
     pending = [
-        ("p1", PendingAction(character_name="Rux", action='I step forward and say "Well met. What news from the north?"')),
-        ("p2", PendingAction(character_name="Mara", action='I nod, then add "And what of the southern road?"')),
+        (
+            "p1",
+            PendingAction(
+                character_name="Rux",
+                action='I step forward and say "Well met. What news from the north?"',
+            ),
+        ),
+        (
+            "p2",
+            PendingAction(
+                character_name="Mara", action='I nod, then add "And what of the southern road?"'
+            ),
+        ),
     ]
 
     _broadcast_player_speech_to_party(room, pending, round_no=4)

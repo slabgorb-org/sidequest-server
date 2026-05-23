@@ -228,9 +228,7 @@ async def test_bootstrap_populates_session_data_grounding_fields(
     out = await handler.handle_message(_connect_msg())
 
     # Sanity — connection succeeded into Playing state.
-    session_events = [
-        m for m in out if getattr(m, "type", None) == MessageType.SESSION_EVENT
-    ]
+    session_events = [m for m in out if getattr(m, "type", None) == MessageType.SESSION_EVENT]
     assert session_events, f"expected SESSION_EVENT connected; got {out}"
     assert getattr(session_events[0].payload, "has_character", False) is True
 
@@ -324,8 +322,7 @@ async def test_get_world_grounding_returns_grounded_payload_through_dispatch(
     result = await registered.handler(args, tool_ctx)
 
     assert result.status is ToolResultStatus.OK, (
-        f"get_world_grounding returned non-OK status: {result.status} "
-        f"message={result.message!r}"
+        f"get_world_grounding returned non-OK status: {result.status} message={result.message!r}"
     )
     payload = cast(dict[str, Any], result.payload)
     assert payload["weather"] is not None, (
@@ -335,8 +332,7 @@ async def test_get_world_grounding_returns_grounded_payload_through_dispatch(
     assert isinstance(payload["weather"], dict)
     # WeatherState.model_dump() includes 'zone' and 'season'.
     assert "zone" in payload["weather"] and "season" in payload["weather"], (
-        f"weather payload missing WeatherState shape; got keys="
-        f"{sorted(payload['weather'])}"
+        f"weather payload missing WeatherState shape; got keys={sorted(payload['weather'])}"
     )
     assert payload["demographics"] is not None, (
         "tool payload.demographics is None after a grounded-pack bootstrap"

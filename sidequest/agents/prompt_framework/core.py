@@ -191,9 +191,7 @@ class PromptRegistry:
             span.set_attribute("user_section_count", len(user_parts))
             return system_text, user_text
 
-    def compose_split_by_zone(
-        self, agent_name: str
-    ) -> tuple[dict[AttentionZone, str], str]:
+    def compose_split_by_zone(self, agent_name: str) -> tuple[dict[AttentionZone, str], str]:
         """Compose system-bucket sections grouped by attention zone.
 
         Returns ``(system_by_zone, user_text)`` where ``system_by_zone``
@@ -594,10 +592,7 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         if rp.motifs:
             lines.append("Motifs: " + ", ".join(rp.motifs))
         if rp.depth_score is not None:
-            lines.append(
-                f"Depth: {rp.depth_score:.1f} "
-                "(deeper = graver, more lethal in tone)"
-            )
+            lines.append(f"Depth: {rp.depth_score:.1f} (deeper = graver, more lethal in tone)")
 
         visible = [e for e in rp.exits if not e.hidden]
         hidden = [e for e in rp.exits if e.hidden]

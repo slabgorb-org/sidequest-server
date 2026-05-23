@@ -86,8 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except (yaml.YAMLError, ValidationError, ValueError) as e:
         print(
-            f"sidequest-weathergen: failed to load {weather_path}: "
-            f"{type(e).__name__}: {e}",
+            f"sidequest-weathergen: failed to load {weather_path}: {type(e).__name__}: {e}",
             file=sys.stderr,
         )
         return 1

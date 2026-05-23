@@ -88,9 +88,7 @@ def ordinary_route_dist(graph: RegionGraph) -> dict[str, int]:
     reachable from the entrance on the ordinary-route graph — depth must
     never silently default to 0 for an unreachable region.
     """
-    skip = {
-        i for i, e in enumerate(graph.edges) if e.hidden or e.shortcut
-    }
+    skip = {i for i, e in enumerate(graph.edges) if e.hidden or e.shortcut}
     dist = graph.bfs_dist(graph.entrance_id, skip_edges=skip)
     missing = sorted(set(graph.nodes) - set(dist))
     if missing:
@@ -145,9 +143,7 @@ def assign_depth_scores(
     cfg = config or DepthConfig()
     cfg.validate()
 
-    to_score = [
-        rid for rid, n in graph.nodes.items() if n.depth_score is None
-    ]
+    to_score = [rid for rid, n in graph.nodes.items() if n.depth_score is None]
     if not to_score:
         return DepthReport(regions_scored=0)
 
@@ -164,9 +160,7 @@ def assign_depth_scores(
                 region_id=rid,
                 jitter_max=cfg.jitter_max,
             )
-        graph.nodes[rid] = dataclasses.replace(
-            graph.nodes[rid], depth_score=score
-        )
+        graph.nodes[rid] = dataclasses.replace(graph.nodes[rid], depth_score=score)
         scored_values.append(score)
 
     return DepthReport(

@@ -72,9 +72,7 @@ def test_secret_note_gm_short_circuits_before_visibility_gate() -> None:
     not listed in (GM is the lie-detector — must see everything).
     """
     stage = CoreInvariantStage()
-    payload = json.dumps(
-        {"subsystem": "x", "_visibility": {"visible_to": ["alice"]}}
-    )
+    payload = json.dumps({"subsystem": "x", "_visibility": {"visible_to": ["alice"]}})
     env = MessageEnvelope(kind="SECRET_NOTE", payload_json=payload, origin_seq=3)
     out_gm = stage.evaluate(envelope=env, view=_view(), player_id="gm")
     assert out_gm.terminal is True
@@ -99,18 +97,14 @@ def test_visibility_gated_malformed_fails_closed() -> None:
     """
     stage = CoreInvariantStage()
     # No _visibility at all.
-    env = MessageEnvelope(
-        kind="SECRET_NOTE", payload_json='{"subsystem": "x"}', origin_seq=3
-    )
+    env = MessageEnvelope(kind="SECRET_NOTE", payload_json='{"subsystem": "x"}', origin_seq=3)
     out = stage.evaluate(envelope=env, view=_view(), player_id="alice")
     assert out.terminal is True
     assert out.decision.include is False
     assert out.source == "invariant:visibility_gated"
 
     # _visibility present but visible_to missing.
-    env2 = MessageEnvelope(
-        kind="SECRET_NOTE", payload_json='{"_visibility": {}}', origin_seq=3
-    )
+    env2 = MessageEnvelope(kind="SECRET_NOTE", payload_json='{"_visibility": {}}', origin_seq=3)
     out2 = stage.evaluate(envelope=env2, view=_view(), player_id="alice")
     assert out2.terminal is True
     assert out2.decision.include is False
@@ -121,14 +115,9 @@ def test_narration_segment_shares_visibility_gate() -> None:
     structural gate as SECRET_NOTE.
     """
     stage = CoreInvariantStage()
-    payload = json.dumps(
-        {"text": "you alone hear it", "_visibility": {"visible_to": ["alice"]}}
-    )
+    payload = json.dumps({"text": "you alone hear it", "_visibility": {"visible_to": ["alice"]}})
     env = MessageEnvelope(kind="NARRATION_SEGMENT", payload_json=payload, origin_seq=9)
-    assert (
-        stage.evaluate(envelope=env, view=_view(), player_id="alice").decision.include
-        is True
-    )
+    assert stage.evaluate(envelope=env, view=_view(), player_id="alice").decision.include is True
     bob = stage.evaluate(envelope=env, view=_view(), player_id="bob")
     assert bob.decision.include is False
     assert bob.source == "invariant:visibility_gated"

@@ -88,7 +88,12 @@ def test_module_exports_error_types() -> None:
 
 @pytest.mark.parametrize(
     "fixture_name",
-    ["combat_brawl_wasteland", "combat_dogfight_space", "social_negotiation_tea", "social_poker_wasteland"],
+    [
+        "combat_brawl_wasteland",
+        "combat_dogfight_space",
+        "social_negotiation_tea",
+        "social_poker_wasteland",
+    ],
 )
 def test_canonical_fixture_hydrates_without_error(fixture_name: str) -> None:
     """Every canonical fixture in scenarios/fixtures/ must hydrate cleanly.
@@ -759,10 +764,7 @@ def _write_multi_pc_fixture(
     """
     fixture = tmp_path / f"{name}.yaml"
     fixture.write_text(
-        "genre: caverns_and_claudes\n"
-        "world: default\n"
-        f"characters:\n{characters_yaml}"
-        f"{extra}",
+        f"genre: caverns_and_claudes\nworld: default\ncharacters:\n{characters_yaml}{extra}",
         encoding="utf-8",
     )
 
@@ -1051,9 +1053,7 @@ def test_explicit_empty_characters_list_yields_empty_list(tmp_path: Path) -> Non
     """
     fixture = tmp_path / "empty_list.yaml"
     fixture.write_text(
-        "genre: caverns_and_claudes\n"
-        "world: default\n"
-        "characters: []\n",
+        "genre: caverns_and_claudes\nworld: default\ncharacters: []\n",
         encoding="utf-8",
     )
 
@@ -1134,10 +1134,7 @@ def test_characters_list_not_a_list_raises_FixtureValidationError(
     """
     fixture = tmp_path / "bad_characters_shape.yaml"
     fixture.write_text(
-        "genre: caverns_and_claudes\n"
-        "world: default\n"
-        "characters:\n"
-        "  not_a_list: true\n",
+        "genre: caverns_and_claudes\nworld: default\ncharacters:\n  not_a_list: true\n",
         encoding="utf-8",
     )
 
@@ -2364,10 +2361,7 @@ def test_abilities_magic_state_and_scenario_state_coexist(tmp_path: Path) -> Non
         "  personality: focused\n"
         "  backstory: studied the arts\n"
         "  char_class: Mage\n"
-        "  race: Human\n"
-        + _ABILITIES_TWO_YAML
-        + _MAGIC_STATE_MINIMAL_YAML
-        + "scenario_state:\n"
+        "  race: Human\n" + _ABILITIES_TWO_YAML + _MAGIC_STATE_MINIMAL_YAML + "scenario_state:\n"
         "  clue_graph:\n"
         "    nodes:\n"
         "      - id: clue_a\n"
@@ -2479,17 +2473,14 @@ def test_combat_brawl_wasteland_fixture_encounter_hydrated() -> None:
     from sidequest.game.encounter import StructuredEncounter
     from sidequest.game.scene_harness import hydrate_fixture
 
-    snapshot = hydrate_fixture(
-        name="combat_brawl_wasteland", fixtures_dir=CANONICAL_FIXTURES_DIR
-    )
+    snapshot = hydrate_fixture(name="combat_brawl_wasteland", fixtures_dir=CANONICAL_FIXTURES_DIR)
 
     assert snapshot.encounter is not None, (
         "combat_brawl_wasteland.yaml declares 'encounter: type: combat' — "
         "snapshot.encounter must not be None"
     )
     assert isinstance(snapshot.encounter, StructuredEncounter), (
-        f"snapshot.encounter must be a StructuredEncounter, got "
-        f"{type(snapshot.encounter).__name__}"
+        f"snapshot.encounter must be a StructuredEncounter, got {type(snapshot.encounter).__name__}"
     )
     assert snapshot.encounter.encounter_type == "combat", (
         f"fixture 'type: combat' must map to encounter_type=='combat'; got "
@@ -2521,9 +2512,7 @@ def test_encounter_default_metrics_initialized(tmp_path: Path) -> None:
         ("opponent_metric", enc.opponent_metric),
     ):
         assert metric.current == 0, f"{label}.current default must be 0; got {metric.current}"
-        assert metric.starting == 0, (
-            f"{label}.starting default must be 0; got {metric.starting}"
-        )
+        assert metric.starting == 0, f"{label}.starting default must be 0; got {metric.starting}"
         assert metric.threshold == 10, (
             f"{label}.threshold default must be 10 (AC-3); got {metric.threshold}"
         )
@@ -2557,9 +2546,7 @@ def test_encounter_missing_type_raises_FixtureValidationError(
         hydrate_fixture(name="encounter_no_type", fixtures_dir=tmp_path)
 
     msg = str(exc_info.value).lower()
-    assert "type" in msg, (
-        f"missing-type error must name the encounter type field; got {msg!r}"
-    )
+    assert "type" in msg, f"missing-type error must name the encounter type field; got {msg!r}"
 
 
 def test_encounter_empty_type_raises_FixtureValidationError(tmp_path: Path) -> None:
@@ -2593,12 +2580,7 @@ def test_encounter_custom_metric_threshold(tmp_path: Path) -> None:
     _write_encounter_fixture(
         tmp_path,
         "custom_threshold",
-        encounter_yaml=(
-            "encounter:\n"
-            "  type: combat\n"
-            "  player_metric:\n"
-            "    threshold: 25\n"
-        ),
+        encounter_yaml=("encounter:\n  type: combat\n  player_metric:\n    threshold: 25\n"),
     )
 
     from sidequest.game.scene_harness import hydrate_fixture
@@ -2608,8 +2590,7 @@ def test_encounter_custom_metric_threshold(tmp_path: Path) -> None:
     enc = snapshot.encounter
     assert enc is not None, "encounter block was provided — must hydrate"
     assert enc.player_metric.threshold == 25, (
-        f"player_metric override must be honored; got "
-        f"{enc.player_metric.threshold} (expected 25)"
+        f"player_metric override must be honored; got {enc.player_metric.threshold} (expected 25)"
     )
     assert enc.opponent_metric.threshold == 10, (
         f"un-overridden opponent_metric must keep the default 10; got "
@@ -2642,16 +2623,13 @@ def test_encounter_metric_override_any_yaml_key_order(tmp_path: Path) -> None:
     enc = snapshot.encounter
     assert enc is not None, "encounter block was provided — must hydrate"
     assert enc.encounter_type == "combat", (
-        f"type declared after opponent_metric must still bind; got "
-        f"{enc.encounter_type!r}"
+        f"type declared after opponent_metric must still bind; got {enc.encounter_type!r}"
     )
     assert enc.player_metric.threshold == 3, (
-        f"player_metric override lost under reordering; got "
-        f"{enc.player_metric.threshold}"
+        f"player_metric override lost under reordering; got {enc.player_metric.threshold}"
     )
     assert enc.opponent_metric.threshold == 7, (
-        f"opponent_metric override lost under reordering; got "
-        f"{enc.opponent_metric.threshold}"
+        f"opponent_metric override lost under reordering; got {enc.opponent_metric.threshold}"
     )
 
 
@@ -2696,11 +2674,7 @@ def test_encounter_legacy_metric_key_raises_FixtureValidationError(
         tmp_path,
         "encounter_legacy_metric",
         encounter_yaml=(
-            "encounter:\n"
-            "  type: combat\n"
-            "  metric:\n"
-            "    name: legacy\n"
-            "    threshold: 10\n"
+            "encounter:\n  type: combat\n  metric:\n    name: legacy\n    threshold: 10\n"
         ),
     )
 
@@ -2733,9 +2707,7 @@ def test_canonical_fixtures_still_hydrate_with_encounter_implementation() -> Non
         "social_poker_wasteland": None,
     }
     for fixture_name, expected_type in expectations.items():
-        snapshot = hydrate_fixture(
-            name=fixture_name, fixtures_dir=CANONICAL_FIXTURES_DIR
-        )
+        snapshot = hydrate_fixture(name=fixture_name, fixtures_dir=CANONICAL_FIXTURES_DIR)
         if expected_type is None:
             assert snapshot.encounter is None, (
                 f"{fixture_name}: no encounter block — snapshot.encounter must "

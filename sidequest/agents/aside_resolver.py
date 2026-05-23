@@ -79,9 +79,7 @@ class AsideResolver:
     def __init__(self, llm: AsideLLM) -> None:
         self._llm = llm
 
-    async def resolve(
-        self, *, question: str, read_view: AsideReadView
-    ) -> AsideResolution:
+    async def resolve(self, *, question: str, read_view: AsideReadView) -> AsideResolution:
         user = (
             f"CHARACTER: {read_view.character_summary}\n"
             f"REGION: {read_view.region_summary}\n"
@@ -104,9 +102,7 @@ class AsideResolver:
         try:
             raw = await self._llm.complete(system=_SYSTEM_PROMPT, user=user)
         except Exception:  # noqa: BLE001 — LLM call-failure boundary (spec §6)
-            logger.error(
-                "aside.resolver_error reason=llm_call_failed", exc_info=True
-            )
+            logger.error("aside.resolver_error reason=llm_call_failed", exc_info=True)
             return AsideResolution(
                 answer=_RESOLVER_ERROR_ANSWER,
                 outcome="resolver_error",
@@ -121,9 +117,7 @@ class AsideResolver:
             answer = str(data.get("answer", "")).strip()
             if not answer:
                 raise ValueError("empty answer")
-            return AsideResolution(
-                answer=answer, outcome=outcome, grounded_on=grounded
-            )
+            return AsideResolution(answer=answer, outcome=outcome, grounded_on=grounded)
         except (json.JSONDecodeError, ValueError, KeyError, TypeError):
             # No Silent Fallbacks: loud, honest, never invents lore.
             # Narrow + precise so a real programming bug (e.g.

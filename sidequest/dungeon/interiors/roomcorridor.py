@@ -43,9 +43,7 @@ def gen_roomcorridor(
 ) -> list[list[int]]:
     """Deterministic for a given (width, height, seed, max_rooms, room_min, room_max)."""
     if width < 5 or height < 5:
-        raise ValueError(
-            f"gen_roomcorridor requires width>=5 and height>=5; got {width}x{height}"
-        )
+        raise ValueError(f"gen_roomcorridor requires width>=5 and height>=5; got {width}x{height}")
     rng = random.Random(seed)
     grid = new_grid(width, height)
     centers: list[tuple[int, int]] = []

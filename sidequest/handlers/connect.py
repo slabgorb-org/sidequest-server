@@ -117,9 +117,7 @@ def _mint_replay_footnote_fact_ids(msg: object) -> tuple[object, int]:
     rebuilt: list[Footnote] = []
     for fn in footnotes:
         if fn.fact_id is None:
-            cat_str = (
-                fn.category.value if hasattr(fn.category, "value") else str(fn.category)
-            )
+            cat_str = fn.category.value if hasattr(fn.category, "value") else str(fn.category)
             digest_input = f"{fn.summary}|{cat_str}|{fn.is_new}"
             digest = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
             rebuilt.append(fn.model_copy(update={"fact_id": f"fn-{digest[:16]}"}))
@@ -129,9 +127,7 @@ def _mint_replay_footnote_fact_ids(msg: object) -> tuple[object, int]:
     if minted == 0:
         return msg, 0
     return (
-        msg.model_copy(
-            update={"payload": msg.payload.model_copy(update={"footnotes": rebuilt})}
-        ),
+        msg.model_copy(update={"payload": msg.payload.model_copy(update={"footnotes": rebuilt})}),
         minted,
     )
 
@@ -432,8 +428,7 @@ class ConnectHandler:
                 )
             except Exception as exc:
                 logger.error(
-                    "session.world_grounding_load_failed genre=%s world=%s "
-                    "slug=%s error=%s",
+                    "session.world_grounding_load_failed genre=%s world=%s slug=%s error=%s",
                     row.genre_slug,
                     row.world_slug,
                     slug,

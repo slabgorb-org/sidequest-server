@@ -251,6 +251,14 @@ async def test_rig_pool_zero_crossing_does_not_re_fire_when_already_zero(
         f"call (got {len(deltas)}: {[e['fields'] for e in deltas]}) — if "
         "this is zero, the test of zero_crossing absence below is vacuous"
     )
+    # AC1 sub-clause: the delta payload on a wrecked rig must report
+    # new_current=0 (clamped) and old_current=0 (already wrecked) — not
+    # the unclamped raw value. A regression that fails to clamp would
+    # otherwise pass the bare "one delta arrived" premise check.
+    delta_fields = deltas[0]["fields"]
+    assert delta_fields["delta"] == -3
+    assert delta_fields["old_current"] == 0
+    assert delta_fields["new_current"] == 0
 
     crossings = [
         e
@@ -259,6 +267,87 @@ async def test_rig_pool_zero_crossing_does_not_re_fire_when_already_zero(
     ]
     assert crossings == [], (
         f"zero_crossing must not re-fire on a wrecked rig (got {crossings})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rig_pool_zero_crossing_re_fires_after_repair_and_re_damage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2 sub-clause: a pool that crosses to 0, heals back to a positive
+    value, then is damaged to 0 again MUST publish a second
+    ``zero_crossing`` event. The crossing is edge-triggered on the
+    downward transition; a regression that tracks "has ever crossed" as
+    a one-way flag would silence the second crash and break the GM
+    dashboard's repeat-encounter signal.
+
+    The hazard this test guards against: a buggy refactor that promotes
+    ``zero_crossed`` to a persistent ``has_crossed_zero`` field on the
+    pool and emits only on first transition — every subsequent re-cross
+    after repair would be invisible.
+    """
+    captured = await _setup(monkeypatch, "test-rig-re-cross-after-heal")
+
+    core = _mounted_core(name="Mira", composure=1, chassis_id="rig_tier_1_prospect")
+    assert core.rig_pool is not None
+    core.rig_pool.apply_delta(-1)  # first crossing (1 → 0)
+    core.rig_pool.apply_delta(+1)  # repair (0 → 1) — must NOT publish a crossing
+    await asyncio.sleep(0.05)
+    captured.clear()
+
+    core.rig_pool.apply_delta(-1)  # second crossing (1 → 0)
+    await asyncio.sleep(0.05)
+
+    crossings = [
+        e
+        for e in _rig_state_transitions(captured)
+        if e["fields"].get("op") == "zero_crossing"
+    ]
+    assert len(crossings) == 1, (
+        "second downward zero-crossing after repair must publish exactly "
+        f"one zero_crossing event in the post-clear window (got {len(crossings)})"
+    )
+    fields = crossings[0]["fields"]
+    assert fields["old_current"] == 1
+    assert fields["new_current"] == 0
+
+
+@pytest.mark.asyncio
+async def test_rig_pool_zero_crossing_independent_of_crash_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC3 negative case: ``rig_pool.zero_crossing`` and
+    ``rig_pool.crash_event`` are independent gates. Driving
+    ``apply_delta`` to zero WITHOUT invoking ``handle_rig_crash`` must
+    publish the zero_crossing event but NOT the crash_event — the
+    crash consequences only fire when the handler is called.
+
+    A regression that accidentally couples the two (e.g., apply_delta
+    starts auto-firing handle_rig_crash on the destroyed pool) would
+    inflate the GM dashboard's crash count with phantom crashes
+    triggered by ordinary damage resolution.
+    """
+    captured = await _setup(monkeypatch, "test-rig-crossing-independent-of-crash")
+
+    core = _mounted_core(name="Mira", composure=2, chassis_id="rig_tier_1_prospect")
+    assert core.rig_pool is not None
+    core.rig_pool.apply_delta(-2)  # crosses to 0; NO handle_rig_crash called
+    await asyncio.sleep(0.05)
+
+    crossings = [
+        e
+        for e in _rig_state_transitions(captured)
+        if e["fields"].get("op") == "zero_crossing"
+    ]
+    crashes = [
+        e
+        for e in _rig_state_transitions(captured)
+        if e["fields"].get("op") == "crash_event"
+    ]
+    assert len(crossings) == 1, "zero_crossing must publish on the downward crossing"
+    assert crashes == [], (
+        "crash_event must NOT publish unless handle_rig_crash is explicitly "
+        f"invoked (got {crashes})"
     )
 
 

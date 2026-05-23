@@ -1,9 +1,17 @@
-"""rig.* OTEL span constants + emitters for the chassis framework.
+"""rig.* and rig_pool.* OTEL span constants + emitters for the chassis framework.
 
-Slice scope: three flat-only emitters. The taxonomy declares ten more;
-they ship with their producing subsystems (subsystem install/remove with
-hardpoints; damage_resolution with dogfight; ancillary_loss with
-ancillary support; etc.).
+Slice scope:
+  - Five flat-only emitters: ``rig.bond_event``, ``rig.voice_register_change``,
+    ``rig.confrontation_outcome``, ``room.entry_skipped``, ``room.entry_evaluated``.
+  - Four routed ``state_transition`` emitters (component="rig"):
+    ``rig_pool.created``, ``rig_pool.delta``, ``rig_pool.zero_crossing``,
+    ``rig_pool.crash_event``. Routed per story 53-4 so the GM dashboard's
+    Subsystems tab renders typed events instead of opaque ``agent_span_close``
+    firehose entries (audio.py / chargen.py / cavern_room.py precedent).
+
+The taxonomy declares ten more rig.* spans; they ship with their producing
+subsystems (subsystem install/remove with hardpoints; damage_resolution with
+dogfight; ancillary_loss with ancillary support; etc.).
 
 Emitters fire on state-mutation points and have no inner work — `pass`
 inside the `Span.open` context is intentional.

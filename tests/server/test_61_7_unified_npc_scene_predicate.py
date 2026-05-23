@@ -60,6 +60,13 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock
 
+import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+
 from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
 from sidequest.agents.tool_registry import (
     ToolContext,
@@ -324,18 +331,33 @@ async def test_projection_and_tool_converge_on_off_stage_npc() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC-2 — field-precedence order (current_room > location > last_seen_location)
+# AC-2 — field resolution across current_room / location / last_seen_location
+#
+# Implementation semantic (per ``sidequest/game/npc_scene.py`` Design
+# Deviation block): UNION across the two structured fields
+# (``current_room`` OR ``location``) plus a PROSE FALLBACK to
+# ``last_seen_location`` only when BOTH structured fields are None.
+# The architect's RED-phase recommendation was strict precedence
+# (``current_room > location > last_seen_location``); Dev's write-path
+# survey surfaced that ``current_room`` and ``location`` are ORTHOGONAL
+# coordinate axes per the Npc model comments and pivoted to union+fallback.
+# The fixtures in this section pass identically under either semantic —
+# they exercise (a) each individual field driving a positive match and
+# (b) the structured-overrides-stale-prose gaslighting-doctrine anchor.
 # ---------------------------------------------------------------------------
 
 
 async def test_unified_predicate_uses_current_room_when_set() -> None:
-    """Precedence: `current_room` wins over `location` and
-    `last_seen_location` when set.
+    """Union semantic: ``current_room`` matches the scene id, the NPC
+    is in scene. ``location`` and ``last_seen_location`` set to a
+    non-matching value do NOT contradict ``current_room`` (they live
+    on different coordinate axes — chassis interior vs general-world
+    vs prose-derived continuity hint).
 
-    Fixture: NPC with `current_room == "main_hall"` (acting PC's room),
-    `location == "distant"`, `last_seen_location == "distant"`. Under
-    the precedence contract, `current_room` is authoritative — the NPC
-    IS in scene. Both call sites must agree.
+    Fixture: NPC with ``current_room == "main_hall"`` (acting PC's room),
+    ``location == "distant"``, ``last_seen_location == "distant"``. NPC
+    IS in scene because ``current_room`` matches. Both call sites must
+    agree.
     """
     npc = _npc(
         "AnchoredNpc",
@@ -349,22 +371,30 @@ async def test_unified_predicate_uses_current_room_when_set() -> None:
     tool = await _tool_npc_names(snap)
 
     assert proj == tool, (
-        f"Precedence-current_room: divergence proj={sorted(proj)} "
-        f"tool={sorted(tool)}. current_room must be authoritative."
+        f"Union(current_room): divergence proj={sorted(proj)} "
+        f"tool={sorted(tool)}. ``current_room`` match must be honored "
+        "by both call sites."
     )
     assert "AnchoredNpc" in proj, (
-        "AnchoredNpc dropped despite current_room == acting PC's room. "
-        "Precedence contract requires current_room win over conflicting "
-        "location / last_seen_location values."
+        "AnchoredNpc dropped despite ``current_room`` == acting PC's "
+        "room. The union check (``current_room == scene or location == "
+        "scene``) requires either structured field matching to anchor "
+        "the NPC; ``location`` being set to a non-matching value does "
+        "not override the matching ``current_room`` (orthogonal axes, "
+        "not precedence competitors)."
     )
 
 
 async def test_unified_predicate_falls_back_to_location_when_no_current_room() -> None:
-    """Precedence: `location` wins when `current_room` is None.
+    """Union semantic: ``location`` matches the scene id, ``current_room``
+    is unset (None) — the union check still resolves positive. The
+    prose fallback (``last_seen_location``) is NOT consulted because at
+    least one structured field is set.
 
-    Fixture: NPC with `current_room == None`, `location == "main_hall"`,
-    `last_seen_location == "distant"`. `location` is the next-most-trusted
-    signal; NPC IS in scene. Both call sites must agree.
+    Fixture: NPC with ``current_room == None``, ``location == "main_hall"``,
+    ``last_seen_location == "distant"``. NPC IS in scene because
+    ``location`` matches and the prose fallback is gated off (one
+    structured field is set). Both call sites must agree.
     """
     npc = _npc(
         "LocationOnlyNpc",
@@ -378,28 +408,29 @@ async def test_unified_predicate_falls_back_to_location_when_no_current_room() -
     tool = await _tool_npc_names(snap)
 
     assert proj == tool, (
-        f"Precedence-location-fallback: divergence proj={sorted(proj)} "
+        f"Union(location): divergence proj={sorted(proj)} "
         f"tool={sorted(tool)}."
     )
     assert "LocationOnlyNpc" in proj, (
-        "LocationOnlyNpc dropped despite location == acting PC's room "
-        "and no current_room override. Precedence contract requires "
-        "location win over conflicting last_seen_location."
+        "LocationOnlyNpc dropped despite ``location`` == acting PC's "
+        "room. The union check matches on ``location``; the prose "
+        "fallback is gated off because ``location`` is set, so the "
+        "stale ``last_seen_location`` value cannot disqualify the NPC."
     )
 
 
 async def test_unified_predicate_falls_back_to_last_seen_when_no_structured_fields() -> None:
-    """Precedence: `last_seen_location` is the final fallback when both
-    structured fields are None.
+    """Prose fallback: when BOTH structured fields (``current_room`` and
+    ``location``) are None, the predicate consults
+    ``last_seen_location`` as a narrator-prose continuity hint. This
+    is the case where the tool's pre-61-7 behavior (consult only
+    structured fields) DROPS the NPC; 61-7 adds the prose fallback to
+    the tool's resolution.
 
-    Fixture: NPC with `current_room == None`, `location == None`,
-    `last_seen_location == "main_hall"`. Narrator-prose-declared NPC with
-    no structured-state writes yet; `last_seen_location` is the only
-    continuity signal. NPC IS in scene. Both call sites must agree.
-
-    This is the case where the tool's pre-61-7 behavior (consult only
-    `current_room` / `location`) DROPS the NPC; 61-7 unification adds
-    `last_seen_location` to the tool's resolution.
+    Fixture: NPC with ``current_room == None``, ``location == None``,
+    ``last_seen_location == "main_hall"``. Narrator-prose-declared NPC
+    with no structured-state writes yet; ``last_seen_location`` is the
+    only continuity signal. NPC IS in scene. Both call sites must agree.
     """
     npc = _npc(
         "ProseOnlyNpc",
@@ -413,7 +444,7 @@ async def test_unified_predicate_falls_back_to_last_seen_when_no_structured_fiel
     tool = await _tool_npc_names(snap)
 
     assert proj == tool, (
-        f"Precedence-last_seen-fallback: divergence proj={sorted(proj)} "
+        f"Prose-fallback: divergence proj={sorted(proj)} "
         f"tool={sorted(tool)}. Tool must consult last_seen_location when "
         "the structured fields are unset (the projection already does)."
     )
@@ -425,21 +456,24 @@ async def test_unified_predicate_falls_back_to_last_seen_when_no_structured_fiel
 
 
 async def test_unified_predicate_current_room_overrides_stale_last_seen() -> None:
-    """Precedence: current_room is authoritative even when last_seen_location
-    agrees with the acting PC's room (the inverse of the 61-2 divergence
-    probe — same NPC shape, opposite expected outcome under unification).
+    """Gaslighting-doctrine anchor: when structured fields point AWAY
+    from the scene id, the prose fallback is GATED OFF and the
+    ``last_seen_location`` agreement with the scene cannot rescue
+    the NPC. Structured-state writes are higher-trust than
+    narrator-prose observations; a stale prose hint must not be fed
+    to the narrator as present-scene ground truth.
 
-    Fixture: NPC with `current_room == "distant_chamber"`,
-    `location == "distant_chamber"`, `last_seen_location == "main_hall"`.
-    Structured-state writes are higher-trust than narrator-prose
-    observations; the NPC has structurally moved to a distant chamber
-    and the narrator-prose hint is stale. NPC is NOT in scene. Both
-    call sites must agree.
+    Fixture: NPC with ``current_room == "distant_chamber"``,
+    ``location == "distant_chamber"``, ``last_seen_location == "main_hall"``.
+    Both structured fields are set and disagree with the scene id; the
+    union check returns False; the prose-fallback branch does NOT fire
+    (gated by ``current_room is None AND location is None``). NPC is
+    NOT in scene. Both call sites must agree.
 
-    This is the 61-2 divergence-probe fixture inverted: today the
-    projection (using last_seen_location) keeps the NPC and the tool
-    (using current_room / location) drops it. Post-unification both
-    drop it (current_room precedence wins).
+    This is the 61-2 divergence-probe fixture inverted: pre-unification
+    the projection (using ``last_seen_location`` only) kept the NPC
+    and the tool (using ``current_room`` or ``location``) dropped it.
+    Post-unification both drop it via the gaslighting-doctrine gate.
     """
     npc = _npc(
         "StaleProseNpc",
@@ -459,10 +493,12 @@ async def test_unified_predicate_current_room_overrides_stale_last_seen() -> Non
     )
     assert "StaleProseNpc" not in proj, (
         "StaleProseNpc kept despite current_room/location pointing to "
-        "distant_chamber. Precedence contract requires structured-state "
-        "writes (current_room) to override stale narrator-prose hints "
-        "(last_seen_location). If this assertion fails post-fix, Dev "
-        "likely chose union semantics — raise as a Design Deviation."
+        "distant_chamber. The prose-fallback branch in ``is_npc_in_scene`` "
+        "must be gated by ``current_room is None AND location is None`` "
+        "so structured-state writes overrule stale narrator-prose hints. "
+        "If this assertion fails the gate has regressed — the narrator "
+        "would be fed a ghost in the present scene (gaslighting-doctrine "
+        "violation)."
     )
 
 
@@ -510,6 +546,7 @@ async def test_unified_predicate_preserves_encounter_actor_branch_in_projection(
     snap = _make_snapshot(npcs=[npc], encounter=encounter)
 
     proj = _projection_npc_names(snap)
+    tool = await _tool_npc_names(snap)
 
     assert "EncounterParticipant" in proj, (
         "EncounterParticipant dropped from projection despite being "
@@ -517,6 +554,14 @@ async def test_unified_predicate_preserves_encounter_actor_branch_in_projection(
         "encounter-actor branch must be preserved through 61-7 "
         "unification — structured encounter participants are in-scene "
         "regardless of where their location fields point."
+    )
+    assert proj == tool, (
+        f"Encounter-branch projection/tool divergence: proj={sorted(proj)} "
+        f"tool={sorted(tool)}. AC-3 requires the encounter-actor branch "
+        "to propagate to BOTH call sites — the per-call-site assertion "
+        "is one half of the contract; this set-equality assertion is the "
+        "other half (and the regression-guard against a tool-side "
+        "encounter-branch breakage)."
     )
 
 
@@ -543,6 +588,7 @@ async def test_unified_predicate_propagates_encounter_branch_to_tool() -> None:
     encounter = _make_encounter(["EncounterParticipant"])
     snap = _make_snapshot(npcs=[npc], encounter=encounter)
 
+    proj = _projection_npc_names(snap)
     tool = await _tool_npc_names(snap)
 
     assert "EncounterParticipant" in tool, (
@@ -552,6 +598,11 @@ async def test_unified_predicate_propagates_encounter_branch_to_tool() -> None:
         "both call sites reach identical verdicts. Today the tool only "
         "consults location/current_room — this assertion is the RED "
         "signal that the encounter branch needs to land on the tool side."
+    )
+    assert proj == tool, (
+        f"Encounter-branch projection/tool divergence: proj={sorted(proj)} "
+        f"tool={sorted(tool)}. Sibling cross-check to the projection-side "
+        "encounter test — together they guard the full AC-3 contract."
     )
 
 
@@ -673,8 +724,8 @@ async def test_unified_predicate_converges_on_mixed_roster() -> None:
 
     # Sanity bounds on the expected verdict so a future regression that
     # silently agrees on the WRONG set still surfaces. Each named NPC
-    # has a deterministic expected outcome under the precedence +
-    # encounter-branch contract:
+    # has a deterministic expected outcome under the union +
+    # prose-fallback + encounter-branch contract:
     expected_in_scene = {
         "ByCurrentRoom",
         "ByLocation",
@@ -688,6 +739,331 @@ async def test_unified_predicate_converges_on_mixed_roster() -> None:
     }
     assert proj == expected_in_scene, (
         f"Expected exactly {sorted(expected_in_scene)} in scene under "
-        f"the precedence + encounter contract; got {sorted(proj)}. "
-        f"Out-of-scope: {sorted(expected_out_of_scene)}."
+        f"the union + prose-fallback + encounter contract; got "
+        f"{sorted(proj)}. Out-of-scope: {sorted(expected_out_of_scene)}."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round-2 RED (review-fix) — empty-string edge cases the simplify-pass missed
+#
+# Reviewer caught that the TEA verify-pass dropped defensive `if name:`
+# truthy guards on the (correct) observation that the type system
+# guarantees `npc.core` non-None. The type system does NOT guarantee
+# `npc.core.name` non-empty (CreatureCore.name is `name: str` with no
+# `min_length`), so removing the guard reintroduced an empty-string
+# false-positive surface. These tests RED today and must pass once Dev
+# re-introduces the truthy guards (or enforces min_length=1 upstream).
+# ---------------------------------------------------------------------------
+
+
+async def test_empty_named_npc_in_empty_named_encounter_actor_is_not_in_scene() -> None:
+    """Reviewer MUST-FIX (edge-hunter #1): an NPC with ``core.name=""``
+    must NOT match an encounter actor with ``name=""`` via the
+    encounter-actor branch.
+
+    Today (post-TEA-verify simplify) the predicate runs
+    ``any(actor.name == name for actor in encounter.actors)`` with
+    ``name=""``, which matches any actor whose name is also ``""``.
+    Result: every empty-named NPC gets a false-positive in-scene
+    verdict via the encounter override, collapsing all empty-named
+    NPCs into a single encounter-participant identity. The pre-TEA
+    simplify code's ``if name and any(...)`` guard caught this — TEA's
+    removal reintroduced the bug.
+
+    Fix-shape (Dev's choice): re-introduce ``if name:`` truthy guard
+    before the ``any()`` scan, OR enforce ``min_length=1`` on
+    ``CreatureCore.name`` (broader change). Either way, an NPC with
+    no name should not silently take an encounter-participant identity.
+    """
+    npc = _npc(
+        "",  # empty name on purpose
+        current_room="distant_chamber",
+        location="distant_chamber",
+        last_seen_location="distant_chamber",
+    )
+    encounter = _make_encounter([""])  # encounter actor also empty-named
+    snap = _make_snapshot(npcs=[npc], encounter=encounter)
+
+    proj = _projection_npc_names(snap)
+    tool = await _tool_npc_names(snap)
+
+    assert "" not in proj, (
+        "Empty-named NPC kept by projection's encounter branch via "
+        "empty-string == empty-string match. The encounter-actor "
+        "membership check must guard against empty names; see "
+        "``sidequest/game/npc_scene.py:is_npc_in_scene`` encounter "
+        "branch (line ~103)."
+    )
+    assert "" not in tool, (
+        "Empty-named NPC kept by tool's encounter branch — same "
+        "empty-string false-positive on the propagated branch."
+    )
+
+
+async def test_projection_does_not_collapse_two_empty_named_npcs_via_set_add() -> None:
+    """Reviewer MUST-FIX (edge-hunter #3): two NPCs both with
+    ``core.name=""`` that pass the in-scene predicate must NOT silently
+    collapse into a single identity via the
+    ``in_scene_names.add(npc.core.name)`` set membership lookup
+    downstream.
+
+    Today (post-TEA-verify simplify) the projection at
+    ``session_helpers.py:158`` adds ``npc.core.name`` to ``in_scene_names``
+    unconditionally; for empty-named NPCs this adds ``""`` once and the
+    second-pass dict filter drops or collapses identity. The pre-TEA
+    code's ``if name:`` guard avoided this. Either guard (and drop
+    empty-named NPCs loudly) or let the second-pass loop handle the
+    collision explicitly. Whichever path Dev picks, the projection
+    must NOT silently produce a payload where two distinct NPCs are
+    indistinguishable.
+
+    Contract: ``payload["npcs"]`` must reflect 2 surviving entries
+    (Dev keeps both) OR 0 (Dev drops both with a warn-log) — but NOT
+    silent identity collapse to 1.
+    """
+    npcs = [
+        _npc("", current_room="main_hall"),
+        _npc("", current_room="main_hall"),  # second empty-named NPC, same room
+    ]
+    snap = _make_snapshot(npcs=npcs)
+
+    # Drive the production projection and inspect the raw payload to
+    # count entries (the `_projection_npc_names` helper deduplicates
+    # via set, which is exactly the collision surface this guards).
+    pack = load_genre_pack(CONTENT_GENRE_PACKS / snap.genre_slug)
+    sd = _SessionData(
+        genre_slug=snap.genre_slug,
+        world_slug=snap.world_slug,
+        player_name="Alice",
+        player_id="player:alice",
+        snapshot=snap,
+        store=MagicMock(),
+        genre_pack=pack,
+        orchestrator=MagicMock(),
+    )
+    sd._room = room_for(snap, slug=snap.world_slug)
+    ctx = _build_turn_context(sd, room=sd._room)
+    assert ctx.state_summary is not None
+    payload_npcs = json.loads(ctx.state_summary).get("npcs") or []
+    empty_named = [
+        e
+        for e in payload_npcs
+        if (
+            (isinstance(e.get("core"), dict) and e["core"].get("name", None) == "")
+            or e.get("name", None) == ""
+        )
+    ]
+
+    assert len(empty_named) != 1, (
+        f"Empty-named NPC identity collapse detected: payload contains "
+        f"exactly {len(empty_named)} empty-named entry out of 2 fixture "
+        "NPCs. The set-add in ``session_helpers.py:_apply_phase_c_projections`` "
+        "is silently deduplicating empty-named NPCs into a single "
+        "identity. Fix: re-introduce ``if name:`` truthy guard before "
+        "``in_scene_names.add(...)``, or enforce min_length=1 on "
+        "CreatureCore.name. ``len(empty_named) == 0`` (drop both) or "
+        "``len(empty_named) == 2`` (keep both) are both acceptable "
+        "contracts; ``== 1`` indicates the silent-collision bug."
+    )
+
+
+async def test_tool_with_empty_scene_id_does_not_match_empty_string_locations() -> None:
+    """Reviewer MUST-FIX (edge-hunter #2): when a narrator-supplied
+    ``scene_id=""`` reaches the tool, it must NOT be treated as a
+    literal scene id matching NPCs with empty-string location fields.
+    Treat empty scene id as "no scene context" (per the tool's
+    existing ``eff is None`` fallback intent).
+
+    Today (post-61-7) ``_resolve_scene_id`` returns ``args.scene_id``
+    directly when non-None, so ``eff=""`` is passed to
+    ``is_npc_in_scene`` as ``current_room=""``. Inside the predicate,
+    ``current_room is None`` is False (empty string is not None), so
+    the no-scene-context early-return does NOT fire, and the union
+    check ``cr == "" or loc == ""`` matches any NPC whose serialized
+    location field is empty.
+
+    Fix options (Dev picks):
+    (a) Coerce empty ``scene_id`` to ``None`` inside ``_resolve_scene_id``
+        — returns the omniscient/debug full roster (consistent with the
+        tool's existing fallback intent).
+    (b) Tighten the predicate's no-scene-context check from
+        ``current_room is None`` to ``not current_room``.
+
+    The reviewer recommended (a) for consistency with the tool's
+    documented omniscient-fallback semantic.
+
+    Fixture: two NPCs, one with all-empty location fields, one with
+    ``current_room="main_hall"``. Tool called with ``scene_id=""``.
+    Expected: full roster returned (both NPCs), NOT just the
+    empty-location one.
+    """
+    npcs = [
+        _npc("EmptyRoomNpc", current_room="", location="", last_seen_location=""),
+        _npc("MainHallNpc", current_room="main_hall"),
+    ]
+    snap = _make_snapshot(npcs=npcs)
+    store = _store_with(snap)
+    ctx = _tool_ctx(store, perspective_pc="Alice")
+
+    registered = default_registry._tools["list_npcs_in_scene"]
+    args = registered.args_model.model_validate({"scene_id": ""})
+    result = await registered.handler(args, ctx)
+    assert result.status is ToolResultStatus.OK, (
+        f"tool call failed: status={result.status} message={result.message!r}"
+    )
+    payload = cast(dict[str, Any], result.payload)
+    names = {entry["name"] for entry in payload.get("npcs", [])}
+
+    assert names == {"EmptyRoomNpc", "MainHallNpc"}, (
+        f"Tool returned {sorted(names)} for scene_id=''. Expected the "
+        "full roster (both NPCs). Empty scene_id must be treated as "
+        "'no scene context' (omniscient fallback), not as a literal "
+        "scene id matching empty-string location fields. See "
+        "``sidequest/agents/tools/list_npcs_in_scene.py:_resolve_scene_id`` — "
+        "coerce empty ``args.scene_id`` to None."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round-2 RED (review-fix) — OTEL coverage for the new encounter branch
+#
+# Per server CLAUDE.md OTEL Observability Principle, every subsystem
+# decision must emit watcher events so the GM panel can verify the fix
+# is working. 61-7 propagates the encounter-actor branch to a NEW call
+# site (the tool); both the projection's ``prompt.game_state.bytes`` span
+# and the tool's ``tool.npcs.count`` need a companion attribute that
+# distinguishes "kept by location match" from "kept by encounter
+# override". Reviewer rule-checker flagged this as 2 high-confidence
+# Rule 17 violations. Test-analyzer #6 independently flagged the same gap.
+#
+# Attribute name selected: ``encounter_anchored_count`` (projection
+# side) and ``tool.npcs.encounter_anchored_count`` (tool side). Dev may
+# choose alternate names; update tests in lockstep if so.
+# ---------------------------------------------------------------------------
+
+
+def test_projection_otel_carries_encounter_anchored_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``prompt.game_state.bytes`` span emitted by the projection
+    must carry an ``encounter_anchored_count`` attribute distinct from
+    ``npcs_dropped``. A GM-panel reader must be able to tell that the
+    encounter-actor branch fired (and on how many NPCs).
+
+    Fixture: 3 NPCs — one kept by location match (cr=main_hall), one
+    kept by encounter override (all locations distant, named in
+    unresolved encounter actors), one dropped (all locations distant,
+    not in encounter). Expected attributes: ``npcs_dropped=1``,
+    ``encounter_anchored_count=1``.
+    """
+    from sidequest.telemetry import spans as _spans
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(_spans, "tracer", lambda: provider.get_tracer("test"))
+
+    npcs = [
+        _npc("LocationNpc", current_room="main_hall"),
+        _npc(
+            "EncounterNpc",
+            current_room="distant_chamber",
+            location="distant_chamber",
+            last_seen_location="distant_chamber",
+        ),
+        _npc(
+            "DroppedNpc",
+            current_room="distant_chamber",
+            location="distant_chamber",
+            last_seen_location="distant_chamber",
+        ),
+    ]
+    encounter = _make_encounter(["EncounterNpc"])
+    snap = _make_snapshot(npcs=npcs, encounter=encounter)
+
+    # Drive the projection
+    _projection_npc_names(snap)
+
+    matching = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == "prompt.game_state.bytes"
+    ]
+    assert len(matching) == 1, (
+        f"Expected exactly one prompt.game_state.bytes span; got "
+        f"{len(matching)}."
+    )
+    attrs = matching[0].attributes or {}
+    got = attrs.get("encounter_anchored_count")
+    assert got == 1, (
+        f"prompt.game_state.bytes span missing or wrong attribute "
+        f"'encounter_anchored_count': got {got!r}, expected 1. Per "
+        "server CLAUDE.md OTEL Observability Principle, the GM panel "
+        "must be able to verify the encounter-actor branch is firing "
+        "on the projection side. ``npcs_dropped`` does not distinguish "
+        "'kept by location match' from 'kept by encounter override'."
+    )
+
+
+async def test_tool_otel_carries_encounter_anchored_count() -> None:
+    """The tool's ``list_npcs_in_scene`` OTEL span must carry an
+    ``encounter_anchored_count`` attribute alongside the existing
+    ``tool.npcs.count``. The tool's pre-61-7 contract was "Only
+    tool.npcs.count is set per the plan spec," but 61-7 propagates the
+    encounter branch to the tool, introducing a new decision the GM
+    panel needs visibility into.
+
+    Fixture: same shape as the projection OTEL test (1 location-match
+    + 1 encounter-anchored + 1 dropped). Expected attribute on the
+    tool's span: ``tool.npcs.encounter_anchored_count=1``.
+    """
+    npcs = [
+        _npc("LocationNpc", current_room="main_hall"),
+        _npc(
+            "EncounterNpc",
+            current_room="distant_chamber",
+            location="distant_chamber",
+            last_seen_location="distant_chamber",
+        ),
+        _npc(
+            "DroppedNpc",
+            current_room="distant_chamber",
+            location="distant_chamber",
+            last_seen_location="distant_chamber",
+        ),
+    ]
+    encounter = _make_encounter(["EncounterNpc"])
+    snap = _make_snapshot(npcs=npcs, encounter=encounter)
+
+    # Use a real span mock the tool can call set_attribute on
+    span_attrs: dict[str, object] = {}
+
+    class _CapturingSpan:
+        def set_attribute(self, key: str, value: object) -> None:
+            span_attrs[key] = value
+
+    store = _store_with(snap)
+    ctx = ToolContext(
+        world_id="w",
+        session_id="s",
+        perspective_pc="Alice",
+        turn_number=1,
+        store=store,
+        otel_span=_CapturingSpan(),  # type: ignore[arg-type]
+        perception_filter=NarratorPerceptionFilter(),
+    )
+
+    registered = default_registry._tools["list_npcs_in_scene"]
+    args = registered.args_model.model_validate({})
+    result = await registered.handler(args, ctx)
+    assert result.status is ToolResultStatus.OK
+
+    got = span_attrs.get("tool.npcs.encounter_anchored_count")
+    assert got == 1, (
+        f"Tool OTEL span missing or wrong attribute "
+        f"'tool.npcs.encounter_anchored_count': got {got!r}, expected 1. "
+        "Per server CLAUDE.md OTEL Observability Principle, the new "
+        "encounter-branch propagation to the tool path (61-7 AC-3) "
+        "requires per-decision visibility on the tool side too."
     )

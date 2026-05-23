@@ -105,4 +105,5 @@ class ToolingLlmClient(Protocol):
         max_iterations: int = 8,
         max_tokens: int = 4096,
         on_text_delta: Callable[[str], None] | None = None,
+        session_id: str | None = None,
     ) -> ToolingResult: ...

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any
 
 import pytest
@@ -39,11 +38,10 @@ from sidequest.agents.anthropic_sdk_client import (
     AnthropicSdkCostCeilingExceeded,
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
-
 from tests.agents.test_61_4_cost_runaway_alarm import (  # type: ignore[attr-defined]
     _FakeSocket,
-    _Sdk,
     _resp,
+    _Sdk,
     _system_blocks,
     _tools_empty,
     _user_msg,
@@ -303,13 +301,19 @@ async def test_cumulative_cost_is_per_session_id(
     - Both still below their ceilings; neither raises.
 
     Sanity: session A's NEXT heavy call would cross (cumulative_A →
-    $0.606 > $0.50), but session B's NEXT heavy call must still succeed
-    (cumulative_B remains at $0.303 from B's own history, NOT $0.606
-    from polluting A's history).
+    $0.606 > $0.50). After A's kill fires, session B makes a tiny
+    call: B inherits only its own $0.303 cumulative (NOT polluted by
+    A's billing) so the tiny call succeeds without crossing.
+
+    Two heavy calls per session would push both over independently —
+    the proof is "A crosses, B does NOT cross at the moment A crosses".
+    The tiny call after A's kill is the cleanest probe for that.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    # 4 responses: A1, B1, A2 (would-cross), B2 (still safe).
-    sdk = _Sdk(responses=[_heavy_call(), _heavy_call(), _heavy_call(), _heavy_call()])
+    # 4 responses: A1 heavy, B1 heavy, A2 heavy (crosses A), B-tiny.
+    sdk = _Sdk(
+        responses=[_heavy_call(), _heavy_call(), _heavy_call(), _tiny_call()]
+    )
     client = _build_client(sdk, ceiling=0.50, monkeypatch=monkeypatch)
 
     # A1 + B1: both safe.
@@ -342,21 +346,22 @@ async def test_cumulative_cost_is_per_session_id(
         f"{excinfo.value.session_id!r}"
     )
 
-    # B2 — session B should be unaffected; cumulative for B is still
-    # only ~$0.303, well below the $0.50 ceiling. Call succeeds.
-    result_b2 = await client.complete_with_tools(
+    # B-tiny — session B is at $0.303 from B1; adding a tiny ~$0.004
+    # call lands at ~$0.307, still below the $0.50 ceiling. If B had
+    # inherited A's cumulative ($0.606) it would have raised on entry
+    # via the pre-flight check. Success here is the isolation proof.
+    result_b_tiny = await client.complete_with_tools(
         system_blocks=_system_blocks(),
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
         session_id="session-B",
     )
-    assert result_b2.cumulative_cost_usd == pytest.approx(0.303, abs=1e-3), (
-        "Session B MUST NOT inherit session A's cumulative. Per-call "
-        "cumulative for B's second heavy call returns ~$0.303 (the "
-        "per-turn aggregate inside complete_with_tools, not the "
-        "per-session cumulative). The per-session check is implicit: "
-        "B2 did not raise."
+    assert result_b_tiny.cumulative_cost_usd == pytest.approx(0.0038, abs=1e-3), (
+        "B's tiny call should report its own per-turn cumulative "
+        "(~$0.0038), not anything else. The per-session isolation is "
+        "implicit: B-tiny did not raise even though A had already "
+        f"crossed the ceiling. Got {result_b_tiny.cumulative_cost_usd!r}"
     )
 
 
@@ -521,7 +526,7 @@ async def test_cost_running_total_fires_every_turn(
     # Default ceiling — tiny calls won't approach $10.
     client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
 
-    for i in range(3):
+    for _ in range(3):
         await client.complete_with_tools(
             system_blocks=_system_blocks(),
             messages=_user_msg(),

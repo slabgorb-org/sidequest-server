@@ -3666,6 +3666,13 @@ class Orchestrator:
                     tools=default_registry.tool_definitions(),
                     tool_dispatch=dispatch,
                     model=model,
+                    # Story 61-followup-D §C.1 — forward the session_id so
+                    # the SDK client can key per-session cumulative cost
+                    # against it. Pass context.session_id raw (None when
+                    # absent) so tests / non-narrator paths bypass the
+                    # tracker cleanly; do NOT substitute the "adhoc"
+                    # sentinel here.
+                    session_id=context.session_id,
                 )
 
                 # Cost-rollup attributes — names per cost.py docstring.

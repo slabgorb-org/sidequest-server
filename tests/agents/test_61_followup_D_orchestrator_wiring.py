@@ -23,7 +23,6 @@ spy. Mirrors ``tests/agents/test_61_3_hard_cap_oversized_canary.py``
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field

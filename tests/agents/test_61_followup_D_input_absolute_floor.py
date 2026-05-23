@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 import pytest
 
@@ -31,11 +30,10 @@ from sidequest.agents.anthropic_sdk_client import (
     AnthropicSdkClient,
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
-
 from tests.agents.test_61_4_cost_runaway_alarm import (  # type: ignore[attr-defined]
     _FakeSocket,
-    _Sdk,
     _resp,
+    _Sdk,
     _system_blocks,
     _tools_empty,
     _user_msg,

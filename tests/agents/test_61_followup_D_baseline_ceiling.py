@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 import pytest
 
@@ -46,8 +45,8 @@ from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
 # enough to redefine here.
 from tests.agents.test_61_4_cost_runaway_alarm import (  # type: ignore[attr-defined]
     _FakeSocket,
-    _Sdk,
     _resp,
+    _Sdk,
     _system_blocks,
     _tools_empty,
     _user_msg,
@@ -79,7 +78,7 @@ def test_baseline_ceilings_are_3x_warmup_floors() -> None:
     61-followup-D ceiling, this test catches the asymmetry before the
     next reviewer pass does.
     """
-    assert _BASELINE_COST_CEILING == pytest.approx(3.0 * _WARMUP_COST_USD_FLOOR), (
+    assert pytest.approx(3.0 * _WARMUP_COST_USD_FLOOR) == _BASELINE_COST_CEILING, (
         f"_BASELINE_COST_CEILING must equal 3× _WARMUP_COST_USD_FLOOR "
         f"($0.09 today). Got {_BASELINE_COST_CEILING!r} vs "
         f"3×{_WARMUP_COST_USD_FLOOR!r}={3.0 * _WARMUP_COST_USD_FLOOR!r}."

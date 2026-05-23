@@ -673,6 +673,7 @@ class ConnectHandler:
                     rules=genre_pack.rules,
                     backstory_tables=genre_pack.backstory_tables,
                 ).with_lobby_name(display_name)
+                builder = builder.with_pack_id(row.genre_slug)
                 if genre_pack.equipment_tables is not None:
                     builder = builder.with_equipment_tables(genre_pack.equipment_tables)
                 if genre_pack.classes:

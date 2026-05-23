@@ -46,6 +46,11 @@ class AbilityDefinition(BaseModel):
     mechanical_effect: engine-facing trigger text.
     involuntary: if True, narrator can trigger without player choice.
     source: how the character acquired this ability (Race/Class/Item/Play).
+    reference_url: optional hyperlink into /reference/rules/<pack> for
+        Class-source signature abilities.  Populated server-side when
+        source == Class and the ability resolves to a known classes.yaml
+        signature; None for Race/Item/Play sources or when the binding
+        cannot be resolved.
     """
 
     model_config = {"extra": "forbid"}
@@ -55,6 +60,11 @@ class AbilityDefinition(BaseModel):
     mechanical_effect: str
     involuntary: bool = False
     source: AbilitySource
+    reference_url: str | None = None
+    """URL into /reference/rules/<pack> for the class signature that grants
+    this ability.  Populated server-side when source == Class and the
+    ability resolves to a known classes.yaml signature; None for
+    Race/Item/Play sources or when the binding cannot be resolved."""
 
 
 # ---------------------------------------------------------------------------

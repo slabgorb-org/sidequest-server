@@ -38,6 +38,11 @@ from sidequest.protocol.messages import (
 )
 from sidequest.protocol.models import ClassRequirement, CreationChoice, RolledStat
 from sidequest.protocol.types import NonBlankString
+from sidequest.server.reference_anchors import reference_url_for_ability
+from sidequest.telemetry.spans.reference import (
+    reference_url_attached_span,
+    reference_url_skipped_span,
+)
 
 # ---------------------------------------------------------------------------
 # Class qualification
@@ -71,16 +76,57 @@ def qualifying_classes_arrangement(
     return [c for c in classes if (arrangement.get(c.prime_requisite) or 0) >= c.minimum_score]
 
 
-def _seed_class_abilities(abilities: list[AbilityDefinition], class_def: ClassDef) -> None:
+def _seed_class_abilities(
+    abilities: list[AbilityDefinition],
+    class_def: ClassDef,
+    *,
+    pack_id: str | None = None,
+) -> None:
     """Append Class-source signature abilities from class_def.abilities.
 
     Loader stamps source=AbilitySource.Class on each entry; authors do not
     type the discriminator. Empty class_def.abilities (e.g., Mage —
     signature lives in magic plugin) is a no-op.
 
+    When ``pack_id`` is supplied the resulting AbilityDefinition carries a
+    populated ``reference_url`` pointing to the class signature anchor on
+    the rules reference page; an OTEL span is emitted for every ability.
+    When ``pack_id`` is None the field is left as None — no span is
+    emitted because there is no content-drift to signal.
+
     Spec: docs/superpowers/specs/2026-05-10-class-mechanical-surface-design.md §6.1.
     """
     for ca in class_def.abilities:
+        url = (
+            reference_url_for_ability(
+                pack=pack_id or "",
+                source="Class",
+                ability_name=ca.name,
+                owning_class_name=class_def.display_name,
+            )
+            if pack_id
+            else None
+        )
+
+        if url is not None:
+            with reference_url_attached_span(
+                kind="ability",
+                pack=pack_id or "",
+                world=None,
+                keys=(class_def.display_name, ca.name),
+            ):
+                pass
+        elif pack_id is not None:
+            # pack_id was supplied but URL could not be built — content drift.
+            with reference_url_skipped_span(
+                kind="ability",
+                pack=pack_id,
+                world=None,
+                keys=(class_def.display_name, ca.name),
+                reason="no_owner_in_scope",
+            ):
+                pass
+
         abilities.append(
             AbilityDefinition(
                 name=ca.name,
@@ -88,6 +134,7 @@ def _seed_class_abilities(abilities: list[AbilityDefinition], class_def: ClassDe
                 mechanical_effect=ca.mechanical_effect,
                 involuntary=ca.involuntary,
                 source=AbilitySource.Class,
+                reference_url=url,
             )
         )
 
@@ -768,6 +815,7 @@ class CharacterBuilder:
         self._backstory_tables: BackstoryTables | None = backstory_tables
         self._equipment_tables: EquipmentTables | None = None
         self._lobby_name: str | None = None
+        self._pack_id: str | None = None
 
     # --- Fluent setters ---
 
@@ -799,6 +847,12 @@ class CharacterBuilder:
         """Attach the genre pack's class definitions for qualification loop
         and class_kit equipment selection."""
         self._classes = list(classes)
+        return self
+
+    def with_pack_id(self, pack_id: str) -> CharacterBuilder:
+        """Record the genre pack slug so build() can attach reference_url on
+        Class-source signature abilities (Task 6, reference-pages v2)."""
+        self._pack_id = pack_id
         return self
 
     # --- Autogen helpers ---
@@ -2041,6 +2095,31 @@ class CharacterBuilder:
             description = result.choice_description or (
                 f"Acquired through character creation: {label}"
             )
+
+            # Hint-based Class-source abilities have no known owning class —
+            # they are scene-level training/affinity hints, not classes.yaml
+            # signatures. reference_url_for_ability returns None when
+            # owning_class_name is None, so these always get reference_url=None.
+            # Per spec: only Class-source paths that *fail to resolve* emit a
+            # skipped span; Race/Item/Play returning None is normal and silent.
+            hint_url: str | None = None
+            if source == AbilitySource.Class and self._pack_id is not None:
+                hint_url = reference_url_for_ability(
+                    pack=self._pack_id,
+                    source="Class",
+                    ability_name=label,
+                    owning_class_name=None,  # hints have no bound class owner
+                )
+                # hint_url is always None here (no owner) — emit skipped span.
+                with reference_url_skipped_span(
+                    kind="ability",
+                    pack=self._pack_id,
+                    world=None,
+                    keys=("?", label),
+                    reason="no_owner_in_scope",
+                ):
+                    pass
+
             abilities.append(
                 AbilityDefinition(
                     name=label,
@@ -2048,6 +2127,7 @@ class CharacterBuilder:
                     mechanical_effect=hint_key,
                     involuntary=False,
                     source=source,
+                    reference_url=hint_url,
                 )
             )
         span.add_event(
@@ -2067,7 +2147,7 @@ class CharacterBuilder:
         _resolved_class_def = next((c for c in self._classes if c.display_name == class_str), None)
         if _resolved_class_def is not None:
             _class_seed_start = len(abilities)
-            _seed_class_abilities(abilities, _resolved_class_def)
+            _seed_class_abilities(abilities, _resolved_class_def, pack_id=self._pack_id)
             _class_seed_count = len(abilities) - _class_seed_start
             from sidequest.telemetry.spans import SPAN_CHARGEN_CLASS_ABILITIES_SEEDED
 

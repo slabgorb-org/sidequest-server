@@ -123,7 +123,7 @@ def _seed_class_abilities(
                 pack=pack_id,
                 world=None,
                 keys=(class_def.display_name, ca.name),
-                reason="no_owner_in_scope",
+                reason="url_build_failed",
             ):
                 pass
 

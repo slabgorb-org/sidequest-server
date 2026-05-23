@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import os
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -206,10 +207,16 @@ class AnthropicSdkClient:
                     f"SIDEQUEST_SESSION_COST_CEILING_USD={ceiling_env!r} "
                     "could not be parsed as a float."
                 ) from exc
-            if parsed <= 0.0:
+            # Reject NaN, ±inf, and non-positive values. Python's float()
+            # accepts 'inf', 'nan', 'infinity' silently — and NaN comparisons
+            # return False so `cumulative >= nan` never fires, which would
+            # silently disable the entire hard-kill feature. inf likewise
+            # produces an unreachable ceiling. Reviewer 2026-05-23 finding
+            # (security + rule-checker §11 + edge-hunter).
+            if not math.isfinite(parsed) or parsed <= 0.0:
                 raise AnthropicSdkConfigError(
                     f"SIDEQUEST_SESSION_COST_CEILING_USD={ceiling_env!r} "
-                    "must be a positive number."
+                    "must be a finite positive number."
                 )
             self.session_cost_ceiling_usd = parsed
 
@@ -514,30 +521,39 @@ class AnthropicSdkClient:
         """Fire ``cost_runaway_suspected`` if any trigger matches.
 
         Two parallel rolling baselines compare the just-observed call
-        against PRIOR calls (K=10 window each):
+        against PRIOR calls (K=10 window each). Story 61-followup-D §A
+        clamps the post-warmup baselines at 3× the warmup floors so
+        sustained runaways cannot train the comparator into silence:
 
-        - **Cost trigger**: ``cost_usd > 5 × baseline_cost`` (warmup
-          floor: $0.03 → trip threshold $0.15).
-        - **I/O fingerprint trigger**: ``input_tokens > 2 × baseline_input
-          AND output_tokens < 50`` (warmup floor: 12_000 → trip threshold
-          24_000 with output < 50).
-        - **Absolute cost floor** (Architect spec-check A): ``cost_usd >
-          $0.30`` ALWAYS fires, regardless of baseline. The rolling
-          baseline can self-train onto a sustained runaway (10 turns at
-          $0.12 → baseline averages ~$0.12 → next $0.18 turn is sub-5x
-          and silent). The absolute floor at 10x the $0.03 healthy-turn
-          target is the safety net. Symmetric with the I/O fingerprint
-          trigger, which already has an absolute output<50 floor.
+        - **Cost trigger** (`cost_multiple`): ``cost_usd > 5 ×
+          baseline_cost``. Warmup floor: $0.03 → trip $0.15. Post-warmup,
+          clamped baseline ≤ $0.09 → trip ≤ $0.45 even if observed mean
+          has drifted higher.
+        - **I/O fingerprint** (`io_fingerprint`): ``input_tokens > 2 ×
+          baseline_input AND output_tokens < 50``. Warmup floor: 12_000
+          → trip 24_000. Post-warmup, clamped baseline ≤ 36_000 → trip
+          ≤ 72_000 with output < 50.
+        - **Absolute input floor** (`input_absolute`, 61-followup-D §B):
+          ``input_tokens > 40_000`` ALWAYS fires, regardless of baseline
+          AND regardless of output shape. Catches the high-output sibling
+          of the I/O fingerprint that snapshot-bloat produces.
+        - **Absolute cost floor** (`cost_absolute`, Architect spec-check
+          A): ``cost_usd > $0.30`` ALWAYS fires, regardless of baseline.
+          Single-call safety net for the trained-into-silence case.
           Baselines also reset on slug recycle — see ``reset_baselines``
           and ``SessionRoom.close_store``.
 
         Exactly one event per call: when multiple triggers fire
-        simultaneously, priority is io_fingerprint > cost_multiple >
-        cost_absolute (decision C, extended by spec-check A — the I/O
-        signature is the most diagnostic, matching the 2026-05-23
-        incident exactly; the cost_multiple condition is still surfaced
-        through the ``cost_usd`` / ``baseline_cost_usd`` field pair so
-        operators see the full picture in one event).
+        simultaneously, priority is **io_fingerprint > input_absolute >
+        cost_multiple > cost_absolute** (decision C, extended by
+        spec-check A and 61-followup-D §B — the I/O signature is the
+        most diagnostic, matching the 2026-05-23 incident exactly;
+        input_absolute slots second as the input-axis canary
+        independent of output; the cost triggers act as amplifiers).
+        All trigger conditions are still surfaced through the
+        ``cost_usd`` / ``baseline_cost_usd`` / ``input_tokens`` /
+        ``baseline_input_tokens`` field pairs so the operator sees the
+        full picture in one event regardless of which trigger named it.
         """
         warmup = len(self._cost_baseline) < _BASELINE_WINDOW_K
         if warmup:
@@ -698,7 +714,6 @@ class AnthropicSdkClient:
                 session_id=session_id, cumulative=cumulative
             )
 
-        self._session_ceiling_announced.add(session_id)
         logger.error(
             "session.cost_ceiling_exceeded session_id=%s "
             "cumulative_cost_usd=%.6f ceiling_usd=%.2f model=%s",
@@ -718,6 +733,12 @@ class AnthropicSdkClient:
             component="narrator.sdk",
             severity="error",
         )
+        # State cleanup ordering (lang-review §14): announce-set add
+        # MUST be after the side-effecting emit. If _watcher_publish_event
+        # raised, an earlier add would poison the announced set and the
+        # GM-panel event would be permanently lost on retry. Reviewer
+        # 2026-05-23 rule-checker finding.
+        self._session_ceiling_announced.add(session_id)
         raise self._build_ceiling_exceeded(
             session_id=session_id, cumulative=cumulative
         )

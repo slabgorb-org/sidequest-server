@@ -144,6 +144,17 @@ def test_env_var_override_rejects_invalid(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(AnthropicSdkConfigError):
         AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
 
+    # Reviewer 2026-05-23: python's float() silently accepts 'inf' and
+    # 'nan'. inf passes a > 0.0 guard; nan defeats every comparison
+    # (NaN-vs-anything always False), so a stored NaN ceiling would
+    # silently disable the entire hard kill (the most catastrophic
+    # failure mode — exactly what the story exists to prevent). The
+    # construction MUST reject both at the input boundary.
+    for bad in ("inf", "-inf", "infinity", "nan", "NaN", "1e500"):
+        monkeypatch.setenv("SIDEQUEST_SESSION_COST_CEILING_USD", bad)
+        with pytest.raises(AnthropicSdkConfigError):
+            AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
+
 
 # ---------------------------------------------------------------------------
 # 2. Crossing the ceiling raises AnthropicSdkCostCeilingExceeded
@@ -668,10 +679,20 @@ async def test_session_id_none_bypasses_cumulative_tracker(
     """Context §C.1: ``None`` session_id bypasses the tracker — for
     non-narrator codepaths (dungeon "curate", future Opus side-calls)
     and tests. They MUST NOT contribute to any session's cumulative,
-    and they MUST NOT raise even at high cumulative cost.
+    MUST NOT raise even at high cumulative cost, AND MUST NOT emit
+    per-turn watcher pulses (no "ticks" the operator didn't initiate).
+
+    Then prove a subsequent real-session call starts from zero cumulative,
+    not from $0.909 inherited via some global accumulator.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sdk = _Sdk(responses=[_heavy_call(), _heavy_call(), _heavy_call()])
+    sock = _FakeSocket()
+    await bound_hub.subscribe(sock)  # type: ignore[arg-type]
+
+    # 3 heavy bypass calls (None) + 1 heavy real-session probe afterward.
+    sdk = _Sdk(
+        responses=[_heavy_call(), _heavy_call(), _heavy_call(), _heavy_call()]
+    )
     client = _build_client(sdk, ceiling=0.50, monkeypatch=monkeypatch)
 
     # Three heavy calls with session_id=None — none should raise even
@@ -684,6 +705,51 @@ async def test_session_id_none_bypasses_cumulative_tracker(
             model="claude-sonnet-4-6",
             session_id=None,
         )
+    await asyncio.sleep(0.05)
+
+    # No watcher pulses on the bypass path (running_total + ceiling
+    # events alike). The bypass means "this call did not consume the
+    # session's budget at all"; emitting either would mislead the GM panel.
+    bypass_events = [
+        e
+        for e in sock.events
+        if e.get("event_type")
+        in {"session.cost_running_total", "session.cost_ceiling_exceeded"}
+    ]
+    assert bypass_events == [], (
+        "session_id=None MUST NOT emit any session.* watcher events. "
+        f"Got {len(bypass_events)}: {[e['event_type'] for e in bypass_events]}"
+    )
+
+    # A real-session call afterward MUST start from $0.00 cumulative —
+    # NOT $0.909 polluted from the None calls. With ceiling=$0.50, a
+    # single $0.303 heavy call lands at $0.303 (well under $0.50) and
+    # SUCCEEDS. If None had polluted some global counter, this call
+    # would raise pre-flight or on update.
+    sock.events.clear()
+    await client.complete_with_tools(
+        system_blocks=_system_blocks(),
+        messages=_user_msg(),
+        tools=_tools_empty(),
+        model="claude-sonnet-4-6",
+        session_id="fresh-after-bypass",
+    )
+    await asyncio.sleep(0.05)
+    rt_events = [
+        e for e in sock.events if e.get("event_type") == "session.cost_running_total"
+    ]
+    assert len(rt_events) == 1, (
+        "Real-session probe AFTER 3 None-bypass calls MUST emit exactly "
+        "one running_total event reflecting only its own cost. Got "
+        f"{len(rt_events)} events."
+    )
+    assert rt_events[0]["fields"]["cumulative_cost_usd"] == pytest.approx(
+        0.303, abs=1e-3
+    ), (
+        "fresh-after-bypass cumulative MUST be ~$0.303 (its own cost), "
+        "NOT $0.909+ polluted from the None calls. Got "
+        f"cumulative={rt_events[0]['fields']['cumulative_cost_usd']!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

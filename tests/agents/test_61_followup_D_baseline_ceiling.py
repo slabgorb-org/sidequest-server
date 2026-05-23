@@ -77,15 +77,33 @@ def test_baseline_ceilings_are_3x_warmup_floors() -> None:
     If someone changes a warmup floor in 61-4 without updating the
     61-followup-D ceiling, this test catches the asymmetry before the
     next reviewer pass does.
+
+    Two-step assertion (reviewer 2026-05-23 test-analyzer): primary
+    literal value check (catches "someone changes the warmup floor
+    and forgot to update the ceiling derivation"); secondary 3×
+    relationship check (catches "someone changes the multiplier
+    without updating the literal").
     """
+    # Primary — the locked literal values from story §A.
+    assert pytest.approx(0.09) == _BASELINE_COST_CEILING, (
+        f"_BASELINE_COST_CEILING must equal $0.09 (story §A locked "
+        f"value). Got {_BASELINE_COST_CEILING!r}."
+    )
+    assert _BASELINE_INPUT_CEILING == 36_000, (
+        f"_BASELINE_INPUT_CEILING must equal 36_000 (story §A locked "
+        f"value). Got {_BASELINE_INPUT_CEILING!r}."
+    )
+
+    # Secondary — the 3× derivation. If a future change to the warmup
+    # floor breaks the 3× relationship, this catches the asymmetry.
     assert pytest.approx(3.0 * _WARMUP_COST_USD_FLOOR) == _BASELINE_COST_CEILING, (
-        f"_BASELINE_COST_CEILING must equal 3× _WARMUP_COST_USD_FLOOR "
-        f"($0.09 today). Got {_BASELINE_COST_CEILING!r} vs "
+        f"_BASELINE_COST_CEILING must equal 3× _WARMUP_COST_USD_FLOOR. "
+        f"Got {_BASELINE_COST_CEILING!r} vs "
         f"3×{_WARMUP_COST_USD_FLOOR!r}={3.0 * _WARMUP_COST_USD_FLOOR!r}."
     )
     assert _BASELINE_INPUT_CEILING == 3 * _WARMUP_INPUT_TOKENS_FLOOR, (
-        f"_BASELINE_INPUT_CEILING must equal 3× _WARMUP_INPUT_TOKENS_FLOOR "
-        f"(36_000 today). Got {_BASELINE_INPUT_CEILING!r} vs "
+        f"_BASELINE_INPUT_CEILING must equal 3× _WARMUP_INPUT_TOKENS_FLOOR. "
+        f"Got {_BASELINE_INPUT_CEILING!r} vs "
         f"3×{_WARMUP_INPUT_TOKENS_FLOOR!r}={3 * _WARMUP_INPUT_TOKENS_FLOOR!r}."
     )
 

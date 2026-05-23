@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from sidequest.protocol.models import EncounterLocationOverlay, LocationEntity
     from sidequest.server.session_room import RoomRegistry, SessionRoom
 
+from sidequest.agents.anthropic_sdk_client import AnthropicSdkCostCeilingExceeded
 from sidequest.agents.claude_client import ClaudeClient, LlmClient
 from sidequest.agents.orchestrator import TurnContext
 from sidequest.audio.library_backend import LibraryBackend
@@ -3369,6 +3370,17 @@ class WebSocketSessionHandler:
                                 ):
                                     pass
                             result = second_result
+                        except AnthropicSdkCostCeilingExceeded:
+                            # 61-followup-D §C.2: the session-cumulative
+                            # hard kill is TERMINAL — must not be swallowed
+                            # by the reprompt fallback. Without this re-raise
+                            # the player would receive the first attempt's
+                            # narration as if normal, the kill banner would
+                            # never fire, and one full turn slips through
+                            # unannounced (one billable turn AFTER the
+                            # ceiling was crossed). Reviewer 2026-05-23
+                            # silent-failure finding.
+                            raise
                         except Exception:
                             logger.exception(
                                 "confrontation.intent_mismatch_reprompt_failed matched_type=%s",

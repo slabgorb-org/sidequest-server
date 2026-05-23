@@ -86,9 +86,7 @@ def test_redacted_dispatch_excludes_non_recipient_through_production_path(
 ) -> None:
     # Production builder turns the redacted dispatch into a SECRET_NOTE
     # envelope carrying _visibility.visible_to (NO `to` field).
-    [envelope] = build_secret_note_events(
-        [_redacted_dispatch("player:Alice")], turn_id="g:w:p:7"
-    )
+    [envelope] = build_secret_note_events([_redacted_dispatch("player:Alice")], turn_id="g:w:p:7")
     assert envelope.kind == "SECRET_NOTE"
     assert "to" not in json.loads(envelope.payload_json)
 
@@ -115,30 +113,22 @@ def test_redacted_dispatch_excludes_non_recipient_through_production_path(
     # Lie-detector fired once per distinct recipient with the structural
     # source — the GM panel can prove Bob was excluded.
     secret_routed = [
-        e
-        for e in captured_watcher_events
-        if e["fields"].get("field") == "invariant.secret_routed"
+        e for e in captured_watcher_events if e["fields"].get("field") == "invariant.secret_routed"
     ]
     assert len(secret_routed) == 2
     by_player = {e["fields"]["player_id"]: e["fields"] for e in secret_routed}
     assert by_player["player:Alice"]["included"] is True
     assert by_player["player:Bob"]["included"] is False
-    assert all(
-        f["source"] == "invariant:visibility_gated" for f in by_player.values()
-    )
+    assert all(f["source"] == "invariant:visibility_gated" for f in by_player.values())
     assert all(f["malformed"] is False for f in by_player.values())
-    assert all(
-        e["kwargs"].get("component") == "projection" for e in secret_routed
-    )
+    assert all(e["kwargs"].get("component") == "projection" for e in secret_routed)
 
 
 def test_gm_sees_redacted_dispatch_through_production_path() -> None:
     """The GM (lie-detector) must see every secret canonically — the GM
     short-circuit precedes the visibility gate.
     """
-    [envelope] = build_secret_note_events(
-        [_redacted_dispatch("player:Alice")], turn_id="g:w:p:7"
-    )
+    [envelope] = build_secret_note_events([_redacted_dispatch("player:Alice")], turn_id="g:w:p:7")
     filt = ComposedFilter(rules=load_rules_from_yaml_str("rules: []"))
     [(pid, decision)] = _project_frames(
         envelope=envelope,

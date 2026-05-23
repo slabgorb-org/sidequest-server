@@ -266,9 +266,7 @@ def test_circular_alias_chain_rejected_at_load() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_successful_alias_resolution_emits_resolved_span(
-    tmp_path: Path, otel_capture
-) -> None:
+def test_successful_alias_resolution_emits_resolved_span(tmp_path: Path, otel_capture) -> None:
     """AC-3: music.mood_alias_resolved with mood_name, resolved_to, chain_depth."""
     cfg = _audio_config(
         mood_tracks={"tension": ["tension_a.ogg"]},
@@ -284,9 +282,7 @@ def test_successful_alias_resolution_emits_resolved_span(
     assert attrs.get("chain_depth") == 2
 
 
-def test_unresolved_mood_emits_failed_span_with_reason(
-    tmp_path: Path, otel_capture
-) -> None:
+def test_unresolved_mood_emits_failed_span_with_reason(tmp_path: Path, otel_capture) -> None:
     """AC-3: music.mood_alias_failed with reason=broken_chain and
     fallback_mood for an undeclared unknown mood (the only kind that
     reaches runtime unresolved after AC-2 load validation)."""
@@ -463,13 +459,13 @@ def test_unresolved_mood_logs_at_warning_level(
     )
     with caplog.at_level(logging.WARNING):
         _backend(cfg, tmp_path).resolve(_music_cue("court"))
-    assert any(
-        rec.levelno >= logging.WARNING for rec in caplog.records
-    ), "unresolved mood must log at WARNING (drift, not silent)"
+    assert any(rec.levelno >= logging.WARNING for rec in caplog.records), (
+        "unresolved mood must log at WARNING (drift, not silent)"
+    )
 
     caplog.clear()
     with caplog.at_level(logging.WARNING):
         _backend(cfg, tmp_path).resolve(_music_cue("tension"))
-    assert not any(
-        rec.levelno >= logging.WARNING for rec in caplog.records
-    ), "a clean direct hit must not emit a warning"
+    assert not any(rec.levelno >= logging.WARNING for rec in caplog.records), (
+        "a clean direct hit must not emit a warning"
+    )

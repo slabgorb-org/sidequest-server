@@ -111,19 +111,14 @@ def _pack(*defs: _FakeConfrontationDef) -> _FakePack:
 
 
 def test_validate_returns_none_when_action_rewrite_is_none() -> None:
-    pack = _pack(
-        _FakeConfrontationDef("negotiation", "warn", frozenset({"haggle", "bargain"}))
-    )
+    pack = _pack(_FakeConfrontationDef("negotiation", "warn", frozenset({"haggle", "bargain"})))
     assert validate(None, "negotiation", pack, active_encounter=False) is None
 
 
 @pytest.mark.parametrize("intent", ["", "   "])
 def test_validate_returns_none_when_intent_is_empty(intent: str) -> None:
     pack = _pack(_FakeConfrontationDef("negotiation", "warn", frozenset({"haggle"})))
-    assert (
-        validate(_FakeActionRewrite(intent=intent), None, pack, active_encounter=False)
-        is None
-    )
+    assert validate(_FakeActionRewrite(intent=intent), None, pack, active_encounter=False) is None
 
 
 def test_validate_returns_none_when_pack_is_none() -> None:
@@ -150,9 +145,7 @@ def test_validate_returns_none_when_active_encounter() -> None:
 
 
 def test_validate_returns_none_when_declared_matches_inferred() -> None:
-    pack = _pack(
-        _FakeConfrontationDef("negotiation", "warn", frozenset({"haggle", "bargain"}))
-    )
+    pack = _pack(_FakeConfrontationDef("negotiation", "warn", frozenset({"haggle", "bargain"})))
     result = validate(
         _FakeActionRewrite(intent="haggle for horse price"),
         "negotiation",
@@ -177,9 +170,7 @@ def test_validate_returns_none_when_no_type_matches() -> None:
 
 
 def test_validate_flags_single_mismatch() -> None:
-    pack = _pack(
-        _FakeConfrontationDef("negotiation", "warn", frozenset({"haggle", "bargain"}))
-    )
+    pack = _pack(_FakeConfrontationDef("negotiation", "warn", frozenset({"haggle", "bargain"})))
     result = validate(
         _FakeActionRewrite(intent="bargain hard for the horse"),
         None,
@@ -253,10 +244,7 @@ def test_validate_never_raises_on_empty_verb_set() -> None:
     """A def with no derived verbs simply never matches — no raise."""
     pack = _pack(_FakeConfrontationDef("negotiation", "warn", frozenset()))
     assert (
-        validate(
-            _FakeActionRewrite(intent="anything"), None, pack, active_encounter=False
-        )
-        is None
+        validate(_FakeActionRewrite(intent="anything"), None, pack, active_encounter=False) is None
     )
 
 

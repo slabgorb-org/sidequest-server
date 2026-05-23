@@ -248,9 +248,7 @@ def test_mage_chargen_has_empty_class_signature_but_class_moves(cc_pack):
 # themself" are intentionally NOT here — singular-they is pronoun-safe,
 # and in the Cleric prose "they/them/theirs" refer to the unliving, not
 # the PC. ``\b`` boundaries keep "the"/"there"/"where" from matching.
-_GENDERED_PRONOUN_RE = re.compile(
-    r"\b(?:he|she|his|him|her|hers|himself|herself)\b", re.IGNORECASE
-)
+_GENDERED_PRONOUN_RE = re.compile(r"\b(?:he|she|his|him|her|hers|himself|herself)\b", re.IGNORECASE)
 
 
 @pytest.mark.parametrize(

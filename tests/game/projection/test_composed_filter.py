@@ -72,9 +72,7 @@ def test_secret_note_visibility_gated_invariant_routes_to_recipient_only() -> No
     filt = ComposedFilter(rules=load_rules_from_yaml_str("rules: []"))
     env = MessageEnvelope(
         kind="SECRET_NOTE",
-        payload_json=json.dumps(
-            {"subsystem": "probe", "_visibility": {"visible_to": ["alice"]}}
-        ),
+        payload_json=json.dumps({"subsystem": "probe", "_visibility": {"visible_to": ["alice"]}}),
         origin_seq=4,
     )
     assert filt.project(envelope=env, view=_view(), player_id="alice").include is True

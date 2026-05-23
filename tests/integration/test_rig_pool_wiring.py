@@ -105,8 +105,7 @@ def _rig_state_transitions(captured: list[dict]) -> list[dict]:
     return [
         e
         for e in captured
-        if e.get("event_type") == "state_transition"
-        and e.get("component") == "rig"
+        if e.get("event_type") == "state_transition" and e.get("component") == "rig"
     ]
 
 
@@ -123,16 +122,10 @@ async def test_rig_pool_created_reaches_watcher_via_span_route(
     """
     captured = await _setup(monkeypatch, "test-rig-created-wiring")
 
-    _mounted_core(
-        name="Mira", composure=4, composure_max=4, chassis_id="rig_tier_1_prospect"
-    )
+    _mounted_core(name="Mira", composure=4, composure_max=4, chassis_id="rig_tier_1_prospect")
     await asyncio.sleep(0.05)
 
-    typed = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "created"
-    ]
+    typed = [e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "created"]
     assert len(typed) == 1, (
         "expected exactly one created state_transition for component=rig "
         f"(got {len(typed)}: {[e['fields'] for e in typed]})"
@@ -165,14 +158,9 @@ async def test_rig_pool_delta_reaches_watcher_via_span_route(
     core.rig_pool.apply_delta(-2)
     await asyncio.sleep(0.05)
 
-    typed = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "delta"
-    ]
+    typed = [e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "delta"]
     assert len(typed) == 1, (
-        f"expected one delta state_transition (got {len(typed)}: "
-        f"{[e['fields'] for e in typed]})"
+        f"expected one delta state_transition (got {len(typed)}: {[e['fields'] for e in typed]})"
     )
     fields = typed[0]["fields"]
     assert fields["character_id"] == "Mira"
@@ -203,9 +191,7 @@ async def test_rig_pool_zero_crossing_reaches_watcher_via_span_route(
     await asyncio.sleep(0.05)
 
     crossings = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "zero_crossing"
+        e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "zero_crossing"
     ]
     assert len(crossings) == 1, (
         f"expected exactly one zero_crossing state_transition (got {len(crossings)})"
@@ -241,11 +227,7 @@ async def test_rig_pool_zero_crossing_does_not_re_fire_when_already_zero(
     # the test passes trivially when nothing routes — which is the very
     # state pre-53-4 production sits in. Assert the delta event DID
     # publish so the "no re-fire of zero_crossing" claim is meaningful.
-    deltas = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "delta"
-    ]
+    deltas = [e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "delta"]
     assert len(deltas) == 1, (
         "wiring premise: the delta event must publish on every apply_delta "
         f"call (got {len(deltas)}: {[e['fields'] for e in deltas]}) — if "
@@ -261,13 +243,9 @@ async def test_rig_pool_zero_crossing_does_not_re_fire_when_already_zero(
     assert delta_fields["new_current"] == 0
 
     crossings = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "zero_crossing"
+        e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "zero_crossing"
     ]
-    assert crossings == [], (
-        f"zero_crossing must not re-fire on a wrecked rig (got {crossings})"
-    )
+    assert crossings == [], f"zero_crossing must not re-fire on a wrecked rig (got {crossings})"
 
 
 @pytest.mark.asyncio
@@ -299,9 +277,7 @@ async def test_rig_pool_zero_crossing_re_fires_after_repair_and_re_damage(
     await asyncio.sleep(0.05)
 
     crossings = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "zero_crossing"
+        e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "zero_crossing"
     ]
     assert len(crossings) == 1, (
         "second downward zero-crossing after repair must publish exactly "
@@ -335,14 +311,10 @@ async def test_rig_pool_zero_crossing_independent_of_crash_event(
     await asyncio.sleep(0.05)
 
     crossings = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "zero_crossing"
+        e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "zero_crossing"
     ]
     crashes = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "crash_event"
+        e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "crash_event"
     ]
     assert len(crossings) == 1, "zero_crossing must publish on the downward crossing"
     assert crashes == [], (
@@ -392,9 +364,7 @@ async def test_rig_pool_crash_event_reaches_watcher_with_consequences(
     await asyncio.sleep(0.05)
 
     crashes = [
-        e
-        for e in _rig_state_transitions(captured)
-        if e["fields"].get("op") == "crash_event"
+        e for e in _rig_state_transitions(captured) if e["fields"].get("op") == "crash_event"
     ]
     assert len(crashes) == 1, (
         f"expected exactly one crash_event state_transition (got {len(crashes)}: "
@@ -449,6 +419,4 @@ async def test_rig_crash_full_sequence_publishes_ordered_events(
         if e["fields"].get("op") is not None
     ]
     expected = ["created", "delta", "zero_crossing", "crash_event"]
-    assert ops == expected, (
-        f"rig event sequence must be {expected}, got {ops}"
-    )
+    assert ops == expected, f"rig event sequence must be {expected}, got {ops}"

@@ -307,7 +307,8 @@ async def _run_sdk_and_capture_tool_ctx(
                             "type": "tool_use",
                             "id": "toolu_1",
                             "name": tool_name,
-                            "input": tool_input or {"include": ["weather", "demographics", "calendar"]},
+                            "input": tool_input
+                            or {"include": ["weather", "demographics", "calendar"]},
                         },
                     )()
                 ],
@@ -336,9 +337,7 @@ async def _run_sdk_and_capture_tool_ctx(
     monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
 
     await orch.run_narration_turn("look around", context)
-    assert "ctx" in captured, (
-        "tool_dispatch never fired — cannot assert ToolContext wiring"
-    )
+    assert "ctx" in captured, "tool_dispatch never fired — cannot assert ToolContext wiring"
     return captured["ctx"]
 
 
@@ -373,8 +372,7 @@ async def test_sdk_path_builds_toolcontext_with_grounding(
         "the very bug 24-10 closes)."
     )
     assert tool_ctx.world_demographics is _DEMOGRAPHICS, (
-        "ToolContext.world_demographics not wired — narrator improvises "
-        "demographics"
+        "ToolContext.world_demographics not wired — narrator improvises demographics"
     )
     assert tool_ctx.world_calendar is _CALENDAR, (
         "ToolContext.world_calendar not wired — narrator improvises calendar"

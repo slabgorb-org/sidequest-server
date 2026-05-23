@@ -32,9 +32,7 @@ def gen_prim(
     maze-maker's size-derived defaults.
     """
     if width < 3 or height < 3:
-        raise ValueError(
-            f"gen_prim requires width>=3 and height>=3; got {width}x{height}"
-        )
+        raise ValueError(f"gen_prim requires width>=3 and height>=3; got {width}x{height}")
     rng = random.Random(seed)
     if density is None:
         density = max(1, (width + height) // 8)

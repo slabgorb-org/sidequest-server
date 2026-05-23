@@ -280,9 +280,7 @@ async def test_narration_turn_mints_fact_id_when_narrator_omits(
 
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
-            narration=(
-                "Brother Hesh studies the bond [1]. The courier [2] never speaks."
-            ),
+            narration=("Brother Hesh studies the bond [1]. The courier [2] never speaks."),
             is_degraded=False,
             agent_duration_ms=1,
             footnotes=[
@@ -319,7 +317,9 @@ async def test_narration_turn_mints_fact_id_when_narrator_omits(
 
     # And the forwarded Footnotes (carried inside the broadcast NarrationPayload)
     # must each have a non-None fact_id with the "fn-" prefix.
-    forwarded_events = [p for (e, p) in captured if e == "state_transition" and p.get("field") == "footnotes"]
+    forwarded_events = [
+        p for (e, p) in captured if e == "state_transition" and p.get("field") == "footnotes"
+    ]
     assert forwarded_events, "footnotes_forwarded watcher event missing"
     assert forwarded_events[0]["count"] == 2
 

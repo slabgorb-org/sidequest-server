@@ -144,9 +144,7 @@ def location_drift_repaired_span(
         "severity": "warning",
         **extra,
     }
-    with Span.open(
-        SPAN_NARRATOR_LOCATION_DRIFT_REPAIRED, attrs, tracer_override=_tracer
-    ) as span:
+    with Span.open(SPAN_NARRATOR_LOCATION_DRIFT_REPAIRED, attrs, tracer_override=_tracer) as span:
         yield span
 
 

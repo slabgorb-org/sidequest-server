@@ -83,9 +83,7 @@ def _clue(node_id: str, *, red_herring: bool = False) -> ClueNode:
 def _scenario(*, clue_ids: list[str], red_herrings: list[str] | None = None) -> ScenarioState:
     red_set = set(red_herrings or [])
     return ScenarioState(
-        clue_graph=ClueGraph(
-            nodes=[_clue(cid, red_herring=cid in red_set) for cid in clue_ids]
-        ),
+        clue_graph=ClueGraph(nodes=[_clue(cid, red_herring=cid in red_set) for cid in clue_ids]),
         guilty_npc="Erskine",
     )
 
@@ -452,9 +450,7 @@ class TestChainOfCustodyDecay:
         summary = evaluator.evaluate(
             scenario=scenario,
             accused_npc="Erskine",
-            evidence=[
-                _evidence(clue_id="c1", confidence="Certain", chain_of_custody=[])
-            ],
+            evidence=[_evidence(clue_id="c1", confidence="Certain", chain_of_custody=[])],
         )
 
         # Certain (2.0) × 0.7^0 = 2.0 × 1.0 = 2.0
@@ -468,11 +464,7 @@ class TestChainOfCustodyDecay:
         summary = evaluator.evaluate(
             scenario=scenario,
             accused_npc="Erskine",
-            evidence=[
-                _evidence(
-                    clue_id="c1", confidence="Certain", chain_of_custody=["Alice"]
-                )
-            ],
+            evidence=[_evidence(clue_id="c1", confidence="Certain", chain_of_custody=["Alice"])],
         )
 
         # 2.0 × 0.7 = 1.4
@@ -654,8 +646,7 @@ class TestWiring:
         )
 
         assert (
-            SPAN_SCENARIO_ACCUSATION in FLAT_ONLY_SPANS
-            or SPAN_SCENARIO_ACCUSATION in SPAN_ROUTES
+            SPAN_SCENARIO_ACCUSATION in FLAT_ONLY_SPANS or SPAN_SCENARIO_ACCUSATION in SPAN_ROUTES
         ), "SPAN_SCENARIO_ACCUSATION must be registered (flat-only or routed)"
 
     def test_verdict_constants_match_band_strings(self) -> None:

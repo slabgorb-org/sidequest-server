@@ -79,10 +79,7 @@ def _capturing_http(captured: list[dict[str, Any]]):
 
 def test_genre_model_map_builds_genre_keys() -> None:
     mapping = genre_model_map(["caverns_and_claudes"])
-    assert (
-        mapping["genre:caverns_and_claudes"]
-        == "sidequest-narrator-caverns_and_claudes:latest"
-    )
+    assert mapping["genre:caverns_and_claudes"] == "sidequest-narrator-caverns_and_claudes:latest"
 
 
 def test_genre_model_map_preserves_default_hints() -> None:

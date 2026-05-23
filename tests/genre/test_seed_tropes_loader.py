@@ -128,8 +128,7 @@ def test_pack_without_seed_tropes_yaml_loads_with_empty_list(tmp_path: Path):
     )
     if not caverns.exists():
         pytest.skip(
-            "caverns_and_claudes pack not found — cannot verify "
-            "no-seed-file fallback contract."
+            "caverns_and_claudes pack not found — cannot verify no-seed-file fallback contract."
         )
     pack = load_genre_pack(caverns)
     assert hasattr(pack, "seed_tropes"), (

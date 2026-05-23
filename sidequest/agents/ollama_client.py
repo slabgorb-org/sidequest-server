@@ -36,9 +36,7 @@ def _default_http(req: Request) -> Any:
     return urlopen(req, timeout=120)  # noqa: S310 — fixed localhost Ollama URL
 
 
-def genre_model_map(
-    genres: Iterable[str], *, base: dict[str, str] | None = None
-) -> dict[str, str]:
+def genre_model_map(genres: Iterable[str], *, base: dict[str, str] | None = None) -> dict[str, str]:
     """Build an OllamaClient model_map with genre-specialized narrator routes.
 
     Story 48-3 substep (e): genre-tagged requests must resolve to the

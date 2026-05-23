@@ -58,5 +58,3 @@ def test_anthropic_sdk_backend_key_routes_to_sdk_client(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     client = build_llm_client()
     assert isinstance(client, AnthropicSdkClient)
-
-

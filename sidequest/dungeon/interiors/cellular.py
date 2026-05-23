@@ -23,13 +23,10 @@ def gen_cave(
 ) -> list[list[int]]:
     """Cellular-automaton cavern. Same (w,h,seed,density,cutoff,passes) → identical."""
     if width < 3 or height < 3:
-        raise ValueError(
-            f"gen_cave requires width>=3 and height>=3; got {width}x{height}"
-        )
+        raise ValueError(f"gen_cave requires width>=3 and height>=3; got {width}x{height}")
     rng = random.Random(seed)
     grid = [
-        [FLOOR if rng.random() < density else WALL for _ in range(width)]
-        for _ in range(height)
+        [FLOOR if rng.random() < density else WALL for _ in range(width)] for _ in range(height)
     ]
     for x in range(width):
         grid[0][x] = WALL

@@ -10,11 +10,15 @@ def test_shape():
 
 
 def test_deterministic():
-    assert gen_depthfirst(width=21, height=21, seed=3) == gen_depthfirst(width=21, height=21, seed=3)
+    assert gen_depthfirst(width=21, height=21, seed=3) == gen_depthfirst(
+        width=21, height=21, seed=3
+    )
 
 
 def test_seed_variance():
-    assert gen_depthfirst(width=21, height=21, seed=3) != gen_depthfirst(width=21, height=21, seed=4)
+    assert gen_depthfirst(width=21, height=21, seed=3) != gen_depthfirst(
+        width=21, height=21, seed=4
+    )
 
 
 def test_value_domain_and_has_floor():

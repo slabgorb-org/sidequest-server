@@ -82,9 +82,7 @@ class RigComposurePool(BaseModel):
         if self.current < 0:
             raise ValueError(f"current must be >= 0, got {self.current}")
         if self.current > self.max:
-            raise ValueError(
-                f"current ({self.current}) cannot exceed max ({self.max})"
-            )
+            raise ValueError(f"current ({self.current}) cannot exceed max ({self.max})")
         return self
 
     def model_post_init(self, __context: Any) -> None:

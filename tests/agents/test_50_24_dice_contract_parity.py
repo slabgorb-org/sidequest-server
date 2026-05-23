@@ -36,9 +36,7 @@ from sidequest.agents.narrator_prompts import NARRATOR_OUTPUT_ONLY_SDK
 
 # The self-gating loophole, verbatim from output_only_sdk.md:142-144 as it
 # stands pre-fix. AC-1 requires this exact clause be deleted.
-_SELF_GATING_LOOPHOLE = (
-    "When the prose hinges on an uncertain outcome the engine should resolve"
-)
+_SELF_GATING_LOOPHOLE = "When the prose hinges on an uncertain outcome the engine should resolve"
 
 
 def _dice_section() -> str:
@@ -149,8 +147,7 @@ def test_dice_section_enumerates_triggers() -> None:
         f"§7 does not enumerate its trigger conditions; missing {missing!r}. "
         "It must spell out that a check, a save, a damage figure (and any "
         "asserted numeric result for ANY actor) require a tool roll — the "
-        "way §4 enumerates its confrontation triggers. Section text:\n"
-        + _dice_section()
+        "way §4 enumerates its confrontation triggers. Section text:\n" + _dice_section()
     )
 
 

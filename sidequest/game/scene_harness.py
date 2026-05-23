@@ -240,9 +240,7 @@ def hydrate_fixture(*, name: str, fixtures_dir: Path) -> GameSnapshot:
     # without an encounter block keep working. Malformed block →
     # FixtureValidationError per ADR-092 "Failure is loud".
     if "encounter" in data and data.get("encounter") is not None:
-        snapshot_kwargs["encounter"] = _hydrate_encounter(
-            data["encounter"], fixture_name=name
-        )
+        snapshot_kwargs["encounter"] = _hydrate_encounter(data["encounter"], fixture_name=name)
 
     # Hydrate magic_state (story 50-22, ADR-092 follow-on).
     #
@@ -644,8 +642,7 @@ def _hydrate_encounter(raw: Any, *, fixture_name: str) -> StructuredEncounter:
     encounter_type = raw.get("type")
     if not isinstance(encounter_type, str) or not encounter_type.strip():
         raise FixtureValidationError(
-            f"fixture {fixture_name!r}: encounter.type is required and must be a "
-            "non-empty string"
+            f"fixture {fixture_name!r}: encounter.type is required and must be a non-empty string"
         )
 
     def _threshold(key: str) -> Any:

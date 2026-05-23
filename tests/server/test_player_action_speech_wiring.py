@@ -80,7 +80,9 @@ async def test_quoted_dialogue_reaches_party_before_narration(
     await handler2._handle_player_action(
         PlayerActionMessage(
             payload=PlayerActionPayload(
-                action=NonBlankString.model_validate("I keep my hand near my blade and watch the walls."),
+                action=NonBlankString.model_validate(
+                    "I keep my hand near my blade and watch the walls."
+                ),
             ),
             player_id="p2",
         )
@@ -92,10 +94,7 @@ async def test_quoted_dialogue_reaches_party_before_narration(
     speech_msgs = [m for k, m in broadcasts if k == "SPEECH"]
     assert len(speech_msgs) == 1
     assert speech_msgs[0].payload.character_name == "Rux"
-    assert (
-        str(speech_msgs[0].payload.text)
-        == "Open the gate. We carry the seal of Duke Halloran."
-    )
+    assert str(speech_msgs[0].payload.text) == "Open the gate. We carry the seal of Duke Halloran."
 
     # Mara's plain action produced no speech.
     assert all(m.payload.character_name != "Mara" for m in speech_msgs)

@@ -33,10 +33,7 @@ import ast
 from pathlib import Path
 
 _MODULE = (
-    Path(__file__).resolve().parents[2]
-    / "sidequest"
-    / "server"
-    / "websocket_session_handler.py"
+    Path(__file__).resolve().parents[2] / "sidequest" / "server" / "websocket_session_handler.py"
 )
 
 
@@ -83,8 +80,7 @@ def test_out_bound_before_emit_closures_append() -> None:
 
     assert bind_lines, "_chargen_confirmation never binds `out`"
     assert append_lines, (
-        "expected `out.append` call-sites in the emit closures; "
-        "did the closure shape change?"
+        "expected `out.append` call-sites in the emit closures; did the closure shape change?"
     )
 
     first_bind = min(bind_lines)

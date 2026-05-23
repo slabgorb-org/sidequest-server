@@ -54,9 +54,7 @@ class UnknownWeatherZone(KeyError):
     def __init__(self, zone: str, available: tuple[str, ...]) -> None:
         self.zone = zone
         self.available = available
-        super().__init__(
-            f"unknown weather zone '{zone}' (available: {', '.join(available)})"
-        )
+        super().__init__(f"unknown weather zone '{zone}' (available: {', '.join(available)})")
 
     def __str__(self) -> str:
         return self.args[0]
@@ -71,8 +69,7 @@ class UnknownWeatherSeason(KeyError):
         self.zone = zone
         self.available = available
         super().__init__(
-            f"unknown season '{season}' in zone '{zone}' "
-            f"(available: {', '.join(available)})"
+            f"unknown season '{season}' in zone '{zone}' (available: {', '.join(available)})"
         )
 
     def __str__(self) -> str:
@@ -130,8 +127,7 @@ class SeasonPalette(BaseModel):
             )
         if self.temp_range[0] > self.temp_range[1]:
             raise ValueError(
-                f"temp_range is [{self.temp_range[0]}, {self.temp_range[1]}] — "
-                f"min must be <= max"
+                f"temp_range is [{self.temp_range[0]}, {self.temp_range[1]}] — min must be <= max"
             )
         return self
 

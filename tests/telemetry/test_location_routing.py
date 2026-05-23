@@ -43,11 +43,9 @@ def test_location_routes_target_state_transition_under_location_component() -> N
             continue
         found = True
         assert route.event_type == "state_transition", (
-            f"{name} routes to event_type={route.event_type!r}; "
-            "expected 'state_transition'"
+            f"{name} routes to event_type={route.event_type!r}; expected 'state_transition'"
         )
         assert route.component == "location", (
-            f"{name} routes to component={route.component!r}; "
-            "expected 'location'"
+            f"{name} routes to component={route.component!r}; expected 'location'"
         )
     assert found, "no location.* routes registered — location.py import missing?"

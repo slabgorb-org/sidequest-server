@@ -136,9 +136,9 @@ async def test_llm_timeout_declines_loudly_does_not_propagate():
 @pytest.mark.asyncio
 async def test_llm_connection_error_declines_loudly():
     # Spec §6: "Resolver LLM call fails ... → outcome=resolver_error."
-    res = await AsideResolver(
-        llm=_RaisingLLM(ConnectionError("connection reset by peer"))
-    ).resolve(question="how does Edge work?", read_view=_view())
+    res = await AsideResolver(llm=_RaisingLLM(ConnectionError("connection reset by peer"))).resolve(
+        question="how does Edge work?", read_view=_view()
+    )
     assert res.outcome == "resolver_error"
     assert res.grounded_on == ()
     assert res.answer
@@ -150,15 +150,14 @@ async def test_resolver_failure_emits_error_log(caplog):
     # panel / ops can see it (CLAUDE.md OTEL principle). The resolver_error
     # path is currently silent — this fails RED until a logger.error lands.
     with caplog.at_level(logging.ERROR):
-        res = await AsideResolver(
-            llm=_RaisingLLM(TimeoutError("boom"))
-        ).resolve(question="anything", read_view=_view())
+        res = await AsideResolver(llm=_RaisingLLM(TimeoutError("boom"))).resolve(
+            question="anything", read_view=_view()
+        )
     assert res.outcome == "resolver_error"
     error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert error_records, "spec §6 requires an ERROR-level log on resolver failure"
     assert any(
-        "aside" in r.name.lower() or "aside" in r.getMessage().lower()
-        for r in error_records
+        "aside" in r.name.lower() or "aside" in r.getMessage().lower() for r in error_records
     ), "the ERROR log must be attributable to the aside resolver"
 
 

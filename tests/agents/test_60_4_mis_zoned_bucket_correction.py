@@ -43,16 +43,12 @@ def _section(
     return PromptSection(name=name, category=category, zone=zone, content=content)
 
 
-def _find_section_payload(
-    payload: list[dict], section_name: str
-) -> dict:
+def _find_section_payload(payload: list[dict], section_name: str) -> dict:
     for zone in payload:
         for s in zone["sections"]:
             if s["name"] == section_name:
                 return s
-    raise AssertionError(
-        f"section {section_name!r} not found in payload {payload!r}"
-    )
+    raise AssertionError(f"section {section_name!r} not found in payload {payload!r}")
 
 
 # --- AC-4: User-bucket state section in cached zone is NOT mis_zoned --------
@@ -126,8 +122,7 @@ def test_state_section_in_uncached_zone_is_not_miszoned() -> None:
     )
     row = _find_section_payload(payload, "npc_roster")
     assert row["mis_zoned"] is False, (
-        f"state section in Valley (uncached) must never be mis_zoned; "
-        f"got {row['mis_zoned']!r}"
+        f"state section in Valley (uncached) must never be mis_zoned; got {row['mis_zoned']!r}"
     )
 
 
@@ -265,9 +260,7 @@ def test_mis_zoned_is_not_pure_zone_and_category_only() -> None:
             )
         ]
     )
-    row = _find_section_payload(
-        payload, "totally_made_up_user_bucket_state_section_xyz"
-    )
+    row = _find_section_payload(payload, "totally_made_up_user_bucket_state_section_xyz")
     assert row["mis_zoned"] is False, (
         "the OLD shape (zone_cached AND category=='state') returns True "
         "here; the corrected shape returns False because bucket is User. "

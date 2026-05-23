@@ -18,11 +18,31 @@ from typing import Any, Literal, Protocol
 
 # Conservative stopword set. The goal is to drop function words that add
 # no semantic signal, not to do NLP.
-_STOPWORDS: frozenset[str] = frozenset({
-    "the", "a", "an", "to", "for", "with", "in", "on", "at", "of",
-    "and", "or", "but", "is", "are", "was", "were", "be", "been",
-    "by", "from",
-})
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "to",
+        "for",
+        "with",
+        "in",
+        "on",
+        "at",
+        "of",
+        "and",
+        "or",
+        "but",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "by",
+        "from",
+    }
+)
 
 _TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 

@@ -113,6 +113,7 @@ def test_span_constants_routed() -> None:
         SPAN_CONFRONTATION_INTENT_MISMATCH_RESOLVED,
         SPAN_ROUTES,
     )
+
     for name in (
         SPAN_CONFRONTATION_INTENT_MISMATCH,
         SPAN_CONFRONTATION_INTENT_MISMATCH_RESOLVED,

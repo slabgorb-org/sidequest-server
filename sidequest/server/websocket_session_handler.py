@@ -3362,6 +3362,7 @@ class WebSocketSessionHandler:
                                 from sidequest.telemetry.spans import (
                                     confrontation_intent_mismatch_resolved_span,
                                 )
+
                                 with confrontation_intent_mismatch_resolved_span(
                                     matched_type=_matched,
                                 ):
@@ -3369,13 +3370,13 @@ class WebSocketSessionHandler:
                             result = second_result
                         except Exception:
                             logger.exception(
-                                "confrontation.intent_mismatch_reprompt_failed "
-                                "matched_type=%s",
+                                "confrontation.intent_mismatch_reprompt_failed matched_type=%s",
                                 _matched,
                             )
                             from sidequest.telemetry.spans import (
                                 confrontation_intent_mismatch_reprompt_failed_span,
                             )
+
                             with confrontation_intent_mismatch_reprompt_failed_span(
                                 matched_type=_matched,
                             ):
@@ -4656,9 +4657,7 @@ class WebSocketSessionHandler:
                                 "world": sd.world_slug,
                                 "current_region": snapshot.current_region or "",
                                 "prior_current_region": prior_current_region or "",
-                                "current_region_present": bool(
-                                    snapshot.current_region
-                                ),
+                                "current_region_present": bool(snapshot.current_region),
                                 "region_changed": _region_changed,
                             },
                             component="location",
@@ -5043,7 +5042,9 @@ class WebSocketSessionHandler:
                         player_id=sd.player_id,
                         player_input=action,
                         classified_intent=(
-                            (getattr(getattr(result, "action_rewrite", None), "intent", "") or "").strip()
+                            (
+                                getattr(getattr(result, "action_rewrite", None), "intent", "") or ""
+                            ).strip()
                             or "unspecified"
                         ),
                         agent_name="narrator",

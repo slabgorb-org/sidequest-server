@@ -57,17 +57,19 @@ def test_intent_verbs_rejects_non_string_elements() -> None:
 
 
 def test_intent_verb_set_derived_from_label_and_beats() -> None:
-    cdef = ConfrontationDef.model_validate({
-        "type": "negotiation",
-        "label": "Tense Negotiation",
-        "category": "social",
-        "player_metric": {"name": "leverage", "threshold": 10},
-        "opponent_metric": {"name": "patience", "threshold": 10},
-        "beats": [
-            {"id": "haggle", "label": "Haggle the Price", "stat_check": "cha", "kind": "push"},
-            {"id": "offer", "label": "Make an Offer", "stat_check": "cha", "kind": "push"},
-        ],
-    })
+    cdef = ConfrontationDef.model_validate(
+        {
+            "type": "negotiation",
+            "label": "Tense Negotiation",
+            "category": "social",
+            "player_metric": {"name": "leverage", "threshold": 10},
+            "opponent_metric": {"name": "patience", "threshold": 10},
+            "beats": [
+                {"id": "haggle", "label": "Haggle the Price", "stat_check": "cha", "kind": "push"},
+                {"id": "offer", "label": "Make an Offer", "stat_check": "cha", "kind": "push"},
+            ],
+        }
+    )
     verbs = cdef.intent_verb_set
     assert "negotiation" in verbs  # 'negotiation' does not end in -ing/-ed/-s
     assert "tense" in verbs
@@ -80,28 +82,32 @@ def test_intent_verb_set_derived_from_label_and_beats() -> None:
 
 
 def test_intent_verb_set_unions_optional_intent_verbs() -> None:
-    cdef = ConfrontationDef.model_validate({
-        "type": "negotiation",
-        "label": "Tense Negotiation",
-        "category": "social",
-        "player_metric": {"name": "leverage", "threshold": 10},
-        "opponent_metric": {"name": "patience", "threshold": 10},
-        "beats": [{"id": "haggle", "label": "Haggle", "stat_check": "cha", "kind": "push"}],
-        "intent_verbs": ["bargain", "barter", "deal"],
-    })
+    cdef = ConfrontationDef.model_validate(
+        {
+            "type": "negotiation",
+            "label": "Tense Negotiation",
+            "category": "social",
+            "player_metric": {"name": "leverage", "threshold": 10},
+            "opponent_metric": {"name": "patience", "threshold": 10},
+            "beats": [{"id": "haggle", "label": "Haggle", "stat_check": "cha", "kind": "push"}],
+            "intent_verbs": ["bargain", "barter", "deal"],
+        }
+    )
     assert {"bargain", "barter", "deal"} <= cdef.intent_verb_set
     assert "haggle" in cdef.intent_verb_set
 
 
 def test_intent_verb_set_empty_when_label_is_only_stopwords() -> None:
-    cdef = ConfrontationDef.model_validate({
-        "type": "x",
-        "label": "the a",
-        "category": "social",
-        "player_metric": {"name": "m", "threshold": 1},
-        "opponent_metric": {"name": "m", "threshold": 1},
-        "beats": [{"id": "b", "label": "to", "stat_check": "cha", "kind": "push"}],
-    })
+    cdef = ConfrontationDef.model_validate(
+        {
+            "type": "x",
+            "label": "the a",
+            "category": "social",
+            "player_metric": {"name": "m", "threshold": 1},
+            "opponent_metric": {"name": "m", "threshold": 1},
+            "beats": [{"id": "b", "label": "to", "stat_check": "cha", "kind": "push"}],
+        }
+    )
     # 'x' from type is NOT included — only label + beats[].label + intent_verbs.
     assert cdef.intent_verb_set == frozenset()
 
@@ -110,26 +116,30 @@ def test_rules_intent_verbs_by_type_accessor() -> None:
     """RulesConfig.intent_verbs_by_type maps confrontation_type -> verb set."""
     from sidequest.genre.models.rules import RulesConfig
 
-    rules = RulesConfig.model_validate({
-        "confrontations": [
-            {
-                "type": "negotiation",
-                "label": "Haggle",
-                "category": "social",
-                "player_metric": {"name": "a", "threshold": 1},
-                "opponent_metric": {"name": "b", "threshold": 1},
-                "beats": [{"id": "b1", "label": "Bargain", "stat_check": "cha", "kind": "push"}],
-            },
-            {
-                "type": "combat",
-                "label": "Fight",
-                "category": "combat",
-                "player_metric": {"name": "a", "threshold": 1},
-                "opponent_metric": {"name": "b", "threshold": 1},
-                "beats": [{"id": "b1", "label": "Strike", "stat_check": "str", "kind": "push"}],
-            },
-        ],
-    })
+    rules = RulesConfig.model_validate(
+        {
+            "confrontations": [
+                {
+                    "type": "negotiation",
+                    "label": "Haggle",
+                    "category": "social",
+                    "player_metric": {"name": "a", "threshold": 1},
+                    "opponent_metric": {"name": "b", "threshold": 1},
+                    "beats": [
+                        {"id": "b1", "label": "Bargain", "stat_check": "cha", "kind": "push"}
+                    ],
+                },
+                {
+                    "type": "combat",
+                    "label": "Fight",
+                    "category": "combat",
+                    "player_metric": {"name": "a", "threshold": 1},
+                    "opponent_metric": {"name": "b", "threshold": 1},
+                    "beats": [{"id": "b1", "label": "Strike", "stat_check": "str", "kind": "push"}],
+                },
+            ],
+        }
+    )
     mapping = rules.intent_verbs_by_type
     assert "negotiation" in mapping
     assert "combat" in mapping

@@ -33,10 +33,7 @@ def generate_interior(
 ) -> Grid:
     """Generate one interior grid. Deterministic for identical inputs."""
     if algorithm not in ALGORITHMS:
-        raise ValueError(
-            f"unknown interior algorithm {algorithm!r}; "
-            f"known: {sorted(ALGORITHMS)}"
-        )
+        raise ValueError(f"unknown interior algorithm {algorithm!r}; known: {sorted(ALGORITHMS)}")
     fn = ALGORITHMS[algorithm]
     grid = fn(width=width, height=height, seed=seed, **(params or {}))
     if braid_ratio > 0.0:

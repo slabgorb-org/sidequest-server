@@ -16,9 +16,7 @@ def test_consume_returns_empty_when_queue_empty() -> None:
 
 
 def test_consume_renders_and_clears() -> None:
-    snap = GameSnapshot(
-        next_turn_directives=["Open the negotiation.", "Open the duel."]
-    )
+    snap = GameSnapshot(next_turn_directives=["Open the negotiation.", "Open the duel."])
     rendered = _consume_next_turn_directives(snap)
     assert "Open the negotiation." in rendered
     assert "Open the duel." in rendered

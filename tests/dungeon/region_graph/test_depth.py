@@ -198,7 +198,7 @@ def test_depth_report_as_dict_is_stable_span_contract():
         "depth_mean",
     }
     assert d["regions_scored"] == 3  # e, a, b
-    assert d["depth_min"] == 0.0     # entrance
+    assert d["depth_min"] == 0.0  # entrance
     assert d["depth_max"] == report.depth_max
 
 

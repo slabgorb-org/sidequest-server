@@ -58,8 +58,7 @@ def load_pack_weather(pack_dir: Path | str) -> ClimateRulesFile | None:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(
-            f"weather.yaml at {path} did not parse as a mapping "
-            f"(got {type(raw).__name__})"
+            f"weather.yaml at {path} did not parse as a mapping (got {type(raw).__name__})"
         )
     # model_validate raises pydantic.ValidationError on schema violation —
     # surfaced loud at bootstrap, exactly the intent of AC8.
@@ -96,7 +95,6 @@ def _load_world_mapping(world_dir: Path | str, filename: str) -> dict[str, Any] 
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(
-            f"{filename} at {path} did not parse as a mapping "
-            f"(got {type(raw).__name__})"
+            f"{filename} at {path} did not parse as a mapping (got {type(raw).__name__})"
         )
     return raw

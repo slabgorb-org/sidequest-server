@@ -212,13 +212,10 @@ class PlayerActionHandler:
             # degrade like a real action if acting-name resolution raises,
             # not crash the handler.
             try:
-                char_name = _resolve_acting_character_name(
-                    sd_aside, session._room
-                )
+                char_name = _resolve_acting_character_name(sd_aside, session._room)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "session.aside_acting_name_resolve_failed error=%s "
-                    "falling_back_to=%s",
+                    "session.aside_acting_name_resolve_failed error=%s falling_back_to=%s",
                     exc,
                     sd_aside.player_name,
                 )
@@ -228,9 +225,7 @@ class PlayerActionHandler:
                 None,
             )
             character_summary = (
-                f"{core.name}: {core.description}"
-                if core is not None
-                else char_name
+                f"{core.name}: {core.description}" if core is not None else char_name
             )
             inventory: list[str] = []
             if core is not None:
@@ -243,9 +238,7 @@ class PlayerActionHandler:
                 or "(location unstated)"
             )
             confrontations = (
-                sd_aside.genre_pack.rules.confrontations
-                if sd_aside.genre_pack.rules
-                else []
+                sd_aside.genre_pack.rules.confrontations if sd_aside.genre_pack.rules else []
             )
             rulebook = (
                 f"Genre {sd_aside.genre_slug}. Confrontations: "
@@ -253,9 +246,7 @@ class PlayerActionHandler:
                 if confrontations
                 else f"Genre {sd_aside.genre_slug}."
             )
-            recent = " ".join(
-                e.content for e in snap.narrative_log[-4:] if e.content
-            )
+            recent = " ".join(e.content for e in snap.narrative_log[-4:] if e.content)
             read_view = AsideReadView(
                 character_summary=character_summary,
                 region_summary=region,
@@ -272,9 +263,7 @@ class PlayerActionHandler:
                 span.set_attribute("outcome", res.outcome)
                 span.set_attribute("grounded_on", ",".join(res.grounded_on))
                 span.set_attribute("model", "haiku")
-                span.set_attribute(
-                    "latency_ms", int((time.monotonic() - t0) * 1000)
-                )
+                span.set_attribute("latency_ms", int((time.monotonic() - t0) * 1000))
             answer_msg = AsideAnswerMessage(
                 payload=AsideAnswerPayload(
                     asker_id=sd_aside.player_id or "",

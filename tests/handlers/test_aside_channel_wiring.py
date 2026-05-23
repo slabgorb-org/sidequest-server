@@ -46,9 +46,7 @@ async def test_aside_is_out_of_band_in_mp():
 
     # Carl submits a real action; Katia fires an aside mid-round; Donut pending.
     await submit(room, "Carl", "I open the door", aside=False)
-    aside_out = await submit(
-        room, "Katia", "can I wade or must I be carried?", aside=True
-    )
+    aside_out = await submit(room, "Katia", "can I wade or must I be carried?", aside=True)
 
     # (1)(2)(3)(4) no turn record / no world advance
     assert room.narrative_log_count() == nlog_before

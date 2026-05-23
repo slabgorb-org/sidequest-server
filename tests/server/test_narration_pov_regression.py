@@ -147,9 +147,7 @@ def test_legacy_payload_without_visibility_sidecar_unchanged(
     # filter peer cards). No swap.
     assert q_donut.qsize() == 1
     donut_text = q_donut.get_nowait().payload["text"]
-    assert donut_text == canonical, (
-        f"legacy payload to peer must be unchanged; got {donut_text!r}"
-    )
+    assert donut_text == canonical, f"legacy payload to peer must be unchanged; got {donut_text!r}"
 
 
 # ---------------------------------------------------------------------------

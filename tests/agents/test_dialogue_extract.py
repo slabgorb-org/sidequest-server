@@ -23,9 +23,7 @@ from sidequest.agents.pov_swap import extract_spoken_lines
 
 def test_extracts_single_quoted_line_dropping_stage_direction() -> None:
     action = 'I walk up to the guard and say "Hello, traveler. What news from the north?"'
-    assert extract_spoken_lines(action) == [
-        "Hello, traveler. What news from the north?"
-    ]
+    assert extract_spoken_lines(action) == ["Hello, traveler. What news from the north?"]
 
 
 def test_extracts_multiple_quoted_lines_in_order() -> None:

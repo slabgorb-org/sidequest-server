@@ -360,9 +360,7 @@ async def test_marker_migrates_to_newest_message_across_iterations(
     # The iter-1 tool_result (now older) must have had its marker cleared.
     # In the iter-3 payload the iter-1 tool_result is messages[-3] (initial
     # user + 2× assistant+user pairs minus the latest user = idx -3).
-    older_user_messages = [
-        m for m in iter3["messages"][:-1] if m.get("role") == "user"
-    ]
+    older_user_messages = [m for m in iter3["messages"][:-1] if m.get("role") == "user"]
     for m in older_user_messages:
         content = m.get("content")
         if not isinstance(content, list):

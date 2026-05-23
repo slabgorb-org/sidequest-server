@@ -88,9 +88,7 @@ climate_zones:
 # ---------------------------------------------------------------------------
 
 
-def test_generate_emits_weather_proposed_span(
-    minimal_weather_yaml: Path, otel_capture
-) -> None:
+def test_generate_emits_weather_proposed_span(minimal_weather_yaml: Path, otel_capture) -> None:
     """Calling ``generate(zone, season, seed)`` fires the proposed span
     on the live tracer with attributes matching the returned state."""
     from sidequest.game.weather import WeatherGenerator
@@ -129,9 +127,7 @@ def test_generate_emits_one_span_per_call_not_per_construction(
     gen = WeatherGenerator(minimal_weather_yaml)
     # Constructor-only — should produce zero proposed spans.
     proposed = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_proposed"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_proposed"
     ]
     assert proposed == []
 
@@ -140,9 +136,7 @@ def test_generate_emits_one_span_per_call_not_per_construction(
     gen.generate("testzone", "summer", seed=3)
 
     proposed = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_proposed"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_proposed"
     ]
     assert len(proposed) == 3, "one proposed span per generate() call"
 
@@ -160,9 +154,7 @@ def test_generate_proposed_span_records_special_event(
     assert state.special_event == "forced_blizzard"  # sanity: setup OK
 
     [proposed] = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_proposed"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_proposed"
     ]
     attrs = proposed.attributes or {}
     assert attrs["special_event"] == "forced_blizzard"
@@ -190,9 +182,7 @@ def test_generate_emits_proposed_even_when_caller_does_not_consume(
     gen.generate("testzone", "summer", seed=99)
 
     proposed = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_proposed"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_proposed"
     ]
     assert len(proposed) == 1
 
@@ -211,8 +201,6 @@ def test_generate_raises_does_not_emit_proposed_span(
         gen.generate("not_a_zone", "winter", seed=42)
 
     proposed = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_proposed"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_proposed"
     ]
     assert proposed == [], "failed generate() must not emit a proposed span"

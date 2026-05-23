@@ -122,13 +122,10 @@ async def test_weather_used_span_fires_when_weather_requested_and_wired(
     assert result.is_error is False
 
     used = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_used"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_used"
     ]
     assert len(used) == 1, (
-        f"expected one weather_used span, got {len(used)} "
-        f"(all spans: {_names(otel_capture)})"
+        f"expected one weather_used span, got {len(used)} (all spans: {_names(otel_capture)})"
     )
     attrs = used[0].attributes or {}
     assert attrs["zone"] == "glen_floor"
@@ -159,9 +156,7 @@ async def test_weather_used_span_does_not_fire_when_section_excluded(
         ctx,
     )
     used = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_used"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_used"
     ]
     assert used == [], "weather_used must not fire when 'weather' is not in include"
 
@@ -182,9 +177,7 @@ async def test_weather_used_span_does_not_fire_when_session_unwired(
         ctx,
     )
     used = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_used"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_used"
     ]
     assert used == [], "weather_used must not fire when ctx.weather_state is None"
 
@@ -207,9 +200,7 @@ async def test_weather_used_span_does_not_fire_on_empty_include(
         ctx,
     )
     used = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "world_grounding.weather_used"
+        s for s in otel_capture.get_finished_spans() if s.name == "world_grounding.weather_used"
     ]
     assert used == []
 
@@ -308,9 +299,7 @@ async def test_existing_tool_grounding_present_attrs_still_fire_on_dispatch_span
         ctx,
     )
     dispatch = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "tool.read.get_world_grounding"
+        s for s in otel_capture.get_finished_spans() if s.name == "tool.read.get_world_grounding"
     ]
     assert dispatch, "dispatch span (tool.read.get_world_grounding) must still fire"
     attrs = dict(dispatch[-1].attributes or {})

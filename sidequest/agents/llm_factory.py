@@ -79,9 +79,7 @@ class _AsideLlm:
             messages=[{"role": "user", "content": user}],
             max_tokens=512,
         )
-        return "".join(
-            block.text for block in resp.content if block.type == "text"
-        )
+        return "".join(block.text for block in resp.content if block.type == "text")
 
 
 def build_aside_llm() -> _AsideLlm:

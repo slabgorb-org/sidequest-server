@@ -258,9 +258,7 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
 
     # ── AC4: the watcher event for the GM panel includes a runtime/static
     # discriminator so Sebastien can tell which path produced the PNG. ──
-    grid_emit_events = [
-        attrs for ev, attrs in watcher_events if ev == "tactical_grid.emitted"
-    ]
+    grid_emit_events = [attrs for ev, attrs in watcher_events if ev == "tactical_grid.emitted"]
     assert len(grid_emit_events) == 1, (
         f"Expected exactly 1 'tactical_grid.emitted' watcher event; "
         f"got {len(grid_emit_events)}. Events seen: "
@@ -293,8 +291,7 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
         f"render a broken image."
     )
     assert rendered[0].name == f"{region_id}.cavern.png", (
-        f"Sidecar filename mismatch: expected {region_id}.cavern.png, "
-        f"got {rendered[0].name}"
+        f"Sidecar filename mismatch: expected {region_id}.cavern.png, got {rendered[0].name}"
     )
 
 

@@ -194,9 +194,7 @@ def test_known_fact_model_validate_rejects_legacy_confirmed_dict() -> None:
     which is exactly the OTEL-lie-detector posture required by ADR-100.
     """
     with pytest.raises(ValidationError):
-        KnownFact.model_validate(
-            {"content": "x", "confidence": "confirmed"}
-        )
+        KnownFact.model_validate({"content": "x", "confidence": "confirmed"})
 
 
 def test_known_fact_model_validate_rejects_arbitrary_confidence_dict() -> None:

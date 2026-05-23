@@ -530,8 +530,7 @@ class AnthropicSdkClient:
             content = msg.get("content")
             if isinstance(content, list):
                 new_msg["content"] = [
-                    dict(block) if isinstance(block, dict) else block
-                    for block in content
+                    dict(block) if isinstance(block, dict) else block for block in content
                 ]
             else:
                 new_msg["content"] = content

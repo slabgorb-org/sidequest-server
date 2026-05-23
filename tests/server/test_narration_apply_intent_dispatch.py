@@ -45,10 +45,12 @@ def _snapshot() -> GameSnapshot:
 
 def _capture(spans_sink: list[dict]):
     """Return a fake context manager that records kwargs in spans_sink."""
+
     @contextmanager
     def fake_span(**kwargs):
         spans_sink.append(kwargs)
         yield None
+
     return fake_span
 
 
@@ -107,9 +109,7 @@ def test_soft_suggest_severity_enqueues_directive(pack, monkeypatch) -> None:
     assert spans[0]["severity"] == "soft_suggest"
 
 
-def test_reprompt_severity_returns_request_does_not_apply_narration(
-    pack, monkeypatch
-) -> None:
+def test_reprompt_severity_returns_request_does_not_apply_narration(pack, monkeypatch) -> None:
     import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
@@ -195,6 +195,8 @@ def test_non_narration_turn_result_classifies_as_unspecified(pack) -> None:
 # Internal helper — keeps test bodies terse
 # ---------------------------------------------------------------------------
 
+
 def _apply(snap, result, player, **kwargs):
     from sidequest.server import narration_apply
+
     return narration_apply._apply_narration_result_to_snapshot(snap, result, player, **kwargs)

@@ -133,8 +133,7 @@ def test_load_world_demographics_returns_dict_with_known_fields(
     `recurring_cast`)."""
     demographics = load_world_demographics(glenross_world_dir)
     assert demographics is not None, (
-        "glenross/demographics.yaml exists — loader must return a populated "
-        "dict, not None"
+        "glenross/demographics.yaml exists — loader must return a populated dict, not None"
     )
     assert isinstance(demographics, dict), (
         f"loader must return a dict, got {type(demographics).__name__}"
@@ -153,12 +152,9 @@ def test_load_world_calendar_returns_dict_when_present(
     a non-None dict."""
     calendar = load_world_calendar(glenross_world_dir)
     assert calendar is not None, (
-        "glenross/calendar.yaml exists — loader must return a populated "
-        "dict, not None"
+        "glenross/calendar.yaml exists — loader must return a populated dict, not None"
     )
-    assert isinstance(calendar, dict), (
-        f"loader must return a dict, got {type(calendar).__name__}"
-    )
+    assert isinstance(calendar, dict), f"loader must return a dict, got {type(calendar).__name__}"
 
 
 # ---------------------------------------------------------------------------

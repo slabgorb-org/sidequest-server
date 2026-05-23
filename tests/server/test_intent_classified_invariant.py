@@ -24,10 +24,7 @@ def test_no_classified_intent_unknown_in_production_source() -> None:
         capture_output=True,
         text=True,
     )
-    offenders = [
-        line for line in result.stdout.splitlines()
-        if "classified_intent" in line
-    ]
+    offenders = [line for line in result.stdout.splitlines() if "classified_intent" in line]
     assert offenders == [], (
         f"Production code still hardcodes classified_intent='unknown': {offenders}"
     )

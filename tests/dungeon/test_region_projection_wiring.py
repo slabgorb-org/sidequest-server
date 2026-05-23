@@ -106,9 +106,7 @@ async def _attach(store: Any, snap: Any, monkeypatch: pytest.MonkeyPatch) -> Any
     from sidequest.dungeon import session_integration
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
-    monkeypatch.setattr(
-        session_integration, "build_llm_client", _reflecting_sdk_client
-    )
+    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
     return await session_integration.attach_dungeon_to_session(
         store=store,
         snapshot=snap,
@@ -134,9 +132,7 @@ async def test_projection_reaches_narrator_prompt_with_real_move_vocab(
     from sidequest.game.session import GameSnapshot
 
     store = SqliteStore.open_in_memory()
-    snap = GameSnapshot(
-        genre_slug="caverns_and_claudes", world_slug="beneath_sunden"
-    )
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     handle = None
     try:
         handle = await _attach(store, snap, monkeypatch)
@@ -166,18 +162,16 @@ async def test_projection_reaches_narrator_prompt_with_real_move_vocab(
             turn_number=3,
             region_projection=proj,
         )
-        prompt_text, _registry = await orch.build_narrator_prompt(
-            "look around", ctx
-        )
+        prompt_text, _registry = await orch.build_narrator_prompt("look around", ctx)
 
         assert "YOU ARE HERE" in prompt_text
         assert "entrance" in prompt_text
         assert "MOVEMENT RULE" in prompt_text
         # The constrained move vocabulary: a REAL adjacent id is in-prompt
         # so the narrator's current_region patch targets a valid node.
-        assert any(
-            e.to_region_id in prompt_text for e in proj.exits
-        ), "no real adjacent region id reached the narrator prompt"
+        assert any(e.to_region_id in prompt_text for e in proj.exits), (
+            "no real adjacent region id reached the narrator prompt"
+        )
     finally:
         await session_integration.detach_dungeon_from_session(handle)
 
@@ -198,18 +192,14 @@ async def test_project_current_region_emits_span_and_skips_other_world(
     )
 
     store = SqliteStore.open_in_memory()
-    snap = GameSnapshot(
-        genre_slug="caverns_and_claudes", world_slug="beneath_sunden"
-    )
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     exporter, _provider, real_tracer = _otel_in_memory()
     original = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
     handle = None
     try:
         handle = await _attach(store, snap, monkeypatch)
-        sd = _FakeSessionData(
-            store, genre="caverns_and_claudes", world="beneath_sunden"
-        )
+        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
         proj = _project_current_region(sd, snap)
         assert proj is not None and proj.region_id == "entrance"
 
@@ -218,16 +208,12 @@ async def test_project_current_region_emits_span_and_skips_other_world(
         assert _project_current_region(sd_other, snap) is None
 
         spans = [
-            s
-            for s in exporter.get_finished_spans()
-            if s.name == SPAN_DUNGEON_REGION_PROJECTION
+            s for s in exporter.get_finished_spans() if s.name == SPAN_DUNGEON_REGION_PROJECTION
         ]
         outcomes = {(s.attributes or {}).get("outcome") for s in spans}
         assert "projected" in outcomes
         assert "no_dungeon" in outcomes
-        projected = next(
-            s for s in spans if (s.attributes or {}).get("outcome") == "projected"
-        )
+        projected = next(s for s in spans if (s.attributes or {}).get("outcome") == "projected")
         assert (projected.attributes or {}).get("region_id") == "entrance"
         assert (projected.attributes or {}).get("exit_count", 0) >= 1
     finally:
@@ -254,9 +240,7 @@ async def test_resumed_save_self_heals_blank_current_region(
     )
 
     store = SqliteStore.open_in_memory()
-    snap = GameSnapshot(
-        genre_slug="caverns_and_claudes", world_slug="beneath_sunden"
-    )
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     exporter, _provider, real_tracer = _otel_in_memory()
     original = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
@@ -267,9 +251,7 @@ async def test_resumed_save_self_heals_blank_current_region(
         snap.current_region = ""
         snap.discovered_regions = []
 
-        sd = _FakeSessionData(
-            store, genre="caverns_and_claudes", world="beneath_sunden"
-        )
+        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
         proj = _project_current_region(sd, snap)
 
         assert proj is not None, "self-heal failed — narrator would improvise"
@@ -329,18 +311,14 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
     phantom = "windswept_overlook_of_lost_names"
 
     store = SqliteStore.open_in_memory()
-    snap = GameSnapshot(
-        genre_slug="caverns_and_claudes", world_slug="beneath_sunden"
-    )
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     exporter, _provider, real_tracer = _otel_in_memory()
     original = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
     handle = None
     try:
         handle = await _attach(store, snap, monkeypatch)
-        sd = _FakeSessionData(
-            store, genre="caverns_and_claudes", world="beneath_sunden"
-        )
+        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
         orch = Orchestrator(client=_CannedClient())
 
         # Three sequential turns. Each turn re-stamps the persisted static
@@ -358,8 +336,7 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
                 "narrator would improvise geography this turn"
             )
             assert proj.region_id == "entrance", (
-                f"turn {turn}: expected heal to graph entrance, "
-                f"got {proj.region_id!r}"
+                f"turn {turn}: expected heal to graph entrance, got {proj.region_id!r}"
             )
             assert snap.current_region == "entrance", (
                 f"turn {turn}: heal did not rebind the live snapshot — the "
@@ -372,9 +349,7 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
                 turn_number=turn,
                 region_projection=proj,
             )
-            prompt_text, _registry = await orch.build_narrator_prompt(
-                "look around", ctx
-            )
+            prompt_text, _registry = await orch.build_narrator_prompt("look around", ctx)
             assert "YOU ARE HERE" in prompt_text and "entrance" in prompt_text, (
                 f"turn {turn}: real geography did not reach the narrator "
                 "prompt — improvisation would resume this turn"
@@ -392,9 +367,9 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
             "expected a bound_entrance span on every sequential turn; "
             f"got {len(healed)} (turn 2+ heal is invisible / not firing)"
         )
-        assert all(
-            (s.attributes or {}).get("healed_from") == phantom for s in healed
-        ), "span must record the phantom healed-from for GM-panel forensics"
+        assert all((s.attributes or {}).get("healed_from") == phantom for s in healed), (
+            "span must record the phantom healed-from for GM-panel forensics"
+        )
     finally:
         _spans_module.tracer = original  # type: ignore[method-assign]
         await session_integration.detach_dungeon_from_session(handle)
@@ -428,18 +403,14 @@ async def test_cartography_region_is_not_self_healed(
     )
 
     store = SqliteStore.open_in_memory()
-    snap = GameSnapshot(
-        genre_slug="caverns_and_claudes", world_slug="beneath_sunden"
-    )
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     exporter, _provider, real_tracer = _otel_in_memory()
     original = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
     handle = None
     try:
         handle = await _attach(store, snap, monkeypatch)
-        sd = _FakeSessionData(
-            store, genre="caverns_and_claudes", world="beneath_sunden"
-        )
+        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
 
         # The surface waiting camp — a real cartography region, never a
         # graph node. Two turns to prove the per-turn behavior is
@@ -490,9 +461,7 @@ async def test_dungeon_map_frame_is_emitted_to_ui(
     from sidequest.server.websocket_session_handler import _maybe_emit_dungeon_map
 
     store = SqliteStore.open_in_memory()
-    snap = GameSnapshot(
-        genre_slug="caverns_and_claudes", world_slug="beneath_sunden"
-    )
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     handle = None
     try:
         handle = await _attach(store, snap, monkeypatch)
@@ -501,9 +470,7 @@ async def test_dungeon_map_frame_is_emitted_to_ui(
         def _emit(msg: Any, kind: str) -> None:
             captured.append((msg, kind))
 
-        sd = _FakeSessionData(
-            store, genre="caverns_and_claudes", world="beneath_sunden"
-        )
+        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
         _maybe_emit_dungeon_map(None, sd=sd, snapshot=snap, emit_fn=_emit)
 
         dmaps = [m for m, k in captured if k == "DUNGEON_MAP"]
@@ -512,9 +479,7 @@ async def test_dungeon_map_frame_is_emitted_to_ui(
         assert isinstance(msg, DungeonMapMessage)
         assert msg.payload.current_location == "entrance"
         assert msg.payload.explored, "no discovered regions projected"
-        entrance = next(
-            loc for loc in msg.payload.explored if loc.id == "entrance"
-        )
+        entrance = next(loc for loc in msg.payload.explored if loc.id == "entrance")
         assert entrance.is_current_room is True
         assert entrance.room_type == "entrance"
         for loc in msg.payload.explored:
@@ -523,9 +488,7 @@ async def test_dungeon_map_frame_is_emitted_to_ui(
 
         # Other world: clean no-op (no frame emitted).
         captured.clear()
-        sd_other = _FakeSessionData(
-            store, genre="space_opera", world="coyote_star"
-        )
+        sd_other = _FakeSessionData(store, genre="space_opera", world="coyote_star")
         _maybe_emit_dungeon_map(None, sd=sd_other, snapshot=snap, emit_fn=_emit)
         assert not captured
     finally:

@@ -275,8 +275,7 @@ def test_non_anchor_recipients_see_third_person_unchanged(
     # Donut and Katia must each receive exactly one frame, in 3rd-person.
     for pid in ("p_donut", "p_katia"):
         assert queues[pid].qsize() == 1, (
-            f"player {pid} expected exactly one NARRATION frame, "
-            f"got {queues[pid].qsize()}"
+            f"player {pid} expected exactly one NARRATION frame, got {queues[pid].qsize()}"
         )
         frame = queues[pid].get_nowait()
         text = frame.payload["text"]
@@ -284,8 +283,7 @@ def test_non_anchor_recipients_see_third_person_unchanged(
             f"non-anchor recipient {pid} must see 3rd-person; got: {text!r}"
         )
         assert "You plant" not in text, (
-            f"non-anchor recipient {pid} must NOT receive the swapped "
-            f"prose; got: {text!r}"
+            f"non-anchor recipient {pid} must NOT receive the swapped prose; got: {text!r}"
         )
 
 
@@ -332,8 +330,7 @@ def test_atmospheric_card_broadcast_unchanged(
         assert queues[pid].qsize() == 1
         frame = queues[pid].get_nowait()
         assert frame.payload["text"] == canonical, (
-            f"atmospheric prose must be untouched for {pid}; got: "
-            f"{frame.payload['text']!r}"
+            f"atmospheric prose must be untouched for {pid}; got: {frame.payload['text']!r}"
         )
 
 
@@ -440,9 +437,7 @@ def test_narration_segment_firewalled_and_pov_swapped_end_to_end(
         def __init__(self, payload):
             self.payload = payload
 
-    monkeypatch.setitem(
-        handler_module._KIND_TO_MESSAGE_CLS, "NARRATION_SEGMENT", _FakeMsg
-    )
+    monkeypatch.setitem(handler_module._KIND_TO_MESSAGE_CLS, "NARRATION_SEGMENT", _FakeMsg)
     monkeypatch.setattr(views_module, "status_effects_by_player", lambda _h: {})
 
     # Carl (he/him) privately senses something the others cannot. In a
@@ -463,9 +458,7 @@ def test_narration_segment_firewalled_and_pov_swapped_end_to_end(
     # Production sequence (websocket_session_handler.py): emit with
     # author=owner, then forward the returned owner frame to the owner's
     # live socket (emit_event's peer fan-out never delivers to the emitter).
-    out = handler._emit_event(
-        "NARRATION_SEGMENT", payload, author_player_id="p_carl"
-    )
+    out = handler._emit_event("NARRATION_SEGMENT", payload, author_player_id="p_carl")
     room = handler._room
     assert room is not None
     _sock = room.socket_for_player("p_carl")

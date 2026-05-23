@@ -30,10 +30,17 @@ Tested AC coverage (per ``sprint/context/context-story-61-7.md``):
 
 * AC-1 / AC-6 — single named predicate, both call sites consume it
   (verified by behavior convergence across the real call paths).
-* AC-2 — field-precedence order ``current_room > location >
-  last_seen_location`` (architect recommendation, subject to red-phase
-  verification; if Dev pivots to union semantics this file's
-  precedence tests get rewritten via Design Deviation).
+* AC-2 — field resolution across ``current_room`` / ``location`` /
+  ``last_seen_location``. Architect's initial recommendation was
+  STRICT PRECEDENCE; Dev surveyed the model comments and pivoted to
+  **union-of-structured + prose-fallback** (the Npc model defines
+  ``current_room`` and ``location`` as ORTHOGONAL coordinate axes,
+  not same-axis precedence competitors). The fixtures in this file
+  pass identically under either semantic — they exercise the
+  structured-overrides-prose anchor and the prose-fallback branch,
+  neither of which distinguishes union from precedence. See the
+  Design Deviation logged in ``sidequest/game/npc_scene.py:52-65``
+  and ``.session/61-7-session.md`` §Design Deviations §Dev #1.
 * AC-3 — encounter-actor membership branch preserved AND propagated
   to the tool path (the tool currently ignores encounters; 61-7 must
   add the branch).

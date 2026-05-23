@@ -155,9 +155,7 @@ def _apply_phase_c_projections(
         in_scene_names: set[str] = set()
         for npc in snapshot.npcs:
             if is_npc_in_scene(npc, current_room=current_room_id, encounter=encounter):
-                name = getattr(getattr(npc, "core", None), "name", None)
-                if name:
-                    in_scene_names.add(name)
+                in_scene_names.add(npc.core.name)
         before = len(npcs_payload)
         kept: list[dict] = []
         for entry in npcs_payload:

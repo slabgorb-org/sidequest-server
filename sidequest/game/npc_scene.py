@@ -99,8 +99,8 @@ def is_npc_in_scene(
     5. **Default:** return ``False``.
     """
     if encounter is not None and not encounter.resolved:
-        name = getattr(getattr(npc, "core", None), "name", None)
-        if name and any(actor.name == name for actor in encounter.actors):
+        name = npc.core.name
+        if any(actor.name == name for actor in encounter.actors):
             return True
 
     if current_room is None:

@@ -686,11 +686,13 @@ def test_prompt_game_state_bytes_span_carries_projection_counts(
 # fields disagree (post-61-7 unification).
 #
 # Predecessor: this test started life in 61-2 verify-phase as an
-# adversarial divergence probe that MEASURED the gap between
-# ``session_helpers._npc_in_scene`` (last_seen_location only) and the
-# ``list_npcs_in_scene`` tool (current_room or location). The probe's
-# docstring explicitly anticipated that 61-7 would flip its contract
-# from "measure divergence" to "guard convergence."
+# adversarial divergence probe that MEASURED the gap between the
+# pre-61-7 ``session_helpers._npc_in_scene`` (last_seen_location only —
+# function removed in 61-7) and the ``list_npcs_in_scene`` tool
+# (current_room or location). The probe's docstring explicitly
+# anticipated that 61-7 would flip its contract from "measure
+# divergence" to "guard convergence." Post-61-7 both call sites
+# delegate to ``sidequest.game.npc_scene.is_npc_in_scene``.
 #
 # Post-61-7 (commit landing the unified ``is_npc_in_scene`` in
 # ``sidequest.game.npc_scene``): when structured fields (current_room,

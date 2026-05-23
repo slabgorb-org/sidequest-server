@@ -10,6 +10,8 @@ target them without schema changes.
 
 from __future__ import annotations
 
+import json
+import re
 from html import escape
 from pathlib import Path
 
@@ -208,6 +210,43 @@ EXCLUDED_FILES: frozenset[str] = frozenset(
 # --- Page assemblers ---
 _STYLESHEET_HREF = "/reference/static/reference.css"
 
+# Matches only the lowercase-alnum-hyphen ids the renderer emits.  Single-quoted
+# string literals inside the inline script (e.g. 'ref-anchors') are NOT preceded
+# by `id=` so they cannot false-match.
+_ID_ATTR_RE = re.compile(r'\bid="([a-z0-9][a-z0-9_-]*)"')
+
+
+def _collect_anchor_ids(body: str) -> list[str]:
+    """Return the deduplicated, source-order list of id values in ``body``."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for match in _ID_ATTR_RE.finditer(body):
+        anchor = match.group(1)
+        if anchor in seen:
+            continue
+        seen.add(anchor)
+        ordered.append(anchor)
+    return ordered
+
+
+_BAD_ANCHOR_BANNER = '<div id="ref-bad-anchor" hidden>Anchor not found on this page.</div>'
+
+_BAD_ANCHOR_SCRIPT = (
+    "<script>"
+    "(function(){"
+    "var h=location.hash.replace(/^#/,'');"
+    "if(!h)return;"
+    "var el=document.getElementById('ref-anchors');"
+    "if(!el)return;"
+    "var anchors=JSON.parse(el.textContent);"
+    "if(anchors.indexOf(h)!==-1)return;"
+    "var b=document.getElementById('ref-bad-anchor');"
+    'b.textContent="Anchor \'#"+h+"\' not found on this page.";'
+    "b.hidden=false;"
+    "})();"
+    "</script>"
+)
+
 
 def _render_file(path: Path) -> str:
     if not path.exists():
@@ -238,6 +277,8 @@ def _render_file_with_label(path: Path, label: str) -> str:
 
 
 def _wrap_document(title: str, body: str) -> str:
+    anchors = _collect_anchor_ids(body)
+    island = f'<script id="ref-anchors" type="application/json">{json.dumps(anchors)}</script>'
     return (
         "<!doctype html>"
         '<html lang="en">'
@@ -247,6 +288,9 @@ def _wrap_document(title: str, body: str) -> str:
         f'<link rel="stylesheet" href="{_STYLESHEET_HREF}">'
         "</head>"
         "<body>"
+        f"{_BAD_ANCHOR_BANNER}"
+        f"{island}"
+        f"{_BAD_ANCHOR_SCRIPT}"
         f'<h1 class="doc-title">{escape(title)}</h1>'
         f"{body}"
         "</body>"

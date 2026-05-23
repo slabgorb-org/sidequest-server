@@ -49,7 +49,6 @@ from sidequest.agents.prompt_framework.types import AttentionZone, SectionCatego
 from sidequest.game.session import GameSnapshot, SeedGhost, SeedState
 from sidequest.genre.models.tropes import SeedTrope
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -399,6 +398,35 @@ async def test_ghost_does_not_surface_narrative_hint():
         "ghost rendering paths without distinguishing them. Split the "
         "renderers (or branch on state type) so SeedGhost carries only "
         "name + delivery_hints into prose."
+    )
+
+
+@pytest.mark.asyncio
+async def test_seed_context_wrapper_tag_is_balanced_for_ghost_only_render():
+    """Regression: the seed-context wrapper tag must open and close
+    exactly once on every produced block, regardless of which state
+    is non-empty. A spec-check spotted a malformed render path where
+    ``</seed-context>`` was appended without a matching opening tag
+    on ghost-only state — XML-unbalanced prose confuses the narrator
+    when it tries to bracket the section in its own output.
+    """
+    snap = GameSnapshot(genre_slug="x", world_slug="y")
+    snap.seed_ghosts = [_ghost("ancestor")]
+    pack = _DuckPack(seed_tropes=[])
+
+    orch = _make_orchestrator()
+    _, registry = await orch.build_narrator_prompt(
+        "act", _turn_context(snapshot=snap, pack=pack)
+    )
+
+    content = _combined_seed_content(registry, orch._narrator.name())
+    assert content.count("<seed-context>") == 1, (
+        f"Expected exactly one <seed-context> opener; got "
+        f"{content.count('<seed-context>')}. Block:\n{content}"
+    )
+    assert content.count("</seed-context>") == 1, (
+        f"Expected exactly one </seed-context> closer; got "
+        f"{content.count('</seed-context>')}. Block:\n{content}"
     )
 
 

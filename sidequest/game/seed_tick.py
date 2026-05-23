@@ -21,6 +21,7 @@ from typing import Any
 from sidequest.game.seed_deck import SeedDeck
 from sidequest.game.session import GameSnapshot, SeedState
 from sidequest.genre.models.tropes import SeedTrope
+from sidequest.telemetry.spans import SPAN_SEED_DRAWN, SPAN_SEED_EXPIRED, Span
 
 
 def tick_seeds(
@@ -36,7 +37,10 @@ def tick_seeds(
     ``snapshot.seed_ghosts`` via :meth:`SeedState.to_ghost`. The
     migration is idempotent on the same ``now_turn`` — a second tick
     with the same turn finds no expired actives and produces no
-    duplicate ghosts.
+    duplicate ghosts. Each migration fires one :data:`SPAN_SEED_EXPIRED`
+    span carrying ``seed_id`` and ``expired_at_turn`` so the GM panel
+    can distinguish "engine engaged, found no expiries" from "engine
+    never engaged" (CLAUDE.md OTEL Observability Principle).
 
     ``pack`` is duck-typed (mirrors :func:`tick_tropes`'s
     ``pack.tropes`` discipline): only ``pack.seed_tropes`` is read by
@@ -51,6 +55,14 @@ def tick_seeds(
     for seed in snapshot.active_seeds:
         if seed.is_expired(now_turn):
             snapshot.seed_ghosts.append(seed.to_ghost(now_turn))
+            with Span.open(
+                SPAN_SEED_EXPIRED,
+                {
+                    "seed_id": seed.id,
+                    "expired_at_turn": now_turn,
+                },
+            ):
+                pass
         else:
             surviving.append(seed)
     snapshot.active_seeds = surviving
@@ -109,4 +121,16 @@ def ensure_initial_draw(
                 delivery_hints=list(seed.delivery_hints),
             )
         )
+        # One span per drawn seed so the GM panel can attribute the
+        # opening hand back to individual seed_ids (sibling discipline
+        # of SPAN_TROPE_ACTIVATE — one-per-activation, not one-per-tick).
+        with Span.open(
+            SPAN_SEED_DRAWN,
+            {
+                "seed_id": seed.id,
+                "session_id": session_id,
+                "activated_at_turn": now_turn,
+            },
+        ):
+            pass
     snapshot.active_seeds = drawn

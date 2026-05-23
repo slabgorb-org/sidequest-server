@@ -67,18 +67,14 @@ def build_seed_context_block(
     if not active_seeds and not seed_ghosts:
         return None
 
-    sections: list[str] = []
-
+    # Always open and close the wrapper tag together — sibling discipline
+    # of <magic-context> / <game_state> in orchestrator.py. The empty-
+    # input early-return above prevents emitting a stub wrapper.
+    sections: list[str] = ["<seed-context>"]
     if active_seeds:
         body = [_render_active(s, seed_trope_by_id.get(s.id)) for s in active_seeds]
-        sections.append("<seed-context>\n[ACTIVE SEEDS]\n" + "\n".join(body))
-
+        sections.append("[ACTIVE SEEDS]\n" + "\n".join(body))
     if seed_ghosts:
         body = [_render_ghost(g) for g in seed_ghosts]
         sections.append("[FADED — cross-session callbacks only]\n" + "\n".join(body))
-    elif active_seeds:
-        # close the opening <seed-context> tag when only actives surfaced
-        pass
-
-    block = "\n\n".join(sections)
-    return block + "\n</seed-context>"
+    return "\n".join(sections) + "\n</seed-context>"

@@ -234,6 +234,82 @@ def test_tick_on_empty_actives_is_a_no_op():
     assert snap.seed_ghosts == []
 
 
+def test_tick_emits_seed_expired_span_per_migration(otel_capture):
+    """Spec-check regression (Architect): each active→ghost migration
+    must emit one ``seed.expired`` span carrying ``seed_id`` and
+    ``expired_at_turn``. Sibling discipline of ``trope_resolve`` —
+    one span per state-changing engine decision so the GM panel can
+    attribute each migration back to the seed that ended."""
+    fn = _resolve_tick_seeds()
+    if fn is None:
+        pytest.skip("tick_seeds not yet wired")
+
+    snap = GameSnapshot(genre_slug="x", world_slug="y")
+    snap.active_seeds = [
+        _active("alpha", activated_at=0, lifespan=2),  # expires at turn 2
+        _active("bravo", activated_at=1, lifespan=20),  # alive
+        _active("charlie", activated_at=0, lifespan=3),  # expires at turn 3
+    ]
+    pack = _make_pack(
+        [_seed("alpha", 2), _seed("bravo", 20), _seed("charlie", 3)]
+    )
+
+    fn(snap, pack, now_turn=5)
+
+    spans = otel_capture.get_finished_spans()
+    expired_spans = [s for s in spans if s.name == "seed.expired"]
+    assert len(expired_spans) == 2, (
+        f"Expected one seed.expired span per migration (2 expired); "
+        f"got {len(expired_spans)}. Spans: "
+        f"{[(s.name, dict(s.attributes or {})) for s in spans if 'seed' in s.name]}"
+    )
+    expired_ids = {dict(s.attributes or {}).get("seed_id") for s in expired_spans}
+    assert expired_ids == {"alpha", "charlie"}
+    for span in expired_spans:
+        attrs = dict(span.attributes or {})
+        assert attrs.get("expired_at_turn") == 5, (
+            f"seed.expired must stamp expired_at_turn=now_turn; got {attrs}"
+        )
+
+
+def test_ensure_initial_draw_emits_seed_drawn_span_per_seed(otel_capture):
+    """Spec-check regression (Architect): each drawn seed at session
+    bootstrap must emit one ``seed.drawn`` span carrying ``seed_id``,
+    ``session_id``, and ``activated_at_turn``. Sibling discipline of
+    ``trope_activate`` — one span per activation so the GM panel can
+    show "this hand was dealt this session" with full attribution."""
+    try:
+        from sidequest.game.seed_tick import ensure_initial_draw
+    except ImportError:
+        pytest.skip("ensure_initial_draw not yet wired")
+
+    snap = GameSnapshot(genre_slug="x", world_slug="y")
+    pack = _make_pack([_seed(f"seed-{i}", 8) for i in range(5)])
+
+    ensure_initial_draw(
+        snap,
+        pack,
+        session_id="session-alpha",
+        now_turn=0,
+        hand_size=3,
+    )
+
+    spans = otel_capture.get_finished_spans()
+    drawn_spans = [s for s in spans if s.name == "seed.drawn"]
+    assert len(drawn_spans) == 3, (
+        f"Expected one seed.drawn span per dealt seed (hand_size=3); "
+        f"got {len(drawn_spans)}. Spans: "
+        f"{[(s.name, dict(s.attributes or {})) for s in spans if 'seed' in s.name]}"
+    )
+    for span in drawn_spans:
+        attrs = dict(span.attributes or {})
+        assert attrs.get("session_id") == "session-alpha"
+        assert attrs.get("activated_at_turn") == 0
+        assert attrs.get("seed_id"), (
+            f"seed.drawn must carry a non-empty seed_id; got {attrs}"
+        )
+
+
 def test_tick_preserves_pre_existing_ghosts():
     """A snapshot that already carries ghosts (from a prior session
     segment) must not have them lost when a new expiry fires. The tick

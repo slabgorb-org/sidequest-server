@@ -24,8 +24,16 @@ def slugify(text: str) -> str:
 def render_node(node: object) -> str:
     """Render a parsed-YAML node to an HTML fragment.
 
-    Handles: dict, list (later tasks), scalar (str/int/float/bool/None).
+    Handles: dict (recursively as nested <section>), scalar (str/int/float/bool/None).
+    Lists raise NotImplementedError until Task 2 of the reference-pages plan
+    replaces this with real <ul>/<section> handling — failing loud per CLAUDE.md
+    "no silent fallbacks" doctrine in the brief window before Task 2 lands.
     """
+    if isinstance(node, list):
+        raise NotImplementedError(
+            "render_node: list handling is implemented in Task 2 of the "
+            "reference-pages plan (see docs/superpowers/plans/2026-05-23-reference-pages.md)"
+        )
     if isinstance(node, dict):
         return _render_dict(node)
     return _render_scalar(node)
@@ -40,6 +48,9 @@ def _render_scalar(value: object) -> str:
     return f"<p>{escape(text)}</p>"
 
 
+# Note: nested dicts recurse into nested <section> elements via render_node, not
+# <dl>/<dt>/<dd>. This is intentional per the plan; the spec design doc's
+# <dl> note is out of date and will be reconciled to match.
 def _render_dict(node: dict) -> str:
     parts: list[str] = []
     for key, value in node.items():

@@ -361,20 +361,25 @@ class AnthropicSdkClient:
     # ------------------------------------------------------------------
 
     def reset_baselines(self) -> None:
-        """Clear both rolling baselines so the next call uses warmup floors.
+        """Resets the rolling baselines so the next call cohort uses warmup floors.
 
-        Architect spec-check A: ``RoomRegistry`` (session_room.py:774-786)
-        never evicts a slug — the ``AnthropicSdkClient`` instance backing
-        a slug's orchestrator therefore lives for the server process
-        lifetime, not per-session. Without this reset, the rolling
-        baseline can self-train onto a sustained runaway: 10 consecutive
-        $0.12 turns calibrate the baseline to ~$0.12, after which an
-        $0.18 follow-up at 1.5x baseline is below the 5x trigger and
-        passes silently. Call this from the slug-recycle path
-        (``SessionRoom.close_store``) so the next session starts cold.
-        The absolute floor at $0.30/call (``_ABSOLUTE_COST_USD_FLOOR``)
-        is the in-session safety net for the same trained-into-silence
-        failure mode.
+        Today this is dormant infrastructure — ``SessionRoom.close_store()``
+        is the wired callsite, but no production code path invokes
+        ``close_store()`` (``RoomRegistry`` never evicts). The absolute
+        cost floor at ``_ABSOLUTE_COST_USD_FLOOR`` is the live safety net
+        for the trained-into-silence case; this method becomes
+        load-bearing when a teardown path lands.
+
+        Background on why the reset matters once teardown wires in:
+        ``RoomRegistry`` (session_room.py:774-786) never evicts a slug —
+        the ``AnthropicSdkClient`` instance backing a slug's orchestrator
+        therefore lives for the server process lifetime, not per-session.
+        Without this reset, the rolling baseline can self-train onto a
+        sustained runaway: 10 consecutive $0.12 turns calibrate the
+        baseline to ~$0.12, after which an $0.18 follow-up at 1.5x
+        baseline is below the 5x trigger and passes silently. When a
+        future teardown path calls ``close_store()`` on slug recycle,
+        this reset ensures the next session starts cold.
         """
         self._cost_baseline.clear()
         self._input_tokens_baseline.clear()
@@ -425,6 +430,9 @@ class AnthropicSdkClient:
                 self._input_tokens_baseline
             )
 
+        # Note: cost-multiple trigger erodes if a sustained runaway trains
+        # the baseline. The absolute floor (>$0.30/call) is the safety net
+        # for that case.
         cost_triggered = cost_usd > _COST_TRIGGER_MULTIPLE * baseline_cost
         io_triggered = (
             input_tokens > _IO_FINGERPRINT_INPUT_MULTIPLE * baseline_input
@@ -461,7 +469,7 @@ class AnthropicSdkClient:
         logger.error(
             "narrator.cost_runaway_suspected trigger=%s input=%d output=%d "
             "cost_usd=%.6f baseline_cost_usd=%.6f baseline_input_tokens=%.1f "
-            "warmup=%s",
+            "warmup=%s model=%s",
             trigger,
             input_tokens,
             output_tokens,
@@ -469,6 +477,7 @@ class AnthropicSdkClient:
             baseline_cost,
             baseline_input,
             warmup,
+            model,
         )
         _watcher_publish_event(
             "cost_runaway_suspected",

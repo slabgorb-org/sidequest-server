@@ -290,3 +290,127 @@ async def test_canary_emits_exactly_once_per_oversized_call(
         "Neither refused turn should have reached the SDK; got "
         f"{len(fake.recorded_requests)} recorded request(s)."
     )
+
+
+# ---------------------------------------------------------------------------
+# 6. Adversarial probe (TEA verify) — SDK + synchronous parity.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
+    simple_turn_context,
+    bound_hub: WatcherHub,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Drive the SAME oversized prompt through BOTH narration paths and
+    assert byte-identical refuse shape.
+
+    Architect's spec-check (61-3, answer B) verified the canary is correctly
+    placed at prompt-construction time on both paths against the same
+    ``SOFT_PROMPT_BUDGET_BYTES`` measure — but did NOT measure end-to-end
+    shape parity. This probe ratifies that finding empirically and guards
+    against future drift between the two paths (e.g., a tweak to the SDK
+    refuse narration that isn't mirrored on the sync path would leave the
+    GM panel showing inconsistent operator-page text depending on which
+    backend was active when the runaway fired).
+
+    Parity surface (the contract a future drift would break):
+
+    1. ``is_degraded`` — both True.
+    2. ``narration`` — both ``"[narrator-overload — operator paged]"``
+       (distinct from the default SDK-error-refuse text per Dev's locked
+       open-question 1 resolution).
+    3. Watcher event ``prompt_oversized_hard`` fires exactly once per
+       refused turn on EACH path.
+    4. Event ``severity == "error"`` on both — the GM panel red-band filter
+       depends on this single field.
+    5. Event ``fields["action"] == "refuse"`` on both — distinguishes
+       hard-refuse from a future truncate variant (epic 61 §Layer 3).
+    6. Neither path bills (no SDK/client call recorded).
+    """
+    from unittest.mock import AsyncMock
+
+    from sidequest.agents.claude_client import ClaudeResponse
+
+    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+
+    # --- SDK path ---------------------------------------------------------
+    sdk_sock = _FakeSocket()
+    await bound_hub.subscribe(sdk_sock)  # type: ignore[arg-type]
+
+    sdk_fake = FakeAnthropicSdkClient(responses=[_end_turn()])
+    sdk_orch = Orchestrator(client=sdk_fake)
+    sdk_result = await sdk_orch.run_narration_turn("look around", simple_turn_context)
+    await asyncio.sleep(0.05)
+
+    sdk_events = [
+        e for e in sdk_sock.events if e.get("event_type") == "prompt_oversized_hard"
+    ]
+
+    # Clear subscribers so the synchronous-path subscription doesn't also
+    # receive any residual SDK-path events (defensive isolation).
+    async with bound_hub._lock:  # noqa: SLF001
+        bound_hub._subscribers.clear()  # noqa: SLF001
+
+    # --- Synchronous path -------------------------------------------------
+    sync_sock = _FakeSocket()
+    await bound_hub.subscribe(sync_sock)  # type: ignore[arg-type]
+
+    sync_client = AsyncMock()
+    sync_client.send_stateless = AsyncMock(
+        return_value=ClaudeResponse(text='{"narration":"ok"}', session_id=None)
+    )
+    sync_orch = Orchestrator(client=sync_client)
+    sync_result = await sync_orch.run_narration_turn("look around", simple_turn_context)
+    await asyncio.sleep(0.05)
+
+    sync_events = [
+        e for e in sync_sock.events if e.get("event_type") == "prompt_oversized_hard"
+    ]
+
+    # --- Parity assertions ------------------------------------------------
+    # 1+2. Result shape: is_degraded + narration text.
+    assert sdk_result.is_degraded is True, "SDK path must refuse with is_degraded=True"
+    assert sync_result.is_degraded is True, "sync path must refuse with is_degraded=True"
+    assert sdk_result.narration == sync_result.narration, (
+        "Refuse narration text must match across paths so operators see "
+        f"consistent paged text. SDK={sdk_result.narration!r} "
+        f"sync={sync_result.narration!r}"
+    )
+    assert sdk_result.narration == "[narrator-overload — operator paged]", (
+        "Refuse narration must be the distinct budget-refuse text (Dev "
+        "open-question 1 resolution — bracketed prefix + en-dash so "
+        f"session grep can find it). Got {sdk_result.narration!r}."
+    )
+
+    # 3. Exactly one event per refused turn on each path.
+    assert len(sdk_events) == 1, (
+        f"SDK path must emit exactly one prompt_oversized_hard; got {len(sdk_events)}"
+    )
+    assert len(sync_events) == 1, (
+        f"sync path must emit exactly one prompt_oversized_hard; got {len(sync_events)}"
+    )
+
+    # 4. Severity parity.
+    assert sdk_events[0].get("severity") == sync_events[0].get("severity") == "error", (
+        "Watcher event severity must be 'error' on both paths (GM panel "
+        f"red-band filter). SDK={sdk_events[0].get('severity')!r} "
+        f"sync={sync_events[0].get('severity')!r}"
+    )
+
+    # 5. Action field parity.
+    sdk_fields = sdk_events[0].get("fields", {})
+    sync_fields = sync_events[0].get("fields", {})
+    assert sdk_fields.get("action") == sync_fields.get("action") == "refuse", (
+        "Watcher event fields.action must be 'refuse' on both paths "
+        "(distinguishes hard-refuse from a future truncate variant). "
+        f"SDK={sdk_fields.get('action')!r} sync={sync_fields.get('action')!r}"
+    )
+
+    # 6. Neither path billed.
+    assert sdk_fake.recorded_requests == [], (
+        f"SDK path must not call complete_with_tools on refuse; got "
+        f"{len(sdk_fake.recorded_requests)} request(s)."
+    )
+    sync_client.send_stateless.assert_not_called()

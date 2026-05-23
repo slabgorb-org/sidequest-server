@@ -343,3 +343,255 @@ def test_party_member_from_character_skips_url_when_class_not_in_pack() -> None:
     )
 
     assert member.class_reference_url is None
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — JournalEntry.reference_url field
+# ---------------------------------------------------------------------------
+
+
+def test_journal_entry_accepts_reference_url() -> None:
+    from sidequest.protocol.models import FactCategory, JournalEntry
+
+    entry = JournalEntry(
+        fact_id="abc",
+        content="The Vicarage smells of rosewater.",
+        category=FactCategory.Place,
+        source="Observation",
+        confidence="confirmed",
+        learned_turn=3,
+        reference_url="/reference/lore/tea_and_murder/glenross#location-the-vicarage",
+    )
+    assert entry.reference_url == ("/reference/lore/tea_and_murder/glenross#location-the-vicarage")
+
+
+def test_journal_entry_reference_url_defaults_to_none() -> None:
+    from sidequest.protocol.models import FactCategory, JournalEntry
+
+    entry = JournalEntry(
+        fact_id="abc",
+        content="Some quest.",
+        category=FactCategory.Quest,
+        source="Observation",
+        confidence="confirmed",
+        learned_turn=3,
+    )
+    assert entry.reference_url is None
+
+
+def test_journal_entry_reference_url_serialises() -> None:
+    """reference_url appears in model_dump(mode='json') output."""
+    from sidequest.protocol.models import FactCategory, JournalEntry
+
+    entry = JournalEntry(
+        fact_id="abc",
+        content="The Vicarage smells of rosewater.",
+        category=FactCategory.Place,
+        source="Observation",
+        confidence="confirmed",
+        learned_turn=3,
+        reference_url="/reference/lore/tea_and_murder/glenross#location-the-vicarage",
+    )
+    payload = entry.model_dump(mode="json")
+    assert payload["reference_url"] == (
+        "/reference/lore/tea_and_murder/glenross#location-the-vicarage"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — wiring test: JournalRequestHandler attaches reference_url
+# ---------------------------------------------------------------------------
+
+
+def test_journal_request_handler_attaches_reference_url_for_lore_match() -> None:
+    """Integration: JournalRequestHandler._attach_reference_url populates
+    reference_url when a Lore-category fact's content matches a legend name.
+
+    Fixture-driven: synthetic _SessionData with a minimal GenrePack carrying
+    one legend. No live genre_packs loaded.
+    """
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from sidequest.game.character import Character, KnownFact
+    from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+    from sidequest.game.persistence import GameMode
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+    from sidequest.genre.models.legends import Legend
+    from sidequest.handlers.journal_request import JournalRequestHandler
+    from sidequest.protocol.models import FactCategory
+    from sidequest.server.session_handler import _SessionData
+
+    legend = Legend(name="The Curse of Glenross")
+    world_mock = MagicMock()
+    world_mock.legends = [legend]
+    world_mock.history = None
+
+    genre_pack = MagicMock()
+    genre_pack.worlds = {"glenross": world_mock}
+
+    snapshot = GameSnapshot(
+        genre_slug="tea_and_murder",
+        world_slug="glenross",
+        turn_manager=TurnManager(interaction=1),
+        characters=[],
+    )
+
+    lore_fact = KnownFact(
+        fact_id="f1",
+        content="The Curse of Glenross",
+        category=FactCategory.Lore,
+        source="Observation",
+        confidence="Certain",
+        learned_turn=1,
+    )
+    character = Character(
+        core=CreatureCore(
+            name="Blackwood",
+            description="A detective.",
+            personality="Sharp.",
+            inventory=Inventory(),
+            edge=EdgePool(current=8, max=10, base_max=10),
+        ),
+        backstory="From the city.",
+        char_class="Detective",
+        race="Human",
+        known_facts=[lore_fact],
+    )
+    snapshot.characters.append(character)
+    snapshot.player_seats["p1"] = "Blackwood"
+
+    sd = _SessionData(
+        genre_slug="tea_and_murder",
+        world_slug="glenross",
+        player_name="Keith",
+        player_id="p1",
+        snapshot=snapshot,
+        store=MagicMock(),
+        genre_pack=genre_pack,
+        orchestrator=MagicMock(),
+        mode=GameMode.SOLO,
+    )
+
+    room = MagicMock()
+    room.snapshot = snapshot
+    room.slug = "test-room"
+
+    session = MagicMock()
+    session._room = room  # noqa: SLF001
+    session._state = MagicMock()  # noqa: SLF001
+    session._state.name = "playing"  # noqa: SLF001
+    session._session_data = sd  # noqa: SLF001
+
+    msg = MagicMock()
+    msg.player_id = "p1"
+
+    handler = JournalRequestHandler()
+
+    # Suppress the OTEL span side-effects during test — the behaviour we assert
+    # is the JournalEntry.reference_url value, not span emission.
+    with patch("sidequest.handlers.journal_request.tracer"):
+        result = asyncio.run(handler.handle(session, msg))
+
+    assert len(result) == 1
+    response = result[0]
+    entries = response.payload.entries
+    assert len(entries) == 1
+    assert entries[0].reference_url is not None
+    assert "tea_and_murder" in entries[0].reference_url
+    assert "glenross" in entries[0].reference_url
+    assert "the-curse-of-glenross" in entries[0].reference_url
+
+
+def test_journal_request_handler_no_url_for_person_fact() -> None:
+    """Person-category facts get reference_url=None — no span emitted.
+
+    Person entries are excluded from URL attachment (npcs.yaml is not rendered).
+    """
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from sidequest.game.character import Character, KnownFact
+    from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+    from sidequest.game.persistence import GameMode
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+    from sidequest.genre.models.legends import Legend
+    from sidequest.handlers.journal_request import JournalRequestHandler
+    from sidequest.protocol.models import FactCategory
+    from sidequest.server.session_handler import _SessionData
+
+    legend = Legend(name="Some Legend")
+    world_mock = MagicMock()
+    world_mock.legends = [legend]
+    world_mock.history = None
+
+    genre_pack = MagicMock()
+    genre_pack.worlds = {"glenross": world_mock}
+
+    snapshot = GameSnapshot(
+        genre_slug="tea_and_murder",
+        world_slug="glenross",
+        turn_manager=TurnManager(interaction=1),
+        characters=[],
+    )
+
+    person_fact = KnownFact(
+        fact_id="f2",
+        content="Lady Ashford is the murderer.",
+        category=FactCategory.Person,
+        source="Observation",
+        confidence="Suspected",
+        learned_turn=2,
+    )
+    character = Character(
+        core=CreatureCore(
+            name="Blackwood",
+            description="A detective.",
+            personality="Sharp.",
+            inventory=Inventory(),
+            edge=EdgePool(current=8, max=10, base_max=10),
+        ),
+        backstory="From the city.",
+        char_class="Detective",
+        race="Human",
+        known_facts=[person_fact],
+    )
+    snapshot.characters.append(character)
+    snapshot.player_seats["p1"] = "Blackwood"
+
+    sd = _SessionData(
+        genre_slug="tea_and_murder",
+        world_slug="glenross",
+        player_name="Keith",
+        player_id="p1",
+        snapshot=snapshot,
+        store=MagicMock(),
+        genre_pack=genre_pack,
+        orchestrator=MagicMock(),
+        mode=GameMode.SOLO,
+    )
+
+    room = MagicMock()
+    room.snapshot = snapshot
+    room.slug = "test-room"
+
+    session = MagicMock()
+    session._room = room  # noqa: SLF001
+    session._state = MagicMock()  # noqa: SLF001
+    session._state.name = "playing"  # noqa: SLF001
+    session._session_data = sd  # noqa: SLF001
+
+    msg = MagicMock()
+    msg.player_id = "p1"
+
+    handler = JournalRequestHandler()
+
+    with patch("sidequest.handlers.journal_request.tracer"):
+        result = asyncio.run(handler.handle(session, msg))
+
+    assert len(result) == 1
+    entries = result[0].payload.entries
+    assert len(entries) == 1
+    assert entries[0].reference_url is None

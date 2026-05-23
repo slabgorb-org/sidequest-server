@@ -138,6 +138,11 @@ class JournalEntry(ProtocolBase):
     """confirmed / suspected / rumored / Discovered / ..."""
     learned_turn: int
     """Interaction-turn index at the moment the fact was learned."""
+    reference_url: str | None = None
+    """URL into the lore page for legend / history / location entries.
+    None for Person (npcs excluded), Quest (no rendered yaml), Ability
+    (handled via AbilityDefinition.reference_url), and Lore/Place
+    entries whose content text doesn't match a known YAML entity."""
 
 
 # ---------------------------------------------------------------------------

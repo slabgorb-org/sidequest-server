@@ -217,9 +217,7 @@ async def test_io_fingerprint_60k_in_12_out_fires_alarm_once(
         )
     await asyncio.sleep(0.05)
 
-    runaway_events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    runaway_events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert len(runaway_events) == 1, (
         "Exactly one cost_runaway_suspected event must reach watcher "
         f"subscribers per offending call; got {len(runaway_events)} "
@@ -229,8 +227,7 @@ async def test_io_fingerprint_60k_in_12_out_fires_alarm_once(
     error_records = [
         r
         for r in caplog.records
-        if r.levelno == logging.ERROR
-        and "narrator.cost_runaway_suspected" in r.getMessage()
+        if r.levelno == logging.ERROR and "narrator.cost_runaway_suspected" in r.getMessage()
     ]
     assert len(error_records) == 1, (
         "Exactly one ERROR-level log record carrying "
@@ -286,11 +283,9 @@ async def test_io_fingerprint_event_severity_is_warn_with_trigger_field(
     )
     # Operator-actionable payload: must surface the offending shape AND
     # the baseline it was compared against, so the GM panel renders both.
-    for key in ("input_tokens", "output_tokens", "cost_usd",
-                "baseline_input_tokens", "warmup"):
+    for key in ("input_tokens", "output_tokens", "cost_usd", "baseline_input_tokens", "warmup"):
         assert key in fields, (
-            f"GM panel needs '{key}' on cost_runaway_suspected fields; "
-            f"got fields={list(fields)}."
+            f"GM panel needs '{key}' on cost_runaway_suspected fields; got fields={list(fields)}."
         )
     assert fields["input_tokens"] == 60_000, fields
     assert fields["output_tokens"] == 12, fields
@@ -330,7 +325,9 @@ async def test_rolling_baseline_window_is_k10_and_excludes_oldest(
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 10 healthy calls warm the baseline up to K=10 observations.
-    sdk = _Sdk(responses=[_healthy() for _ in range(10)] + [_resp(input_tokens=25_000, output_tokens=12)])
+    sdk = _Sdk(
+        responses=[_healthy() for _ in range(10)] + [_resp(input_tokens=25_000, output_tokens=12)]
+    )
     client = _build_client(sdk)
     for _ in range(11):
         await client.complete_with_tools(
@@ -393,8 +390,8 @@ async def test_rolling_window_evicts_oldest_after_k_plus_one_calls(
     # 12th call is the probe at 25K in / 12 out.
     responses = (
         [_resp(input_tokens=100_000, output_tokens=500)]  # pollute
-        + [_healthy() for _ in range(10)]                  # evict the outlier
-        + [_resp(input_tokens=25_000, output_tokens=12)]    # probe
+        + [_healthy() for _ in range(10)]  # evict the outlier
+        + [_resp(input_tokens=25_000, output_tokens=12)]  # probe
     )
     sdk = _Sdk(responses=responses)
     client = _build_client(sdk)
@@ -550,12 +547,10 @@ async def test_sustained_runaway_emits_one_event_per_call_not_per_iteration(
     error_records = [
         r
         for r in caplog.records
-        if r.levelno == logging.ERROR
-        and "narrator.cost_runaway_suspected" in r.getMessage()
+        if r.levelno == logging.ERROR and "narrator.cost_runaway_suspected" in r.getMessage()
     ]
     assert len(error_records) == 3, (
-        "Log parity: 3 calls → 3 ERROR records, not 3xN. Got "
-        f"{len(error_records)} ERROR records."
+        f"Log parity: 3 calls → 3 ERROR records, not 3xN. Got {len(error_records)} ERROR records."
     )
 
 
@@ -639,8 +634,8 @@ async def test_reset_baselines_clears_rolling_state(
     # that MUST report warmup=True.
     responses = (
         [_healthy() for _ in range(10)]
-        + [_resp(input_tokens=25_000, output_tokens=12)]   # probe pre-reset
-        + [_resp(input_tokens=25_000, output_tokens=12)]   # probe post-reset
+        + [_resp(input_tokens=25_000, output_tokens=12)]  # probe pre-reset
+        + [_resp(input_tokens=25_000, output_tokens=12)]  # probe post-reset
     )
     sdk = _Sdk(responses=responses)
     client = _build_client(sdk)
@@ -658,14 +653,11 @@ async def test_reset_baselines_clears_rolling_state(
     # Sanity: deques are full at K=10 (the eleventh probe already evicted
     # the oldest entry; deque maxlen=10).
     assert len(client._cost_baseline) == 10, (  # noqa: SLF001
-        f"K=10 deque should hold 10 entries after 11 calls; got "
-        f"{len(client._cost_baseline)}"  # noqa: SLF001
+        f"K=10 deque should hold 10 entries after 11 calls; got {len(client._cost_baseline)}"  # noqa: SLF001
     )
 
     # First probe (call #11) should have reported warmup=False.
-    pre_reset_events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    pre_reset_events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert len(pre_reset_events) >= 1, (
         "Pre-reset probe at 25K-in/12-out MUST trip alarm with observed "
         f"baseline. Got {len(pre_reset_events)} events."
@@ -677,12 +669,10 @@ async def test_reset_baselines_clears_rolling_state(
     # The reset.
     client.reset_baselines()
     assert len(client._cost_baseline) == 0, (  # noqa: SLF001
-        f"reset_baselines() MUST clear cost deque; got "
-        f"{len(client._cost_baseline)}"  # noqa: SLF001
+        f"reset_baselines() MUST clear cost deque; got {len(client._cost_baseline)}"  # noqa: SLF001
     )
     assert len(client._input_tokens_baseline) == 0, (  # noqa: SLF001
-        f"reset_baselines() MUST clear input_tokens deque; got "
-        f"{len(client._input_tokens_baseline)}"  # noqa: SLF001
+        f"reset_baselines() MUST clear input_tokens deque; got {len(client._input_tokens_baseline)}"  # noqa: SLF001
     )
 
     # Post-reset probe MUST see warmup floors again (warmup=True).
@@ -695,9 +685,7 @@ async def test_reset_baselines_clears_rolling_state(
     )
     await asyncio.sleep(0.05)
 
-    post_reset_events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    post_reset_events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert len(post_reset_events) == 1, (
         f"Post-reset probe MUST trip alarm (25K > 2 × 12_000 warmup floor "
         f"AND output<50). Got {len(post_reset_events)} events."
@@ -755,9 +743,7 @@ async def test_absolute_cost_floor_fires_when_baseline_is_high(
     # The 10 warmup calls each trip cost_multiple (>$0.15 warmup floor)
     # AND every call after warmup that exceeds $0.30 trips cost_absolute.
     # Filter to events from the 11th call (post-warmup probe).
-    events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     post_warmup = [e for e in events if e["fields"]["warmup"] is False]
     assert len(post_warmup) == 1, (
         "Exactly one post-warmup event expected from the $0.31 probe; got "
@@ -776,8 +762,7 @@ async def test_absolute_cost_floor_fires_when_baseline_is_high(
         f"baseline_cost_usd={fields['baseline_cost_usd']!r}"
     )
     assert fields["cost_usd"] > _ABSOLUTE_COST_USD_FLOOR_PROBE, (
-        f"Probe must exceed the absolute floor. Got "
-        f"cost_usd={fields['cost_usd']!r}"
+        f"Probe must exceed the absolute floor. Got cost_usd={fields['cost_usd']!r}"
     )
 
 
@@ -821,9 +806,7 @@ async def test_absolute_floor_does_not_re_fire_io_fingerprint_priority(
     )
     await asyncio.sleep(0.05)
 
-    events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert len(events) == 1, (
         "Triple-trigger call (io_fingerprint + cost_multiple + "
         "cost_absolute) MUST collapse to one event (no double-spam). "
@@ -898,9 +881,7 @@ async def test_tea_adversarial_a_attack_baseline_self_training(
         )
     await asyncio.sleep(0.05)
 
-    events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
 
     # Positive: exactly one cost_absolute event, on the probe.
     cost_abs = [e for e in events if e["fields"]["trigger"] == "cost_absolute"]
@@ -916,8 +897,7 @@ async def test_tea_adversarial_a_attack_baseline_self_training(
         f"(not floor). Got warmup={fields['warmup']!r}"
     )
     assert fields["cost_usd"] > _ABSOLUTE_COST_USD_FLOOR_PROBE, (
-        f"Probe cost_usd must exceed $0.30 absolute floor; "
-        f"got cost_usd={fields['cost_usd']!r}"
+        f"Probe cost_usd must exceed $0.30 absolute floor; got cost_usd={fields['cost_usd']!r}"
     )
     # Baseline must reflect the trained $0.1275, not the warmup floor.
     assert 0.10 <= fields["baseline_cost_usd"] <= 0.15, (

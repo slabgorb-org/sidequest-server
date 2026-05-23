@@ -325,9 +325,7 @@ async def test_projection_and_tool_converge_on_off_stage_npc() -> None:
         "Tool kept OffStageNpc despite current_room mismatch (tool's "
         "existing contract). Convergence requires both paths drop it."
     )
-    assert proj == tool, (
-        f"Projection/tool divergence: proj={sorted(proj)} tool={sorted(tool)}."
-    )
+    assert proj == tool, f"Projection/tool divergence: proj={sorted(proj)} tool={sorted(tool)}."
 
 
 # ---------------------------------------------------------------------------
@@ -407,10 +405,7 @@ async def test_unified_predicate_falls_back_to_location_when_no_current_room() -
     proj = _projection_npc_names(snap)
     tool = await _tool_npc_names(snap)
 
-    assert proj == tool, (
-        f"Union(location): divergence proj={sorted(proj)} "
-        f"tool={sorted(tool)}."
-    )
+    assert proj == tool, f"Union(location): divergence proj={sorted(proj)} tool={sorted(tool)}."
     assert "LocationOnlyNpc" in proj, (
         "LocationOnlyNpc dropped despite ``location`` == acting PC's "
         "room. The union check matches on ``location``; the prose "
@@ -518,10 +513,7 @@ def _make_encounter(actor_names: list[str]) -> StructuredEncounter:
         encounter_type="social",
         player_metric=EncounterMetric(name="poise", threshold=10),
         opponent_metric=EncounterMetric(name="suspicion", threshold=10),
-        actors=[
-            EncounterActor(name=n, role="bystander", side="opponent")
-            for n in actor_names
-        ],
+        actors=[EncounterActor(name=n, role="bystander", side="opponent") for n in actor_names],
         resolved=False,
     )
 
@@ -631,8 +623,7 @@ async def test_resolved_encounter_does_not_anchor_npc_as_in_scene() -> None:
     tool = await _tool_npc_names(snap)
 
     assert proj == tool, (
-        f"Resolved-encounter convergence: divergence proj={sorted(proj)} "
-        f"tool={sorted(tool)}."
+        f"Resolved-encounter convergence: divergence proj={sorted(proj)} tool={sorted(tool)}."
     )
     assert "ResolvedEncounterActor" not in proj, (
         "ResolvedEncounterActor kept despite (a) all location fields "
@@ -664,8 +655,7 @@ async def test_unified_predicate_drops_npc_with_all_none_location_fields() -> No
     tool = await _tool_npc_names(snap)
 
     assert proj == tool, (
-        f"All-None convergence: divergence proj={sorted(proj)} "
-        f"tool={sorted(tool)}."
+        f"All-None convergence: divergence proj={sorted(proj)} tool={sorted(tool)}."
     )
     assert "UnplacedNpc" not in proj, (
         "UnplacedNpc kept despite all three location fields being None "
@@ -930,14 +920,9 @@ def test_projection_otel_carries_encounter_anchored_count(
     # Drive the projection
     _projection_npc_names(snap)
 
-    matching = [
-        s
-        for s in exporter.get_finished_spans()
-        if s.name == "prompt.game_state.bytes"
-    ]
+    matching = [s for s in exporter.get_finished_spans() if s.name == "prompt.game_state.bytes"]
     assert len(matching) == 1, (
-        f"Expected exactly one prompt.game_state.bytes span; got "
-        f"{len(matching)}."
+        f"Expected exactly one prompt.game_state.bytes span; got {len(matching)}."
     )
     attrs = matching[0].attributes or {}
     got = attrs.get("encounter_anchored_count")

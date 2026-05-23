@@ -27,7 +27,6 @@ import pytest
 
 from sidequest.agents.orchestrator import NarrationTurnResult
 from sidequest.game.session import NarrativeEntry
-from sidequest.protocol.dispatch import DispatchPackage
 from tests.server.conftest import _build_turn_context_for_test
 
 # ---------------------------------------------------------------------------
@@ -71,23 +70,6 @@ class TestNarrativeEntryAuthorValidator:
 # ---------------------------------------------------------------------------
 
 
-def _fake_dispatch_package(turn_id: str = "t-test") -> DispatchPackage:
-    return DispatchPackage(
-        turn_id=turn_id,
-        per_player=[],
-        cross_player=[],
-        confidence_global=0.0,
-        degraded=False,
-        degraded_reason=None,
-    )
-
-
-def _fake_local_dm(turn_id: str = "t-test") -> MagicMock:
-    fake_dm = MagicMock()
-    fake_dm.decompose = AsyncMock(return_value=_fake_dispatch_package(turn_id))
-    return fake_dm
-
-
 def _captured_narrative_entries(sd) -> list[NarrativeEntry]:
     """Pull every NarrativeEntry passed to ``sd.store.append_narrative``.
 
@@ -114,11 +96,9 @@ class TestPlayerTurnAuthorWiring:
         sd.orchestrator.run_narration_turn = AsyncMock(
             return_value=NarrationTurnResult(
                 narration="The torch flickers as you approach.",
-                is_degraded=False,
                 agent_duration_ms=1,
             )
         )
-        sd.local_dm = _fake_local_dm("t-author")
 
         mock_validator = MagicMock()
         mock_validator.submit = AsyncMock()
@@ -164,11 +144,9 @@ class TestPlayerTurnAuthorWiring:
         sd.orchestrator.run_narration_turn = AsyncMock(
             return_value=NarrationTurnResult(
                 narration="…",
-                is_degraded=False,
                 agent_duration_ms=1,
             )
         )
-        sd.local_dm = _fake_local_dm("t-speaker")
 
         mock_validator = MagicMock()
         mock_validator.submit = AsyncMock()
@@ -197,11 +175,9 @@ class TestPlayerTurnAuthorWiring:
         sd.orchestrator.run_narration_turn = AsyncMock(
             return_value=NarrationTurnResult(
                 narration="…",
-                is_degraded=False,
                 agent_duration_ms=1,
             )
         )
-        sd.local_dm = _fake_local_dm("t-round")
 
         mock_validator = MagicMock()
         mock_validator.submit = AsyncMock()
@@ -234,11 +210,9 @@ class TestOpeningTurnSkipsPlayerAppend:
         sd.orchestrator.run_narration_turn = AsyncMock(
             return_value=NarrationTurnResult(
                 narration="The dome looms ahead.",
-                is_degraded=False,
                 agent_duration_ms=1,
             )
         )
-        sd.local_dm = _fake_local_dm("t-opening")
 
         mock_validator = MagicMock()
         mock_validator.submit = AsyncMock()

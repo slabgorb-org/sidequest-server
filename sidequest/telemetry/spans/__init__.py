@@ -57,11 +57,11 @@ from .dungeon_render import *  # noqa: F401, F403
 from .dungeon_setpiece import *  # noqa: F401, F403
 from .emitter import Emitter  # noqa: F401
 from .encounter import *  # noqa: F401, F403
+from .intent_router import *  # noqa: F401, F403
 from .interior import *  # noqa: F401, F403
 from .inventory import *  # noqa: F401, F403
 from .journal import *  # noqa: F401, F403
 from .lobby import *  # noqa: F401, F403
-from .local_dm import *  # noqa: F401, F403
 from .location import *  # noqa: F401, F403
 from .lore import *  # noqa: F401, F403
 from .magic import *  # noqa: F401, F403

@@ -70,14 +70,7 @@ class Referent(ProtocolBase):
     # Pingpong 2026-04-26 S2-OBS: the decomposer LLM occasionally emits a
     # ``list[str]`` of player IDs when a token like "the party" resolves to
     # multiple PCs (e.g. ``resolved_to=['Paul','John','George','Ringo']``).
-    # Pre-fix the schema only accepted ``str | None``, so the entire
-    # DispatchPackage was rejected via ValidationError, the turn was
-    # downgraded to a degraded empty package, and downstream subsystems
-    # never engaged. Accept either form so multi-target turns survive
-    # validation; ``local_dm._normalize_multi_target_resolved_to`` records a
-    # span attribute when normalization fires so the GM panel can see it.
-    # No production consumer reads this field today (only tests + the
-    # schema itself), so widening the type is non-breaking.
+    # Schema accepts either form so multi-target turns survive validation.
     resolved_to: str | list[str] | None = Field(
         default=None,
         description="Entity id, list of entity ids (multi-target), or None for absence.",
@@ -192,14 +185,13 @@ class DispatchPackage(ProtocolBase):
     per_player: list[PlayerDispatch] = Field(default_factory=list)
     cross_player: list[CrossAction] = Field(default_factory=list)
     confidence_global: float = Field(ge=0.0, le=1.0)
-    degraded: bool = False
-    degraded_reason: str | None = None
 
-    @model_validator(mode="after")
-    def _degraded_requires_reason(self) -> DispatchPackage:
-        if self.degraded and not self.degraded_reason:
-            raise ValueError("degraded=True requires non-null degraded_reason")
-        return self
+    # Note: the historical ``degraded`` / ``degraded_reason`` fields and the
+    # ``_degraded_requires_reason`` validator were removed by Story 59-2
+    # per ADR-113 and memory rule ``feedback_no_fallbacks_hard``. The
+    # Intent Router producer raises ``IntentRouterFailure`` on retry-fail
+    # instead of returning a degraded shape; downstream consumers no longer
+    # branch on a "degraded" flag.
 
     @model_validator(mode="after")
     def _unique_idempotency_keys(self) -> DispatchPackage:

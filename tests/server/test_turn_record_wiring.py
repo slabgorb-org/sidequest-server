@@ -12,26 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sidequest.agents.orchestrator import NarrationTurnResult
-from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.turn_record import TurnRecord
 from tests.server.conftest import _build_turn_context_for_test
-
-
-def _fake_dispatch_package(turn_id: str = "t-test") -> DispatchPackage:
-    return DispatchPackage(
-        turn_id=turn_id,
-        per_player=[],
-        cross_player=[],
-        confidence_global=0.0,
-        degraded=False,
-        degraded_reason=None,
-    )
-
-
-def _fake_local_dm(turn_id: str = "t-test") -> MagicMock:
-    fake_dm = MagicMock()
-    fake_dm.decompose = AsyncMock(return_value=_fake_dispatch_package(turn_id))
-    return fake_dm
 
 
 @pytest.mark.asyncio
@@ -46,7 +28,6 @@ async def test_dispatch_submits_turn_record_to_validator(session_fixture) -> Non
             agent_duration_ms=1,
         )
     )
-    sd.local_dm = _fake_local_dm("t-test")
 
     mock_validator = MagicMock()
     mock_validator.submit = AsyncMock()
@@ -79,7 +60,6 @@ async def test_turn_record_fields_populated(session_fixture) -> None:
             token_count_out=60,
         )
     )
-    sd.local_dm = _fake_local_dm("t-fields")
 
     mock_validator = MagicMock()
     mock_validator.submit = AsyncMock()
@@ -115,7 +95,6 @@ async def test_validator_none_does_not_raise(session_fixture) -> None:
             agent_duration_ms=1,
         )
     )
-    sd.local_dm = _fake_local_dm("t-none-validator")
 
     turn_context = _build_turn_context_for_test(sd)
     # Should not raise.

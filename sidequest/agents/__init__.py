@@ -36,8 +36,8 @@ from sidequest.agents.claude_client import (
     SubprocessFailed,
 )
 from sidequest.agents.claude_client import TimeoutError as ClaudeTimeoutError
+from sidequest.agents.intent_router import IntentRouter, IntentRouterFailure
 from sidequest.agents.llm_factory import UnknownBackend, build_llm_client
-from sidequest.agents.local_dm import LocalDM
 from sidequest.agents.model_routing import CallType, resolve_model
 from sidequest.agents.narrator import NarratorAgent, narrator_output_format_text
 from sidequest.agents.ollama_client import OllamaClient, OllamaClientError
@@ -83,8 +83,9 @@ from sidequest.agents.tooling_protocol import (
 )
 
 __all__ = [
-    # local dm decomposer (Group B)
-    "LocalDM",
+    # intent router producer (ADR-113, Story 59-2)
+    "IntentRouter",
+    "IntentRouterFailure",
     # narrator + orchestrator (Phase 1 — story 41-5)
     "NarratorAgent",
     "narrator_output_format_text",

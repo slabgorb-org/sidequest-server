@@ -10,7 +10,7 @@ be rooted in a ``turn`` span for the dashboard to group by turn.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -21,26 +21,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from sidequest.agents.orchestrator import NarrationTurnResult
-from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.setup import init_tracer
 from tests.server.conftest import _build_turn_context_for_test
-
-
-def _fake_dispatch_package(turn_id: str = "t-test") -> DispatchPackage:
-    return DispatchPackage(
-        turn_id=turn_id,
-        per_player=[],
-        cross_player=[],
-        confidence_global=0.0,
-        degraded=False,
-        degraded_reason=None,
-    )
-
-
-def _fake_local_dm(turn_id: str = "t-test") -> MagicMock:
-    fake_dm = MagicMock()
-    fake_dm.decompose = AsyncMock(return_value=_fake_dispatch_package(turn_id))
-    return fake_dm
 
 
 @pytest.fixture
@@ -79,11 +61,9 @@ async def test_dispatch_opens_turn_span(otel_capture, session_fixture) -> None:
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="You look around. Nothing happens.",
-            is_degraded=False,
             agent_duration_ms=1,
         )
     )
-    sd.local_dm = _fake_local_dm("t-test")
 
     turn_context = _build_turn_context_for_test(sd)
     await handler._execute_narration_turn(sd, "I look around.", turn_context)
@@ -116,11 +96,9 @@ async def test_turn_span_carries_required_attributes(otel_capture, session_fixtu
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="The torch flickers.",
-            is_degraded=False,
             agent_duration_ms=1,
         )
     )
-    sd.local_dm = _fake_local_dm("t-attrs")
 
     turn_context = _build_turn_context_for_test(sd)
     await handler._execute_narration_turn(sd, "I examine the torch.", turn_context)

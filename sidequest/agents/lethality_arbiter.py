@@ -35,7 +35,7 @@ from sidequest.protocol.dispatch import (
     NarratorDirective,
     VisibilityTag,
 )
-from sidequest.telemetry.spans import lethality_arbitrate_span
+from sidequest.telemetry.spans import intent_router_lethality_arbitrate_span
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class LethalityArbiter:
         pc_cores_by_player: dict[str, CreatureCore],
         npc_cores_by_name: dict[str, CreatureCore],
     ) -> LethalityResult:
-        with lethality_arbitrate_span(
+        with intent_router_lethality_arbitrate_span(
             turn_id=package.turn_id,
             genre_key=self._policy.genre_key,
         ) as span:

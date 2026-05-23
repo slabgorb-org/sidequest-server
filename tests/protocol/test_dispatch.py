@@ -26,10 +26,7 @@ def test_dispatch_package_minimal_valid():
         per_player=[],
         cross_player=[],
         confidence_global=1.0,
-        degraded=False,
-        degraded_reason=None,
     )
-    assert pkg.degraded is False
     assert pkg.per_player == []
 
 
@@ -100,8 +97,6 @@ def test_dispatch_package_full_roundtrip():
         ],
         cross_player=[],
         confidence_global=0.78,
-        degraded=False,
-        degraded_reason=None,
     )
     serialized = pkg.model_dump_json()
     parsed = DispatchPackage.model_validate_json(serialized)
@@ -157,29 +152,20 @@ def test_cross_action_names_participants_and_witnesses():
     assert set(ca.witnesses) >= set(ca.participants)
 
 
-def test_dispatch_package_degraded_reason_required_when_degraded():
-    """Spec §6.6 — degraded=True means degraded_reason is non-null."""
-    with pytest.raises(ValueError):
-        DispatchPackage(
-            turn_id="turn-err",
-            per_player=[],
-            cross_player=[],
-            confidence_global=0.0,
-            degraded=True,
-            degraded_reason=None,
-        )
-
-
 def test_dispatch_package_parses_from_llm_style_json():
-    """The decomposer emits raw JSON; parser must accept it."""
+    """The decomposer emits raw JSON; parser must accept it.
+
+    Story 59-2 removed the legacy ``degraded`` / ``degraded_reason`` fields
+    per ADR-113. Producer failure now raises ``IntentRouterFailure`` instead
+    of returning a degraded shape; ``tests/agents/test_intent_router.py``
+    covers the fail-loud retry semantics.
+    """
     raw = json.dumps(
         {
             "turn_id": "turn-x",
             "per_player": [],
             "cross_player": [],
             "confidence_global": 0.9,
-            "degraded": False,
-            "degraded_reason": None,
         }
     )
     pkg = DispatchPackage.model_validate_json(raw)
@@ -226,8 +212,6 @@ def test_dispatch_package_rejects_duplicate_idempotency_keys_within_player():
             ],
             cross_player=[],
             confidence_global=1.0,
-            degraded=False,
-            degraded_reason=None,
         )
 
 
@@ -268,6 +252,4 @@ def test_dispatch_package_rejects_duplicate_idempotency_keys_across_per_and_cros
             ],
             cross_player=[CrossAction(participants=["p"], witnesses=["p"], dispatch=[d_cross])],
             confidence_global=1.0,
-            degraded=False,
-            degraded_reason=None,
         )

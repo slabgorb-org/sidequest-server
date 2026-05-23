@@ -48,7 +48,6 @@ def _empty_package(turn_id: str = "turn-1", player_id: str = "alice") -> Dispatc
         per_player=[PlayerDispatch(player_id=player_id, raw_action="swing sword")],
         cross_player=[],
         confidence_global=1.0,
-        degraded=False,
     )
 
 

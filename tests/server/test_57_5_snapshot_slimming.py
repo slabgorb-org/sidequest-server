@@ -82,7 +82,19 @@ def _character(name: str) -> Character:
     )
 
 
-def _npc(name: str) -> Npc:
+def _npc(name: str, *, last_seen_location: str | None = "Main Hall") -> Npc:
+    """Build an Npc seated in-scene with the acting PC by default.
+
+    Story 61-2 / ADR-110 Phase C added an in-scene filter to
+    ``state_summary["npcs"]``: NPCs whose ``last_seen_location`` doesn't
+    match the acting PC's current room (or who aren't named in an
+    unresolved encounter's actor list) are dropped from the dump and
+    addressable only via ``npc_pool``. Seat the 57-5 fixture NPCs at
+    the acting PC's location ("Main Hall") so the
+    ``test_anchor_preserved_npcs_with_content`` contract — "NPCs the
+    fixture sets DO survive the per-turn projection" — still holds
+    under the new contract.
+    """
     return Npc(
         core=CreatureCore(
             name=name,
@@ -90,7 +102,8 @@ def _npc(name: str) -> Npc:
             personality="dour",
             inventory=Inventory(),
             edge=EdgePool(current=5, max=5, base_max=5),
-        )
+        ),
+        last_seen_location=last_seen_location,
     )
 
 

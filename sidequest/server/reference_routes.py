@@ -77,7 +77,10 @@ def _resolve_world_dir(pack_dir: Path, world: str) -> Path:
 def create_reference_router() -> APIRouter:
     router = APIRouter(prefix="/reference", tags=["reference"])
 
-    static_dir = Path(__file__).parent / "static"
+    # Use a dedicated subdirectory so the /reference/static route surface
+    # never accidentally aliases other files in sidequest/server/static/
+    # (dashboard.html, forensics.html, future package-level assets).
+    static_dir = Path(__file__).parent / "static" / "reference"
 
     # NOTE: We expose /reference/static/* via explicit APIRoutes rather than
     # router.mount(StaticFiles(...)), because FastAPI's APIRouter.include_router

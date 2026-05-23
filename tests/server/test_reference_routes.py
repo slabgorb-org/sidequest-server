@@ -6,6 +6,7 @@ later) hits the live tea_and_murder pack.
 """
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -113,6 +114,21 @@ def test_stylesheet_route_serves_css(tmp_path):
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/css")
     assert "body" in r.text
+
+
+@pytest.mark.parametrize("evil", [
+    "EVIL.css",        # uppercase rejected by regex
+    "..%2Fevil.css",   # URL-decoded traversal
+    ".hidden",         # leading dot, no extension
+    "/etc/passwd",     # absolute path attempt
+    "no_extension",    # missing dotted extension
+])
+def test_stylesheet_route_rejects_bad_filenames(tmp_path, evil):
+    """Any filename failing the safe-filename regex must 404, not 500 or 200."""
+    _seed_pack(tmp_path)
+    client = _build_app(tmp_path)
+    r = client.get(f"/reference/static/{evil}")
+    assert r.status_code == 404, f"Expected 404 for {evil!r}, got {r.status_code}"
 
 
 def test_malformed_yaml_returns_500_with_filename(tmp_path, monkeypatch):

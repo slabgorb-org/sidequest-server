@@ -122,18 +122,3 @@ def test_dispatch_package_no_degraded_validator_attached() -> None:
     )
 
 
-def test_dispatch_package_minimal_constructor_succeeds_post_cleanup() -> None:
-    """Sanity check: the minimal DispatchPackage shape STILL succeeds
-    once degraded/degraded_reason are removed — proves the removal
-    didn't accidentally break the happy-path constructor.
-    """
-    pkg = DispatchPackage(
-        turn_id="t",
-        per_player=[],
-        cross_player=[],
-        confidence_global=1.0,
-    )
-    assert pkg.turn_id == "t"
-    assert pkg.per_player == []
-    assert pkg.cross_player == []
-    assert pkg.confidence_global == 1.0

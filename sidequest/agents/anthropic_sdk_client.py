@@ -631,6 +631,26 @@ class AnthropicSdkClient:
     # session-cumulative cost ceiling (Story 61-followup-D §C)
     # ------------------------------------------------------------------
 
+    def _build_ceiling_exceeded(
+        self,
+        *,
+        session_id: str,
+        cumulative: float,
+    ) -> AnthropicSdkCostCeilingExceeded:
+        """Construct the typed ceiling-exceeded exception with the
+        canonical message + actionable fields. Centralized so the
+        three raise sites (pre-flight, already-announced re-raise,
+        first-crossing raise) cannot drift in wording or field shape.
+        """
+        return AnthropicSdkCostCeilingExceeded(
+            f"Session {session_id!r} has exceeded its "
+            f"${self.session_cost_ceiling_usd:.2f} ceiling "
+            f"(cumulative=${cumulative:.4f}).",
+            session_id=session_id,
+            cumulative_cost_usd=cumulative,
+            ceiling_usd=self.session_cost_ceiling_usd,
+        )
+
     def _check_cost_ceiling(self, session_id: str) -> None:
         """Pre-flight check at the entry of ``complete_with_tools``.
 
@@ -643,13 +663,8 @@ class AnthropicSdkClient:
         """
         cumulative = self._session_cumulative_cost_usd.get(session_id, 0.0)
         if cumulative >= self.session_cost_ceiling_usd:
-            raise AnthropicSdkCostCeilingExceeded(
-                f"Session {session_id!r} has exceeded its "
-                f"${self.session_cost_ceiling_usd:.2f} ceiling "
-                f"(cumulative=${cumulative:.4f}).",
-                session_id=session_id,
-                cumulative_cost_usd=cumulative,
-                ceiling_usd=self.session_cost_ceiling_usd,
+            raise self._build_ceiling_exceeded(
+                session_id=session_id, cumulative=cumulative
             )
 
     def _update_session_cumulative(
@@ -679,13 +694,8 @@ class AnthropicSdkClient:
         # happen in practice (the loop raises on first cross) but the
         # guard is cheap.
         if session_id in self._session_ceiling_announced:
-            raise AnthropicSdkCostCeilingExceeded(
-                f"Session {session_id!r} has exceeded its "
-                f"${self.session_cost_ceiling_usd:.2f} ceiling "
-                f"(cumulative=${cumulative:.4f}).",
-                session_id=session_id,
-                cumulative_cost_usd=cumulative,
-                ceiling_usd=self.session_cost_ceiling_usd,
+            raise self._build_ceiling_exceeded(
+                session_id=session_id, cumulative=cumulative
             )
 
         self._session_ceiling_announced.add(session_id)
@@ -708,13 +718,8 @@ class AnthropicSdkClient:
             component="narrator.sdk",
             severity="error",
         )
-        raise AnthropicSdkCostCeilingExceeded(
-            f"Session {session_id!r} has exceeded its "
-            f"${self.session_cost_ceiling_usd:.2f} ceiling "
-            f"(cumulative=${cumulative:.4f}).",
-            session_id=session_id,
-            cumulative_cost_usd=cumulative,
-            ceiling_usd=self.session_cost_ceiling_usd,
+        raise self._build_ceiling_exceeded(
+            session_id=session_id, cumulative=cumulative
         )
 
     def _emit_cost_running_total(

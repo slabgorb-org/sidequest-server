@@ -366,3 +366,69 @@ async def test_sdk_path_context_missing_ids_still_fires_when_unwired(
         "context_missing_ids warning did NOT fire for a genuinely unwired "
         "TurnContext — the fail-loud guard was lost"
     )
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_context_missing_lore_store_fires_when_ids_present_but_lore_unwired(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Story 61-8 §A — defense-in-depth on the Phase-E lore_store seam.
+
+    A regression in ``_build_turn_context`` that drops
+    ``lore_store=sd.lore_store`` would slip past the umbrella
+    ``context_missing_ids`` guard because world_id/session_id are still
+    populated. The dedicated ``context_missing_lore_store`` warning
+    catches this partial-wiring failure mode — the same one that
+    originally produced the 61-1 ``hit_count=0`` confabulation bug.
+    """
+    ctx = TurnContext(
+        character_name="Alice",
+        world_id="mawdeep",
+        session_id="2026-05-23-caverns_mawdeep-1",
+        turn_number=3,
+        store=MagicMock(),
+        lore_store=None,
+    )
+    with caplog.at_level(logging.WARNING):
+        await _run_sdk_and_capture_ctx(monkeypatch, ctx)
+
+    assert any("context_missing_lore_store" in rec.message for rec in caplog.records), (
+        "context_missing_lore_store warning did NOT fire even though "
+        "lore_store=None with present ids — the defense-in-depth guard "
+        "must catch a partial-wiring regression that the umbrella "
+        "context_missing_ids check would miss."
+    )
+    # The umbrella warning MUST NOT fire (ids ARE present); this is the
+    # whole point of separating the two warnings — distinct GM-panel signals.
+    assert not any("context_missing_ids" in rec.message for rec in caplog.records), (
+        "context_missing_ids fired despite ids being present — that "
+        "warning is reserved for the umbrella unwired-TurnContext case."
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_context_missing_lore_store_silent_when_fully_wired(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression guard: a fully-wired TurnContext (ids + lore_store)
+    MUST NOT fire either defense-in-depth warning. Both guards together
+    must stay quiet on the green path or they devolve into noise."""
+    ctx = TurnContext(
+        character_name="Alice",
+        world_id="mawdeep",
+        session_id="2026-05-23-caverns_mawdeep-1",
+        turn_number=3,
+        store=MagicMock(),
+        lore_store=_seeded_lore_store(),
+    )
+    with caplog.at_level(logging.WARNING):
+        await _run_sdk_and_capture_ctx(monkeypatch, ctx)
+
+    assert not any("context_missing_lore_store" in rec.message for rec in caplog.records), (
+        "lore_store warning fired despite lore_store being wired"
+    )
+    assert not any("context_missing_ids" in rec.message for rec in caplog.records), (
+        "umbrella context_missing_ids warning fired on the green path"
+    )

@@ -111,6 +111,14 @@ async def list_npcs_in_scene(args: ListNpcsInSceneArgs, ctx: ToolContext) -> Too
     encounter = snapshot.encounter
     matched: list[Npc]
     encounter_anchored_count = 0
+    # Story 61-8 §D2 — silent-failure-hunter follow-up. The eff-is-None
+    # branch returns the full roster as designed, but pre-§D2 the GM
+    # panel could not distinguish "filter applied and kept everyone"
+    # from "filter was bypassed entirely". Surface the branch as a
+    # dedicated boolean OTEL attribute so observability operators can
+    # tell a degraded scene-context state apart from a fully-engaged
+    # filter that happened to retain everyone.
+    encounter_bypassed = eff is None
     if eff is None:
         # No scene context (no perspective_pc, or PC not in snapshot, or
         # PC has no current_room, or caller passed empty scene_id) —
@@ -144,8 +152,8 @@ async def list_npcs_in_scene(args: ListNpcsInSceneArgs, ctx: ToolContext) -> Too
     }
 
     ctx.otel_span.set_attribute("tool.npcs.count", len(matched))
-    ctx.otel_span.set_attribute(
-        "tool.npcs.encounter_anchored_count", encounter_anchored_count
-    )
+    ctx.otel_span.set_attribute("tool.npcs.encounter_anchored_count", encounter_anchored_count)
+    # Story 61-8 §D2 — see comment block at the branch above.
+    ctx.otel_span.set_attribute("tool.npcs.encounter_bypassed", encounter_bypassed)
 
     return ToolResult.ok(payload)

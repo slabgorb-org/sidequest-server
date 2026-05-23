@@ -14,7 +14,7 @@ in the incident even if its severity had been ERROR.
 
 Story 61-3 promotes the seam to a HARD refuse on the SDK path:
 
-1. When `total_bytes > SOFT_PROMPT_BUDGET_BYTES`, the SDK call does
+1. When `total_bytes > PROMPT_BUDGET_BYTES_HARD`, the SDK call does
    NOT fire and `run_narration_turn` returns a degraded
    `NarrationTurnResult` (in-fiction stall).
 2. The emit is LOUD: `logger.error` (not WARNING) + a NEW watcher
@@ -100,7 +100,7 @@ async def test_oversized_prompt_refuses_sdk_call_and_returns_degraded(
     `NarrationTurnResult` carrying narration text (so the player
     surface doesn't hang).
     """
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     fake = FakeAnthropicSdkClient(responses=[_end_turn()])
     orch = Orchestrator(client=fake)
@@ -170,7 +170,7 @@ async def test_oversized_canary_emits_loud_event_to_gm_panel(
     sock = _FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     fake = FakeAnthropicSdkClient(responses=[_end_turn()])
     orch = Orchestrator(client=fake)
@@ -220,7 +220,7 @@ async def test_oversized_canary_logs_at_error_level_not_warning(
       - No WARNING-level record carrying the same prefix (regression guard
         against accidental `logger.warning` reintroduction).
     """
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     fake = FakeAnthropicSdkClient(responses=[_end_turn()])
     orch = Orchestrator(client=fake)
@@ -268,7 +268,7 @@ async def test_canary_emits_exactly_once_per_oversized_call(
     sock = _FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     fake = FakeAnthropicSdkClient(responses=[_end_turn(), _end_turn()])
     orch = Orchestrator(client=fake)
@@ -308,7 +308,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
 
     Architect's spec-check (61-3, answer B) verified the canary is correctly
     placed at prompt-construction time on both paths against the same
-    ``SOFT_PROMPT_BUDGET_BYTES`` measure — but did NOT measure end-to-end
+    ``PROMPT_BUDGET_BYTES_HARD`` measure — but did NOT measure end-to-end
     shape parity. This probe ratifies that finding empirically and guards
     against future drift between the two paths (e.g., a tweak to the SDK
     refuse narration that isn't mirrored on the sync path would leave the
@@ -333,7 +333,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
 
     from sidequest.agents.claude_client import ClaudeResponse
 
-    monkeypatch.setattr(orch_mod, "SOFT_PROMPT_BUDGET_BYTES", 10)
+    monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     # --- SDK path ---------------------------------------------------------
     sdk_sock = _FakeSocket()
@@ -344,9 +344,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
     sdk_result = await sdk_orch.run_narration_turn("look around", simple_turn_context)
     await asyncio.sleep(0.05)
 
-    sdk_events = [
-        e for e in sdk_sock.events if e.get("event_type") == "prompt_oversized_hard"
-    ]
+    sdk_events = [e for e in sdk_sock.events if e.get("event_type") == "prompt_oversized_hard"]
 
     # Clear subscribers so the synchronous-path subscription doesn't also
     # receive any residual SDK-path events (defensive isolation).
@@ -365,9 +363,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
     sync_result = await sync_orch.run_narration_turn("look around", simple_turn_context)
     await asyncio.sleep(0.05)
 
-    sync_events = [
-        e for e in sync_sock.events if e.get("event_type") == "prompt_oversized_hard"
-    ]
+    sync_events = [e for e in sync_sock.events if e.get("event_type") == "prompt_oversized_hard"]
 
     # --- Parity assertions ------------------------------------------------
     # 1+2. Result shape: is_degraded + narration text.

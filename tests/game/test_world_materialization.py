@@ -349,6 +349,76 @@ class TestWorldBuilderBuild:
         # description from Fresh persists (Early didn't declare one)
         assert drakul.core.description == "A sage."
 
+    def test_npc_chapter_apply_also_seeds_npc_pool(self) -> None:
+        """Story 61-8 §B — npc_pool exhaustiveness.
+
+        ``_apply_phase_c_projections`` drops off-stage NPCs from the
+        prompt's in-scene list (Story 61-2). Identity preservation
+        depends on ``snap.npc_pool`` carrying every NPC the projection
+        might drop. Pre-§B, ``_apply_npc`` populated ``snap.npcs`` only
+        and the auto-mint-from-prose path was the sole writer to
+        ``npc_pool`` — meaning world-authored NPCs the projection
+        dropped were invisible to the narrator until they happened to be
+        prose-cited.
+        """
+        snap = (
+            WorldBuilder()
+            .with_chapters(
+                [
+                    _fresh_chapter(
+                        npcs=[
+                            ChapterNpc(name="Drakul", description="A sage."),
+                            ChapterNpc(name="Mira", description="A scout."),
+                        ]
+                    ),
+                ]
+            )
+            .build()
+        )
+        pool_names = {m.name for m in snap.npc_pool}
+        assert "Drakul" in pool_names, (
+            "World-authored NPC Drakul missing from npc_pool — the "
+            "61-2 projection's off-scene drop branch would lose this "
+            "NPC's identity entirely."
+        )
+        assert "Mira" in pool_names
+        drakul_member = next(m for m in snap.npc_pool if m.name == "Drakul")
+        assert drakul_member.drawn_from == "world_authored", (
+            "World-authored pool member must carry drawn_from="
+            "'world_authored' so the auto-mint pipeline can distinguish "
+            "canonical chapter NPCs from prose-extracted ones."
+        )
+        assert drakul_member.observation_pending is False, (
+            "World-authored NPCs enter the pool already ratified — "
+            "they are canonical at chapter-apply time, not prose-"
+            "auto-minted."
+        )
+
+    def test_npc_chapter_apply_pool_seed_is_idempotent(self) -> None:
+        """Story 61-8 §B — idempotency on repeated chapter apply.
+
+        Re-applying the same chapter (e.g. cross-chapter NPC re-citation)
+        must not duplicate the pool entry; identity stays one-to-one
+        with ``snap.npcs``.
+        """
+        snap = (
+            WorldBuilder()
+            .at_maturity(CampaignMaturity.Early)
+            .with_chapters(
+                [
+                    _fresh_chapter(npcs=[ChapterNpc(name="Drakul")]),
+                    _early_chapter(npcs=[ChapterNpc(name="Drakul", disposition=-5)]),
+                ]
+            )
+            .build()
+        )
+        drakul_members = [m for m in snap.npc_pool if m.name == "Drakul"]
+        assert len(drakul_members) == 1, (
+            f"Duplicate pool entries for Drakul: {len(drakul_members)} — "
+            "the idempotency guard in _apply_npc must skip when a member "
+            "with the same name already exists."
+        )
+
     def test_blank_npc_name_skipped(self) -> None:
         snap = (
             WorldBuilder()

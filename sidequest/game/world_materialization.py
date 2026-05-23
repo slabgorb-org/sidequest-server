@@ -41,6 +41,7 @@ from sidequest.game.history_chapter import (
     ChapterTrope,
     HistoryChapter,
 )
+from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import NarrativeEntry, Npc, TropeState
 from sidequest.genre.models.authored_npc import AuthoredNpc
 
@@ -435,7 +436,13 @@ class WorldBuilder:
         disposition, description, personality, location in place. New
         NPC → append a new ``Npc`` with chapter data and defaults for
         Phase-1-deferred fields (OCEAN, belief state, resolution tier,
-        archetype axes).
+        archetype axes), AND register an identity-only
+        ``NpcPoolMember`` so the 61-2 npcs projection can drop the NPC
+        from the prompt's in-scene list without losing identity (Story
+        61-8 §B — closes the exhaustiveness gap that the 61-2 review
+        flagged: off-stage NPCs the projection drops must retain
+        identity in ``snap.npc_pool`` so the narrator can still cite
+        them by name).
         """
         if not npc_data.name:
             return
@@ -484,6 +491,26 @@ class WorldBuilder:
                 resolved_archetype=None,
             )
         )
+        # Story 61-8 §B — npc_pool exhaustiveness. Append an
+        # identity-only pool member whenever we mint a new ``Npc`` so
+        # the prompt-projection's drop branch always has a fallback
+        # identity to cite. Idempotent vs the same name (auto-mint
+        # path may have added a pending entry from prose; world-
+        # authored NPCs override that with ``observation_pending=False``
+        # since they are canonical at chapter-apply time).
+        existing_member = next((m for m in snap.npc_pool if m.name == npc_data.name), None)
+        if existing_member is None:
+            snap.npc_pool.append(
+                NpcPoolMember(
+                    name=npc_data.name,
+                    role=None,
+                    pronouns=None,
+                    appearance=None,
+                    archetype_id=None,
+                    drawn_from="world_authored",
+                    observation_pending=False,
+                )
+            )
 
     # ------------------------------------------------------------------
     # apply_trope — upsert a trope state by definition id

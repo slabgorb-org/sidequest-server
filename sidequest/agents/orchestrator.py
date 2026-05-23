@@ -228,7 +228,11 @@ def _compute_cache_blocks(
 # ---------------------------------------------------------------------------
 
 NARRATOR_MODEL: str = "opus"
-SOFT_PROMPT_BUDGET_BYTES = 2_000_000  # ~500K tokens, half of Opus 4.7's 1M window (ADR-098)
+# Story 61-3 promoted this from a soft warning to a hard refuse-or-truncate cap.
+# Renamed in 61-8 §C1 to stop the "lying name" the Reviewer flagged (the
+# behavior gate is HARD: cross this and the SDK call is refused before billing).
+# ~500K tokens, half of Opus 4.7's 1M window (ADR-098).
+PROMPT_BUDGET_BYTES_HARD = 2_000_000
 
 # Recency-zone narrative-window tunables (Story 49-1; tightened to K=2 in 57-1).
 # K=2 = 1 player turn + 1 narrator turn. Cap (not floor): any non-empty
@@ -2972,7 +2976,7 @@ class Orchestrator:
     ) -> bool:
         """Hard-cap canary (Story 61-3 — promotes ADR-098 §Bound canary).
 
-        When ``len(system_prompt) + len(user_message) > SOFT_PROMPT_BUDGET_BYTES``
+        When ``len(system_prompt) + len(user_message) > PROMPT_BUDGET_BYTES_HARD``
         (~2 MB ≈ 500K tokens, half of Opus 4.7's 1M window), refuses the
         narrator turn. The 2026-05-23 incident burned $313 in 48h while a
         SOFT warning scrolled past unread overnight; the hard refuse stops
@@ -2992,7 +2996,7 @@ class Orchestrator:
             in the caller — this method does not raise.
         """
         total = len(system_prompt) + len(user_message)
-        if total <= SOFT_PROMPT_BUDGET_BYTES:
+        if total <= PROMPT_BUDGET_BYTES_HARD:
             return False
         from sidequest.telemetry.watcher_hub import publish_event as _pub
 
@@ -3002,14 +3006,14 @@ class Orchestrator:
         logger.error(
             "narrator.prompt_oversized total_bytes=%d budget=%d sections=%d action=refuse",
             total,
-            SOFT_PROMPT_BUDGET_BYTES,
+            PROMPT_BUDGET_BYTES_HARD,
             len(breakdown),
         )
         _pub(
             "prompt_oversized_hard",
             {
                 "total_bytes": total,
-                "budget": SOFT_PROMPT_BUDGET_BYTES,
+                "budget": PROMPT_BUDGET_BYTES_HARD,
                 "sections": breakdown,
                 "action": "refuse",
             },
@@ -3355,7 +3359,7 @@ class Orchestrator:
         branching. If the first attempt fails transiently, retry once;
         otherwise return a degraded :class:`NarrationTurnResult`.
         """
-        with orchestrator_process_action_span(action_len=len(action)):
+        with orchestrator_process_action_span(action_len=len(action)) as _action_span:
             agent_name = self._narrator.name()
 
             prompt_text, registry = await self.build_narrator_prompt(action, context)
@@ -3365,6 +3369,11 @@ class Orchestrator:
                 # Story 61-3: hard refuse short-circuits the SDK call. The
                 # loud emit inside _check_oversized_prompt pages the operator;
                 # the degraded result keeps the player surface alive.
+                # Story 61-8 §C2: stamp the action span so the GM panel can
+                # red-band-color the per-turn ribbon (companion to the
+                # watcher event — the event flags the moment, the span
+                # attribute lets a per-turn view color the whole turn).
+                _action_span.set_attribute("refused_oversized", True)
                 return self._degraded_result(
                     action=action,
                     context=context,
@@ -3433,7 +3442,7 @@ class Orchestrator:
                 f"{type(self._client).__name__!r}"
             )
 
-        with orchestrator_process_action_span(action_len=len(action)):
+        with orchestrator_process_action_span(action_len=len(action)) as _action_span:
             agent_name = self._narrator.name()
 
             # build_narrator_prompt skips its build-time prompt_assembled on the
@@ -3497,6 +3506,10 @@ class Orchestrator:
             if self._check_oversized_prompt(
                 system_prompt_total, user_message, registry, agent_name
             ):
+                # Story 61-8 §C2 — see synchronous-path twin above. Stamp
+                # the per-turn action span so a future GM-panel per-turn
+                # view can red-band-color the entire refused turn.
+                _action_span.set_attribute("refused_oversized", True)
                 return self._degraded_result(
                     action=action,
                     context=context,
@@ -3539,6 +3552,26 @@ class Orchestrator:
                     "narrator.sdk_path.context_missing_ids — world_id=%s "
                     "session_id=%s unexpectedly missing post-wiring; check "
                     "_build_turn_context (should never fire in production).",
+                    world_id,
+                    session_id,
+                )
+            # Story 61-8 §A: defense-in-depth on the Phase-E lore_store
+            # seam. The umbrella ``context_missing_ids`` guard above only
+            # catches the unwired-TurnContext case (world_id/session_id
+            # missing). A REGRESSION in ``_build_turn_context`` that drops
+            # ``lore_store=sd.lore_store`` would slip past — ids would be
+            # present, ``query_lore`` would silently return
+            # ``lore_store_wired=False``, and the narrator would
+            # confabulate canon (the original 61-1 failure mode). Fire a
+            # separate warning so the GM panel sees the partial-wiring
+            # regression distinctly from the umbrella case.
+            if context.lore_store is None and world_id != "unknown" and session_id != "adhoc":
+                logger.warning(
+                    "narrator.sdk_path.context_missing_lore_store — "
+                    "world_id=%s session_id=%s has present ids but "
+                    "lore_store=None; query_lore will return "
+                    "lore_store_wired=False. Check _build_turn_context "
+                    "thread-through of sd.lore_store.",
                     world_id,
                     session_id,
                 )

@@ -29,7 +29,7 @@ async def test_oversized_prompt_refuses_and_returns_degraded(simple_turn_context
 
     orch = Orchestrator(client=client)
     with (
-        patch("sidequest.agents.orchestrator.SOFT_PROMPT_BUDGET_BYTES", 10),
+        patch("sidequest.agents.orchestrator.PROMPT_BUDGET_BYTES_HARD", 10),
         caplog.at_level(logging.ERROR, logger="sidequest.agents.orchestrator"),
     ):
         result = await orch._run_narration_turn_synchronous("look", simple_turn_context)

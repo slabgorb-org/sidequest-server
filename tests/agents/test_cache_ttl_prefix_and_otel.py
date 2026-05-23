@@ -15,14 +15,15 @@ Two guarantees the 1h ephemeral-cache restore depends on:
    amortization (paired with the already-emitted
    ``narration.turn.cache_write_tokens``) and prove the fix engaged.
 
-NOTE (Story 60-3, 2026-05-22): byte-stability (gate #1) is NECESSARY but
-NOT SUFFICIENT for the 1h rebate to materialize. The prefix is confirmed
-byte-identical, yet the narrator's tool-use loop still re-mints it at 5m on
-every continuation call (the appended tool_use/tool_result messages carry no
-cache breakpoint), so the "amortization" in #2 does not yet hold in practice.
-60-4 adds a moving 1h breakpoint on the continuation. These tests remain valid
-as the stability + wiring gate; they do NOT prove the rebate is realized. See
-sprint/archive/60-3-session.md.
+UPDATE (Story 60-4, 2026-05-23): the moving 1h cache_control breakpoint on
+the tool-loop continuation has landed in ``complete_with_tools``, so the
+rebate now materializes on continuation calls (measured: prefix write moves
+from ephemeral_5m to ephemeral_1h, next identical continuation reads it at
+write=0). These tests remain the stability + wiring gate they always were;
+the realized-rebate behavior is now covered by
+``tests/agents/test_60_4_continuation_cache_breakpoint.py``. See
+``sprint/archive/60-3-session.md`` (diagnosis) and
+``sprint/archive/60-4-session.md`` (fix).
 """
 
 from __future__ import annotations

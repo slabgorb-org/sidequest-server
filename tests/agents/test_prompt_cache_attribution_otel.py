@@ -363,19 +363,21 @@ async def test_stable_block_digest_stable_across_unchanging_turns(
 
 
 @pytest.mark.asyncio
-async def test_state_section_in_cached_zone_is_flagged_miszoned(
+async def test_user_bucket_state_in_cached_zone_is_not_miszoned(
     bound_hub: WatcherHub, simple_turn_context: TurnContext
 ) -> None:
-    """A ``state``-category section that lands in a cached *zone* (Early) MUST
-    be flagged ``mis_zoned: true``. Drives the real registration of
-    ``narrator_available_confrontations`` (Early / State) by setting
-    ``available_confrontations`` on a peace context.
+    """Story 60-4: ``mis_zoned`` ANDs with bucket. A ``state``-category
+    section that lands in a cached *zone* (Early) but is User-bucket — i.e.,
+    routes to the uncached user message, NOT ``system_blocks[0]`` — must
+    return ``mis_zoned=False``. ``narrator_available_confrontations`` is the
+    canonical example: it's State + Early + User-bucket, and 60-3 measured
+    that it never touches the cached block.
 
-    NOTE (60-3): ``mis_zoned`` is a zone-only heuristic — this section is
-    User-bucket, so it does NOT actually ride ``system_blocks[0]`` and was NOT
-    the block-0 cost driver. The flag is retained as a zoning smell, but the
-    per-section ``cached`` field is the authoritative "rides the cached block"
-    signal. See sprint/archive/60-3-session.md."""
+    This test enforces the corrected semantics. The pre-60-4 zone-only
+    bucket-blind shape returned ``True`` here, false-flagging the section as
+    the cache-churn culprit (it isn't). See
+    ``sprint/archive/60-3-session.md`` and ``sprint/archive/60-4-session.md``.
+    """
     ctx = replace(
         simple_turn_context,
         available_confrontations=[("negotiation", "Parley with the Sheriff", "social")],
@@ -403,13 +405,25 @@ async def test_state_section_in_cached_zone_is_flagged_miszoned(
     flagged = sections_by_name["narrator_available_confrontations"]
     assert flagged["category"] == "state"
     assert flagged["_zone"] in CACHED_ZONES
-    assert flagged["mis_zoned"] is True, (
-        "a state-category section in a cached zone is the wasted-write bug "
-        "signature and MUST be flagged mis_zoned=True"
+    # The section IS in a cached zone AND is state-category, but bucket=User
+    # so it doesn't actually ride the cached block. Per the 60-4 AND-correction,
+    # mis_zoned must be False here.
+    assert flagged["cached"] is False, (
+        "narrator_available_confrontations is User-bucket — the per-section "
+        "cached flag (bucket-aware) must report False even though the zone "
+        "itself is cached"
+    )
+    assert flagged["mis_zoned"] is False, (
+        "Story 60-4: mis_zoned now ANDs zone-cached with bucket. A User-bucket "
+        "state section routes to the uncached user message and CANNOT churn "
+        "system_blocks[0] — so flagging it would be the false positive 60-3 "
+        "disproved. The corrected positive case (System-bucket + State + cached "
+        "zone) is covered by tests/agents/test_60_4_mis_zoned_bucket_correction.py."
     )
 
-    # Negative case: a non-state section in the SAME cached zone must NOT be
-    # flagged — the flag is specific to volatile state, not all cached content.
+    # Negative case (unchanged across 60-4): a non-state section in the SAME
+    # cached zone must NOT be flagged — mis_zoned is specifically about
+    # volatile state, not all cached content.
     non_state_cached = [
         s
         for s in sections_by_name.values()

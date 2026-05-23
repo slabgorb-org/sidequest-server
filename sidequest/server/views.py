@@ -456,6 +456,37 @@ def party_member_from_character(
     class_nbs = NonBlankString(character.char_class or "Adventurer")
     char_name_nbs = NonBlankString(character.core.name)
 
+    # Reference URL for the class rules page. class_def being non-None means
+    # this class is in classes.yaml — use it as the registry check directly
+    # (the lookup was already done above for class_moves). No second lookup needed.
+    from sidequest.server.reference_anchors import reference_url_for_class
+    from sidequest.telemetry.spans.reference import (
+        reference_url_attached_span,
+        reference_url_skipped_span,
+    )
+
+    class_reference_url: str | None = None
+    if class_def is not None:
+        class_reference_url = reference_url_for_class(
+            pack=sd.genre_slug, class_name=character.char_class or "Adventurer"
+        )
+        with reference_url_attached_span(
+            kind="class",
+            pack=sd.genre_slug,
+            world=None,
+            keys=(character.char_class or "Adventurer",),
+        ):
+            pass
+    else:
+        with reference_url_skipped_span(
+            kind="class",
+            pack=sd.genre_slug,
+            world=None,
+            keys=(character.char_class or "Adventurer",),
+            reason="not_in_classes_yaml",
+        ):
+            pass
+
     return PartyMember(
         player_id=NonBlankString(player_id or "anon"),
         name=NonBlankString(player_name or "Player"),
@@ -469,6 +500,7 @@ def party_member_from_character(
         current_location=location_nbs,
         sheet=sheet,
         inventory=inventory_payload,
+        class_reference_url=class_reference_url,
     )
 
 

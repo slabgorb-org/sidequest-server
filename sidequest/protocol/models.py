@@ -420,6 +420,9 @@ class PartyMember(ProtocolBase):
     """Full character sheet. None until chargen completes."""
     inventory: InventoryPayload | None = None
     """Full inventory snapshot. None until the member has a loadout."""
+    class_reference_url: str | None = None
+    """URL to /reference/rules/<pack>#class-<slug>. Populated when the
+    class is a known classes.yaml entry; None otherwise."""
 
 
 # ---------------------------------------------------------------------------

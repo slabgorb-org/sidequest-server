@@ -124,3 +124,53 @@ def test_render_empty_list_emits_em_placeholder():
 
 def test_render_empty_dict_emits_em_placeholder():
     assert render_node({}) == "<p><em>(empty)</em></p>"
+
+
+def test_render_mixed_list_threads_scalars_and_sections():
+    """Heterogeneous list — scalar, dict, scalar — must emit scalar <p>,
+    then a sectioned dict, then another scalar <p>, in order. Pins the
+    fallthrough path in _render_list for non-dict, non-list items.
+    """
+    html = render_node(["before", {"name": "middle"}, "after"])
+    p_before = html.index("<p>before</p>")
+    section_mid = html.index('<section id="middle">')
+    p_after = html.index("<p>after</p>")
+    assert p_before < section_mid < p_after
+
+
+def test_render_list_item_with_empty_name_falls_through_to_index():
+    """An item with name="" produces an unusable heading; must fall through
+    to Item N rather than silently emitting <section id="">.
+    """
+    html = render_node([{"name": "", "value": "v1"}, {"name": "", "value": "v2"}])
+    assert '<section id="item-1">' in html
+    assert "<h3>Item 1</h3>" in html
+    assert '<section id="item-2">' in html
+    assert "<h3>Item 2</h3>" in html
+    # No empty id should be emitted
+    assert 'id=""' not in html
+
+
+def test_render_list_item_with_unicode_only_name_falls_through_to_index():
+    """A name whose slug is empty (unicode-only) still falls through to the
+    index-based heading. The display value is kept (no information loss),
+    only the anchor uses the fallback.
+    """
+    html = render_node([{"name": "日本"}, {"name": "中文"}])
+    # Anchors fall back to Item N
+    assert '<section id="item-1">' in html
+    assert '<section id="item-2">' in html
+    # But the display headings still show what the author wrote
+    assert "<h3>日本</h3>" in html
+    assert "<h3>中文</h3>" in html
+    assert 'id=""' not in html
+
+
+def test_render_list_item_name_priority_skips_falsy_intermediate():
+    """When the first field is empty/unusable but the second is valid, the
+    code must continue iterating rather than falling all the way through
+    to the index fallback. Priority order: name -> id -> title -> index.
+    """
+    html = render_node([{"name": "", "id": "fallback-id", "value": "x"}])
+    assert '<section id="fallback-id">' in html
+    assert "<h3>fallback-id</h3>" in html

@@ -61,15 +61,36 @@ _NAME_FIELDS = ("name", "id", "title")
 
 
 def _heading_for_item(item: dict, index: int) -> tuple[str, str]:
-    """Return (slug, display) for a list-of-dict item heading."""
+    """Return (slug, display) for a list-of-dict item heading.
+
+    Iterates name -> id -> title looking for a usable value. A value is
+    "usable" when, after str() and strip(), it is non-empty. Empty strings
+    fall through to the next field, then to "Item N". If the chosen value
+    slugifies to "" (e.g. unicode-only), the index-based slug is used but
+    the readable display is preserved.
+    """
+    fallback_display = f"Item {index + 1}"
+    fallback_slug = slugify(fallback_display)
     for field in _NAME_FIELDS:
-        if field in item and item[field] is not None:
-            value = str(item[field])
-            return slugify(value), value
-    fallback = f"Item {index + 1}"
-    return slugify(fallback), fallback
+        raw = item.get(field)
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if not value:
+            continue
+        slug = slugify(value)
+        if not slug:
+            # Display value survived but produced an empty slug (e.g. unicode-only).
+            # Keep the readable display, fall back to the index-based slug so we
+            # never emit id="".
+            return fallback_slug, value
+        return slug, value
+    return fallback_slug, fallback_display
 
 
+# TODO(reference v2): two list items with the same name produce duplicate id
+# attributes; acceptable for v1, fix with per-list seen-set when authoring
+# friction surfaces it.
 def _render_list(items: list) -> str:
     if all(not isinstance(item, (dict, list)) for item in items):
         lis = "".join(f"<li>{escape(str(item))}</li>" for item in items)

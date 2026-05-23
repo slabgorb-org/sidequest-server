@@ -535,6 +535,11 @@ class LocationEntity(BaseModel):
     ] = "authored"
     promoted_at_turn: int | None = None
     promoted_canon: str | None = None
+    reference_url: str | None = None
+    """URL into /reference/lore/<pack>/<world>#location-<slug>. Populated
+    server-side when pack + world + label are in scope at construction.
+    The lore page's bad-anchor banner (Task 4) handles cases where the
+    label doesn't match a rendered locations.yaml entry."""
 
 
 class EncounterLocationOverlay(BaseModel):

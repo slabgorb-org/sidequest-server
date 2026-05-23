@@ -595,3 +595,112 @@ def test_journal_request_handler_no_url_for_person_fact() -> None:
     entries = result[0].payload.entries
     assert len(entries) == 1
     assert entries[0].reference_url is None
+
+
+# ---------------------------------------------------------------------------
+# Task 9 — LocationEntity.reference_url field
+# ---------------------------------------------------------------------------
+
+
+def test_location_entity_accepts_reference_url() -> None:
+    from sidequest.protocol.models import LocationEntity
+
+    entity = LocationEntity(
+        id="vicarage",
+        label="The Vicarage",
+        tier="real_object",
+        reference_url="/reference/lore/tea_and_murder/glenross#location-the-vicarage",
+    )
+    assert entity.reference_url == ("/reference/lore/tea_and_murder/glenross#location-the-vicarage")
+
+
+def test_location_entity_reference_url_defaults_to_none() -> None:
+    from sidequest.protocol.models import LocationEntity
+
+    entity = LocationEntity(
+        id="vicarage",
+        label="The Vicarage",
+        tier="real_object",
+    )
+    assert entity.reference_url is None
+
+
+# ---------------------------------------------------------------------------
+# Task 9 — wiring test: compose_room_prose attaches reference_url
+# ---------------------------------------------------------------------------
+
+
+def test_compose_room_prose_attaches_reference_url_when_pack_and_world_given() -> None:
+    """Integration: compose_room_prose populates reference_url on each entity
+    when pack_id + world_slug are supplied.
+
+    This is the behavioural wiring test required by CLAUDE.md
+    ("Every Test Suite Needs a Wiring Test"). Uses a minimal LookDef fixture;
+    no live genre_packs are loaded.
+    """
+    import random
+
+    from sidequest.game.cookbook.compose import compose_room_prose
+    from sidequest.game.cookbook.models import LookDef
+
+    look_def = LookDef(
+        id="dripping_cave",
+        generator_binding="cellular",
+        register="grim",
+        dressing=[
+            "Stalactites hang overhead like stone fingers.",
+            "A pool of dark water reflects torchlight.",
+            "The walls are streaked with mineral deposits.",
+        ],
+    )
+
+    result = compose_room_prose(
+        rng=random.Random(42),
+        look_def=look_def,
+        special_rooms=[],
+        room_id="room-001",
+        pack_id="tea_and_murder",
+        world_slug="glenross",
+    )
+
+    assert result.entities, "expected at least one entity from dressing"
+    for entity in result.entities:
+        assert entity.reference_url is not None, (
+            f"entity {entity.id!r} (label={entity.label!r}) has reference_url=None "
+            "but pack_id + world_slug were supplied"
+        )
+        assert "tea_and_murder" in entity.reference_url
+        assert "glenross" in entity.reference_url
+        assert "location" in entity.reference_url
+
+
+def test_compose_room_prose_reference_url_none_when_no_pack() -> None:
+    """compose_room_prose leaves reference_url=None when pack_id is absent
+    (existing callers without world context — no crash, no silent promotion).
+    """
+    import random
+
+    from sidequest.game.cookbook.compose import compose_room_prose
+    from sidequest.game.cookbook.models import LookDef
+
+    look_def = LookDef(
+        id="dripping_cave",
+        generator_binding="cellular",
+        register="grim",
+        dressing=[
+            "Stalactites hang overhead like stone fingers.",
+            "A pool of dark water reflects torchlight.",
+            "The walls are streaked with mineral deposits.",
+        ],
+    )
+
+    result = compose_room_prose(
+        rng=random.Random(42),
+        look_def=look_def,
+        special_rooms=[],
+        room_id="room-001",
+        # pack_id and world_slug intentionally omitted
+    )
+
+    for entity in result.entities:
+        assert entity.reference_url is None

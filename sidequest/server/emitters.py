@@ -47,25 +47,24 @@ def persist_scrapbook_entry(
         ]
     )
     facts_json = _json.dumps(list(payload.world_facts))
-    with SAVE_WRITE_LOCK:
-        with store._conn:
-            store._conn.execute(
-                "INSERT INTO scrapbook_entries "
-                "(turn_id, scene_title, scene_type, location, image_url, "
-                " narrative_excerpt, world_facts, npcs_present, render_status) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    payload.turn_id,
-                    payload.scene_title,
-                    payload.scene_type,
-                    payload.location,
-                    payload.image_url,
-                    payload.narrative_excerpt,
-                    facts_json,
-                    npcs_json,
-                    payload.render_status,
-                ),
-            )
+    with SAVE_WRITE_LOCK, store._conn:
+        store._conn.execute(
+            "INSERT INTO scrapbook_entries "
+            "(turn_id, scene_title, scene_type, location, image_url, "
+            " narrative_excerpt, world_facts, npcs_present, render_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                payload.turn_id,
+                payload.scene_title,
+                payload.scene_type,
+                payload.location,
+                payload.image_url,
+                payload.narrative_excerpt,
+                facts_json,
+                npcs_json,
+                payload.render_status,
+            ),
+        )
 
 
 def update_scrapbook_image_url(
@@ -99,18 +98,17 @@ def update_scrapbook_image_url(
         return False
     store = handler._event_log.store
     try:
-        with SAVE_WRITE_LOCK:
-            with store._conn:
-                cur = store._conn.execute(
-                    "UPDATE scrapbook_entries SET image_url = ? "
-                    "WHERE rowid = ("
-                    "  SELECT rowid FROM scrapbook_entries "
-                    "  WHERE turn_id = ? AND image_url IS NULL "
-                    "  ORDER BY rowid DESC LIMIT 1"
-                    ")",
-                    (image_url, turn_id),
-                )
-                return cur.rowcount > 0
+        with SAVE_WRITE_LOCK, store._conn:
+            cur = store._conn.execute(
+                "UPDATE scrapbook_entries SET image_url = ? "
+                "WHERE rowid = ("
+                "  SELECT rowid FROM scrapbook_entries "
+                "  WHERE turn_id = ? AND image_url IS NULL "
+                "  ORDER BY rowid DESC LIMIT 1"
+                ")",
+                (image_url, turn_id),
+            )
+            return cur.rowcount > 0
     except Exception as exc:  # noqa: BLE001 — render path must not crash on a backfill miss
         logger.warning(
             "scrapbook.image_url_update_failed turn_id=%d error=%s",
@@ -276,128 +274,127 @@ def emit_event(
         store = event_log.store
         conn = store._conn
         fanout: list[tuple[str, FilterDecision, dict]] = []
-        with SAVE_WRITE_LOCK:
-            with conn:
-                row = event_log.append_in_transaction(kind=kind, payload_json=payload_json, conn=conn)
-                seq = row.seq
+        with SAVE_WRITE_LOCK, conn:
+            row = event_log.append_in_transaction(kind=kind, payload_json=payload_json, conn=conn)
+            seq = row.seq
 
-                if kind == "NARRATION" and event_log is not None:
-                    # Phase 2: photograph every seated PC's mechanical state
-                    # while the C2 turn txn is open (R1) so it rides the turn.
-                    # Gated to the single canonical NARRATION emit so it fires
-                    # once per turn, not per segment/confrontation frame.
-                    from sidequest.game.mechanical_census import (
-                        emit_mechanical_census,
-                    )
+            if kind == "NARRATION" and event_log is not None:
+                # Phase 2: photograph every seated PC's mechanical state
+                # while the C2 turn txn is open (R1) so it rides the turn.
+                # Gated to the single canonical NARRATION emit so it fires
+                # once per turn, not per segment/confrontation frame.
+                from sidequest.game.mechanical_census import (
+                    emit_mechanical_census,
+                )
 
-                    emit_mechanical_census(
-                        room,
-                        handler._session_data.snapshot if handler._session_data else None,
-                    )
+                emit_mechanical_census(
+                    room,
+                    handler._session_data.snapshot if handler._session_data else None,
+                )
 
-                if room is not None and projection_filter is not None:
-                    from sidequest.server import views
+            if room is not None and projection_filter is not None:
+                from sidequest.server import views
 
-                    view = views.build_game_state_view(handler)
-                    envelope = MessageEnvelope(
-                        kind=row.kind,
-                        payload_json=row.payload_json,
-                        origin_seq=row.seq,
-                    )
-                    # G6: status-effect perception overlay. Built once per
-                    # event (not per recipient) — snapshot statuses don't
-                    # change mid-fanout.
-                    status_effects = views.status_effects_by_player(handler)
+                view = views.build_game_state_view(handler)
+                envelope = MessageEnvelope(
+                    kind=row.kind,
+                    payload_json=row.payload_json,
+                    origin_seq=row.seq,
+                )
+                # G6: status-effect perception overlay. Built once per
+                # event (not per recipient) — snapshot statuses don't
+                # change mid-fanout.
+                status_effects = views.status_effects_by_player(handler)
 
-                    # G8: route through the shared write-split helper so the
-                    # per-peer filter loop is a single code path (test and
-                    # production exercise `_project_frames`).
-                    recipients = [
-                        pid for pid in room.connected_player_ids() if pid != emitter_player_id
-                    ]
+                # G8: route through the shared write-split helper so the
+                # per-peer filter loop is a single code path (test and
+                # production exercise `_project_frames`).
+                recipients = [
+                    pid for pid in room.connected_player_ids() if pid != emitter_player_id
+                ]
 
-                    def _cache_decision(pid: str, decision: FilterDecision) -> None:
-                        if handler._projection_cache is not None:
-                            handler._projection_cache.write_in_transaction(
-                                event_seq=seq,
-                                player_id=pid,
-                                decision=decision,
-                                conn=conn,
-                            )
-
-                    decisions = _project_frames(
-                        envelope=envelope,
-                        projection_filter=projection_filter,
-                        connected_players=recipients,
-                        view=view,
-                        on_decision=_cache_decision,
-                    )
-                    # Story 49-8: per-recipient POV swap snapshot for the
-                    # emitter path below. Captured here so the emitter and
-                    # peer paths share one view/snapshot binding.
-                    _snapshot_for_swap = (
-                        handler._session_data.snapshot if handler._session_data else None
-                    )
-
-                    for other_pid, decision in decisions:
-                        filtered_data: dict = {}
-                        if decision.include:
-                            filtered_data = json.loads(decision.payload_json)
-                            # G6: PerceptionRewriter — strip spans whose kind
-                            # is incompatible with the recipient's effective
-                            # fidelity (base fidelity + status effects like
-                            # blinded/deafened). Runs on the already-filtered
-                            # payload, before WS send. Deterministic only;
-                            # LLM re-voicing is deferred to post-MP.
-                            filtered_data = rewrite_for_recipient(
-                                canonical_payload=filtered_data,
-                                viewer_player_id=other_pid,
-                                status_effects=status_effects,
-                            )
-                            # Story 49-8: 2nd-person POV swap. Fires only
-                            # when the recipient's PC matches the sidecar's
-                            # anchor_pc and pov_strategy=="pc_anchored".
-                            # No-op for atmospheric / non-anchor recipients.
-                            if _snapshot_for_swap is not None:
-                                filtered_data = _apply_pov_swap(
-                                    filtered_data,
-                                    recipient_player_id=other_pid,
-                                    view=view,
-                                    snapshot=_snapshot_for_swap,
-                                )
-                        fanout.append((other_pid, decision, filtered_data))
-
-                    # ADR-105 Track A: project the merged-MP driver too.
-                    # Invariant 3's raw bypass is a solo assumption — in a
-                    # shared merged turn the driving (last-submitter) handler
-                    # is not the sole author, so the driver gets their own
-                    # per-recipient projected + perception-rewritten + POV-
-                    # swapped frame, plus a projection.filter.decide span and
-                    # a cache row in THIS same transaction (so reconnect
-                    # replays from cache consistently with peers rather than
-                    # depending on lazy_fill). visible_to:"all" today means
-                    # include=True for everyone — content redaction of the
-                    # shared blob is ADR-105 Track B, not this change.
-                    if project_emitter and emitter_player_id is not None:
-                        _e_decision = projection_filter.project(
-                            envelope=envelope, view=view, player_id=emitter_player_id
+                def _cache_decision(pid: str, decision: FilterDecision) -> None:
+                    if handler._projection_cache is not None:
+                        handler._projection_cache.write_in_transaction(
+                            event_seq=seq,
+                            player_id=pid,
+                            decision=decision,
+                            conn=conn,
                         )
-                        _cache_decision(emitter_player_id, _e_decision)
-                        if _e_decision.include:
-                            _e_data = json.loads(_e_decision.payload_json)
-                            _e_data = rewrite_for_recipient(
-                                canonical_payload=_e_data,
-                                viewer_player_id=emitter_player_id,
-                                status_effects=status_effects,
+
+                decisions = _project_frames(
+                    envelope=envelope,
+                    projection_filter=projection_filter,
+                    connected_players=recipients,
+                    view=view,
+                    on_decision=_cache_decision,
+                )
+                # Story 49-8: per-recipient POV swap snapshot for the
+                # emitter path below. Captured here so the emitter and
+                # peer paths share one view/snapshot binding.
+                _snapshot_for_swap = (
+                    handler._session_data.snapshot if handler._session_data else None
+                )
+
+                for other_pid, decision in decisions:
+                    filtered_data: dict = {}
+                    if decision.include:
+                        filtered_data = json.loads(decision.payload_json)
+                        # G6: PerceptionRewriter — strip spans whose kind
+                        # is incompatible with the recipient's effective
+                        # fidelity (base fidelity + status effects like
+                        # blinded/deafened). Runs on the already-filtered
+                        # payload, before WS send. Deterministic only;
+                        # LLM re-voicing is deferred to post-MP.
+                        filtered_data = rewrite_for_recipient(
+                            canonical_payload=filtered_data,
+                            viewer_player_id=other_pid,
+                            status_effects=status_effects,
+                        )
+                        # Story 49-8: 2nd-person POV swap. Fires only
+                        # when the recipient's PC matches the sidecar's
+                        # anchor_pc and pov_strategy=="pc_anchored".
+                        # No-op for atmospheric / non-anchor recipients.
+                        if _snapshot_for_swap is not None:
+                            filtered_data = _apply_pov_swap(
+                                filtered_data,
+                                recipient_player_id=other_pid,
+                                view=view,
+                                snapshot=_snapshot_for_swap,
                             )
-                            if _snapshot_for_swap is not None:
-                                _e_data = _apply_pov_swap(
-                                    _e_data,
-                                    recipient_player_id=emitter_player_id,
-                                    view=view,
-                                    snapshot=_snapshot_for_swap,
-                                )
-                            emitter_projected_dict = _e_data
+                    fanout.append((other_pid, decision, filtered_data))
+
+                # ADR-105 Track A: project the merged-MP driver too.
+                # Invariant 3's raw bypass is a solo assumption — in a
+                # shared merged turn the driving (last-submitter) handler
+                # is not the sole author, so the driver gets their own
+                # per-recipient projected + perception-rewritten + POV-
+                # swapped frame, plus a projection.filter.decide span and
+                # a cache row in THIS same transaction (so reconnect
+                # replays from cache consistently with peers rather than
+                # depending on lazy_fill). visible_to:"all" today means
+                # include=True for everyone — content redaction of the
+                # shared blob is ADR-105 Track B, not this change.
+                if project_emitter and emitter_player_id is not None:
+                    _e_decision = projection_filter.project(
+                        envelope=envelope, view=view, player_id=emitter_player_id
+                    )
+                    _cache_decision(emitter_player_id, _e_decision)
+                    if _e_decision.include:
+                        _e_data = json.loads(_e_decision.payload_json)
+                        _e_data = rewrite_for_recipient(
+                            canonical_payload=_e_data,
+                            viewer_player_id=emitter_player_id,
+                            status_effects=status_effects,
+                        )
+                        if _snapshot_for_swap is not None:
+                            _e_data = _apply_pov_swap(
+                                _e_data,
+                                recipient_player_id=emitter_player_id,
+                                view=view,
+                                snapshot=_snapshot_for_swap,
+                            )
+                        emitter_projected_dict = _e_data
                         # include=False under project_emitter (a participant
                         # excluded from their own shared narration) is a
                         # Track B concern; leaving emitter_projected_dict None

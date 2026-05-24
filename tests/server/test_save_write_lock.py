@@ -33,8 +33,8 @@ import pytest
 from sidequest.game.persistence import SAVE_WRITE_LOCK, SqliteStore
 from sidequest.telemetry.watcher_hub import bind_event_store, publish_event
 
-
 # -------- helpers --------
+
 
 def _open_store(tmp_path) -> SqliteStore:
     return SqliteStore.open(str(tmp_path / "save.db"))
@@ -57,6 +57,7 @@ def _append_synthetic_event(store: SqliteStore, kind: str = "NARRATION") -> int:
 
 
 # -------- fixtures --------
+
 
 @pytest.fixture
 def store(tmp_path):
@@ -128,14 +129,13 @@ def test_concurrent_writers_no_race(store, caplog):
         conn = store._conn
         for i in range(ITERATIONS_PER_THREAD):
             try:
-                with SAVE_WRITE_LOCK:
-                    with conn:
-                        _append_synthetic_event(store)
-                        publish_event(
-                            "state_transition",
-                            {"field": "mechanical", "round": i},
-                            component="mechanical_census",
-                        )
+                with SAVE_WRITE_LOCK, conn:
+                    _append_synthetic_event(store)
+                    publish_event(
+                        "state_transition",
+                        {"field": "mechanical", "round": i},
+                        component="mechanical_census",
+                    )
             except sqlite3.OperationalError as exc:
                 record(exc)
             except Exception as exc:  # noqa: BLE001
@@ -155,7 +155,16 @@ def test_concurrent_writers_no_race(store, caplog):
             except Exception as exc:  # noqa: BLE001
                 record(exc)
 
-    workers = [saver, saver, narrator, narrator, c2_stand_in, c2_stand_in, telemetry_only, telemetry_only]
+    workers = [
+        saver,
+        saver,
+        narrator,
+        narrator,
+        c2_stand_in,
+        c2_stand_in,
+        telemetry_only,
+        telemetry_only,
+    ]
 
     with ThreadPoolExecutor(max_workers=len(workers)) as pool:
         futures = [pool.submit(fn) for fn in workers]
@@ -172,12 +181,10 @@ def test_concurrent_writers_no_race(store, caplog):
 
     # Assertion 3: telemetry sink never logged ``sink_failed``.
     sink_failed = [
-        rec for rec in caplog.records
-        if "turn_telemetry.sink_failed" in rec.getMessage()
+        rec for rec in caplog.records if "turn_telemetry.sink_failed" in rec.getMessage()
     ]
     assert sink_failed == [], (
-        f"turn_telemetry.sink_failed warnings: "
-        f"{[r.getMessage() for r in sink_failed]}"
+        f"turn_telemetry.sink_failed warnings: {[r.getMessage() for r in sink_failed]}"
     )
 
     # Assertion 4 (atomicity, replaces spec assertion #4 — no FK in schema):
@@ -201,6 +208,7 @@ def test_concurrent_writers_no_race(store, caplog):
 
 # -------- reentrancy unit test --------
 
+
 def test_save_write_lock_is_reentrant():
     """The lock must be a ``threading.RLock``-shaped object that allows
     the same thread to re-acquire without blocking."""
@@ -219,6 +227,7 @@ def test_save_write_lock_is_reentrant():
 
 
 # -------- watcher_hub rename smoke --------
+
 
 def test_watcher_hub_uses_save_write_lock():
     """After the rename, ``watcher_hub`` no longer owns a private

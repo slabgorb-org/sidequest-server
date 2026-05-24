@@ -325,6 +325,7 @@ def _maybe_persist_encounter_row(event: dict) -> None:
     payload = json.dumps(fields, default=_json_default)
     try:
         from sidequest.game.persistence import SAVE_WRITE_LOCK
+
         with SAVE_WRITE_LOCK:
             _event_store._conn.execute(
                 "INSERT INTO events (kind, payload_json, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
@@ -393,6 +394,7 @@ def _persist_turn_telemetry(event: dict) -> None:
             "VALUES (?, ?, ?, ?, ?, ?)"
         )
         from sidequest.game.persistence import SAVE_WRITE_LOCK
+
         with SAVE_WRITE_LOCK:
             if conn.in_transaction:
                 ev_seq = conn.execute("SELECT MAX(seq) FROM events").fetchone()[0]
@@ -540,6 +542,7 @@ def __getattr__(name: str):
     """
     if name == "SAVE_WRITE_LOCK":
         from sidequest.game.persistence import SAVE_WRITE_LOCK
+
         # Cache in module dict so future accesses bypass __getattr__
         globals()["SAVE_WRITE_LOCK"] = SAVE_WRITE_LOCK
         return SAVE_WRITE_LOCK

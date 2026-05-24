@@ -228,6 +228,26 @@ def test_history_chapters_emits_timeline(fake_theme: ReferenceTheme) -> None:
     assert "<h2>description</h2>" not in html
 
 
+def test_calendar_emits_table(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_calendar
+
+    node = {
+        "days_per_week": 8,
+        "months": ["Frostmarch", "Thawmonth", "Bloomtide"],
+        "year_length": 320,
+    }
+    html = present_calendar(node, make_ctx("calendar", (), fake_theme))
+
+    assert 'class="ref-table"' in html
+    assert "<th>" in html
+    assert "days_per_week" in html
+    assert "8" in html
+    assert "Frostmarch" in html
+    assert "year_length" in html
+    # No raw h2 field-name headings
+    assert "<h2>days_per_week</h2>" not in html
+
+
 def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
     from sidequest.server.reference_presenters import present_lore_geography
 

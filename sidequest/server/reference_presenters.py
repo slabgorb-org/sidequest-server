@@ -13,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from html import escape
 
+import yaml
+
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import ReferenceTheme
 
@@ -296,3 +298,23 @@ def present_history_chapters(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("history", ("chapters",))] = present_history_chapters
+
+
+def present_calendar(node: object, ctx: PresenterContext) -> str:
+    """Render calendar.yaml as a key-value table."""
+    if not isinstance(node, dict) or not node:
+        return ""
+    rows: list[str] = []
+    for key, value in node.items():
+        if isinstance(value, list):
+            cell = escape(", ".join(str(v) for v in value))
+        elif isinstance(value, dict):
+            dumped = yaml.safe_dump(value, sort_keys=False, default_flow_style=True).strip()
+            cell = f"<pre>{escape(dumped)}</pre>"
+        else:
+            cell = escape(str(value))
+        rows.append(f"<tr><th>{escape(str(key))}</th><td>{cell}</td></tr>")
+    return f'<table class="ref-table"><tbody>{"".join(rows)}</tbody></table>'
+
+
+PRESENTERS[("calendar", ())] = present_calendar

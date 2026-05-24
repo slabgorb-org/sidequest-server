@@ -128,6 +128,7 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
     finally:
         writer_task.cancel()
         room = handler.current_room()
+        left_player: str | None = None
         if room is not None:
             room.detach_outbound(socket_id)
             left_player = room.disconnect(socket_id=socket_id)
@@ -146,19 +147,23 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
                         GamePausedMessage(payload=GamePausedPayload(waiting_for=absent)),
                         exclude_socket_id=None,
                     )
-                # Story 61-followup-C: when the last player disconnects, call
-                # close_store() to reset the narrator's cost baselines for the
-                # next session. RoomRegistry never evicts, so the orchestrator
-                # (and its SDK client) persist across multiple sessions on the
-                # same slug; without resetting the baselines, the rolling
-                # average can self-train onto a sustained runaway (61-4 +
-                # 61-followup-A). check room is now fully empty before tearing
-                # down; intermediate disconnects in multiplayer must not
-                # trigger close_store (room still has other connected players).
-                if not room.connected_player_ids():
-                    room.close_store()
-                    logger.info("ws.room_teardown_close_store slug=%s", room.slug)
         await handler.cleanup()
+        # Story 61-followup-C: AFTER handler.cleanup() has persisted the final
+        # snapshot via room.save() (websocket_session_handler.cleanup() →
+        # room.save() → store.save(snapshot)), tear down the canonical store if
+        # the room is now empty. Order matters: close_store() nulls room._store,
+        # and room.save() silently no-ops on a None store (session_room.py:277).
+        # Doing close_store() BEFORE cleanup() would drop the last on-disconnect
+        # save and was caught by Architect spec-check 2026-05-24.
+        #
+        # close_store() also calls reset_baselines() on the orchestrator's SDK
+        # client. RoomRegistry never evicts, so without this the rolling cost
+        # baseline can self-train onto a sustained runaway (61-4 + followup-A).
+        # Intermediate MP disconnects (room still has other connected players)
+        # and HMR transients (left_player is None) must NOT trigger teardown.
+        if room is not None and left_player is not None and not room.connected_player_ids():
+            room.close_store()
+            logger.info("ws.room_teardown_close_store slug=%s", room.slug)
         logger.info("ws.session_cleanup_complete")
 
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
@@ -86,9 +86,22 @@ class _PinnedRoomHandler:
         self._room = room
         self._captured_socket_id: str | None = None
         self._connect_player_for_endpoint: str | None = None
+        self.cleanup_calls = 0
         for player_id, socket_id in prewire:
             room.connect(player_id, socket_id=socket_id)
-        self.cleanup = AsyncMock()
+
+    async def cleanup(self) -> None:
+        """Mirror the production WebSocketSessionHandler.cleanup() contract:
+        persist the canonical snapshot via room.save() before returning.
+
+        Without this, the ordering bug caught by Architect spec-check
+        2026-05-24 (close_store nulling _store before the final save)
+        cannot be detected by these tests — an AsyncMock cleanup never
+        reaches the save path, so the regression hides behind a green
+        suite.
+        """
+        self.cleanup_calls += 1
+        self._room.save()
 
     def bind_endpoint_socket_to(self, player_id: str) -> None:
         """Have attach_room_context register the endpoint's socket as
@@ -149,7 +162,25 @@ async def test_ws_endpoint_calls_close_store_when_last_player_disconnects():
         "when the last player disconnected. Expected exactly one close() "
         f"on the mock store, got {store.close.call_count}."
     )
-    handler.cleanup.assert_awaited_once()
+    assert handler.cleanup_calls == 1, "handler.cleanup() must run exactly once"
+
+    # Ordering guard (Architect spec-check finding 2026-05-24): the final
+    # snapshot save in handler.cleanup() must run BEFORE close_store() nulls
+    # _store, otherwise the final save silently no-ops on the now-None store
+    # (session_room.py:277). All save and close calls flow through the same
+    # MagicMock store, so its method_calls list preserves order.
+    method_names = [c[0] for c in store.method_calls]
+    assert "save" in method_names, (
+        "handler.cleanup() must call room.save() (which calls store.save) "
+        f"before teardown. Got method_calls={store.method_calls!r}"
+    )
+    assert "close" in method_names, "store.close must be called by close_store()"
+    assert method_names.index("save") < method_names.index("close"), (
+        "Ordering failure: store.close was called before store.save. "
+        "close_store() must run AFTER handler.cleanup() persists the final "
+        "snapshot — otherwise the final save silently no-ops. "
+        f"Observed order: {method_names}"
+    )
 
 
 @pytest.mark.asyncio
@@ -184,7 +215,7 @@ async def test_ws_endpoint_does_not_close_store_on_transient_hmr_disconnect():
         "Wiring failure: close_store() fired on a transient (multi-socket) "
         "disconnect. It must only fire when the room is fully empty."
     )
-    handler.cleanup.assert_awaited_once()
+    assert handler.cleanup_calls == 1, "handler.cleanup() must run exactly once"
 
 
 @pytest.mark.asyncio

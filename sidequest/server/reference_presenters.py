@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from html import escape
 
+from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import ReferenceTheme
 
 KeyPath = tuple[str, ...]
@@ -116,3 +117,57 @@ PRESENTERS.update(
         ("lore", ("cosmology",)): present_lore_cosmology,
     }
 )
+
+
+_DISPOSITION_KNOWN = frozenset({"friendly", "neutral", "wary", "hostile"})
+
+
+def _disposition_badge(value: str) -> str:
+    """Render a disposition pill. Unknown dispositions fall back to neutral
+    class so we never emit an undefined CSS class (which would trip the
+    chrome-wiring regression guard once it covers .ref-* classes)."""
+    normalized = value.strip().lower()
+    css_class = normalized if normalized in _DISPOSITION_KNOWN else "neutral"
+    display = value.strip().title()
+    return f'<span class="ref-badge ref-badge--disposition-{css_class}">{escape(display)}</span>'
+
+
+def present_lore_factions(node: object, ctx: PresenterContext) -> str:
+    if not isinstance(node, list) or not node:
+        return ""
+    cards: list[str] = []
+    for item in node:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "Unnamed"
+        summary = str(item.get("summary", "")).strip()
+        description = str(item.get("description", "")).strip()
+        disposition = str(item.get("disposition", "neutral")).strip()
+        slug = slugify(name)
+        cards.append(
+            f'<article class="ref-card" id="cult-{slug}">'
+            '<div class="ref-card__kicker">Faction</div>'
+            f'<h3 class="ref-card__title">{escape(name, quote=False)}</h3>'
+            + (
+                f'<div class="ref-card__summary">{escape(summary, quote=False)}</div>'
+                if summary
+                else ""
+            )
+            + (
+                f'<p class="ref-card__body">{escape(description, quote=False)}</p>'
+                if description
+                else ""
+            )
+            + f'<div class="ref-card__meta">{_disposition_badge(disposition)}</div>'
+            "</article>"
+        )
+    return (
+        '<section class="ref-factions">'
+        '<div class="ref-card-grid ref-card-grid--cols-3">' + "".join(cards) + "</div></section>"
+    )
+
+
+PRESENTERS[("lore", ("factions",))] = present_lore_factions
+# Pack-tier factions.yaml reuses the same renderer — registry entry is
+# present but inactive until a future task wires top-level-list dispatch.
+PRESENTERS[("factions", ())] = present_lore_factions

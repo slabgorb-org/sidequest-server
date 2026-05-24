@@ -93,3 +93,65 @@ def test_cosmology_emits_pull_quote_with_dinkus_surround(
     assert '<hr class="ref-dinkus"' in html
     assert '<p class="ref-pull-quote' in html
     assert "void is a sea" in html
+
+
+def test_factions_emits_card_grid_with_disposition_badge(
+    fake_theme: ReferenceTheme,
+) -> None:
+    from sidequest.server.reference_presenters import present_lore_factions
+
+    factions = [
+        {
+            "name": "Vaskov Administration",
+            "summary": "Governor's office on the habitable world.",
+            "description": "Prefect Ilara Vaskov inherited the post…",
+            "disposition": "neutral",
+        },
+        {
+            "name": "Broken Drift Runners",
+            "summary": "Outlaw clan that cut their tattoos.",
+            "description": "Lost the Moana-Teru name when they ran.",
+            "disposition": "hostile",
+        },
+    ]
+    html = present_lore_factions(factions, make_ctx("lore", ("factions",), fake_theme))
+
+    # Grid wrapper
+    assert 'class="ref-card-grid ref-card-grid--cols-3"' in html
+    # Per-card structure
+    assert '<article class="ref-card" id="cult-vaskov-administration">' in html
+    assert '<article class="ref-card" id="cult-broken-drift-runners">' in html
+    # Card title is h3, NOT h2
+    assert '<h3 class="ref-card__title">Vaskov Administration</h3>' in html
+    # Kicker
+    assert '<div class="ref-card__kicker">Faction</div>' in html
+    # Summary
+    assert "Governor's office on the habitable world." in html
+    # Disposition badges
+    assert 'class="ref-badge ref-badge--disposition-neutral">Neutral</span>' in html
+    assert 'class="ref-badge ref-badge--disposition-hostile">Hostile</span>' in html
+    # Field-name headings absent
+    assert "<h2>name</h2>" not in html
+    assert "<h2>summary</h2>" not in html
+    assert "<h2>disposition</h2>" not in html
+    assert "<h2>description</h2>" not in html
+
+
+def test_factions_unknown_disposition_falls_back_to_neutral(
+    fake_theme: ReferenceTheme,
+) -> None:
+    from sidequest.server.reference_presenters import present_lore_factions
+
+    factions = [
+        {
+            "name": "X",
+            "summary": "y",
+            "description": "z",
+            "disposition": "mysterious",
+        }
+    ]
+    html = present_lore_factions(factions, make_ctx("lore", ("factions",), fake_theme))
+    # Unknown disposition still emits a badge — does not crash. Use neutral
+    # as fallback class so the chrome-wiring guard doesn't see an undefined
+    # CSS class.
+    assert 'class="ref-badge ref-badge--disposition-neutral">Mysterious</span>' in html

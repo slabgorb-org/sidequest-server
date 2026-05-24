@@ -234,16 +234,26 @@ async def test_continuation_marker_ttl_matches_client_5m_configuration(
 
 
 @pytest.mark.asyncio
-async def test_no_continuation_marker_on_single_iter_turn(
+async def test_single_iter_turn_marks_initial_user_message_at_configured_ttl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-1 edge: a turn that ends without a tool_use must NOT add any
-    message-level marker. The marker is a CONTINUATION construct — it only
-    exists to cover the appended tool_use/tool_result blocks.
+    """AC-1 (60-7 amendment). A turn that ends without a tool_use MUST mark
+    the initial user message's last content block with
+    `cache_control={'type':'ephemeral','ttl': self.cache_ttl}` on iter=1.
 
-    Regression guard: if the fix accidentally marks the original user
-    message on iter-1, every turn pays an extra breakpoint and the message
-    bucket grows on rebates.
+    This test was inverted by story 60-7 (2026-05-24). The prior assertion
+    ("must carry zero message-level markers") codified the bug — empirical
+    measurement on probe `probe/60-7-single-iter-prose` (live save
+    `~/.sidequest/saves/games/2026-05-24-coyote_star/save.db`) proved that
+    leaving the iter=1 tail unmarked causes Anthropic to auto-cache the
+    post-prefix content at the default 5m TTL, wasting ~$0.04/turn on a
+    write that gets displaced seconds later by the 60-4 iter=2 1h marker.
+
+    The 4-breakpoint budget still holds: system_blocks[0] + tools[-1] +
+    iter=1 user message = 3 markers on a single-iter turn (safe). On a
+    multi-iter turn the iter=2 newest-user marker brings it to exactly 4
+    (at the cap, not over) — see `tests/agents/test_60_7_iter1_cache_marker.py
+    ::test_iter1_marker_does_not_inflate_total_breakpoint_count`.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sdk = _Sdk(responses=[_end_turn("done")])
@@ -258,12 +268,11 @@ async def test_no_continuation_marker_on_single_iter_turn(
 
     assert len(sdk.messages.calls) == 1, "expected a single end_turn call"
     call = sdk.messages.calls[0]
-    markers = _count_message_level_markers(call["messages"])
-    assert markers == 0, (
-        "a single-iter turn must carry zero message-level cache_control "
-        f"markers (no continuation happened); got {markers}. "
-        "Marking the initial user message wastes a breakpoint and risks "
-        "tripping the 4-breakpoint cap once tools+system are counted."
+    assert _last_block_has_marker(call["messages"][-1], expected_ttl="1h"), (
+        "a single-iter turn MUST mark the newest user message's last content "
+        "block with cache_control={'type':'ephemeral','ttl':'1h'} (60-7). "
+        "Without it the API auto-caches the post-prefix tail at 5m, wasting "
+        f"~$0.04/turn. Got messages[-1]={call['messages'][-1]!r}"
     )
 
 

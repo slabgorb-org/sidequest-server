@@ -469,9 +469,7 @@ async def test_promoted_genre_prose_lands_in_cached_system_block(
     # ``opening_directive is not None``. The ``simple_turn_context``
     # fixture has ``opening_directive=None``, so the marker must be
     # absent from EVERY part of the prompt this turn.
-    full_prompt_text = (
-        cached_block_text + "\n" + other_system_text + "\n" + user_message_text
-    )
+    full_prompt_text = cached_block_text + "\n" + other_system_text + "\n" + user_message_text
     assert "<genre-chargen>" not in full_prompt_text, (
         "<genre-chargen> appeared somewhere in the prompt on a turn "
         "with opening_directive=None. Story 61-11 demoted chargen and "

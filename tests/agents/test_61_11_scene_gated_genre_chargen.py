@@ -192,9 +192,7 @@ async def test_genre_chargen_absent_from_prompt_on_neutral_turn():
     orch = Orchestrator(client=_make_canned_client())
     context = _make_neutral_turn_context()
 
-    _prompt, registry = await orch.build_narrator_prompt(
-        "you walk into the tavern", context
-    )
+    _prompt, registry = await orch.build_narrator_prompt("you walk into the tavern", context)
     system_text, user_text = registry.compose_split("narrator")
 
     assert _CHARGEN_PROSE not in system_text, (
@@ -219,7 +217,11 @@ async def test_genre_chargen_absent_from_prompt_on_neutral_turn():
     "section_marker, prose, fixture",
     [
         ("genre_extraction", "STORY-57-3-EXTRACTION-FIXTURE: party hauls treasure.", "extraction"),
-        ("genre_keeper_monologue", "STORY-57-3-KEEPER-FIXTURE: the walls speak.", "keeper_monologue"),
+        (
+            "genre_keeper_monologue",
+            "STORY-57-3-KEEPER-FIXTURE: the walls speak.",
+            "keeper_monologue",
+        ),
         ("genre_town", "STORY-57-3-TOWN-FIXTURE: surface waystation.", "town"),
     ],
 )

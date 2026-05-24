@@ -605,7 +605,9 @@ def _render_picker(
         body_html = panel_body(item)
         hidden_attr = "" if is_default else " hidden"
         panels.append(
-            f'<section class="ref-picker-panel" data-panel="{hash_prefix}-{slug}"{hidden_attr}>'
+            f'<section class="ref-picker-panel" '
+            f'id="{hash_prefix}-{slug}" '
+            f'data-panel="{hash_prefix}-{slug}"{hidden_attr}>'
             f'<div class="ref-card__kicker">{escape(item_kicker)}</div>'
             f'<h3 class="ref-card__title">{escape(name)}</h3>' + body_html + "</section>"
         )
@@ -651,11 +653,25 @@ def _class_panel_body(item: dict) -> str:
     return "".join(parts)
 
 
+def _unwrap_list(node: object) -> list | None:
+    """Accept either a top-level list OR a dict whose first list-valued
+    entry IS the list (the common YAML wrapper pattern). Return the list
+    or None if no list is reachable."""
+    if isinstance(node, list):
+        return node
+    if isinstance(node, dict):
+        for value in node.values():
+            if isinstance(value, list):
+                return value
+    return None
+
+
 def present_archetypes_picker(node: object, ctx: PresenterContext) -> str:
-    if not isinstance(node, list):
+    items = _unwrap_list(node)
+    if items is None:
         return ""
     return _render_picker(
-        node,
+        items,
         "Archetype",
         "archetype",
         name_field="name",
@@ -664,13 +680,14 @@ def present_archetypes_picker(node: object, ctx: PresenterContext) -> str:
 
 
 def present_classes_picker(node: object, ctx: PresenterContext) -> str:
-    if not isinstance(node, list):
+    items = _unwrap_list(node)
+    if items is None:
         return ""
     return _render_picker(
-        node,
+        items,
         "Class",
         "class",
-        name_field="display_name",
+        name_field="name",
         panel_body=_class_panel_body,
     )
 

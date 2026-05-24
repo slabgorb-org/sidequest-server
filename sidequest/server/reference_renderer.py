@@ -519,9 +519,9 @@ def _render_file(
                     f'<section class="file" id="file-{file_slug}">'
                     f"<h1>{escape(path.name)}</h1>{rendered}</section>"
                 )
-            # Empty presenter output — presenter is suppressing the file.
-            # Return the empty wrapped section to keep the anchor live.
-            return f'<section class="file" id="file-{file_slug}"></section>'
+            # Presenter returned empty — means "I don't recognise this shape",
+            # not "intentionally suppress". Fall through to the generic walk
+            # below so the file content is never silently blackholed.
 
     body = "<p><em>(empty file)</em></p>" if data is None else render_node(data, kind=kind, ctx=ctx)
     return (

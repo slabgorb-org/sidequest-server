@@ -524,34 +524,37 @@ class AnthropicSdkClient:
         before making its first SDK call, and the teardown path must
         not crash on that race.
 
-        Today this remains dormant infrastructure: 61-followup-C will
-        wire ``SessionRoom.close_store()`` to call this on slug recycle.
-        The absolute cost floor at ``_ABSOLUTE_COST_USD_FLOOR`` and the
-        baseline-ceiling clamp at ``_BASELINE_COST_CEILING`` are the
-        live safety nets for the trained-into-silence case; this
-        method becomes load-bearing once C wires the call site.
+        Load-bearing call site: ``SessionRoom.close_store()``, which
+        ``ws_endpoint`` invokes when the last player disconnects (Story
+        61-followup-C). The absolute cost floor at
+        ``_ABSOLUTE_COST_USD_FLOOR`` and the baseline-ceiling clamp at
+        ``_BASELINE_COST_CEILING`` are the live safety nets for the
+        trained-into-silence case; this method is the per-session
+        eviction handle on top of those nets.
 
         **Scope:** this method clears ONLY the cost-runaway baselines
         (``_cost_baseline`` and ``_input_tokens_baseline``). The
         61-followup-D state for the same session_id —
         ``_session_cumulative_cost_usd`` and
         ``_session_ceiling_announced`` — is intentionally NOT cleared
-        here. 61-followup-C should decide whether its ``close_store``
-        eviction path also needs to drop those entries; for a
-        slug-recycle rejoin (where the same session_id will be reused
-        by a fresh session), the answer is almost certainly YES — a
-        stale announce-set entry would silently suppress the new
-        session's first ceiling-cross alarm. Left to C so the decision
-        and its OTEL plumbing land together.
+        here. A future follow-up (tracked alongside 61-followup-B's
+        broader cost-trend telemetry work) should decide whether the
+        ``close_store`` eviction path also needs to drop those entries;
+        for a slug-recycle rejoin (where the same session_id will be
+        reused by a fresh session), the answer is almost certainly
+        YES — a stale announce-set entry would silently suppress the
+        new session's first ceiling-cross alarm. Deferred so the
+        decision and its OTEL plumbing land together.
 
-        Background on why the reset matters once teardown wires in:
-        ``RoomRegistry`` (session_room.py:774-786) never evicts a slug
-        today — the ``AnthropicSdkClient`` instance backing a slug's
-        orchestrator therefore lives for the server process lifetime,
-        not per-session. Without this reset, even per-session-keyed
+        Background on why the reset matters: ``RoomRegistry`` (defined
+        at session_room.py:817) never evicts a slug today — the
+        ``AnthropicSdkClient`` instance backing a slug's orchestrator
+        therefore lives for the server process lifetime, not
+        per-session. Without this reset, even per-session-keyed
         baselines accumulate entries forever (one per distinct
-        session_id seen). When ``close_store()`` lands as a callsite,
-        this method gives it a per-session eviction handle.
+        session_id seen). ``close_store()`` is the per-session eviction
+        handle that gives RoomRegistry's permanent-room model a clean
+        per-session baseline-reset surface.
         """
         self._cost_baseline.pop(session_id, None)
         self._input_tokens_baseline.pop(session_id, None)

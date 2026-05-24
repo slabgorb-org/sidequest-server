@@ -128,6 +128,7 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
     finally:
         writer_task.cancel()
         room = handler.current_room()
+        left_player: str | None = None
         if room is not None:
             room.detach_outbound(socket_id)
             left_player = room.disconnect(socket_id=socket_id)
@@ -146,7 +147,72 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
                         GamePausedMessage(payload=GamePausedPayload(waiting_for=absent)),
                         exclude_socket_id=None,
                     )
-        await handler.cleanup()
+        # Story 61-followup-C round 2: handler.cleanup() may itself raise
+        # (programmer bug or unexpected exception bubbling out of the cleanup
+        # stack). Without this guard the exception propagates out of the
+        # finally block, bypassing the close_store gate below with zero
+        # breadcrumb (violates No Silent Fallbacks). Catch and log at ERROR
+        # so the skip is visible in operator tails — and use cleanup_failed
+        # to gate the teardown decision below.
+        cleanup_failed = False
+        try:
+            await handler.cleanup()
+        except asyncio.CancelledError:
+            # Server shutdown (uvicorn SIGINT/SIGTERM) and pytest task teardown both
+            # raise CancelledError into in-flight awaits. CancelledError is a
+            # BaseException (Python 3.8+), so it would slip past `except Exception`
+            # below — re-raise it explicitly here so the policy is visible and the
+            # surrounding `finally`'s teardown gate is intentionally skipped: the
+            # process is going down, there is no operator to act on a teardown-skip
+            # breadcrumb, and the per-turn save chain is the recovery point. Without
+            # this explicit re-raise, the wide `except Exception` reads ambiguously
+            # ("does it catch cancel?"); with it, the contract is in the code.
+            raise
+        except Exception as cleanup_exc:
+            cleanup_failed = True
+            slug_for_log = room.slug if room is not None else "unbound"
+            logger.error(
+                "ws.cleanup_failed slug=%s error=%r",
+                slug_for_log,
+                cleanup_exc,
+            )
+        # Story 61-followup-C: AFTER handler.cleanup() has persisted the final
+        # snapshot via room.save() (websocket_session_handler.cleanup() →
+        # room.save() → store.save(snapshot)), tear down the canonical store if
+        # the room is now empty. Order matters: close_store() nulls room._store,
+        # and room.save() silently no-ops on a None store (session_room.py:277).
+        # Doing close_store() BEFORE cleanup() would drop the last on-disconnect
+        # save and was caught by Architect spec-check 2026-05-24.
+        #
+        # close_store() also calls reset_baselines() on the orchestrator's SDK
+        # client. RoomRegistry never evicts, so without this the rolling cost
+        # baseline can self-train onto a sustained runaway (61-4 + followup-A).
+        # Intermediate MP disconnects (room still has other connected players)
+        # and HMR transients (left_player is None) must NOT trigger teardown.
+        #
+        # Round-2 round-trip 1 (Reviewer 2026-05-24 HIGH finding 1): also
+        # skip teardown if cleanup raised OR cleanup swallowed a save
+        # exception internally (websocket_session_handler.py:1557 sets
+        # handler.last_save_failure). Tearing down a store after the final
+        # save was lost compounds the data loss — leave the handle bound so
+        # a subsequent process can retry or inspect. The shared trigger
+        # (real disconnect, empty room) is the outer guard; the
+        # cleanup/save state decides between teardown and a loud skip log.
+        save_failure = getattr(handler, "last_save_failure", None)
+        if (
+            room is not None
+            and left_player is not None
+            and not room.connected_player_ids()
+        ):
+            if not cleanup_failed and save_failure is None:
+                room.close_store()
+                logger.info("ws.room_teardown_close_store slug=%s", room.slug)
+            else:
+                logger.error(
+                    "ws.room_teardown_skipped slug=%s reason=%s",
+                    room.slug,
+                    "cleanup_raised" if cleanup_failed else "save_failure_swallowed",
+                )
         logger.info("ws.session_cleanup_complete")
 
 

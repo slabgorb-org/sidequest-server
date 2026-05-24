@@ -146,6 +146,18 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
                         GamePausedMessage(payload=GamePausedPayload(waiting_for=absent)),
                         exclude_socket_id=None,
                     )
+                # Story 61-followup-C: when the last player disconnects, call
+                # close_store() to reset the narrator's cost baselines for the
+                # next session. RoomRegistry never evicts, so the orchestrator
+                # (and its SDK client) persist across multiple sessions on the
+                # same slug; without resetting the baselines, the rolling
+                # average can self-train onto a sustained runaway (61-4 +
+                # 61-followup-A). check room is now fully empty before tearing
+                # down; intermediate disconnects in multiplayer must not
+                # trigger close_store (room still has other connected players).
+                if not room.connected_player_ids():
+                    room.close_store()
+                    logger.info("ws.room_teardown_close_store slug=%s", room.slug)
         await handler.cleanup()
         logger.info("ws.session_cleanup_complete")
 

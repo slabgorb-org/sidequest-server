@@ -965,3 +965,44 @@ def present_equipment_tables(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("equipment_tables", ())] = present_equipment_tables
+
+
+def present_beat_vocabulary(node: object, ctx: PresenterContext) -> str:
+    """Render beat_vocabulary.yaml as dl sections per list-of-dict key.
+
+    Skips the `obstacles` key explicitly — KEEPER content for the narrator only.
+    """
+    if not isinstance(node, dict) or not node:
+        return ""
+    parts: list[str] = []
+    for key, value in node.items():
+        if key == "obstacles":
+            continue
+        if not isinstance(value, list) or not value:
+            continue
+        # Only render if items are dicts with name/description fields.
+        terms: list[str] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            description = str(item.get("description", "")).strip()
+            if name or description:
+                terms.append(
+                    f"<dt>{escape(name)}</dt>"
+                    + (f"<dd>{escape(description)}</dd>" if description else "")
+                )
+        if not terms:
+            continue
+        parts.append(
+            f"<section>"
+            f"<h3>{escape(_format_chip_label(str(key)))}</h3>"
+            f"<dl>{''.join(terms)}</dl>"
+            f"</section>"
+        )
+    if not parts:
+        return ""
+    return "".join(parts)
+
+
+PRESENTERS[("beat_vocabulary", ())] = present_beat_vocabulary

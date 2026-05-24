@@ -575,12 +575,20 @@ def _picker_chip_strip(title: str, items: list) -> str:
     )
 
 
+def _first_field(item: dict, fields: tuple[str, ...]) -> str:
+    for f in fields:
+        v = item.get(f)
+        if v not in (None, ""):
+            return str(v).strip()
+    return ""
+
+
 def _render_picker(
     items: list,
     item_kicker: str,
     hash_prefix: str,
     *,
-    name_field: str,
+    name_fields: tuple[str, ...],
     panel_body: Callable[[dict], str],
 ) -> str:
     """Shared picker shape — chip row + panel stack with data-island='picker'.
@@ -592,9 +600,11 @@ def _render_picker(
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             continue
-        item_id = str(item.get("id") or item.get(name_field) or f"item-{index}").strip()
+        name = _first_field(item, name_fields)
+        item_id = str(item.get("id") or name or f"item-{index}").strip()
         slug = slugify(item_id)
-        name = str(item.get(name_field, item_id)).strip() or item_id
+        if not name:
+            name = item_id
         is_default = index == 0
         chips.append(
             f'<button type="button" class="ref-picker__chip" '
@@ -674,7 +684,7 @@ def present_archetypes_picker(node: object, ctx: PresenterContext) -> str:
         items,
         "Archetype",
         "archetype",
-        name_field="name",
+        name_fields=("name",),
         panel_body=_archetype_panel_body,
     )
 
@@ -687,7 +697,7 @@ def present_classes_picker(node: object, ctx: PresenterContext) -> str:
         items,
         "Class",
         "class",
-        name_field="name",
+        name_fields=("display_name", "name"),
         panel_body=_class_panel_body,
     )
 

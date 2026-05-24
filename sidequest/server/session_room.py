@@ -322,18 +322,23 @@ class SessionRoom:
     def close_store(self) -> None:
         """Close the canonical store exactly once. Idempotent.
 
-        Dormant in production today — ``RoomRegistry`` never evicts, so
-        ``close_store`` has no production callers. Wired in anticipation
-        of a future teardown path (last-disconnect cleanup, slug
-        recycle). Safe to call when never bound.
+        Called by ``ws_endpoint`` (sidequest/server/websocket.py finally
+        block) when the last player disconnects, AFTER
+        ``handler.cleanup()`` has persisted the final snapshot via
+        ``room.save()``. Order matters: nulling ``_store`` first would
+        silently no-op the cleanup save (see ``save()`` at the top of
+        this file). ``ws_endpoint`` also skips the call when cleanup
+        raised or swallowed a save exception so a lost final snapshot
+        does not get compounded by a teardown. Safe to call when never
+        bound and safe to call multiple times.
 
         Also calls ``reset_baselines()`` on the SDK client as part of
-        slug-recycle prep. Per Story 61-4 (Architect spec-check A): once
-        a teardown path lands, ``RoomRegistry`` never having evicted
-        means the ``AnthropicSdkClient`` backing the orchestrator lives
-        for the process lifetime per slug; without a reset the rolling
-        baseline can self-train onto a sustained runaway and silence the
-        alarm. Resetting here ensures the next session starts cold. The
+        slug-recycle prep. Per Story 61-4 (Architect spec-check A):
+        ``RoomRegistry`` never evicts, so the ``AnthropicSdkClient``
+        backing the orchestrator lives for the process lifetime per
+        slug; without a reset the rolling baseline can self-train onto
+        a sustained runaway and silence the alarm. Resetting here
+        ensures the next session on the same slug starts cold. The
         reset is best-effort — if the orchestrator is unbound, never
         created, or its client lacks ``reset_baselines`` (e.g. claude
         -p / Ollama backends), we no-op rather than crash teardown.

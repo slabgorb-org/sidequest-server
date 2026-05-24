@@ -1229,6 +1229,14 @@ class WebSocketSessionHandler:
         self._event_log: EventLog | None = None
         self._projection_filter: ProjectionFilter | None = None
         self._projection_cache: ProjectionCache | None = None
+        # Story 61-followup-C: ws_endpoint reads this after cleanup() returns
+        # to decide whether to fire room.close_store(). The cleanup save block
+        # swallows save exceptions to keep the WebSocket lifecycle stable,
+        # which would otherwise hide a final-snapshot loss from the teardown
+        # gate. Setting this here exposes the swallowed failure to
+        # ws_endpoint so it can skip close_store and preserve the canonical
+        # store handle for a later retry.
+        self.last_save_failure: Exception | None = None
 
     # ------------------------------------------------------------------
     # Room context (MP-02 Task 2)
@@ -1542,6 +1550,11 @@ class WebSocketSessionHandler:
                 )
             except Exception as exc:
                 logger.error("session.disconnect_save_failed error=%s", exc)
+                # Story 61-followup-C: expose the swallowed save failure to
+                # ws_endpoint so its teardown gate can skip close_store().
+                # Closing the canonical store after a lost final save would
+                # compound the data loss into a permanent state regression.
+                self.last_save_failure = exc
 
             # Story 45-31: post-session render diagnostic. Writes a
             # JSON snapshot of the render worker's lifetime so the

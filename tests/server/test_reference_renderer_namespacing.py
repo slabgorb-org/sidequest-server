@@ -13,6 +13,19 @@ from sidequest.server.reference_renderer import (
     _kind_for_stem,
     _render_file,
 )
+from sidequest.server.reference_theme import ReferenceTheme
+
+_STUB_THEME = ReferenceTheme(
+    archetype="terminal",
+    palette_primary="#4A90D9",
+    palette_accent="#E8A838",
+    palette_background="#0D1117",
+    web_font_family="Rajdhani",
+    display_font_family="Orbitron",
+    dinkus_light="·",
+    dinkus_medium="✦",
+    dinkus_heavy="✦✦",
+)
 
 
 @pytest.mark.parametrize(
@@ -37,14 +50,14 @@ def test_kind_for_stem(stem: str, expected: str) -> None:
 def test_namespaced_id_for_class_item(tmp_path: Path) -> None:
     path = tmp_path / "classes.yaml"
     path.write_text(yaml.safe_dump({"classes": [{"name": "Knight"}]}))
-    rendered = _render_file(path)
+    rendered = _render_file(path, pack="test", world=None, theme=_STUB_THEME)
     assert 'id="class-knight"' in rendered
 
 
 def test_namespaced_id_for_culture_item(tmp_path: Path) -> None:
     path = tmp_path / "cultures.yaml"
     path.write_text(yaml.safe_dump({"cultures": [{"name": "Knight"}]}))
-    rendered = _render_file(path)
+    rendered = _render_file(path, pack="test", world=None, theme=_STUB_THEME)
     assert 'id="culture-knight"' in rendered
 
 
@@ -53,8 +66,8 @@ def test_class_and_culture_with_same_name_do_not_collide(tmp_path: Path) -> None
     cultures = tmp_path / "cultures.yaml"
     classes.write_text(yaml.safe_dump({"classes": [{"name": "Knight"}]}))
     cultures.write_text(yaml.safe_dump({"cultures": [{"name": "Knight"}]}))
-    rendered_classes = _render_file(classes)
-    rendered_cultures = _render_file(cultures)
+    rendered_classes = _render_file(classes, pack="test", world=None, theme=_STUB_THEME)
+    rendered_cultures = _render_file(cultures, pack="test", world=None, theme=_STUB_THEME)
     assert 'id="class-knight"' in rendered_classes
     assert 'id="culture-knight"' in rendered_cultures
 
@@ -63,12 +76,12 @@ def test_top_level_dict_keys_keep_flat_slug(tmp_path: Path) -> None:
     """Top-level keys are unique within the file so they don't need namespacing."""
     path = tmp_path / "rules.yaml"
     path.write_text(yaml.safe_dump({"core_rules": {"description": "x"}}))
-    rendered = _render_file(path)
+    rendered = _render_file(path, pack="test", world=None, theme=_STUB_THEME)
     assert 'id="core-rules"' in rendered
 
 
 def test_file_wrapper_keeps_existing_id(tmp_path: Path) -> None:
     path = tmp_path / "classes.yaml"
     path.write_text(yaml.safe_dump({"classes": [{"name": "Knight"}]}))
-    rendered = _render_file(path)
+    rendered = _render_file(path, pack="test", world=None, theme=_STUB_THEME)
     assert 'id="file-classes"' in rendered

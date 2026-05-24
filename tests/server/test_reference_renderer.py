@@ -362,7 +362,11 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     world_dir = pack_dir / "worlds" / "demoworld"
     world_dir.mkdir(parents=True)
     (pack_dir / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
-    (pack_dir / "lore.yaml").write_text("pack_flavor: yes\n")
+    # Use a PUBLIC field (setting_anchor) for the pack-flavor lore.yaml so
+    # the visibility gate does not drop it. The purpose of this test is to
+    # verify that BOTH world-tier and pack-tier content reaches the page;
+    # the field name itself is not significant.
+    (pack_dir / "lore.yaml").write_text("setting_anchor: genre-flavor-value\n")
     (pack_dir / "cultures.yaml").write_text("genre_cultures: yes\n")
     (world_dir / "world.yaml").write_text("world_name: Demoworld\n")
     (world_dir / "legends.yaml").write_text("legend: a tale\n")
@@ -372,7 +376,7 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     assert "<title>demo / demoworld — Lore</title>" in html
     assert "Demoworld" in html
     assert "a tale" in html
-    assert "pack_flavor" in html
+    assert "genre-flavor-value" in html
     assert "genre_cultures" in html
     # Both world-tier content (world.yaml) and pack-tier flavor (with the
     # `(genre)` suffix) are reachable in the rendered HTML. Tier order is

@@ -67,6 +67,25 @@ KEEPER: frozenset[Entry] = frozenset(
 for _entry in PUBLIC | KEEPER:
     _validate_pattern(_entry[1])
 
+# Set of stems that have AT LEAST ONE registered entry (PUBLIC or KEEPER).
+# Used by the renderer to skip classification for stems not yet enumerated
+# by Task 8 — avoids dropping all content from files whose vocabulary has
+# not yet been reviewed. Once Task 8 populates PUBLIC fully, every
+# rendered stem will appear here and this bypass will be unreachable.
+_REGISTERED_STEMS: frozenset[str] = frozenset(stem for stem, _ in PUBLIC | KEEPER)
+
+
+def has_registered_entries(file_stem: str) -> bool:
+    """Return True iff ``file_stem`` has at least one entry in PUBLIC or KEEPER.
+
+    The renderer uses this to skip the visibility gate for stems whose
+    vocabulary has not yet been enumerated (Task 8). Once the full PUBLIC
+    set is populated, every stem reachable from a reference page will
+    appear in ``_REGISTERED_STEMS`` and this function will always return
+    True for rendered files.
+    """
+    return file_stem in _REGISTERED_STEMS
+
 
 def classify(file_stem: str, key_path: KeyPath) -> Visibility:
     """Return the Visibility for a given (file_stem, key_path)."""

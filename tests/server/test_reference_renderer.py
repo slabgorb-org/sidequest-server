@@ -367,7 +367,9 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     # verify that BOTH world-tier and pack-tier content reaches the page;
     # the field name itself is not significant.
     (pack_dir / "lore.yaml").write_text("setting_anchor: genre-flavor-value\n")
-    (pack_dir / "cultures.yaml").write_text("genre_cultures: yes\n")
+    (pack_dir / "cultures.yaml").write_text(
+        "- name: Genre Traveller\n  summary: a genre-culture value\n"
+    )
     (world_dir / "world.yaml").write_text("description: Demoworld is a rainy procedural plateau.\n")
     (world_dir / "legends.yaml").write_text("- name: A Tale\n  summary: a tale\n")
 
@@ -377,7 +379,7 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     assert "Demoworld" in html
     assert "a tale" in html
     assert "genre-flavor-value" in html
-    assert "genre_cultures" in html
+    assert "genre-culture value" in html
     # Both world-tier content (world.yaml) and pack-tier flavor (with the
     # `(genre)` suffix) are reachable in the rendered HTML. Tier order is
     # no longer asserted — see docstring above.

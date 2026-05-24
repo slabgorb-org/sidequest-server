@@ -422,3 +422,35 @@ def present_openings(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("openings", ())] = present_openings
+
+
+def present_cultures(node: object, ctx: PresenterContext) -> str:
+    """Render cultures.yaml as a 3-column card grid. Skips `slots` (generator config)."""
+    # Unwrap dict wrapper (e.g. {cultures: [...]}).
+    if isinstance(node, dict):
+        for v in node.values():
+            if isinstance(v, list):
+                node = v
+                break
+    if not isinstance(node, list) or not node:
+        return ""
+    cards: list[str] = []
+    for item in node:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "Unnamed"
+        summary = str(item.get("summary", "")).strip()
+        description = str(item.get("description", "")).strip()
+        slug = slugify(name)
+        cards.append(
+            f'<article class="ref-card" id="culture-{slug}">'
+            '<div class="ref-card__kicker">Culture</div>'
+            f'<h3 class="ref-card__title">{escape(name)}</h3>'
+            + (f'<div class="ref-card__summary">{escape(summary)}</div>' if summary else "")
+            + (f'<p class="ref-card__body">{escape(description)}</p>' if description else "")
+            + "</article>"
+        )
+    return '<div class="ref-card-grid ref-card-grid--cols-3">' + "".join(cards) + "</div>"
+
+
+PRESENTERS[("cultures", ())] = present_cultures

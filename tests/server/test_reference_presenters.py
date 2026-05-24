@@ -336,6 +336,39 @@ def test_openings_emits_card_grid(fake_theme: ReferenceTheme) -> None:
     assert "<h2>name</h2>" not in html
 
 
+def test_cultures_emits_card_grid(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_cultures
+
+    cultures = [
+        {
+            "name": "Vacworld-Born",
+            "summary": "Children of the orbital ring stations.",
+            "description": "A pragmatic people who grew up recycling everything.",
+            "slots": {"naming": "markov", "corpus_file": "vacworld.txt"},
+        },
+        {
+            "name": "Moana-Teru",
+            "summary": "Ocean-traders from the habitable world.",
+        },
+    ]
+    html = present_cultures(cultures, make_ctx("cultures", (), fake_theme))
+
+    assert 'class="ref-card-grid ref-card-grid--cols-3"' in html
+    assert 'class="ref-card"' in html
+    assert '<div class="ref-card__kicker">Culture</div>' in html
+    assert "Vacworld-Born" in html
+    assert "Children of the orbital ring" in html
+    assert "pragmatic people" in html
+    assert "Moana-Teru" in html
+    # slots MUST NOT appear — generator config
+    assert "markov" not in html
+    assert "corpus_file" not in html
+    assert "slots" not in html
+    # No raw h2 headings
+    assert "<h2>name</h2>" not in html
+    assert "<h2>summary</h2>" not in html
+
+
 def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
     from sidequest.server.reference_presenters import present_lore_geography
 

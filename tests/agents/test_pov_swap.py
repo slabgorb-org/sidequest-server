@@ -233,12 +233,14 @@ def test_comma_continuation_with_she_her():
 def test_adverb_between_subject_and_verb_conjugates():
     """The verbatim playtest repro: an adverb strands the main verb.
     "Carl steadily works the drum with his hands, checking the rope."
-    must become "You steadily work the drum with your hands, checking
-    the rope." — not "You steadily works…".
+    must become "You steadily work the drum with his hands, checking the
+    rope." — not "You steadily works…". Under the retired-pronoun-passes
+    contract, the possessive "his" survives (NPC-disambiguation cost);
+    the narrator should be writing "Carl's hands" in well-formed prose.
     """
     text = "Carl steadily works the drum with his hands, checking the rope."
     out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
-    assert out == "You steadily work the drum with your hands, checking the rope.", out
+    assert out == "You steadily work the drum with his hands, checking the rope.", out
     assert "works" not in out
 
 
@@ -262,10 +264,11 @@ def test_parenthetical_between_subject_and_verb_conjugates():
 
 def test_interrupter_conjugation_they_them_parity():
     """The defect is pronoun-set-agnostic — it must also be fixed for a
-    they/them PC (the playgroup's Katia profile)."""
+    they/them PC (the playgroup's Katia profile). The possessive "their"
+    survives under the retired-pronoun-passes contract."""
     text = "Sam carefully works the drum with their hands."
     out, _ = swap_to_second_person(text, target_name="Sam", pronouns="they/them")
-    assert out == "You carefully work the drum with your hands.", out
+    assert out == "You carefully work the drum with their hands.", out
     assert "works" not in out
 
 
@@ -279,36 +282,91 @@ def test_interrupter_pass_does_not_fire_for_other_actors():
     assert count == 0
 
 
-def test_he_him_pronoun_in_predicate_swaps():
-    """After the subject is rewritten to 'you', subsequent pronoun
-    references to the target also need swapping: 'Carl plants a boot...
-    and he hauls...' becomes 'You plant a boot... and you haul...'.
-    Edge case: only swap pronouns that refer to the target — but in
-    single-anchor narration there's no ambiguity, so all of them swap.
+# ---------------------------------------------------------------------------
+# Antecedent-blindness retired (sq-playtest 2026-05-23 pulp_noir/annees_folles)
+# ---------------------------------------------------------------------------
+#
+# The original Story 49-8 helper applied PRONOUN-LEVEL substitutions (he → you,
+# his → your, him → you, himself → yourself) anywhere those tokens appeared in
+# the anchored prose. Regex has no antecedent resolution: in a scene with an
+# NPC who shares the PC's pronouns ("the man with Le Figaro folds his paper…
+# He doesn't hurry."), every he/his/him/himself in the prose was rewritten —
+# turning NPC actions into PC actions on the player's tab.
+#
+# The new contract retires the antecedent-blind pronoun passes and shifts the
+# 2nd-person voice contract to the narrator side: the narrator is instructed
+# (via narrator_prompts/pov_rules.md) to write the anchor PC's actions using
+# the PC's NAME, never a pronoun. The reflexive ``himself``/``herself`` pass
+# stays in place but is GATED on a sentence-local name swap, so it only fires
+# when this sentence already contains the PC's name as the subject.
+#
+# The tests below pin the new contract: NPC pronouns survive untouched even
+# when the PC shares their pronoun set.
+
+
+def test_npc_he_with_he_him_pc_not_rewritten():
+    """Verbatim sq-playtest 2026-05-23 repro: pulp_noir / annees_folles, PC
+    Paul Lautrec (he/him). The narrator writes about an NPC ("the man with
+    Le Figaro") leaving the café; the legacy helper rewrote "He doesn't
+    hurry" to "You doesn't hurry" because Pass 5 fired on any "He" in the
+    prose. After the retire, NPC pronouns survive — the only swaps come
+    from the PC's actual name appearances (zero in this fragment).
     """
+    text = (
+        "Across the room, the man with Le Figaro folds his paper, sets a coin "
+        "on the table, and walks out without looking at you. He doesn't hurry."
+    )
+    out, count = swap_to_second_person(text, target_name="Paul Lautrec", pronouns="he/him")
+    # The PC's name doesn't appear in the prose — there is nothing to swap.
+    assert out == text, out
+    assert count == 0
+
+
+def test_npc_she_with_she_her_pc_not_rewritten():
+    """She/her parity: an NPC sister scene with a she/her PC must leave the
+    NPC's pronouns untouched."""
+    text = "The widow turns away. She does not look back. Her veil catches in the door."
+    out, count = swap_to_second_person(text, target_name="Mme. Beaumont", pronouns="she/her")
+    assert out == text
+    assert count == 0
+
+
+def test_npc_them_with_they_them_pc_not_rewritten():
+    """They/them parity: pronoun passes are retired across all pronoun sets."""
+    text = "The strangers exchange a glance. They wait. Their hands stay in their coats."
+    out, count = swap_to_second_person(text, target_name="Avery", pronouns="they/them")
+    assert out == text
+    assert count == 0
+
+
+def test_pronoun_in_predicate_after_name_swap_stays_third_person():
+    """If the narrator slips and mixes the PC's name with pronouns inside one
+    sentence (legacy 49-8 narrator style), the name swaps but the pronouns
+    survive — the renderer no longer guesses which pronouns refer to the PC
+    vs. another character. The prompt-side discipline (pov_rules.md) is what
+    keeps this from happening in well-formed prose."""
     text = "Carl plants a boot and he hauls the polearm out wet."
     out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
-    assert out == "You plant a boot and you haul the polearm out wet."
+    # Name → "You", verb conjugated by Pass 2. The bare "he hauls" survives
+    # untouched — antecedent-blind pronoun-pass would have wrongly converted
+    # it; the new contract does not.
+    assert out == "You plant a boot and he hauls the polearm out wet.", out
 
 
-def test_she_her_pronoun_in_predicate_swaps():
-    text = "Katia eases the knife back and she watches the body for movement."
-    out, _ = swap_to_second_person(text, target_name="Katia", pronouns="she/her")
-    assert out == "You ease the knife back and you watch the body for movement."
-
-
-def test_object_pronoun_him_swaps_to_you():
+def test_object_pronoun_him_for_npc_stays_third_person():
+    """Object 'him' referring to an NPC in the same sentence as the PC is a
+    direct antecedent collision. The retire keeps the NPC pronoun intact."""
     text = "Carl plants a boot; the moth shudders against him."
     out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
-    assert "against him" not in out
-    assert "against you" in out
+    # 'him' refers to the moth (or to Carl — ambiguous), and the engine no
+    # longer guesses. 'Carl' → 'You' fires; the object pronoun stays.
+    assert out == "You plant a boot; the moth shudders against him.", out
 
 
-def test_object_pronoun_her_swaps_to_you():
+def test_object_pronoun_her_for_npc_stays_third_person():
     text = "Katia eases the knife; the cold seeps into her."
     out, _ = swap_to_second_person(text, target_name="Katia", pronouns="she/her")
-    assert "into her" not in out
-    assert "into you" in out
+    assert out == "You ease the knife; the cold seeps into her.", out
 
 
 # ---------------------------------------------------------------------------
@@ -329,11 +387,15 @@ def test_dialogue_protected_carl_in_speech_not_swapped():
 
 
 def test_dialogue_protected_pronoun_in_speech_not_swapped():
-    text = 'Katia hisses, "She drew first, you know." She raises the knife.'
+    """Dialogue protection: text inside quotes is left alone by every pass.
+    The narrator-voice sentence after the dialogue is swapped via the NAME
+    (not the pronoun) under the new contract — well-formed prose uses the
+    PC's name here, not 'She'."""
+    text = 'Katia hisses, "She drew first, you know." Katia raises the knife.'
     out, _ = swap_to_second_person(text, target_name="Katia", pronouns="she/her")
-    # Dialogue's 'She drew first' refers to someone else and is in quotes;
-    # the narrator-voice 'She raises' refers to Katia and swaps.
+    # Dialogue's 'She drew first' refers to someone else and is in quotes; stays.
     assert '"She drew first, you know."' in out
+    # The narrator-voice line uses the name — swaps via Pass 2.
     assert "You raise the knife." in out
 
 
@@ -386,6 +448,52 @@ def test_irregular_verb_was_swaps_to_were():
 
 
 # ---------------------------------------------------------------------------
+# Contracted verbs (sq-playtest 2026-05-23 pulp_noir/annees_folles, B2b)
+# ---------------------------------------------------------------------------
+#
+# The verb-capture regex uses ``\w+`` which stops at the apostrophe — so
+# "Carl doesn't move" was captured as "Carl doesn" and conjugated to "You
+# doesn", leaving "'t move" in place: "You doesn't move." The fix routes
+# the bare contraction stem ("doesn", "wasn", "isn", "hasn") through
+# ``_IRREGULAR_VERBS`` so the conjugated stem composes correctly with the
+# trailing "n't" suffix that survives outside the regex match.
+
+
+def test_contraction_doesnt_after_name_conjugates_to_dont():
+    """'Carl doesn't move' -> 'You don't move'. Pre-fix this rendered as
+    'You doesn't move' on the player's tab."""
+    text = "Carl doesn't move."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You don't move."
+
+
+def test_contraction_isnt_after_name_conjugates_to_arent():
+    text = "Carl isn't ready."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You aren't ready."
+
+
+def test_contraction_wasnt_after_name_conjugates_to_werent():
+    text = "Carl wasn't expecting that."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You weren't expecting that."
+
+
+def test_contraction_hasnt_after_name_conjugates_to_havent():
+    text = "Carl hasn't moved."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You haven't moved."
+
+
+def test_contraction_in_and_continuation_conjugates():
+    """Pass 8 ('and <verb>' continuation) must also conjugate contractions
+    once the sentence's subject was swapped via a name."""
+    text = "Carl plants a boot and doesn't move."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You plant a boot and don't move."
+
+
+# ---------------------------------------------------------------------------
 # Negative cases — fail-loud guards
 # ---------------------------------------------------------------------------
 
@@ -422,8 +530,15 @@ def test_target_name_absent_returns_unchanged_and_zero_count():
 
 
 def test_swap_count_matches_substitution_total():
-    """Count should reflect the total number of distinct swap operations
-    so the OTEL span has a meaningful 'how much did this rewrite' signal.
+    """Count should reflect the total number of distinct swap operations so
+    the OTEL span has a meaningful 'how much did this rewrite' signal.
+
+    Under the new (pronoun-pass retired) contract, only name-based swaps
+    fire — antecedent-blind pronoun-passes have been removed. The third
+    sentence ('He shoulders himself…') has no Carl mention so nothing in
+    it gets touched: 'He' / 'himself' both survive. The pov_rules.md
+    narrator instruction is what keeps well-formed prose from reaching this
+    fallback in the first place.
     """
     text = (
         "Carl plants a boot on the moth's thorax. "
@@ -431,14 +546,12 @@ def test_swap_count_matches_substitution_total():
         "He shoulders himself between Donut and the door."
     )
     out, count = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
-    # Subject Carl x2, possessive Carl's x1, pronoun he x1, reflexive
-    # himself x1 = at least 5 substitutions (verb conjugation may also
-    # be counted but is implementation-detail; floor at 5).
-    assert count >= 5, f"expected at least 5 swaps in the dense passage, got {count}"
-    # Resulting prose has no third-person references to Carl.
+    # Sentence 1: Carl + plants → 2 swaps. Sentence 2: Carl's → 1. Sentence 3: 0.
+    assert count >= 3, f"expected at least 3 swaps in the dense passage, got {count}"
+    # The Carl name is gone (Pass 1/2 fired).
     assert "Carl" not in out
-    assert " he " not in out and " he," not in out and " he." not in out
-    assert "himself" not in out
+    # Sentence 3 pronouns survive — antecedent unknown to the regex layer.
+    assert "He shoulders himself" in out
 
 
 def test_swap_count_zero_when_no_match():

@@ -30,6 +30,7 @@ from sidequest.agents.narrator_prompts import (
     NARRATOR_OUTPUT_ONLY,
     NARRATOR_OUTPUT_ONLY_SDK,
     NARRATOR_OUTPUT_STYLE,
+    NARRATOR_POV_RULES,
     NARRATOR_REFERRAL_RULE,
 )
 from sidequest.agents.prompt_framework.types import (
@@ -53,6 +54,7 @@ __all__ = [
     "NARRATOR_COMBAT_RULES",
     "NARRATOR_CHASE_RULES",
     "NARRATOR_DIALOGUE_RULES",
+    "NARRATOR_POV_RULES",
     "NarratorAgent",
     "narrator_output_format_text",
     "is_streaming_enabled",
@@ -187,6 +189,21 @@ class NarratorAgent(BaseAgent):
             PromptSection.new(
                 "narrator_agency",
                 f"<critical>\n{NARRATOR_AGENCY}\n</critical>",
+                AttentionZone.Primacy,
+                SectionCategory.Guardrail,
+            ),
+        )
+
+        # Primacy/Guardrail — POV / pronoun discipline for the per-recipient
+        # name-driven rewriter (sq-playtest 2026-05-23: pov_swap pronoun
+        # passes retired after the "You doesn't hurry" antecedent-blindness
+        # bug; the narrator-side discipline of using the PC's NAME instead
+        # of pronouns is what keeps NPC pronouns out of the swap surface).
+        registry.register_section(
+            self.name(),
+            PromptSection.new(
+                "narrator_pov_rules",
+                f"<critical>\n{NARRATOR_POV_RULES}\n</critical>",
                 AttentionZone.Primacy,
                 SectionCategory.Guardrail,
             ),

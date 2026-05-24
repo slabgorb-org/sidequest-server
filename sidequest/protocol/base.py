@@ -33,7 +33,9 @@ class ProtocolBase(BaseModel):
     """Base class for all sidequest protocol models.
 
     @model_serializer applies Rust-equivalent skip_serializing_if semantics:
-      - None → omitted (Rust Option::is_none)
+      - None → omitted (Rust Option::is_none), UNLESS the field has None as
+        its declared default (e.g., rig_composure_current = None, which means
+        "no rig" — a meaningful protocol state that must be included)
       - empty list/dict/str matching its declared default → omitted (Rust is_empty)
       - numeric/bool fields → always present regardless of value
 
@@ -76,9 +78,20 @@ class ProtocolBase(BaseModel):
         result: dict[str, Any] = {}
         for k, v in d.items():
             wire_key = remap.get(k, k)
-            # Always drop None (covers all Option<T> fields)
+            # Handle None values: skip them UNLESS the field has None as its
+            # declared default. Fields like rig_composure_current (nullable rig pool)
+            # have None as their default, meaning "no rig", which is a meaningful
+            # protocol state that must be included in serialization.
             if v is None:
-                continue
+                field_info = _find_field(cls, k)
+                if field_info is not None:
+                    default_val = _field_default(field_info)
+                    # Only skip None if the field's declared default is NOT None
+                    if default_val is not None:
+                        continue
+                else:
+                    # Field not found in model — skip it (shouldn't happen)
+                    continue
             # Drop empty list/dict/str ONLY when the field default is also empty.
             # This mirrors Rust's skip_serializing_if = "Vec::is_empty" and
             # skip_serializing_if = "String::is_empty" — numeric/bool fields
@@ -95,9 +108,10 @@ class ProtocolBase(BaseModel):
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         """model_dump respects the same exclude logic as serialization.
 
-        Callers may override exclude_none / exclude_defaults explicitly.
+        Note: exclude_none is NOT set to True by default here anymore.
+        The @model_serializer handles None-exclusion logic based on field defaults.
+        Callers can still pass exclude_none explicitly if needed.
         """
-        kwargs.setdefault("exclude_none", True)
         return super().model_dump(**kwargs)
 
     def model_dump_json(self, **kwargs: Any) -> str:

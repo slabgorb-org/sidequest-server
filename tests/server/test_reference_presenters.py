@@ -269,6 +269,41 @@ def test_demographics_emits_label_grid(fake_theme: ReferenceTheme) -> None:
     assert "<h2>total_population</h2>" not in html
 
 
+def test_legends_emits_article_cards(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_legends
+
+    legends = [
+        {
+            "name": "The First Crossing",
+            "era": "Pre-collapse",
+            "summary": "When the gate was found.",
+            "cultural_impact": "Changed everything about how people thought of distance.",
+            "affected_cultures": ["moana-teru", "vacworld-born"],
+            "terrain_scars": ["gate-scar"],
+        },
+        {
+            "name": "The Long Winter",
+            "summary": "A generation of darkness.",
+        },
+    ]
+    html = present_legends(legends, make_ctx("legends", (), fake_theme))
+
+    assert 'class="ref-legends"' in html
+    assert 'class="ref-card"' in html
+    assert 'class="ref-card__title"' in html
+    assert "The First Crossing" in html
+    assert "Pre-collapse" in html
+    assert "When the gate was found." in html
+    assert "Changed everything" in html
+    assert "The Long Winter" in html
+    # v1 skips terrain_scars and affected_cultures
+    assert "moana-teru" not in html
+    assert "gate-scar" not in html
+    # No raw h2 headings
+    assert "<h2>name</h2>" not in html
+    assert "<h2>era</h2>" not in html
+
+
 def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
     from sidequest.server.reference_presenters import present_lore_geography
 

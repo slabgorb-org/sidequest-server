@@ -345,3 +345,40 @@ def present_demographics(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("demographics", ())] = present_demographics
+
+
+def present_legends(node: object, ctx: PresenterContext) -> str:
+    """Render legends.yaml as a vertical stack of long-form article cards."""
+    # Accept both a top-level list and a dict with a single list-valued key.
+    if isinstance(node, dict):
+        for v in node.values():
+            if isinstance(v, list):
+                node = v
+                break
+    if not isinstance(node, list) or not node:
+        return ""
+    articles: list[str] = []
+    for item in node:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "Unnamed"
+        era = str(item.get("era", "")).strip()
+        summary = str(item.get("summary", "")).strip()
+        cultural_impact = str(item.get("cultural_impact", "")).strip()
+        slug = slugify(name)
+        articles.append(
+            f'<article class="ref-card" id="legend-{slug}">'
+            f'<h3 class="ref-card__title">{escape(name)}</h3>'
+            + (f'<div class="ref-card__kicker">{escape(era)}</div>' if era else "")
+            + (f'<div class="ref-card__summary">{escape(summary)}</div>' if summary else "")
+            + (
+                f'<p class="ref-card__body">{escape(cultural_impact)}</p>'
+                if cultural_impact
+                else ""
+            )
+            + "</article>"
+        )
+    return f'<section class="ref-legends">{"".join(articles)}</section>'
+
+
+PRESENTERS[("legends", ())] = present_legends

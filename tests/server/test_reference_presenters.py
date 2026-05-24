@@ -718,7 +718,9 @@ def test_achievements_empty_list_returns_empty_string(fake_theme: ReferenceTheme
     from sidequest.server.reference_presenters import present_achievements
 
     assert present_achievements([], make_ctx("achievements", (), fake_theme)) == ""
-    assert present_achievements({"achievements": []}, make_ctx("achievements", (), fake_theme)) == ""
+    assert (
+        present_achievements({"achievements": []}, make_ctx("achievements", (), fake_theme)) == ""
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -843,4 +845,7 @@ def test_beat_vocabulary_empty_returns_empty_string(fake_theme: ReferenceTheme) 
     from sidequest.server.reference_presenters import present_beat_vocabulary
 
     assert present_beat_vocabulary({}, make_ctx("beat_vocabulary", (), fake_theme)) == ""
-    assert present_beat_vocabulary({"obstacles": []}, make_ctx("beat_vocabulary", (), fake_theme)) == ""
+    assert (
+        present_beat_vocabulary({"obstacles": []}, make_ctx("beat_vocabulary", (), fake_theme))
+        == ""
+    )

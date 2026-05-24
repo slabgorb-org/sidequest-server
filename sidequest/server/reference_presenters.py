@@ -728,9 +728,7 @@ def present_progression(node: object, ctx: PresenterContext) -> str:
         if description:
             inner.append(f'<p class="ref-card__summary">{escape(description)}</p>')
         if isinstance(triggers, list) and triggers:
-            chips = "".join(
-                f'<span class="ref-chip">{escape(str(t))}</span>' for t in triggers
-            )
+            chips = "".join(f'<span class="ref-chip">{escape(str(t))}</span>' for t in triggers)
             inner.append(f'<div class="ref-card__meta">{chips}</div>')
         if isinstance(tier_thresholds, list) and len(tier_thresholds) >= 3:
             label = " / ".join(str(t) for t in tier_thresholds[:3])
@@ -808,11 +806,7 @@ def present_power_tiers(node: object, ctx: PresenterContext) -> str:
             )
         if not rows:
             continue
-        thead = (
-            "<thead><tr>"
-            "<th>Level</th><th>Label</th><th>Player View</th>"
-            "</tr></thead>"
-        )
+        thead = "<thead><tr><th>Level</th><th>Label</th><th>Player View</th></tr></thead>"
         sections.append(
             "<section>"
             f"<h3>{escape(str(class_name))}</h3>"
@@ -847,9 +841,7 @@ def present_achievements(node: object, ctx: PresenterContext) -> str:
             inner.append(f'<p class="ref-card__body">{escape(condition)}</p>')
         if reward:
             inner.append(
-                f'<div class="ref-card__meta">'
-                f'<span class="ref-chip">{escape(reward)}</span>'
-                f"</div>"
+                f'<div class="ref-card__meta"><span class="ref-chip">{escape(reward)}</span></div>'
             )
         cards.append('<article class="ref-card">' + "".join(inner) + "</article>")
     if not cards:
@@ -913,9 +905,7 @@ def present_inventory(node: object, ctx: PresenterContext) -> str:
                 "<th>Weight</th><th>Rarity</th><th>Description</th>"
                 "</tr></thead>"
             )
-            parts.append(
-                f'<table class="ref-table">{thead}<tbody>{"".join(rows)}</tbody></table>'
-            )
+            parts.append(f'<table class="ref-table">{thead}<tbody>{"".join(rows)}</tbody></table>')
 
     if not parts:
         return ""

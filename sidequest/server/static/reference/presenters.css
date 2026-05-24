@@ -197,6 +197,19 @@
 }
 .ref-picker-panel[hidden] { display: none; }
 
+/* --- Section wrappers (structural only — no visual chrome) --- */
+/* These class names are structural markers on presenter-generated sections.
+ * Layout is handled by their children (.ref-card-grid, .ref-label-grid, etc.);
+ * the section wrapper itself contributes only spacing. */
+.ref-factions   { margin: 1.5rem 0; }
+.ref-geography  { margin: 1.5rem 0; }
+.ref-world-meta { margin: 1.5rem 0; }
+.ref-legends    { margin: 1.5rem 0; }
+.ref-timeline   { /* already defined above — preserved here for colocation */ }
+
+/* --- History block --- */
+.ref-history { margin: 1.5rem 0; }
+
 /* --- Error / unknown banners (dev-only visibility) --- */
 .ref-presenter-error {
     background: rgba(200, 50, 50, 0.15);

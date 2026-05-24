@@ -40,8 +40,8 @@ def _seed_pack(tmp_path: Path) -> None:
     (pack / "archetypes.yaml").write_text("kinds:\n  - sleuth\n")
     (pack / "classes.yaml").write_text("amateur_sleuth:\n  signature: deduce\n")
     (pack / "npcs.yaml").write_text("villain: thedoctor\n")  # MUST be excluded
-    (world / "world.yaml").write_text("name: Demoworld\n")
-    (world / "legends.yaml").write_text("legend: a tale\n")
+    (world / "world.yaml").write_text("description: Demoworld is a rainy plateau.\n")
+    (world / "legends.yaml").write_text("- name: A Tale\n  summary: a tale\n")
 
 
 def test_rules_route_returns_html(tmp_path):

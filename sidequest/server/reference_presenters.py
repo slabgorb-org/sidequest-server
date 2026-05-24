@@ -179,6 +179,13 @@ def _format_chip_label(value: str) -> str:
 
 
 def present_lore_geography(node: object, ctx: PresenterContext) -> str:
+    # Accept both a top-level list and a dict with a single list-valued key
+    # (e.g. {locations: [...]}).
+    if isinstance(node, dict):
+        for v in node.values():
+            if isinstance(v, list):
+                node = v
+                break
     if not isinstance(node, list) or not node:
         return ""
     cards: list[str] = []
@@ -213,6 +220,48 @@ def present_lore_geography(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("lore", ("geography",))] = present_lore_geography
-# Pack/world-tier locations.yaml — top-level-list dispatch still inactive
-# (see Task 7 commit message). Entry kept for the future fix.
+# Pack/world-tier locations.yaml — activated via file-root dispatch (Task 10).
 PRESENTERS[("locations", ())] = present_lore_geography
+
+
+def present_world_meta(node: object, ctx: PresenterContext) -> str:
+    """Render world.yaml as a label-grid of key axes + starting conditions."""
+    if not isinstance(node, dict):
+        return ""
+    description = str(node.get("description", "")).strip()
+    axis_snapshot = node.get("axis_snapshot") or {}
+    starting_location = str(node.get("starting_location", "")).strip()
+    starting_time = str(node.get("starting_time", "")).strip()
+    # cover_poi is a daemon hint — skip entirely.
+
+    cells: list[str] = []
+    axis_labels = {"scale": "Scale", "tone": "Tone", "swagger": "Swagger"}
+    for key, label in axis_labels.items():
+        value = str(axis_snapshot.get(key, "")).strip() if isinstance(axis_snapshot, dict) else ""
+        if value:
+            cells.append(
+                f'<div class="ref-label-grid__cell">'
+                f'<div class="ref-card__kicker">{escape(label)}</div>'
+                f"<div>{escape(value)}</div>"
+                f"</div>"
+            )
+    if starting_location:
+        cells.append(
+            f'<div class="ref-label-grid__cell">'
+            f'<div class="ref-card__kicker">Starting Location</div>'
+            f"<div>{escape(starting_location)}</div>"
+            f"</div>"
+        )
+    if starting_time:
+        cells.append(
+            f'<div class="ref-label-grid__cell">'
+            f'<div class="ref-card__kicker">Starting Time</div>'
+            f"<div>{escape(starting_time)}</div>"
+            f"</div>"
+        )
+    grid = f'<div class="ref-label-grid">{"".join(cells)}</div>'
+    desc_html = f'<p class="narrative-flourish">{escape(description)}</p>' if description else ""
+    return f'<section class="ref-world-meta">{desc_html}{grid}</section>'
+
+
+PRESENTERS[("world", ())] = present_world_meta

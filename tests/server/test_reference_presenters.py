@@ -157,6 +157,39 @@ def test_factions_unknown_disposition_falls_back_to_neutral(
     assert 'class="ref-badge ref-badge--disposition-neutral">Mysterious</span>' in html
 
 
+def test_world_meta_emits_label_grid(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_world_meta
+
+    node = {
+        "name": "Coyote Star",
+        "description": "A lawless stretch of space beyond the Hegemony.",
+        "axis_snapshot": {"scale": "intimate", "tone": "dry", "swagger": "high"},
+        "starting_location": "kestrel_galley",
+        "starting_time": "mid-coast",
+        "cover_poi": "gate_approach",
+    }
+    html = present_world_meta(node, make_ctx("world", (), fake_theme))
+
+    assert 'class="ref-world-meta"' in html
+    assert 'class="ref-label-grid"' in html
+    assert 'class="ref-label-grid__cell"' in html
+    # Axis snapshot values
+    assert "intimate" in html
+    assert "dry" in html
+    assert "high" in html
+    # Starting fields
+    assert "kestrel_galley" in html
+    assert "mid-coast" in html
+    # Description as narrative flourish
+    assert 'class="narrative-flourish"' in html
+    assert "lawless stretch" in html
+    # cover_poi must NOT appear — daemon hint
+    assert "gate_approach" not in html
+    # No raw field-name headings
+    assert "<h2>name</h2>" not in html
+    assert "<h2>axis_snapshot</h2>" not in html
+
+
 def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
     from sidequest.server.reference_presenters import present_lore_geography
 

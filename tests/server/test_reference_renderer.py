@@ -368,8 +368,8 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     # the field name itself is not significant.
     (pack_dir / "lore.yaml").write_text("setting_anchor: genre-flavor-value\n")
     (pack_dir / "cultures.yaml").write_text("genre_cultures: yes\n")
-    (world_dir / "world.yaml").write_text("world_name: Demoworld\n")
-    (world_dir / "legends.yaml").write_text("legend: a tale\n")
+    (world_dir / "world.yaml").write_text("description: Demoworld is a rainy procedural plateau.\n")
+    (world_dir / "legends.yaml").write_text("- name: A Tale\n  summary: a tale\n")
 
     html = assemble_lore_page("demo", "demoworld", pack_dir, world_dir)
 

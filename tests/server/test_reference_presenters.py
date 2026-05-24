@@ -190,6 +190,44 @@ def test_world_meta_emits_label_grid(fake_theme: ReferenceTheme) -> None:
     assert "<h2>axis_snapshot</h2>" not in html
 
 
+def test_history_chapters_emits_timeline(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_history_chapters
+
+    chapters = [
+        {
+            "id": "ch1",
+            "label": "The First Crossing",
+            "session_range": [1, 3],
+            "description": "The crew arrived at the gate.",
+            "events": ["event1", "event2"],
+            "points_of_interest": ["poi1"],
+        },
+        {
+            "id": "ch2",
+            "label": "The Long Coast",
+            "description": "Weeks of quiet transit.",
+        },
+    ]
+    html = present_history_chapters(chapters, make_ctx("history", ("chapters",), fake_theme))
+
+    assert 'class="ref-timeline"' in html
+    assert 'class="ref-timeline__chapter"' in html
+    assert 'class="ref-card__title"' in html
+    assert "The First Crossing" in html
+    assert "The Long Coast" in html
+    assert "The crew arrived" in html
+    assert "Weeks of quiet transit" in html
+    # Session range chip
+    assert 'class="ref-chip"' in html
+    assert "Sessions 1" in html
+    # events and points_of_interest NOT rendered in v1
+    assert "event1" not in html
+    assert "poi1" not in html
+    # No raw field-name headings
+    assert "<h2>label</h2>" not in html
+    assert "<h2>description</h2>" not in html
+
+
 def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
     from sidequest.server.reference_presenters import present_lore_geography
 

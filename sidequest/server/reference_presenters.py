@@ -265,3 +265,34 @@ def present_world_meta(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("world", ())] = present_world_meta
+
+
+def present_history_chapters(node: object, ctx: PresenterContext) -> str:
+    """Render history.yaml chapters list as a vertical timeline."""
+    if not isinstance(node, list) or not node:
+        return ""
+    chapters: list[str] = []
+    for item in node:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip() or "Chapter"
+        description = str(item.get("description", "")).strip()
+        session_range = item.get("session_range")
+        chip_html = ""
+        if isinstance(session_range, list) and len(session_range) >= 2:
+            chip_html = (
+                f'<span class="ref-chip">Sessions {escape(str(session_range[0]))}'
+                f"–{escape(str(session_range[1]))}</span>"
+            )
+        desc_html = f"<p>{escape(description)}</p>" if description else ""
+        chapters.append(
+            f'<section class="ref-timeline__chapter">'
+            f'<h3 class="ref-card__title">{escape(label)}</h3>'
+            f"{chip_html}"
+            f"{desc_html}"
+            f"</section>"
+        )
+    return f'<div class="ref-timeline">{"".join(chapters)}</div>'
+
+
+PRESENTERS[("history", ("chapters",))] = present_history_chapters

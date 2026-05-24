@@ -19,12 +19,9 @@ Cross-file collision invariant: class "Knight" must produce id="class-knight"
 on the rules page; culture "Knight" must produce id="culture-knight" on the
 lore page; neither anchor may appear on the wrong page.
 
-NOTE on locations.yaml: locations is registered in _KIND_OVERRIDES
-("locations" -> "location") but locations.yaml is NOT yet listed in
-LORE_WORLD_FILES — so location-the-vicarage is expected to be absent from
-the lore anchor island. The assertion is xfailed with a precise reason so the
-test suite fails loudly if/when the renderer adds locations.yaml (at which
-point the xfail should be promoted to a passing assertion).
+locations.yaml is enumerated in LORE_WORLD_FILES (the renderer walks it
+as a world-level lore file), so location-the-vicarage appears on the
+lore page like legends and cultures.
 """
 
 from __future__ import annotations
@@ -110,14 +107,6 @@ def test_lore_page_emits_legend_the_rending_anchor(client: TestClient) -> None:
     assert "legend-the-rending" in anchors, f"legend-the-rending not in anchor island: {anchors}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "locations.yaml is registered in _KIND_OVERRIDES but is NOT in LORE_WORLD_FILES "
-        "— the renderer does not yet walk it. Promote to a passing assertion once "
-        "LORE_WORLD_FILES includes locations.yaml."
-    ),
-)
 def test_lore_page_emits_location_the_vicarage_anchor(client: TestClient) -> None:
     response = client.get(f"/reference/lore/{_PACK}/{_WORLD}")
     anchors = _anchor_island(response.text)

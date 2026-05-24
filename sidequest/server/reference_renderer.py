@@ -178,6 +178,7 @@ LORE_WORLD_FILES: tuple[str, ...] = (
     "legends.yaml",
     "openings.yaml",
     "lore.yaml",
+    "locations.yaml",
 )
 
 LORE_PACK_FLAVOR_FILES: tuple[str, ...] = (

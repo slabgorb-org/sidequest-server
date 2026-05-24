@@ -240,6 +240,7 @@ def test_lore_world_files_in_documented_order():
         "legends.yaml",
         "openings.yaml",
         "lore.yaml",
+        "locations.yaml",
     )
 
 

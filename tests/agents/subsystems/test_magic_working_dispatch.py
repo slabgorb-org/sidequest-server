@@ -44,6 +44,7 @@ AC3 tests PASS TODAY — watcher coverage already shipped in 59-3.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -54,7 +55,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.game.session import GameSnapshot
-from sidequest.magic.models import LedgerBarSpec, WorldMagicConfig, WorldKnowledge
+from sidequest.magic.models import LedgerBarSpec, WorldKnowledge, WorldMagicConfig
 from sidequest.magic.state import MagicState
 from sidequest.protocol.dispatch import (
     DispatchPackage,
@@ -243,10 +244,9 @@ async def test_magic_working_handler_debits_costs() -> None:
     from sidequest.agents.subsystems.magic_working import (
         run_magic_working_dispatch,
     )
-    from sidequest.magic.state import BarKey
 
     snap = _snapshot_with_magic()
-    bar_key = f"character|Alice|vitality"
+    bar_key = "character|Alice|vitality"
     initial_value = snap.magic_state.ledger[bar_key].value  # type: ignore[union-attr]
 
     dispatch = _magic_working_dispatch(actor="Alice")
@@ -328,7 +328,9 @@ async def test_magic_working_handler_raises_when_no_magic_state() -> None:
     snap = _snapshot_without_magic()
     dispatch = _magic_working_dispatch()
 
-    with pytest.raises(Exception):
+    with pytest.raises(  # noqa: B017
+        Exception,
+    ):
         await run_magic_working_dispatch(
             dispatch,
             snapshot=snap,
@@ -351,7 +353,9 @@ async def test_magic_working_handler_raises_on_unknown_actor() -> None:
     snap = _snapshot_with_magic()
     dispatch = _magic_working_dispatch(actor="NonExistentCharacter")
 
-    with pytest.raises(Exception):
+    with pytest.raises(  # noqa: B017
+        Exception,
+    ):
         await run_magic_working_dispatch(
             dispatch,
             snapshot=snap,
@@ -365,21 +369,19 @@ async def test_magic_working_handler_raises_on_unknown_actor() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_narration_apply_ignores_result_magic_working_sidecar() -> None:
+def test_narration_apply_ignores_result_magic_working_sidecar() -> None:
     """AC2 (behavioral retirement guard): setting result.magic_working
     on a turn result must NOT cause apply_magic_working to fire via the
     narration_apply pipeline.
 
     After 59-5 retires the sidecar consumer at narration_apply.py:1684-1709,
     the only path to magic engagement is the dispatch handler. This test
-    verifies the retirement by constructing a result with a valid
-    magic_working field and asserting no working_log entry is created.
-
-    FAILS TODAY: the sidecar consumer still exists at narration_apply.py:1684.
-    This test will PASS after the consumer is removed.
+    verifies the retirement by driving the real apply pipeline with a
+    result carrying a valid magic_working field and asserting no
+    working_log entry is created.
     """
-    from sidequest.server.narration_apply import apply_narration
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from tests._helpers.session_room import room_for
 
     snap = _snapshot_with_magic()
     assert len(snap.magic_state.working_log) == 0  # type: ignore[union-attr]
@@ -391,19 +393,27 @@ async def test_narration_apply_ignores_result_magic_working_sidecar() -> None:
     result.confrontation = None
     result.npcs_present = None
     result.items = None
+    result.items_gained = None
+    result.items_lost = None
     result.status_changes = None
     result.narration = "A magical ward shimmers into existence."
     result.action_rewrite = None
+    result.quest_updates = None
+    result.lore_established = None
+    result.beat_selections = None
+    result.npc_pool = None
+    result.plotted_course = None
+    result.companion_changes = None
+    result.morale = None
 
-    try:
-        apply_narration(
-            result=result,
-            snapshot=snap,
-            player_name="Alice",
-            genre_slug="test_magic_pack",
+    room = room_for(snap)
+    with contextlib.suppress(Exception):
+        _apply_narration_result_to_snapshot(
+            snap,
+            result,
+            "Alice",
+            room=room,
         )
-    except Exception:
-        pass
 
     assert len(snap.magic_state.working_log) == 0, (  # type: ignore[union-attr]
         "After 59-5 retirement, result.magic_working on a narration result "

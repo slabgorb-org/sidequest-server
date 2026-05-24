@@ -19,7 +19,6 @@ from __future__ import annotations
 import pytest
 
 from sidequest.magic.models import HardLimit, WorldMagicConfig
-from tests._helpers.session_room import room_for
 
 
 @pytest.fixture()
@@ -179,24 +178,24 @@ def test_bar_without_promote_to_status_silently_skipped(world_config):
     assert promote_crossings_to_status_changes(result=result, snapshot=snapshot) == []
 
 
-def test_pipeline_wires_promotion_into_character_statuses(coyote_world_config):
-    """Wiring test (CLAUDE.md): the apply pipeline must end-to-end add the
+@pytest.mark.asyncio
+async def test_pipeline_wires_promotion_into_character_statuses(coyote_world_config):
+    """Wiring test (CLAUDE.md): the dispatch handler must end-to-end add the
     auto-promoted Status onto the rolling actor's ``core.statuses``.
 
-    Without this test, ``promote_crossings_to_status_changes`` could be
-    correct but unwired — the exact failure mode CLAUDE.md "Verify Wiring,
-    Not Just Existence" warns about.
+    Story 59-5 moved magic engagement from the narration_apply sidecar
+    consumer to the dispatch handler. The threshold promotion chain
+    (apply_magic_working → _apply_magic_status_promotions) now fires
+    inside ``run_magic_working_dispatch``.
     """
-    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.agents.subsystems.magic_working import run_magic_working_dispatch
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore
     from sidequest.game.session import GameSnapshot
     from sidequest.game.status import StatusSeverity
     from sidequest.game.turn import TurnManager
     from sidequest.magic.state import BarKey, MagicState
-    from sidequest.server.narration_apply import (
-        _apply_narration_result_to_snapshot,
-    )
+    from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
     state = MagicState.from_config(coyote_world_config)
     state.add_character("sira_mendes")
@@ -204,10 +203,6 @@ def test_pipeline_wires_promotion_into_character_statuses(coyote_world_config):
 
     snapshot = GameSnapshot.model_construct(magic_state=state)
     snapshot.turn_manager = TurnManager()
-    snapshot.discovered_regions = []
-    snapshot.quest_log = {}
-    snapshot.lore_established = []
-    snapshot.encounter = None
     snapshot.characters = [
         Character.model_construct(
             core=CreatureCore.model_construct(name="sira_mendes", statuses=[]),
@@ -216,10 +211,11 @@ def test_pipeline_wires_promotion_into_character_statuses(coyote_world_config):
             race="human",
         )
     ]
+    snapshot.encounter = None
 
-    result = NarrationTurnResult(
-        narration="Sira's vision blurs as the Reach bleeds through.",
-        magic_working={
+    dispatch = SubsystemDispatch(
+        subsystem="magic_working",
+        params={
             "plugin": "innate_v1",
             "mechanism": "condition",
             "actor": "sira_mendes",
@@ -229,10 +225,14 @@ def test_pipeline_wires_promotion_into_character_statuses(coyote_world_config):
             "flavor": "acquired",
             "consent_state": "involuntary",
         },
+        idempotency_key="k-magic-promo",
+        visibility=VisibilityTag(visible_to="all"),
     )
 
-    _apply_narration_result_to_snapshot(
-        snapshot, result, player_name="Sira", room=room_for(snapshot)
+    await run_magic_working_dispatch(
+        dispatch,
+        snapshot=snapshot,
+        player_name="Sira",
     )
 
     target = next(c for c in snapshot.characters if c.core.name == "sira_mendes")

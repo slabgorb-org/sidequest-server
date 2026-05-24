@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import typing
 from collections.abc import Mapping
 
 import pytest
@@ -188,10 +189,17 @@ def test_reset_baselines_requires_typed_session_id_param() -> None:
         f"Got parameters: {list(params)!r}."
     )
     param = params["session_id"]
-    assert param.annotation is str, (
+    # `from __future__ import annotations` (PEP 563) stringifies all
+    # annotations in anthropic_sdk_client.py, so `param.annotation` is
+    # the string `'str'`, not the type `str`. Use get_type_hints to
+    # resolve the forward reference against the module's globals; that
+    # gives us back the actual type for the identity check.
+    hints = typing.get_type_hints(AnthropicSdkClient.reset_baselines)
+    assert hints.get("session_id") is str, (
         "Lang-review rule #3 (type annotations at public surface) + "
         "context AC 4: session_id MUST be annotated as `str`. "
-        f"Got annotation: {param.annotation!r}."
+        f"Got resolved hint: {hints.get('session_id')!r} "
+        f"(raw annotation: {param.annotation!r})."
     )
     assert param.default is inspect.Parameter.empty, (
         "session_id MUST be required (no default). A default-None "

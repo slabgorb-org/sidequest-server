@@ -217,6 +217,7 @@ async def test_io_fingerprint_60k_in_12_out_fires_alarm_once(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
@@ -266,6 +267,7 @@ async def test_io_fingerprint_event_severity_is_warn_with_trigger_field(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -338,6 +340,7 @@ async def test_rolling_baseline_window_is_k10_and_excludes_oldest(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
@@ -404,6 +407,7 @@ async def test_rolling_window_evicts_oldest_after_k_plus_one_calls(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
@@ -456,6 +460,7 @@ async def test_first_call_uses_floor_and_can_trip_cost_trigger(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -499,6 +504,7 @@ async def test_healthy_first_call_under_floor_does_not_trip(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -543,6 +549,7 @@ async def test_sustained_runaway_emits_one_event_per_call_not_per_iteration(
                 messages=_user_msg(),
                 tools=_tools_empty(),
                 model="claude-sonnet-4-6",
+                session_id="61-baseline-test",
             )
     await asyncio.sleep(0.05)
 
@@ -593,6 +600,7 @@ async def test_both_triggers_active_simultaneously_emit_single_event_with_io_pri
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -654,13 +662,17 @@ async def test_reset_baselines_clears_rolling_state(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
-    # Sanity: deques are full at K=10 (the eleventh probe already evicted
-    # the oldest entry; deque maxlen=10).
-    assert len(client._cost_baseline) == 10, (  # noqa: SLF001
-        f"K=10 deque should hold 10 entries after 11 calls; got {len(client._cost_baseline)}"  # noqa: SLF001
+    # Sanity: the session's deque is full at K=10 (the eleventh probe
+    # already evicted the oldest entry; deque maxlen=10). Story
+    # 61-followup-A: baselines are now keyed on session_id, so the
+    # assertion targets the per-session deque, not an instance-wide one.
+    cost_deque = client._cost_baseline["61-baseline-test"]  # noqa: SLF001
+    assert len(cost_deque) == 10, (
+        f"K=10 deque should hold 10 entries after 11 calls; got {len(cost_deque)}"
     )
 
     # First probe (call #11) should have reported warmup=False.
@@ -673,13 +685,16 @@ async def test_reset_baselines_clears_rolling_state(
         "Pre-reset probe MUST report warmup=False (baseline is observed)."
     )
 
-    # The reset.
-    client.reset_baselines()
-    assert len(client._cost_baseline) == 0, (  # noqa: SLF001
-        f"reset_baselines() MUST clear cost deque; got {len(client._cost_baseline)}"  # noqa: SLF001
+    # The reset. Story 61-followup-A: reset_baselines now takes a
+    # session_id and drops only that session's deques.
+    client.reset_baselines("61-baseline-test")
+    assert "61-baseline-test" not in client._cost_baseline, (  # noqa: SLF001
+        "reset_baselines('61-baseline-test') MUST drop the session's cost "
+        f"deque. Got keys: {list(client._cost_baseline)!r}."  # noqa: SLF001
     )
-    assert len(client._input_tokens_baseline) == 0, (  # noqa: SLF001
-        f"reset_baselines() MUST clear input_tokens deque; got {len(client._input_tokens_baseline)}"  # noqa: SLF001
+    assert "61-baseline-test" not in client._input_tokens_baseline, (  # noqa: SLF001
+        "reset_baselines('61-baseline-test') MUST drop the session's input "
+        f"deque. Got keys: {list(client._input_tokens_baseline)!r}."  # noqa: SLF001
     )
 
     # Post-reset probe MUST see warmup floors again (warmup=True).
@@ -689,6 +704,7 @@ async def test_reset_baselines_clears_rolling_state(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -748,6 +764,7 @@ async def test_absolute_cost_floor_fires_when_baseline_is_high(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
@@ -815,6 +832,7 @@ async def test_absolute_floor_does_not_re_fire_io_fingerprint_priority(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -899,6 +917,7 @@ async def test_tea_adversarial_a_attack_baseline_self_training(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 

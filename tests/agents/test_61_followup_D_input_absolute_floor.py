@@ -106,6 +106,7 @@ async def test_input_absolute_fires_on_high_output_call(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
@@ -172,6 +173,7 @@ async def test_input_absolute_fires_on_first_call_regardless_of_baseline(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -229,6 +231,7 @@ async def test_io_fingerprint_outranks_input_absolute(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -273,6 +276,7 @@ async def test_input_absolute_outranks_cost_triggers(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
 
@@ -323,6 +327,7 @@ async def test_input_absolute_boundary_at_40000_strict(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
     events_under = [
@@ -344,6 +349,7 @@ async def test_input_absolute_boundary_at_40000_strict(
         messages=_user_msg(),
         tools=_tools_empty(),
         model="claude-sonnet-4-6",
+        session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
     events_over = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]

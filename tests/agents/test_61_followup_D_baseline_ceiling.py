@@ -159,6 +159,7 @@ async def test_input_clamp_catches_post_ramp_call_unclamped_would_miss(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
@@ -231,6 +232,7 @@ async def test_baseline_cost_usd_field_is_clamped_post_warmup(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
@@ -294,6 +296,7 @@ async def test_clamp_is_noop_for_healthy_steady_state_baseline(
             messages=_user_msg(),
             tools=_tools_empty(),
             model="claude-sonnet-4-6",
+            session_id="61-baseline-test",
         )
     await asyncio.sleep(0.05)
 
@@ -354,6 +357,7 @@ async def test_cost_multiple_silent_for_low_cost_post_warmup_when_clamped(
                 messages=_user_msg(),
                 tools=_tools_empty(),
                 model="claude-sonnet-4-6",
+                session_id="61-baseline-test",
             )
     await asyncio.sleep(0.05)
 

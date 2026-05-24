@@ -169,10 +169,13 @@ def test_close_store_resets_narrator_cost_baselines():
 
     room.close_store()
 
-    assert fake_client.reset_baselines.call_count == 1, (
-        "close_store MUST call reset_baselines() on the orchestrator's "
-        "client exactly once per slug recycle (61-4 spec-check A)."
-    )
+    # Story 61-followup-A — reset_baselines now requires a session_id.
+    # Assert the exact call shape (slug-as-session_id), not just call_count;
+    # the old call_count-only assertion let a zero-arg reset() slip past
+    # because MagicMock accepts any arity. The slug is the canonical
+    # session_id (it flows down to AnthropicSdkClient as
+    # session_id=sd.game_slug via session_helpers.py:998).
+    fake_client.reset_baselines.assert_called_once_with("slug")
 
 
 def test_close_store_tolerates_client_without_reset_baselines():

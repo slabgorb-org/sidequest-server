@@ -352,9 +352,13 @@ class SessionRoom:
                 if callable(reset):
                     # Never crash teardown on a baseline reset failure, but
                     # don't swallow silently — log loudly so the failure is
-                    # visible in operator tails.
+                    # visible in operator tails. Story 61-followup-A made
+                    # reset_baselines per-session-id; this call passes the
+                    # room's slug, which is the canonical session_id (it
+                    # flows into AnthropicSdkClient.complete_with_tools as
+                    # session_id=sd.game_slug via session_helpers.py).
                     try:
-                        reset()
+                        reset(self.slug)
                     except Exception as exc:
                         _log.warning(
                             "session.reset_baselines_failed slug=%s err=%r",

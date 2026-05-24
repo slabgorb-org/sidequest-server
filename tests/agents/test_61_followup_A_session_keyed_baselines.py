@@ -21,8 +21,10 @@ Behavioral contract additions (per context-story-61-followup-A.md):
 - When `session_id is None` (non-narrator codepaths like the dungeon
   materializer one-shot curate), the detector is a no-op: neither
   reads nor appends to any baseline. Same semantics as the existing
-  session-cumulative tracker's None bypass at
-  anthropic_sdk_client.py:408.
+  session-cumulative tracker's None bypass (see
+  ``AnthropicSdkClient.complete_with_tools``, where ``session_id is
+  not None`` gates both ``_check_cost_ceiling`` and
+  ``_update_session_cumulative``).
 - `reset_baselines()` becomes `reset_baselines(session_id: str)` and
   clears only the target session's deques. Calling it on a never-seen
   session_id is a no-op (no KeyError). The dormant-infrastructure
@@ -148,9 +150,9 @@ def test_input_tokens_baseline_is_dict_keyed_on_session_id(
 
 
 def test_maybe_emit_cost_runaway_accepts_session_id_kwarg() -> None:
-    """The internal hook must accept session_id so the call site at
-    anthropic_sdk_client.py:393 (inside complete_with_tools) can plumb
-    the value through. AC 1, 3, 5 all require session-aware reads.
+    """The internal hook must accept session_id so the call site
+    inside ``complete_with_tools`` can plumb the value through.
+    AC 1, 3, 5 all require session-aware reads.
     """
     sig = inspect.signature(AnthropicSdkClient._maybe_emit_cost_runaway)
     assert "session_id" in sig.parameters, (
@@ -472,8 +474,9 @@ def test_session_id_none_direct_call_skips_baseline_dict(
 ) -> None:
     """Context behavioral addition: `session_id=None` is a complete
     no-op for the detector — no read, no append. This mirrors the
-    existing None-bypass in the session-cumulative tracker
-    (anthropic_sdk_client.py:408).
+    existing None-bypass in the session-cumulative tracker (the
+    ``if session_id is not None`` gate at the top of
+    ``complete_with_tools``).
 
     Without this, non-narrator codepaths that pass session_id=None
     (dungeon materializer one-shot curate, future ad-hoc one-shots)
@@ -564,7 +567,7 @@ async def test_complete_with_tools_routes_session_id_to_baseline_dict(
 ) -> None:
     """AC 6 (integration / wiring): complete_with_tools must plumb its
     session_id parameter all the way down to the per-session deque
-    append at the call site near anthropic_sdk_client.py:399-400.
+    append inside ``_maybe_emit_cost_runaway``.
 
     Server CLAUDE.md "Every Test Suite Needs a Wiring Test": the unit
     test at `test_direct_emit_records_per_session_baseline_independence`

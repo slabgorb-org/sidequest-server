@@ -531,6 +531,19 @@ class AnthropicSdkClient:
         live safety nets for the trained-into-silence case; this
         method becomes load-bearing once C wires the call site.
 
+        **Scope:** this method clears ONLY the cost-runaway baselines
+        (``_cost_baseline`` and ``_input_tokens_baseline``). The
+        61-followup-D state for the same session_id —
+        ``_session_cumulative_cost_usd`` and
+        ``_session_ceiling_announced`` — is intentionally NOT cleared
+        here. 61-followup-C should decide whether its ``close_store``
+        eviction path also needs to drop those entries; for a
+        slug-recycle rejoin (where the same session_id will be reused
+        by a fresh session), the answer is almost certainly YES — a
+        stale announce-set entry would silently suppress the new
+        session's first ceiling-cross alarm. Left to C so the decision
+        and its OTEL plumbing land together.
+
         Background on why the reset matters once teardown wires in:
         ``RoomRegistry`` (session_room.py:774-786) never evicts a slug
         today — the ``AnthropicSdkClient`` instance backing a slug's

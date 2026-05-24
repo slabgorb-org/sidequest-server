@@ -181,31 +181,27 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
         #
         # Round-2 round-trip 1 (Reviewer 2026-05-24 HIGH finding 1): also
         # skip teardown if cleanup raised OR cleanup swallowed a save
-        # exception internally (websocket_session_handler.py:1543 sets
+        # exception internally (websocket_session_handler.py:1557 sets
         # handler.last_save_failure). Tearing down a store after the final
         # save was lost compounds the data loss — leave the handle bound so
-        # a subsequent process can retry or inspect.
+        # a subsequent process can retry or inspect. The shared trigger
+        # (real disconnect, empty room) is the outer guard; the
+        # cleanup/save state decides between teardown and a loud skip log.
         save_failure = getattr(handler, "last_save_failure", None)
         if (
             room is not None
             and left_player is not None
-            and not cleanup_failed
-            and save_failure is None
             and not room.connected_player_ids()
         ):
-            room.close_store()
-            logger.info("ws.room_teardown_close_store slug=%s", room.slug)
-        elif (
-            room is not None
-            and left_player is not None
-            and not room.connected_player_ids()
-            and (cleanup_failed or save_failure is not None)
-        ):
-            logger.error(
-                "ws.room_teardown_skipped slug=%s reason=%s",
-                room.slug,
-                "cleanup_raised" if cleanup_failed else "save_failure_swallowed",
-            )
+            if not cleanup_failed and save_failure is None:
+                room.close_store()
+                logger.info("ws.room_teardown_close_store slug=%s", room.slug)
+            else:
+                logger.error(
+                    "ws.room_teardown_skipped slug=%s reason=%s",
+                    room.slug,
+                    "cleanup_raised" if cleanup_failed else "save_failure_swallowed",
+                )
         logger.info("ws.session_cleanup_complete")
 
 

@@ -1,13 +1,12 @@
 """Dispatch tests for narration_apply intent-validator branches.
 
-Covers warn / soft_suggest / reprompt severities and the classified_intent
-single-exit invariant. Spec 2026-05-20 confrontation-intent-validator step 5.
-
-Task 8 update: monkeypatch target is now the real span context manager on the
-spans module (sidequest.telemetry.spans.confrontation_intent_mismatch_span).
-The dispatch site does a lazy `from sidequest.telemetry.spans import ...`
-inside the function body so the monkeypatched attribute is evaluated each
-call.
+Covers warn / soft_suggest / (downgraded) reprompt severities and the
+classified_intent single-exit invariant. Spec 2026-05-20 confrontation-
+intent-validator step 5; updated for Story 59-3 / ADR-113 — the reprompt
+loop is retired, reprompt severity now downgrades to soft_suggest at the
+apply step. Router-driven engagement-mismatch detection is owned by
+sidequest.agents.dispatch_engagement_watcher
+(tests/agents/test_dispatch_engagement_watcher.py).
 """
 
 from __future__ import annotations
@@ -67,7 +66,6 @@ def test_no_mismatch_classifies_from_action_rewrite_intent(pack, monkeypatch) ->
     outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
     assert outcome.classified_intent == "look around quietly"
-    assert outcome.reprompt_request is None
     assert spans == []
     assert snap.next_turn_directives == []
 
@@ -86,7 +84,6 @@ def test_warn_severity_emits_span_classifies_matched_type(pack, monkeypatch) -> 
     assert len(spans) == 1
     assert spans[0]["severity"] == "warn"
     assert spans[0]["matched_type"] == "negotiation_warn"
-    assert outcome.reprompt_request is None
     assert outcome.classified_intent == "negotiation_warn"
     assert snap.next_turn_directives == []  # warn does not enqueue
 
@@ -102,44 +99,40 @@ def test_soft_suggest_severity_enqueues_directive(pack, monkeypatch) -> None:
 
     outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
-    assert outcome.reprompt_request is None
     assert outcome.classified_intent == "negotiation_soft"
     assert len(snap.next_turn_directives) == 1
     assert "negotiation_soft" in snap.next_turn_directives[0]
     assert spans[0]["severity"] == "soft_suggest"
 
 
-def test_reprompt_severity_returns_request_does_not_apply_narration(pack, monkeypatch) -> None:
+def test_reprompt_severity_downgrades_to_soft_suggest(pack, monkeypatch) -> None:
+    """Story 59-3 / ADR-113: the reprompt loop is gone. A validator that
+    returns severity=reprompt now downgrades to soft_suggest in the
+    apply step — the directive is enqueued for next turn, no separate
+    reprompt round happens, and the router-driven dispatch engagement
+    watcher (one mechanism per problem) catches downstream engagement
+    failures.
+
+    Genre packs declaring ``on_intent_mismatch: reprompt`` still validate
+    (severity literal is unchanged in confrontation_intent_validator.py)
+    — the severity is just no longer *acted upon* as a separate path."""
     import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
     result = _result(intent="strike the bandit dead", confrontation=None)
     room = MagicMock()
-    monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture([]))
-
-    outcome = _apply(snap, result, "Player1", room=room, pack=pack)
-
-    assert outcome.reprompt_request is not None
-    assert outcome.reprompt_request.matched_type == "combat_reprompt"
-    assert "combat_reprompt" in outcome.reprompt_request.directive
-    assert outcome.classified_intent == "combat_reprompt"
-
-
-def test_already_reprompted_degrades_reprompt_to_warn(pack, monkeypatch) -> None:
-    import sidequest.telemetry.spans as spans_mod
-
-    snap = _snapshot()
-    result = _result(intent="strike again", confrontation=None)
-    room = MagicMock()
     spans: list[dict] = []
     monkeypatch.setattr(spans_mod, "confrontation_intent_mismatch_span", _capture(spans))
 
-    outcome = _apply(snap, result, "Player1", room=room, pack=pack, already_reprompted=True)
+    outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
-    assert outcome.reprompt_request is None  # degraded
-    assert spans[0]["severity"] == "warn"
-    assert spans[0]["reprompt_attempted"] is True
     assert outcome.classified_intent == "combat_reprompt"
+    assert spans[0]["severity"] == "soft_suggest", "reprompt should downgrade to soft_suggest"
+    assert spans[0]["reprompt_attempted"] is False, "no reprompt loop runs anymore"
+    assert len(snap.next_turn_directives) == 1, (
+        "downgraded reprompt should enqueue the soft_suggest directive"
+    )
+    assert "combat_reprompt" in snap.next_turn_directives[0]
 
 
 def test_active_encounter_short_circuits_validator(pack, monkeypatch) -> None:
@@ -159,7 +152,6 @@ def test_active_encounter_short_circuits_validator(pack, monkeypatch) -> None:
     outcome = _apply(snap, result, "Player1", room=room, pack=pack)
 
     assert spans == []
-    assert outcome.reprompt_request is None
     # When the validator short-circuits, intent comes from action_rewrite verbatim.
     assert outcome.classified_intent == "strike the bandit"
 
@@ -188,7 +180,6 @@ def test_non_narration_turn_result_classifies_as_unspecified(pack) -> None:
         snap, "not a turn result", "Player1", room=room, pack=pack
     )
     assert outcome.classified_intent == "unspecified"
-    assert outcome.reprompt_request is None
 
 
 # ---------------------------------------------------------------------------

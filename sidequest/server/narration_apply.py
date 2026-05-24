@@ -594,19 +594,6 @@ class MagicApplyResult:
         return self.apply.crossings
 
 
-@dataclass(frozen=True)
-class RepromptRequest:
-    """Returned by the apply step when validator severity is 'reprompt'.
-
-    Carries the directive string the orchestrator should inject into the
-    second narrator call's recency zone. Spec 2026-05-20.
-    """
-
-    matched_type: str
-    declared: str | None
-    directive: str
-
-
 @dataclass
 class NarrationApplyOutcome:
     """Aggregate result of applying a NarrationTurnResult to a snapshot.
@@ -631,7 +618,6 @@ class NarrationApplyOutcome:
 
     sealed_letter: SealedLetterOutcome | None = None
     magic: MagicApplyResult | None = None
-    reprompt_request: RepromptRequest | None = None
     classified_intent: str = "unspecified"
 
 
@@ -1638,7 +1624,6 @@ def _apply_narration_result_to_snapshot(
     opposed_player_beat_id: str | None = None,
     opposed_player_actor: str | None = None,
     acting_character_name: str | None = None,
-    already_reprompted: bool = False,
 ) -> NarrationApplyOutcome:
     """Apply narrator-extracted fields to the snapshot.
 
@@ -2482,8 +2467,7 @@ def _apply_narration_result_to_snapshot(
         # shape signal is an OPPONENT-side actor in ``npcs_present`` — the
         # narrator named an adversary but engaged nothing and emitted no intent.
         # A quiet travel/dialogue/rest turn has no opponent actor and does not
-        # fire. Guarded on ``not already_reprompted`` so the reprompt-loop
-        # re-apply cannot double-emit for one player turn.
+        # fire.
         _no_active_encounter = snapshot.encounter is None or snapshot.encounter.resolved
         _named_opponent = any(m.side == "opponent" for m in result.npcs_present)
         if (
@@ -2491,7 +2475,6 @@ def _apply_narration_result_to_snapshot(
             and _no_active_encounter
             and not _intent_text
             and _named_opponent
-            and not already_reprompted
         ):
             with confrontation_unengaged_turn_span(
                 player_name=player_name,
@@ -2506,11 +2489,18 @@ def _apply_narration_result_to_snapshot(
                 )
 
         if _mismatch is not None:
+            # Story 59-3 retired the reprompt response to a validator mismatch.
+            # The validator's INFORMATIONAL span still fires (so the GM panel
+            # sees an intent-vs-declared mismatch), but the soft_suggest path
+            # is the only remaining structural reaction; reprompt severity now
+            # downgrades to a soft suggest (preserved genre-pack compat —
+            # packs declaring ``on_intent_mismatch: reprompt`` still validate;
+            # the severity literal is unchanged in confrontation_intent_validator.py).
+            # Engagement failure detection now lives in the router-driven
+            # dispatch_engagement_watcher (one mechanism per problem).
             _effective_severity = _mismatch.severity
-            _outcome_label: str | None = None
-            if already_reprompted and _effective_severity == "reprompt":
-                _effective_severity = "warn"  # bounded retry, fall through
-                _outcome_label = "fall_through"
+            if _effective_severity == "reprompt":
+                _effective_severity = "soft_suggest"
 
             _classified_intent_value = _mismatch.matched_type
 
@@ -2521,8 +2511,7 @@ def _apply_narration_result_to_snapshot(
                 declared_type=_mismatch.declared,
                 severity=_effective_severity,
                 matched_tokens=_mismatch.matched_tokens,
-                reprompt_attempted=already_reprompted,
-                outcome=_outcome_label,
+                reprompt_attempted=False,
             ):
                 pass
 
@@ -2532,34 +2521,6 @@ def _apply_narration_result_to_snapshot(
                     f"If this scene is in fact a {_mismatch.matched_type}, open the "
                     f"encounter on this turn."
                 )
-            elif _effective_severity == "reprompt":
-                # Spec 2026-05-20 — build the directive, attach to outcome,
-                # return early so the orchestrator can re-invoke the narrator
-                # with extra_directive=<directive> and re-apply with
-                # already_reprompted=True.
-                #
-                # CAVEAT: by this point the apply has already mutated
-                # location, lore, NPCs, inventory, magic_working, etc.
-                # The early return only skips the ENCOUNTER/BEAT
-                # application below. The second-attempt apply will re-run
-                # those pre-validator mutations against the second
-                # narration's fields, which may double-add NPCs or
-                # overwrite location. The double-apply risk is rare in
-                # practice (requires the second narration to mention the
-                # same NPCs/items) and per-spec; revisit if playtest
-                # surfaces concrete regressions.
-                outcome.reprompt_request = RepromptRequest(
-                    matched_type=_mismatch.matched_type,
-                    declared=_mismatch.declared,
-                    directive=(
-                        f"Previous attempt described a {_mismatch.matched_type} "
-                        f"(intent: '{_intent_text}') but did not open one. "
-                        f"Either set confrontation={_mismatch.matched_type} "
-                        f"or rewrite without {_mismatch.matched_type}-shaped language."
-                    ),
-                )
-                outcome.classified_intent = _classified_intent_value
-                return outcome
 
         outcome.classified_intent = _classified_intent_value
 

@@ -171,7 +171,6 @@ def test_horse_purchase_full_dispatch_populates_classified_intent_and_emits_span
         f"got {outcome.classified_intent!r}. The 'unknown' literal must NEVER appear."
     )
     assert outcome.classified_intent != "unknown"
-    assert outcome.reprompt_request is None  # severity=warn does not request reprompt
 
 
 def test_horse_purchase_negotiation_with_declared_confrontation_no_mismatch(

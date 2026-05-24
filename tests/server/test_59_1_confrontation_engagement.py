@@ -268,36 +268,10 @@ def test_quiet_turn_does_not_emit_unengaged_watcher_span(
     )
 
 
-def test_reprompt_reapply_does_not_double_emit_unengaged_span(
-    otel_capture: InMemorySpanExporter,
-) -> None:
-    """AC5 (C2): the reprompt-loop second apply (already_reprompted=True) must
-    NOT re-emit the watcher for the same logical player turn — even on a
-    confrontation-shaped, unengaged, no-intent result."""
-    snap = _snapshot()
-    pack = _negotiation_pack()
-    snap.character_locations["Neil"] = "The Bridge"
-    result = NarrationTurnResult(
-        narration="Neil blocks the path again; the solicitor still says nothing.",
-        confrontation=None,
-        npcs_present=[
-            NpcMention(name="Neil", role="investigator", side="player"),
-            NpcMention(name="Solicitor Ewan Forbes", role="opposition", side="opponent"),
-        ],
-    )
-    _apply_narration_result_to_snapshot(
-        snapshot=snap,
-        result=result,
-        pack=pack,
-        player_name="Neil",
-        room=room_for(snapshot=snap),
-        already_reprompted=True,
-    )
-    names = [s.name for s in otel_capture.get_finished_spans()]
-    assert _UNENGAGED_SPAN not in names, (
-        f"{_UNENGAGED_SPAN!r} fired on a reprompt re-apply (double-emit for one "
-        f"turn). Finished spans: {names!r}"
-    )
+# test_reprompt_reapply_does_not_double_emit_unengaged_span (59-1 AC5 C2)
+# retired alongside the reprompt loop in Story 59-3 / ADR-113. The
+# already_reprompted parameter no longer exists; the double-emit risk it
+# guarded against cannot recur because there is no second-apply path.
 
 
 def test_engaged_turn_does_not_emit_unengaged_watcher_span(

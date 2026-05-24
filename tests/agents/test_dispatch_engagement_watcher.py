@@ -331,7 +331,7 @@ def test_watcher_no_op_when_package_is_none() -> None:
 
     run_dispatch_engagement_watcher(package=None, snapshot=snap, tracer=tracer)
 
-    assert exporter.get_finished_spans() == []
+    assert len(exporter.get_finished_spans()) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +562,6 @@ def test_cross_player_dispatches_also_watched() -> None:
     from sidequest.agents.dispatch_engagement_watcher import (
         run_dispatch_engagement_watcher,
     )
-
     from sidequest.protocol.dispatch import CrossAction
 
     tracer, exporter = _fresh_tracer_and_exporter()
@@ -733,8 +732,19 @@ def test_watcher_wired_into_session_handler() -> None:
     grep): the handler module's runtime namespace must contain a reference
     to ``run_dispatch_engagement_watcher``. Reflection on ``module.__dict__``
     catches "Dev forgot to import the watcher in the handler" — the exact
-    silent-failure mode that 59-3 exists to prevent."""
-    import sidequest.server.websocket_session_handler as handler_mod
+    silent-failure mode that 59-3 exists to prevent.
+
+    Imports via ``sidequest.server.session_handler`` (the public surface
+    that re-exports ``WebSocketSessionHandler``) to avoid tripping the
+    pre-existing circular import between ``session_handler.py`` and
+    ``websocket_session_handler.py``. Once ``session_handler`` is loaded,
+    ``websocket_session_handler`` is also in ``sys.modules`` and its
+    runtime namespace is inspectable."""
+    import sys
+
+    import sidequest.server.session_handler  # noqa: F401 — load order fix
+
+    handler_mod = sys.modules["sidequest.server.websocket_session_handler"]
 
     # Either a top-level import (``run_dispatch_engagement_watcher`` in the
     # module namespace) or via a re-export of the module itself

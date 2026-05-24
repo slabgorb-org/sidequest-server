@@ -29,8 +29,10 @@ if TYPE_CHECKING:
     from sidequest.protocol.models import EncounterLocationOverlay, LocationEntity
     from sidequest.server.session_room import RoomRegistry, SessionRoom
 
-from sidequest.agents.anthropic_sdk_client import AnthropicSdkCostCeilingExceeded
 from sidequest.agents.claude_client import LlmClient
+from sidequest.agents.dispatch_engagement_watcher import (
+    run_dispatch_engagement_watcher,
+)
 from sidequest.agents.llm_factory import build_llm_client
 from sidequest.agents.orchestrator import TurnContext
 from sidequest.audio.library_backend import LibraryBackend
@@ -3343,7 +3345,6 @@ class WebSocketSessionHandler:
                         opposed_player_actor=dice_actor,
                         acting_character_name=_resolve_acting_character_name(sd, sd._room),
                     )
-                    first_result = result
                     applied_outcome = _apply_narration_result_to_snapshot(
                         snapshot,
                         result,
@@ -3351,77 +3352,18 @@ class WebSocketSessionHandler:
                         **_apply_kwargs,
                     )
 
-                    # Spec 2026-05-20 step 7 — one-iteration reprompt loop.
-                    # When the validator's reprompt severity fires, give the
-                    # narrator exactly one chance to restructure the turn.
-                    # Bounded to ONE retry; on second-narrator failure, apply
-                    # the FIRST attempt's narration.
-                    if applied_outcome.reprompt_request is not None:
-                        _directive = applied_outcome.reprompt_request.directive
-                        _matched = applied_outcome.reprompt_request.matched_type
-                        logger.info(
-                            "confrontation.intent_mismatch_reprompting "
-                            "matched_type=%s directive=%r",
-                            _matched,
-                            _directive,
-                        )
-                        try:
-                            second_result = await sd.orchestrator.run_narration_turn(
-                                action,
-                                turn_context,
-                                room=self._room,
-                                extra_directive=_directive,
-                            )
-                            applied_outcome = _apply_narration_result_to_snapshot(
-                                snapshot,
-                                second_result,
-                                sd.player_name,
-                                already_reprompted=True,
-                                **_apply_kwargs,
-                            )
-                            if applied_outcome.reprompt_request is None:
-                                from sidequest.telemetry.spans import (
-                                    confrontation_intent_mismatch_resolved_span,
-                                )
-
-                                with confrontation_intent_mismatch_resolved_span(
-                                    matched_type=_matched,
-                                ):
-                                    pass
-                            result = second_result
-                        except AnthropicSdkCostCeilingExceeded:
-                            # 61-followup-D §C.2: the session-cumulative
-                            # hard kill is TERMINAL — must not be swallowed
-                            # by the reprompt fallback. Without this re-raise
-                            # the player would receive the first attempt's
-                            # narration as if normal, the kill banner would
-                            # never fire, and one full turn slips through
-                            # unannounced (one billable turn AFTER the
-                            # ceiling was crossed). Reviewer 2026-05-23
-                            # silent-failure finding.
-                            raise
-                        except Exception:
-                            logger.exception(
-                                "confrontation.intent_mismatch_reprompt_failed matched_type=%s",
-                                _matched,
-                            )
-                            from sidequest.telemetry.spans import (
-                                confrontation_intent_mismatch_reprompt_failed_span,
-                            )
-
-                            with confrontation_intent_mismatch_reprompt_failed_span(
-                                matched_type=_matched,
-                            ):
-                                pass
-                            # Fall through: apply the first attempt's narration.
-                            applied_outcome = _apply_narration_result_to_snapshot(
-                                snapshot,
-                                first_result,
-                                sd.player_name,
-                                already_reprompted=True,
-                                **_apply_kwargs,
-                            )
-                            result = first_result
+                    # Story 59-3 / ADR-113 — Intent Router lie-detector.
+                    # Compare what the router dispatched against what the
+                    # engines actually engaged on the post-turn snapshot;
+                    # emit one OTEL span per mismatch so the GM panel
+                    # surfaces "convincing prose with zero mechanical
+                    # backing" turns. No-op while
+                    # turn_context.dispatch_package is None (the live SDK
+                    # path between 59-3 ship and 59-4 ship).
+                    run_dispatch_engagement_watcher(
+                        package=turn_context.dispatch_package,
+                        snapshot=snapshot,
+                    )
 
                     encounter_resolved_this_turn = encounter_unresolved_before and (
                         snapshot.encounter is None or snapshot.encounter.resolved

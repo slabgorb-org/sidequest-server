@@ -78,47 +78,23 @@ def test_confrontation_intent_mismatch_span_with_outcome_label() -> None:
     assert attrs["declared_type"] == "negotiation"
 
 
-def test_confrontation_intent_mismatch_resolved_span() -> None:
-    from sidequest.telemetry.spans import confrontation_intent_mismatch_resolved_span
-
-    tracer, exporter = _fresh_tracer_and_exporter()
-
-    with confrontation_intent_mismatch_resolved_span(matched_type="combat", _tracer=tracer):
-        pass
-
-    spans = exporter.get_finished_spans()
-    assert any(s.name == "confrontation.intent_mismatch_resolved" for s in spans)
-    matching = [s for s in spans if s.name == "confrontation.intent_mismatch_resolved"]
-    assert dict(matching[0].attributes or {})["matched_type"] == "combat"
-
-
-def test_confrontation_intent_mismatch_reprompt_failed_span() -> None:
-    from sidequest.telemetry.spans import confrontation_intent_mismatch_reprompt_failed_span
-
-    tracer, exporter = _fresh_tracer_and_exporter()
-
-    with confrontation_intent_mismatch_reprompt_failed_span(matched_type="combat", _tracer=tracer):
-        pass
-
-    spans = exporter.get_finished_spans()
-    assert any(s.name == "confrontation.intent_mismatch_reprompt_failed" for s in spans)
+# Story 59-3 / ADR-113 retired the reprompt-failed and reprompt-resolved
+# spans alongside the reprompt loop in _execute_narration_turn. The
+# router-driven sidequest.agents.dispatch_engagement_watcher (covered by
+# tests/agents/test_dispatch_engagement_watcher.py +
+# tests/telemetry/test_dispatch_engagement_spans.py) replaces both —
+# "one mechanism per problem" (memory feedback_one_mechanism_per_problem).
 
 
 def test_span_constants_routed() -> None:
-    """Routing-completeness check — every new SPAN_* either routed or flat-only."""
+    """Routing-completeness check — every surviving SPAN_* either routed or flat-only."""
     from sidequest.telemetry.spans import (
         FLAT_ONLY_SPANS,
         SPAN_CONFRONTATION_INTENT_MISMATCH,
-        SPAN_CONFRONTATION_INTENT_MISMATCH_REPROMPT_FAILED,
-        SPAN_CONFRONTATION_INTENT_MISMATCH_RESOLVED,
         SPAN_ROUTES,
     )
 
-    for name in (
-        SPAN_CONFRONTATION_INTENT_MISMATCH,
-        SPAN_CONFRONTATION_INTENT_MISMATCH_RESOLVED,
-        SPAN_CONFRONTATION_INTENT_MISMATCH_REPROMPT_FAILED,
-    ):
-        assert name in SPAN_ROUTES or name in FLAT_ONLY_SPANS, (
-            f"span {name} is neither routed nor flat-only"
-        )
+    assert (
+        SPAN_CONFRONTATION_INTENT_MISMATCH in SPAN_ROUTES
+        or SPAN_CONFRONTATION_INTENT_MISMATCH in FLAT_ONLY_SPANS
+    ), f"span {SPAN_CONFRONTATION_INTENT_MISMATCH} is neither routed nor flat-only"

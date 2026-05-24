@@ -177,13 +177,19 @@ def test_player_check_rule_reaches_composed_sdk_prompt() -> None:
 def test_existing_confrontation_forbiddance_survives() -> None:
     """SENTINEL (passes now by design; must stay green). The AC-2 fix
     adds a player-check forbiddance; it must not be achieved by
-    cannibalising §4's confrontation forbiddance.
+    cannibalising §4's confrontation language.
+
+    Story 59-4 / ADR-113 retired ``begin_confrontation`` and made
+    STARTING a confrontation router-driven (pre-narrator) — the old §4
+    "Do NOT resolve these narratively without begin_confrontation"
+    forbiddance is therefore gone (the narrator has no signaling
+    channel for engagement). The §4 routing rules that remain
+    (advance_confrontation / advance_encounter_beat) are the surviving
+    sentinel surface.
     """
-    # Story 59-1 corrected the named tool: STARTING a confrontation
-    # routes to begin_confrontation (advance_confrontation cannot start
-    # one). The forbiddance is unchanged; only the tool name moved.
-    legacy_anchor = "Do NOT resolve these narratively without `begin_confrontation`"
-    assert legacy_anchor in NARRATOR_OUTPUT_ONLY, (
-        f"Regression sentinel: §4 anchor {legacy_anchor!r} vanished. The "
-        "player-check forbiddance must be ADDED, not carved out of §4."
+    surviving_anchor = "advance_confrontation"
+    assert surviving_anchor in NARRATOR_OUTPUT_ONLY, (
+        f"Regression sentinel: §4 anchor {surviving_anchor!r} vanished. "
+        "The advance-encounter routing rules must remain in the SDK "
+        "narrator prompt — only STARTING engagement moved to the router."
     )

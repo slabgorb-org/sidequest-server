@@ -460,6 +460,40 @@ def _mock_claude_client(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_intent_router_factory(monkeypatch):
+    """Autouse guard (Story 59-4, ADR-113): replace the production
+    Intent Router factory with an in-process stub so the live wiring in
+    ``_execute_narration_turn`` does NOT spawn a real Anthropic SDK
+    client during tests.
+
+    Mirrors the ``_mock_claude_client`` pattern above: tests MUST NOT
+    spawn a real Claude client. The production factory
+    (``intent_router_pass.build_intent_router_for_session``) constructs an
+    ``AnthropicSdkClient`` which eagerly validates ``ANTHROPIC_API_KEY``,
+    so without this guard every server test that exercises
+    ``_handle_player_action`` would fail at router construction.
+
+    The stub returns an ``IntentRouter`` whose ``decompose`` yields an
+    empty ``DispatchPackage`` — no dispatches to engage, so the
+    dispatch bank no-ops and the pre-narrator pass is effectively a
+    pass-through. Tests that need to drive a non-empty router output
+    install their own monkeypatch (which shadows this guard).
+    """
+    from sidequest.protocol.dispatch import DispatchPackage
+
+    async def _empty_decompose(*, action: str, state_summary: object) -> DispatchPackage:  # noqa: ARG001
+        return DispatchPackage(turn_id="test-stub", confidence_global=0.0)
+
+    stub_router = MagicMock()
+    stub_router.decompose = _empty_decompose
+
+    monkeypatch.setattr(
+        "sidequest.server.intent_router_pass.build_intent_router_for_session",
+        lambda: stub_router,
+    )
+
+
 def canned_claude_response(
     *,
     text: str | None = None,

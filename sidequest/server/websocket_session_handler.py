@@ -133,6 +133,8 @@ from sidequest.server.dispatch.opening import (
     record_opening_played,
 )
 from sidequest.server.dispatch.scenario_bind import bind_scenario
+from sidequest.server import intent_router_pass
+from sidequest.server.intent_router_pass import execute_intent_router_pre_narrator_pass
 from sidequest.server.magic_init import init_magic_state_for_session
 from sidequest.server.narration_apply import (
     _apply_narration_result_to_snapshot,
@@ -3169,12 +3171,6 @@ class WebSocketSessionHandler:
                 world=sd.world_slug,
                 action_len=len(action),
             ):
-                # Intent Router (renamed from LocalDM by Story 59-2; per ADR-113)
-                # is not yet on the live turn path — Story 59-4 wires it in.
-                # Until then, turn_context.dispatch_package stays None and
-                # build_narrator_prompt's is-None guards skip redaction and the
-                # dispatch bank.
-
                 # Monster Manual injection (ADR-059, port of Rust
                 # dispatch/mod.rs:643-681). Materialize Manual NPCs and
                 # encounter creatures into snapshot.npcs BEFORE the
@@ -3254,6 +3250,43 @@ class WebSocketSessionHandler:
                 # Mirrors the monster_manual.injected refresh pattern at
                 # ``turn_context.npcs = list(snapshot.npcs)`` above.
                 turn_context.snapshot = snapshot
+
+                # Intent Router pre-narrator pass (Story 59-4, ADR-113). The
+                # router classifies the player's action and the dispatch bank
+                # engages mechanical engines on the canonical snapshot BEFORE
+                # the narrator runs — so the narrator narrates already-real
+                # state instead of self-reporting engagement via the (retired)
+                # ``begin_confrontation`` sidecar tool. ``IntentRouterFailure``
+                # (after the router's bounded retry) propagates out of this
+                # block and is handled by the existing turn-failure path —
+                # NO silent narrator-only fallback (memory rule
+                # feedback_no_fallbacks_hard). The factory call is module-
+                # level (``intent_router_pass.build_intent_router_for_session``)
+                # so tests monkeypatch it to a stub — tests MUST NOT spawn
+                # a real Claude client.
+                _acting_player_name = (
+                    snapshot.player_seats.get(sd.player_id, "") or sd.player_id
+                )
+                _additional_player_names = [
+                    name
+                    for pid, name in snapshot.player_seats.items()
+                    if pid != sd.player_id and name and name != _acting_player_name
+                ]
+                _intent_router = intent_router_pass.build_intent_router_for_session()
+                _dispatch_package = await execute_intent_router_pre_narrator_pass(
+                    intent_router=_intent_router,
+                    snapshot=snapshot,
+                    pack=sd.genre_pack,
+                    action=action,
+                    player_name=_acting_player_name,
+                    additional_player_names=_additional_player_names or None,
+                )
+                turn_context.dispatch_package = _dispatch_package
+                # The dispatch bank may have mutated snapshot.npcs (e.g. NPC
+                # edge published on confrontation initiation). Refresh
+                # turn_context.npcs the same way the monster_manual.injected
+                # path does, so build_narrator_prompt sees post-dispatch state.
+                turn_context.npcs = list(snapshot.npcs)
 
                 with orchestrator_process_action_span(action_len=len(action)):
                     result = await sd.orchestrator.run_narration_turn(

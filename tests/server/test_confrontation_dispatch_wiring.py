@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -26,34 +26,20 @@ def _result(narration: str = "ok", **kwargs) -> NarrationTurnResult:
 
 
 @pytest.mark.asyncio
-async def test_confrontation_message_emitted_on_encounter_start(
-    session_handler_factory,
-):
-    from sidequest.agents.orchestrator import NpcMention
-
-    sd, handler = session_handler_factory(genre="caverns_and_claudes")
-    # Story 45-33: combat now requires an opponent post-fallback. Supply
-    # an explicit hostile so the lifecycle does not raise — the test's
-    # focus is the CONFRONTATION-message dispatch on encounter start, not
-    # opponent supply.
-    sd.orchestrator.run_narration_turn = AsyncMock(
-        return_value=_result(
-            confrontation="combat",
-            npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
-        ),
-    )
-    from sidequest.server.session_handler import _build_turn_context
-
-    msgs = await handler._execute_narration_turn(
-        sd,
-        "I attack the goblins!",
-        _build_turn_context(sd),
-    )
-    conf = [m for m in msgs if isinstance(m, ConfrontationMessage)]
-    assert len(conf) == 1
-    assert conf[0].payload.active is True
-    assert conf[0].payload.type == "combat"
-    assert [b["id"] for b in conf[0].payload.beats]  # beats included
+# test_confrontation_message_emitted_on_encounter_start was retired in
+# Story 59-4 (ADR-113). It drove encounter creation by setting
+# ``result.confrontation`` on the narrator's sidecar result and relied on
+# narration_apply's consumer to instantiate the encounter — both of which
+# were removed in the atomic IntentRouter cutover. Coverage for the new
+# creation path lives in:
+#   - tests/agents/subsystems/test_confrontation_dispatch.py
+#     (handler creates encounter on snapshot pre-narrator)
+#   - tests/server/test_59_4_router_wiring.py
+#     (end-to-end helper drives router → bank → handler)
+# The ConfrontationMessage broadcast wiring itself is exercised by the
+# sibling tests below, which pre-set ``sd.snapshot.encounter`` directly
+# (the broadcast logic keys on prior vs current encounter, not on the
+# creation mechanism).
 
 
 @pytest.mark.asyncio

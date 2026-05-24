@@ -169,9 +169,12 @@ def test_dice_section_enumerates_triggers() -> None:
         # track" + the apply_world_patch arrow.
         "Every location header",  # §2
         "you MUST call",  # §3/§4 generic obligation
-        # Story 59-1: §4 STARTING routes to begin_confrontation (the SDK
-        # engagement writer); advance_confrontation cannot start an encounter.
-        "Do NOT resolve these narratively without `begin_confrontation`",  # §4
+        # Story 59-4: §4 STARTING is no longer a narrator concern (router-
+        # driven via the Intent Router spine, ADR-113). The §4 sentinel
+        # anchor that previously asserted ``begin_confrontation`` is
+        # removed alongside the prompt rewrite; the surviving §4 obligation
+        # is the advance-encounter routing, covered by the generic
+        # ``you MUST call`` anchor above.
         "you MUST call `tick_tropes`",  # §5
     ],
 )

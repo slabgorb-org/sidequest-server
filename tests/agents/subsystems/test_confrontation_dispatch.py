@@ -107,30 +107,42 @@ def _package_with(*dispatches: SubsystemDispatch, turn_id: str = "turn-1") -> Di
 def _synthetic_pack_with_negotiation() -> Any:
     """Build a minimal GenrePack with one ConfrontationDef ('negotiation').
 
-    Dev is expected to wire this fixture against the live ConfrontationDef
-    shape during GREEN. The unit test only needs a pack whose
-    ``find_confrontation_def`` returns a non-None def for the type
-    "negotiation". If Dev finds the existing fixture helper at
-    ``tests/agents/fixtures/`` is reusable, prefer that — see Design
-    Deviation #2 in the session file.
+    Mirrors the canonical synthetic-pack helper at
+    ``tests/server/test_59_1_confrontation_engagement.py`` (the 59-1
+    fixture shape — kept verbatim so the GREEN-phase implementation
+    cannot drift from the live ConfrontationDef contract).
     """
-    pytest.importorskip("sidequest.genre.models")
-    from sidequest.genre.models import (  # type: ignore[import-not-found]
+    from unittest.mock import MagicMock as _MagicMock
+
+    from sidequest.genre.models.pack import GenrePack
+    from sidequest.genre.models.rules import (
+        BeatDef,
         ConfrontationDef,
-        GenrePack,
-        Rules,
+        MetricDef,
+        RulesConfig,
     )
 
     cdef = ConfrontationDef(
-        name="negotiation",
+        type="negotiation",
+        label="Negotiation",
         category="social",
-        description="A social negotiation.",
+        player_metric=MetricDef(name="leverage", starting=0, threshold=10),
+        opponent_metric=MetricDef(name="leverage", starting=0, threshold=10),
+        beats=[
+            BeatDef.model_validate(
+                {
+                    "id": "press",
+                    "label": "Press the Point",
+                    "kind": "strike",
+                    "base": 1,
+                    "stat_check": "CHA",
+                }
+            )
+        ],
     )
-    rules = Rules(confrontations=[cdef])
-    return GenrePack(
-        slug="test_negotiation_pack",
-        rules=rules,
-    )
+    pack = _MagicMock(spec=GenrePack)
+    pack.rules = RulesConfig(confrontations=[cdef])
+    return pack
 
 
 def _snapshot_no_encounter(*, player_name: str = "Alice") -> GameSnapshot:
@@ -196,7 +208,9 @@ async def test_confrontation_handler_creates_encounter_on_snapshot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_confrontation_handler_emits_encounter_initiated_span() -> None:
+async def test_confrontation_handler_emits_encounter_initiated_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """AC1 (OTEL leg): the handler must emit
     ``encounter_confrontation_initiated_span`` per the legacy
     ``narration_apply.py:2528`` consumer site. The span moves with the
@@ -206,13 +220,22 @@ async def test_confrontation_handler_emits_encounter_initiated_span() -> None:
     The exact span name is asserted because the GM panel queries by name —
     a rename would silently break the dashboard.
 
-    FAILS TODAY: handler does not exist.
+    Span capture pattern mirrors ``tests/integration/test_npc_wiring.py``:
+    monkeypatch ``spans_module.tracer`` to return a local TracerProvider's
+    tracer so the span emitter (which calls ``tracer()``) writes into
+    our InMemorySpanExporter without conflicting with the global tracer
+    provider OTEL refuses to replace.
     """
-    from sidequest.agents.subsystems.confrontation import (  # type: ignore[import-not-found]
+    from sidequest.agents.subsystems.confrontation import (
         run_confrontation_dispatch,
     )
+    from sidequest.telemetry import spans as spans_module
 
-    _tracer, exporter = _fresh_tracer_and_exporter()
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    local_tracer = provider.get_tracer("test-59-4-handler")
+    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
 
     snap = _snapshot_no_encounter()
     pack = _synthetic_pack_with_negotiation()

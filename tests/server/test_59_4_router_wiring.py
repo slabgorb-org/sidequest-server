@@ -106,20 +106,37 @@ def _confrontation_package(*, enc_type: str = "negotiation") -> DispatchPackage:
 
 
 def _synthetic_pack_with_negotiation() -> Any:
-    pytest.importorskip("sidequest.genre.models")
-    from sidequest.genre.models import (  # type: ignore[import-not-found]
+    """Synthetic pack with negotiation ConfrontationDef. Mirrors the
+    canonical fixture at tests/server/test_59_1_confrontation_engagement.py."""
+    from sidequest.genre.models.pack import GenrePack
+    from sidequest.genre.models.rules import (
+        BeatDef,
         ConfrontationDef,
-        GenrePack,
-        Rules,
+        MetricDef,
+        RulesConfig,
     )
 
     cdef = ConfrontationDef(
-        name="negotiation",
+        type="negotiation",
+        label="Negotiation",
         category="social",
-        description="A social negotiation.",
+        player_metric=MetricDef(name="leverage", starting=0, threshold=10),
+        opponent_metric=MetricDef(name="leverage", starting=0, threshold=10),
+        beats=[
+            BeatDef.model_validate(
+                {
+                    "id": "press",
+                    "label": "Press the Point",
+                    "kind": "strike",
+                    "base": 1,
+                    "stat_check": "CHA",
+                }
+            )
+        ],
     )
-    rules = Rules(confrontations=[cdef])
-    return GenrePack(slug="test_pack", rules=rules)
+    pack = MagicMock(spec=GenrePack)
+    pack.rules = RulesConfig(confrontations=[cdef])
+    return pack
 
 
 def _snapshot_no_encounter() -> Any:
@@ -154,8 +171,7 @@ def test_narration_apply_ignores_result_confrontation_after_cutover() -> None:
 
     FAILS TODAY: the consumer block is live and would create the encounter.
     """
-    pytest.importorskip("sidequest.server.narration_apply")
-    from sidequest.protocol.narration import NarrationTurnResult
+    from sidequest.agents.orchestrator import NarrationTurnResult
     from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 
     snap = _snapshot_no_encounter()
@@ -165,16 +181,18 @@ def test_narration_apply_ignores_result_confrontation_after_cutover() -> None:
         confrontation="negotiation",
         npcs_present=[],
     )
+    # ``room`` is a required kw-only param on the live signature; a
+    # MagicMock satisfies the type-only access this test path triggers
+    # (no real room IO is reached because the consumer block we're
+    # asserting-absent is the first encounter-touching branch).
+    room = MagicMock()
 
-    # Try the canonical apply call. Signature may vary post-port — if Dev
-    # finds the function takes additional args, update this test in the
-    # same PR. Today the function is ``_apply_narration_result_to_snapshot``
-    # at narration_apply.py:~2447.
     _apply_narration_result_to_snapshot(
-        result=result,
-        snapshot=snap,
+        snap,
+        result,
+        "Alice",
+        room=room,
         pack=pack,
-        player_name="Alice",
     )
 
     assert snap.encounter is None, (

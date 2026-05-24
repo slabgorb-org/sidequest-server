@@ -1,13 +1,31 @@
-"""2nd-person POV swap for narration prose (Story 49-8).
+"""2nd-person POV swap for narration prose (Story 49-8, antecedent-fix 2026-05-23).
 
 Found in the 2026-05-12 caverns_sunden playtest: every per-PC narration
 card landed on every player's tab third-person. On Carl's own tab his
 action card should read "You plant a boot..." not "Carl plants a boot...".
 
-This module rewrites third-person references to a single named target
-into second-person. Pure string transform — no network, no LLM. Called
-by ``sidequest.server.emitters.emit_event`` once per recipient when the
-recipient's PC name matches ``visibility_sidecar["anchor_pc"]``.
+This module rewrites NAME references to a single named target into
+second-person, plus their immediate verb conjugation and sentence-local
+reflexive ("himself"/"herself"/"themself"). Pure string transform — no
+network, no LLM. Called by ``sidequest.server.emitters.emit_event`` once
+per recipient when the recipient's PC name matches
+``visibility_sidecar["anchor_pc"]``.
+
+ANTECEDENT-BLINDNESS RETIRE (2026-05-23 pulp_noir/annees_folles repro):
+the legacy helper carried antecedent-blind PRONOUN passes — every "he" /
+"his" / "him" in the anchored prose was rewritten when the PC had he/him
+pronouns. In any scene with an NPC who shares the PC's pronouns ("the
+man with Le Figaro folds his paper… He doesn't hurry."), the pronoun
+passes turned NPC actions into PC actions. Regex has no antecedent
+resolution; the only safe rewrites are NAME-driven. The 2nd-person voice
+contract for non-name pronouns has been shifted to the narrator side
+(see ``narrator_prompts/pov_rules.md`` — narrator writes the PC's actions
+using the PC's NAME, never a pronoun, so this rewriter has unambiguous
+input to swap).
+
+Reflexives ("himself"/"herself"/"themself") survive but only fire when
+the sentence already had a name-driven subject swap — without that gate
+"himself" in a sentence about another character would mis-attach.
 
 Dialogue inside double quotes is preserved unchanged — speakers
 referring to the target by name belong to the in-world scene, not the
@@ -65,12 +83,24 @@ _PRONOUN_FORMS = {
 # Irregular verbs that need explicit 3rd-person -> 2nd-person mapping.
 # Regular -s/-es/-ies suffixes are handled by _conjugate's algorithmic
 # fallback.
+#
+# Contraction stems (``doesn``, ``wasn``, ``isn``, ``hasn``) are included
+# because the verb-capture regex is ``\w+`` — it stops at the apostrophe,
+# so "Carl doesn't move" captures the bare stem "doesn" and leaves the
+# "'t move" suffix outside the match. Conjugating the stem to its plural
+# bare form composes correctly with that surviving suffix: "doesn" → "don"
+# + "'t move" = "don't move". This matches the bug-2 sub-case found in the
+# 2026-05-23 pulp_noir/annees_folles playtest ("You doesn't hurry").
 _IRREGULAR_VERBS: dict[str, str] = {
     "has": "have",
     "is": "are",
     "was": "were",
     "does": "do",
     "goes": "go",
+    "doesn": "don",
+    "wasn": "weren",
+    "isn": "aren",
+    "hasn": "haven",
 }
 
 
@@ -308,109 +338,49 @@ def _rewrite_sentence(
 
     # ------------------------------------------------------------------
     # Pass 4: reflexive ("himself"/"herself"/"themself"/"themselves") -> "yourself"
+    #
+    # Gated on ``had_subject_swap``: fires only when this sentence already
+    # had a name-driven subject swap (Pass 2). Without the gate, a sentence
+    # like "The man crosses himself" rewrote "himself" → "yourself" simply
+    # because the PC shared he/him pronouns — even though the reflexive
+    # unambiguously refers to "the man". Sentence-local antecedent means
+    # the reflexive belongs to the PC only when the PC IS the local
+    # subject — which Pass 2 establishes when (and only when) the PC's
+    # name appears as that subject.
     # ------------------------------------------------------------------
-    for reflexive in forms["reflexive"]:
-        count_before = count
+    if had_subject_swap:
+        for reflexive in forms["reflexive"]:
+            count_before = count
 
-        def _reflexive_sub(m: re.Match) -> str:
-            nonlocal count
-            count += 1
-            return "yourself"
-
-        text, n = re.subn(rf"\b{re.escape(reflexive)}\b", _reflexive_sub, text)
-        # subn returns the count separately — but our nested function
-        # already incremented; reset by removing the auto-count and
-        # using subn's count. Simpler: subtract our increment, add subn.
-        # (re.subn here is the authoritative count.)
-        count = count_before + n
-        text = text  # subn already replaced
-
-    # ------------------------------------------------------------------
-    # Pass 5: subject pronoun ("he"/"she"/"they") + verb -> "you" + plural-verb
-    # Conjugate the immediately-following verb just like Pass 2 did
-    # for the name.
-    # ------------------------------------------------------------------
-    subj_pron = forms["subject"]
-    subj_pat = rf"\b({subj_pron[0].upper()}{subj_pron[1:]}|{subj_pron})\b\s+(\w+)"
-
-    def _subj_pron_sub(m: re.Match) -> str:
-        nonlocal count, had_subject_swap
-        had_subject_swap = True
-        leader = m.group(1)
-        verb = m.group(2)
-        you = "You" if leader[0].isupper() else "you"
-        count += 1
-        if _looks_like_verb(verb):
-            conjugated = _conjugate(verb)
-            if conjugated != verb:
+            def _reflexive_sub(m: re.Match) -> str:
+                nonlocal count
                 count += 1
-            return f"{you} {conjugated}"
-        return f"{you} {verb}"
+                return "yourself"
 
-    text = re.sub(subj_pat, _subj_pron_sub, text)
-
-    # ------------------------------------------------------------------
-    # Pass 6: possessive pronoun ("his"/"their"/"her" before a noun) -> "your"
-    # For she/her, "her" is ambiguous (object vs possessive). Disambiguate
-    # by lookahead: "her" followed by whitespace + word (not punctuation)
-    # is possessive; otherwise it's object (handled in Pass 7).
-    # ------------------------------------------------------------------
-    possessive = forms["possessive"]
-    if possessive == "her":
-        # She/her case: possessive "her" only when followed by a word.
-        pos_pat = r"\b([Hh])er\b(?=\s+\w)"
-
-        def _pos_her_sub(m: re.Match) -> str:
-            nonlocal count
-            count += 1
-            return "Your" if m.group(1).isupper() else "your"
-
-        text = re.sub(pos_pat, _pos_her_sub, text)
-    elif possessive == "his":
-        pos_pat = r"\b([Hh])is\b"
-
-        def _pos_his_sub(m: re.Match) -> str:
-            nonlocal count
-            count += 1
-            return "Your" if m.group(1).isupper() else "your"
-
-        text = re.sub(pos_pat, _pos_his_sub, text)
-    elif possessive == "their":
-        pos_pat = r"\b([Tt])heir\b"
-
-        def _pos_their_sub(m: re.Match) -> str:
-            nonlocal count
-            count += 1
-            return "Your" if m.group(1).isupper() else "your"
-
-        text = re.sub(pos_pat, _pos_their_sub, text)
+            text, n = re.subn(rf"\b{re.escape(reflexive)}\b", _reflexive_sub, text)
+            # subn returns the count separately — but our nested function
+            # already incremented; reset by removing the auto-count and
+            # using subn's count. Simpler: subtract our increment, add subn.
+            # (re.subn here is the authoritative count.)
+            count = count_before + n
 
     # ------------------------------------------------------------------
-    # Pass 7: object pronoun ("him"/"them"/"her" at end of clause) -> "you"
-    # For "her" specifically, this fires only when NOT followed by a noun
-    # (Pass 6 already consumed the possessive case).
+    # Passes 5/6/7 RETIRED (2026-05-23, sq-playtest pulp_noir/annees_folles).
+    #
+    # Pass 5 (subject pronoun "He"/"She"/"They" → "You"),
+    # Pass 6 (possessive pronoun "his"/"her"/"their" → "your"), and
+    # Pass 7 (object pronoun "him"/"her"/"them" → "you") are removed.
+    #
+    # All three were antecedent-blind: they fired on every matching pronoun
+    # in the anchored prose regardless of who that pronoun actually referred
+    # to. In a scene with an NPC who shared the PC's pronouns (the man with
+    # Le Figaro folds *his* paper… *He* doesn't hurry) the passes converted
+    # the NPC's actions into PC actions on the player's tab ("You doesn't
+    # hurry"). Regex has no antecedent resolution; the fix is to constrain
+    # the narrator-side input (see ``narrator_prompts/pov_rules.md``: write
+    # the PC's actions using the PC's NAME, never a pronoun) and let the
+    # surviving name-driven passes do the rest.
     # ------------------------------------------------------------------
-    obj_pron = forms["object"]
-    if obj_pron == "her":
-        # Object "her" — followed by punctuation, end-of-string, or
-        # connective words that signal end of clause.
-        obj_pat = r"\b([Hh])er\b(?![\s]+\w)"
-
-        def _obj_her_sub(m: re.Match) -> str:
-            nonlocal count
-            count += 1
-            return "You" if m.group(1).isupper() else "you"
-
-        text = re.sub(obj_pat, _obj_her_sub, text)
-    else:
-        obj_pat = rf"\b({obj_pron[0].upper()}{obj_pron[1:]}|{obj_pron})\b"
-
-        def _obj_sub(m: re.Match) -> str:
-            nonlocal count
-            count += 1
-            return "You" if m.group(1)[0].isupper() else "you"
-
-        text = re.sub(obj_pat, _obj_sub, text)
 
     # ------------------------------------------------------------------
     # Pass 8: "and <verb>" continuation. When this sentence had a

@@ -31,6 +31,7 @@ NARRATOR_REFERRAL_RULE: str = _load("referral_rule.md")
 NARRATOR_COMBAT_RULES: str = _load("combat_rules.md")
 NARRATOR_CHASE_RULES: str = _load("chase_rules.md")
 NARRATOR_DIALOGUE_RULES: str = _load("dialogue_rules.md")
+NARRATOR_POV_RULES: str = _load("pov_rules.md")
 
 __all__ = [
     "NARRATOR_IDENTITY",
@@ -44,4 +45,5 @@ __all__ = [
     "NARRATOR_COMBAT_RULES",
     "NARRATOR_CHASE_RULES",
     "NARRATOR_DIALOGUE_RULES",
+    "NARRATOR_POV_RULES",
 ]

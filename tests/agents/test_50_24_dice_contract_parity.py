@@ -163,7 +163,11 @@ def test_dice_section_enumerates_triggers() -> None:
     "anchor",
     [
         "you MUST call `apply_status`",  # §1
-        "CRITICAL LOCATION RULE",  # §2
+        # Story 61-12 AC-5 demoted §2's "CRITICAL LOCATION RULE" banner —
+        # banner count capped at 4. The §2 routing rule remains expressible
+        # via "Every location header ... is a scene boundary state must
+        # track" + the apply_world_patch arrow.
+        "Every location header",  # §2
         "you MUST call",  # §3/§4 generic obligation
         # Story 59-1: §4 STARTING routes to begin_confrontation (the SDK
         # engagement writer); advance_confrontation cannot start an encounter.
@@ -175,6 +179,10 @@ def test_other_tool_categories_keep_mandatory_language(anchor: str) -> None:
     """SENTINEL (not an AC test): these anchors exist pre-fix and must
     survive the GREEN-phase §7 edit. If Dev's §7 hardening accidentally
     rewrites/relaxes a sibling category, this flips red and catches it.
+
+    Story 61-12 updated the §2 anchor from "CRITICAL LOCATION RULE" to
+    "Every location header" — AC-5 caps banner count at 4 and §2's banner
+    was demoted; the routing rule itself remains expressible per AC-6.
     """
     assert anchor in NARRATOR_OUTPUT_ONLY, (
         f"Regression sentinel: the existing obligation anchor {anchor!r} "

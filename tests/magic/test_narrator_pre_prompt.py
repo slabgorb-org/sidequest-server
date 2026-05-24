@@ -115,14 +115,20 @@ async def test_narrator_pre_prompt_omits_magic_context_when_state_absent():
 
 
 def test_narrator_output_doc_mentions_magic_working():
-    """NARRATOR_OUTPUT_ONLY documents magic-effect recording.
+    """The narrator records magic-effect recording obligations.
 
     Story 61-9 / ADR-101 amendment: the SDK narrator records magic
     workings by CALLING ``apply_spell_effect`` (a tool); the legacy
-    ``magic_working`` sidecar field is gone. The CRITICAL MAGIC RULE
-    and the innate-magic plugin gate must still appear in the prose so
-    the narrator gates the tool call on plugin state.
+    ``magic_working`` sidecar field is gone. The ``apply_spell_effect``
+    arrow stays in NARRATOR_OUTPUT_ONLY (every world that runs the tool
+    sees it); the CRITICAL MAGIC RULE detail + the innate-magic plugin
+    gate live in NARRATOR_MAGIC_OUTPUT_RULES per Story 61-12 AC-3,
+    registered conditionally only when ``context.magic_state is not None``
+    so non-magic worlds (road_warrior, pulp_noir, tea_and_murder,
+    spaghetti_western) never pay for them.
     """
+    from sidequest.agents.narrator_prompts import NARRATOR_MAGIC_OUTPUT_RULES
+
     assert "apply_spell_effect" in NARRATOR_OUTPUT_ONLY
-    assert "CRITICAL MAGIC RULE" in NARRATOR_OUTPUT_ONLY
-    assert "innate_v1" in NARRATOR_OUTPUT_ONLY
+    assert "CRITICAL MAGIC RULE" in NARRATOR_MAGIC_OUTPUT_RULES
+    assert "innate_v1" in NARRATOR_MAGIC_OUTPUT_RULES

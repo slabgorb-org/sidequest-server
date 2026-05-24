@@ -976,7 +976,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         len(patch.get("items_lost", [])),
         len(patch.get("items_discarded", [])),
         len(patch.get("items_consumed", [])),
-        len(patch.get("npcs_present", patch.get("npcs_met", []))),
+        len(patch.get("npcs_present", [])),
         len(patch.get("quest_updates", {})),
         len(patch.get("sfx_triggers", [])),
         patch.get("visual_scene") is not None,
@@ -1000,7 +1000,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         "items_lost": patch.get("items_lost", []),
         "items_discarded": patch.get("items_discarded", []),
         "items_consumed": patch.get("items_consumed", []),
-        "npcs_present": patch.get("npcs_present", patch.get("npcs_met", [])),
+        "npcs_present": patch.get("npcs_present", []),
         "quest_updates": patch.get("quest_updates", {}),
         "visual_scene": patch.get("visual_scene"),
         "scene_mood": patch.get("scene_mood", patch.get("mood")),
@@ -1856,8 +1856,24 @@ class Orchestrator:
         # Magic context (Valley zone) — injected when a world has magic.yaml loaded.
         # Tells the narrator which plugins are active, what the hard_limits are,
         # and the per-actor ledger bars so it can emit magic_working correctly.
+        #
+        # Story 61-12: the CRITICAL MAGIC EFFECT / RULE / NEGATIVE CASE banners
+        # are gated behind the same chokepoint so non-magic worlds
+        # (road_warrior, pulp_noir, tea_and_murder, spaghetti_western) never
+        # pay the ~400 tok these rules cost. Single gate, no parallel mechanism.
         if context.magic_state is not None:
+            from sidequest.agents.narrator_prompts import NARRATOR_MAGIC_OUTPUT_RULES
             from sidequest.magic.context_builder import build_magic_context_block
+
+            registry.register_section(
+                agent_name,
+                PromptSection.new(
+                    "magic_output_rules",
+                    f"<critical>\n{NARRATOR_MAGIC_OUTPUT_RULES}\n</critical>",
+                    AttentionZone.Primacy,
+                    SectionCategory.Guardrail,
+                ),
+            )
 
             reliquaries = None
             if context.world_items is not None:

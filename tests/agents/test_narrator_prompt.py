@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from sidequest.agents.narrator import NARRATOR_OUTPUT_ONLY
+from sidequest.agents.narrator_prompts import NARRATOR_MAGIC_OUTPUT_RULES
 
 
 def test_prompt_documents_npc_side_field():
@@ -35,12 +36,19 @@ def test_prompt_documents_boon_for_temporary_buffs():
     playtest gap). Without an explicit rule, the narrator silently dropped
     "the torchlight gets clearer" (a real perception buff) into prose with
     no schema slot.
+
+    Story 61-12 moved the CRITICAL MAGIC EFFECT RULE prose into
+    ``NARRATOR_MAGIC_OUTPUT_RULES`` — a conditional section that registers
+    only when ``context.magic_state is not None``. The Boon-emit obligation
+    survives there; the bare Boon severity description stays in
+    ``NARRATOR_OUTPUT_ONLY``.
     """
     # Boon severity is documented and contextualized.
     assert "Boon" in NARRATOR_OUTPUT_ONLY
     # The CRITICAL MAGIC EFFECT RULE wires the Boon-emit obligation to the
-    # prose patterns the narrator was previously dropping silently.
-    assert "CRITICAL MAGIC EFFECT RULE" in NARRATOR_OUTPUT_ONLY
+    # prose patterns the narrator was previously dropping silently — now
+    # lives in the conditional magic-rules prose per Story 61-12 AC-3.
+    assert "CRITICAL MAGIC EFFECT RULE" in NARRATOR_MAGIC_OUTPUT_RULES
     # Boon is described as scene-bounded (matches status_clear.py wiring).
     assert (
         "scene end" in NARRATOR_OUTPUT_ONLY.lower()

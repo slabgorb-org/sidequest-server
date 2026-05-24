@@ -184,11 +184,19 @@ def test_extract_structured_extracts_confrontation():
     assert result["confrontation"] == "combat"
 
 
-def test_extract_structured_extracts_npcs_met_alias():
-    """npcs_met and npcs_present are both valid labels."""
+def test_extract_structured_drops_legacy_npcs_met_key():
+    """Story 61-12 AC-1 removed the silent fallback at orchestrator.py:1003
+    that aliased ``npcs_met`` → ``npcs_present``. The canonical sidecar key
+    is ``npcs_present`` everywhere else in the codebase (protocol, DB,
+    NarrationResult, narration_apply, emitters, telemetry); the prose
+    enforces it; the parser no longer rescues the wrong spelling.
+    Narrator that emits ``npcs_met`` drops to ``[]`` (the same behavior as
+    any missing sidecar field) so the lie detector (OTEL spans /
+    render_trigger) fires on the divergence instead of papering it over.
+    """
     raw = '```game_patch\n{"npcs_met": ["Toggler"]}\n```'
     result = extract_structured_from_response(raw)
-    assert len(result["npcs_present"]) == 1
+    assert result["npcs_present"] == []
 
 
 def test_extract_structured_extracts_gold_change():
@@ -593,9 +601,11 @@ async def test_run_narration_turn_extracts_confrontation():
 
 @pytest.mark.asyncio
 async def test_run_narration_turn_extracts_npcs():
+    # Story 61-12 removed the npcs_met silent fallback; the canonical
+    # sidecar key is npcs_present everywhere.
     narration_text = (
         "**The Market**\n\nThe vendor smiles.\n\n"
-        '```game_patch\n{"npcs_met": ["Nub the Vendor"]}\n```'
+        '```game_patch\n{"npcs_present": ["Nub the Vendor"]}\n```'
     )
     client = make_canned_client(narration_text)
     orch = Orchestrator(client=client)

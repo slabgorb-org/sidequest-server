@@ -305,17 +305,20 @@ class AnthropicSdkClient:
         initial_message_count = len(running_messages)
 
         for iteration in range(1, max_iterations + 1):
-            # Story 60-4: on continuation calls (iter 2+, where running_messages
-            # has been extended past the input set with appended tool_use /
-            # tool_result blocks), build the API payload with a moving
-            # cache_control breakpoint on the LAST content block of the newest
-            # user (tool_result) message. Without this marker the API re-mints
-            # the ~11.7k system_blocks[0]+tools prefix at the default 5m TTL on
-            # every continuation regardless of the system/tools markers, since
-            # the appended messages sit AFTER those markers in cache-prefix
-            # order. Measured cost: ~$0.089/turn wasted cache_write
-            # (sprint/archive/60-3-session.md). The payload is rebuilt fresh
-            # per iteration so prior calls' captured kwargs stay snapshot-clean.
+            # Story 60-4/60-7: every iter — iter=1 included — build the API
+            # payload with a moving cache_control breakpoint on the LAST
+            # content block of the newest user message. Without this marker
+            # the API auto-caches the content sitting past our last explicit
+            # breakpoint (the system_blocks[0]+tools prefix) at the default 5m
+            # TTL — on iter=1 that's the new user message + recency-zone
+            # deltas (~17K tok), on iter=2+ it's the appended tool_use /
+            # tool_result blocks. The iter=2 marker then writes the same
+            # content at 1h seconds later, displacing the 5m write — pure
+            # waste. Stamping every iter at the configured TTL overrides the
+            # auto-5m default so the write lands at 1h directly. Measured
+            # savings: ~$0.041/turn ($0.137 → $0.096) on top of the 60-4
+            # baseline. The payload is rebuilt fresh per iteration so prior
+            # calls' captured kwargs stay snapshot-clean.
             payload_messages = self._build_messages_payload(
                 running_messages,
                 is_continuation=len(running_messages) > initial_message_count,
@@ -919,7 +922,7 @@ class AnthropicSdkClient:
         the auto-5m default so the iter=1 write lands at 1h directly and
         iter=2 reads it. Probe evidence: per-turn cost
         $0.137 → $0.096 (~30% savings); see
-        ``sprint/.session/60-7-session.md``.
+        ``sprint/archive/60-7-session.md``.
 
         ``is_continuation`` is retained as caller-facing intent (iter=1 vs
         iter=2+) — useful to the call site and to test naming — but no
@@ -974,6 +977,17 @@ class AnthropicSdkClient:
                     "type": "ephemeral",
                     "ttl": self.cache_ttl,
                 }
+            else:
+                # No Silent Fallbacks: every live call site appends dict blocks
+                # to running_messages, so a non-dict last block means an
+                # upstream invariant has broken. Skipping the marker silently
+                # would re-introduce the iter=1 auto-5m write we are paying
+                # this whole story to eliminate — surface it loudly instead.
+                logger.warning(
+                    "_build_messages_payload: non-dict last block type=%s — "
+                    "cache_control marker skipped (upstream invariant broken)",
+                    type(last_block).__name__,
+                )
 
         return out
 

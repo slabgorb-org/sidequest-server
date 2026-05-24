@@ -481,8 +481,49 @@ def _render_file(
         theme=theme,
         depth=0,
     )
-    body = "<p><em>(empty file)</em></p>" if data is None else render_node(data, kind=kind, ctx=ctx)
     file_slug = slugify(path.stem)
+
+    # File-root presenter dispatch (key_path == ()). Applies the same
+    # visibility gate as _render_dict's child-key path. If KEEPER, drop
+    # silently. If UNKNOWN, fire warn span + drop. Otherwise, run the
+    # registered presenter (if any); absence means fall through to the
+    # generic walk below.
+    if data is not None:
+        vis_root = classify(ctx.file_stem, ())
+        if vis_root is Visibility.KEEPER:
+            return ""
+        if vis_root is Visibility.UNKNOWN:
+            with reference_unknown_field_span(
+                pack=ctx.pack,
+                world=ctx.world,
+                file_stem=ctx.file_stem,
+                key_path=(),
+            ):
+                pass
+            _log_unknown_once(ctx.file_stem, ())
+            return ""
+        presenter = lookup_presenter(path.stem, ())
+        if presenter is not None:
+            try:
+                rendered = presenter(data, ctx)
+            except Exception as exc:
+                with reference_presenter_error_span(
+                    pack=ctx.pack,
+                    file_stem=ctx.file_stem,
+                    key_path=(),
+                ) as span:
+                    span.record_exception(exc)
+                raise
+            if rendered:
+                return (
+                    f'<section class="file" id="file-{file_slug}">'
+                    f"<h1>{escape(path.name)}</h1>{rendered}</section>"
+                )
+            # Empty presenter output — presenter is suppressing the file.
+            # Return the empty wrapped section to keep the anchor live.
+            return f'<section class="file" id="file-{file_slug}"></section>'
+
+    body = "<p><em>(empty file)</em></p>" if data is None else render_node(data, kind=kind, ctx=ctx)
     return (
         f'<section class="file" id="file-{file_slug}"><h1>{escape(path.name)}</h1>{body}</section>'
     )

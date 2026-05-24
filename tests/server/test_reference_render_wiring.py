@@ -117,13 +117,13 @@ def test_public_unpresented_field_renders_via_generic_fallback(
     """A PUBLIC field with no presenter renders via generic fallback and
     fires the unpresented_field INFO span.
 
-    Uses ``geography`` — a lore PUBLIC field with no registered presenter
-    (setting_anchor gained a presenter in Task 6).
+    Uses ``cultural_notes`` — a lore PUBLIC field with no registered
+    presenter (geography and setting_anchor both have presenters now).
     """
     from sidequest.server.reference_renderer import assemble_lore_page
 
     (synthetic_world / "lore.yaml").write_text(
-        yaml.safe_dump({"geography": "A rain-soaked plateau."})
+        yaml.safe_dump({"cultural_notes": "A rain-soaked plateau."})
     )
 
     html = assemble_lore_page(
@@ -140,3 +140,30 @@ def test_public_unpresented_field_renders_via_generic_fallback(
         if s.name == "sidequest.reference.unpresented_field"
     ]
     assert info_spans, f"Expected unpresented_field INFO span; saw {_span_names(captured_spans)}"
+
+
+def test_file_root_presenter_fires_for_top_level_list(
+    synthetic_pack: Path, synthetic_world: Path
+) -> None:
+    """A registry entry under (stem, ()) fires when the YAML root is a list."""
+    from sidequest.server.reference_presenters import PRESENTERS
+    from sidequest.server.reference_renderer import assemble_lore_page
+
+    sentinel = "<div data-test-sentinel='1'>FILE_ROOT_HIT</div>"
+
+    def _sentinel_presenter(node: object, ctx: object) -> str:
+        return sentinel
+
+    (synthetic_world / "cultures.yaml").write_text(yaml.safe_dump([{"name": "X"}, {"name": "Y"}]))
+    PRESENTERS[("cultures", ())] = _sentinel_presenter
+    try:
+        html = assemble_lore_page(
+            pack="space_opera",
+            world="synth_world",
+            pack_dir=synthetic_pack,
+            world_dir=synthetic_world,
+        )
+    finally:
+        del PRESENTERS[("cultures", ())]
+
+    assert sentinel in html

@@ -58,7 +58,6 @@ import pytest
 
 from sidequest.game.session import GameSnapshot
 
-
 # ---------------------------------------------------------------------------
 # Registry import — the test MUST fail loudly if either registry is missing
 # from session_helpers. Conftest-level imports would convert this into a
@@ -194,14 +193,12 @@ def test_no_field_in_multiple_registries() -> None:
     for name in drop_set & bounded_set:
         overlaps.append((name, ("_PHASE_B_DROP_FIELDS", "_BOUNDED_BY_CONSTRUCTION")))
     for name in projections_set & bounded_set:
-        overlaps.append(
-            (name, ("_PHASE_C_PROJECTIONS", "_BOUNDED_BY_CONSTRUCTION"))
-        )
+        overlaps.append((name, ("_PHASE_C_PROJECTIONS", "_BOUNDED_BY_CONSTRUCTION")))
 
     assert not overlaps, (
-        f"The following GameSnapshot field(s) appear in MORE THAN ONE "
-        f"bounding registry — a field cannot be both dropped and "
-        f"projected (or bounded), the categories are exclusive:\n"
+        "The following GameSnapshot field(s) appear in MORE THAN ONE "
+        "bounding registry — a field cannot be both dropped and "
+        "projected (or bounded), the categories are exclusive:\n"
         + "\n".join(f"  - {name!r}: {a} AND {b}" for name, (a, b) in overlaps)
     )
 
@@ -230,11 +227,9 @@ def test_registries_reference_only_real_snapshot_fields() -> None:
     }
     stray = {k: v for k, v in stray.items() if v}
     assert not stray, (
-        f"Registry entries reference field name(s) that are NOT on "
-        f"GameSnapshot.model_fields (typo or stale entry):\n"
-        + "\n".join(
-            f"  - {registry}: {sorted(names)}" for registry, names in stray.items()
-        )
+        "Registry entries reference field name(s) that are NOT on "
+        "GameSnapshot.model_fields (typo or stale entry):\n"
+        + "\n".join(f"  - {registry}: {sorted(names)}" for registry, names in stray.items())
     )
 
 

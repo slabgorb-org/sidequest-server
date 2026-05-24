@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import pytest
 
-from sidequest.agents.narrator_prompts import NARRATOR_OUTPUT_ONLY_SDK
+from sidequest.agents.narrator_prompts import NARRATOR_OUTPUT_ONLY
 
 # The self-gating loophole, verbatim from output_only_sdk.md:142-144 as it
 # stands pre-fix. AC-1 requires this exact clause be deleted.
@@ -48,11 +48,11 @@ def _dice_section() -> str:
     makes the MUST/MANDATORY assertion meaningful — the rest of the
     document is saturated with MUST language for the other categories.
     """
-    text = NARRATOR_OUTPUT_ONLY_SDK
+    text = NARRATOR_OUTPUT_ONLY
     start = text.find("7. DICE RESOLUTION")
     assert start != -1, (
         "Could not locate the '7. DICE RESOLUTION' header in "
-        "NARRATOR_OUTPUT_ONLY_SDK — the section structure changed; "
+        "NARRATOR_OUTPUT_ONLY — the section structure changed; "
         "update this slice helper."
     )
     end = text.find("8. SCENARIO-CLUE", start)
@@ -176,8 +176,8 @@ def test_other_tool_categories_keep_mandatory_language(anchor: str) -> None:
     survive the GREEN-phase §7 edit. If Dev's §7 hardening accidentally
     rewrites/relaxes a sibling category, this flips red and catches it.
     """
-    assert anchor in NARRATOR_OUTPUT_ONLY_SDK, (
+    assert anchor in NARRATOR_OUTPUT_ONLY, (
         f"Regression sentinel: the existing obligation anchor {anchor!r} "
-        "disappeared from NARRATOR_OUTPUT_ONLY_SDK. Hardening §7 must not "
+        "disappeared from NARRATOR_OUTPUT_ONLY. Hardening §7 must not "
         "soften the other seven tool-owned categories."
     )

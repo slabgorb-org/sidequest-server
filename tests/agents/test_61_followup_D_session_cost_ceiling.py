@@ -97,8 +97,7 @@ def test_default_ceiling_is_ten_dollars() -> None:
     story-body update and a test review.
     """
     assert _SESSION_COST_CEILING_USD == 10.0, (
-        f"Story §C locks the default ceiling at $10.00. Got "
-        f"{_SESSION_COST_CEILING_USD!r}."
+        f"Story §C locks the default ceiling at $10.00. Got {_SESSION_COST_CEILING_USD!r}."
     )
 
 
@@ -191,8 +190,7 @@ async def test_crossing_ceiling_raises_typed_exception(
         session_id="ceiling-cross-test",
     )
     assert result1.cumulative_cost_usd == pytest.approx(0.303, abs=1e-3), (
-        f"Call #1 cumulative_cost_usd should be ~$0.303. Got "
-        f"{result1.cumulative_cost_usd!r}"
+        f"Call #1 cumulative_cost_usd should be ~$0.303. Got {result1.cumulative_cost_usd!r}"
     )
 
     # Call #2 crosses the ceiling.
@@ -206,12 +204,10 @@ async def test_crossing_ceiling_raises_typed_exception(
         )
     err = excinfo.value
     assert err.session_id == "ceiling-cross-test", (
-        f"Exception session_id MUST match the offending session. Got "
-        f"{err.session_id!r}"
+        f"Exception session_id MUST match the offending session. Got {err.session_id!r}"
     )
     assert err.ceiling_usd == pytest.approx(0.50), (
-        f"Exception ceiling_usd MUST match configured ceiling. Got "
-        f"{err.ceiling_usd!r}"
+        f"Exception ceiling_usd MUST match configured ceiling. Got {err.ceiling_usd!r}"
     )
     assert err.cumulative_cost_usd >= 0.50, (
         "Exception cumulative MUST be at or above the ceiling — that's "
@@ -322,9 +318,7 @@ async def test_cumulative_cost_is_per_session_id(
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     # 4 responses: A1 heavy, B1 heavy, A2 heavy (crosses A), B-tiny.
-    sdk = _Sdk(
-        responses=[_heavy_call(), _heavy_call(), _heavy_call(), _tiny_call()]
-    )
+    sdk = _Sdk(responses=[_heavy_call(), _heavy_call(), _heavy_call(), _tiny_call()])
     client = _build_client(sdk, ceiling=0.50, monkeypatch=monkeypatch)
 
     # A1 + B1: both safe.
@@ -353,8 +347,7 @@ async def test_cumulative_cost_is_per_session_id(
             session_id="session-A",
         )
     assert excinfo.value.session_id == "session-A", (
-        f"Crossing call MUST raise with session_id='session-A'. Got "
-        f"{excinfo.value.session_id!r}"
+        f"Crossing call MUST raise with session_id='session-A'. Got {excinfo.value.session_id!r}"
     )
 
     # B-tiny — session B is at $0.303 from B1; adding a tiny ~$0.004
@@ -567,8 +560,7 @@ async def test_cost_running_total_fires_every_turn(
     # Required field shape — cumulative MUST monotonically grow.
     cumulatives = [e["fields"]["cumulative_cost_usd"] for e in running_total_events]
     assert cumulatives == sorted(cumulatives), (
-        f"cumulative_cost_usd MUST grow monotonically across turns. "
-        f"Got {cumulatives!r}"
+        f"cumulative_cost_usd MUST grow monotonically across turns. Got {cumulatives!r}"
     )
     assert all(c > 0 for c in cumulatives), (
         f"Every turn's cumulative_cost_usd MUST be > 0. Got {cumulatives!r}"
@@ -634,9 +626,7 @@ async def test_cost_running_total_does_not_fire_on_refused_call(
     await asyncio.sleep(0.05)
 
     # Snapshot event count after threshold-cross.
-    rt_after_cross = [
-        e for e in sock.events if e.get("event_type") == "session.cost_running_total"
-    ]
+    rt_after_cross = [e for e in sock.events if e.get("event_type") == "session.cost_running_total"]
     events_before_refuse = len(sock.events)
 
     # Subsequent refusal — must add zero events.
@@ -690,9 +680,7 @@ async def test_session_id_none_bypasses_cumulative_tracker(
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 3 heavy bypass calls (None) + 1 heavy real-session probe afterward.
-    sdk = _Sdk(
-        responses=[_heavy_call(), _heavy_call(), _heavy_call(), _heavy_call()]
-    )
+    sdk = _Sdk(responses=[_heavy_call(), _heavy_call(), _heavy_call(), _heavy_call()])
     client = _build_client(sdk, ceiling=0.50, monkeypatch=monkeypatch)
 
     # Three heavy calls with session_id=None — none should raise even
@@ -713,8 +701,7 @@ async def test_session_id_none_bypasses_cumulative_tracker(
     bypass_events = [
         e
         for e in sock.events
-        if e.get("event_type")
-        in {"session.cost_running_total", "session.cost_ceiling_exceeded"}
+        if e.get("event_type") in {"session.cost_running_total", "session.cost_ceiling_exceeded"}
     ]
     assert bypass_events == [], (
         "session_id=None MUST NOT emit any session.* watcher events. "
@@ -735,17 +722,13 @@ async def test_session_id_none_bypasses_cumulative_tracker(
         session_id="fresh-after-bypass",
     )
     await asyncio.sleep(0.05)
-    rt_events = [
-        e for e in sock.events if e.get("event_type") == "session.cost_running_total"
-    ]
+    rt_events = [e for e in sock.events if e.get("event_type") == "session.cost_running_total"]
     assert len(rt_events) == 1, (
         "Real-session probe AFTER 3 None-bypass calls MUST emit exactly "
         "one running_total event reflecting only its own cost. Got "
         f"{len(rt_events)} events."
     )
-    assert rt_events[0]["fields"]["cumulative_cost_usd"] == pytest.approx(
-        0.303, abs=1e-3
-    ), (
+    assert rt_events[0]["fields"]["cumulative_cost_usd"] == pytest.approx(0.303, abs=1e-3), (
         "fresh-after-bypass cumulative MUST be ~$0.303 (its own cost), "
         "NOT $0.909+ polluted from the None calls. Got "
         f"cumulative={rt_events[0]['fields']['cumulative_cost_usd']!r}"
@@ -794,8 +777,7 @@ async def test_ceiling_cross_logs_at_error_level(
     error_records = [
         r
         for r in caplog.records
-        if r.levelno == logging.ERROR
-        and "session.cost_ceiling_exceeded" in r.getMessage()
+        if r.levelno == logging.ERROR and "session.cost_ceiling_exceeded" in r.getMessage()
     ]
     assert len(error_records) >= 1, (
         "Ceiling-cross MUST log at ERROR level with the "

@@ -3,30 +3,50 @@
 from __future__ import annotations
 
 import os
+from typing import Literal
 
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
-from sidequest.agents.claude_client import ClaudeClient, LlmClient, LlmClientError
-from sidequest.agents.ollama_client import DEFAULT_OLLAMA_URL, OllamaClient
+from sidequest.agents.claude_client import LlmClient, LlmClientError
 from sidequest.agents.tooling_protocol import ToolingLlmClient
 
 ENV_BACKEND = "SIDEQUEST_LLM_BACKEND"
 ENV_OLLAMA_URL = "SIDEQUEST_OLLAMA_URL"
 
 _VALID_BACKENDS = frozenset({"claude", "ollama", "anthropic_sdk"})
+_RETIRED_BACKENDS = frozenset({"claude", "ollama"})
 
 
 class UnknownBackend(LlmClientError):
     """SIDEQUEST_LLM_BACKEND value was not one of the supported backends."""
 
 
-def build_llm_client() -> LlmClient | ToolingLlmClient:
-    """Return the configured LlmClient. Default: AnthropicSdkClient (Phase D).
+class NarratorBackendRetired(LlmClientError):
+    """Story 61-9 / ADR-101 amendment: ``claude`` and ``ollama`` are retired.
 
-    Returns LlmClient for 'claude'/'ollama' backends and ToolingLlmClient for
-    'anthropic_sdk'. ToolingLlmClient is a richer protocol (tool-use loop,
-    prompt caching) and intentionally does not inherit from LlmClient — the
-    two protocols serve different call sites. Callers that need tool-use must
-    isinstance-check or accept the union type.
+    The SDK (``anthropic_sdk``) is the sole viable backend for both narrator
+    and tool callers — the retired backends do not implement the tool-use
+    contract (``complete_with_tools``), so handing them to any caller is a
+    deferred-failure trap. Fail at the config boundary instead (NO-FALLBACK
+    per project memory ``feedback_no_fallbacks_hard``).
+    """
+
+
+def build_llm_client(
+    *, purpose: Literal["narrator", "tool"] = "narrator"
+) -> LlmClient | ToolingLlmClient:
+    """Return the configured LlmClient. Default: AnthropicSdkClient.
+
+    ``purpose`` declares the caller's intent (narrator prompt-build vs.
+    tool-only consumer such as the dungeon ``curate`` stage). The kwarg is
+    keyword-only so future param additions cannot silently shift positional
+    meaning.
+
+    Post-story-61-9 / ADR-101 amendment: only ``anthropic_sdk`` is viable
+    for any caller. Setting ``SIDEQUEST_LLM_BACKEND`` to ``claude`` or
+    ``ollama`` raises :class:`NarratorBackendRetired` at construction
+    regardless of ``purpose`` — those backends do not implement the
+    tool-use contract, so failing here keeps the error at the config
+    boundary instead of at first method call.
 
     Fails loudly for unknown backend values — no silent fallback (CLAUDE.md).
     """
@@ -36,11 +56,15 @@ def build_llm_client() -> LlmClient | ToolingLlmClient:
         raise UnknownBackend(
             f"{ENV_BACKEND}={raw!r} not supported; pick one of {sorted(_VALID_BACKENDS)}"
         )
-    if key == "claude":
-        return ClaudeClient()
-    if key == "ollama":
-        base_url = os.environ.get(ENV_OLLAMA_URL, DEFAULT_OLLAMA_URL)
-        return OllamaClient(base_url=base_url)
+    if key in _RETIRED_BACKENDS:
+        raise NarratorBackendRetired(
+            f"{ENV_BACKEND}={raw!r} is retired for purpose={purpose!r}. "
+            "ADR-101 (amended by story 61-9): the Anthropic SDK "
+            "(anthropic_sdk) is the sole viable narrator backend, and the "
+            "retired backends (claude, ollama) do not implement the "
+            "tool-use contract required by any caller. Set "
+            f"{ENV_BACKEND}=anthropic_sdk (or unset for the default)."
+        )
     if key == "anthropic_sdk":
         return AnthropicSdkClient()
     # Unreachable — the set check above covers all known backends.

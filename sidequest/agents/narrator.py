@@ -28,7 +28,6 @@ from sidequest.agents.narrator_prompts import (
     NARRATOR_DIALOGUE_RULES,
     NARRATOR_IDENTITY,
     NARRATOR_OUTPUT_ONLY,
-    NARRATOR_OUTPUT_ONLY_SDK,
     NARRATOR_OUTPUT_STYLE,
     NARRATOR_POV_RULES,
     NARRATOR_REFERRAL_RULE,
@@ -48,7 +47,6 @@ __all__ = [
     "NARRATOR_AGENCY",
     "NARRATOR_CONSEQUENCES",
     "NARRATOR_OUTPUT_ONLY",
-    "NARRATOR_OUTPUT_ONLY_SDK",
     "NARRATOR_OUTPUT_STYLE",
     "NARRATOR_REFERRAL_RULE",
     "NARRATOR_COMBAT_RULES",
@@ -222,10 +220,10 @@ class NarratorAgent(BaseAgent):
 
         # narrator_output_only is injected via build_output_format(), called
         # exactly once from Orchestrator.build_narrator_prompt (ADR-098
-        # removed Full/Delta tiering — there is no per-tier builder). That
-        # single call is backend-gated: the claude -p path gets the legacy
-        # full-sidecar prose; the SDK tool-use path gets the slimmed-sidecar
-        # + tool-routing prose. See NarratorAgent.build_output_format.
+        # removed Full/Delta tiering — there is no per-tier builder). Story
+        # 61-9 retired the legacy claude -p / Ollama narrator backends per
+        # the ADR-101 amendment; the call now emits the SDK tool-use prose
+        # unconditionally. See NarratorAgent.build_output_format.
 
         # Early/Format — output-style rules
         registry.register_section(
@@ -249,52 +247,30 @@ class NarratorAgent(BaseAgent):
             ),
         )
 
-    def build_output_format(self, registry: object, *, tool_backend: bool = False) -> None:
-        """Inject the game_patch output-format spec — backend-gated.
+    def build_output_format(self, registry: object) -> None:
+        """Inject the game_patch output-format spec (SDK tool-use prose).
 
         Called exactly once from ``Orchestrator.build_narrator_prompt``
         (ADR-098 removed Full/Delta tiering). The section is always named
         ``narrator_output_only`` and always lands in the Primacy/Guardrail
-        zone so downstream registry consumers and tests that look it up by
-        name keep working regardless of backend.
+        zone.
 
-        ``tool_backend`` selects the prose:
-
-        * ``False`` (the ``claude -p`` path — default): the legacy
-          full-sidecar prose. Byte-identical to pre-E1.5-A behavior — the
-          playgroup still plays on this path until merge, so it MUST NOT
-          drift.
-        * ``True`` (the Anthropic SDK tool-use path): the slimmed-sidecar
-          prose. Task E1.5-B made the SDK path a hybrid split — the 26
-          WRITE tools own + persist 8 state categories during dispatch and
-          the sidecar copy of those categories is zeroed. The legacy prose
-          tells the model to emit a FULL sidecar covering those tool-owned
-          categories, so on the SDK path it would be instructed to emit
-          state E1.5-B deliberately ignores (and could hedge — sidecar
-          field, no tool call → state silently lost). The SDK prose
-          reframes the 8 tool-owned categories as "call the tool" and keeps
-          only the no-tool presentation fields in the sidecar.
-
-        Not a silent fallback: the caller passes
-        ``tool_backend=isinstance(self._client, ToolingLlmClient)``; the
-        import is unconditional, so an unavailable backend fails loudly
-        rather than defaulting.
-
-        Port of NarratorAgent::build_output_format() in narrator.rs
-        (pre-port; backend gate added Task E1.5-A).
+        Story 61-9 retired the legacy ``claude -p`` / Ollama narrator path
+        per ADR-101 amendment; the SDK prose at ``NARRATOR_OUTPUT_ONLY``
+        is the only output-format prose. ``llm_factory.build_llm_client``
+        fails loud at construction if a non-SDK backend is selected — no
+        runtime backend gate here.
         """
         from sidequest.agents.prompt_framework.core import PromptRegistry
 
         if not isinstance(registry, PromptRegistry):
             raise TypeError(f"Expected PromptRegistry, got {type(registry)}")
 
-        prose = NARRATOR_OUTPUT_ONLY_SDK if tool_backend else NARRATOR_OUTPUT_ONLY
-
         registry.register_section(
             self.name(),
             PromptSection.new(
                 "narrator_output_only",
-                f"<critical>\n{prose}\n</critical>",
+                f"<critical>\n{NARRATOR_OUTPUT_ONLY}\n</critical>",
                 AttentionZone.Primacy,
                 SectionCategory.Guardrail,
             ),

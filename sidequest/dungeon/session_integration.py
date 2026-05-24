@@ -152,7 +152,7 @@ async def attach_dungeon_to_session(
 
         bundle = load_cookbook(world_dir)
         palette = load_theme_palette(_theme_pack_root(world_dir))
-        claude_client = build_llm_client()
+        claude_client = build_llm_client(purpose="tool")
 
         # Save-is-truth: reuse a frozen seed; only generate+persist on a
         # genuinely fresh save (a prior failed bootstrap left the seed but

@@ -257,8 +257,7 @@ def test_direct_emit_records_per_session_baseline_independence(
     a_costs = list(client._cost_baseline["session-A"])
     b_costs = list(client._cost_baseline["session-B"])
     assert a_costs == [pytest.approx(0.05)], (
-        f"session-A's deque must hold exactly its own observation. "
-        f"Got {a_costs!r}."
+        f"session-A's deque must hold exactly its own observation. Got {a_costs!r}."
     )
     assert b_costs == [pytest.approx(0.10)], (
         f"session-B's deque must hold exactly its own observation, "
@@ -267,8 +266,7 @@ def test_direct_emit_records_per_session_baseline_independence(
     a_inputs = list(client._input_tokens_baseline["session-A"])
     b_inputs = list(client._input_tokens_baseline["session-B"])
     assert a_inputs == [15_000], (
-        f"session-A's input deque must hold exactly its own observation. "
-        f"Got {a_inputs!r}."
+        f"session-A's input deque must hold exactly its own observation. Got {a_inputs!r}."
     )
     assert b_inputs == [30_000], (
         f"session-B's input deque must hold exactly its own observation, "
@@ -315,9 +313,7 @@ async def test_fresh_session_uses_warmup_floor_not_event(
     )
     await asyncio.sleep(0.05)
 
-    runaway_events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    runaway_events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert len(runaway_events) == 0, (
         "AC 2: a fresh session's first healthy call MUST NOT fire "
         "cost_runaway_suspected. A nonzero count here means either "
@@ -432,9 +428,7 @@ async def test_session_a_trips_cost_multiple_after_session_b_floods(
     )
     await asyncio.sleep(0.05)
 
-    runaway_events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    runaway_events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert len(runaway_events) == 1, (
         "AC 3 / AC 5: after session B floods, session A's trip call "
         "(cost ~$0.225) MUST still be compared against session A's own "
@@ -543,9 +537,7 @@ async def test_complete_with_tools_with_none_session_id_does_not_populate_baseli
         "identity). "
         f"Got entries: {list(client._cost_baseline)!r}."
     )
-    runaway_events = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    runaway_events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert len(runaway_events) == 0, (
         "The session_id=None call is a healthy 12K-in/500-out call — "
         "it MUST NOT fire cost_runaway_suspected regardless of bypass "

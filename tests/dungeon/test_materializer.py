@@ -1253,11 +1253,15 @@ def _real_cookbook_bundle() -> Any:
     return load_cookbook(_BENEATH_SUNDEN_WORLD)
 
 
-def _reflecting_sdk_client() -> Any:
+def _reflecting_sdk_client(**_: Any) -> Any:
     """ToolingLlmClient-shaped fake: parses the curation prompt's
     ``INPUT:\\n<json>`` and echoes a well-formed per-region verdict as
     ToolingResult.text. The shared Plan-7 curate-success fake — NEVER a
-    real network call (the only mocked seam)."""
+    real network call (the only mocked seam).
+
+    Accepts (and ignores) arbitrary kwargs so it can stand in for the
+    real ``build_llm_client(purpose=...)`` factory via ``monkeypatch``.
+    """
     import json as _json
 
     from sidequest.agents.tooling_protocol import ToolingResult

@@ -17,8 +17,7 @@ zero-content), silently contributing nothing to the assembled narrator prompt?
 | constraints.md      |    792 | `NARRATOR_CONSTRAINTS`      |
 | agency.md           |  1,269 | `NARRATOR_AGENCY`           |
 | consequences.md     |    398 | `NARRATOR_CONSEQUENCES`     |
-| output_only.md      | 24,698 | `NARRATOR_OUTPUT_ONLY`      |
-| output_only_sdk.md  | 23,475 | `NARRATOR_OUTPUT_ONLY_SDK`  |
+| output_only.md      | 23,475 | `NARRATOR_OUTPUT_ONLY`      |
 | output_style.md     |    667 | `NARRATOR_OUTPUT_STYLE`     |
 | referral_rule.md    |    324 | `NARRATOR_REFERRAL_RULE`    |
 | combat_rules.md     |  1,825 | `NARRATOR_COMBAT_RULES`     |
@@ -45,3 +44,13 @@ have been minimal at extraction time. Since then, content has been backfilled.
 **Conclusion:** No silent-empty token savings available in this directory. The
 larger token-reduction wins for Epic 57 live in stories 57-3 (cache promotion),
 57-4 (guardrail → tool descriptions), and 57-5 (game_state slimming).
+
+## 2026-05-24 — Story 61-9
+
+ADR-101 amendment retired the legacy ``claude -p`` / Ollama narrator path.
+Legacy ``output_only.md`` (24,698 B, full-sidecar prose) was deleted and
+``output_only_sdk.md`` (23,475 B, SDK tool-use prose) was renamed to
+``output_only.md`` — the canonical name now points at the SDK prose. The
+``NARRATOR_OUTPUT_ONLY_SDK`` constant was removed; ``NARRATOR_OUTPUT_ONLY``
+is the single remaining constant. See ``sprint/context/context-story-61-9.md``
+in the orchestrator repo for the migration record.

@@ -1455,15 +1455,11 @@ class Orchestrator:
                     )
 
         # === OUTPUT FORMAT (narrator must always know the game_patch schema) ===
-        # Backend-gated (Task E1.5-A). The claude -p path gets the legacy
-        # full-sidecar prose; the SDK tool-use path gets the slimmed-sidecar
-        # + tool-routing prose so the model is not double-instructed to emit
-        # the 8 tool-owned categories E1.5-B deliberately zeros. ToolingLlmClient
-        # is imported unconditionally at module top — no silent fallback.
-        self._narrator.build_output_format(
-            registry,
-            tool_backend=isinstance(self._client, ToolingLlmClient),
-        )
+        # Story 61-9 retired the legacy ``claude -p`` / Ollama narrator path;
+        # ``build_output_format`` is now backend-agnostic and always emits the
+        # SDK tool-use prose. ``llm_factory.build_llm_client`` fails loud if
+        # a non-SDK backend is selected.
+        self._narrator.build_output_format(registry)
 
         # === GENRE IDENTITY (every tier — narrator MUST always know the genre) ===
         # Fix: playtest-2026-04-05 — narrator broke fourth wall asking "What genre is Ashgate Square in?"
@@ -2214,23 +2210,21 @@ class Orchestrator:
         )
 
         # ADR-111 §Observability — emit the migration cutover span so the
-        # GM panel can verify on every turn whether the Recency-zone
-        # registrations actually skipped (SDK path) or fired (legacy).
-        # Constant-emit shape: the span fires on every prompt-build so
-        # absence-of-span is unambiguous (= the migration call site is
-        # missing entirely), not "the legacy path". ``GUARDRAIL_NAMES``
-        # and ``TOTAL_PROSE_BYTES`` are precomputed at module load time
-        # — derived from the static ``ALL_GUARDRAILS`` tuple, they never
-        # change after import and don't need per-turn recomputation.
-        _tool_backend = isinstance(self._client, ToolingLlmClient)
+        # GM panel can verify on every turn that the Recency-zone
+        # registrations are still being skipped. Constant-emit shape: the
+        # span fires on every prompt-build so absence-of-span is unambiguous
+        # (= the migration call site is missing entirely). Post-61-9 the
+        # ``tool_backend`` attribute is gone (no longer carries information
+        # — only SDK is wired); ``GUARDRAIL_NAMES`` and ``TOTAL_PROSE_BYTES``
+        # are hard-wired constants derived from the static ``ALL_GUARDRAILS``
+        # tuple at module load.
         from sidequest.telemetry.spans.span import Span as _GuardrailSpan
 
         with _GuardrailSpan.open(
             "narrator.recency_guardrails_skipped",
             {
-                "tool_backend": _tool_backend,
-                "guardrails_skipped": GUARDRAIL_NAMES if _tool_backend else (),
-                "bytes_saved": TOTAL_PROSE_BYTES if _tool_backend else 0,
+                "guardrails_skipped": GUARDRAIL_NAMES,
+                "bytes_saved": TOTAL_PROSE_BYTES,
             },
         ):
             pass

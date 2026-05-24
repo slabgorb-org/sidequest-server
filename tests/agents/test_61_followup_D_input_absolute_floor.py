@@ -120,12 +120,10 @@ async def test_input_absolute_fires_on_high_output_call(
     )
     fields = events[0]["fields"]
     assert fields["trigger"] == "input_absolute", (
-        f"Trigger MUST be 'input_absolute'. Got {fields['trigger']!r}. "
-        f"All fields: {fields!r}"
+        f"Trigger MUST be 'input_absolute'. Got {fields['trigger']!r}. All fields: {fields!r}"
     )
     assert fields["input_tokens"] > _ABSOLUTE_INPUT_TOKENS_FLOOR, (
-        "Probe must exceed the absolute input floor. Got "
-        f"input_tokens={fields['input_tokens']!r}"
+        f"Probe must exceed the absolute input floor. Got input_tokens={fields['input_tokens']!r}"
     )
 
     # Log parity — input_absolute is a new trigger but the existing
@@ -236,10 +234,7 @@ async def test_io_fingerprint_outranks_input_absolute(
     await asyncio.sleep(0.05)
 
     events = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
-    assert len(events) == 1, (
-        "Multi-trigger call MUST collapse to one event. Got "
-        f"{len(events)}."
-    )
+    assert len(events) == 1, f"Multi-trigger call MUST collapse to one event. Got {len(events)}."
     assert events[0]["fields"]["trigger"] == "io_fingerprint", (
         "Priority order: io_fingerprint > input_absolute. When both "
         f"fire, io_fingerprint wins. Got trigger={events[0]['fields']['trigger']!r}"
@@ -330,9 +325,7 @@ async def test_input_absolute_boundary_at_40000_strict(
         session_id="61-baseline-test",
     )
     await asyncio.sleep(0.05)
-    events_under = [
-        e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"
-    ]
+    events_under = [e for e in sock.events if e.get("event_type") == "cost_runaway_suspected"]
     assert events_under == [], (
         "39_999-in is ≤ 40_000 floor; input_absolute MUST stay silent. "
         f"Got {len(events_under)} events: {[e['fields']['trigger'] for e in events_under]}"

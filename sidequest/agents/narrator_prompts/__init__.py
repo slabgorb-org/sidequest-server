@@ -25,7 +25,6 @@ NARRATOR_CONSTRAINTS: str = _load("constraints.md")
 NARRATOR_AGENCY: str = _load("agency.md")
 NARRATOR_CONSEQUENCES: str = _load("consequences.md")
 NARRATOR_OUTPUT_ONLY: str = _load("output_only.md")
-NARRATOR_OUTPUT_ONLY_SDK: str = _load("output_only_sdk.md")
 NARRATOR_OUTPUT_STYLE: str = _load("output_style.md")
 NARRATOR_REFERRAL_RULE: str = _load("referral_rule.md")
 NARRATOR_COMBAT_RULES: str = _load("combat_rules.md")
@@ -39,7 +38,6 @@ __all__ = [
     "NARRATOR_AGENCY",
     "NARRATOR_CONSEQUENCES",
     "NARRATOR_OUTPUT_ONLY",
-    "NARRATOR_OUTPUT_ONLY_SDK",
     "NARRATOR_OUTPUT_STYLE",
     "NARRATOR_REFERRAL_RULE",
     "NARRATOR_COMBAT_RULES",

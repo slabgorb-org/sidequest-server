@@ -431,21 +431,20 @@ class _FakeClaudeClient:
 
 @pytest.fixture(autouse=True)
 def _mock_claude_client(monkeypatch):
-    """Autouse guard: replace ``ClaudeClient`` at every import site.
+    """Autouse guard: replace narrator-client construction at every import site.
 
     ``from sidequest.agents.claude_client import ClaudeClient`` creates a
     fresh per-module binding, so ``monkeypatch.setattr`` on the original
     module does NOT propagate to consumers. Patch the two sites that
-    instantiate one inline:
+    construct one inline:
 
     - ``orchestrator.ClaudeClient`` — Orchestrator's default narrator client
-    - ``websocket_session_handler.ClaudeClient`` — the factory default in
-      ``WebSocketSessionHandler`` (defined in ``websocket_session_handler``,
-      which reads its own module-level ``ClaudeClient`` binding at the
-      ``_client_factory`` default) when no ``claude_client_factory`` is
-      passed. Patching ``session_handler.ClaudeClient`` (a dead re-export)
-      does NOT reach it — this is the per-module-binding footgun above,
-      applied to the guard itself.
+      (pre-61-9 legacy default; replaced by injection in production).
+    - ``websocket_session_handler.build_llm_client`` — post-61-9 the factory
+      default in ``WebSocketSessionHandler`` calls
+      ``build_llm_client(purpose="narrator")``; redirect that to the fake
+      so tests that omit ``claude_client_factory`` do not hit the real SDK
+      (which would raise on missing ``ANTHROPIC_API_KEY``).
 
     Tests that want to inspect prompts install their own mock via
     ``monkeypatch.setattr`` / ``claude_client_factory=`` — those shadow
@@ -456,8 +455,8 @@ def _mock_claude_client(monkeypatch):
         _FakeClaudeClient,
     )
     monkeypatch.setattr(
-        "sidequest.server.websocket_session_handler.ClaudeClient",
-        _FakeClaudeClient,
+        "sidequest.server.websocket_session_handler.build_llm_client",
+        lambda *, purpose="narrator": _FakeClaudeClient(),
     )
 
 

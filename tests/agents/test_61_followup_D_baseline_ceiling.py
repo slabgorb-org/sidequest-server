@@ -167,8 +167,7 @@ async def test_input_clamp_catches_post_ramp_call_unclamped_would_miss(
     post_warmup_io = [
         e
         for e in events
-        if e["fields"]["warmup"] is False
-        and e["fields"]["trigger"] == "io_fingerprint"
+        if e["fields"]["warmup"] is False and e["fields"]["trigger"] == "io_fingerprint"
     ]
     assert len(post_warmup_io) == 1, (
         "The 80K-in/12-out probe AFTER a 60K-in baseline must fire "

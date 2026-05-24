@@ -1,12 +1,23 @@
-"""Tests for llm_factory.build_llm_client — env-var backend selection."""
+"""Tests for llm_factory.build_llm_client — env-var backend selection.
+
+Story 61-9 / ADR-101 amendment retired the legacy ``claude`` and
+``ollama`` backends for both narrator and tool purposes. The factory
+raises :class:`NarratorBackendRetired` at construction for those env
+values; ``anthropic_sdk`` is the sole viable backend. Whitespace and
+case-insensitivity normalization still applies (the gate uses the
+normalized key), so a stray casing of a retired name fails loud rather
+than silently passing through.
+"""
 
 from __future__ import annotations
 
 import pytest
 
-from sidequest.agents.claude_client import ClaudeClient, LlmClient
-from sidequest.agents.llm_factory import UnknownBackend, build_llm_client
-from sidequest.agents.ollama_client import OllamaClient
+from sidequest.agents.llm_factory import (
+    NarratorBackendRetired,
+    UnknownBackend,
+    build_llm_client,
+)
 
 
 def test_default_is_anthropic_sdk(monkeypatch):
@@ -19,20 +30,22 @@ def test_default_is_anthropic_sdk(monkeypatch):
     assert isinstance(client, AnthropicSdkClient)
 
 
-def test_explicit_claude_backend_still_resolves(monkeypatch):
-    """Non-narrator paths can still opt into ClaudeClient explicitly."""
+def test_explicit_claude_backend_is_retired(monkeypatch):
+    """Story 61-9 / ADR-101 amendment: ``claude`` is retired for any
+    purpose. The factory fails loud at construction."""
     monkeypatch.setenv("SIDEQUEST_LLM_BACKEND", "claude")
-    client = build_llm_client()
-    assert isinstance(client, ClaudeClient)
-    assert isinstance(client, LlmClient)
+    with pytest.raises(NarratorBackendRetired):
+        build_llm_client()
 
 
-def test_ollama_backend_picks_url_from_env(monkeypatch):
+def test_ollama_backend_is_retired(monkeypatch):
+    """Story 61-9 / ADR-101 amendment: ``ollama`` is retired for any
+    purpose. The factory fails loud at construction even with a custom
+    ``SIDEQUEST_OLLAMA_URL`` set."""
     monkeypatch.setenv("SIDEQUEST_LLM_BACKEND", "ollama")
     monkeypatch.setenv("SIDEQUEST_OLLAMA_URL", "http://example.local:9000")
-    client = build_llm_client()
-    assert isinstance(client, OllamaClient)
-    assert client._base_url == "http://example.local:9000"
+    with pytest.raises(NarratorBackendRetired):
+        build_llm_client()
 
 
 def test_unknown_backend_raises(monkeypatch):
@@ -41,11 +54,17 @@ def test_unknown_backend_raises(monkeypatch):
         build_llm_client()
 
 
-def test_whitespace_and_case_insensitivity(monkeypatch):
+def test_whitespace_and_case_insensitivity_still_normalizes_into_gate(monkeypatch):
+    """Stray casing of a retired backend must still hit the gate, not
+    silently pass through as an unrecognized backend. The normalization
+    (``strip().lower()``) runs before the gate check, so ``' CLAUDE  '``
+    is treated identically to ``'claude'``."""
     monkeypatch.setenv("SIDEQUEST_LLM_BACKEND", " CLAUDE  ")
-    assert isinstance(build_llm_client(), ClaudeClient)
+    with pytest.raises(NarratorBackendRetired):
+        build_llm_client()
     monkeypatch.setenv("SIDEQUEST_LLM_BACKEND", "Ollama")
-    assert isinstance(build_llm_client(), OllamaClient)
+    with pytest.raises(NarratorBackendRetired):
+        build_llm_client()
 
 
 def test_anthropic_sdk_backend_key_routes_to_sdk_client(

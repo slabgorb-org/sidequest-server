@@ -460,3 +460,79 @@ def test_rules_root_omits_axioms_for_missing_keys(fake_theme: ReferenceTheme) ->
     }
     html = present_rules_root(node, make_ctx("rules", (), fake_theme))
     assert html.count('class="ref-stat-card"') == 2  # only 2 keys present
+
+
+def test_archetypes_picker_emits_island_markup(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_archetypes_picker
+
+    archetypes = [
+        {
+            "name": "Station Bartender",
+            "description": "Knows everyone.",
+            "personality_traits": ["perceptive", "discreet"],
+            "typical_classes": ["Smuggler"],
+        },
+        {
+            "name": "Dock Rat",
+            "description": "Sells passage for food.",
+            "personality_traits": ["skittish"],
+        },
+    ]
+    html = present_archetypes_picker(archetypes, make_ctx("archetypes", (), fake_theme))
+
+    assert 'data-island="picker"' in html
+    assert html.count('class="ref-picker__chip"') == 2
+    # Default chip selected
+    assert 'aria-selected="true"' in html
+    # Exactly one hidden panel (second item)
+    assert html.count(" hidden>") == 1
+    # Per-panel content
+    assert "Knows everyone" in html and "Sells passage" in html
+    # Chip strip for personality_traits
+    assert "perceptive" in html and "discreet" in html
+    # Anchor IDs use 'archetype-' prefix
+    assert 'data-target="archetype-station-bartender"' in html
+
+
+def test_classes_picker_emits_island_markup(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_classes_picker
+
+    classes = [
+        {
+            "id": "fighter",
+            "display_name": "Fighter",
+            "rpg_role": "tank",
+            "prime_requisite": "STR",
+            "flavor": "Plate, polearm, patience.",
+            "encounter_beat_choices": ["attack", "defend", "flee"],
+        },
+        {
+            "id": "rogue",
+            "display_name": "Rogue",
+            "rpg_role": "scout",
+            "prime_requisite": "DEX",
+            "flavor": "In and out.",
+            "encounter_beat_choices": ["sneak_attack", "hide"],
+        },
+    ]
+    html = present_classes_picker(classes, make_ctx("classes", (), fake_theme))
+
+    assert 'data-island="picker"' in html
+    assert html.count('class="ref-picker__chip"') == 2
+    assert 'data-target="class-fighter"' in html
+    assert "Plate, polearm" in html
+    # Label grid for role + prime requisite
+    assert "ref-label-grid" in html
+    assert "Tank" in html or "tank" in html
+    assert "STR" in html
+
+
+def test_picker_no_ops_on_empty_input(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import (
+        present_archetypes_picker,
+        present_classes_picker,
+    )
+
+    assert present_archetypes_picker([], make_ctx("archetypes", (), fake_theme)) == ""
+    assert present_classes_picker([], make_ctx("classes", (), fake_theme)) == ""
+    assert present_archetypes_picker("not a list", make_ctx("archetypes", (), fake_theme)) == ""

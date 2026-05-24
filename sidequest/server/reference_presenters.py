@@ -560,3 +560,120 @@ def present_rules_root(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("rules", ())] = present_rules_root
+
+
+def _picker_chip_strip(title: str, items: list) -> str:
+    """Inline labeled chip row inside a panel."""
+    if not isinstance(items, list) or not items:
+        return ""
+    chips = "".join(f'<span class="ref-chip">{escape(str(it))}</span>' for it in items)
+    return (
+        '<div class="ref-card__meta">'
+        f'<div class="ref-card__kicker">{escape(title)}</div>'
+        f"<div>{chips}</div>"
+        "</div>"
+    )
+
+
+def _render_picker(
+    items: list,
+    item_kicker: str,
+    hash_prefix: str,
+    *,
+    name_field: str,
+    panel_body: Callable[[dict], str],
+) -> str:
+    """Shared picker shape — chip row + panel stack with data-island='picker'.
+    First item is default-selected; others hidden until JS hydrates."""
+    if not isinstance(items, list) or not items:
+        return ""
+    chips: list[str] = []
+    panels: list[str] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or item.get(name_field) or f"item-{index}").strip()
+        slug = slugify(item_id)
+        name = str(item.get(name_field, item_id)).strip() or item_id
+        is_default = index == 0
+        chips.append(
+            f'<button type="button" class="ref-picker__chip" '
+            f'data-target="{hash_prefix}-{slug}" '
+            f'aria-selected="{"true" if is_default else "false"}">'
+            f"{escape(name)}</button>"
+        )
+        body_html = panel_body(item)
+        hidden_attr = "" if is_default else " hidden"
+        panels.append(
+            f'<section class="ref-picker-panel" data-panel="{hash_prefix}-{slug}"{hidden_attr}>'
+            f'<div class="ref-card__kicker">{escape(item_kicker)}</div>'
+            f'<h3 class="ref-card__title">{escape(name)}</h3>' + body_html + "</section>"
+        )
+    if not chips:
+        return ""
+    return (
+        '<div data-island="picker">'
+        f'<div class="ref-picker">{"".join(chips)}</div>' + "".join(panels) + "</div>"
+    )
+
+
+def _archetype_panel_body(item: dict) -> str:
+    parts: list[str] = []
+    desc = item.get("description")
+    if desc:
+        parts.append(f'<p class="ref-card__body">{escape(str(desc))}</p>')
+    parts.append(_picker_chip_strip("Personality", item.get("personality_traits") or []))
+    parts.append(_picker_chip_strip("Typical Classes", item.get("typical_classes") or []))
+    parts.append(_picker_chip_strip("Typical Origins", item.get("typical_races") or []))
+    parts.append(_picker_chip_strip("Dialogue Quirks", item.get("dialogue_quirks") or []))
+    return "".join(parts)
+
+
+def _class_panel_body(item: dict) -> str:
+    parts: list[str] = []
+    flavor = item.get("flavor")
+    if flavor:
+        parts.append(f'<p class="ref-card__body">{escape(str(flavor))}</p>')
+    # Label grid for role + prime requisite + magic access (if any present and non-null).
+    cells: list[str] = []
+    for key, label in (
+        ("rpg_role", "Role"),
+        ("prime_requisite", "Prime Req"),
+        ("magic_access", "Magic"),
+    ):
+        val = item.get(key)
+        if val in (None, "", []):
+            continue
+        cells.append(_label_cell(label, val))
+    if cells:
+        parts.append('<div class="ref-label-grid">' + "".join(cells) + "</div>")
+    parts.append(_picker_chip_strip("Beat Choices", item.get("encounter_beat_choices") or []))
+    return "".join(parts)
+
+
+def present_archetypes_picker(node: object, ctx: PresenterContext) -> str:
+    if not isinstance(node, list):
+        return ""
+    return _render_picker(
+        node,
+        "Archetype",
+        "archetype",
+        name_field="name",
+        panel_body=_archetype_panel_body,
+    )
+
+
+def present_classes_picker(node: object, ctx: PresenterContext) -> str:
+    if not isinstance(node, list):
+        return ""
+    return _render_picker(
+        node,
+        "Class",
+        "class",
+        name_field="display_name",
+        panel_body=_class_panel_body,
+    )
+
+
+PRESENTERS[("archetypes", ())] = present_archetypes_picker
+PRESENTERS[("classes", ())] = present_classes_picker

@@ -65,11 +65,123 @@ from sidequest.telemetry.spans import (
 # narrative_axis sections) or they belong to deferred subsystems with no
 # consumer. Each entry is audit-evidenced — see context-story-57-5.md
 # §Phase B and the Field Audit in .session/57-5-session.md.
+#
+# Story 61-5 / ADR-110 architecture-gate amendment — ``narrative_log``
+# joins the registry. It was already being dropped via an explicit
+# ``state_summary_payload.pop("narrative_log", None)`` below (story 49-1),
+# but the named registry is now the single source of truth for "dropped
+# top-level fields" enforced by the
+# ``test_snapshot_field_governance`` gate (see
+# ``tests/server/test_snapshot_field_governance.py``). The explicit
+# pop remains for defense-in-depth (idempotent) until the gate
+# subsumes it cleanly in a follow-up refactor.
 _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
     "active_tropes",
     "axis_values",
     "genie_wishes",
     "achievement_tracker",
+    "narrative_log",
+)
+
+# Story 61-5 / ADR-110 architecture gate — fields that ride into
+# ``snapshot.model_dump()`` but are projected to a bounded shape by
+# ``_apply_phase_c_projections`` (below) BEFORE the dump leaves
+# ``_build_turn_context``. Each entry has a specific projection:
+#
+# * ``room_states`` — kept entry is the acting PC's current room only;
+#   all other room ids dropped (story 61-2, ADR-110 Phase C).
+# * ``npcs`` — kept entries pass the ``is_npc_in_scene`` predicate
+#   (location match OR encounter-actor anchor, story 61-7); nested
+#   ``belief_state`` is stripped from each kept entry (story 61-2).
+# * ``characters`` — nested ``known_facts`` list is truncated to the
+#   last ``_KNOWN_FACTS_TAIL_K`` entries per PC (story 61-2).
+# * ``scenario_state`` — nested ``discovered_clues`` set is capped at
+#   ``_DISCOVERED_CLUES_CAP`` entries, ordered by clue id for
+#   determinism (story 61-2, ADR-110 Phase C).
+#
+# Adding a field here means: this field's growth in the dump is bounded
+# by projection logic (NOT by the field's own structure). The behavior
+# is tested by ``test_61_2_snapshot_seven_field_projection.py`` and
+# ``test_57_5_snapshot_slimming.py``; the registry membership is tested
+# by ``test_snapshot_field_governance.py``.
+_PHASE_C_PROJECTIONS: tuple[str, ...] = (
+    "room_states",
+    "npcs",
+    "characters",
+    "scenario_state",
+)
+
+# Story 61-5 / ADR-110 architecture gate — fields whose growth is
+# bounded by their own structure rather than by projection logic.
+# Bounded-by-construction means one of:
+#
+#   (a) Scalar primitive (int/float/bool/str/datetime) — fixed wire size.
+#   (b) Bounded enum-shaped string (e.g. ``time_of_day``,
+#       ``campaign_maturity``, ``current_region`` slug).
+#   (c) Single-record optional (``encounter``, ``magic_state``,
+#       ``plotted_course``, ``pending_*``) — one structured value max.
+#   (d) Dict keyed by a finite domain (PC names, body ids, seat ids,
+#       resource pool keys, quest ids, region/room/route slugs) where
+#       the key cardinality is itself a finite gameplay quantity.
+#   (e) List bounded by gameplay convention to small cardinality
+#       (companions, active_seeds, next_turn_directives, etc).
+#
+# Genuinely growing lists that the narrator reads in full but are
+# small-by-gameplay-convention (``lore_established``, ``world_history``,
+# ``npc_pool``) sit in (e) for now. If any of them grows large enough
+# in real play to matter, the bounding decision moves to
+# ``_PHASE_C_PROJECTIONS`` in a follow-up story — that conversation is
+# what this gate exists to force. ``world_history`` is currently
+# P3-deferred (campaign maturity / world materialization not populated
+# in the live build per ``session.py:684``). ``npc_pool`` is the
+# anti-confabulation anchor (context-story-61-2.md §"gaslighting
+# doctrine, MUST survive") — it cannot be projected without breaking
+# the narrator's ability to cite off-stage NPCs.
+_BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
+    # scalars / enum-shaped strings
+    "active_stakes",
+    "atmosphere",
+    "campaign_maturity",
+    "clock_t_hours",
+    "current_region",
+    "days_elapsed",
+    "genre_slug",
+    "last_saved_at",
+    "party_body_id",
+    "player_dead",
+    "time_of_day",
+    "total_beats_fired",
+    "turns_since_meaningful",
+    "world_slug",
+    # single-record optionals / single-record structs
+    "encounter",
+    "magic_state",
+    "pending_magic_confrontation_outcome",
+    "pending_resolution_signal",
+    "pending_time_skip_summary",
+    "plotted_course",
+    "turn_manager",
+    # dicts keyed by finite gameplay domains
+    "character_locations",
+    "chassis_autofire_cooldowns",
+    "chassis_registry",
+    "player_seats",
+    "quest_log",
+    "resources",
+    # lists bounded by gameplay convention (small cardinality)
+    "active_seeds",
+    "companions",
+    "discovered_regions",
+    "discovered_rooms",
+    "discovered_routes",
+    "lore_established",
+    "next_turn_directives",
+    "notes",
+    "npc_pool",
+    "pending_magic_auto_fires",
+    "quest_anchors",
+    "seed_ghosts",
+    "world_history",
 )
 
 # Story 61-2 / ADR-110 — projection tunings for the four growing fields

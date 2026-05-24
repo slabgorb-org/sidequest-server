@@ -392,9 +392,10 @@ class SqliteStore:
         return store
 
     def _init_schema(self) -> None:
-        self._conn.executescript(SCHEMA_SQL)
-        self._apply_migrations()
-        self._conn.commit()
+        with SAVE_WRITE_LOCK:
+            self._conn.executescript(SCHEMA_SQL)
+            self._apply_migrations()
+            self._conn.commit()
 
     def _apply_migrations(self) -> None:
         """Idempotent column adds for tables that pre-existed before a
@@ -408,11 +409,12 @@ class SqliteStore:
         # Story 45-31: scrapbook_entries.render_status — degradation
         # marker for the unavailable-fallback path. Older DBs created
         # before this column existed need it added.
-        try:
-            self._conn.execute("ALTER TABLE scrapbook_entries ADD COLUMN render_status TEXT")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" not in str(exc).lower():
-                raise
+        with SAVE_WRITE_LOCK:
+            try:
+                self._conn.execute("ALTER TABLE scrapbook_entries ADD COLUMN render_status TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     def initialize(self) -> None:
         """Public alias for _init_schema — re-runs schema creation (idempotent)."""
@@ -438,16 +440,17 @@ class SqliteStore:
         ]
         prior_event_count = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
-        with self._conn:
-            for tbl in _PER_SLOT_TABLES:
-                self._conn.execute(f"DELETE FROM {tbl}")
-            now = _now_rfc3339()
-            self._conn.execute(
-                """INSERT OR REPLACE INTO session_meta
-                   (id, genre_slug, world_slug, created_at, last_played, schema_version)
-                   VALUES (1, ?, ?, ?, ?, 1)""",
-                (genre_slug, world_slug, now, now),
-            )
+        with SAVE_WRITE_LOCK:
+            with self._conn:
+                for tbl in _PER_SLOT_TABLES:
+                    self._conn.execute(f"DELETE FROM {tbl}")
+                now = _now_rfc3339()
+                self._conn.execute(
+                    """INSERT OR REPLACE INTO session_meta
+                       (id, genre_slug, world_slug, created_at, last_played, schema_version)
+                       VALUES (1, ?, ?, ?, ?, 1)""",
+                    (genre_slug, world_slug, now, now),
+                )
 
         _watcher_publish(
             SPAN_SESSION_SLOT_REINITIALIZED,
@@ -477,16 +480,17 @@ class SqliteStore:
         state_json = snapshot_copy.model_dump_json()
         now_str = now.isoformat()
 
-        with self._conn:
-            self._conn.execute(
-                """INSERT OR REPLACE INTO game_state (id, snapshot_json, saved_at)
-                   VALUES (1, ?, ?)""",
-                (state_json, now_str),
-            )
-            self._conn.execute(
-                "UPDATE session_meta SET last_played = ? WHERE id = 1",
-                (now_str,),
-            )
+        with SAVE_WRITE_LOCK:
+            with self._conn:
+                self._conn.execute(
+                    """INSERT OR REPLACE INTO game_state (id, snapshot_json, saved_at)
+                       VALUES (1, ?, ?)""",
+                    (state_json, now_str),
+                )
+                self._conn.execute(
+                    "UPDATE session_meta SET last_played = ? WHERE id = 1",
+                    (now_str,),
+                )
         _watcher_publish(
             "state_transition",
             {
@@ -643,24 +647,26 @@ class SqliteStore:
         now = datetime.now(tz=UTC)
         stamped = world_save.model_copy(update={"last_saved_at": now})
         payload_json = stamped.model_dump_json()
-        with self._conn:
-            self._conn.execute(
-                """INSERT OR REPLACE INTO world_save (id, payload_json, saved_at)
-                   VALUES (1, ?, ?)""",
-                (payload_json, now.isoformat()),
-            )
+        with SAVE_WRITE_LOCK:
+            with self._conn:
+                self._conn.execute(
+                    """INSERT OR REPLACE INTO world_save (id, payload_json, saved_at)
+                       VALUES (1, ?, ?)""",
+                    (payload_json, now.isoformat()),
+                )
 
     def append_narrative(self, entry: NarrativeEntry) -> None:
         """Append a narrative entry to the log."""
         import json
 
         tags_json = json.dumps(entry.tags)
-        self._conn.execute(
-            """INSERT INTO narrative_log (round_number, author, content, tags)
-               VALUES (?, ?, ?, ?)""",
-            (entry.round, entry.author, entry.content, tags_json),
-        )
-        self._conn.commit()
+        with SAVE_WRITE_LOCK:
+            self._conn.execute(
+                """INSERT INTO narrative_log (round_number, author, content, tags)
+                   VALUES (?, ?, ?, ?)""",
+                (entry.round, entry.author, entry.content, tags_json),
+            )
+            self._conn.commit()
 
     def max_narrative_round(self) -> int:
         """Return ``MAX(round_number)`` from ``narrative_log``, or 0 when empty.
@@ -754,34 +760,35 @@ class SqliteStore:
         / ``new_tier`` / binding fields in place rather than minting a
         duplicate row (ADR-109 §4.3, AC-3 in story 54-6).
         """
-        with self._conn:
-            self._conn.execute(
-                """INSERT INTO location_promotions (
-                       save_id, region_id, entity_id, provenance, label,
-                       promoted_at_turn, promoted_canon, new_tier,
-                       new_binding_kind, new_binding_ref
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(save_id, region_id, entity_id) DO UPDATE SET
-                       provenance = excluded.provenance,
-                       label = excluded.label,
-                       promoted_at_turn = excluded.promoted_at_turn,
-                       promoted_canon = excluded.promoted_canon,
-                       new_tier = excluded.new_tier,
-                       new_binding_kind = excluded.new_binding_kind,
-                       new_binding_ref = excluded.new_binding_ref""",
-                (
-                    row.save_id,
-                    row.region_id,
-                    row.entity_id,
-                    row.provenance,
-                    row.label,
-                    row.promoted_at_turn,
-                    row.promoted_canon,
-                    row.new_tier,
-                    row.new_binding_kind,
-                    row.new_binding_ref,
-                ),
-            )
+        with SAVE_WRITE_LOCK:
+            with self._conn:
+                self._conn.execute(
+                    """INSERT INTO location_promotions (
+                           save_id, region_id, entity_id, provenance, label,
+                           promoted_at_turn, promoted_canon, new_tier,
+                           new_binding_kind, new_binding_ref
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(save_id, region_id, entity_id) DO UPDATE SET
+                           provenance = excluded.provenance,
+                           label = excluded.label,
+                           promoted_at_turn = excluded.promoted_at_turn,
+                           promoted_canon = excluded.promoted_canon,
+                           new_tier = excluded.new_tier,
+                           new_binding_kind = excluded.new_binding_kind,
+                           new_binding_ref = excluded.new_binding_ref""",
+                    (
+                        row.save_id,
+                        row.region_id,
+                        row.entity_id,
+                        row.provenance,
+                        row.label,
+                        row.promoted_at_turn,
+                        row.promoted_canon,
+                        row.new_tier,
+                        row.new_binding_kind,
+                        row.new_binding_ref,
+                    ),
+                )
 
     def _load_meta(self) -> SessionMeta | None:
         row = self._conn.execute(
@@ -848,13 +855,14 @@ def upsert_game(
     resume path by design; the caller can re-invoke without branching on
     "already exists?".
     """
-    with store._conn:
-        store._conn.execute(
-            """INSERT INTO games (slug, mode, genre_slug, world_slug, created_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(slug) DO NOTHING""",
-            (slug, mode.value, genre_slug, world_slug, _now_rfc3339()),
-        )
+    with SAVE_WRITE_LOCK:
+        with store._conn:
+            store._conn.execute(
+                """INSERT INTO games (slug, mode, genre_slug, world_slug, created_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(slug) DO NOTHING""",
+                (slug, mode.value, genre_slug, world_slug, _now_rfc3339()),
+            )
 
 
 def get_game(store: SqliteStore, slug: str) -> GameRow | None:
@@ -875,11 +883,12 @@ def get_game(store: SqliteStore, slug: str) -> GameRow | None:
 
 
 def set_claude_session_id(store: SqliteStore, slug: str, claude_session_id: str) -> None:
-    with store._conn:
-        store._conn.execute(
-            "UPDATE games SET claude_session_id = ? WHERE slug = ?",
-            (claude_session_id, slug),
-        )
+    with SAVE_WRITE_LOCK:
+        with store._conn:
+            store._conn.execute(
+                "UPDATE games SET claude_session_id = ? WHERE slug = ?",
+                (claude_session_id, slug),
+            )
 
 
 def query_encounter_events(store: SqliteStore) -> list[dict]:

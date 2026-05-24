@@ -546,14 +546,15 @@ class AnthropicSdkClient:
         new session's first ceiling-cross alarm. Deferred so the
         decision and its OTEL plumbing land together.
 
-        Background on why the reset matters once teardown wires in:
-        ``RoomRegistry`` (session_room.py:774-786) never evicts a slug
-        today — the ``AnthropicSdkClient`` instance backing a slug's
-        orchestrator therefore lives for the server process lifetime,
-        not per-session. Without this reset, even per-session-keyed
+        Background on why the reset matters: ``RoomRegistry`` (defined
+        at session_room.py:817) never evicts a slug today — the
+        ``AnthropicSdkClient`` instance backing a slug's orchestrator
+        therefore lives for the server process lifetime, not
+        per-session. Without this reset, even per-session-keyed
         baselines accumulate entries forever (one per distinct
-        session_id seen). When ``close_store()`` lands as a callsite,
-        this method gives it a per-session eviction handle.
+        session_id seen). ``close_store()`` is the per-session eviction
+        handle that gives RoomRegistry's permanent-room model a clean
+        per-session baseline-reset surface.
         """
         self._cost_baseline.pop(session_id, None)
         self._input_tokens_baseline.pop(session_id, None)

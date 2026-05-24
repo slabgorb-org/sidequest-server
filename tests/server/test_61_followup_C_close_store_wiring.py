@@ -90,10 +90,12 @@ class _PinnedRoomHandler:
     - ``"swallow_save_exception"``: increment counter but do NOT save,
       return normally. Models the production behaviour where
       ``WebSocketSessionHandler.cleanup()`` catches a save Exception at
-      ``websocket_session_handler.py:1543-1544``, logs ``session.disconnect_save_failed``,
-      and returns without re-raising. In that case ``close_store()``
-      must NOT fire — otherwise the canonical store is torn down with
-      the final snapshot lost.
+      ``websocket_session_handler.py:1551-1552``, logs ``session.disconnect_save_failed``,
+      sets ``self.last_save_failure = exc`` (added by Story 61-followup-C
+      so ws_endpoint can see the swallowed failure), and returns without
+      re-raising. In that case ``close_store()`` must NOT fire —
+      otherwise the canonical store is torn down with the final
+      snapshot lost.
     """
 
     def __init__(
@@ -186,7 +188,7 @@ def _mock_room_with_baseline_tracking(
     mock_orch = MagicMock()
     mock_orch._client = MagicMock()
     mock_orch._client.reset_baselines = MagicMock()
-    # close_store reads ``self._orchestrator`` directly (session_room.py:348).
+    # close_store reads ``self._orchestrator`` directly (session_room.py:353).
     # Bypass the get_or_create factory by writing the underscore field —
     # this is internal access reserved for tests of close_store's reset
     # contract; production code goes through get_or_create_orchestrator.
@@ -355,7 +357,7 @@ async def test_ws_endpoint_calls_close_store_when_last_mp_player_disconnects():
     The story's SM Acceptance Bar bullet
     `MP game, last player disconnects: room is now empty → close_store()
     fires ✓` was previously unasserted. The teardown gate at
-    ``websocket.py:164`` is mode-agnostic
+    ``websocket.py:191`` is mode-agnostic
     (``not room.connected_player_ids()``), but missing a multiplayer
     last-player test means a mode-specific regression (e.g. accidentally
     gating teardown on ``GameMode.SOLO``) would slip through. This test
@@ -403,56 +405,61 @@ async def test_ws_endpoint_calls_close_store_when_last_mp_player_disconnects():
 
 
 # ---------------------------------------------------------------------------
-# Cleanup exception-safety contract (Reviewer 2026-05-24 HIGH finding 1)
+# Cleanup exception-safety contract — regression guards
+# (originated as Reviewer 2026-05-24 HIGH finding 1, RED→GREEN landed in
+#  RT1 commits 88cc9ee + 6b6e9e1 + 61abe22; further hardened in RT2 with
+#  the explicit asyncio.CancelledError re-raise per Reviewer RT1 HIGH 1)
 #
-# The round-2 spec-check fix placed close_store() AFTER handler.cleanup() to
-# protect the final save. That fix has a corollary the round-1→round-2
-# review process surfaced: close_store's gate has two failure modes that
-# this round did not yet defend.
+# close_store's teardown gate has two failure modes that the round-1
+# delivery did not initially defend. Both are now production-protected
+# and these tests are the regression guards.
 #
-# A. handler.cleanup() itself raises (uncaught exception bubbles out)
-#    → control exits the finally block. close_store is skipped. Currently
-#    there is no log breadcrumb at the skip site — the store leaks and the
-#    skipped teardown is invisible (violates No Silent Fallbacks).
+# A. handler.cleanup() itself raises (uncaught Exception bubbles out)
+#    → ws_endpoint catches at websocket.py:170, logs ws.cleanup_failed at
+#    ERROR with the slug, sets cleanup_failed=True, and the teardown gate
+#    at websocket.py:191 skips close_store with a ws.room_teardown_skipped
+#    reason=cleanup_raised breadcrumb. asyncio.CancelledError is re-raised
+#    explicitly (websocket.py:160) so shutdown propagates correctly.
 #
 # B. handler.cleanup() catches a save-side exception internally and returns
-#    normally (this is what production WebSocketSessionHandler.cleanup()
-#    does at websocket_session_handler.py:1543-1544 — it logs
-#    session.disconnect_save_failed and swallows). Cleanup returns; the
-#    finally block proceeds; close_store fires; the store is torn down with
-#    the final snapshot LOST. This is the same data-loss class the round-1
-#    ordering bug exhibited, in a different costume.
+#    normally (production WebSocketSessionHandler.cleanup() at
+#    websocket_session_handler.py:1551-1552 — it logs session.disconnect_save_failed
+#    AND sets self.last_save_failure = exc, added in this story specifically
+#    so ws_endpoint can detect the swallow). ws_endpoint reads
+#    handler.last_save_failure (websocket.py:200) and the teardown gate
+#    skips close_store with reason=save_failure_swallowed. Without this,
+#    the canonical store would be torn down with the final snapshot lost.
 #
-# Both tests below are RED in the current production code:
-#   - A fails because the "skipped teardown" path has no error log assertion
-#     hook today (Dev needs to add the try/except + error log in green).
-#   - B fails because close_store() currently fires unconditionally after
-#     cleanup() returns normally — Dev needs to gate close_store on a
-#     save-succeeded signal in green.
+# The two tests below GREEN against the current production code. They
+# exist as regression guards: if a future refactor removes the
+# cleanup_failed gate, the last_save_failure read, or the explicit
+# CancelledError re-raise, these tests will fail.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_ws_endpoint_logs_and_skips_close_store_when_cleanup_raises(caplog):
-    """RED: when handler.cleanup() raises an uncaught exception, the
-    finally block must (a) not crash the WebSocket teardown, (b) emit a
-    loud error breadcrumb with the slug, and (c) NOT silently skip
-    close_store without telling anyone.
+    """Regression guard: when handler.cleanup() raises an uncaught
+    Exception, the finally block must (a) not crash the WebSocket
+    teardown, (b) emit a loud ERROR breadcrumb with the slug
+    (``ws.cleanup_failed``), and (c) skip close_store — with a SECOND
+    breadcrumb (``ws.room_teardown_skipped reason=cleanup_raised``) so
+    the skipped teardown is visible in operator tails.
 
-    Today the cleanup exception propagates out of the finally block and
-    close_store is skipped with zero breadcrumb. That violates the
-    No Silent Fallbacks rule (CLAUDE.md). Green-phase Dev must wrap
-    cleanup in try/except, log at error with the slug, and decide an
-    explicit policy on whether close_store should still attempt teardown
-    after cleanup blew up (probably yes — the store is in an unknown
-    state and we should release the handle).
+    Production wiring: ws_endpoint at websocket.py:170 catches Exception
+    (re-raising asyncio.CancelledError explicitly at :160 so shutdown
+    cancellation propagates correctly). The cleanup_failed flag then
+    drives the teardown gate at websocket.py:191 to skip close_store
+    and emit the ``ws.room_teardown_skipped`` log instead. This test
+    asserts both halves (the log presence and the skip behaviour) so a
+    regression that removed either guard would fail loudly.
     """
     import logging
 
     room = SessionRoom(slug="slug-wire-cleanup-raises", mode=GameMode.SOLO)
     store = MagicMock()
     room.bind_world(snapshot=MagicMock(), store=store)
-    _mock_room_with_baseline_tracking(room)
+    mock_orch = _mock_room_with_baseline_tracking(room)
 
     handler = _PinnedRoomHandler(
         room,
@@ -483,22 +490,38 @@ async def test_ws_endpoint_logs_and_skips_close_store_when_cleanup_raises(caplog
         f"Captured: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
     )
 
+    # Reviewer 2026-05-24 HIGH 3 (round-trip 1 review): the test name says
+    # "logs AND skips close_store" but only the log half was asserted.
+    # Without the close-count assertion, a regression that removed the
+    # `cleanup_failed` gate from websocket.py (letting close_store fire
+    # even after a cleanup exception) would still pass — the ERROR log
+    # from the try/except is independent of the gate decision.
+    assert store.close.call_count == 0, (
+        "Wiring failure: close_store() must NOT fire when cleanup raised. "
+        f"Got close.call_count={store.close.call_count}."
+    )
+    assert mock_orch._client.reset_baselines.call_count == 0, (
+        "reset_baselines() must NOT fire when cleanup raised; the per-session "
+        "cost baseline belongs to a session whose final state we cannot vouch "
+        f"for. Got call_count={mock_orch._client.reset_baselines.call_count}."
+    )
+
 
 @pytest.mark.asyncio
 async def test_ws_endpoint_does_not_close_store_when_cleanup_swallowed_save_failure():
-    """RED: when handler.cleanup() catches a save exception internally
-    and returns normally (the production cleanup contract — it logs
-    `session.disconnect_save_failed` and swallows), the close_store
-    teardown must NOT fire. Tearing down a store whose final save was
-    lost compounds the data loss into a permanent state regression.
+    """Regression guard: when handler.cleanup() catches a save exception
+    internally and returns normally (production cleanup contract — it
+    logs `session.disconnect_save_failed` AND sets
+    `self.last_save_failure = exc`), the close_store teardown must NOT
+    fire. Tearing down a store whose final save was lost would compound
+    the data loss into a permanent state regression.
 
-    The current production code at ``websocket.py:164`` fires close_store
-    based purely on connected_player_ids() emptiness; it has no signal
-    from cleanup() about whether the save succeeded. Green-phase Dev must
-    either propagate the save-failure status out of cleanup() (return
-    bool, expose a flag, or re-raise) and gate close_store on success,
-    or compute the teardown decision before the cleanup save attempt
-    and re-verify after.
+    The production teardown gate at ``websocket.py:191`` reads
+    ``handler.last_save_failure`` (websocket.py:200) alongside
+    ``cleanup_failed`` and ``connected_player_ids()``. When
+    last_save_failure is not None, the gate skips close_store and emits
+    ``ws.room_teardown_skipped slug=… reason=save_failure_swallowed``.
+    This test exercises the save-failure branch of that gate.
     """
     room = SessionRoom(slug="slug-wire-cleanup-swallowed", mode=GameMode.SOLO)
     store = MagicMock()

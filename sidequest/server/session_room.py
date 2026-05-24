@@ -365,7 +365,13 @@ class SessionRoom:
                     try:
                         reset(self.slug)
                     except Exception as exc:
-                        _log.warning(
+                        # ERROR (not WARNING) per Reviewer 2026-05-24 HIGH 2: a
+                        # swallowed reset_baselines IS the cost-runaway hazard
+                        # this story exists to prevent. WARNING-level filtering
+                        # by operator tails would silently mask the next session
+                        # on this slug inheriting a trained-into-silence baseline
+                        # — the exact failure mode 61-followup-A and -C target.
+                        _log.error(
                             "session.reset_baselines_failed slug=%s err=%r",
                             self.slug,
                             exc,

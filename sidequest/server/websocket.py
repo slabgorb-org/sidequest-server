@@ -157,6 +157,17 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
         cleanup_failed = False
         try:
             await handler.cleanup()
+        except asyncio.CancelledError:
+            # Server shutdown (uvicorn SIGINT/SIGTERM) and pytest task teardown both
+            # raise CancelledError into in-flight awaits. CancelledError is a
+            # BaseException (Python 3.8+), so it would slip past `except Exception`
+            # below — re-raise it explicitly here so the policy is visible and the
+            # surrounding `finally`'s teardown gate is intentionally skipped: the
+            # process is going down, there is no operator to act on a teardown-skip
+            # breadcrumb, and the per-turn save chain is the recovery point. Without
+            # this explicit re-raise, the wide `except Exception` reads ambiguously
+            # ("does it catch cancel?"); with it, the contract is in the code.
+            raise
         except Exception as cleanup_exc:
             cleanup_failed = True
             slug_for_log = room.slug if room is not None else "unbound"

@@ -4393,6 +4393,41 @@ class WebSocketSessionHandler:
                             component="confrontation",
                         )
 
+                        # sq-playtest 2026-05-12 lie-detector: classify the
+                        # post-narration confrontation state by comparing
+                        # narration prose kill-claims against the engine's
+                        # encounter state. The repro was the Chalk Moth
+                        # "kill turn" — narrator's prose said the moth
+                        # died ("the legs go slack", "Silence."), but no
+                        # engine resolution fired (rolls failing, dial
+                        # stuck 0/7) so the right-rail Confrontation
+                        # panel stayed open and the next turn's narration
+                        # un-killed the moth. Without this watcher event
+                        # the GM panel could only see ``state_transition
+                        # field=encounter op=resolved`` firing or not —
+                        # which is the engine side. This event surfaces
+                        # the NARRATOR side so Sebastien can see when
+                        # prose outruns the dial.
+                        from sidequest.server.confrontation_lifecycle_detector import (
+                            build_lifecycle_snapshot,
+                        )
+
+                        lifecycle_snapshot = build_lifecycle_snapshot(
+                            narration=narration_text,
+                            encounter_active_pre_apply=prior_live,
+                            encounter=snapshot.encounter,
+                            encounter_resolved_this_turn=encounter_resolved_this_turn,
+                        )
+                        _watcher_publish(
+                            "confrontation_lifecycle",
+                            {
+                                "slug": room_slug,
+                                "acting_player_id": sd.player_id,
+                                **lifecycle_snapshot.to_watcher_attrs(),
+                            },
+                            component="confrontation",
+                        )
+
                 with timings.phase("broadcast"):
                     # MP merged-dispatch: shared-world frames need to reach
                     # every connected socket in the room. NARRATION rides the

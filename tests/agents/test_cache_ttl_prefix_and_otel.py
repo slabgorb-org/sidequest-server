@@ -358,8 +358,15 @@ def _prompts_with_all_promotions() -> Any:
     Inline construction avoids depending on a specific genre pack's
     ``prompts.yaml`` content being loaded into the test environment.
     Required ``narrator``/``combat``/``npc``/``world_state`` fields are
-    given placeholder text; only the four promoted optional fields
+    given placeholder text; the four originally-promoted optional fields
     carry the assertable marker strings.
+
+    Story 61-11 (ADR-112 amendment): ``genre_chargen`` was demoted from
+    STABLE and now gates on ``TurnContext.opening_directive is not None``.
+    The marker stays in this fixture so tests can assert either presence
+    (predicate true) or absence (predicate false) without rebuilding
+    the Prompts shape; the dedicated chargen tests below cover both
+    states.
     """
     from sidequest.genre.models.narrative import Prompts
 
@@ -379,29 +386,36 @@ def _prompts_with_all_promotions() -> Any:
 async def test_promoted_genre_prose_lands_in_cached_system_block(
     simple_turn_context,
 ) -> None:
-    """ADR-112 / Story 57-3 — the four promoted genre prose sections ride
+    """ADR-112 / Story 57-3 — the still-promoted genre prose sections ride
     the cached ``system_blocks[0]`` block, not the per-turn user message
     or any uncached follow-on system block.
 
     This is the direct cache evidence path (see Story 57-3 brief, 2026-05-20):
     the per-turn ``narration.turn.system_block_sizes_json["stable"]``
-    attribute is expected to grow by the four sections' size (≈ their
-    combined char count / 4 tokens) on every turn after promotion.
+    attribute is expected to grow by the sections' combined size on every
+    turn after promotion.
 
-    Pre-promotion the four sections register at ``orchestrator.py:1368..1411``
-    with ``AttentionZone.Valley`` and ``SectionBucket.User``, so their
-    content (wrapped in ``<genre-extraction>``, ``<genre-keeper>``,
-    ``<genre-town>``, ``<genre-chargen>`` tags) lands in the per-turn
-    user message — uncached.
+    Pre-promotion the sections registered at ``orchestrator.py`` with
+    ``AttentionZone.Valley`` and ``SectionBucket.User``, so their content
+    (wrapped in ``<genre-extraction>``, ``<genre-keeper>``,
+    ``<genre-town>`` tags) landed in the per-turn user message — uncached.
 
-    Post-promotion (allowlist contains the four section names) the bucket
-    classifier returns ``SectionBucket.System`` for each, so the
-    four marker tags MUST appear in the cached block —
+    Post-promotion (allowlist contains the section names) the bucket
+    classifier returns ``SectionBucket.System`` for each, so the marker
+    tags MUST appear in the cached block —
     ``recorded_requests[0].system_blocks[0].text`` — and MUST NOT appear
     in any user message content.
 
+    Story 61-11 (ADR-112 amendment): ``genre_chargen`` is no longer
+    asserted in this loop — it was demoted from STABLE and gated on
+    ``TurnContext.opening_directive is not None``. With the
+    ``simple_turn_context`` fixture (``opening_directive=None``), the
+    chargen section is not registered at all this turn. The dedicated
+    ``test_demoted_genre_chargen_*`` tests below cover both predicate
+    states for chargen.
+
     Hand-built ``Prompts`` is injected on the ``TurnContext.genre_prompts``
-    slot so the registration sites at ``orchestrator.py:1304..1411`` fire
+    slot so the registration sites at ``orchestrator.py`` fire
     deterministically without relying on a specific pack's
     ``prompts.yaml`` being loaded by the test environment.
     """
@@ -420,16 +434,16 @@ async def test_promoted_genre_prose_lands_in_cached_system_block(
     other_system_text = "\n".join(b.text for b in request.system_blocks[1:])
     user_message_text = "\n".join(m.content for m in request.messages if m.role == "user")
 
+    # Story 61-11: chargen removed from this loop — gated separately below.
     promoted_markers = (
         "<genre-extraction>",
         "<genre-keeper>",
         "<genre-town>",
-        "<genre-chargen>",
     )
     for marker in promoted_markers:
         assert marker in cached_block_text, (
             f"{marker!r} did not land in the cached system_blocks[0].text. "
-            f"ADR-112 promotion routes these four sections into the Stable "
+            f"ADR-112 promotion routes these sections into the Stable "
             f"(cached) block; if the marker is missing here, the cache "
             f"savings ADR-112 promises are not materializing — likely the "
             f"section is still registered against AttentionZone.Valley and "
@@ -450,6 +464,82 @@ async def test_promoted_genre_prose_lands_in_cached_system_block(
             f"requires the content to be cached for the amortization "
             f"claim to hold."
         )
+
+    # Story 61-11 regression guard: chargen is gated on
+    # ``opening_directive is not None``. The ``simple_turn_context``
+    # fixture has ``opening_directive=None``, so the marker must be
+    # absent from EVERY part of the prompt this turn.
+    full_prompt_text = (
+        cached_block_text + "\n" + other_system_text + "\n" + user_message_text
+    )
+    assert "<genre-chargen>" not in full_prompt_text, (
+        "<genre-chargen> appeared somewhere in the prompt on a turn "
+        "with opening_directive=None. Story 61-11 demoted chargen and "
+        "gated it on TurnContext.opening_directive — this turn should "
+        "skip registration entirely."
+    )
+
+
+@pytest.mark.asyncio
+async def test_demoted_genre_chargen_lands_in_user_message_on_opening_turn(
+    simple_turn_context,
+) -> None:
+    """Story 61-11 (ADR-112 amendment) — ``genre_chargen`` was demoted from
+    STABLE and now gates on ``TurnContext.opening_directive is not None``.
+
+    On the post-chargen opening turn the gate passes and registration
+    fires; the section routes to the User bucket (uncached) because it
+    was dropped from ``STABLE_SECTION_NAMES``. Both halves are
+    load-bearing:
+
+      - If the gate is broken (registers when predicate is false), the
+        prose returns on every neutral turn — the per-turn carry the
+        story is eliminating.
+      - If the bucket assignment is broken (section is registered but
+        ends up back in System), the cache root carries the prose on
+        every turn that the gate fires.
+
+    This test pins the predicate-true / demoted-bucket combination
+    against the SDK request shape, mirroring the same assertion path
+    as ``test_promoted_genre_prose_lands_in_cached_system_block`` but
+    inverted for the demoted section.
+    """
+    ctx = replace(
+        simple_turn_context,
+        genre_prompts=_prompts_with_all_promotions(),
+        opening_directive="ESTABLISHING: torchlight, dripping water, the descent begins.",
+    )
+
+    fake = FakeAnthropicSdkClient(responses=[_end_turn("ok")])
+    orch = Orchestrator(client=fake)
+    await orch.run_narration_turn("look around", ctx)
+
+    request = fake.recorded_requests[0]
+    cached_block_text = request.system_blocks[0].text
+    other_system_text = "\n".join(b.text for b in request.system_blocks[1:])
+    user_message_text = "\n".join(m.content for m in request.messages if m.role == "user")
+
+    assert "<genre-chargen>" in user_message_text, (
+        "<genre-chargen> did not land in the user message on the opening "
+        "turn (opening_directive set). Expected the post-demotion path: "
+        "predicate gate fires → bucket assignment routes to User → "
+        "content appears in the per-turn user message. Check the "
+        "registration block at orchestrator.py (chargen, ~line 1595)."
+    )
+    assert "<genre-chargen>" not in cached_block_text, (
+        "<genre-chargen> landed in the CACHED system_blocks[0] on the "
+        "opening turn. Story 61-11 demoted chargen out of "
+        "STABLE_SECTION_NAMES; it must route to the User bucket "
+        "(uncached) regardless of whether the predicate fires. If it "
+        "is back in the cached block, ``genre_chargen`` was likely "
+        "re-added to STABLE_SECTION_NAMES — revert that change."
+    )
+    assert "<genre-chargen>" not in other_system_text, (
+        "<genre-chargen> landed in an uncached system block on the "
+        "opening turn. The demoted section should route to the User "
+        "bucket only; appearance in any system block indicates the "
+        "bucket classifier still maps it to System."
+    )
 
 
 @pytest.mark.asyncio

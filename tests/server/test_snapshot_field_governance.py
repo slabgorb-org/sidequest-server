@@ -54,6 +54,8 @@ bounded-by-construction).
 
 from __future__ import annotations
 
+import pytest
+
 from sidequest.game.session import GameSnapshot
 from sidequest.server import session_helpers as sh
 
@@ -69,45 +71,42 @@ _PROJECTIONS = sh._PHASE_C_PROJECTIONS
 _BOUNDED = sh._BOUNDED_BY_CONSTRUCTION
 _EXCLUDED = sh._EXCLUDED_FROM_DUMP
 
+# Canonical name→registry mapping used by the categorization,
+# overlap, and stray-entry tests. A single source of truth: adding a
+# 5th registry means editing this dict (and importing it above), not
+# editing every test that iterates the registries.
+_REGISTRIES: dict[str, tuple[str, ...]] = {
+    "_PHASE_B_DROP_FIELDS": _DROP,
+    "_PHASE_C_PROJECTIONS": _PROJECTIONS,
+    "_BOUNDED_BY_CONSTRUCTION": _BOUNDED,
+    "_EXCLUDED_FROM_DUMP": _EXCLUDED,
+}
+
 
 # ---------------------------------------------------------------------------
-# AC1 + AC2 — both new registries MUST exist as importable named tuples.
+# AC1 + AC2 — each registry MUST exist and be a tuple[str, ...].
 # ---------------------------------------------------------------------------
 
 
-def test_phase_c_projections_registry_is_tuple_of_strs() -> None:
-    """``_PHASE_C_PROJECTIONS`` is a tuple-typed registry in session_helpers."""
-    assert isinstance(_PROJECTIONS, tuple), (
-        "_PHASE_C_PROJECTIONS must be a tuple[str, ...] for reflection — "
-        f"got {type(_PROJECTIONS).__name__}"
-    )
-    assert all(isinstance(name, str) for name in _PROJECTIONS), (
-        "_PHASE_C_PROJECTIONS entries must all be str field names — "
-        f"got {[type(n).__name__ for n in _PROJECTIONS]}"
-    )
+@pytest.mark.parametrize(
+    "registry_name",
+    ["_PHASE_C_PROJECTIONS", "_BOUNDED_BY_CONSTRUCTION", "_EXCLUDED_FROM_DUMP"],
+)
+def test_registry_is_tuple_of_strs(registry_name: str) -> None:
+    """Each new registry is ``tuple[str, ...]`` — required for reflection.
 
-
-def test_bounded_by_construction_registry_is_tuple_of_strs() -> None:
-    """``_BOUNDED_BY_CONSTRUCTION`` is a tuple-typed registry in session_helpers."""
-    assert isinstance(_BOUNDED, tuple), (
-        "_BOUNDED_BY_CONSTRUCTION must be a tuple[str, ...] for reflection — "
-        f"got {type(_BOUNDED).__name__}"
+    ``_PHASE_B_DROP_FIELDS`` is excluded from the parametrize list because
+    its tuple-of-str shape is implicitly tested by every consumer of the
+    drop loop at ``session_helpers.py:905``; the three new registries
+    introduced by story 61-5 get this dedicated structural check.
+    """
+    registry = _REGISTRIES[registry_name]
+    assert isinstance(registry, tuple), (
+        f"{registry_name} must be a tuple[str, ...] for reflection — got {type(registry).__name__}"
     )
-    assert all(isinstance(name, str) for name in _BOUNDED), (
-        "_BOUNDED_BY_CONSTRUCTION entries must all be str field names — "
-        f"got {[type(n).__name__ for n in _BOUNDED]}"
-    )
-
-
-def test_excluded_from_dump_registry_is_tuple_of_strs() -> None:
-    """``_EXCLUDED_FROM_DUMP`` is a tuple-typed registry in session_helpers."""
-    assert isinstance(_EXCLUDED, tuple), (
-        "_EXCLUDED_FROM_DUMP must be a tuple[str, ...] for reflection — "
-        f"got {type(_EXCLUDED).__name__}"
-    )
-    assert all(isinstance(name, str) for name in _EXCLUDED), (
-        "_EXCLUDED_FROM_DUMP entries must all be str field names — "
-        f"got {[type(n).__name__ for n in _EXCLUDED]}"
+    assert all(isinstance(name, str) for name in registry), (
+        f"{registry_name} entries must all be str field names — "
+        f"got {[type(n).__name__ for n in registry]}"
     )
 
 
@@ -163,16 +162,9 @@ def test_no_field_in_multiple_registries() -> None:
     statically. Also catches intra-registry duplicates (a single tuple
     listing the same field name twice).
     """
-    registries: dict[str, tuple[str, ...]] = {
-        "_PHASE_B_DROP_FIELDS": _DROP,
-        "_PHASE_C_PROJECTIONS": _PROJECTIONS,
-        "_BOUNDED_BY_CONSTRUCTION": _BOUNDED,
-        "_EXCLUDED_FROM_DUMP": _EXCLUDED,
-    }
-
     # Intra-registry duplicates: each tuple must have unique entries.
     intra_dupes: list[tuple[str, list[str]]] = []
-    for reg_name, reg_tuple in registries.items():
+    for reg_name, reg_tuple in _REGISTRIES.items():
         seen: dict[str, int] = {}
         for name in reg_tuple:
             seen[name] = seen.get(name, 0) + 1
@@ -188,10 +180,10 @@ def test_no_field_in_multiple_registries() -> None:
 
     # Cross-registry overlap: each pair of registries must be disjoint.
     overlaps: list[tuple[str, tuple[str, str]]] = []
-    names = list(registries)
+    names = list(_REGISTRIES)
     for i, a in enumerate(names):
         for b in names[i + 1 :]:
-            for shared in set(registries[a]) & set(registries[b]):
+            for shared in set(_REGISTRIES[a]) & set(_REGISTRIES[b]):
                 overlaps.append((shared, (a, b)))
 
     assert not overlaps, (
@@ -217,10 +209,7 @@ def test_registries_reference_only_real_snapshot_fields() -> None:
     """
     all_fields = set(GameSnapshot.model_fields.keys())
     stray: dict[str, list[str]] = {
-        "_PHASE_B_DROP_FIELDS": sorted(set(_DROP) - all_fields),
-        "_PHASE_C_PROJECTIONS": sorted(set(_PROJECTIONS) - all_fields),
-        "_BOUNDED_BY_CONSTRUCTION": sorted(set(_BOUNDED) - all_fields),
-        "_EXCLUDED_FROM_DUMP": sorted(set(_EXCLUDED) - all_fields),
+        reg_name: sorted(set(reg_tuple) - all_fields) for reg_name, reg_tuple in _REGISTRIES.items()
     }
     stray = {k: v for k, v in stray.items() if v}
     assert not stray, (

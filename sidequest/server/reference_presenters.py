@@ -318,3 +318,30 @@ def present_calendar(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("calendar", ())] = present_calendar
+
+
+def present_demographics(node: object, ctx: PresenterContext) -> str:
+    """Render demographics.yaml as a label-grid of scalar key-value pairs."""
+    if not isinstance(node, dict) or not node:
+        return ""
+    cells: list[str] = []
+    for key, value in node.items():
+        label = _format_chip_label(str(key))
+        if isinstance(value, list):
+            display = escape(", ".join(str(v) for v in value))
+        elif isinstance(value, dict):
+            # Nested dict: dump first sentence or YAML
+            dumped = yaml.safe_dump(value, sort_keys=False, default_flow_style=True).strip()
+            display = f"<pre>{escape(dumped)}</pre>"
+        else:
+            display = escape(str(value))
+        cells.append(
+            f'<div class="ref-label-grid__cell">'
+            f'<div class="ref-card__kicker">{escape(label)}</div>'
+            f"<div>{display}</div>"
+            f"</div>"
+        )
+    return f'<div class="ref-label-grid">{"".join(cells)}</div>'
+
+
+PRESENTERS[("demographics", ())] = present_demographics

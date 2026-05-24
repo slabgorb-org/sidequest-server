@@ -248,6 +248,27 @@ def test_calendar_emits_table(fake_theme: ReferenceTheme) -> None:
     assert "<h2>days_per_week</h2>" not in html
 
 
+def test_demographics_emits_label_grid(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_demographics
+
+    node = {
+        "total_population": "~40,000",
+        "dominant_culture": "Hegemony transplants",
+        "languages": ["Jovian pidgin", "Standard"],
+    }
+    html = present_demographics(node, make_ctx("demographics", (), fake_theme))
+
+    assert 'class="ref-label-grid"' in html
+    assert 'class="ref-label-grid__cell"' in html
+    assert 'class="ref-card__kicker"' in html
+    assert "Total Population" in html
+    assert "~40,000" in html
+    assert "Dominant Culture" in html
+    assert "Hegemony transplants" in html
+    # No raw h2 field-name headings
+    assert "<h2>total_population</h2>" not in html
+
+
 def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
     from sidequest.server.reference_presenters import present_lore_geography
 

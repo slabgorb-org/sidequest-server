@@ -12,6 +12,7 @@ import json
 import logging
 import shutil
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -304,6 +305,46 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Process-wide save-DB write lock
+# ---------------------------------------------------------------------------
+
+# All writes through any SqliteStore._conn (or any sqlite3.Connection owned
+# by SqliteStore) MUST be made inside:
+#
+#     with SAVE_WRITE_LOCK, conn:    # lock first, then transaction
+#         conn.execute(...)
+#
+# (The nested form ``with SAVE_WRITE_LOCK: / with conn:`` is equivalent;
+# ruff SIM117 collapses it to the combined form above. Acquire order is
+# left-to-right in the combined form, identical to the nested form.)
+#
+# The acquire order is mandatory: SAVE_WRITE_LOCK outside the transaction,
+# never the reverse. Acquiring the transaction first and the lock second
+# lets two threads both call ``conn.__enter__`` on the shared connection
+# (the connection is opened with ``check_same_thread=False``, see
+# ``SqliteStore.open``), corrupting the connection's per-statement state
+# and producing ``sqlite3.OperationalError: database is locked``.
+#
+# The lock is reentrant (``threading.RLock``) because the C2 event-append
+# transaction in ``sidequest.server.emitters.emit_event`` calls
+# ``emit_mechanical_census(...)`` inside its open transaction, which
+# publishes watcher events that re-enter ``_persist_turn_telemetry``
+# (`sidequest.telemetry.watcher_hub`). Without reentrancy that re-entry
+# from the same thread would deadlock.
+#
+# Consumer modules (kept in sync as writer sites are added):
+#   - sidequest.game.persistence
+#   - sidequest.server.emitters
+#   - sidequest.telemetry.watcher_hub
+#
+# Future writers landing in any other module must import this lock and
+# wrap their writes. The authoritative regression test is
+# ``tests/server/test_save_write_lock.py`` — anyone adding a 15th write
+# site without acquiring the lock will see it fail under concurrent load.
+SAVE_WRITE_LOCK = threading.RLock()
+
+
+# ---------------------------------------------------------------------------
 # SqliteStore
 # ---------------------------------------------------------------------------
 
@@ -313,6 +354,9 @@ class SqliteStore:
 
     Uses singleton tables (session_meta, game_state) plus append-only
     narrative_log. Built on stdlib sqlite3.
+
+    All writes through ``self._conn`` must hold ``SAVE_WRITE_LOCK`` from
+    this module — see the lock's module-level doc block above.
     """
 
     def __init__(self, conn: sqlite3.Connection | Path) -> None:
@@ -351,9 +395,10 @@ class SqliteStore:
         return store
 
     def _init_schema(self) -> None:
-        self._conn.executescript(SCHEMA_SQL)
-        self._apply_migrations()
-        self._conn.commit()
+        with SAVE_WRITE_LOCK:
+            self._conn.executescript(SCHEMA_SQL)
+            self._apply_migrations()
+            self._conn.commit()
 
     def _apply_migrations(self) -> None:
         """Idempotent column adds for tables that pre-existed before a
@@ -367,11 +412,12 @@ class SqliteStore:
         # Story 45-31: scrapbook_entries.render_status — degradation
         # marker for the unavailable-fallback path. Older DBs created
         # before this column existed need it added.
-        try:
-            self._conn.execute("ALTER TABLE scrapbook_entries ADD COLUMN render_status TEXT")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" not in str(exc).lower():
-                raise
+        with SAVE_WRITE_LOCK:
+            try:
+                self._conn.execute("ALTER TABLE scrapbook_entries ADD COLUMN render_status TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     def initialize(self) -> None:
         """Public alias for _init_schema — re-runs schema creation (idempotent)."""
@@ -397,14 +443,14 @@ class SqliteStore:
         ]
         prior_event_count = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
-        with self._conn:
+        with SAVE_WRITE_LOCK, self._conn:
             for tbl in _PER_SLOT_TABLES:
                 self._conn.execute(f"DELETE FROM {tbl}")
             now = _now_rfc3339()
             self._conn.execute(
                 """INSERT OR REPLACE INTO session_meta
-                   (id, genre_slug, world_slug, created_at, last_played, schema_version)
-                   VALUES (1, ?, ?, ?, ?, 1)""",
+                       (id, genre_slug, world_slug, created_at, last_played, schema_version)
+                       VALUES (1, ?, ?, ?, ?, 1)""",
                 (genre_slug, world_slug, now, now),
             )
 
@@ -436,10 +482,10 @@ class SqliteStore:
         state_json = snapshot_copy.model_dump_json()
         now_str = now.isoformat()
 
-        with self._conn:
+        with SAVE_WRITE_LOCK, self._conn:
             self._conn.execute(
                 """INSERT OR REPLACE INTO game_state (id, snapshot_json, saved_at)
-                   VALUES (1, ?, ?)""",
+                       VALUES (1, ?, ?)""",
                 (state_json, now_str),
             )
             self._conn.execute(
@@ -602,10 +648,10 @@ class SqliteStore:
         now = datetime.now(tz=UTC)
         stamped = world_save.model_copy(update={"last_saved_at": now})
         payload_json = stamped.model_dump_json()
-        with self._conn:
+        with SAVE_WRITE_LOCK, self._conn:
             self._conn.execute(
                 """INSERT OR REPLACE INTO world_save (id, payload_json, saved_at)
-                   VALUES (1, ?, ?)""",
+                       VALUES (1, ?, ?)""",
                 (payload_json, now.isoformat()),
             )
 
@@ -614,12 +660,13 @@ class SqliteStore:
         import json
 
         tags_json = json.dumps(entry.tags)
-        self._conn.execute(
-            """INSERT INTO narrative_log (round_number, author, content, tags)
-               VALUES (?, ?, ?, ?)""",
-            (entry.round, entry.author, entry.content, tags_json),
-        )
-        self._conn.commit()
+        with SAVE_WRITE_LOCK:
+            self._conn.execute(
+                """INSERT INTO narrative_log (round_number, author, content, tags)
+                   VALUES (?, ?, ?, ?)""",
+                (entry.round, entry.author, entry.content, tags_json),
+            )
+            self._conn.commit()
 
     def max_narrative_round(self) -> int:
         """Return ``MAX(round_number)`` from ``narrative_log``, or 0 when empty.
@@ -713,21 +760,21 @@ class SqliteStore:
         / ``new_tier`` / binding fields in place rather than minting a
         duplicate row (ADR-109 §4.3, AC-3 in story 54-6).
         """
-        with self._conn:
+        with SAVE_WRITE_LOCK, self._conn:
             self._conn.execute(
                 """INSERT INTO location_promotions (
-                       save_id, region_id, entity_id, provenance, label,
-                       promoted_at_turn, promoted_canon, new_tier,
-                       new_binding_kind, new_binding_ref
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(save_id, region_id, entity_id) DO UPDATE SET
-                       provenance = excluded.provenance,
-                       label = excluded.label,
-                       promoted_at_turn = excluded.promoted_at_turn,
-                       promoted_canon = excluded.promoted_canon,
-                       new_tier = excluded.new_tier,
-                       new_binding_kind = excluded.new_binding_kind,
-                       new_binding_ref = excluded.new_binding_ref""",
+                           save_id, region_id, entity_id, provenance, label,
+                           promoted_at_turn, promoted_canon, new_tier,
+                           new_binding_kind, new_binding_ref
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(save_id, region_id, entity_id) DO UPDATE SET
+                           provenance = excluded.provenance,
+                           label = excluded.label,
+                           promoted_at_turn = excluded.promoted_at_turn,
+                           promoted_canon = excluded.promoted_canon,
+                           new_tier = excluded.new_tier,
+                           new_binding_kind = excluded.new_binding_kind,
+                           new_binding_ref = excluded.new_binding_ref""",
                 (
                     row.save_id,
                     row.region_id,
@@ -807,11 +854,11 @@ def upsert_game(
     resume path by design; the caller can re-invoke without branching on
     "already exists?".
     """
-    with store._conn:
+    with SAVE_WRITE_LOCK, store._conn:
         store._conn.execute(
             """INSERT INTO games (slug, mode, genre_slug, world_slug, created_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(slug) DO NOTHING""",
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(slug) DO NOTHING""",
             (slug, mode.value, genre_slug, world_slug, _now_rfc3339()),
         )
 
@@ -834,7 +881,7 @@ def get_game(store: SqliteStore, slug: str) -> GameRow | None:
 
 
 def set_claude_session_id(store: SqliteStore, slug: str, claude_session_id: str) -> None:
-    with store._conn:
+    with SAVE_WRITE_LOCK, store._conn:
         store._conn.execute(
             "UPDATE games SET claude_session_id = ? WHERE slug = ?",
             (claude_session_id, slug),

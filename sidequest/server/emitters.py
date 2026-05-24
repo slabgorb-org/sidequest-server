@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from sidequest.agents.perception_rewriter import rewrite_for_recipient
 from sidequest.agents.pov_swap import swap_to_second_person
+from sidequest.game.persistence import SAVE_WRITE_LOCK
 
 if TYPE_CHECKING:
     from sidequest.game.projection.view import SessionGameStateView
@@ -46,7 +47,7 @@ def persist_scrapbook_entry(
         ]
     )
     facts_json = _json.dumps(list(payload.world_facts))
-    with store._conn:
+    with SAVE_WRITE_LOCK, store._conn:
         store._conn.execute(
             "INSERT INTO scrapbook_entries "
             "(turn_id, scene_title, scene_type, location, image_url, "
@@ -97,7 +98,7 @@ def update_scrapbook_image_url(
         return False
     store = handler._event_log.store
     try:
-        with store._conn:
+        with SAVE_WRITE_LOCK, store._conn:
             cur = store._conn.execute(
                 "UPDATE scrapbook_entries SET image_url = ? "
                 "WHERE rowid = ("
@@ -273,7 +274,7 @@ def emit_event(
         store = event_log.store
         conn = store._conn
         fanout: list[tuple[str, FilterDecision, dict]] = []
-        with conn:
+        with SAVE_WRITE_LOCK, conn:
             row = event_log.append_in_transaction(kind=kind, payload_json=payload_json, conn=conn)
             seq = row.seq
 
@@ -394,11 +395,11 @@ def emit_event(
                                 snapshot=_snapshot_for_swap,
                             )
                         emitter_projected_dict = _e_data
-                    # include=False under project_emitter (a participant
-                    # excluded from their own shared narration) is a
-                    # Track B concern; leaving emitter_projected_dict None
-                    # falls through to the existing path so a frame is
-                    # still returned rather than silently emitting empty.
+                        # include=False under project_emitter (a participant
+                        # excluded from their own shared narration) is a
+                        # Track B concern; leaving emitter_projected_dict None
+                        # falls through to the existing path so a frame is
+                        # still returned rather than silently emitting empty.
 
         # Build emitter's message. Solo/legacy: raw, unfiltered payload +
         # seq (Invariant 3 — visibility filter bypassed for the emitter).

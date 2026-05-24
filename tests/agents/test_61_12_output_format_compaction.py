@@ -56,7 +56,6 @@ rewording. Never xfail, never skip.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -598,41 +597,11 @@ async def test_non_magic_prompt_smaller_than_magic_prompt_by_at_least_5kb() -> N
     )
 
 
-# ---------------------------------------------------------------------------
-# Wiring check — production code path consumes the new constant
-# ---------------------------------------------------------------------------
-
-
-def test_narrator_magic_output_rules_has_a_non_test_consumer() -> None:
-    """CLAUDE.md "Every Test Suite Needs a Wiring Test": confirm a
-    production import of the new constant exists. Without this assertion
-    a future regression could delete the conditional registration but
-    leave the constant defined as dead code — the unit/parametrized
-    tests above would all still pass.
-    """
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[2] / "sidequest"
-    hits: list[str] = []
-    for py in root.rglob("*.py"):
-        # Skip the constant's own module (the definition site).
-        if py.match("agents/narrator_prompts/__init__.py"):
-            continue
-        text = py.read_text(encoding="utf-8")
-        if "NARRATOR_MAGIC_OUTPUT_RULES" in text:
-            hits.append(str(py.relative_to(root.parent)))
-    assert hits, (
-        "NARRATOR_MAGIC_OUTPUT_RULES is defined but has no production "
-        "consumer — the conditional registration in orchestrator.py "
-        "(adjacent to the magic_context block at line 1859) must import "
-        "and register it. CLAUDE.md mandates every new test suite include "
-        "a wiring check; without a non-test consumer the constant is dead "
-        "code."
-    )
-
-
-# Suppress unused imports warning — ``re`` is reserved for future regex-based
-# assertions during the verify phase (e.g. a tighter "items_* paragraphs
-# collapsed into a single contiguous block" check); kept imported to avoid
-# a churn import-edit in green.
-_ = re
+# Wiring is enforced by the two async tests above
+# (test_magic_output_rules_section_registered_when_magic_state_present +
+# test_magic_output_rules_section_absent_when_magic_state_none): they
+# drive the live Orchestrator.build_narrator_prompt path and assert on
+# what registered, rather than grepping source text for the constant
+# name. Per sidequest-server CLAUDE.md "No Source-Text Wiring Tests" —
+# a behavior-driving test is the load-bearing wiring check; a string
+# grep on production source is the forbidden pattern.

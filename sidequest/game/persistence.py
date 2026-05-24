@@ -12,6 +12,7 @@ import json
 import logging
 import shutil
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -304,6 +305,43 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Process-wide save-DB write lock
+# ---------------------------------------------------------------------------
+
+# All writes through any SqliteStore._conn (or any sqlite3.Connection owned
+# by SqliteStore) MUST be made inside:
+#
+#     with SAVE_WRITE_LOCK:
+#         with conn:           # SQLite implicit transaction
+#             conn.execute(...)
+#
+# The acquire order is mandatory: SAVE_WRITE_LOCK outside the transaction,
+# never the reverse. Acquiring the transaction first and the lock second
+# lets two threads both call ``conn.__enter__`` on the shared connection
+# (the connection is opened with ``check_same_thread=False``, see
+# ``SqliteStore.open``), corrupting the connection's per-statement state
+# and producing ``sqlite3.OperationalError: database is locked``.
+#
+# The lock is reentrant (``threading.RLock``) because the C2 event-append
+# transaction in ``sidequest.server.emitters.emit_event`` calls
+# ``emit_mechanical_census(...)`` inside its open transaction, which
+# publishes watcher events that re-enter ``_persist_turn_telemetry``
+# (`sidequest.telemetry.watcher_hub`). Without reentrancy that re-entry
+# from the same thread would deadlock.
+#
+# Consumer modules (kept in sync as writer sites are added):
+#   - sidequest.game.persistence
+#   - sidequest.server.emitters
+#   - sidequest.telemetry.watcher_hub
+#
+# Future writers landing in any other module must import this lock and
+# wrap their writes. The authoritative regression test is
+# ``tests/server/test_save_write_lock.py`` — anyone adding a 15th write
+# site without acquiring the lock will see it fail under concurrent load.
+SAVE_WRITE_LOCK = threading.RLock()
+
+
+# ---------------------------------------------------------------------------
 # SqliteStore
 # ---------------------------------------------------------------------------
 
@@ -313,6 +351,9 @@ class SqliteStore:
 
     Uses singleton tables (session_meta, game_state) plus append-only
     narrative_log. Built on stdlib sqlite3.
+
+    All writes through ``self._conn`` must hold ``SAVE_WRITE_LOCK`` from
+    this module — see the lock's module-level doc block above.
     """
 
     def __init__(self, conn: sqlite3.Connection | Path) -> None:

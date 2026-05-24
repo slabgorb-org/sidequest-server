@@ -303,7 +303,7 @@ async def test_scenario_clue_handler_prerequisite_not_satisfied_does_not_raise()
     # Add a prerequisite that hasn't been discovered
     assert snap.scenario_state is not None
     node = snap.scenario_state.clue_graph.nodes[0]
-    node.prerequisites = ["undiscovered_prereq"]
+    node.requires = ["undiscovered_prereq"]
 
     dispatch = _scenario_clue_dispatch(fact_id="library_key")
 

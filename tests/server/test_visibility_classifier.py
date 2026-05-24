@@ -479,4 +479,36 @@ def test_span_emits_private_segment_count(otel_capture):
     assert len(attrs) == 1
     assert attrs[0]["private_segment_count"] == 1
     assert attrs[0]["private_visible_to"] == "p1"
+
+
+def test_span_surfaces_prose_segment_count(otel_capture):
+    """oq-1 VERIFY-FAIL 2026-05-16: private_segment_count counts only
+    secret_routes-derived segments and read 0 while a NARRATION_SEGMENT
+    from the narrator's PROSE partition was emitted + gated. The span
+    must distinctly surface the prose-partition count so the GM panel
+    sees the turn DID carry a private prose segment."""
+    snap = _snapshot([_pc("Willes"), _pc("Narder")])
+    result = NarrationTurnResult(
+        narration="Willes kneels at the chalk-cross, eyes closed.",
+        action_rewrite=ActionRewrite(
+            you="You kneel", named="Willes kneels", intent="probe"
+        ),
+        # No structured secret_routes (the withheld content came as
+        # narrator PROSE) — yet a prose segment WAS partitioned.
+        private_prose_segments=[
+            {"text": "Two auras, one active.", "anchor_pc": "Willes"}
+        ],
+    )
+    classify_narration_visibility(
+        result=result,
+        snapshot=snap,
+        connected_player_ids=["p1", "p2"],
+        player_id_to_character={"p1": "Willes", "p2": "Narder"},
+    )
+    attrs = span_attrs_by_name(otel_capture, "narration.visibility_classified")
+    assert len(attrs) == 1
+    # The old (misleading) count is 0 — there were no structured routes.
+    assert attrs[0]["private_segment_count"] == 0
+    # The new count exposes the prose partition that WAS emitted+gated.
+    assert attrs[0]["private_prose_segment_count"] == 1
     assert attrs[0]["visible_to"] == "all"

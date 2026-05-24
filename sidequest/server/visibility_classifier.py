@@ -219,5 +219,17 @@ def classify_narration_visibility(
             "private_visible_to",
             ",".join(private_union) if isinstance(private_union, list) else str(private_union),
         )
+        # oq-1 VERIFY-FAIL 2026-05-16: ``private_segment_count`` counts
+        # only secret_routes-derived (structured-dispatch) segments and
+        # read 0 while a NARRATION_SEGMENT from the narrator's PROSE
+        # partition (result.private_prose_segments) was in fact emitted +
+        # gated — making the firewall look like it had nothing to
+        # partition. Surface the prose-partition count distinctly so the
+        # GM panel sees a turn DID carry a private prose segment.
+        _prose_segs = getattr(result, "private_prose_segments", None) or []
+        span.set_attribute(
+            "private_prose_segment_count",
+            len(_prose_segs) if isinstance(_prose_segs, list) else 0,
+        )
 
     return sidecar

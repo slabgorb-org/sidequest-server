@@ -943,6 +943,171 @@ def _strip_json_fence(text: str) -> str:
     return text.strip()
 
 
+# ADR-105 B3 public-safe ENFORCEMENT (oq-1 VERIFY-FAIL 2026-05-16).
+#
+# The narrator partitions private perception into game_patch.private_segments
+# (reliable — structured JSON, the segment is emitted + B1-gated correctly)
+# but ALSO duplicates it into the public PART-1 prose — including a
+# self-labelled "⚠ Aside — Private (X only):" block. The shared NARRATION
+# blob is visible_to:"all" by contract, so the duplicate bypasses the
+# firewall in parallel. The B3 prose-prompt is not honored by the live SDK
+# narrator; prompt adherence is exactly the "Claude wings it" failure mode
+# the OTEL principle exists to catch. This is the MECHANICAL backstop:
+# whatever the narrator does, the public blob is scrubbed of explicitly
+# self-marked private blocks and of near-duplicate private-segment prose,
+# and every scrub is surfaced as a watcher event (a firing scrub == a
+# narrator contract violation the GM panel must see).
+
+# A line that introduces a narrator-self-labelled private aside. Matches
+# the evidenced family: an optional ⚠ / md emphasis, a privacy keyword
+# (private|secret|aside|for your eyes|whisper|gm only) AND a parenthetical
+# "(<who> only)" OR an explicit "kept to <pron>self" / "no outward sign".
+# Case-insensitive, line-anchored. Conservative on the keyword side
+# (must co-occur with an "only)"/"kept to …self" privacy qualifier) so it
+# cannot eat ordinary prose that merely contains the word "private".
+_PRIVATE_ASIDE_LINE = re.compile(
+    r"(?im)^[^\S\n]*"
+    r"(?:[⚠❗✱*_>\-\s]*)"
+    r"(?=.*\b(?:privat\w*|secret\w*|aside|whisper\w*|for your eyes|gm[ -]?only)\b)"
+    r"(?:.*\(\s*[^)\n]*?\bonly\s*\)"
+    r"|.*\bkept\b[^\n]*\b(?:to|for)\b[^\n]*self"
+    r"|.*\bno\b[^\n]*\boutward\b[^\n]*\bsign\b)"
+    r".*$"
+)
+
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[\"'\(“‘A-Z0-9])")
+_WORD = re.compile(r"[a-z0-9]+")
+# POV / function words that differ between a 2nd-person owner segment and
+# a 3rd-person public duplicate — neutralized before overlap scoring so a
+# verbatim-modulo-POV duplicate still scores as a duplicate.
+_OVERLAP_STOP = frozenset(
+    {
+        "you", "your", "yours", "yourself", "he", "his", "him", "himself",
+        "she", "her", "hers", "herself", "they", "their", "them", "i", "me",
+        "my", "mine", "myself", "the", "a", "an", "of", "to", "is", "it",
+        "its", "and", "as", "at", "in", "on", "no", "not",
+    }
+)
+
+
+def _overlap_tokens(text: str) -> set[str]:
+    return {w for w in _WORD.findall(text.lower()) if w not in _OVERLAP_STOP}
+
+
+def _scrub_public_prose(
+    prose: str, private_segments: list[dict[str, Any]]
+) -> tuple[str, dict[str, Any]]:
+    """Strip narrator-leaked private content from the public NARRATION blob.
+
+    Two deterministic-to-bounded passes:
+      1. Labelled-aside strip (ALWAYS): from the first self-labelled
+         private-aside line to end-of-prose. The narrator appends private
+         asides; nothing public follows a "Private (X only):" marker.
+         Sound — this removes an explicitly self-marked block, exactly
+         analogous to stripping the ```game_patch``` fence (not the
+         "un-baking" ADR-105 forbids, which is unmarked interwoven prose).
+      2. Duplicate-sentence strip (when private_segments present): drop any
+         public sentence whose content-token Jaccard with a private
+         segment is >= _DUP_OVERLAP — catches verbatim and POV-modulo
+         paraphrase the narrator copied into PART 1.
+
+    Degrades safely: if pass 2 would empty the prose (narrator wrote zero
+    public content — pathological), pass 2 is skipped (pass 1 still
+    applied) so the turn still surfaces SOME public text rather than an
+    unrenderable empty NARRATION or a raw-bypass re-leak.
+
+    Returns (scrubbed_prose, report). The report is for the
+    ``narration.public_scrub`` lie-detector: a non-zero report means the
+    narrator violated the B3 public-safe contract this turn.
+    """
+    _DUP_OVERLAP = 0.5
+    report: dict[str, Any] = {
+        "labelled_blocks_removed": 0,
+        "dup_sentences_removed": 0,
+        "chars_removed": 0,
+        "orphan_private_block": False,
+        "degraded": False,
+    }
+    original_len = len(prose)
+    work = prose
+
+    # Pass 1 — labelled private-aside block (always; even with no segment).
+    m = _PRIVATE_ASIDE_LINE.search(work)
+    if m is not None:
+        work = work[: m.start()].rstrip()
+        report["labelled_blocks_removed"] = 1
+        # The narrator self-marked private content but emitted no
+        # structured segment for it → it is being dropped (lost to the
+        # owner), never leaked. Loud signal of double non-compliance.
+        report["orphan_private_block"] = not private_segments
+
+    # Pass 2 — near-duplicate of a private segment copied into PART 1.
+    if private_segments:
+        seg_token_sets = [
+            _overlap_tokens(str(s.get("text", ""))) for s in private_segments
+        ]
+        seg_token_sets = [ts for ts in seg_token_sets if ts]
+        if seg_token_sets:
+            sentences = _SENT_SPLIT.split(work)
+            kept: list[str] = []
+            dropped = 0
+            for sent in sentences:
+                st = _overlap_tokens(sent)
+                is_dup = False
+                if st:
+                    for ts in seg_token_sets:
+                        inter = len(st & ts)
+                        union = len(st | ts)
+                        if union and inter / union >= _DUP_OVERLAP:
+                            is_dup = True
+                            break
+                if is_dup:
+                    dropped += 1
+                else:
+                    kept.append(sent)
+            candidate = " ".join(p.strip() for p in kept if p.strip()).strip()
+            if dropped and not candidate:
+                # Skipping pass 2 keeps SOME public text rather than an
+                # unrenderable empty blob / raw re-leak. Loud.
+                report["degraded"] = True
+            elif dropped:
+                work = candidate
+                report["dup_sentences_removed"] = dropped
+
+    scrubbed = work.strip()
+    report["chars_removed"] = original_len - len(scrubbed)
+
+    fired = (
+        report["labelled_blocks_removed"]
+        or report["dup_sentences_removed"]
+        or report["degraded"]
+    )
+    if fired:
+        try:
+            from sidequest.telemetry.watcher_hub import publish_event as _wp
+
+            _wp(
+                "state_transition",
+                {"field": "narration.public_scrub", **report},
+                component="projection",
+                severity="warning",
+            )
+        except Exception:  # noqa: BLE001 — telemetry must never crash a turn
+            logger.warning("narration.public_scrub watcher publish failed")
+        logger.warning(
+            "narration.public_scrub fired: labelled=%d dup_sentences=%d "
+            "chars_removed=%d orphan=%s degraded=%s — the SDK narrator "
+            "duplicated private perception into the public NARRATION blob "
+            "(B3 public-safe contract violation)",
+            report["labelled_blocks_removed"],
+            report["dup_sentences_removed"],
+            report["chars_removed"],
+            report["orphan_private_block"],
+            report["degraded"],
+        )
+    return scrubbed, report
+
+
 def extract_structured_from_response(raw: str) -> dict[str, Any]:
     """Extract the narrator's prose and all structured fields from a raw response.
 
@@ -993,6 +1158,30 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
 
     prose = _strip_json_fence(raw)
 
+    # ADR-105 B3: private per-PC prose the narrator partitioned out of the
+    # public blob. Keep only well-formed entries (a non-empty ``text``
+    # string); a malformed entry is dropped here rather than risking an
+    # un-routable segment downstream. anchor_pc is optional (the
+    # per-segment POV swap no-ops without it).
+    _private_segments: list[dict[str, Any]] = [
+        {
+            "text": str(seg["text"]).strip(),
+            "anchor_pc": (str(seg["anchor_pc"]).strip() or None)
+            if seg.get("anchor_pc")
+            else None,
+        }
+        for seg in patch.get("private_segments", [])
+        if isinstance(seg, dict)
+        and isinstance(seg.get("text"), str)
+        and seg["text"].strip()
+    ]
+
+    # ADR-105 B3 ENFORCEMENT: scrub the public blob of any private content
+    # the narrator (non-compliantly) duplicated into PART 1 — labelled
+    # "Private (X only)" asides + near-duplicate private-segment prose.
+    # The mechanical guarantee; the prompt is only the soft first layer.
+    prose, _ = _scrub_public_prose(prose, _private_segments)
+
     return {
         "prose": prose,
         "footnotes": patch.get("footnotes", []),
@@ -1006,21 +1195,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         "scene_mood": patch.get("scene_mood", patch.get("mood")),
         "sfx_triggers": patch.get("sfx_triggers", []),
         "action_rewrite": patch.get("action_rewrite"),
-        # ADR-105 B3: private per-PC prose the narrator partitioned out
-        # of the public blob. Keep only well-formed entries (a non-empty
-        # ``text`` string); a malformed entry is dropped here rather than
-        # risking an un-routable segment downstream. anchor_pc is
-        # optional (the per-segment POV swap no-ops without it).
-        "private_segments": [
-            {
-                "text": str(seg["text"]).strip(),
-                "anchor_pc": (str(seg["anchor_pc"]).strip() or None)
-                if seg.get("anchor_pc")
-                else None,
-            }
-            for seg in patch.get("private_segments", [])
-            if isinstance(seg, dict) and isinstance(seg.get("text"), str) and seg["text"].strip()
-        ],
+        "private_segments": _private_segments,
         "beat_selections": patch.get("beat_selections", []),
         "confrontation": patch.get("confrontation"),
         "location": patch.get("location"),

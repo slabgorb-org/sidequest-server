@@ -208,8 +208,14 @@ sentences from PART 1.
 
 PERCEPTION FIREWALL (ADR-105): in multiplayer, every player receives PART
 1 verbatim. PART 1 MUST contain ONLY what every PC physically present can
-observe — any single-PC perception MUST move into `private_segments`. A
-secret written into PART 1 leaks to every player at the table.
+observe — any single-PC perception MUST appear ONLY in `private_segments`
+and MUST NOT appear in PART 1 in ANY form. MOVE, NOT COPY: a duplicate or
+summary in PART 1 ("Willes senses two auras") IS the leak. ABSOLUTELY
+FORBIDDEN in PART 1: labelled asides ("Private (X only):", "(you only)",
+"kept to himself:") AND the withheld result as ordinary narration. If
+you start a privacy label, STOP — it belongs in private_segments with NO
+trace in PART 1. PART 1 gets ONLY the publicly-observable action; the
+reading itself is private.
 
 If nothing sidecar-owned changed AND no new knowledge was revealed, still
 emit:

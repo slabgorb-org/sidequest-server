@@ -28,7 +28,6 @@ import json
 import logging
 import os
 import sqlite3
-import threading
 from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -269,17 +268,17 @@ else:
 
 _event_store = None  # bound at session-handler startup; weakref-safe by class id
 
-# Serializes the persistence helpers below across publisher threads. The
-# bound store's sqlite3 connection is opened with
-# ``check_same_thread=False`` so that ``publish_event`` is safe to call
-# from narrator workers / renderer / daemon threads; this lock is what
-# makes that flag safe. Without it, two threads can interleave inside a
-# single ``conn.execute`` / ``with conn:`` and race to BEGIN a write
-# transaction — which manifested as the 2026-05-18 MP playtest
-# ``sqlite3.OperationalError: database is locked`` warnings on every
-# census / trope_census event. Held only across the sqlite call, never
-# while constructing payloads, so contention is bounded.
-_persist_lock = threading.Lock()
+# Per-write save-DB serialization is now provided by the process-wide
+# ``SAVE_WRITE_LOCK`` (RLock) from ``sidequest.game.persistence``. See
+# that module's doc block for the acquire-order rule and the consumer
+# list. The two persistence helpers below acquire the same lock as
+# every other writer (persistence.py, server/emitters.py). The lock is
+# imported lazily inside each helper (function-local) to avoid a
+# module-scope circular import: persistence.py imports watcher_hub at
+# line 27, so a module-scope ``from persistence import SAVE_WRITE_LOCK``
+# here would fail when persistence is imported first (partial module).
+# ``SAVE_WRITE_LOCK`` is also exposed as a module attribute via
+# ``__getattr__`` below so external assertions can verify the binding.
 
 
 def bind_event_store(store) -> None:
@@ -325,7 +324,8 @@ def _maybe_persist_encounter_row(event: dict) -> None:
         return
     payload = json.dumps(fields, default=_json_default)
     try:
-        with _persist_lock:
+        from sidequest.game.persistence import SAVE_WRITE_LOCK
+        with SAVE_WRITE_LOCK:
             _event_store._conn.execute(
                 "INSERT INTO events (kind, payload_json, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
                 (kind, payload),
@@ -392,7 +392,8 @@ def _persist_turn_telemetry(event: dict) -> None:
             "(event_seq, round, ts, component, event_type, payload_json) "
             "VALUES (?, ?, ?, ?, ?, ?)"
         )
-        with _persist_lock:
+        from sidequest.game.persistence import SAVE_WRITE_LOCK
+        with SAVE_WRITE_LOCK:
             if conn.in_transaction:
                 ev_seq = conn.execute("SELECT MAX(seq) FROM events").fetchone()[0]
                 conn.execute(
@@ -523,3 +524,23 @@ def synthetic_spans_count() -> int:
     Cheap (single attribute read); safe from any thread.
     """
     return _synthetic_spans_minted
+
+
+def __getattr__(name: str):
+    """Lazy module attribute access for ``SAVE_WRITE_LOCK``.
+
+    Exposes the process-wide ``SAVE_WRITE_LOCK`` from
+    ``sidequest.game.persistence`` as a module attribute without a
+    module-scope import (which would cause a circular import because
+    ``persistence.py`` imports ``watcher_hub`` at module scope).
+
+    Only triggered on first access of the attribute name; Python caches
+    the result in the module's ``__dict__`` so subsequent lookups are
+    O(1) dict reads.
+    """
+    if name == "SAVE_WRITE_LOCK":
+        from sidequest.game.persistence import SAVE_WRITE_LOCK
+        # Cache in module dict so future accesses bypass __getattr__
+        globals()["SAVE_WRITE_LOCK"] = SAVE_WRITE_LOCK
+        return SAVE_WRITE_LOCK
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

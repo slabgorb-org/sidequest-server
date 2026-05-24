@@ -744,3 +744,37 @@ def present_progression(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("progression", ())] = present_progression
+
+
+def present_magic(node: object, ctx: PresenterContext) -> str:
+    """Render magic.yaml as a label-grid of genre, sources, and plugins."""
+    if not isinstance(node, dict):
+        return ""
+    cells: list[str] = []
+    genre = str(node.get("genre", "")).strip()
+    if genre:
+        cells.append(_label_cell("Genre", genre))
+    allowed_sources = node.get("allowed_sources")
+    if isinstance(allowed_sources, list) and allowed_sources:
+        chips = ", ".join(str(s) for s in allowed_sources)
+        cells.append(
+            '<div class="ref-label-grid__cell">'
+            '<div class="ref-card__kicker">Sources</div>'
+            f"<div>{escape(chips)}</div>"
+            "</div>"
+        )
+    permitted_plugins = node.get("permitted_plugins")
+    if isinstance(permitted_plugins, list) and permitted_plugins:
+        chips = ", ".join(str(p) for p in permitted_plugins)
+        cells.append(
+            '<div class="ref-label-grid__cell">'
+            '<div class="ref-card__kicker">Plugins</div>'
+            f"<div>{escape(chips)}</div>"
+            "</div>"
+        )
+    if not cells:
+        return ""
+    return '<div class="ref-label-grid">' + "".join(cells) + "</div>"
+
+
+PRESENTERS[("magic", ())] = present_magic

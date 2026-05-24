@@ -220,10 +220,10 @@ class NarratorAgent(BaseAgent):
 
         # narrator_output_only is injected via build_output_format(), called
         # exactly once from Orchestrator.build_narrator_prompt (ADR-098
-        # removed Full/Delta tiering — there is no per-tier builder). That
-        # single call is backend-gated: the claude -p path gets the legacy
-        # full-sidecar prose; the SDK tool-use path gets the slimmed-sidecar
-        # + tool-routing prose. See NarratorAgent.build_output_format.
+        # removed Full/Delta tiering — there is no per-tier builder). Story
+        # 61-9 retired the legacy claude -p / Ollama narrator backends per
+        # the ADR-101 amendment; the call now emits the SDK tool-use prose
+        # unconditionally. See NarratorAgent.build_output_format.
 
         # Early/Format — output-style rules
         registry.register_section(

@@ -47,6 +47,7 @@ from .continuity import *  # noqa: F401, F403
 from .cookbook import *  # noqa: F401, F403
 from .course import *  # noqa: F401, F403
 from .dice import *  # noqa: F401, F403
+from .dispatch_engagement import *  # noqa: F401, F403
 from .disposition import *  # noqa: F401, F403
 from .dogfight import *  # noqa: F401, F403
 from .dungeon_attach import *  # noqa: F401, F403

@@ -6,6 +6,7 @@ that critical spoiler files do not leak. It does not assert specific content
 of any class or culture — that's a content-team deliverable, not a server
 concern.
 """
+
 import os
 from pathlib import Path
 
@@ -44,6 +45,7 @@ def client(monkeypatch):
     if "SIDEQUEST_GENRE_PACKS" not in os.environ:
         monkeypatch.setenv("SIDEQUEST_GENRE_PACKS", str(repo_relative))
     from sidequest.server.app import create_app
+
     return TestClient(create_app(genre_pack_search_paths=[repo_relative]))
 
 

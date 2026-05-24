@@ -1,0 +1,9 @@
+classes:
+  - name: Knight
+    signature_ability:
+      name: Lance Charge
+      description: A brave mounted charge that breaks enemy lines.
+  - name: Burglar
+    signature_ability:
+      name: Cosh
+      description: A swift, silent bludgeon from the shadows.

@@ -34,6 +34,7 @@ from sidequest.protocol.models import (
     LocationEntity,
     LocationEntityResolution,
 )
+from sidequest.telemetry.spans.reference import reference_url_skipped_span
 
 ResolverMode = Literal["narrator_proactive", "player_initiated"]
 EngagementKind = Literal["mention", "mechanical"]
@@ -77,6 +78,20 @@ def _apply_promotion(authored: LocationEntity, row: LocationPromotionRow) -> Loc
 
 
 def _minted_entity_from_row(row: LocationPromotionRow) -> LocationEntity:
+    # Pack and world are not in scope at this pure-function level — the resolver
+    # is called from multiple paths and deliberately carries no session context.
+    # Emit a skipped span for observability; the reference_url is None.
+    # A per-world registry tightening (attach URL when pack/world flow through
+    # the tool adapter) is deferred until the loader exposes locations.yaml as
+    # a runtime list. See Task 9 commit body.
+    with reference_url_skipped_span(
+        kind="location",
+        pack="",
+        world=None,
+        keys=(row.label,),
+        reason="no_pack_or_world_in_scope",
+    ):
+        pass
     return LocationEntity(
         id=row.entity_id,
         label=row.label,
@@ -86,6 +101,7 @@ def _minted_entity_from_row(row: LocationPromotionRow) -> LocationEntity:
         provenance=row.provenance,
         promoted_at_turn=row.promoted_at_turn,
         promoted_canon=row.promoted_canon,
+        reference_url=None,
     )
 
 

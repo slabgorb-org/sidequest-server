@@ -1,0 +1,5 @@
+locations:
+  - name: The Vicarage
+    description: A test location — a quiet stone building at the edge of the village.
+  - name: The Old Mill
+    description: A test location — a disused watermill with a rusted wheel.

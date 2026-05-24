@@ -1165,6 +1165,13 @@ async def _stage_curate(
                 # region = one room per ADR-106; the seam is open for a
                 # future multi-room-per-region extension).
                 room_id=node.id,
+                # Task 9 (reference-pages v2): thread pack/world so each
+                # LocationEntity in the manifest receives a reference_url.
+                # request.genre_slug / world_slug default to "" when the
+                # caller is a test fixture that doesn't carry world context;
+                # passing "" is equivalent to None for the URL-builder guard.
+                pack_id=request.genre_slug or None,
+                world_slug=request.world_slug or None,
             )
     except ValueError as exc:
         span.set_attribute("curated", False)

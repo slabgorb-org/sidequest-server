@@ -1,0 +1,7 @@
+cultures:
+  - name: Knight
+    description: >-
+      A noble culture of mounted warriors, sharing the class name by design
+      to exercise the cross-file anchor-collision invariant.
+  - name: Commoner
+    description: The folk who till the fields and mind the market stalls.

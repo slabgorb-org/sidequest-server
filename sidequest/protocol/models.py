@@ -46,6 +46,11 @@ class AbilityDefinition(BaseModel):
     mechanical_effect: engine-facing trigger text.
     involuntary: if True, narrator can trigger without player choice.
     source: how the character acquired this ability (Race/Class/Item/Play).
+    reference_url: optional hyperlink into /reference/rules/<pack> for
+        Class-source signature abilities.  Populated server-side when
+        source == Class and the ability resolves to a known classes.yaml
+        signature; None for Race/Item/Play sources or when the binding
+        cannot be resolved.
     """
 
     model_config = {"extra": "forbid"}
@@ -55,6 +60,11 @@ class AbilityDefinition(BaseModel):
     mechanical_effect: str
     involuntary: bool = False
     source: AbilitySource
+    reference_url: str | None = None
+    """URL into /reference/rules/<pack> for the class signature that grants
+    this ability.  Populated server-side when source == Class and the
+    ability resolves to a known classes.yaml signature; None for
+    Race/Item/Play sources or when the binding cannot be resolved."""
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +138,11 @@ class JournalEntry(ProtocolBase):
     """confirmed / suspected / rumored / Discovered / ..."""
     learned_turn: int
     """Interaction-turn index at the moment the fact was learned."""
+    reference_url: str | None = None
+    """URL into the lore page for legend / history / location entries.
+    None for Person (npcs excluded), Quest (no rendered yaml), Ability
+    (handled via AbilityDefinition.reference_url), and Lore/Place
+    entries whose content text doesn't match a known YAML entity."""
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +425,9 @@ class PartyMember(ProtocolBase):
     """Full character sheet. None until chargen completes."""
     inventory: InventoryPayload | None = None
     """Full inventory snapshot. None until the member has a loadout."""
+    class_reference_url: str | None = None
+    """URL to /reference/rules/<pack>#class-<slug>. Populated when the
+    class is a known classes.yaml entry; None otherwise."""
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +535,11 @@ class LocationEntity(BaseModel):
     ] = "authored"
     promoted_at_turn: int | None = None
     promoted_canon: str | None = None
+    reference_url: str | None = None
+    """URL into /reference/lore/<pack>/<world>#location-<slug>. Populated
+    server-side when pack + world + label are in scope at construction.
+    The lore page's bad-anchor banner (Task 4) handles cases where the
+    label doesn't match a rendered locations.yaml entry."""
 
 
 class EncounterLocationOverlay(BaseModel):

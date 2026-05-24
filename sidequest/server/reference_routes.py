@@ -7,6 +7,7 @@ Routes:
 The renderer is pure (sidequest.server.reference_renderer). This module owns
 the HTTP boundary: registry lookups, 404/500, response shaping.
 """
+
 from __future__ import annotations
 
 import logging
@@ -41,13 +42,15 @@ def _resolve_pack_dir(request: Request, pack: str) -> Path:
         candidate = Path(root) / pack
         if candidate.is_dir():
             return candidate
-    valid = sorted({
-        entry.name
-        for root in paths
-        if Path(root).is_dir()
-        for entry in Path(root).iterdir()
-        if entry.is_dir() and _SAFE_SLUG.match(entry.name)
-    })
+    valid = sorted(
+        {
+            entry.name
+            for root in paths
+            if Path(root).is_dir()
+            for entry in Path(root).iterdir()
+            if entry.is_dir() and _SAFE_SLUG.match(entry.name)
+        }
+    )
     raise HTTPException(
         status_code=404,
         detail=f"Pack '{pack}' not found. Valid packs: {', '.join(valid) or '(none)'}",
@@ -61,10 +64,15 @@ def _resolve_world_dir(pack_dir: Path, world: str) -> Path:
     if candidate.is_dir():
         return candidate
     worlds_root = pack_dir / "worlds"
-    valid = sorted(
-        entry.name for entry in worlds_root.iterdir()
-        if entry.is_dir() and _SAFE_SLUG.match(entry.name)
-    ) if worlds_root.is_dir() else []
+    valid = (
+        sorted(
+            entry.name
+            for entry in worlds_root.iterdir()
+            if entry.is_dir() and _SAFE_SLUG.match(entry.name)
+        )
+        if worlds_root.is_dir()
+        else []
+    )
     raise HTTPException(
         status_code=404,
         detail=(

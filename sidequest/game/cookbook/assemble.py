@@ -286,6 +286,8 @@ def assemble_region(
     look: str,
     is_first_band_entry: bool,
     room_id: str,
+    pack_id: str | None = None,
+    world_slug: str | None = None,
 ) -> RegionContentManifest:
     """The deterministic content-manifest contract (spec §4.3).
 
@@ -302,6 +304,11 @@ def assemble_region(
     lands on ``manifest.room_descriptions[0]`` (v1: one region = one
     room per ADR-106; multi-room-per-region is a future seam open at
     ``room_id``).
+
+    ``pack_id`` / ``world_slug``: threaded through to ``compose_room_prose``
+    so each ``LocationEntity`` in the manifest receives a ``reference_url``
+    when both are non-empty. Optional (default ``None``) so existing test
+    call sites that do not carry world context remain valid without changes.
     """
     rng = region_rng(campaign_seed, expansion_id)
     band = band_for_depth(bundle.affinities, depth_score)
@@ -353,6 +360,8 @@ def assemble_region(
         look_def=look_def,
         special_rooms=region_specials,
         room_id=room_id,
+        pack_id=pack_id,
+        world_slug=world_slug,
     )
 
     return RegionContentManifest(

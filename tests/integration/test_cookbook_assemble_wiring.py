@@ -28,6 +28,10 @@ def test_public_contract_signature_is_stable() -> None:
         "is_first_band_entry",
         # Story 55-1 / ADR-109: per-room deterministic seed.
         "room_id",
+        # Reference Pages v2 / Task 9: threaded through to compose_room_prose
+        # so LocationEntity.reference_url can resolve at construction time.
+        "pack_id",
+        "world_slug",
     }
 
 

@@ -304,6 +304,38 @@ def test_legends_emits_article_cards(fake_theme: ReferenceTheme) -> None:
     assert "<h2>era</h2>" not in html
 
 
+def test_openings_emits_card_grid(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_openings
+
+    node = [
+        {
+            "id": "solo_came_through_gate",
+            "name": "Galley, Coast — Gate Behind",
+            "establishing_narration": "Mid-coast. The Kestrel hums.",
+            "starting_location": "kestrel_galley",
+            "triggers": {"mode": "solo"},
+        },
+        {
+            "id": "mp_galley",
+            "name": "Galley, Jumprest",
+            "establishing_narration": "Jumpspace always smells of burnt sweetness.",
+        },
+    ]
+    html = present_openings(node, make_ctx("openings", (), fake_theme))
+
+    assert 'class="ref-card-grid ref-card-grid--cols-3"' in html
+    assert 'class="ref-card"' in html
+    assert 'class="ref-card__title"' in html
+    assert "Galley, Coast — Gate Behind" in html
+    assert "Galley, Jumprest" in html
+    assert "Mid-coast" in html
+    assert "burnt sweetness" in html
+    assert 'class="ref-pull-quote"' in html
+    # fields beyond title/prose are silently dropped
+    assert "kestrel_galley" not in html
+    assert "<h2>name</h2>" not in html
+
+
 def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
     from sidequest.server.reference_presenters import present_lore_geography
 

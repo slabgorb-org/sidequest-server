@@ -382,3 +382,43 @@ def present_legends(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("legends", ())] = present_legends
+
+
+_OPENING_PROSE_FIELDS = ("establishing_narration", "prose", "hook")
+_OPENING_TITLE_FIELDS = ("name", "title")
+
+
+def present_openings(node: object, ctx: PresenterContext) -> str:
+    """Render openings.yaml as a 3-column card grid with pull-quoted prose."""
+    # Unwrap dict wrapper (e.g. {version:…, openings:[…]}).
+    if isinstance(node, dict):
+        for v in node.values():
+            if isinstance(v, list):
+                node = v
+                break
+    if not isinstance(node, list) or not node:
+        return ""
+    cards: list[str] = []
+    for item in node:
+        if not isinstance(item, dict):
+            continue
+        title = ""
+        for f in _OPENING_TITLE_FIELDS:
+            title = str(item.get(f, "")).strip()
+            if title:
+                break
+        prose = ""
+        for f in _OPENING_PROSE_FIELDS:
+            prose = str(item.get(f, "")).strip()
+            if prose:
+                break
+        cards.append(
+            '<article class="ref-card">'
+            + (f'<h3 class="ref-card__title">{escape(title)}</h3>' if title else "")
+            + (f'<p class="ref-pull-quote">{escape(prose)}</p>' if prose else "")
+            + "</article>"
+        )
+    return '<div class="ref-card-grid ref-card-grid--cols-3">' + "".join(cards) + "</div>"
+
+
+PRESENTERS[("openings", ())] = present_openings

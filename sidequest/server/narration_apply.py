@@ -1797,6 +1797,37 @@ def _apply_narration_result_to_snapshot(
                 },
                 component="game",
             )
+            # MP scene-cohort propagation (sq-playtest 2026-05-11 per-player
+            # location desync): the narrator emits a single ``location`` field
+            # per turn, which is the *scene* location — not just the actor's.
+            # When the acting PC's scene changes, every other seated PC who
+            # was previously co-located with the actor follows them into the
+            # new scene. PCs at a different prior location are a genuine
+            # party split and stay put. PCs with no prior entry have already
+            # been bootstrapped by ``_bootstrap_character_locations_from_opening``;
+            # if they somehow have no entry here we leave them untouched
+            # rather than guess.
+            if old_loc and result.location != old_loc:
+                cohort_followed: list[str] = []
+                for seated_name in snapshot.player_seats.values():
+                    if not seated_name or seated_name == actor_for_location:
+                        continue
+                    peer_old = snapshot.character_locations.get(seated_name)
+                    if peer_old == old_loc:
+                        snapshot.character_locations[seated_name] = result.location
+                        cohort_followed.append(seated_name)
+                if cohort_followed:
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "kind": "scene_cohort_followed",
+                            "actor": actor_for_location,
+                            "followers": cohort_followed,
+                            "old_location": old_loc,
+                            "new_location": result.location,
+                        },
+                        component="game",
+                    )
         # Story 45-16: filter narrator-emitted location before adding
         # to the region graph. Playtest 3 leaked
         # `(aside — narrator brief)` into discovered_regions because

@@ -228,3 +228,159 @@ def test_apply_narration_writes_acting_character_location_entry() -> None:
     assert sd.snapshot.character_locations["Shirley"] == "Cockpit"
     # Pre-existing peer entry untouched (no clobber, but also no seed).
     assert sd.snapshot.character_locations["Laverne"] == "Engine Room"
+
+
+# ---------------------------------------------------------------------------
+# Scene-cohort propagation (sq-playtest 2026-05-11 per-player location desync)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_narration_propagates_scene_change_to_co_located_peers() -> None:
+    """When the acting PC moves the scene from L1 to L2, every other seated
+    PC whose prior location is also L1 follows into L2.
+
+    The narrator's ``location`` field is the *scene* location for the turn,
+    not just the actor's GPS. Without cohort propagation, only the actor's
+    ``character_locations`` entry updates and every peer renders a stale
+    location in their PARTY_STATUS (the playtest 2026-05-11 bug:
+    Vyvyan moves the party to "Sünden Square" but Neil's header still reads
+    "The Mouth of Mawdeep — The Throat").
+    """
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+
+    vyvyan = _char("Vyvyan")
+    neil = _char("Neil")
+    sd = _sd("p:vyvyan", "Vyvyan", [vyvyan, neil])
+    # Both bootstrapped to the opening scene.
+    sd.snapshot.character_locations = {
+        "Vyvyan": "The Mouth of Mawdeep — The Throat",
+        "Neil": "The Mouth of Mawdeep — The Throat",
+    }
+    sd.snapshot.player_seats = {"p:vyvyan": "Vyvyan", "p:neil": "Neil"}
+
+    room = SessionRoom(slug="slug-cohort", mode=GameMode.MULTIPLAYER)
+    room.seat("p:vyvyan", character_slot="Vyvyan")
+    room.seat("p:neil", character_slot="Neil")
+
+    result = NarrationTurnResult(
+        narration="Vyvyan steps off the coach at the Recruiter's Post.",
+        location="Sünden Square",
+    )
+
+    _apply_narration_result_to_snapshot(
+        sd.snapshot,
+        result,
+        sd.player_name,
+        room=room,
+        pack=sd.genre_pack,
+        acting_character_name="Vyvyan",
+    )
+
+    assert sd.snapshot.character_locations["Vyvyan"] == "Sünden Square"
+    assert sd.snapshot.character_locations["Neil"] == "Sünden Square", (
+        "Neil was co-located with Vyvyan at the prior scene; a narrator-emitted "
+        "scene change must carry every co-located PC into the new scene"
+    )
+
+
+def test_apply_narration_preserves_genuine_party_split() -> None:
+    """When a peer is at a *different* prior location, the scene-cohort
+    follow MUST NOT clobber them. That preserves Living World autonomy:
+    one PC walking into a new room doesn't yank a PC who's elsewhere.
+    """
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+
+    vyvyan = _char("Vyvyan")
+    neil = _char("Neil")
+    sd = _sd("p:vyvyan", "Vyvyan", [vyvyan, neil])
+    sd.snapshot.character_locations = {
+        "Vyvyan": "Sünden Square",
+        "Neil": "The Wall (looking down)",
+    }
+    sd.snapshot.player_seats = {"p:vyvyan": "Vyvyan", "p:neil": "Neil"}
+
+    room = SessionRoom(slug="slug-split", mode=GameMode.MULTIPLAYER)
+    room.seat("p:vyvyan", character_slot="Vyvyan")
+    room.seat("p:neil", character_slot="Neil")
+
+    result = NarrationTurnResult(
+        narration="Vyvyan ducks into Lampwick's.",
+        location="Lampwick's Tavern",
+    )
+
+    _apply_narration_result_to_snapshot(
+        sd.snapshot,
+        result,
+        sd.player_name,
+        room=room,
+        pack=sd.genre_pack,
+        acting_character_name="Vyvyan",
+    )
+
+    assert sd.snapshot.character_locations["Vyvyan"] == "Lampwick's Tavern"
+    assert sd.snapshot.character_locations["Neil"] == "The Wall (looking down)", (
+        "Neil was NOT co-located with Vyvyan — scene-cohort propagation must "
+        "leave the genuine party split intact"
+    )
+
+
+def test_apply_narration_emits_scene_cohort_followed_watcher_event() -> None:
+    """Wiring/OTEL: when scene-cohort propagation fires, a state_transition
+    event with ``kind=scene_cohort_followed`` is published so the GM panel
+    (Sebastien's lie-detector) can see the propagation rather than guessing
+    why peer locations changed.
+    """
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.server import narration_apply as napply
+
+    vyvyan = _char("Vyvyan")
+    neil = _char("Neil")
+    sd = _sd("p:vyvyan", "Vyvyan", [vyvyan, neil])
+    sd.snapshot.character_locations = {
+        "Vyvyan": "The Mouth of Mawdeep — The Throat",
+        "Neil": "The Mouth of Mawdeep — The Throat",
+    }
+    sd.snapshot.player_seats = {"p:vyvyan": "Vyvyan", "p:neil": "Neil"}
+
+    seen_events: list[tuple[str, dict]] = []
+    original = napply._watcher_publish
+
+    def capture(event_type, payload, **kw):
+        seen_events.append((event_type, dict(payload) if isinstance(payload, dict) else {}))
+        return original(event_type, payload, **kw)
+
+    napply._watcher_publish = capture  # type: ignore[assignment]
+    try:
+        room = SessionRoom(slug="slug-cohort-event", mode=GameMode.MULTIPLAYER)
+        room.seat("p:vyvyan", character_slot="Vyvyan")
+        room.seat("p:neil", character_slot="Neil")
+        result = NarrationTurnResult(
+            narration="Vyvyan crosses the flagstones.",
+            location="Sünden Square",
+        )
+        napply._apply_narration_result_to_snapshot(
+            sd.snapshot,
+            result,
+            sd.player_name,
+            room=room,
+            pack=sd.genre_pack,
+            acting_character_name="Vyvyan",
+        )
+    finally:
+        napply._watcher_publish = original  # type: ignore[assignment]
+
+    cohort_events = [
+        payload
+        for _et, payload in seen_events
+        if payload.get("kind") == "scene_cohort_followed"
+    ]
+    assert len(cohort_events) == 1, (
+        f"Expected exactly one scene_cohort_followed event, got: {cohort_events}"
+    )
+    evt = cohort_events[0]
+    assert evt["actor"] == "Vyvyan"
+    assert evt["followers"] == ["Neil"]
+    assert evt["old_location"] == "The Mouth of Mawdeep — The Throat"
+    assert evt["new_location"] == "Sünden Square"

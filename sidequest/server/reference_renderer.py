@@ -830,6 +830,7 @@ def _wrap_document(
         f"<title>{escape(title)}</title>"
         '<link rel="stylesheet" href="/reference/static/theme.css">'
         '<link rel="stylesheet" href="/reference/static/styles.css">'
+        '<link rel="stylesheet" href="/reference/static/presenters.css">'
         f"{_theme_style_block(theme)}"
         "</head>"
         "<body>"

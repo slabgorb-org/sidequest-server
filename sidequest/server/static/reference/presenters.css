@@ -1,0 +1,216 @@
+/* Reference body presenter styles (Story 63-8).
+ *
+ * Loaded after styles.css. All rules use the .ref-* namespace so the
+ * chrome-wiring regression test can fence them against drift between
+ * presenter HTML emit and CSS coverage.
+ *
+ * Theme branching uses the existing [data-archetype] selector for
+ * per-pack overrides — base rules go in this file, archetype-specific
+ * tweaks layer on with [data-archetype="terminal"] .ref-card { … } etc.
+ */
+
+/* --- Cards & grids --- */
+.ref-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.25rem;
+    margin: 1.5rem 0;
+}
+.ref-card-grid--cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.ref-card-grid--cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 960px) {
+    .ref-card-grid--cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ref-card-grid--cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+    .ref-card-grid--cols-3, .ref-card-grid--cols-4 {
+        grid-template-columns: 1fr;
+    }
+}
+
+.ref-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--ref-color-primary);
+    border-radius: 4px;
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.ref-card__kicker {
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ref-color-accent);
+}
+.ref-card__title {
+    font-family: var(--ref-font-display);
+    font-size: 1.25rem;
+    margin: 0;
+}
+.ref-card__summary {
+    font-style: italic;
+    opacity: 0.85;
+}
+.ref-card__body {
+    margin: 0;
+}
+.ref-card__meta {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: auto;
+}
+
+/* --- Badges --- */
+.ref-badge {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+.ref-badge--disposition-friendly { background: rgba(40, 180, 80, 0.2);  color: #6FE0A0; }
+.ref-badge--disposition-neutral  { background: rgba(180, 160, 60, 0.2); color: #E8C878; }
+.ref-badge--disposition-wary     { background: rgba(200, 120, 50, 0.2); color: #E8A878; }
+.ref-badge--disposition-hostile  { background: rgba(200, 50, 50, 0.2);  color: #E87878; }
+
+/* --- Chips --- */
+.ref-chip {
+    display: inline-block;
+    padding: 0.1rem 0.55rem;
+    border: 1px solid var(--ref-color-primary);
+    border-radius: 2px;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* --- Pull-quote --- */
+.ref-pull-quote {
+    font-family: var(--ref-font-display);
+    font-size: 1.15rem;
+    line-height: 1.5;
+    border-left: 3px solid var(--ref-color-accent);
+    padding-left: 1.25rem;
+    margin: 1.5rem 0;
+    font-style: italic;
+}
+.ref-pull-quote__dropcap {
+    font-size: 3em;
+    line-height: 0.85;
+    float: left;
+    margin: 0.15em 0.1em 0 0;
+    color: var(--ref-color-accent);
+    font-style: normal;
+}
+
+/* --- Dinkus divider --- */
+.ref-dinkus {
+    border: none;
+    text-align: center;
+    margin: 2rem 0;
+    overflow: visible;
+}
+.ref-dinkus::before {
+    content: attr(data-glyph);
+    color: var(--ref-color-accent);
+    font-size: 1.5rem;
+    letter-spacing: 0.5em;
+}
+
+/* --- Label grid (default frame, ability scores, world meta) --- */
+.ref-label-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+.ref-label-grid__cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+/* --- Stat strip (rules axioms) --- */
+.ref-stat-strip {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 1.5rem 0;
+}
+.ref-stat-card {
+    padding: 1rem;
+    border: 1px solid var(--ref-color-primary);
+    border-radius: 4px;
+    text-align: center;
+}
+@media (max-width: 960px) {
+    .ref-stat-strip { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* --- Table --- */
+.ref-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+}
+.ref-table th, .ref-table td {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+}
+.ref-table th {
+    font-family: var(--ref-font-display);
+    color: var(--ref-color-accent);
+}
+
+/* --- Timeline --- */
+.ref-timeline { border-left: 2px solid var(--ref-color-primary); padding-left: 1.25rem; }
+.ref-timeline__chapter { margin: 0 0 1.5rem 0; }
+
+/* --- Picker --- */
+.ref-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 1rem 0;
+}
+.ref-picker__chip {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--ref-color-primary);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-family: var(--ref-font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.85rem;
+}
+.ref-picker__chip[aria-selected="true"] {
+    background: var(--ref-color-primary);
+    color: var(--ref-color-background);
+}
+.ref-picker-panel[hidden] { display: none; }
+
+/* --- Error / unknown banners (dev-only visibility) --- */
+.ref-presenter-error {
+    background: rgba(200, 50, 50, 0.15);
+    border: 1px solid #C83232;
+    padding: 0.75rem 1rem;
+    border-radius: 2px;
+    margin: 1rem 0;
+}
+.ref-unknown-field {
+    background: rgba(200, 160, 50, 0.1);
+    border: 1px dashed #C8A032;
+    padding: 0.5rem 0.75rem;
+    border-radius: 2px;
+    margin: 0.5rem 0;
+    font-family: monospace;
+    font-size: 0.85rem;
+}

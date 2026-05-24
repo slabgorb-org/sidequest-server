@@ -1,5 +1,4 @@
 import random as _random
-from pathlib import Path
 
 from sidequest.game.beat_filter import beats_available_for
 from sidequest.game.beat_kinds import (
@@ -361,9 +360,11 @@ def test_space_opera_negotiation_beats_carry_opponent_overrides():
     import pytest
 
     from sidequest.genre.loader import load_genre_pack
+    from tests._helpers.genre_paths import PackNotFound, find_pack_path
 
-    content = Path("/Users/slabgorb/Projects/oq-2/sidequest-content/genre_packs/space_opera")
-    if not content.is_dir():
+    try:
+        content = find_pack_path("space_opera")
+    except PackNotFound:
         pytest.skip("sidequest-content not on disk in this checkout")
 
     pack = load_genre_pack(content)

@@ -6,6 +6,7 @@ surface: '#2a2a1a'
 text: '#c8d6a0'
 border_style: heavy
 web_font_family: Special Elite
+display_font_family: Special Elite
 
 dinkus:
   enabled: true

@@ -40,5 +40,6 @@ class GenreTheme(BaseModel):
     text: str
     border_style: str
     web_font_family: str
+    display_font_family: str
     dinkus: Dinkus
     session_opener: SessionOpener

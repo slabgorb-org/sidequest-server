@@ -167,3 +167,63 @@ def test_file_root_presenter_fires_for_top_level_list(
         del PRESENTERS[("cultures", ())]
 
     assert sentinel in html
+
+
+def test_file_header_h1_suppressed_for_presented_file(
+    synthetic_pack: Path, synthetic_world: Path
+) -> None:
+    """If a file_stem has any presenter registered, the <h1>{filename}</h1>
+    file-header wrapper is suppressed — TOC label provides the section title.
+    The section anchor wrapper is still emitted."""
+    from sidequest.server.reference_renderer import assemble_lore_page
+
+    (synthetic_world / "lore.yaml").write_text(
+        yaml.safe_dump({"history": "Real prose.\n\nSecond paragraph."})
+    )
+    html = assemble_lore_page(
+        pack="space_opera",
+        world="synth_world",
+        pack_dir=synthetic_pack,
+        world_dir=synthetic_world,
+    )
+    assert "<h1>lore.yaml</h1>" not in html
+    # But the section wrapper is still emitted so the anchor works
+    assert 'id="file-lore"' in html
+
+
+def test_file_header_h1_kept_for_unpresented_file(
+    synthetic_pack: Path, synthetic_world: Path
+) -> None:
+    """Files whose stem has no registered presenter still emit the legacy
+    <h1>{filename}</h1> file-header — the v1 raw fallback signal stays
+    visible to authors during development."""
+    from sidequest.server.reference_presenters import PRESENTERS
+    from sidequest.server.reference_renderer import (
+        EXCLUDED_FILES,
+        LORE_WORLD_FILES,
+        assemble_lore_page,
+    )
+
+    # Find a real LORE_WORLD_FILES entry that has no presenter.
+    presented_stems = {reg_stem for reg_stem, _ in PRESENTERS}
+    unpresented_lore = [
+        filename
+        for filename in LORE_WORLD_FILES
+        if filename not in EXCLUDED_FILES and filename.removesuffix(".yaml") not in presented_stems
+    ]
+    if not unpresented_lore:
+        # Skip — every world-lore stem has a presenter, which is fine and
+        # means this test no longer expresses anything load-bearing.
+        import pytest
+
+        pytest.skip("Every LORE_WORLD_FILES stem has a presenter — nothing to assert.")
+
+    target = unpresented_lore[0]
+    (synthetic_world / target).write_text(yaml.safe_dump({"some_key": "some_value"}))
+    html = assemble_lore_page(
+        pack="space_opera",
+        world="synth_world",
+        pack_dir=synthetic_pack,
+        world_dir=synthetic_world,
+    )
+    assert f"<h1>{target}</h1>" in html

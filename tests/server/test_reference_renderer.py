@@ -308,10 +308,12 @@ def test_assemble_rules_page_includes_listed_files_in_order(tmp_path):
     html = assemble_rules_page("demo", pack_dir)
 
     assert "<title>demo — Rules</title>" in html
-    # Section order matches RULES_FILES ordering
-    a_pos = html.index("archetypes.yaml")
-    b_pos = html.index("classes.yaml")
-    c_pos = html.index("rules.yaml")
+    # Section order matches RULES_FILES ordering.
+    # Task 15: presented files suppress <h1>{filename}</h1>; assert on
+    # the stable section anchor ids instead.
+    a_pos = html.index('id="file-archetypes"')
+    b_pos = html.index('id="file-classes"')
+    c_pos = html.index('id="file-rules"')
     assert a_pos < b_pos < c_pos
 
 
@@ -321,8 +323,10 @@ def test_assemble_rules_page_skips_missing_optional_files(tmp_path):
     pack_dir = _write_pack(tmp_path, "demo", {"archetypes.yaml": "a: 1\n"})
     html = assemble_rules_page("demo", pack_dir)
 
-    assert "archetypes.yaml" in html
-    assert "magic.yaml" not in html  # silently absent
+    # Task 15: archetypes has a presenter, so <h1>archetypes.yaml</h1> is
+    # suppressed. Assert on the stable section anchor id instead.
+    assert 'id="file-archetypes"' in html
+    assert 'id="file-magic"' not in html  # silently absent
 
 
 def test_assemble_rules_page_never_renders_excluded_files(tmp_path):
@@ -380,11 +384,13 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     assert "a tale" in html
     assert "genre-flavor-value" in html
     assert "genre-culture value" in html
-    # Both world-tier content (world.yaml) and pack-tier flavor (with the
-    # `(genre)` suffix) are reachable in the rendered HTML. Tier order is
-    # no longer asserted — see docstring above.
-    assert "world.yaml" in html
-    assert "(genre)" in html
+    # Both world-tier content (world.yaml) and pack-tier flavor (cultures.yaml)
+    # are reachable via their stable section anchor ids. Task 15 suppresses the
+    # legacy <h1>{filename}</h1> for presented files, so "world.yaml" and
+    # "(genre)" no longer appear as heading text; the section wrappers still
+    # emit so deep-links resolve.
+    assert 'id="file-world"' in html
+    assert 'id="file-cultures"' in html
 
 
 def test_assemble_handles_malformed_yaml_with_loud_marker(tmp_path):

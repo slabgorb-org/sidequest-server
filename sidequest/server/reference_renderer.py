@@ -458,6 +458,31 @@ _BAD_ANCHOR_SCRIPT = (
 )
 
 
+def _stem_has_any_presenter(stem: str) -> bool:
+    """True iff the PRESENTERS registry has at least one (stem, *) entry."""
+    from sidequest.server.reference_presenters import PRESENTERS
+
+    return any(reg_stem == stem for reg_stem, _ in PRESENTERS)
+
+
+def _file_section_wrapper(path: Path, body: str) -> str:
+    """Wrap file content in a ``<section class="file" id="file-{slug}">`` element.
+
+    When the file stem has a registered presenter, the ``<h1>{filename}</h1>``
+    file-header is suppressed — the TOC label provides the section title.
+    Unpresented files keep the legacy ``<h1>`` so authors see the raw-fallback
+    signal during development.
+
+    The ``<section>`` anchor wrapper is always emitted so deep-links resolve.
+    """
+    file_slug = slugify(path.stem)
+    if _stem_has_any_presenter(path.stem):
+        return f'<section class="file" id="file-{file_slug}">{body}</section>'
+    return (
+        f'<section class="file" id="file-{file_slug}"><h1>{escape(path.name)}</h1>{body}</section>'
+    )
+
+
 def _render_file(
     path: Path,
     *,
@@ -481,8 +506,6 @@ def _render_file(
         theme=theme,
         depth=0,
     )
-    file_slug = slugify(path.stem)
-
     # File-root presenter dispatch (key_path == ()). Applies the same
     # visibility gate as _render_dict's child-key path. If KEEPER, drop
     # silently. If UNKNOWN, fire warn span + drop. Otherwise, run the
@@ -515,18 +538,13 @@ def _render_file(
                     span.record_exception(exc)
                 raise
             if rendered:
-                return (
-                    f'<section class="file" id="file-{file_slug}">'
-                    f"<h1>{escape(path.name)}</h1>{rendered}</section>"
-                )
+                return _file_section_wrapper(path, rendered)
             # Presenter returned empty — means "I don't recognise this shape",
             # not "intentionally suppress". Fall through to the generic walk
             # below so the file content is never silently blackholed.
 
     body = "<p><em>(empty file)</em></p>" if data is None else render_node(data, kind=kind, ctx=ctx)
-    return (
-        f'<section class="file" id="file-{file_slug}"><h1>{escape(path.name)}</h1>{body}</section>'
-    )
+    return _file_section_wrapper(path, body)
 
 
 def _render_file_with_label(
@@ -537,10 +555,18 @@ def _render_file_with_label(
     world: str | None,
     theme: ReferenceTheme,
 ) -> str:
-    """Like _render_file but appends a parenthetical label to the file heading."""
+    """Like _render_file but appends a parenthetical label to the file heading.
+
+    For presented files, the ``(genre)`` heading suffix is suppressed — the
+    presenter output stands on its own and the TOC label is sufficient context.
+    """
     rendered = _render_file(path, pack=pack, world=world, theme=theme)
     if not rendered:
         return ""
+    if _stem_has_any_presenter(path.stem):
+        # Presented file — TOC label suffices; suppress the legacy (genre)
+        # heading suffix as well.
+        return rendered
     return rendered.replace(
         f"<h1>{escape(path.name)}</h1>",
         f"<h1>{escape(path.name)} <small>{escape(label)}</small></h1>",

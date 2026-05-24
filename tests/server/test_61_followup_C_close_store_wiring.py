@@ -357,7 +357,7 @@ async def test_ws_endpoint_calls_close_store_when_last_mp_player_disconnects():
     The story's SM Acceptance Bar bullet
     `MP game, last player disconnects: room is now empty → close_store()
     fires ✓` was previously unasserted. The teardown gate at
-    ``websocket.py:191`` is mode-agnostic
+    ``websocket.py:202`` is mode-agnostic
     (``not room.connected_player_ids()``), but missing a multiplayer
     last-player test means a mode-specific regression (e.g. accidentally
     gating teardown on ``GameMode.SOLO``) would slip through. This test
@@ -415,9 +415,9 @@ async def test_ws_endpoint_calls_close_store_when_last_mp_player_disconnects():
 # and these tests are the regression guards.
 #
 # A. handler.cleanup() itself raises (uncaught Exception bubbles out)
-#    → ws_endpoint catches at websocket.py:170, logs ws.cleanup_failed at
+#    → ws_endpoint catches at websocket.py:171, logs ws.cleanup_failed at
 #    ERROR with the slug, sets cleanup_failed=True, and the teardown gate
-#    at websocket.py:191 skips close_store with a ws.room_teardown_skipped
+#    at websocket.py:202 skips close_store with a ws.room_teardown_skipped
 #    reason=cleanup_raised breadcrumb. asyncio.CancelledError is re-raised
 #    explicitly (websocket.py:160) so shutdown propagates correctly.
 #
@@ -426,7 +426,7 @@ async def test_ws_endpoint_calls_close_store_when_last_mp_player_disconnects():
 #    websocket_session_handler.py:1551-1552 — it logs session.disconnect_save_failed
 #    AND sets self.last_save_failure = exc, added in this story specifically
 #    so ws_endpoint can detect the swallow). ws_endpoint reads
-#    handler.last_save_failure (websocket.py:200) and the teardown gate
+#    handler.last_save_failure (websocket.py:201) and the teardown gate
 #    skips close_store with reason=save_failure_swallowed. Without this,
 #    the canonical store would be torn down with the final snapshot lost.
 #
@@ -446,10 +446,10 @@ async def test_ws_endpoint_logs_and_skips_close_store_when_cleanup_raises(caplog
     breadcrumb (``ws.room_teardown_skipped reason=cleanup_raised``) so
     the skipped teardown is visible in operator tails.
 
-    Production wiring: ws_endpoint at websocket.py:170 catches Exception
+    Production wiring: ws_endpoint at websocket.py:171 catches Exception
     (re-raising asyncio.CancelledError explicitly at :160 so shutdown
     cancellation propagates correctly). The cleanup_failed flag then
-    drives the teardown gate at websocket.py:191 to skip close_store
+    drives the teardown gate at websocket.py:202 to skip close_store
     and emit the ``ws.room_teardown_skipped`` log instead. This test
     asserts both halves (the log presence and the skip behaviour) so a
     regression that removed either guard would fail loudly.
@@ -516,8 +516,8 @@ async def test_ws_endpoint_does_not_close_store_when_cleanup_swallowed_save_fail
     fire. Tearing down a store whose final save was lost would compound
     the data loss into a permanent state regression.
 
-    The production teardown gate at ``websocket.py:191`` reads
-    ``handler.last_save_failure`` (websocket.py:200) alongside
+    The production teardown gate at ``websocket.py:202`` reads
+    ``handler.last_save_failure`` (websocket.py:201) alongside
     ``cleanup_failed`` and ``connected_player_ids()``. When
     last_save_failure is not None, the gate skips close_store and emits
     ``ws.room_teardown_skipped slug=… reason=save_failure_swallowed``.

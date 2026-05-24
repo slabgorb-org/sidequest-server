@@ -34,11 +34,23 @@ def test_allowlist_minimum_contents():
 
     Story 57-3 / ADR-112: the four unconditional Valley-zone genre prose
     sections (``genre_extraction``, ``genre_keeper_monologue``,
-    ``genre_town``, ``genre_chargen``) are promoted into the Stable
-    allowlist. They are session-static (sourced from per-pack
+    ``genre_town``, ``genre_chargen``) were promoted into the Stable
+    allowlist. They were session-static (sourced from per-pack
     ``prompts.yaml`` blocks that don't mutate at runtime) and registered
-    unconditionally on every narrator turn, so they satisfy ADR-112's
-    mutability rubric for Stable membership.
+    unconditionally on every narrator turn.
+
+    Story 61-11 (ADR-112 amendment): ``genre_chargen`` is demoted from
+    Stable — it was the only one of the four for which an existing
+    runtime predicate (``TurnContext.opening_directive is not None``)
+    cleanly expressed its scene scope. The chargen prose is needed only
+    on the post-chargen opening turn; carrying it on every subsequent
+    "you walk into the tavern" turn was misallocated cache budget.
+    ``genre_extraction`` and ``genre_keeper_monologue`` retain Stable
+    classification pending a future story that builds the missing
+    runtime signals (no ``extraction_active`` or ``keeper_speaking``
+    field exists today). ``genre_town`` retains Stable classification
+    per the original ADR-112 §Defer — high firing rate, needs profiling
+    before demotion.
     """
     required = {
         "narrator_identity",
@@ -51,11 +63,12 @@ def test_allowlist_minimum_contents():
         "genre_world_state",
         "narrator_vocabulary",
         "genre_transition_hints",
-        # ADR-112 promotions (Story 57-3) ----------------------------------
+        # ADR-112 promotions that remain Stable (Story 57-3, unchanged) ----
         "genre_extraction",
         "genre_keeper_monologue",
         "genre_town",
-        "genre_chargen",
+        # NOTE: ``genre_chargen`` removed from this set per Story 61-11.
+        # See ``test_genre_chargen_resolves_to_user`` for the inverse pin.
     }
     missing = required - set(STABLE_SECTION_NAMES)
     assert not missing, f"Required stable sections missing from allowlist: {missing}"
@@ -102,14 +115,40 @@ def test_genre_town_resolves_to_system():
     assert "genre_town" in STABLE_SECTION_NAMES
 
 
-def test_genre_chargen_resolves_to_system():
-    """ADR-112 §Promote — ``genre_chargen`` rides the cached System block.
+def test_genre_chargen_resolves_to_user():
+    """Story 61-11 (ADR-112 amendment) — ``genre_chargen`` is demoted.
 
-    Source: ``prompts.yaml gp.chargen``; unconditionally registered at
-    ``orchestrator.py:1403``. Session-static.
+    Source: ``prompts.yaml gp.chargen``; registered ONLY when
+    ``TurnContext.opening_directive is not None`` at the post-chargen
+    opening turn (see ``orchestrator.py`` chargen registration block —
+    Story 61-11 added the predicate gate around the existing ``if
+    gp.chargen:`` outer guard).
+
+    The original ADR-112 promotion (Story 57-3) carried the prose on
+    every turn for cache stability, but the predicate audit performed
+    during 61-11 found that ``opening_directive`` (set by
+    ``_populate_opening_directive_on_chargen_complete`` at
+    ``websocket_session_handler.py:181-346``, cleared after the opening
+    turn fires) IS a clean existing signal for the chargen scene. The
+    section is needed only on the opening turn — at most once per
+    session. Carrying it on every subsequent neutral turn was a
+    ~150-token misallocation that this story corrects.
+
+    Regression guard: if a future author promotes ``genre_chargen``
+    back into ``STABLE_SECTION_NAMES``, this test fails loudly. The
+    chargen prose ("describe what the character is carrying — their
+    weapon, their pack contents, how much coin they have. The player
+    should know their loadout before they step into the dark") is
+    scene-typed and does not belong in the cache root.
     """
-    assert default_bucket_for_section("genre_chargen") == SectionBucket.System
-    assert "genre_chargen" in STABLE_SECTION_NAMES
+    assert default_bucket_for_section("genre_chargen") == SectionBucket.User
+    assert "genre_chargen" not in STABLE_SECTION_NAMES, (
+        "genre_chargen was added back to STABLE_SECTION_NAMES — Story 61-11 "
+        "(ADR-112 amendment) demoted it. Promotion would re-introduce the "
+        "~150-tok per-turn carry on every neutral turn. The chargen prose is "
+        "scene-typed (post-chargen opening turn only); the predicate gate at "
+        "the orchestrator registration block keeps it relevant where it fires."
+    )
 
 
 def test_genre_combat_voice_remains_in_user_bucket():

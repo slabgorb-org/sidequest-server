@@ -1591,8 +1591,21 @@ class Orchestrator:
                     ),
                 )
 
-            # ADR-112 / Story 57-3 re-zoned Valley → Early — see comment above.
-            if gp.chargen:
+            # Story 61-11 (ADR-112 amendment): chargen prose is scene-
+            # gated on the existing ``TurnContext.opening_directive`` —
+            # the only one of the four ADR-112 promotions whose scene
+            # scope (post-chargen opening turn) was cleanly expressible
+            # via existing runtime state. The directive is populated by
+            # ``_populate_opening_directive_on_chargen_complete``
+            # (``websocket_session_handler.py:181-346``) at chargen
+            # confirmation and cleared after the opening turn fires, so
+            # this block fires at most once per session — eliminating
+            # the ~150-tok per-turn carry on every subsequent neutral
+            # turn. The section was also demoted from
+            # ``STABLE_SECTION_NAMES`` so it rides the User bucket
+            # (uncached) instead of glueing onto the cached System
+            # prefix; both halves are required.
+            if gp.chargen and context.opening_directive is not None:
                 registry.register_section(
                     agent_name,
                     PromptSection.new(

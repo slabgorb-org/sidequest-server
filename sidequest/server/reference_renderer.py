@@ -18,6 +18,8 @@ from pathlib import Path
 import yaml
 
 from sidequest.server.reference_slug import slugify
+from sidequest.server.reference_theme import ReferenceTheme, load_reference_theme
+from sidequest.telemetry.spans.reference import reference_hero_unbound_span
 
 _DEPTH_CAP = 6
 
@@ -209,12 +211,40 @@ EXCLUDED_FILES: frozenset[str] = frozenset(
 
 
 # --- Page assemblers ---
-_STYLESHEET_HREF = "/reference/static/reference.css"
 
 # Matches only the lowercase-alnum-hyphen ids the renderer emits.  Single-quoted
 # string literals inside the inline script (e.g. 'ref-anchors') are NOT preceded
 # by `id=` so they cannot false-match.
 _ID_ATTR_RE = re.compile(r'\bid="([a-z0-9][a-z0-9_-]*)"')
+
+
+# Inline IntersectionObserver scroll-spy — toggles aria-current on the
+# contents-rail link whose target section is in view. Bounded ≤2KB so the
+# guard test catches any accidental SPA-bundle inlining.
+_SCROLL_SPY_SCRIPT = (
+    "<script>"
+    "(function(){"
+    "var rail=document.querySelector('.contents-rail');"
+    "if(!rail)return;"
+    "var links=rail.querySelectorAll('a[href^=\"#\"]');"
+    "var byId={};"
+    "links.forEach(function(a){byId[a.getAttribute('href').slice(1)]=a;});"
+    "var io=new IntersectionObserver(function(entries){"
+    "entries.forEach(function(e){"
+    "var a=byId[e.target.id];"
+    "if(a&&e.isIntersecting){"
+    "links.forEach(function(l){l.removeAttribute('aria-current');});"
+    "a.setAttribute('aria-current','true');"
+    "}"
+    "});"
+    "},{rootMargin:'-30% 0px -60% 0px'});"
+    "Object.keys(byId).forEach(function(id){"
+    "var el=document.getElementById(id);"
+    "if(el)io.observe(el);"
+    "});"
+    "})();"
+    "</script>"
+)
 
 
 def _collect_anchor_ids(body: str) -> list[str]:
@@ -277,49 +307,171 @@ def _render_file_with_label(path: Path, label: str) -> str:
     )
 
 
-def _wrap_document(title: str, body: str) -> str:
-    anchors = _collect_anchor_ids(body)
+def _theme_style_block(theme: ReferenceTheme) -> str:
+    """Inline ``<style>`` block exposing per-pack palette + fonts as CSS vars
+    so the bundled theme.css and styles.css can resolve them without hardcoded
+    hex values. Per-pack values OVERRIDE any defaults in theme.css."""
+    return (
+        "<style>"
+        ":root{"
+        f"--ref-color-primary:{theme.palette_primary};"
+        f"--ref-color-accent:{theme.palette_accent};"
+        f"--ref-color-background:{theme.palette_background};"
+        f"--ref-font-web:{theme.web_font_family};"
+        f"--ref-font-display:{theme.display_font_family};"
+        "}"
+        "</style>"
+    )
+
+
+def _document_root_open(pack: str, world: str | None, archetype: str) -> str:
+    """Open the ``<html>`` element with data-pack/world/archetype attrs that
+    drive the bundle's per-archetype CSS rules ([data-archetype="rugged"], etc.)."""
+    world_attr = f' data-world="{escape(world)}"' if world else ""
+    return (
+        '<html lang="en"'
+        f' data-pack="{escape(pack)}"'
+        f"{world_attr}"
+        f' data-archetype="{escape(archetype)}"'
+        ' class="dark">'
+    )
+
+
+def _build_contents_rail(entries: list[tuple[str, str]]) -> str:
+    """Server-rendered locked TOC. ``data-scroll-spy`` marks it as the target
+    for the inline IntersectionObserver script."""
+    items = "".join(
+        f'<li><a href="#{slug}">{escape(display)}</a></li>' for slug, display in entries
+    )
+    return f'<nav class="contents-rail" data-scroll-spy><ul>{items}</ul></nav>'
+
+
+def _build_hero(*, pack: str, world: str, world_dir: Path) -> str:
+    """Lore-page hero block. Reads ``world_dir/lore.yaml``; falls back to the
+    pack name + WARN span if lore.yaml is absent or has no ``world_name``."""
+    lore_path = world_dir / "lore.yaml"
+    if not lore_path.is_file():
+        with reference_hero_unbound_span(pack=pack, world=world):
+            return (
+                '<header class="hero" id="hero">'
+                f"<h1>{escape(pack)}</h1>"
+                "</header>"
+            )
+    with lore_path.open() as fh:
+        data = yaml.safe_load(fh) or {}
+    world_name = data.get("world_name")
+    if not world_name:
+        with reference_hero_unbound_span(pack=pack, world=world):
+            return (
+                '<header class="hero" id="hero">'
+                f"<h1>{escape(pack)}</h1>"
+                "</header>"
+            )
+    epigraph = data.get("epigraph") or ""
+    epigraph_html = (
+        f'<p class="epigraph">{escape(str(epigraph))}</p>' if epigraph else ""
+    )
+    return (
+        '<header class="hero" id="hero">'
+        f"<h1>{escape(str(world_name))}</h1>"
+        f"{epigraph_html}"
+        "</header>"
+    )
+
+
+def _wrap_document(
+    *,
+    title: str,
+    body: str,
+    pack: str,
+    theme: ReferenceTheme,
+    rail_entries: list[tuple[str, str]],
+    world: str | None = None,
+    hero_html: str = "",
+) -> str:
+    anchors = _collect_anchor_ids(hero_html + body)
     island = f'<script id="ref-anchors" type="application/json">{json.dumps(anchors)}</script>'
+    rail = _build_contents_rail(rail_entries)
     return (
         "<!doctype html>"
-        '<html lang="en">'
+        f"{_document_root_open(pack=pack, world=world, archetype=theme.archetype)}"
         "<head>"
         '<meta charset="utf-8">'
         f"<title>{escape(title)}</title>"
-        f'<link rel="stylesheet" href="{_STYLESHEET_HREF}">'
+        f'<link rel="stylesheet" href="/reference/static/theme.css">'
+        f'<link rel="stylesheet" href="/reference/static/styles.css">'
+        f"{_theme_style_block(theme)}"
         "</head>"
         "<body>"
         f"{_BAD_ANCHOR_BANNER}"
         f"{island}"
         f"{_BAD_ANCHOR_SCRIPT}"
+        f"{hero_html}"
+        f"{rail}"
         f'<h1 class="doc-title">{escape(title)}</h1>'
         f"{body}"
+        f"{_SCROLL_SPY_SCRIPT}"
         "</body>"
         "</html>"
     )
 
 
-def assemble_rules_page(pack: str, pack_dir: Path) -> str:
-    """Build the /reference/rules/<pack> HTML document."""
-    body_parts: list[str] = []
-    for filename in RULES_FILES:
+def _rail_entries_for(
+    files: tuple[str, ...], base_dir: Path, *, label_suffix: str = ""
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Build rail entries + rendered file fragments for ``files`` in ``base_dir``,
+    skipping any file that doesn't exist (parity with existing behavior)."""
+    entries: list[tuple[str, str]] = []
+    rendered: list[str] = []
+    for filename in files:
         if filename in EXCLUDED_FILES:
             continue
-        body_parts.append(_render_file(pack_dir / filename))
-    body = "".join(body_parts)
-    return _wrap_document(f"{pack} — Rules", body)
+        path = base_dir / filename
+        if not path.exists():
+            continue
+        # Rail link targets must match the section wrapper id from
+        # `_render_file`, which uses the ``file-{slug}`` prefix.
+        file_id = f"file-{slugify(path.stem)}"
+        if label_suffix:
+            rendered.append(_render_file_with_label(path, label_suffix))
+            entries.append((file_id, f"{path.name} {label_suffix}"))
+        else:
+            rendered.append(_render_file(path))
+            entries.append((file_id, path.name))
+    return entries, rendered
+
+
+def assemble_rules_page(pack: str, pack_dir: Path) -> str:
+    """Build the /reference/rules/<pack> HTML document."""
+    theme = load_reference_theme(pack_dir)
+    entries, rendered = _rail_entries_for(RULES_FILES, pack_dir)
+    return _wrap_document(
+        title=f"{pack} — Rules",
+        body="".join(rendered),
+        pack=pack,
+        theme=theme,
+        rail_entries=entries,
+    )
 
 
 def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -> str:
     """Build the /reference/lore/<pack>/<world> HTML document."""
-    body_parts: list[str] = []
-    for filename in LORE_WORLD_FILES:
-        if filename in EXCLUDED_FILES:
-            continue
-        body_parts.append(_render_file(world_dir / filename))
-    for filename in LORE_PACK_FLAVOR_FILES:
-        if filename in EXCLUDED_FILES:
-            continue
-        body_parts.append(_render_file_with_label(pack_dir / filename, "(genre)"))
-    body = "".join(body_parts)
-    return _wrap_document(f"{pack} / {world} — Lore", body)
+    theme = load_reference_theme(pack_dir)
+    hero_html = _build_hero(pack=pack, world=world, world_dir=world_dir)
+    world_entries, world_rendered = _rail_entries_for(LORE_WORLD_FILES, world_dir)
+    flavor_entries, flavor_rendered = _rail_entries_for(
+        LORE_PACK_FLAVOR_FILES, pack_dir, label_suffix="(genre)"
+    )
+    rail_entries: list[tuple[str, str]] = [("hero", "Overview")]
+    rail_entries.extend(world_entries)
+    rail_entries.extend(flavor_entries)
+    body = "".join(world_rendered) + "".join(flavor_rendered)
+    return _wrap_document(
+        title=f"{pack} / {world} — Lore",
+        body=body,
+        pack=pack,
+        theme=theme,
+        world=world,
+        hero_html=hero_html,
+        rail_entries=rail_entries,
+    )

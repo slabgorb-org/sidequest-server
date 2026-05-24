@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-
 # --- URL-attachment spans (already-shipped helpers; coverage gap from 63-1) ---
 
 

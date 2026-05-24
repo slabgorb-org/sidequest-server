@@ -1,0 +1,11 @@
+primary: '#5C7A4F'
+accent: '#C9A96E'
+background: '#F4EBDA'
+archetype: parchment
+web_font_family: Lora
+display_font_family: Playfair Display
+dinkus:
+  glyph:
+    light: '—'
+    medium: '❧'
+    heavy: '❧❧❧'

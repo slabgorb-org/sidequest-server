@@ -1,0 +1,542 @@
+/* ═════════════════════════════════════════════════════════════════════
+   SideQuest — multi-pack theme.
+   Composition: archetype (structural) + genre pack (palette + texture).
+   Packs included here: heavy_metal (rugged), space_opera (terminal).
+   ═════════════════════════════════════════════════════════════════════ */
+
+@import url("https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=Noto+Sans+Symbols+2&family=Orbitron:wght@400;500;600;700;800&family=Pirata+One&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&family=Special+Elite&family=Source+Sans+3:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Oswald:wght@300;400;500;600;700&display=swap");
+
+/* ─── Base shell (Folio + archetype structural fonts) ──────────────── */
+:root {
+  /* Folio — character/lore surface palette (locked across all genres) */
+  --folio-paper:   #1a140d;
+  --folio-paper2:  #221a10;
+  --folio-paper3:  #2a1f12;
+  --folio-ink:     #ecdba8;
+  --folio-ink-soft:#b09a6a;
+  --folio-crimson: #d6735e;
+  --folio-gold:    #d4a945;
+  --folio-rule:    rgba(212, 169, 69, 0.22);
+  --folio-rule-strong: rgba(212, 169, 69, 0.45);
+  --folio-font-display: "Pirata One", serif;
+  --folio-font-body:    "EB Garamond", serif;
+
+  --font-display: "Pirata One", serif;
+  --radius: 4px;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+}
+
+/* Archetype: rugged */
+[data-archetype="rugged"] {
+  --font-body: "Source Sans 3", "Helvetica Neue", sans-serif;
+  --font-ui:   "Oswald", Impact, sans-serif;
+  --border-radius: 4px;
+}
+
+/* Archetype: terminal */
+[data-archetype="terminal"] {
+  --font-body: "Share Tech Mono", "Courier New", monospace;
+  --font-ui:   "Orbitron", monospace;
+  --border-radius: 0px;
+  --glow-primary: rgba(74, 144, 217, 0.20);
+  --glow-accent:  rgba(232, 168, 56, 0.18);
+}
+
+/* ═════════════════════════════════════════════════════════════════════
+   GENRE PACK — HEAVY METAL  (rugged archetype + Long Foundry world)
+   Sourced from genre_workshopping/heavy_metal/theme.yaml
+   ═════════════════════════════════════════════════════════════════════ */
+[data-pack="heavy_metal"] {
+  /* Identity palette — canonical theme.yaml */
+  --primary:    #8B0000;
+  --secondary:  #2A1A1A;
+  --accent:     #B8860B;
+  --background: #0F0A0A;
+  --surface:    #1C1414;
+  --text:       #E8DFC8;
+
+  --foreground:           #E8DFC8;
+  --card:                 #1C1414;
+  --card-foreground:      #E8DFC8;
+  --popover:              #1C1414;
+  --popover-foreground:   #E8DFC8;
+  --primary-foreground:   #E8DFC8;
+  --secondary-foreground: #E8DFC8;
+  --muted:                #221816;
+  --muted-foreground:     #9a8a6f;
+  --accent-foreground:    #0F0A0A;
+  --border:               rgba(184, 134, 11, 0.22);
+  --input:                #221816;
+  --ring:                 #8B0000;
+  --destructive:          oklch(0.62 0.21 27);
+
+  /* Folio overrides — heavy metal makes the lore surface match the iron page */
+  --folio-paper:   #0F0A0A;
+  --folio-paper2:  #1C1414;
+  --folio-paper3:  #221816;
+  --folio-ink:     #E8DFC8;
+  --folio-ink-soft:#9a8a6f;
+  --folio-crimson: #8B0000;
+  --folio-gold:    #B8860B;
+  --folio-rule:    rgba(184, 134, 11, 0.22);
+  --folio-rule-strong: rgba(184, 134, 11, 0.48);
+
+  --font-narrative: "IM Fell English", "EB Garamond", Georgia, serif;
+}
+
+[data-pack="heavy_metal"] body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(ellipse 70% 60% at 15% 10%, rgba(199, 80, 31, 0.14) 0%, transparent 60%),
+    radial-gradient(ellipse 55% 65% at 88% 92%, rgba(122, 30, 30, 0.18) 0%, transparent 55%),
+    radial-gradient(ellipse at center, transparent 20%, rgba(0,0,0,0.60) 100%);
+  filter: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.08'/%3E%3C/svg%3E#n");
+  mix-blend-mode: overlay;
+}
+[data-pack="heavy_metal"] body::after {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    repeating-linear-gradient(22deg, transparent 0 60px, rgba(232,220,196,0.013) 60px, rgba(232,220,196,0.013) 62px),
+    repeating-linear-gradient(-34deg, transparent 0 90px, rgba(232,220,196,0.010) 90px, rgba(232,220,196,0.010) 91px);
+}
+
+/* Heavy-metal dinkus — † / ✠ / ⸸ ☥ ⸸ */
+[data-pack="heavy_metal"] .dinkus {
+  font-family: "IM Fell English", "Noto Sans Symbols 2", serif;
+  color: var(--accent);
+  font-size: 22px;
+  letter-spacing: 0.5em;
+  font-weight: 500;
+  opacity: 0.78;
+}
+[data-pack="heavy_metal"] .dinkus.light::before  { content: '†'; letter-spacing: 0; }
+[data-pack="heavy_metal"] .dinkus.medium::before { content: '✠'; letter-spacing: 0; }
+[data-pack="heavy_metal"] .dinkus.heavy::before  { content: '⸸  ☥  ⸸'; }
+
+/* ═════════════════════════════════════════════════════════════════════
+   GENRE PACK — SPACE OPERA  (terminal archetype + Coyote Star world)
+   Sourced from genre_packs/space_opera/theme.yaml + client_theme.css
+   ═════════════════════════════════════════════════════════════════════ */
+[data-pack="space_opera"] {
+  /* Identity palette — canonical theme.yaml */
+  --primary:    #4A90D9;   /* console blue */
+  --secondary:  #2C5F8A;
+  --accent:     #E8A838;   /* holo amber */
+  --background: #0D1117;
+  --surface:    #161B22;
+  --text:       #C9D1D9;
+
+  --foreground:           #C9D1D9;
+  --card:                 #161B22;
+  --card-foreground:      #C9D1D9;
+  --popover:              #161B22;
+  --popover-foreground:   #C9D1D9;
+  --primary-foreground:   #0D1117;
+  --secondary-foreground: #C9D1D9;
+  --muted:                #1c2330;
+  --muted-foreground:     #6D767E;
+  --accent-foreground:    #0D1117;
+  --border:               rgba(74, 144, 217, 0.20);
+  --input:                #1c2330;
+  --ring:                 #E8A838;
+  --destructive:          oklch(0.704 0.191 22.216);
+
+  /* Folio overrides — space opera carries lore in cool near-black with holo amber rule */
+  --folio-paper:   #0D1117;
+  --folio-paper2:  #161B22;
+  --folio-paper3:  #1c2330;
+  --folio-ink:     #C9D1D9;
+  --folio-ink-soft:#6D767E;
+  --folio-crimson: #E8A838;   /* repurpose crimson → holo amber for accents */
+  --folio-gold:    #4A90D9;   /* and gold → console blue */
+  --folio-rule:    rgba(74, 144, 217, 0.18);
+  --folio-rule-strong: rgba(232, 168, 56, 0.40);
+
+  --font-narrative: "Rajdhani", "Exo 2", "Source Sans 3", sans-serif;
+}
+
+[data-pack="space_opera"] body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    /* Nebula glow — blue-shifted center */
+    radial-gradient(ellipse 60% 60% at 50% 35%, rgba(74, 144, 217, 0.08) 0%, transparent 65%),
+    /* Holo amber bloom upper-right */
+    radial-gradient(ellipse 40% 50% at 88% 12%, rgba(232, 168, 56, 0.06) 0%, transparent 60%),
+    /* Starfield vignette */
+    radial-gradient(ellipse at center, transparent 35%, rgba(2, 4, 10, 0.55) 100%);
+}
+[data-pack="space_opera"] body::after {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  /* CRT scanlines — subtle */
+  background:
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(74, 144, 217, 0.025) 2px, rgba(74, 144, 217, 0.025) 3px),
+    /* 40px circuit grid — accent-tinted */
+    repeating-linear-gradient(0deg, rgba(74, 144, 217, 0.04) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(90deg, rgba(74, 144, 217, 0.04) 0 1px, transparent 1px 40px);
+}
+
+/* Space-opera dinkus — ✦ / ✦ ⬡ ✦ / ⬡ ✦ ⬡ ✦ ⬡ */
+[data-pack="space_opera"] .dinkus {
+  font-family: "Rajdhani", "Noto Sans Symbols 2", sans-serif;
+  color: var(--accent);
+  font-size: 18px;
+  letter-spacing: 0.8em;
+  font-weight: 500;
+  opacity: 0.65;
+}
+[data-pack="space_opera"] .dinkus.light::before  { content: '✦'; letter-spacing: 0; }
+[data-pack="space_opera"] .dinkus.medium::before { content: '✦  ⬡  ✦'; }
+[data-pack="space_opera"] .dinkus.heavy::before  { content: '⬡  ✦  ⬡  ✦  ⬡'; }
+
+/* ── Hero title glow per pack — Pirata One stays display font for heavy_metal,
+     but space opera replaces with Orbitron for a colder console feel.       */
+[data-pack="space_opera"] {
+  --folio-font-display: "Orbitron", "Rajdhani", sans-serif;
+  --font-display: "Orbitron", sans-serif;
+}
+
+/* ── Card / panel chrome per archetype ───────────────────────────────── */
+[data-archetype="terminal"] .folio-card,
+[data-archetype="terminal"] .conf-card,
+[data-archetype="terminal"] .aff-card,
+[data-archetype="terminal"] .cult-card,
+[data-archetype="terminal"] .stratum-card,
+[data-archetype="terminal"] .threshold-card,
+[data-archetype="terminal"] .tension-cell,
+[data-archetype="terminal"] .rule-card,
+[data-archetype="terminal"] .class-tile,
+[data-archetype="terminal"] .wealth-ladder,
+[data-archetype="terminal"] .currency-cell,
+[data-archetype="terminal"] .inv-table,
+[data-archetype="terminal"] .bv-table,
+[data-archetype="terminal"] .brick,
+[data-archetype="terminal"] .power-tiers {
+  /* Terminal: sharp corners, accent-tinted glow */
+  border-radius: 0 !important;
+  box-shadow:
+    inset 0 0 8px rgba(74, 144, 217, 0.06),
+    0 0 12px rgba(74, 144, 217, 0.04);
+}
+
+[data-archetype="terminal"] .folio-card.bracketed::before,
+[data-archetype="terminal"] .folio-card.bracketed::after {
+  display: none;
+}
+
+/* Parchment archetype */
+[data-archetype="parchment"] {
+  --font-body: "EB Garamond", Georgia, serif;
+  --font-ui:   "EB Garamond", Georgia, serif;
+  --border-radius: 2px;
+}
+
+/* ═════════════════════════════════════════════════════════════════════
+   GENRE PACK — VICTORIA  (parchment archetype + Blackthorn Moor)
+   Canonical: gaslit manor, burgundy + gilt, Playfair Display
+   ═════════════════════════════════════════════════════════════════════ */
+[data-pack="victoria"] {
+  --primary:    #8B1A1A;
+  --secondary:  #2D4A3E;
+  --accent:     #C9A96E;
+  --background: #1C1510;
+  --surface:    #2A2118;
+  --text:       #D4C5A9;
+
+  --foreground:           #D4C5A9;
+  --card:                 #2A2118;
+  --card-foreground:      #D4C5A9;
+  --popover:              #2A2118;
+  --popover-foreground:   #D4C5A9;
+  --primary-foreground:   #1C1510;
+  --secondary-foreground: #D4C5A9;
+  --muted:                #2A2118;
+  --muted-foreground:     #7F7360;
+  --accent-foreground:    #1C1510;
+  --border:               rgba(201, 169, 110, 0.25);
+  --input:                #2A2118;
+  --ring:                 #C9A96E;
+  --destructive:          oklch(0.704 0.191 22.216);
+
+  --folio-paper:   #1C1510;
+  --folio-paper2:  #2A2118;
+  --folio-paper3:  #322619;
+  --folio-ink:     #D4C5A9;
+  --folio-ink-soft:#7F7360;
+  --folio-crimson: #8B1A1A;
+  --folio-gold:    #C9A96E;
+  --folio-rule:    rgba(201, 169, 110, 0.25);
+  --folio-rule-strong: rgba(201, 169, 110, 0.55);
+
+  --font-narrative: "Playfair Display", "EB Garamond", Georgia, serif;
+
+  /* Display face — Pirata One is wrong for Victorian gothic; use Playfair */
+  --font-display:       "Playfair Display", "EB Garamond", serif;
+  --folio-font-display: "Playfair Display", "EB Garamond", serif;
+}
+[data-pack="victoria"] body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(ellipse at center, transparent 40%, rgba(15, 13, 11, 0.6) 100%),
+    radial-gradient(ellipse at 30% 40%, rgba(201, 169, 110, 0.06) 0%, transparent 60%),
+    radial-gradient(ellipse at 70% 80%, rgba(139, 26, 26, 0.05) 0%, transparent 50%);
+  filter: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.45' numOctaves='5' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E#n");
+  mix-blend-mode: soft-light;
+}
+[data-pack="victoria"] .dinkus {
+  font-family: "Playfair Display", "Noto Sans Symbols 2", serif;
+  color: var(--accent);
+  font-size: 18px;
+  letter-spacing: 0.6em;
+  opacity: 0.65;
+}
+[data-pack="victoria"] .dinkus.light::before  { content: '—  ❧  —'; letter-spacing: 0.3em; }
+[data-pack="victoria"] .dinkus.medium::before { content: '❧ ❧ ❧'; }
+[data-pack="victoria"] .dinkus.heavy::before  { content: '❧ ❧ ❧ ❧ ❧'; }
+
+/* ═════════════════════════════════════════════════════════════════════
+   GENRE PACK — MUTANT WASTELAND  (rugged archetype + Flickering Reach)
+   Canonical: irradiated green + rust + hazard orange on burnt brown
+   ═════════════════════════════════════════════════════════════════════ */
+[data-pack="mutant_wasteland"] {
+  --primary:    #4a7c2e;    /* irradiated green */
+  --secondary:  #8b4513;
+  --accent:     #ff6600;    /* hazard orange */
+  --background: #1a1a0e;
+  --surface:    #2a2a1a;
+  --text:       #c8d6a0;
+
+  --foreground:           #c8d6a0;
+  --card:                 #2a2a1a;
+  --card-foreground:      #c8d6a0;
+  --popover:              #2a2a1a;
+  --popover-foreground:   #c8d6a0;
+  --primary-foreground:   #1a1a0e;
+  --secondary-foreground: #c8d6a0;
+  --muted:                #2a2a1a;
+  --muted-foreground:     #79805d;
+  --accent-foreground:    #1a1a0e;
+  --border:               rgba(74, 124, 46, 0.25);
+  --input:                #2a2a1a;
+  --ring:                 #ff6600;
+  --destructive:          oklch(0.704 0.191 22.216);
+
+  --folio-paper:   #1a1a0e;
+  --folio-paper2:  #2a2a1a;
+  --folio-paper3:  #353520;
+  --folio-ink:     #c8d6a0;
+  --folio-ink-soft:#79805d;
+  --folio-crimson: #ff6600;
+  --folio-gold:    #4a7c2e;
+  --folio-rule:    rgba(74, 124, 46, 0.25);
+  --folio-rule-strong: rgba(255, 102, 0, 0.45);
+
+  --font-narrative: "Special Elite", "Courier Prime", "IM Fell English", serif;
+
+  /* Display face — typewriter feel, not the heraldic blackletter of heavy_metal */
+  --font-display:       "Special Elite", "Courier Prime", monospace;
+  --folio-font-display: "Special Elite", "Courier Prime", monospace;
+}
+[data-pack="mutant_wasteland"] body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 40%, rgba(74, 124, 46, 0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 50% at 85% 15%, rgba(255, 102, 0, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at center, transparent 25%, rgba(10, 8, 2, 0.65) 100%);
+  filter: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.09'/%3E%3C/svg%3E#n");
+  mix-blend-mode: overlay;
+}
+[data-pack="mutant_wasteland"] .dinkus {
+  font-family: "Special Elite", "Noto Sans Symbols 2", serif;
+  color: var(--accent);
+  font-size: 20px;
+  letter-spacing: 0.5em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+[data-pack="mutant_wasteland"] .dinkus.light::before  { content: '·  ☢  ·'; letter-spacing: 0.4em; }
+[data-pack="mutant_wasteland"] .dinkus.medium::before { content: '☢  ☢  ☢'; }
+[data-pack="mutant_wasteland"] .dinkus.heavy::before  { content: '☢  ☣  ☢'; }
+
+/* ═════════════════════════════════════════════════════════════════════
+   GENRE PACK — CAVERNS & CLAUDES  (rugged archetype + Caverns of Sünden)
+   Canonical: torchlight amber + dried-blood red + graph paper
+   ═════════════════════════════════════════════════════════════════════ */
+[data-pack="caverns_and_claudes"] {
+  --primary:    #E8A83E;
+  --secondary:  #4A3B2A;
+  --accent:     #8B0000;
+  --background: #1A1A1A;
+  --surface:    #2A2318;
+  --text:       #D4C5A9;
+
+  --foreground:           #D4C5A9;
+  --card:                 #2A2318;
+  --card-foreground:      #D4C5A9;
+  --popover:              #2A2318;
+  --popover-foreground:   #D4C5A9;
+  --primary-foreground:   #1A1A1A;
+  --secondary-foreground: #D4C5A9;
+  --muted:                #2A2318;
+  --muted-foreground:     #7F7460;
+  --accent-foreground:    #D4C5A9;
+  --border:               rgba(232, 168, 62, 0.22);
+  --input:                #2A2318;
+  --ring:                 #8B0000;
+  --destructive:          oklch(0.704 0.191 22.216);
+
+  --folio-paper:   #1A1A1A;
+  --folio-paper2:  #2A2318;
+  --folio-paper3:  #36291A;
+  --folio-ink:     #D4C5A9;
+  --folio-ink-soft:#7F7460;
+  --folio-crimson: #8B0000;
+  --folio-gold:    #E8A83E;
+  --folio-rule:    rgba(232, 168, 62, 0.22);
+  --folio-rule-strong: rgba(232, 168, 62, 0.5);
+
+  --font-narrative: "IM Fell English", "Georgia", serif;
+}
+[data-pack="caverns_and_claudes"] body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    /* Graph paper grid */
+    repeating-linear-gradient(0deg, rgba(58, 51, 42, 0.35) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(90deg, rgba(58, 51, 42, 0.35) 0 1px, transparent 1px 24px),
+    /* Torchlight amber center */
+    radial-gradient(ellipse at 50% 35%, rgba(232, 168, 62, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at center, transparent 30%, rgba(10, 10, 8, 0.7) 100%);
+  filter: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E#n");
+  mix-blend-mode: overlay;
+}
+[data-pack="caverns_and_claudes"] .dinkus {
+  font-family: "IM Fell English", "Noto Sans Symbols 2", serif;
+  color: var(--accent);
+  font-size: 22px;
+  letter-spacing: 0.5em;
+  font-weight: 700;
+  opacity: 0.75;
+}
+[data-pack="caverns_and_claudes"] .dinkus.light::before  { content: '·  ⛏  ·'; letter-spacing: 0.4em; }
+[data-pack="caverns_and_claudes"] .dinkus.medium::before { content: '⛏  ⛏  ⛏'; }
+[data-pack="caverns_and_claudes"] .dinkus.heavy::before  { content: '⛏  🕯  ⛏'; }
+
+/* ═════════════════════════════════════════════════════════════════════
+   GENRE PACK — NEON DYSTOPIA  (terminal archetype + Franchise Nations)
+   Canonical: cyan + magenta + neon green on near-black, CRT scanlines
+   ═════════════════════════════════════════════════════════════════════ */
+[data-pack="neon_dystopia"] {
+  --primary:    #00ffff;    /* neon cyan */
+  --secondary:  #ff00ff;    /* magenta */
+  --accent:     #39ff14;    /* neon green */
+  --background: #050010;
+  --surface:    #0a0518;
+  --text:       #b8e6ff;
+
+  --foreground:           #b8e6ff;
+  --card:                 #0a0518;
+  --card-foreground:      #b8e6ff;
+  --popover:              #0a0518;
+  --popover-foreground:   #b8e6ff;
+  --primary-foreground:   #050010;
+  --secondary-foreground: #b8e6ff;
+  --muted:                #14092a;
+  --muted-foreground:     #7a7a99;
+  --accent-foreground:    #050010;
+  --border:               rgba(0, 255, 255, 0.20);
+  --input:                #14092a;
+  --ring:                 #39ff14;
+  --destructive:          oklch(0.704 0.191 22.216);
+
+  --folio-paper:   #050010;
+  --folio-paper2:  #0a0518;
+  --folio-paper3:  #14092a;
+  --folio-ink:     #b8e6ff;
+  --folio-ink-soft:#7a7a99;
+  --folio-crimson: #ff00ff;
+  --folio-gold:    #00ffff;
+  --folio-rule:    rgba(0, 255, 255, 0.20);
+  --folio-rule-strong: rgba(255, 0, 255, 0.45);
+
+  --font-narrative: "Orbitron", "Share Tech Mono", monospace;
+}
+[data-pack="neon_dystopia"] body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    /* Neon cyan bloom upper */
+    radial-gradient(ellipse 70% 60% at 50% 20%, rgba(0, 255, 255, 0.07) 0%, transparent 65%),
+    /* Magenta bloom lower */
+    radial-gradient(ellipse 60% 60% at 50% 85%, rgba(255, 0, 255, 0.05) 0%, transparent 60%),
+    /* Dark corner vignette */
+    radial-gradient(ellipse at center, transparent 35%, rgba(5, 0, 16, 0.75) 100%);
+}
+[data-pack="neon_dystopia"] body::after {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  /* CRT scanlines */
+  background: repeating-linear-gradient(0deg,
+    transparent 0 2px,
+    rgba(0, 255, 255, 0.04) 2px,
+    rgba(0, 255, 255, 0.04) 3px);
+}
+[data-pack="neon_dystopia"] .dinkus {
+  font-family: "Orbitron", "Noto Sans Symbols 2", monospace;
+  color: var(--primary);
+  font-size: 16px;
+  letter-spacing: 0.8em;
+  font-weight: 700;
+  opacity: 0.75;
+  text-shadow: 0 0 12px rgba(0, 255, 255, 0.6);
+}
+[data-pack="neon_dystopia"] .dinkus.light::before  { content: '◇'; letter-spacing: 0; }
+[data-pack="neon_dystopia"] .dinkus.medium::before { content: '◆ ◆ ◆'; }
+[data-pack="neon_dystopia"] .dinkus.heavy::before  { content: '▮ ◆ ▮ ◆ ▮'; }
+
+/* Neon dystopia: title gets glow */
+[data-pack="neon_dystopia"] .hero-title {
+  text-shadow: 0 0 24px rgba(0, 255, 255, 0.4), 0 0 50px rgba(255, 0, 255, 0.2);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--background);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+body { min-height: 100vh; position: relative; overflow-x: hidden; }
+
+.background-canvas { display: none; }
+
+::selection {
+  background: rgba(74, 144, 217, 0.28);
+  color: var(--folio-ink);
+}
+[data-pack="heavy_metal"] ::selection {
+  background: rgba(212, 169, 69, 0.32);
+  color: var(--folio-ink);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--background); }
+::-webkit-scrollbar-thumb {
+  background: var(--folio-paper3);
+  border: 2px solid var(--background);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--folio-ink-soft); }

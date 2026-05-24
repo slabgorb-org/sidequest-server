@@ -94,7 +94,7 @@ def create_reference_router() -> APIRouter:
     # router.mount(StaticFiles(...)), because FastAPI's APIRouter.include_router
     # silently drops Mount routes from sub-routers (only APIRoute / Route /
     # WebSocketRoute propagate). The HTML's
-    # <link href="/reference/static/reference.css"> still resolves correctly.
+    # <link href="/reference/static/theme.css"> still resolves correctly.
     @router.get("/static/{filename}", include_in_schema=False)
     async def static_file(filename: str) -> FileResponse:
         if not _SAFE_STATIC_FILENAME.match(filename):

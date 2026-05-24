@@ -41,5 +41,9 @@ class GenreTheme(BaseModel):
     border_style: str
     web_font_family: str
     display_font_family: str
+    # Structural archetype consumed by reference-page chrome (Story 63-4).
+    # Values map to bundle [data-archetype="..."] CSS rules: "parchment"
+    # (cosy/era), "rugged" (action/violence), "terminal" (sci-fi/dystopia).
+    archetype: str
     dinkus: Dinkus
     session_opener: SessionOpener

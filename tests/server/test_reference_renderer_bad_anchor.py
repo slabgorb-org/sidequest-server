@@ -11,9 +11,21 @@ import yaml
 from sidequest.server.reference_renderer import assemble_rules_page
 
 
+_MINIMAL_THEME_YAML = (
+    "primary: '#5C7A4F'\n"
+    "accent: '#C9A96E'\n"
+    "background: '#F4EBDA'\n"
+    "archetype: parchment\n"
+    "web_font_family: Lora\n"
+    "display_font_family: Playfair Display\n"
+    "dinkus:\n  glyph:\n    light: '—'\n    medium: '❧'\n    heavy: '❧❧❧'\n"
+)
+
+
 def _make_fixture_pack(root: Path) -> Path:
     pack = root / "fixture_pack"
     pack.mkdir()
+    (pack / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
     (pack / "classes.yaml").write_text(
         yaml.safe_dump({"classes": [{"name": "Knight"}, {"name": "Burglar"}]})
     )

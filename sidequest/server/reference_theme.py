@@ -66,7 +66,7 @@ def load_reference_theme(pack_dir: Path) -> ReferenceTheme:
     if not theme_path.is_file():
         with reference_theme_missing_span(pack=pack, field="theme.yaml"):
             raise MissingThemeFieldError(f"theme.yaml not found for pack {pack!r}")
-    with theme_path.open() as fh:
+    with theme_path.open(encoding="utf-8") as fh:
         try:
             data = yaml.safe_load(fh) or {}
         except yaml.YAMLError as exc:

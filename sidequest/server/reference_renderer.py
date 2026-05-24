@@ -289,7 +289,7 @@ def _render_file(path: Path) -> str:
     if not path.exists():
         return ""
     try:
-        with path.open() as fh:
+        with path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
     except yaml.YAMLError as exc:
         raise ValueError(f"{path.name}: malformed YAML: {exc}") from exc
@@ -369,7 +369,7 @@ def _build_hero(*, pack: str, world: str, world_dir: Path) -> str:
     lore_path = world_dir / "lore.yaml"
     if not lore_path.is_file():
         return _hero_fallback(pack, world)
-    with lore_path.open() as fh:
+    with lore_path.open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     world_name = data.get("world_name")
     if not world_name:

@@ -203,11 +203,12 @@ def test_build_messages_payload_marks_iter1_user_message_at_1h() -> None:
     (~17K tok) added on iter=1 carry no marker, so the API auto-mints a 5m
     cache for them. On iter=2 the 60-4 continuation marker writes the same
     content again at 1h, displacing the 5m one and burning the rebate.
-    Marking iter=1 at 1h overrides the auto-5m default, so the iter=1 write
-    lands at 1h directly and iter=2 reads it.
+    Marking iter=1 at the configured TTL overrides the auto-5m default, so
+    the iter=1 write lands at 1h directly and iter=2 reads it.
 
-    Current production at lines 913-914 short-circuits `if not is_continuation`,
-    so today this test is RED.
+    Regression guard for the iter=1 cache_control marker introduced by 60-7.
+    Pre-60-7, `_build_messages_payload` short-circuited on `is_continuation=False`
+    and the iter=1 user message tail carried no marker.
     """
     sdk = _Sdk(responses=[])
     client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
@@ -279,9 +280,9 @@ def test_build_messages_payload_promotes_bare_string_content_to_block_list() -> 
     is the only way to keep the legacy entry shape live without silently
     dropping the marker.
 
-    Current production at lines 909-910 keeps bare-string content as-is and
-    line 922 explicitly skips non-list content even on the continuation
-    path — so today this test is RED.
+    Regression guard for the bare-string promotion path introduced by 60-7.
+    See the companion `test_..._bare_string_at_5m_ttl` test for the
+    TTL-echo half of the same path.
     """
     sdk = _Sdk(responses=[])
     client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
@@ -316,6 +317,49 @@ def test_build_messages_payload_promotes_bare_string_content_to_block_list() -> 
     assert block.get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
         "promoted text block MUST carry cache_control{'type':'ephemeral','ttl':'1h'} "
         f"on iter=1; got {block!r}"
+    )
+
+
+def test_build_messages_payload_promotes_bare_string_at_5m_ttl() -> None:
+    """AC-6 (bare-string promotion path) — TTL-echo half. A 5m-configured
+    client with bare-string content on the newest user message MUST promote
+    the string to a single text block AND attach cache_control with
+    `ttl: '5m'` — not hardcoded `'1h'`.
+
+    Why this test exists: the companion `..._bare_string_content_to_block_list`
+    test only covers `cache_ttl='1h'`. If the promotion path hardcodes the
+    TTL on the marker (instead of echoing `self.cache_ttl`), the existing
+    `..._marks_iter1_at_configured_5m_ttl` test would still pass because it
+    uses list-content (which exercises a different code path than the
+    bare-string promotion). This test closes the seam.
+    """
+    sdk = _Sdk(responses=[])
+    client = AnthropicSdkClient(sdk=sdk, cache_ttl="5m")
+
+    running_messages: list[dict[str, Any]] = [
+        {"role": "user", "content": "go"},
+    ]
+
+    payload = client._build_messages_payload(  # noqa: SLF001
+        running_messages,
+        is_continuation=False,
+    )
+
+    last_msg = payload[-1]
+    content = last_msg.get("content")
+    assert isinstance(content, list) and len(content) == 1, (
+        "bare-string content MUST promote to a single-text-block list on the "
+        f"5m path too; got content={content!r}"
+    )
+    block = content[0]
+    assert isinstance(block, dict), f"promoted block must be a dict; got {block!r}"
+    assert block.get("text") == "go", (
+        f"promoted block must preserve the original string; got text={block.get('text')!r}"
+    )
+    assert block.get("cache_control") == {"type": "ephemeral", "ttl": "5m"}, (
+        "5m-configured client MUST emit cache_control{ttl:'5m'} on the "
+        "promoted bare-string block — no hardcoded '1h', no silent upgrade. "
+        f"Got block={block!r}"
     )
 
 
@@ -471,11 +515,26 @@ async def test_iter1_marker_does_not_inflate_total_breakpoint_count(
         return n
 
     iter1_markers = _count_markers(sdk.messages.calls[0])
+    iter2_markers = _count_markers(sdk.messages.calls[1])
     final_markers = _count_markers(sdk.messages.calls[2])
 
     assert iter1_markers == 1, (
         f"iter=1 payload must carry exactly one message-level cache_control "
         f"marker (on the newest user message); got {iter1_markers}."
+    )
+    # AC-3 / 4-cap guard (added in 60-7 review): the iter=2 payload sits
+    # mid-loop between the iter=1 stamp and the iter=3 newest-message
+    # stamp. If stale-marker cleanup misses iter=1's marker before the
+    # iter=2 newest-message stamp lands, the iter=2 payload carries 2
+    # message-level markers (combined with system_blocks[0] + tools[-1]
+    # = 4 — exactly at Anthropic's hard cap, no headroom). Counting only
+    # iter=1 and the final iter misses this exact regression mode.
+    assert iter2_markers <= 1, (
+        f"iter=2 payload must carry AT MOST one message-level cache_control "
+        f"marker. A count > 1 means stale-marker cleanup failed before the "
+        f"iter=2 newest-message stamp landed — combined with system+tools "
+        f"that pushes the request to or past Anthropic's 4-breakpoint cap. "
+        f"Got {iter2_markers}."
     )
     assert final_markers <= 1, (
         f"final iter payload must carry at most one message-level marker "

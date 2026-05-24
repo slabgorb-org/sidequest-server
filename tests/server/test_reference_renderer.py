@@ -250,10 +250,13 @@ def test_lore_world_files_in_documented_order():
 
 
 def test_lore_pack_flavor_files_in_documented_order():
+    # Story 63-7 added "factions.yaml" so lore-tier list-of-dict items
+    # in the new ``cult-<slug>`` namespace render on the lore page.
     assert LORE_PACK_FLAVOR_FILES == (
         "cultures.yaml",
         "lore.yaml",
         "history.yaml",
+        "factions.yaml",
     )
 
 
@@ -341,6 +344,18 @@ def test_assemble_rules_page_never_renders_excluded_files(tmp_path):
 
 
 def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
+    """Both world-tier and pack-tier flavor content must be reachable on
+    the lore page.
+
+    Story 63-7 note: this test previously asserted ``world.yaml`` appeared
+    BEFORE the ``(genre)`` label suffix in the rendered HTML — enforcing a
+    tier-ordering invariant. The v3 TOC-driven layout buckets renders by
+    ``PACK_TOC[pack].id`` via ``TOC_TO_FILES``, so file order inside
+    ``<main>`` follows the per-pack TOC, not the world-then-flavor
+    iteration order. Tier-ordering at the markup level is no longer a
+    spec invariant; what matters is that BOTH tiers' content reaches
+    the rendered page. Content-presence is what the test verifies now.
+    """
     from sidequest.server.reference_renderer import assemble_lore_page
 
     pack_dir = tmp_path / "demo"
@@ -359,8 +374,11 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     assert "a tale" in html
     assert "pack_flavor" in html
     assert "genre_cultures" in html
-    # World tier must precede pack flavor
-    assert html.index("world.yaml") < html.index("(genre)")
+    # Both world-tier content (world.yaml) and pack-tier flavor (with the
+    # `(genre)` suffix) are reachable in the rendered HTML. Tier order is
+    # no longer asserted — see docstring above.
+    assert "world.yaml" in html
+    assert "(genre)" in html
 
 
 def test_assemble_handles_malformed_yaml_with_loud_marker(tmp_path):

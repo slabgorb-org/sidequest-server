@@ -32,9 +32,10 @@ SPAN_REFERENCE_URL_ATTACHED = "sidequest.reference.url_attached"
 SPAN_REFERENCE_URL_SKIPPED = "sidequest.reference.url_skipped"
 SPAN_REFERENCE_URL_FAILED = "sidequest.reference.url_failed"
 
-# Chrome-render failure spans (Story 63-4 Tasks 18 + 21).
+# Chrome-render failure spans (Story 63-4 Tasks 18 + 21; Story 63-7 Task C).
 SPAN_REFERENCE_THEME_MISSING = "sidequest.reference.theme_missing"
 SPAN_REFERENCE_HERO_UNBOUND = "sidequest.reference.hero_unbound"
+SPAN_REFERENCE_TOC_MISSING = "sidequest.reference.toc_missing"
 
 FLAT_ONLY_SPANS.update(
     {
@@ -43,6 +44,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_URL_FAILED,
         SPAN_REFERENCE_THEME_MISSING,
         SPAN_REFERENCE_HERO_UNBOUND,
+        SPAN_REFERENCE_TOC_MISSING,
     }
 )
 
@@ -167,6 +169,29 @@ def reference_hero_unbound_span(
     with Span.open(
         SPAN_REFERENCE_HERO_UNBOUND,
         {"reference.pack": pack, "reference.world": world},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_toc_missing_span(
+    *,
+    pack: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """ERROR span fired when ``PACK_TOC`` has no entry for the requested pack
+    and the renderer falls through to the documented 2-item default TOC
+    (``reckoning``, ``bearing``).
+
+    Not a silent fallback per SOUL doctrine — the GM panel surfaces the
+    gap so authoring drift (a new pack added to content without chrome
+    metadata) is visible in OTEL rather than buried in "the reference
+    page looks slightly off."
+    """
+    with Span.open(
+        SPAN_REFERENCE_TOC_MISSING,
+        {"reference.pack": pack},
         tracer_override=_tracer,
     ) as span:
         yield span

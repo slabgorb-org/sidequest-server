@@ -79,6 +79,16 @@ SEMANTIC_ALLOWLIST: set[str] = {
     # an inherited convention from the design bundle's `app.jsx`.
     # No `.dark` selector in the CSS; semantic-only.
     "dark",
+    # `<section class="file" id="file-{stem}">` is a structural marker
+    # the renderer emits around each rendered YAML file. The bundle has
+    # no visual treatment for `.file` (file boundaries should be
+    # invisible in the rendered chrome), but the class is load-bearing
+    # for the test suite and any future content tooling that needs to
+    # walk the per-file boundaries (cross-anchor checks, validators,
+    # etc.). Removing the class would force every test that locates a
+    # file section to read the `id="file-…"` attribute instead — more
+    # brittle than a stable class marker. Semantic-only by design.
+    "file",
 }
 
 
@@ -110,15 +120,10 @@ def _seed_space_opera_pack(tmp_path: Path) -> Path:
     (pack / "theme.yaml").write_text(_FIXTURE_THEME_YAML)
     (pack / "archetypes.yaml").write_text("kinds:\n  - spacer\n  - colonist\n")
     (pack / "classes.yaml").write_text(
-        "- name: pilot\n  signature: vector-burn\n"
-        "- name: scavver\n  signature: ledger-bargain\n"
+        "- name: pilot\n  signature: vector-burn\n- name: scavver\n  signature: ledger-bargain\n"
     )
-    (pack / "cultures.yaml").write_text(
-        "- name: vacworld-born\n  language: jovian-pidgin\n"
-    )
-    (pack / "factions.yaml").write_text(
-        "- name: old-folk\n  disposition: wary\n"
-    )
+    (pack / "cultures.yaml").write_text("- name: vacworld-born\n  language: jovian-pidgin\n")
+    (pack / "factions.yaml").write_text("- name: old-folk\n  disposition: wary\n")
     (pack / "rules.yaml").write_text("core: vector-and-trust\n")
     return pack
 
@@ -133,12 +138,8 @@ def _seed_space_opera_world(pack_dir: Path) -> Path:
         "world_name: Coyote Star\n"
         "epigraph: Out here the only law that travels faster than light is grief.\n"
     )
-    (world / "legends.yaml").write_text(
-        "- name: the-long-burn\n  origin: pre-collapse\n"
-    )
-    (world / "locations.yaml").write_text(
-        "- name: the-broken-needle\n  district: belt\n"
-    )
+    (world / "legends.yaml").write_text("- name: the-long-burn\n  origin: pre-collapse\n")
+    (world / "locations.yaml").write_text("- name: the-broken-needle\n  district: belt\n")
     return world
 
 
@@ -219,9 +220,7 @@ def test_every_emitted_class_has_matching_css_rule(tmp_path: Path) -> None:
     css_text = _served_css_text()
 
     unmatched = sorted(
-        cls
-        for cls in emitted
-        if cls not in SEMANTIC_ALLOWLIST and f".{cls}" not in css_text
+        cls for cls in emitted if cls not in SEMANTIC_ALLOWLIST and f".{cls}" not in css_text
     )
 
     assert not unmatched, (
@@ -263,10 +262,10 @@ def test_renderer_does_not_emit_legacy_contents_rail_class(tmp_path: Path) -> No
 
     for label, html in (("rules", rules_html), ("lore", lore_html)):
         assert 'class="contents-rail"' not in html, (
-            f"{label} page still emits the legacy 63-4 `class=\"contents-rail\"`. "
+            f'{label} page still emits the legacy 63-4 `class="contents-rail"`. '
             f"Plan v3 Task 22 replaces it with "
-            f"`<aside class=\"toc-sticky\"><nav class=\"toc\">…</nav></aside>` "
-            f"wrapped inside `<div class=\"layout\">`."
+            f'`<aside class="toc-sticky"><nav class="toc">…</nav></aside>` '
+            f'wrapped inside `<div class="layout">`.'
         )
 
 

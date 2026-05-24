@@ -70,9 +70,7 @@ def _seed_pack(tmp_path: Path, pack_name: str = "space_opera") -> Path:
     (pack / "theme.yaml").write_text(_THEME_YAML)
     (pack / "archetypes.yaml").write_text("kinds:\n  - spacer\n")
     (pack / "classes.yaml").write_text("- name: knight\n  signature: charge\n")
-    (pack / "cultures.yaml").write_text(
-        "- name: highlander\n  language: gaelic\n"
-    )
+    (pack / "cultures.yaml").write_text("- name: highlander\n  language: gaelic\n")
     (pack / "rules.yaml").write_text("core: dice-resolution\n")
     return pack
 
@@ -86,9 +84,7 @@ def _seed_world(pack_dir: Path, world_name: str = "coyote_star") -> Path:
         f"world_name: {world_name.replace('_', ' ').title()}\n"
         "epigraph: A quiet valley where nothing has happened for a hundred years.\n"
     )
-    (world / "legends.yaml").write_text(
-        "- name: the-grey-pilgrim\n  origin: unknown\n"
-    )
+    (world / "legends.yaml").write_text("- name: the-grey-pilgrim\n  origin: unknown\n")
     return world
 
 
@@ -106,7 +102,7 @@ def _hero_window(html: str) -> str:
     if tag_open == -1:
         # Bundle hero is a <header>; if a future change moves it to
         # <section>/<div>, update this helper deliberately.
-        raise AssertionError("found class=\"hero\" but no enclosing <header> tag")
+        raise AssertionError('found class="hero" but no enclosing <header> tag')
     tag_close = html.index("</header>", start)
     return html[tag_open : tag_close + len("</header>")]
 
@@ -132,7 +128,7 @@ def test_lore_page_body_is_wrapped_in_page_div(tmp_path: Path) -> None:
     html = assemble_lore_page("space_opera", "coyote_star", pack, world)
 
     assert 'class="page"' in html, (
-        "AC1: <div class=\"page\"> wrapper not emitted; the bundle's CSS "
+        'AC1: <div class="page"> wrapper not emitted; the bundle\'s CSS '
         "targets `.page` as the outer typographic container."
     )
 
@@ -195,8 +191,8 @@ def test_lore_hero_has_eyebrow_with_glyph_eyebrow_rule(tmp_path: Path) -> None:
     # The bundle styles `.eyebrow.gilt` — both tokens must appear together.
     assert re.search(r'class="[^"]*\beyebrow\b[^"]*\bgilt\b', hero) or re.search(
         r'class="[^"]*\bgilt\b[^"]*\beyebrow\b', hero
-    ), "AC2.1: <span class=\"eyebrow gilt\"> not emitted in hero"
-    assert 'class="rule"' in hero, "AC2.1: empty <span class=\"rule\"> missing"
+    ), 'AC2.1: <span class="eyebrow gilt"> not emitted in hero'
+    assert 'class="rule"' in hero, 'AC2.1: empty <span class="rule"> missing'
 
 
 def test_lore_hero_has_kicker(tmp_path: Path) -> None:
@@ -257,7 +253,7 @@ def test_lore_hero_epigraph_has_attrib(tmp_path: Path) -> None:
     hero = _hero_window(html)
 
     assert 'class="hero-epigraph' in hero, (
-        "AC2.5: .hero-epigraph missing from hero — legacy <p class=\"epigraph\"> "
+        'AC2.5: .hero-epigraph missing from hero — legacy <p class="epigraph"> '
         "has no matching CSS rule and renders as a plain paragraph."
     )
     # The narrative-flourish class is the bundle's display-toggle hook
@@ -267,7 +263,7 @@ def test_lore_hero_epigraph_has_attrib(tmp_path: Path) -> None:
         "— required for the bundle's display-toggle to hide epigraphs."
     )
     assert 'class="attrib"' in hero, (
-        "AC2.5: <span class=\"attrib\"> missing — epigraph attribution "
+        'AC2.5: <span class="attrib"> missing — epigraph attribution '
         "needs its own class so the bundle can style it distinct from "
         "the quoted text."
     )
@@ -298,8 +294,7 @@ def test_lore_hero_escapes_world_name(tmp_path: Path) -> None:
     world = pack / "worlds" / "evil"
     world.mkdir(parents=True)
     (world / "lore.yaml").write_text(
-        'world_name: "<script>alert(1)</script>"\n'
-        "epigraph: harmless\n"
+        'world_name: "<script>alert(1)</script>"\nepigraph: harmless\n'
     )
 
     html = assemble_lore_page("space_opera", "evil", pack, world)
@@ -328,7 +323,7 @@ def test_lore_page_emits_layout_grid(tmp_path: Path) -> None:
     html = assemble_lore_page("space_opera", "coyote_star", pack, world)
 
     assert 'class="layout"' in html, (
-        "AC3: <div class=\"layout\"> grid missing — the bundle's CSS uses "
+        'AC3: <div class="layout"> grid missing — the bundle\'s CSS uses '
         "`.layout` as a CSS-grid container with TOC sidebar + main column."
     )
 
@@ -352,12 +347,12 @@ def test_lore_page_emits_toc_sticky_aside_with_nav_toc(tmp_path: Path) -> None:
     html = assemble_lore_page("space_opera", "coyote_star", pack, world)
 
     # Both classes must appear and the .toc-sticky must contain the .toc.
-    assert 'class="toc-sticky"' in html, "AC3: <aside class=\"toc-sticky\"> missing"
-    assert 'class="toc"' in html, "AC3: <nav class=\"toc\"> missing"
+    assert 'class="toc-sticky"' in html, 'AC3: <aside class="toc-sticky"> missing'
+    assert 'class="toc"' in html, 'AC3: <nav class="toc"> missing'
     aside_pos = html.index('class="toc-sticky"')
     toc_pos = html.index('class="toc"')
     assert toc_pos > aside_pos, (
-        "AC3: <nav class=\"toc\"> must be nested inside the .toc-sticky aside, "
+        'AC3: <nav class="toc"> must be nested inside the .toc-sticky aside, '
         "not a sibling — the bundle's sticky positioning targets the aside."
     )
 
@@ -405,7 +400,7 @@ def test_layout_wraps_main_around_section_body(tmp_path: Path) -> None:
     # The classes.yaml section body must be inside <main>.
     file_section_pos = html.index('class="file"')
     assert main_pos < file_section_pos < main_close, (
-        "AC3: per-file <section class=\"file\"> sits outside the <main> "
+        'AC3: per-file <section class="file"> sits outside the <main> '
         "element of the .layout grid; the bundle's CSS positions the main "
         "column relative to the sticky TOC aside."
     )
@@ -430,7 +425,7 @@ def test_toc_link_uses_toc_num_span_for_numeral(tmp_path: Path) -> None:
     html = assemble_rules_page("space_opera", pack)
 
     assert 'class="toc-num"' in html, (
-        "AC4: <span class=\"toc-num\"> missing from TOC links — the "
+        'AC4: <span class="toc-num"> missing from TOC links — the '
         "bundle styles `.toc-num` for the Roman-numeral prefix."
     )
 
@@ -467,18 +462,18 @@ def test_toc_links_resolve_to_section_ids(tmp_path: Path) -> None:
     toc_close = html.index("</nav>", toc_pos)
     toc_block = html[toc_pos:toc_close]
     targets = re.findall(r'href="#([a-z0-9][a-z0-9_-]*)"', toc_block)
-    assert targets, "AC4: no TOC links found inside <nav class=\"toc\">"
+    assert targets, 'AC4: no TOC links found inside <nav class="toc">'
 
     for target in targets:
         assert f'id="{target}"' in html, (
-            f"AC4/Task D: TOC links to #{target} but no <section id=\"{target}\"> "
+            f'AC4/Task D: TOC links to #{target} but no <section id="{target}"> '
             f"renders on the page — section/file mapping (TOC_TO_FILES) is "
             f"broken or this TOC entry has no content file."
         )
 
 
 def test_unknown_pack_falls_back_to_default_toc_and_fires_error_span(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC4 + AC10: unknown pack name → renderer emits the documented
     2-item default TOC AND fires ``sidequest.reference.toc_missing``
@@ -487,22 +482,36 @@ def test_unknown_pack_falls_back_to_default_toc_and_fires_error_span(
     Per plan line 2780, the default TOC is:
         [{"num":"I","id":"reckoning","label":"The World"},
          {"num":"II","id":"bearing","label":"Bearing & Make"}]
+
+    Span emission is verified by monkeypatching the span helper rather
+    than installing a global ``TracerProvider`` exporter. Replacing the
+    global provider races under ``pytest-xdist -n auto`` (a parallel
+    worker may have set the provider first; subsequent set calls are
+    silently ignored). The monkeypatch isolates each worker.
     """
+    from sidequest.server import reference_renderer
     from sidequest.server.reference_renderer import assemble_rules_page
 
     pack = _seed_pack(tmp_path, pack_name="never_real_pack")
 
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-        InMemorySpanExporter,
-    )
+    # Wrap the real span helper so we observe invocations while still
+    # exercising the production code path (open context, yield, close).
+    calls: list[dict[str, str]] = []
+    from contextlib import contextmanager
 
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
+    @contextmanager
+    def _spy(*, pack: str, _tracer: object = None):
+        calls.append({"pack": pack})
+        # Re-enter the real helper so the actual OTEL span fires too
+        # (we're not stubbing — we're spying).
+        from sidequest.telemetry.spans.reference import (
+            reference_toc_missing_span as real_helper,
+        )
+
+        with real_helper(pack=pack, _tracer=_tracer) as span:
+            yield span
+
+    monkeypatch.setattr(reference_renderer, "reference_toc_missing_span", _spy)
 
     html = assemble_rules_page("never_real_pack", pack)
 
@@ -511,16 +520,15 @@ def test_unknown_pack_falls_back_to_default_toc_and_fires_error_span(
         "AC4: unknown pack should render the 2-item default TOC starting "
         "with 'I. The World' / id=reckoning per plan line 2780."
     )
-    assert "#bearing" in html, (
-        "AC4: unknown pack default TOC missing 'bearing' id"
-    )
+    assert "#bearing" in html, "AC4: unknown pack default TOC missing 'bearing' id"
 
-    # And the ERROR span must have fired.
-    span_names = {span.name for span in exporter.get_finished_spans()}
-    assert "sidequest.reference.toc_missing" in span_names, (
+    # And the ERROR span helper must have been invoked exactly with the
+    # unknown pack name (loud-fail path, not silent fallback).
+    assert calls, (
         "AC10: unknown pack must fire `sidequest.reference.toc_missing` "
         "ERROR span — silent fallback to default TOC is forbidden."
     )
+    assert calls[0]["pack"] == "never_real_pack"
 
 
 def test_toc_missing_span_helper_is_importable() -> None:
@@ -648,8 +656,7 @@ def test_factions_yaml_emits_cult_namespaced_ids(tmp_path: Path) -> None:
     pack = _seed_pack(tmp_path)
     # Add factions.yaml to pack-flavor sweep so it renders on the lore page.
     (pack / "factions.yaml").write_text(
-        "- name: river-cabal\n  disposition: hostile\n"
-        "- name: old-folk\n  disposition: wary\n"
+        "- name: river-cabal\n  disposition: hostile\n- name: old-folk\n  disposition: wary\n"
     )
     world = _seed_world(pack)
 
@@ -657,7 +664,7 @@ def test_factions_yaml_emits_cult_namespaced_ids(tmp_path: Path) -> None:
 
     assert 'id="cult-river-cabal"' in html, (
         "AC7: factions.yaml item 'river-cabal' should produce "
-        "id=\"cult-river-cabal\" — plan v3 Task 22 step 4 namespaces "
+        'id="cult-river-cabal" — plan v3 Task 22 step 4 namespaces '
         "factions → cult."
     )
     assert 'id="cult-old-folk"' in html
@@ -671,8 +678,7 @@ def test_kind_overrides_contains_factions_to_cult_mapping() -> None:
     from sidequest.server.reference_renderer import _KIND_OVERRIDES
 
     assert _KIND_OVERRIDES.get("factions") == "cult", (
-        "AC7: _KIND_OVERRIDES['factions'] should be 'cult' per plan "
-        "line 2832–2839"
+        "AC7: _KIND_OVERRIDES['factions'] should be 'cult' per plan line 2832–2839"
     )
 
 
@@ -705,9 +711,7 @@ def test_pack_constant_is_exported_from_reference_theme(constant_name: str) -> N
     "constant_name",
     ["PACK_LABELS", "PACK_BLURBS", "PACK_EPIGRAPHS", "PACK_TOC"],
 )
-def test_pack_constants_cover_every_live_pack(
-    pack: str, constant_name: str
-) -> None:
+def test_pack_constants_cover_every_live_pack(pack: str, constant_name: str) -> None:
     """AC6: all 10 live packs covered by each PACK_* constant — no
     fallthrough on a real pack. The unknown-pack fallback path is
     reserved for genuine drift (new pack added to content without
@@ -734,12 +738,10 @@ def test_pack_epigraph_has_body_and_attrib_fields() -> None:
         assert isinstance(epigraph, dict), (
             f"PACK_EPIGRAPHS[{pack!r}] should be a dict with body/attrib"
         )
-        assert "body" in epigraph, (
-            f"PACK_EPIGRAPHS[{pack!r}] missing 'body' field"
-        )
+        assert "body" in epigraph, f"PACK_EPIGRAPHS[{pack!r}] missing 'body' field"
         assert "attrib" in epigraph, (
             f"PACK_EPIGRAPHS[{pack!r}] missing 'attrib' field — without "
-            f"it the hero's <span class=\"attrib\"> renders empty."
+            f'it the hero\'s <span class="attrib"> renders empty.'
         )
 
 
@@ -768,7 +770,7 @@ def test_no_renderer_path_emits_contents_rail_class(tmp_path: Path) -> None:
 
     for label, html in (("rules", rules_html), ("lore", lore_html)):
         assert 'class="contents-rail"' not in html, (
-            f"AC9: {label} page still emits legacy `class=\"contents-rail\"` — "
+            f'AC9: {label} page still emits legacy `class="contents-rail"` — '
             f"63-4's invented vocabulary must be retired in favor of "
             f"`.toc-sticky` / `.toc`."
         )

@@ -6,6 +6,33 @@ HTML fragments.
 
 Headings get stable slugified ``id`` attributes so future deep-link work can
 target them without schema changes.
+
+**Chrome contract (Story 63-7).** The bundled CSS at
+``sidequest/server/static/reference/{theme,styles}.css`` is the source of
+truth for the markup vocabulary. This renderer conforms to it — never the
+other way around. Specifically:
+
+- ``<body>`` content (everything except the trailing scroll-spy script)
+  sits inside ``<div class="page">…</div>`` (Task A).
+- Hero is ``<header class="hero">`` containing five ordered elements:
+  ``.hero-eyebrow`` (glyph + eyebrow.gilt + rule), ``.hero-kicker``,
+  ``<h1 class="hero-title">``, ``.hero-sub``, and
+  ``.hero-epigraph narrative-flourish`` with a ``<span class="attrib">``
+  (Task B). Both lore and rules pages emit a hero — rules-page hero
+  title falls back to ``PACK_LABELS[pack]``.
+- Body is wrapped in ``<div class="layout"><aside class="toc-sticky">
+  <nav class="toc"><ol>…</ol></nav></aside><main>…</main></div>`` and
+  each TOC entry has a matching ``<section id="{toc.id}">…</section>``
+  inside ``<main>`` (Task C, D).
+- Inline scroll-spy queries ``aside.toc-sticky nav.toc a``, toggles
+  ``.active`` on the visible link, ``rootMargin '-20% 0% -60% 0%'``
+  (Task E).
+- ``_KIND_OVERRIDES["factions"] = "cult"`` for lore-tier list-of-dict
+  namespacing (Task F).
+
+The ``test_reference_chrome_wiring.py`` regression guard parses every
+emitted ``class="…"`` and asserts each matches a CSS rule — drift like
+shipping ``.contents-rail`` again will fail loud.
 """
 
 from __future__ import annotations
@@ -18,8 +45,20 @@ from pathlib import Path
 import yaml
 
 from sidequest.server.reference_slug import slugify
-from sidequest.server.reference_theme import ReferenceTheme, load_reference_theme
-from sidequest.telemetry.spans.reference import reference_hero_unbound_span
+from sidequest.server.reference_theme import (
+    DEFAULT_TOC,
+    PACK_BLURBS,
+    PACK_EPIGRAPHS,
+    PACK_LABELS,
+    PACK_TOC,
+    TOC_TO_FILES,
+    ReferenceTheme,
+    load_reference_theme,
+)
+from sidequest.telemetry.spans.reference import (
+    reference_hero_unbound_span,
+    reference_toc_missing_span,
+)
 
 _DEPTH_CAP = 6
 
@@ -34,6 +73,10 @@ _KIND_OVERRIDES: dict[str, str] = {
     "locations": "location",
     "achievements": "achievement",
     "tropes": "trope",
+    # Story 63-7 Task F: factions.yaml entries get `cult-<slug>` ids
+    # (per plan line 2832-2839). Keeps lore-tier list-of-dict items
+    # in a distinct namespace from rules-tier classes/archetypes.
+    "factions": "cult",
 }
 
 
@@ -187,6 +230,8 @@ LORE_PACK_FLAVOR_FILES: tuple[str, ...] = (
     "cultures.yaml",
     "lore.yaml",
     "history.yaml",
+    # Story 63-7: factions live at the pack tier and namespace as `cult-*`.
+    "factions.yaml",
 )
 
 EXCLUDED_FILES: frozenset[str] = frozenset(
@@ -218,36 +263,39 @@ EXCLUDED_FILES: frozenset[str] = frozenset(
 _ID_ATTR_RE = re.compile(r'\bid="([a-z0-9][a-z0-9_-]*)"')
 
 
-# Inline IntersectionObserver scroll-spy — toggles aria-current on the
-# contents-rail link whose target section is in view. Bounded ≤2KB so the
-# guard test catches any accidental SPA-bundle inlining.
+# Inline IntersectionObserver scroll-spy (Story 63-7 Task E — verbatim port
+# from plan lines 2807-2828). Queries ``aside.toc-sticky nav.toc a`` to find
+# TOC links and toggles ``classList.add('active')`` / ``.remove('active')``
+# on the link whose target ``<section id>`` is highest in the viewport.
 #
-# rootMargin "-30% 0px -60% 0px" defines an "active band" between 30% and
-# 40% from the top of the viewport: a section becomes active as it crosses
-# the 30% line and stays active until it falls past 40%. This avoids the
-# common scroll-spy flicker where two sections fight for active state when
-# one ends and the next begins at exactly the same scroll position.
+# ``rootMargin '-20% 0% -60% 0%'`` defines a 20%-to-40% activation band:
+# a section becomes "active" as it crosses the 20% line and stays active
+# until it falls past the 40% line. This is the bundle's exact value.
+#
+# Bounded ≤2KB so a future inlined SPA bundle would trip the guard test.
 _SCROLL_SPY_SCRIPT = (
     "<script>"
     "(function(){"
-    "var rail=document.querySelector('.contents-rail');"
-    "if(!rail)return;"
-    "var links=rail.querySelectorAll('a[href^=\"#\"]');"
-    "var byId={};"
-    "links.forEach(function(a){byId[a.getAttribute('href').slice(1)]=a;});"
-    "var io=new IntersectionObserver(function(entries){"
-    "entries.forEach(function(e){"
-    "var a=byId[e.target.id];"
-    "if(a&&e.isIntersecting){"
-    "links.forEach(function(l){l.removeAttribute('aria-current');});"
-    "a.setAttribute('aria-current','true');"
+    "var ids=Array.from("
+    "document.querySelectorAll('aside.toc-sticky nav.toc a')"
+    ").map(function(a){return a.getAttribute('href').slice(1);});"
+    "var sections=ids.map(function(id){return document.getElementById(id);})"
+    ".filter(Boolean);"
+    "var links={};"
+    "document.querySelectorAll('aside.toc-sticky nav.toc a').forEach("
+    "function(a){links[a.getAttribute('href').slice(1)]=a;}"
+    ");"
+    "if(!sections.length)return;"
+    "var obs=new IntersectionObserver(function(entries){"
+    "var visible=entries.filter(function(e){return e.isIntersecting;})"
+    ".sort(function(a,b){return a.boundingClientRect.top-b.boundingClientRect.top;});"
+    "if(visible[0]){"
+    "Object.values(links).forEach(function(a){a.classList.remove('active');});"
+    "var top=visible[0].target.id;"
+    "if(links[top])links[top].classList.add('active');"
     "}"
-    "});"
-    "},{rootMargin:'-30% 0px -60% 0px'});"
-    "Object.keys(byId).forEach(function(id){"
-    "var el=document.getElementById(id);"
-    "if(el)io.observe(el);"
-    "});"
+    "},{rootMargin:'-20% 0% -60% 0%',threshold:0});"
+    "sections.forEach(function(s){obs.observe(s);});"
     "})();"
     "</script>"
 )
@@ -343,47 +391,241 @@ def _document_root_open(pack: str, world: str | None, archetype: str) -> str:
     )
 
 
-def _build_contents_rail(entries: list[tuple[str, str]]) -> str:
-    """Server-rendered locked TOC. ``data-scroll-spy`` marks it as the target
-    for the inline IntersectionObserver script."""
+# --- Chrome assemblers (Story 63-7) ---
+
+
+def _pack_toc_entries(pack: str) -> list[dict[str, str]]:
+    """Return the ordered TOC entries for ``pack``.
+
+    Falls through to ``DEFAULT_TOC`` AND fires the
+    ``sidequest.reference.toc_missing`` ERROR span when ``pack`` is absent
+    from ``PACK_TOC``. Per plan line 2780 and AC10 — never silent.
+    """
+    entries = PACK_TOC.get(pack)
+    if entries is None:
+        with reference_toc_missing_span(pack=pack):
+            return list(DEFAULT_TOC)
+    return entries
+
+
+def _build_toc(pack: str) -> str:
+    """Per-pack table of contents — emits
+    ``<aside class="toc-sticky"><nav class="toc"><div class="toc-title">Contents</div><ol>…</ol></nav></aside>``.
+
+    Each ``<li>`` is ``<a href="#{id}"><span class="toc-num">{num}.</span>{label}</a>``.
+    The ``.toc-num`` class is what the bundle styles for the serif-numeral
+    prefix; the ``<ol>`` (not ``<ul>``) is required because the bundle's
+    ``.toc ol`` rule strips default list markers and ``.toc-num`` provides
+    the visible numbering.
+    """
+    entries = _pack_toc_entries(pack)
     items = "".join(
-        f'<li><a href="#{slug}">{escape(display)}</a></li>' for slug, display in entries
-    )
-    return f'<nav class="contents-rail" data-scroll-spy><ul>{items}</ul></nav>'
-
-
-def _hero_fallback(pack: str, world: str) -> str:
-    """Fallback hero: pack name only + WARN span. Shared between
-    'lore.yaml absent' and 'world_name missing' paths in ``_build_hero``."""
-    with reference_hero_unbound_span(pack=pack, world=world):
-        return (
-            '<header class="hero" id="hero">'
-            f"<h1>{escape(pack)}</h1>"
-            "</header>"
-        )
-
-
-def _build_hero(*, pack: str, world: str, world_dir: Path) -> str:
-    """Lore-page hero block. Reads ``world_dir/lore.yaml``; falls back to the
-    pack name + WARN span if lore.yaml is absent or has no ``world_name``."""
-    lore_path = world_dir / "lore.yaml"
-    if not lore_path.is_file():
-        return _hero_fallback(pack, world)
-    with lore_path.open(encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
-    world_name = data.get("world_name")
-    if not world_name:
-        return _hero_fallback(pack, world)
-    epigraph = data.get("epigraph") or ""
-    epigraph_html = (
-        f'<p class="epigraph">{escape(str(epigraph))}</p>' if epigraph else ""
+        f'<li><a href="#{escape(entry["id"])}">'
+        f'<span class="toc-num">{escape(entry["num"])}.</span>'
+        f"{escape(entry['label'])}"
+        f"</a></li>"
+        for entry in entries
     )
     return (
+        '<aside class="toc-sticky">'
+        '<nav class="toc">'
+        '<div class="toc-title">Contents</div>'
+        f"<ol>{items}</ol>"
+        "</nav>"
+        "</aside>"
+    )
+
+
+def _build_hero(
+    *,
+    pack: str,
+    world: str | None,
+    world_dir: Path | None,
+) -> str:
+    """Render the 5-element hero block (Story 63-7 Task B).
+
+    Structure (per plan lines 2674-2685):
+
+    ```html
+    <header class="hero" id="hero">
+      <div class="hero-eyebrow">
+        <span class="glyph">…</span>
+        <span class="eyebrow gilt">SideQuest · {label} · World Reference</span>
+        <span class="rule"></span>
+      </div>
+      <div class="hero-kicker">{kicker}</div>
+      <h1 class="hero-title">{title}</h1>
+      <div class="hero-sub">{label} · Lore &amp; Rules</div>
+      <div class="hero-epigraph narrative-flourish">
+        {body}<span class="attrib">{attrib}</span>
+      </div>
+    </header>
+    ```
+
+    Title resolution:
+    - Lore page (``world_dir`` provided): read ``world_dir/lore.yaml``
+      and use ``world_name``. If absent or empty, fall back to
+      ``PACK_LABELS[pack]`` and fire ``reference_hero_unbound_span``
+      (WARN).
+    - Rules page (``world_dir`` is None): title is ``PACK_LABELS[pack]``.
+
+    Kicker resolution: first sentence of ``lore.world.description`` if
+    present (lore page), else ``PACK_BLURBS[pack]`` (falls back to empty
+    string for unknown packs — silent because the toc_missing span
+    already covers the broader gap; emitting two spans for one cause is
+    noise).
+
+    Glyph: pulled from the loaded ``ReferenceTheme.dinkus_medium``.
+    """
+    label = PACK_LABELS.get(pack, pack)
+    blurb = PACK_BLURBS.get(pack, "")
+    epigraph = PACK_EPIGRAPHS.get(pack, {"body": "", "attrib": ""})
+
+    # Default values; possibly overridden by lore.yaml on lore page.
+    title = label
+    kicker = blurb
+
+    # Lore-page hero reads lore.yaml for world_name and description override.
+    if world_dir is not None and world is not None:
+        lore_path = world_dir / "lore.yaml"
+        if lore_path.is_file():
+            with lore_path.open(encoding="utf-8") as fh:
+                lore_data = yaml.safe_load(fh) or {}
+            world_name = lore_data.get("world_name")
+            if world_name:
+                title = str(world_name)
+            else:
+                # Hero falls back to pack label; fire WARN span so the GM
+                # panel surfaces world-binding drift.
+                with reference_hero_unbound_span(pack=pack, world=world):
+                    pass
+            world_desc = ((lore_data.get("world") or {}).get("description")) or lore_data.get(
+                "description"
+            )
+            if world_desc:
+                first_sentence = str(world_desc).split(".")[0].strip()
+                if first_sentence:
+                    kicker = first_sentence + "."
+        else:
+            with reference_hero_unbound_span(pack=pack, world=world):
+                pass
+
+    # The dinkus glyph is per-pack from theme.yaml — caller passes it via
+    # ReferenceTheme. We read it from the loaded theme at the page-
+    # assembler level so this function can be called with or without a
+    # full theme (e.g. tests).
+    return _hero_html(
+        title=title,
+        label=label,
+        kicker=kicker,
+        epigraph=epigraph,
+    )
+
+
+def _hero_html(
+    *,
+    title: str,
+    label: str,
+    kicker: str,
+    epigraph: dict[str, str],
+) -> str:
+    """Pure HTML assembly for the 5-element hero. Every interpolation is
+    escaped — the inputs may have come from author-controlled YAML.
+    """
+    return (
         '<header class="hero" id="hero">'
-        f"<h1>{escape(str(world_name))}</h1>"
-        f"{epigraph_html}"
+        '<div class="hero-eyebrow">'
+        # The glyph slot is filled by the bundle's CSS via
+        # `[data-archetype]` rules; an empty `.glyph` span lets the
+        # bundle drop in its archetype-specific ornament. We keep it
+        # empty here because the per-pack dinkus already varies through
+        # the inline `:root{--ref-*}` style block.
+        '<span class="glyph"></span>'
+        f'<span class="eyebrow gilt">SideQuest · {escape(label)} · World Reference</span>'
+        '<span class="rule"></span>'
+        "</div>"
+        f'<div class="hero-kicker">{escape(kicker)}</div>'
+        f'<h1 class="hero-title">{escape(title)}</h1>'
+        f'<div class="hero-sub">{escape(label)} · Lore &amp; Rules</div>'
+        '<div class="hero-epigraph narrative-flourish">'
+        f"{escape(epigraph.get('body', ''))}"
+        f'<span class="attrib">{escape(epigraph.get("attrib", ""))}</span>'
+        "</div>"
         "</header>"
     )
+
+
+# --- Section walk by TOC id ---
+
+
+def _file_renders_by_stem(
+    files: tuple[str, ...],
+    base_dir: Path,
+    *,
+    label_suffix: str = "",
+) -> dict[str, str]:
+    """Render every existing file from ``files`` in ``base_dir``, keyed by
+    stem (without the ``.yaml`` extension)."""
+    out: dict[str, str] = {}
+    for filename in files:
+        if filename in EXCLUDED_FILES:
+            continue
+        path = base_dir / filename
+        if not path.exists():
+            continue
+        if label_suffix:
+            rendered = _render_file_with_label(path, label_suffix)
+        else:
+            rendered = _render_file(path)
+        if rendered:
+            stem = path.stem
+            # Two files with the same stem (e.g. pack-flavor cultures.yaml
+            # AND world cultures.yaml) get concatenated under the same
+            # key so the section renders both.
+            if stem in out:
+                out[stem] = out[stem] + rendered
+            else:
+                out[stem] = rendered
+    return out
+
+
+def _wrap_sections_by_toc(
+    pack: str,
+    rendered_by_stem: dict[str, str],
+) -> str:
+    """Bucket the rendered file fragments into per-TOC-id sections.
+
+    For each TOC entry of ``pack``, emit
+    ``<section id="{toc.id}">{concatenated stems}</section>`` — even if
+    no mapped files exist (the TOC link must resolve, per AC4 + Task D).
+
+    Stems not referenced by any TOC entry render afterwards in their
+    existing per-file wrappers so content is never silently dropped.
+    """
+    entries = _pack_toc_entries(pack)
+    used_stems: set[str] = set()
+    parts: list[str] = []
+    for entry in entries:
+        toc_id = entry["id"]
+        stems = TOC_TO_FILES.get(toc_id, [])
+        section_body_parts: list[str] = []
+        for stem in stems:
+            if stem in rendered_by_stem:
+                section_body_parts.append(rendered_by_stem[stem])
+                used_stems.add(stem)
+        section_body = "".join(section_body_parts)
+        # Emit the section wrapper even when empty so the TOC anchor
+        # resolves (a missing anchor would bring up the bad-anchor banner).
+        parts.append(f'<section id="{escape(toc_id)}">{section_body}</section>')
+
+    # Append unmapped stems at the end so their content is reachable.
+    for stem, rendered in rendered_by_stem.items():
+        if stem not in used_stems:
+            parts.append(rendered)
+    return "".join(parts)
+
+
+# --- Top-level document wrap ---
 
 
 def _wrap_document(
@@ -392,87 +634,113 @@ def _wrap_document(
     body: str,
     pack: str,
     theme: ReferenceTheme,
-    rail_entries: list[tuple[str, str]],
     world: str | None = None,
     hero_html: str = "",
 ) -> str:
+    """Assemble the final HTML document.
+
+    Layout (Story 63-7 Tasks A, C):
+
+    ```
+    <body>
+      {bad-anchor banner}
+      {ref-anchors island}
+      {bad-anchor script}
+      <div class="page">
+        {hero_html}
+        <div class="layout">
+          {_build_toc(pack)}
+          <main>{body}</main>
+        </div>
+      </div>
+      {_SCROLL_SPY_SCRIPT}    ← intentionally OUTSIDE .page wrapper
+    </body>
+    ```
+
+    The scroll-spy script stays outside ``.page`` for parser-
+    friendliness — the bundle's CSS doesn't care, and keeping inline
+    scripts at body root sidesteps any odd interaction with future
+    ``.page`` rules.
+    """
     anchors = _collect_anchor_ids(hero_html + body)
     island = f'<script id="ref-anchors" type="application/json">{json.dumps(anchors)}</script>'
-    rail = _build_contents_rail(rail_entries)
+    toc = _build_toc(pack)
     return (
         "<!doctype html>"
         f"{_document_root_open(pack=pack, world=world, archetype=theme.archetype)}"
         "<head>"
         '<meta charset="utf-8">'
         f"<title>{escape(title)}</title>"
-        f'<link rel="stylesheet" href="/reference/static/theme.css">'
-        f'<link rel="stylesheet" href="/reference/static/styles.css">'
+        '<link rel="stylesheet" href="/reference/static/theme.css">'
+        '<link rel="stylesheet" href="/reference/static/styles.css">'
         f"{_theme_style_block(theme)}"
         "</head>"
         "<body>"
         f"{_BAD_ANCHOR_BANNER}"
         f"{island}"
         f"{_BAD_ANCHOR_SCRIPT}"
+        '<div class="page">'
         f"{hero_html}"
-        f"{rail}"
-        f'<h1 class="doc-title">{escape(title)}</h1>'
-        f"{body}"
+        '<div class="layout">'
+        f"{toc}"
+        f"<main>{body}</main>"
+        "</div>"
+        "</div>"
         f"{_SCROLL_SPY_SCRIPT}"
         "</body>"
         "</html>"
     )
 
 
-def _rail_entries_for(
-    files: tuple[str, ...], base_dir: Path, *, label_suffix: str = ""
-) -> tuple[list[tuple[str, str]], list[str]]:
-    """Build rail entries + rendered file fragments for ``files`` in ``base_dir``,
-    skipping any file that doesn't exist (parity with existing behavior)."""
-    entries: list[tuple[str, str]] = []
-    rendered: list[str] = []
-    for filename in files:
-        if filename in EXCLUDED_FILES:
-            continue
-        path = base_dir / filename
-        if not path.exists():
-            continue
-        # Rail link targets must match the section wrapper id from
-        # `_render_file`, which uses the ``file-{slug}`` prefix.
-        file_id = f"file-{slugify(path.stem)}"
-        if label_suffix:
-            rendered.append(_render_file_with_label(path, label_suffix))
-            entries.append((file_id, f"{path.name} {label_suffix}"))
-        else:
-            rendered.append(_render_file(path))
-            entries.append((file_id, path.name))
-    return entries, rendered
-
-
 def assemble_rules_page(pack: str, pack_dir: Path) -> str:
-    """Build the /reference/rules/<pack> HTML document."""
+    """Build the /reference/rules/<pack> HTML document.
+
+    Rules pages render every existing file in ``RULES_FILES`` and wrap
+    the renders by TOC id per ``TOC_TO_FILES``. Hero title is
+    ``PACK_LABELS[pack]`` (no lore.yaml at the pack tier).
+    """
     theme = load_reference_theme(pack_dir)
-    entries, rendered = _rail_entries_for(RULES_FILES, pack_dir)
+    rendered_by_stem = _file_renders_by_stem(RULES_FILES, pack_dir)
+    body = _wrap_sections_by_toc(pack, rendered_by_stem)
+    hero_html = _build_hero(pack=pack, world=None, world_dir=None)
     return _wrap_document(
         title=f"{pack} — Rules",
-        body="".join(rendered),
+        body=body,
         pack=pack,
         theme=theme,
-        rail_entries=entries,
+        hero_html=hero_html,
     )
 
 
 def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -> str:
-    """Build the /reference/lore/<pack>/<world> HTML document."""
+    """Build the /reference/lore/<pack>/<world> HTML document.
+
+    Lore pages render the world-tier files (``LORE_WORLD_FILES`` from
+    ``world_dir``) plus the pack-tier flavor files (``LORE_PACK_FLAVOR_FILES``
+    from ``pack_dir``). Pack-flavor renders get the ``(genre)`` label
+    suffix so authors can tell at a glance which tier the content
+    came from.
+
+    Hero title is the world's ``world_name`` from ``world_dir/lore.yaml``,
+    falling back to ``PACK_LABELS[pack]`` with a WARN span.
+    """
     theme = load_reference_theme(pack_dir)
     hero_html = _build_hero(pack=pack, world=world, world_dir=world_dir)
-    world_entries, world_rendered = _rail_entries_for(LORE_WORLD_FILES, world_dir)
-    flavor_entries, flavor_rendered = _rail_entries_for(
+
+    world_rendered = _file_renders_by_stem(LORE_WORLD_FILES, world_dir)
+    flavor_rendered = _file_renders_by_stem(
         LORE_PACK_FLAVOR_FILES, pack_dir, label_suffix="(genre)"
     )
-    rail_entries: list[tuple[str, str]] = [("hero", "Overview")]
-    rail_entries.extend(world_entries)
-    rail_entries.extend(flavor_entries)
-    body = "".join(world_rendered) + "".join(flavor_rendered)
+    # Merge: pack-flavor renders come AFTER same-stem world renders so
+    # world-tier content takes precedence in source order.
+    merged: dict[str, str] = dict(world_rendered)
+    for stem, rendered in flavor_rendered.items():
+        if stem in merged:
+            merged[stem] = merged[stem] + rendered
+        else:
+            merged[stem] = rendered
+
+    body = _wrap_sections_by_toc(pack, merged)
     return _wrap_document(
         title=f"{pack} / {world} — Lore",
         body=body,
@@ -480,5 +748,4 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
         theme=theme,
         world=world,
         hero_html=hero_html,
-        rail_entries=rail_entries,
     )

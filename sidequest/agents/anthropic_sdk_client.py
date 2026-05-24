@@ -403,6 +403,38 @@ class AnthropicSdkClient:
                     cost,
                 )
 
+                # Story 60-7 — Lie-detector for the iter=1 cache_control
+                # regression class. A healthy iter writes to exactly one
+                # cache tier (the explicit 1h marker fires; nothing else
+                # defaults to 5m). Both > 0 in a single iter means a
+                # breakpoint defaulted to 5m while another explicit 1h
+                # marker fired on overlapping content — the same waste
+                # pattern the 60-7 fix eliminated. Fires per offending
+                # iter (not aggregated per turn) so the GM panel can pin
+                # which iteration is leaking. severity=warn (lie-detector,
+                # not hard error — the call already succeeded; the
+                # observation is the waste).
+                if cache_write_5m > 0 and cache_write_1h > 0:
+                    both_writes_fields: dict[str, Any] = {
+                        "iteration": iteration,
+                        "cache_write_5m_tokens": cache_write_5m,
+                        "cache_write_1h_tokens": cache_write_1h,
+                        "model": response.model,
+                    }
+                    logger.warning(
+                        "narrator.cache.both_writes_fired iter=%d 5m=%d 1h=%d model=%s",
+                        iteration,
+                        cache_write_5m,
+                        cache_write_1h,
+                        response.model,
+                    )
+                    _watcher_publish_event(
+                        "narrator.cache.both_writes_fired",
+                        both_writes_fields,
+                        component="narrator.sdk",
+                        severity="warn",
+                    )
+
                 # Story 61-4 — Cost-runaway fingerprint detector. Check the
                 # just-observed call against the rolling baselines (or warmup
                 # floors), fire the watcher event if any trigger matches,
@@ -872,14 +904,31 @@ class AnthropicSdkClient:
     ) -> list[dict[str, Any]]:
         """Build the ``messages`` array for a single ``messages.create`` call.
 
-        Story 60-4: on continuation calls (iter 2+, where the tool-use loop has
-        appended ``{role:'assistant', tool_use}`` + ``{role:'user', tool_result}``
-        to ``running_messages``), the LAST content block of the newest user
-        message gets a ``cache_control={'type':'ephemeral', 'ttl':self.cache_ttl}``
-        marker. This covers the appended messages under the same cache, so the
-        API stops re-minting the ~11.7k ``system_blocks[0]+tools`` prefix at the
-        default 5m TTL on every continuation (measured root cause in
-        ``sprint/archive/60-3-session.md``).
+        Story 60-7 (supersedes 60-4): every iter — iter=1 included — marks the
+        LAST content block of the newest user message with
+        ``cache_control={'type':'ephemeral', 'ttl': self.cache_ttl}``.
+
+        Why marker every iter, not only on continuation: Anthropic auto-caches
+        content that sits past the last explicit breakpoint at the default 5m
+        TTL. The system_blocks[0] + tools[-1] prefix is marked at the
+        configured TTL (1h by default), but the user message + recency-zone
+        deltas added on iter=1 (~17K tok) carry no marker by default, so the
+        API auto-caches that tail at 5m. On iter=2 the 60-4 continuation
+        marker writes the same content at 1h, displacing the 5m one within
+        seconds — pure waste. Marking iter=1 at the configured TTL overrides
+        the auto-5m default so the iter=1 write lands at 1h directly and
+        iter=2 reads it. Probe evidence: per-turn cost
+        $0.137 → $0.096 (~30% savings); see
+        ``sprint/.session/60-7-session.md``.
+
+        ``is_continuation`` is retained as caller-facing intent (iter=1 vs
+        iter=2+) — useful to the call site and to test naming — but no
+        longer branches the implementation. Both paths apply the marker.
+
+        Bare-string content on the newest user message is promoted to a
+        single-text-block list so ``cache_control`` (a content-block
+        attribute) has somewhere to attach. The wire shape stays valid:
+        Anthropic accepts both bare strings and block-list user content.
 
         Each call returns a fresh list of fresh message dicts (content blocks
         are copied where they're dicts). Two reasons:
@@ -893,11 +942,8 @@ class AnthropicSdkClient:
            newest user message; this iteration's marker must be on the *new*
            newest message, with prior message-level markers cleared. Building
            fresh achieves the cleanup without mutating shared state.
-
-        For non-continuation calls (iter 1 with no appended tool turns), no
-        marker is added — the initial user message rides the cached system
-        prefix without needing its own breakpoint.
         """
+        del is_continuation  # informational only; behavior is uniform across iters
         out: list[dict[str, Any]] = []
         for msg in running_messages:
             new_msg: dict[str, Any] = {"role": msg["role"]}
@@ -910,15 +956,17 @@ class AnthropicSdkClient:
                 new_msg["content"] = content
             out.append(new_msg)
 
-        if not is_continuation or not out:
+        if not out:
             return out
 
-        # Mark the last content block of the newest message (the freshly
-        # appended tool_result user pair). Skip when content is a bare string
-        # (no block-level addressable structure) or empty — both are non-
-        # continuation shapes that shouldn't happen here but degrade safely.
         last_msg = out[-1]
         last_content = last_msg.get("content")
+        if isinstance(last_content, str):
+            # Promote bare string → single text block so cache_control has a
+            # content-block to land on.
+            promoted: list[dict[str, Any]] = [{"type": "text", "text": last_content}]
+            last_msg["content"] = promoted
+            last_content = promoted
         if isinstance(last_content, list) and last_content:
             last_block = last_content[-1]
             if isinstance(last_block, dict):

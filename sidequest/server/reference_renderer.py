@@ -221,6 +221,12 @@ _ID_ATTR_RE = re.compile(r'\bid="([a-z0-9][a-z0-9_-]*)"')
 # Inline IntersectionObserver scroll-spy — toggles aria-current on the
 # contents-rail link whose target section is in view. Bounded ≤2KB so the
 # guard test catches any accidental SPA-bundle inlining.
+#
+# rootMargin "-30% 0px -60% 0px" defines an "active band" between 30% and
+# 40% from the top of the viewport: a section becomes active as it crosses
+# the 30% line and stays active until it falls past 40%. This avoids the
+# common scroll-spy flicker where two sections fight for active state when
+# one ends and the next begins at exactly the same scroll position.
 _SCROLL_SPY_SCRIPT = (
     "<script>"
     "(function(){"
@@ -346,27 +352,28 @@ def _build_contents_rail(entries: list[tuple[str, str]]) -> str:
     return f'<nav class="contents-rail" data-scroll-spy><ul>{items}</ul></nav>'
 
 
+def _hero_fallback(pack: str, world: str) -> str:
+    """Fallback hero: pack name only + WARN span. Shared between
+    'lore.yaml absent' and 'world_name missing' paths in ``_build_hero``."""
+    with reference_hero_unbound_span(pack=pack, world=world):
+        return (
+            '<header class="hero" id="hero">'
+            f"<h1>{escape(pack)}</h1>"
+            "</header>"
+        )
+
+
 def _build_hero(*, pack: str, world: str, world_dir: Path) -> str:
     """Lore-page hero block. Reads ``world_dir/lore.yaml``; falls back to the
     pack name + WARN span if lore.yaml is absent or has no ``world_name``."""
     lore_path = world_dir / "lore.yaml"
     if not lore_path.is_file():
-        with reference_hero_unbound_span(pack=pack, world=world):
-            return (
-                '<header class="hero" id="hero">'
-                f"<h1>{escape(pack)}</h1>"
-                "</header>"
-            )
+        return _hero_fallback(pack, world)
     with lore_path.open() as fh:
         data = yaml.safe_load(fh) or {}
     world_name = data.get("world_name")
     if not world_name:
-        with reference_hero_unbound_span(pack=pack, world=world):
-            return (
-                '<header class="hero" id="hero">'
-                f"<h1>{escape(pack)}</h1>"
-                "</header>"
-            )
+        return _hero_fallback(pack, world)
     epigraph = data.get("epigraph") or ""
     epigraph_html = (
         f'<p class="epigraph">{escape(str(epigraph))}</p>' if epigraph else ""

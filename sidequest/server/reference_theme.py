@@ -67,7 +67,15 @@ def load_reference_theme(pack_dir: Path) -> ReferenceTheme:
         with reference_theme_missing_span(pack=pack, field="theme.yaml"):
             raise MissingThemeFieldError(f"theme.yaml not found for pack {pack!r}")
     with theme_path.open() as fh:
-        data = yaml.safe_load(fh) or {}
+        try:
+            data = yaml.safe_load(fh) or {}
+        except yaml.YAMLError as exc:
+            # Honor the docstring contract: every missing/broken theme.yaml
+            # path surfaces as MissingThemeFieldError, not the raw yaml error.
+            with reference_theme_missing_span(pack=pack, field="theme.yaml"):
+                raise MissingThemeFieldError(
+                    f"theme.yaml for pack {pack!r} is malformed: {exc}"
+                ) from exc
     glyph = (data.get("dinkus") or {}).get("glyph") or {}
     return ReferenceTheme(
         archetype=_require_str(data.get("archetype"), "archetype", pack),

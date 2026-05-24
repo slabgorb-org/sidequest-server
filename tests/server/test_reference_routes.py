@@ -174,6 +174,37 @@ def test_reference_router_registered_in_real_app(tmp_path):
     assert "sleuth" in r.text
 
 
+def test_missing_theme_field_returns_500(tmp_path):
+    """A pack with theme.yaml missing a required field (e.g., archetype)
+    must surface as HTTP 500. Regression guard: prior to Story 63-4 the
+    routes caught only ValueError, so MissingThemeFieldError raised by
+    load_reference_theme would have bubbled as an uncaught 500 with no
+    log shape. Both routes now catch MissingThemeFieldError explicitly."""
+    pack = tmp_path / "demo"
+    world = pack / "worlds" / "demoworld"
+    world.mkdir(parents=True)
+    # archetype intentionally omitted — load_reference_theme raises.
+    (pack / "theme.yaml").write_text(
+        "primary: '#5C7A4F'\n"
+        "accent: '#C9A96E'\n"
+        "background: '#F4EBDA'\n"
+        "web_font_family: Lora\n"
+        "display_font_family: Playfair Display\n"
+        "dinkus:\n  glyph:\n    light: '—'\n    medium: '❧'\n    heavy: '❧❧❧'\n"
+    )
+    (pack / "archetypes.yaml").write_text("kinds:\n  - sleuth\n")
+    (world / "world.yaml").write_text("name: Demoworld\n")
+
+    client = _build_app(tmp_path)
+    r_rules = client.get("/reference/rules/demo")
+    assert r_rules.status_code == 500
+    assert "archetype" in r_rules.text.lower()
+
+    r_lore = client.get("/reference/lore/demo/demoworld")
+    assert r_lore.status_code == 500
+    assert "archetype" in r_lore.text.lower()
+
+
 def test_malformed_yaml_returns_500_with_filename(tmp_path, monkeypatch):
     """When assemble_rules_page raises ValueError (malformed YAML), the route
     must wrap it as 500 with the filename in the detail. Locks the from-exc

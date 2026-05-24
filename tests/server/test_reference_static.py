@@ -72,6 +72,10 @@ def test_static_theme_css_contains_token_vocabulary(tmp_path):
     r = client.get("/reference/static/theme.css")
     assert r.status_code == 200
     assert "--" in r.text, "theme.css missing CSS custom properties"
+    # Confirm at least one of the bundle's per-archetype variables survived
+    # the copy — `--font-body` is defined under [data-archetype="parchment"]
+    # in the source bundle. A truncated copy would lose it.
+    assert "--font-body" in r.text
 
 
 def test_static_styles_css_contains_structural_rules(tmp_path):

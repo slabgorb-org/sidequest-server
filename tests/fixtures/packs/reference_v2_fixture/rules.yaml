@@ -1,0 +1,5 @@
+core_rules: |
+  Roll d6 for most actions. Beat the difficulty and you succeed.
+resolution:
+  success: Roll meets or beats target number.
+  failure: Roll falls short of target number.

@@ -1,0 +1,12 @@
+name: Reference V2 Fixture
+version: "0.1.0"
+description: >-
+  Minimal fixture pack for reference-pages v2 integration tests.
+  Contains a class and a culture both named "Knight" to exercise the
+  cross-file name-collision invariant.
+lobby_blurb: "For testing only."
+recommended_players:
+  min: 1
+  max: 4
+  sweet_spot: 2
+min_sidequest_version: "0.1.0"

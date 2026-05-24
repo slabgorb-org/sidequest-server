@@ -858,3 +858,68 @@ def present_achievements(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("achievements", ())] = present_achievements
+
+
+def present_inventory(node: object, ctx: PresenterContext) -> str:
+    """Render inventory.yaml — currency label-grid + item catalog table."""
+    if not isinstance(node, dict):
+        return ""
+    parts: list[str] = []
+
+    currency = node.get("currency")
+    if isinstance(currency, dict) and currency:
+        name = str(currency.get("name", "")).strip()
+        denoms = currency.get("denominations") or []
+        cells: list[str] = []
+        if name:
+            cells.append(_label_cell("Currency", name))
+        if isinstance(denoms, list) and denoms:
+            chips = ", ".join(str(d) for d in denoms)
+            cells.append(
+                '<div class="ref-label-grid__cell">'
+                '<div class="ref-card__kicker">Denominations</div>'
+                f"<div>{escape(chips)}</div>"
+                "</div>"
+            )
+        if cells:
+            parts.append('<div class="ref-label-grid">' + "".join(cells) + "</div>")
+
+    catalog = node.get("item_catalog")
+    if isinstance(catalog, list) and catalog:
+        rows: list[str] = []
+        for item in catalog:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            category = str(item.get("category", "")).strip()
+            value = str(item.get("value", "")).strip()
+            weight = str(item.get("weight", "")).strip()
+            rarity = str(item.get("rarity", "")).strip()
+            description = str(item.get("description", "")).strip()
+            rows.append(
+                f"<tr>"
+                f"<td>{escape(name)}</td>"
+                f"<td>{escape(category)}</td>"
+                f"<td>{escape(value)}</td>"
+                f"<td>{escape(weight)}</td>"
+                f"<td>{escape(rarity)}</td>"
+                f"<td>{escape(description)}</td>"
+                f"</tr>"
+            )
+        if rows:
+            thead = (
+                "<thead><tr>"
+                "<th>Name</th><th>Category</th><th>Value</th>"
+                "<th>Weight</th><th>Rarity</th><th>Description</th>"
+                "</tr></thead>"
+            )
+            parts.append(
+                f'<table class="ref-table">{thead}<tbody>{"".join(rows)}</tbody></table>'
+            )
+
+    if not parts:
+        return ""
+    return "".join(parts)
+
+
+PRESENTERS[("inventory", ())] = present_inventory

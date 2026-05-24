@@ -450,6 +450,24 @@ class CharacterCreationPayload(ProtocolBase):
 # ---------------------------------------------------------------------------
 
 
+class TurnStatusEntry(ProtocolBase):
+    """One row of the sealed-letter pacing roster.
+
+    Carried on every TURN_STATUS broadcast (see ``TurnStatusPayload.entries``)
+    so every connected tab renders identical per-player rows and denominator.
+    Without this, the UI accumulates entries from per-player active/submitted
+    broadcasts and any dropped or late delivery diverges the counter — host
+    sees "(1/2)" while peers see "(2/3)" because their accumulators contain
+    different sets of broadcasts (sq-playtest 2026-05-12 [BUG-LOW] sealed-
+    letter counter format differs by tab).
+    """
+
+    player_id: NonBlankString
+    character_name: NonBlankString
+    status: str
+    """'pending' = composing, 'submitted' = sealed, 'auto_resolved' = timed out."""
+
+
 class TurnStatusPayload(ProtocolBase):
     """Turn/round tracking.
 
@@ -462,6 +480,13 @@ class TurnStatusPayload(ProtocolBase):
     """'active' = this player's turn, 'resolved' = turn complete."""
     state_delta: StateDelta | None = None
     """Optional state delta."""
+    entries: list[TurnStatusEntry] | None = None
+    """Canonical sealed-letter roster snapshot — every PLAYING peer with
+    current pending/submitted state. Emitted alongside every broadcast so
+    each tab reconciles to the same denominator. Default-None means the
+    field is absent on the wire and the UI falls back to its per-player
+    accumulator (legacy path); an explicit empty list signals "no roster"
+    (round resolved)."""
 
 
 # ---------------------------------------------------------------------------

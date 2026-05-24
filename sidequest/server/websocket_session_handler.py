@@ -4792,6 +4792,14 @@ class WebSocketSessionHandler:
                                 payload=TurnStatusPayload(
                                     player_name=NonBlankString(acting_name),
                                     status="resolved",
+                                    # Explicit empty roster — the UI clears
+                                    # turnStatusEntries on resolved; sending
+                                    # `[]` keeps the wire canonical and
+                                    # prevents the App.tsx per-player path
+                                    # from re-pushing a stale "pending"
+                                    # entry between the clear and the next
+                                    # round's broadcasts.
+                                    entries=[],
                                 ),
                                 player_id=sd.player_id or "",
                             )

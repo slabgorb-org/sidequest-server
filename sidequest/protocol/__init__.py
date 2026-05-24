@@ -69,6 +69,7 @@ from sidequest.protocol.messages import (
     TacticalGridMessage,
     ThinkingMessage,
     ThinkingPayload,
+    TurnStatusEntry,
     TurnStatusMessage,
     TurnStatusPayload,
 )
@@ -197,6 +198,7 @@ __all__ = [
     "TacticalGridMessage",
     "ThinkingMessage",
     "ThinkingPayload",
+    "TurnStatusEntry",
     "TurnStatusMessage",
     "TurnStatusPayload",
 ]

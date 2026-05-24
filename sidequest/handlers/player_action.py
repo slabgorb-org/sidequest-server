@@ -21,6 +21,7 @@ from sidequest.server.session_helpers import (
     _error_msg,
     _resolve_acting_character_name,
 )
+from sidequest.server.turn_status_roster import build_turn_status_roster
 from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -343,10 +344,19 @@ class PlayerActionHandler:
             acting_name = sd.player_name
         if session._room is not None and sd.player_name:
             try:
+                # Canonical roster on the wire — every recipient agrees on
+                # the denominator. The submitter hasn't called submit_input
+                # yet at this point, so they appear as "pending" in the
+                # roster — correct (active broadcast precedes the buffer
+                # write / barrier.submit at lines below).
+                active_roster = build_turn_status_roster(
+                    sd.snapshot, session._room.playing_player_ids()
+                )
                 turn_active_msg = TurnStatusMessage(
                     payload=TurnStatusPayload(
                         player_name=NonBlankString(acting_name),
                         status="active",
+                        entries=active_roster,
                     ),
                     player_id=sd.player_id or "",
                 )
@@ -441,10 +451,31 @@ class PlayerActionHandler:
             # already consistent with this player counting as sealed.
             if sd.player_name:
                 try:
+                    # Roster snapshot after submit_input — this submitter
+                    # now appears as "submitted". If the barrier just fired
+                    # the turn_manager._submitted set was cleared on phase
+                    # transition (turn.py:98); in that case the roster
+                    # would show everyone as "pending" again, which would
+                    # contradict the per-tab visual of "all sealed". Use
+                    # an explicit all-submitted projection when
+                    # barrier_fired so the UI sees the round's terminal
+                    # state on this final broadcast.
+                    if barrier_fired:
+                        submitted_roster = [
+                            entry.model_copy(update={"status": "submitted"})
+                            for entry in build_turn_status_roster(
+                                snapshot, session._room.playing_player_ids()
+                            )
+                        ]
+                    else:
+                        submitted_roster = build_turn_status_roster(
+                            snapshot, session._room.playing_player_ids()
+                        )
                     submitted_msg = TurnStatusMessage(
                         payload=TurnStatusPayload(
                             player_name=NonBlankString(acting_name),
                             status="submitted",
+                            entries=submitted_roster,
                         ),
                         player_id=sd.player_id or "",
                     )

@@ -32,9 +32,17 @@ logger = logging.getLogger(__name__)
 # tokens. Either trigger fires the same ``cost_runaway_suspected`` event,
 # distinguished by a ``trigger`` discriminator field. The 60K-in/12-out
 # fingerprint from the 2026-05-23 incident hits both; collapse to a single
-# event with ``io_fingerprint`` priority (decision C). Per-instance state:
-# each session creates a fresh client via ``llm_factory.build_llm_client``,
-# so per-instance deques are per-session by construction.
+# event with ``io_fingerprint`` priority (decision C).
+#
+# Story 61-followup-A — the baseline deques are keyed on ``session_id``
+# (``dict[str, deque]``), NOT instance-wide. Deterministic-URL session
+# rejoins (``/play/{date}-{world}-mp``) inherit the prior session's
+# baseline window; distinct sessions stay independent even when one
+# client instance backs several sessions in sequence. Mirrors the
+# 61-followup-D ``_session_cumulative_cost_usd: dict[str, float]``
+# pattern. Calls with ``session_id=None`` (non-narrator codepaths like
+# the dungeon materializer one-shot curate) are detector no-ops — no
+# read, no append.
 
 _BASELINE_WINDOW_K: int = 10
 _WARMUP_COST_USD_FLOOR: float = 0.03
@@ -181,14 +189,24 @@ class AnthropicSdkClient:
             sdk = AsyncAnthropic(api_key=self._api_key)
         self._sdk = sdk
 
-        # Story 61-4 — per-instance rolling baselines for the cost-runaway
-        # fingerprint detector. Two parallel windows (cost_usd, input_tokens)
-        # each bounded to K=10 observations; pre-warmup comparisons use the
-        # locked floors above. ``llm_factory.build_llm_client`` returns a fresh
-        # client per session, making per-instance state per-session by
-        # construction.
-        self._cost_baseline: deque[float] = deque(maxlen=_BASELINE_WINDOW_K)
-        self._input_tokens_baseline: deque[int] = deque(maxlen=_BASELINE_WINDOW_K)
+        # Story 61-followup-A — per-session_id rolling baselines for the
+        # cost-runaway fingerprint detector. Two parallel windows
+        # (cost_usd, input_tokens), each a K=10 deque, lazily created on
+        # first append for a session. ``llm_factory.build_llm_client`` no
+        # longer guarantees one-client-per-session post-A: deterministic
+        # multiplayer URLs (memory project_session_id_dropin) rejoin the
+        # same logical session, and a single client instance may back
+        # several sessions across a process lifetime. Keying on
+        # session_id makes the baseline window correctly per-session
+        # regardless of how the client is reused. Mirrors the
+        # ``_session_cumulative_cost_usd`` shape below.
+        #
+        # Unbounded growth note: the dict gains one entry per distinct
+        # session_id seen by the client. The 61-followup-C wiring of
+        # ``SessionRoom.close_store()`` → ``reset_baselines(session_id)``
+        # will provide the per-session eviction.
+        self._cost_baseline: dict[str, deque[float]] = {}
+        self._input_tokens_baseline: dict[str, deque[int]] = {}
 
         # Story 61-followup-D — per-session_id cumulative cost tracker
         # and the configurable ceiling. ``None`` session_ids bypass the
@@ -387,17 +405,20 @@ class AnthropicSdkClient:
 
                 # Story 61-4 — Cost-runaway fingerprint detector. Check the
                 # just-observed call against the rolling baselines (or warmup
-                # floors) BEFORE appending the call to those baselines, so the
-                # comparison is always against PRIOR calls. See module-level
-                # constants above for the locked thresholds (decisions A-C).
+                # floors), fire the watcher event if any trigger matches,
+                # then append to the baseline window so subsequent calls
+                # compare against PRIOR calls. The entire lifecycle
+                # (read → emit → append) lives inside
+                # ``_maybe_emit_cost_runaway`` to keep the detector's
+                # state management encapsulated. ``session_id=None``
+                # bypasses the detector entirely (non-narrator).
                 self._maybe_emit_cost_runaway(
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     cost_usd=cost,
                     model=response.model,
+                    session_id=session_id,
                 )
-                self._cost_baseline.append(cost)
-                self._input_tokens_baseline.append(input_tokens)
 
                 # Story 61-followup-D §C.2 — per-iter cumulative update +
                 # threshold-cross detection. Each iter has already billed;
@@ -486,29 +507,54 @@ class AnthropicSdkClient:
     # cost-runaway fingerprint alarm (Story 61-4)
     # ------------------------------------------------------------------
 
-    def reset_baselines(self) -> None:
-        """Resets the rolling baselines so the next call cohort uses warmup floors.
+    def reset_baselines(self, session_id: str) -> None:
+        """Reset the rolling baselines for a single session.
 
-        Today this is dormant infrastructure — ``SessionRoom.close_store()``
-        is the wired callsite, but no production code path invokes
-        ``close_store()`` (``RoomRegistry`` never evicts). The absolute
-        cost floor at ``_ABSOLUTE_COST_USD_FLOOR`` is the live safety net
-        for the trained-into-silence case; this method becomes
-        load-bearing when a teardown path lands.
+        Story 61-followup-A: per-session signature. Drops the
+        ``cost_usd`` and ``input_tokens`` deques for ``session_id`` so
+        the next call cohort for that session uses warmup floors. Other
+        sessions' deques are untouched — a session ending must not
+        clobber its concurrent neighbors' baseline windows.
+
+        ``session_id`` is required and typed: an accidental
+        ``reset_baselines()`` with no argument would silently clear
+        nothing (load-bearing for the upcoming 61-followup-C call site).
+        A never-observed ``session_id`` is a no-op (``dict.pop`` with
+        default ``None``) — important because a session can disconnect
+        before making its first SDK call, and the teardown path must
+        not crash on that race.
+
+        Today this remains dormant infrastructure: 61-followup-C will
+        wire ``SessionRoom.close_store()`` to call this on slug recycle.
+        The absolute cost floor at ``_ABSOLUTE_COST_USD_FLOOR`` and the
+        baseline-ceiling clamp at ``_BASELINE_COST_CEILING`` are the
+        live safety nets for the trained-into-silence case; this
+        method becomes load-bearing once C wires the call site.
+
+        **Scope:** this method clears ONLY the cost-runaway baselines
+        (``_cost_baseline`` and ``_input_tokens_baseline``). The
+        61-followup-D state for the same session_id —
+        ``_session_cumulative_cost_usd`` and
+        ``_session_ceiling_announced`` — is intentionally NOT cleared
+        here. 61-followup-C should decide whether its ``close_store``
+        eviction path also needs to drop those entries; for a
+        slug-recycle rejoin (where the same session_id will be reused
+        by a fresh session), the answer is almost certainly YES — a
+        stale announce-set entry would silently suppress the new
+        session's first ceiling-cross alarm. Left to C so the decision
+        and its OTEL plumbing land together.
 
         Background on why the reset matters once teardown wires in:
-        ``RoomRegistry`` (session_room.py:774-786) never evicts a slug —
-        the ``AnthropicSdkClient`` instance backing a slug's orchestrator
-        therefore lives for the server process lifetime, not per-session.
-        Without this reset, the rolling baseline can self-train onto a
-        sustained runaway: 10 consecutive $0.12 turns calibrate the
-        baseline to ~$0.12, after which an $0.18 follow-up at 1.5x
-        baseline is below the 5x trigger and passes silently. When a
-        future teardown path calls ``close_store()`` on slug recycle,
-        this reset ensures the next session starts cold.
+        ``RoomRegistry`` (session_room.py:774-786) never evicts a slug
+        today — the ``AnthropicSdkClient`` instance backing a slug's
+        orchestrator therefore lives for the server process lifetime,
+        not per-session. Without this reset, even per-session-keyed
+        baselines accumulate entries forever (one per distinct
+        session_id seen). When ``close_store()`` lands as a callsite,
+        this method gives it a per-session eviction handle.
         """
-        self._cost_baseline.clear()
-        self._input_tokens_baseline.clear()
+        self._cost_baseline.pop(session_id, None)
+        self._input_tokens_baseline.pop(session_id, None)
 
     def _maybe_emit_cost_runaway(
         self,
@@ -517,11 +563,13 @@ class AnthropicSdkClient:
         output_tokens: int,
         cost_usd: float,
         model: str,
+        session_id: str | None,
     ) -> None:
         """Fire ``cost_runaway_suspected`` if any trigger matches.
 
         Two parallel rolling baselines compare the just-observed call
-        against PRIOR calls (K=10 window each). Story 61-followup-D §A
+        against PRIOR calls (K=10 window each). Story 61-followup-A
+        keys both windows on ``session_id``; Story 61-followup-D §A
         clamps the post-warmup baselines at 3× the warmup floors so
         sustained runaways cannot train the comparator into silence:
 
@@ -543,6 +591,13 @@ class AnthropicSdkClient:
           Baselines also reset on slug recycle — see ``reset_baselines``
           and ``SessionRoom.close_store``.
 
+        ``session_id`` is required (keyword-only). ``session_id=None``
+        bypasses the detector entirely — non-narrator codepaths
+        (dungeon materializer one-shot curate, future ad-hoc one-shots)
+        don't have a session identity and must not pollute any session's
+        baseline window. Mirrors the existing None bypass on the
+        session-cumulative tracker (see ``_update_session_cumulative``).
+
         Exactly one event per call: when multiple triggers fire
         simultaneously, priority is **io_fingerprint > input_absolute >
         cost_multiple > cost_absolute** (decision C, extended by
@@ -554,8 +609,28 @@ class AnthropicSdkClient:
         ``cost_usd`` / ``baseline_cost_usd`` / ``input_tokens`` /
         ``baseline_input_tokens`` field pairs so the operator sees the
         full picture in one event regardless of which trigger named it.
+        The published event also carries ``session_id`` so the GM panel
+        can attribute interleaved multi-session events (61-followup-A
+        addition, TEA finding § Question).
         """
-        warmup = len(self._cost_baseline) < _BASELINE_WINDOW_K
+        # Story 61-followup-A — None bypass for non-narrator callers.
+        # No silent fallback (CLAUDE.md): the contract is "detector is
+        # off for None"; we don't synthesize a magic "<no-session>" key.
+        if session_id is None:
+            return
+
+        cost_window = self._cost_baseline.get(session_id)
+        input_window = self._input_tokens_baseline.get(session_id)
+        # Warmup uses floors when EITHER window hasn't accumulated K
+        # observations yet. Both windows are populated together at the
+        # append site, so they advance in lock-step; the OR is a
+        # defensive read against a partial-init race that today can't
+        # occur but would be a silent comparator bug if it ever did.
+        warmup = (
+            cost_window is None
+            or input_window is None
+            or len(cost_window) < _BASELINE_WINDOW_K
+        )
         if warmup:
             baseline_cost = _WARMUP_COST_USD_FLOOR
             baseline_input: float = _WARMUP_INPUT_TOKENS_FLOOR
@@ -565,10 +640,11 @@ class AnthropicSdkClient:
             # under sustained ramps. The clamp is a CEILING (min, not
             # fixed): healthy steady-state baselines below the ceiling
             # are unchanged; only drifted baselines are clipped down.
-            observed_cost = sum(self._cost_baseline) / len(self._cost_baseline)
-            observed_input = sum(self._input_tokens_baseline) / len(
-                self._input_tokens_baseline
-            )
+            # ``cost_window`` and ``input_window`` are non-None here
+            # because warmup is False (asserts on pyright path).
+            assert cost_window is not None and input_window is not None
+            observed_cost = sum(cost_window) / len(cost_window)
+            observed_input = sum(input_window) / len(input_window)
             baseline_cost = min(observed_cost, _BASELINE_COST_CEILING)
             baseline_input = min(observed_input, float(_BASELINE_INPUT_CEILING))
 
@@ -592,56 +668,76 @@ class AnthropicSdkClient:
         # "trained-into-silence" case where a sustained runaway calibrates
         # the rolling baseline upward.
         absolute_triggered = cost_usd > _ABSOLUTE_COST_USD_FLOOR
-        if not (
+        any_triggered = (
             cost_triggered
             or io_triggered
             or input_absolute_triggered
             or absolute_triggered
-        ):
-            return
+        )
 
-        # Priority order (decision C, extended by 61-followup-D §B):
-        # 1. io_fingerprint (most diagnostic; matches 2026-05-23 shape)
-        # 2. input_absolute (input-axis canary independent of output)
-        # 3. cost_multiple (rolling-baseline-relative; existing trigger)
-        # 4. cost_absolute (safety net for trained-into-silence baseline)
-        if io_triggered:
-            trigger = "io_fingerprint"
-        elif input_absolute_triggered:
-            trigger = "input_absolute"
-        elif cost_triggered:
-            trigger = "cost_multiple"
-        else:
-            trigger = "cost_absolute"
-        fields: dict[str, Any] = {
-            "trigger": trigger,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cost_usd": cost_usd,
-            "baseline_cost_usd": baseline_cost,
-            "baseline_input_tokens": baseline_input,
-            "warmup": warmup,
-            "model": model,
-        }
-        logger.error(
-            "narrator.cost_runaway_suspected trigger=%s input=%d output=%d "
-            "cost_usd=%.6f baseline_cost_usd=%.6f baseline_input_tokens=%.1f "
-            "warmup=%s model=%s",
-            trigger,
-            input_tokens,
-            output_tokens,
-            cost_usd,
-            baseline_cost,
-            baseline_input,
-            warmup,
-            model,
-        )
-        _watcher_publish_event(
-            "cost_runaway_suspected",
-            fields,
-            component="narrator.sdk",
-            severity="warn",
-        )
+        if any_triggered:
+            # Priority order (decision C, extended by 61-followup-D §B):
+            # 1. io_fingerprint (most diagnostic; matches 2026-05-23 shape)
+            # 2. input_absolute (input-axis canary independent of output)
+            # 3. cost_multiple (rolling-baseline-relative; existing trigger)
+            # 4. cost_absolute (safety net for trained-into-silence baseline)
+            if io_triggered:
+                trigger = "io_fingerprint"
+            elif input_absolute_triggered:
+                trigger = "input_absolute"
+            elif cost_triggered:
+                trigger = "cost_multiple"
+            else:
+                trigger = "cost_absolute"
+            fields: dict[str, Any] = {
+                "trigger": trigger,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": cost_usd,
+                "baseline_cost_usd": baseline_cost,
+                "baseline_input_tokens": baseline_input,
+                "warmup": warmup,
+                "model": model,
+                # Story 61-followup-A: GM-panel attribution for interleaved
+                # multi-session events. session_id is non-None here (the
+                # bypass returned early above).
+                "session_id": session_id,
+            }
+            logger.error(
+                "narrator.cost_runaway_suspected trigger=%s input=%d "
+                "output=%d cost_usd=%.6f baseline_cost_usd=%.6f "
+                "baseline_input_tokens=%.1f warmup=%s model=%s "
+                "session_id=%s",
+                trigger,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                baseline_cost,
+                baseline_input,
+                warmup,
+                model,
+                session_id,
+            )
+            _watcher_publish_event(
+                "cost_runaway_suspected",
+                fields,
+                component="narrator.sdk",
+                severity="warn",
+            )
+
+        # Story 61-followup-A — append AFTER the check so the comparator
+        # always sees PRIOR observations. The append happens whether or
+        # not a trigger fired: a healthy call must seed the baseline so
+        # the next call has priors. Lazy-init the deques on first
+        # observation for this session_id (mirrors the
+        # ``_session_cumulative_cost_usd`` dict in the cumulative-cost
+        # tracker).
+        self._cost_baseline.setdefault(
+            session_id, deque(maxlen=_BASELINE_WINDOW_K)
+        ).append(cost_usd)
+        self._input_tokens_baseline.setdefault(
+            session_id, deque(maxlen=_BASELINE_WINDOW_K)
+        ).append(input_tokens)
 
     # ------------------------------------------------------------------
     # session-cumulative cost ceiling (Story 61-followup-D §C)

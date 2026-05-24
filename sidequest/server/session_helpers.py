@@ -941,6 +941,9 @@ def _build_turn_context(
     # would put the same prose in two zones — high-attention Recency
     # AND decayed Valley — re-creating the attention-decay disease this
     # story exists to cure.
+    # Also enforced via the ``_PHASE_B_DROP_FIELDS`` loop above (story
+    # 61-5 added ``narrative_log`` to the registry); this pop is kept
+    # for defense-in-depth pending follow-up consolidation.
     state_summary_payload.pop("narrative_log", None)
     # Story 45-8 — when the gate is engaged, also redact non-self PCs
     # from the state_summary JSON. Without this redaction the canonical

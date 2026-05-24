@@ -271,9 +271,9 @@ def test_excluded_from_dump_entries_actually_absent_from_model_dump() -> None:
     serializer or model_dump override re-introduces the field despite
     the ``exclude=True`` metadata.
     """
-    # Construct a snapshot with the required scalar slugs filled in;
-    # everything else defaults. world_slug and genre_slug are
-    # non-defaultable str fields on GameSnapshot.
+    # Construct a snapshot with the scalar slugs filled in for
+    # self-documenting intent (both default to "" on GameSnapshot);
+    # everything else defaults.
     snap = GameSnapshot(world_slug="test", genre_slug="test")
     dump_keys = set(snap.model_dump().keys())
     leaked = sorted(name for name in _EXCLUDED if name in dump_keys)

@@ -147,6 +147,49 @@ def test_close_store_when_unbound_is_noop():
     room.close_store()  # must not raise
 
 
+def test_close_store_unbinds_snapshot_so_next_bind_reattaches_store():
+    """Regression: after close_store, a fresh bind_world must re-attach
+    both snapshot AND store.
+
+    Before this fix, close_store nulled only ``_store`` and left
+    ``_snapshot`` set. The next ``bind_world`` then early-returned on
+    its ``_snapshot is not None`` idempotency check WITHOUT re-attaching
+    a store, leaving ``room.store is None``. Every reconnecting session
+    built ``_SessionData(store=None)`` and crashed at the first
+    ``sd.store.recent_narrative(...)`` call (sq-playtest 2026-05-24
+    on dust_and_lead-mp after last-disconnect → reconnect).
+
+    The contract: close_store is a full teardown. After it, the room
+    behaves as if never bound — the next bind_world goes through the
+    full attachment path.
+    """
+    room = SessionRoom(slug="slug-recycle", mode=GameMode.MULTIPLAYER)
+
+    snap1 = _fresh_snapshot()
+    store1 = MagicMock()
+    room.bind_world(snapshot=snap1, store=store1)
+    assert room.snapshot is snap1
+    assert room.store is store1
+
+    room.close_store()
+    assert room.snapshot is None, (
+        "close_store must null _snapshot so the next bind_world re-binds "
+        "fully (not early-returns on stale snapshot)"
+    )
+    assert room.store is None
+
+    # Second bind — represents a reconnecting session after everyone left.
+    snap2 = _fresh_snapshot()
+    store2 = MagicMock()
+    room.bind_world(snapshot=snap2, store=store2)
+
+    assert room.snapshot is snap2, "re-bind must attach the fresh snapshot"
+    assert room.store is store2, (
+        "re-bind must attach the fresh store — this is the regression: a "
+        "reconnect after close_store left store=None and broke turn_context"
+    )
+
+
 def test_close_store_resets_narrator_cost_baselines():
     """Story 61-4 (Architect spec-check A) wiring test.
 

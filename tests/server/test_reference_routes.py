@@ -4,6 +4,7 @@ These tests use a tmp-path pack so they do not depend on the live
 sidequest-content tree. A separate smoke test (test_reference_smoke.py,
 later) hits the live tea_and_murder pack.
 """
+
 from pathlib import Path
 
 import pytest
@@ -116,13 +117,16 @@ def test_stylesheet_route_serves_css(tmp_path):
     assert "body" in r.text
 
 
-@pytest.mark.parametrize("evil", [
-    "EVIL.css",        # uppercase rejected by regex
-    "..%2Fevil.css",   # URL-decoded traversal
-    ".hidden",         # leading dot, no extension
-    "/etc/passwd",     # absolute path attempt
-    "no_extension",    # missing dotted extension
-])
+@pytest.mark.parametrize(
+    "evil",
+    [
+        "EVIL.css",  # uppercase rejected by regex
+        "..%2Fevil.css",  # URL-decoded traversal
+        ".hidden",  # leading dot, no extension
+        "/etc/passwd",  # absolute path attempt
+        "no_extension",  # missing dotted extension
+    ],
+)
 def test_stylesheet_route_rejects_bad_filenames(tmp_path, evil):
     """Any filename failing the safe-filename regex must 404, not 500 or 200."""
     _seed_pack(tmp_path)

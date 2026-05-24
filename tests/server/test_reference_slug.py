@@ -3,6 +3,7 @@
 The helper is imported by both the page renderer and the URL builder so the
 two surfaces cannot drift.
 """
+
 from __future__ import annotations
 
 import pytest

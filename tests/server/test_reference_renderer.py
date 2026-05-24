@@ -3,6 +3,7 @@
 Renderer must produce stable, escaped HTML from arbitrary YAML trees. The walker
 is pure (input dict/list/scalar → output str); no IO, no globals.
 """
+
 from pathlib import Path
 
 import pytest
@@ -99,21 +100,25 @@ def test_render_list_of_scalars_emits_ul():
 
 
 def test_render_list_of_dicts_with_name_uses_h3_anchor():
-    html = render_node([
-        {"name": "Sleuth", "description": "Investigates."},
-        {"name": "Detective", "description": "Investigates harder."},
-    ])
+    html = render_node(
+        [
+            {"name": "Sleuth", "description": "Investigates."},
+            {"name": "Detective", "description": "Investigates harder."},
+        ]
+    )
     assert '<section id="sleuth">' in html
     assert "<h3>Sleuth</h3>" in html
     assert '<section id="detective">' in html
 
 
 def test_render_list_of_dicts_falls_through_id_title_then_index():
-    html = render_node([
-        {"id": "tier-1", "value": "low"},
-        {"title": "Tier Two", "value": "mid"},
-        {"value": "high"},
-    ])
+    html = render_node(
+        [
+            {"id": "tier-1", "value": "low"},
+            {"title": "Tier Two", "value": "mid"},
+            {"value": "high"},
+        ]
+    )
     assert '<section id="tier-1">' in html
     assert "<h3>tier-1</h3>" in html
     assert '<section id="tier-two">' in html
@@ -275,11 +280,15 @@ def _write_pack(tmp_path: Path, pack: str, files: dict[str, str]) -> Path:
 def test_assemble_rules_page_includes_listed_files_in_order(tmp_path):
     from sidequest.server.reference_renderer import assemble_rules_page
 
-    pack_dir = _write_pack(tmp_path, "demo", {
-        "archetypes.yaml": "a: 1\n",
-        "classes.yaml": "b: 2\n",
-        "rules.yaml": "c: 3\n",
-    })
+    pack_dir = _write_pack(
+        tmp_path,
+        "demo",
+        {
+            "archetypes.yaml": "a: 1\n",
+            "classes.yaml": "b: 2\n",
+            "rules.yaml": "c: 3\n",
+        },
+    )
     html = assemble_rules_page("demo", pack_dir)
 
     assert "<title>demo — Rules</title>" in html
@@ -303,11 +312,15 @@ def test_assemble_rules_page_skips_missing_optional_files(tmp_path):
 def test_assemble_rules_page_never_renders_excluded_files(tmp_path):
     from sidequest.server.reference_renderer import assemble_rules_page
 
-    pack_dir = _write_pack(tmp_path, "demo", {
-        "archetypes.yaml": "a: 1\n",
-        "npcs.yaml": "secret_villain: thedoctor\n",
-        "seed_tropes.yaml": "spoilers: yes\n",
-    })
+    pack_dir = _write_pack(
+        tmp_path,
+        "demo",
+        {
+            "archetypes.yaml": "a: 1\n",
+            "npcs.yaml": "secret_villain: thedoctor\n",
+            "seed_tropes.yaml": "spoilers: yes\n",
+        },
+    )
     html = assemble_rules_page("demo", pack_dir)
 
     assert "thedoctor" not in html
@@ -339,9 +352,13 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
 def test_assemble_handles_malformed_yaml_with_loud_marker(tmp_path):
     from sidequest.server.reference_renderer import assemble_rules_page
 
-    pack_dir = _write_pack(tmp_path, "demo", {
-        "archetypes.yaml": ":\n  - this is: : not valid\n",
-    })
+    pack_dir = _write_pack(
+        tmp_path,
+        "demo",
+        {
+            "archetypes.yaml": ":\n  - this is: : not valid\n",
+        },
+    )
     with pytest.raises(ValueError) as exc:
         assemble_rules_page("demo", pack_dir)
     assert "archetypes.yaml" in str(exc.value)

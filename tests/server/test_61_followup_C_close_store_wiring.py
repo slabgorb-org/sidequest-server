@@ -90,7 +90,7 @@ class _PinnedRoomHandler:
     - ``"swallow_save_exception"``: increment counter but do NOT save,
       return normally. Models the production behaviour where
       ``WebSocketSessionHandler.cleanup()`` catches a save Exception at
-      ``websocket_session_handler.py:1551-1552``, logs ``session.disconnect_save_failed``,
+      ``websocket_session_handler.py:1551-1557``, logs ``session.disconnect_save_failed``,
       sets ``self.last_save_failure = exc`` (added by Story 61-followup-C
       so ws_endpoint can see the swallowed failure), and returns without
       re-raising. In that case ``close_store()`` must NOT fire —
@@ -423,7 +423,7 @@ async def test_ws_endpoint_calls_close_store_when_last_mp_player_disconnects():
 #
 # B. handler.cleanup() catches a save-side exception internally and returns
 #    normally (production WebSocketSessionHandler.cleanup() at
-#    websocket_session_handler.py:1551-1552 — it logs session.disconnect_save_failed
+#    websocket_session_handler.py:1551-1557 — it logs session.disconnect_save_failed
 #    AND sets self.last_save_failure = exc, added in this story specifically
 #    so ws_endpoint can detect the swallow). ws_endpoint reads
 #    handler.last_save_failure (websocket.py:201) and the teardown gate
@@ -488,6 +488,24 @@ async def test_ws_endpoint_logs_and_skips_close_store_when_cleanup_raises(caplog
         "ws_endpoint must emit an ERROR-level log line referencing the "
         "slug when handler.cleanup() raises. Got no such record. "
         f"Captured: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
+
+    # Reviewer 2026-05-24 RT2 HIGH 2: the test name and docstring claim TWO
+    # breadcrumbs fire (ws.cleanup_failed AND ws.room_teardown_skipped). The
+    # `error_records` filter above is satisfied by either alone — both contain
+    # the slug at ERROR level. Assert the second breadcrumb independently so
+    # a regression that removed the else-branch log at websocket.py:210-215
+    # (the No-Silent-Fallbacks teardown-skip breadcrumb this story explicitly
+    # delivers) cannot silently regress without failing the suite.
+    skipped_records = [
+        r for r in caplog.records
+        if "ws.room_teardown_skipped" in r.getMessage()
+        and "cleanup_raised" in r.getMessage()
+    ]
+    assert skipped_records, (
+        "ws.room_teardown_skipped reason=cleanup_raised breadcrumb must fire "
+        "when the teardown gate skips close_store after a cleanup exception. "
+        f"Got no such record. Captured: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
     )
 
     # Reviewer 2026-05-24 HIGH 3 (round-trip 1 review): the test name says

@@ -536,3 +536,311 @@ def test_picker_no_ops_on_empty_input(fake_theme: ReferenceTheme) -> None:
     assert present_archetypes_picker([], make_ctx("archetypes", (), fake_theme)) == ""
     assert present_classes_picker([], make_ctx("classes", (), fake_theme)) == ""
     assert present_archetypes_picker("not a list", make_ctx("archetypes", (), fake_theme)) == ""
+
+
+# ---------------------------------------------------------------------------
+# present_progression
+# ---------------------------------------------------------------------------
+
+
+def test_progression_emits_affinity_cards(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_progression
+
+    node = {
+        "affinities": [
+            {
+                "name": "Command",
+                "description": "Leadership and tactics.",
+                "triggers": ["lead the crew", "make tactical calls"],
+                "tier_thresholds": [6, 15, 30],
+            },
+            {
+                "name": "Grit",
+                "description": "Endurance under fire.",
+                "triggers": ["take a hit"],
+            },
+        ]
+    }
+    html = present_progression(node, make_ctx("progression", (), fake_theme))
+    assert "ref-progression" in html
+    assert "Command" in html
+    assert "Grit" in html
+    assert "lead the crew" in html
+    assert "6 / 15 / 30" in html
+    assert "Affinity" in html
+    assert "<h2>name</h2>" not in html
+    assert "<h2>triggers</h2>" not in html
+
+
+def test_progression_empty_returns_empty_string(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_progression
+
+    assert present_progression({}, make_ctx("progression", (), fake_theme)) == ""
+    assert present_progression({"other_key": "x"}, make_ctx("progression", (), fake_theme)) == ""
+
+
+# ---------------------------------------------------------------------------
+# present_magic
+# ---------------------------------------------------------------------------
+
+
+def test_magic_emits_label_grid(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_magic
+
+    node = {
+        "genre": "space_opera",
+        "allowed_sources": ["innate", "item_based"],
+        "permitted_plugins": ["psionics", "force_fields"],
+    }
+    html = present_magic(node, make_ctx("magic", (), fake_theme))
+    assert "ref-label-grid" in html
+    assert "innate" in html
+    assert "item_based" in html
+    assert "psionics" in html
+    assert "Sources" in html
+    assert "<h2>genre</h2>" not in html
+    assert "<h2>allowed_sources</h2>" not in html
+
+
+def test_magic_empty_returns_empty_string(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_magic
+
+    assert present_magic({}, make_ctx("magic", (), fake_theme)) == ""
+    assert present_magic({"unrelated_key": "x"}, make_ctx("magic", (), fake_theme)) == ""
+
+
+# ---------------------------------------------------------------------------
+# present_power_tiers
+# ---------------------------------------------------------------------------
+
+
+def test_power_tiers_emits_class_tables(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_power_tiers
+
+    node = {
+        "Officer": [
+            {
+                "level_range": [1, 3],
+                "label": "ensign",
+                "player": "a uniform that still creases",
+                "npc": "NARRATOR ONLY — should not appear",
+            },
+            {
+                "level_range": [4, 7],
+                "label": "lieutenant",
+                "player": "commanding small units",
+                "npc": "NARRATOR ONLY 2",
+            },
+        ],
+        "Smuggler": [
+            {
+                "level_range": [1, 3],
+                "label": "runner",
+                "player": "quick, quiet, cheap",
+                "npc": "hidden npc text",
+            },
+        ],
+    }
+    html = present_power_tiers(node, make_ctx("power_tiers", (), fake_theme))
+    assert "ref-power-tiers" in html
+    assert "Officer" in html
+    assert "Smuggler" in html
+    assert "ensign" in html
+    assert "lieutenant" in html
+    assert "runner" in html
+    assert "1–3" in html
+    assert "4–7" in html
+    assert 'class="ref-table"' in html
+    # npc column must NOT appear
+    assert "NARRATOR ONLY" not in html
+    assert "hidden npc text" not in html
+    # no raw field-name headings
+    assert "<h2>label</h2>" not in html
+
+
+def test_power_tiers_skips_npc_column(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_power_tiers
+
+    node = {
+        "Officer": [
+            {
+                "level_range": [1, 3],
+                "label": "ensign",
+                "player": "earnest posture",
+                "npc": "NARRATOR ONLY — should not appear",
+            },
+        ]
+    }
+    html = present_power_tiers(node, make_ctx("power_tiers", (), fake_theme))
+    assert "ensign" in html
+    assert "earnest posture" in html
+    assert "NARRATOR ONLY" not in html
+
+
+def test_power_tiers_non_dict_returns_empty(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_power_tiers
+
+    assert present_power_tiers([], make_ctx("power_tiers", (), fake_theme)) == ""
+    assert present_power_tiers("bad", make_ctx("power_tiers", (), fake_theme)) == ""
+
+
+# ---------------------------------------------------------------------------
+# present_achievements
+# ---------------------------------------------------------------------------
+
+
+def test_achievements_emits_card_grid(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_achievements
+
+    node = [
+        {
+            "name": "First Blood",
+            "condition": "Win a confrontation for the first time.",
+            "reward": "+5 XP",
+        },
+        {
+            "name": "Smooth Operator",
+            "condition": "Bluff your way past three checkpoints.",
+        },
+    ]
+    html = present_achievements(node, make_ctx("achievements", (), fake_theme))
+    assert "ref-card-grid" in html
+    assert "First Blood" in html
+    assert "Win a confrontation" in html
+    assert "+5 XP" in html
+    assert "Smooth Operator" in html
+    assert "Achievement" in html
+    assert "<h2>name</h2>" not in html
+    assert "<h2>condition</h2>" not in html
+
+
+def test_achievements_empty_list_returns_empty_string(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_achievements
+
+    assert present_achievements([], make_ctx("achievements", (), fake_theme)) == ""
+    assert present_achievements({"achievements": []}, make_ctx("achievements", (), fake_theme)) == ""
+
+
+# ---------------------------------------------------------------------------
+# present_inventory
+# ---------------------------------------------------------------------------
+
+
+def test_inventory_emits_currency_and_catalog(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_inventory
+
+    node = {
+        "currency": {
+            "name": "Credits",
+            "denominations": ["copper chip", "silver slug", "gold bar"],
+        },
+        "item_catalog": [
+            {
+                "id": "blaster",
+                "name": "Blaster Pistol",
+                "description": "Standard sidearm.",
+                "category": "weapon",
+                "value": 150,
+                "weight": 1.2,
+                "rarity": "common",
+            },
+            {
+                "id": "medkit",
+                "name": "Medkit",
+                "description": "Heals 1d6 HP.",
+                "category": "consumable",
+                "value": 50,
+                "weight": 0.5,
+                "rarity": "common",
+            },
+        ],
+    }
+    html = present_inventory(node, make_ctx("inventory", (), fake_theme))
+    assert "Credits" in html
+    assert "copper chip" in html
+    assert "Blaster Pistol" in html
+    assert "Medkit" in html
+    assert "weapon" in html
+    assert "consumable" in html
+    assert 'class="ref-table"' in html
+    assert "<h2>currency</h2>" not in html
+    assert "<h2>item_catalog</h2>" not in html
+
+
+def test_inventory_empty_returns_empty_string(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_inventory
+
+    assert present_inventory({}, make_ctx("inventory", (), fake_theme)) == ""
+    assert (
+        present_inventory(
+            {"item_catalog": [], "currency": None}, make_ctx("inventory", (), fake_theme)
+        )
+        == ""
+    )
+
+
+# ---------------------------------------------------------------------------
+# present_equipment_tables
+# ---------------------------------------------------------------------------
+
+
+def test_equipment_tables_emits_section_per_list_key(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_equipment_tables
+
+    node = {
+        "starting_gear": [
+            {"name": "Worn Jacket", "slots": 1},
+            {"name": "Battered Pistol", "slots": 1},
+        ],
+        "weapons": [
+            {"name": "Combat Knife", "damage": "1d4"},
+        ],
+    }
+    html = present_equipment_tables(node, make_ctx("equipment_tables", (), fake_theme))
+    assert "starting_gear" in html or "Starting Gear" in html
+    assert "weapons" in html or "Weapons" in html
+    assert "Worn Jacket" in html
+    assert "Combat Knife" in html
+    assert 'class="ref-table"' in html
+
+
+def test_equipment_tables_non_dict_returns_empty(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_equipment_tables
+
+    assert present_equipment_tables([], make_ctx("equipment_tables", (), fake_theme)) == ""
+    assert present_equipment_tables("bad", make_ctx("equipment_tables", (), fake_theme)) == ""
+    assert present_equipment_tables({}, make_ctx("equipment_tables", (), fake_theme)) == ""
+
+
+# ---------------------------------------------------------------------------
+# present_beat_vocabulary
+# ---------------------------------------------------------------------------
+
+
+def test_beat_vocabulary_emits_dl_sections(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_beat_vocabulary
+
+    node = {
+        "beats": [
+            {"name": "advance", "description": "Move forward aggressively."},
+            {"name": "parley", "description": "Attempt negotiation."},
+        ],
+        "obstacles": [
+            {"name": "locked_door", "description": "KEEPER content — should NOT appear"},
+        ],
+    }
+    html = present_beat_vocabulary(node, make_ctx("beat_vocabulary", (), fake_theme))
+    assert "advance" in html
+    assert "parley" in html
+    assert "Move forward aggressively" in html
+    assert "KEEPER content" not in html
+    assert "locked_door" not in html
+    assert "<dl" in html
+    assert "<h2>beats</h2>" not in html
+
+
+def test_beat_vocabulary_empty_returns_empty_string(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_beat_vocabulary
+
+    assert present_beat_vocabulary({}, make_ctx("beat_vocabulary", (), fake_theme)) == ""
+    assert present_beat_vocabulary({"obstacles": []}, make_ctx("beat_vocabulary", (), fake_theme)) == ""

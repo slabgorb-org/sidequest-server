@@ -704,3 +704,43 @@ def present_classes_picker(node: object, ctx: PresenterContext) -> str:
 
 PRESENTERS[("archetypes", ())] = present_archetypes_picker
 PRESENTERS[("classes", ())] = present_classes_picker
+
+
+def present_progression(node: object, ctx: PresenterContext) -> str:
+    """Render progression.yaml affinities as a vertical card stack."""
+    if not isinstance(node, dict):
+        return ""
+    affinities = node.get("affinities")
+    if not isinstance(affinities, list) or not affinities:
+        return ""
+    cards: list[str] = []
+    for item in affinities:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "Unnamed"
+        description = str(item.get("description", "")).strip()
+        triggers = item.get("triggers") or []
+        tier_thresholds = item.get("tier_thresholds")
+        inner: list[str] = [
+            '<div class="ref-card__kicker">Affinity</div>',
+            f'<h3 class="ref-card__title">{escape(name)}</h3>',
+        ]
+        if description:
+            inner.append(f'<p class="ref-card__summary">{escape(description)}</p>')
+        if isinstance(triggers, list) and triggers:
+            chips = "".join(
+                f'<span class="ref-chip">{escape(str(t))}</span>' for t in triggers
+            )
+            inner.append(f'<div class="ref-card__meta">{chips}</div>')
+        if isinstance(tier_thresholds, list) and len(tier_thresholds) >= 3:
+            label = " / ".join(str(t) for t in tier_thresholds[:3])
+            inner.append(
+                f'<div class="ref-card__meta">'
+                f'<span class="ref-chip">Tier thresholds: {escape(label)}</span>'
+                f"</div>"
+            )
+        cards.append('<article class="ref-card">' + "".join(inner) + "</article>")
+    return '<section class="ref-progression">' + "".join(cards) + "</section>"
+
+
+PRESENTERS[("progression", ())] = present_progression

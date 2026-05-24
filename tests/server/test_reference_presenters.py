@@ -155,3 +155,37 @@ def test_factions_unknown_disposition_falls_back_to_neutral(
     # as fallback class so the chrome-wiring guard doesn't see an undefined
     # CSS class.
     assert 'class="ref-badge ref-badge--disposition-neutral">Mysterious</span>' in html
+
+
+def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_lore_geography
+
+    pois = [
+        {
+            "id": "vaskov-centrum",
+            "name": "Vaskov Centrum",
+            "region": "habitable_world",
+            "type": "city",
+            "environment": "humid coastal capital",
+            "description": "The governor's seat; rain-soaked rooftops and tax offices.",
+            "visual_prompt": "skyline at dusk",  # ignored by presenter, present in YAML
+        },
+        {
+            "id": "broken-drift",
+            "name": "The Broken Drift",
+            "region": "asteroid_belt",
+            "type": "void_drift",
+            "environment": "low-g shipwreck field",
+            "description": "Where the lost ships go.",
+        },
+    ]
+    html = present_lore_geography(pois, make_ctx("lore", ("geography",), fake_theme))
+
+    assert 'class="ref-card-grid"' in html
+    assert '<article class="ref-card" id="location-vaskov-centrum">' in html
+    assert '<h3 class="ref-card__title">Vaskov Centrum</h3>' in html
+    assert '<span class="ref-chip">City</span>' in html
+    assert '<span class="ref-chip">Habitable World</span>' in html
+    assert "rain-soaked rooftops" in html
+    # Unknown-to-presenter fields (visual_prompt) MUST NOT leak as headings
+    assert "<h2>visual_prompt" not in html

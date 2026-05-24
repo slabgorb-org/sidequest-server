@@ -171,3 +171,48 @@ PRESENTERS[("lore", ("factions",))] = present_lore_factions
 # Pack-tier factions.yaml reuses the same renderer — registry entry is
 # present but inactive until a future task wires top-level-list dispatch.
 PRESENTERS[("factions", ())] = present_lore_factions
+
+
+def _format_chip_label(value: str) -> str:
+    """snake_case → Title Case With Spaces, for chip labels."""
+    return " ".join(part.capitalize() for part in str(value).replace("_", " ").split())
+
+
+def present_lore_geography(node: object, ctx: PresenterContext) -> str:
+    if not isinstance(node, list) or not node:
+        return ""
+    cards: list[str] = []
+    for item in node:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "Unnamed"
+        item_id = str(item.get("id", slugify(name))).strip() or slugify(name)
+        slug = slugify(item_id)
+        region = str(item.get("region", "")).strip()
+        type_ = str(item.get("type", "")).strip()
+        environment = str(item.get("environment", "")).strip()
+        description = str(item.get("description", "")).strip()
+        chips: list[str] = []
+        if type_:
+            chips.append(f'<span class="ref-chip">{escape(_format_chip_label(type_))}</span>')
+        if region:
+            chips.append(f'<span class="ref-chip">{escape(_format_chip_label(region))}</span>')
+        cards.append(
+            f'<article class="ref-card" id="location-{slug}">'
+            '<div class="ref-card__kicker">Location</div>'
+            f'<h3 class="ref-card__title">{escape(name)}</h3>'
+            + (f'<div class="ref-card__meta">{"".join(chips)}</div>' if chips else "")
+            + (f'<div class="ref-card__summary">{escape(environment)}</div>' if environment else "")
+            + (f'<p class="ref-card__body">{escape(description)}</p>' if description else "")
+            + "</article>"
+        )
+    return (
+        '<section class="ref-geography">'
+        '<div class="ref-card-grid">' + "".join(cards) + "</div></section>"
+    )
+
+
+PRESENTERS[("lore", ("geography",))] = present_lore_geography
+# Pack/world-tier locations.yaml — top-level-list dispatch still inactive
+# (see Task 7 commit message). Entry kept for the future fix.
+PRESENTERS[("locations", ())] = present_lore_geography

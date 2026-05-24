@@ -161,11 +161,15 @@ def test_public_unpresented_field_renders_via_generic_fallback(
     captured_spans: InMemorySpanExporter,
 ) -> None:
     """A PUBLIC field with no presenter renders via generic fallback and
-    fires the unpresented_field INFO span."""
+    fires the unpresented_field INFO span.
+
+    Uses ``geography`` — a lore PUBLIC field with no registered presenter
+    (setting_anchor gained a presenter in Task 6).
+    """
     from sidequest.server.reference_renderer import assemble_lore_page
 
     (synthetic_world / "lore.yaml").write_text(
-        yaml.safe_dump({"setting_anchor": "A cul-de-sac star system."})
+        yaml.safe_dump({"geography": "A rain-soaked plateau."})
     )
 
     html = assemble_lore_page(
@@ -175,7 +179,7 @@ def test_public_unpresented_field_renders_via_generic_fallback(
         world_dir=synthetic_world,
     )
 
-    assert "cul-de-sac star system" in html, "PUBLIC field must render even without a presenter"
+    assert "rain-soaked plateau" in html, "PUBLIC field must render even without a presenter"
     info_spans = [
         s
         for s in captured_spans.get_finished_spans()

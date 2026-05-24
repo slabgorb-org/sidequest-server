@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from html import escape
 
 from sidequest.server.reference_theme import ReferenceTheme
 
@@ -42,3 +43,76 @@ def lookup_presenter(file_stem: str, key_path: KeyPath) -> Presenter | None:
     list-of-dict slots in the key_path before calling.
     """
     return PRESENTERS.get((file_stem, key_path))
+
+
+def present_world_name_suppress(node: object, ctx: PresenterContext) -> str:
+    """Drop the duplicate world_name — already rendered as hero H1."""
+    return ""
+
+
+def present_lore_setting_anchor(node: object, ctx: PresenterContext) -> str:
+    """Single narrative-flourish opening paragraph, no heading."""
+    text = str(node).strip()
+    if not text:
+        return ""
+    return f'<p class="narrative-flourish">{escape(text)}</p>'
+
+
+def _split_paragraphs(prose: str) -> list[str]:
+    return [p.strip() for p in str(prose).split("\n\n") if p.strip()]
+
+
+def present_lore_history(node: object, ctx: PresenterContext) -> str:
+    """Split history prose into paragraphs; first is pull-quoted with drop-cap;
+    dinkus divider every 3-4 paragraphs."""
+    paragraphs = _split_paragraphs(str(node))
+    if not paragraphs:
+        return ""
+    parts: list[str] = ['<div class="ref-history">']
+
+    # First paragraph: pull-quote with drop-cap
+    first = paragraphs[0]
+    if first:
+        first_letter = first[0]
+        remainder = first[1:]
+        parts.append(
+            '<p class="ref-pull-quote narrative-flourish">'
+            f'<span class="ref-pull-quote__dropcap">{escape(first_letter)}</span>'
+            f"{escape(remainder)}"
+            "</p>"
+        )
+
+    glyph = ctx.theme.dinkus_medium or "✦"
+    for index, paragraph in enumerate(paragraphs[1:], start=1):
+        parts.append(f"<p>{escape(paragraph)}</p>")
+        # Insert dinkus rest every 3rd paragraph (after paragraphs 3, 6, 9 …),
+        # but not as the very last element.
+        if index % 3 == 0 and index < len(paragraphs) - 1:
+            parts.append(f'<hr class="ref-dinkus" data-glyph="{escape(glyph)}">')
+
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def present_lore_cosmology(node: object, ctx: PresenterContext) -> str:
+    """Pull-quote block flanked by dinkus dividers."""
+    text = str(node).strip()
+    if not text:
+        return ""
+    glyph = ctx.theme.dinkus_medium or "✦"
+    return (
+        f'<hr class="ref-dinkus" data-glyph="{escape(glyph)}">'
+        f'<p class="ref-pull-quote narrative-flourish">{escape(text)}</p>'
+        f'<hr class="ref-dinkus" data-glyph="{escape(glyph)}">'
+    )
+
+
+# Register the prose presenters.
+PRESENTERS.update(
+    {
+        ("lore", ("world_name",)): present_world_name_suppress,
+        ("lore", ("setting_anchor",)): present_lore_setting_anchor,
+        ("lore", ("history",)): present_lore_history,
+        ("lore", ("cosmology",)): present_lore_cosmology,
+    }
+)

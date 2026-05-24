@@ -825,3 +825,36 @@ def present_power_tiers(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("power_tiers", ())] = present_power_tiers
+
+
+def present_achievements(node: object, ctx: PresenterContext) -> str:
+    """Render achievements.yaml as a 3-column card grid."""
+    items = _unwrap_list(node)
+    if not items:
+        return ""
+    cards: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "Unnamed"
+        condition = str(item.get("condition", "")).strip()
+        reward = str(item.get("reward", "")).strip()
+        inner: list[str] = [
+            '<div class="ref-card__kicker">Achievement</div>',
+            f'<h3 class="ref-card__title">{escape(name)}</h3>',
+        ]
+        if condition:
+            inner.append(f'<p class="ref-card__body">{escape(condition)}</p>')
+        if reward:
+            inner.append(
+                f'<div class="ref-card__meta">'
+                f'<span class="ref-chip">{escape(reward)}</span>'
+                f"</div>"
+            )
+        cards.append('<article class="ref-card">' + "".join(inner) + "</article>")
+    if not cards:
+        return ""
+    return '<div class="ref-card-grid ref-card-grid--cols-3">' + "".join(cards) + "</div>"
+
+
+PRESENTERS[("achievements", ())] = present_achievements

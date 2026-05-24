@@ -5194,102 +5194,117 @@ class WebSocketSessionHandler:
         # so the joiner is the LAST entry in ``snapshot.characters``.
         joiner_orientation = sd.opening_seed is None and len(sd.snapshot.characters) > 1
         if joiner_orientation:
-            # Per-PC POV anchoring works for the 2P "P2 joins P1's
-            # in-progress game" case the original fix targeted, but
-            # produces jarring single-PC framing for fresh 3+ player
-            # openings (playtest 2026-04-30 BUG-LOW: opening narration
-            # anchored on Linus, the last/4th committer, when the four
-            # PCs all completed chargen together — Sebastien-class
-            # incoherence between "you have the floor" per-tab banners
-            # and a single-PC POV opening). For 3+ PCs use omniscient
-            # framing that introduces the party as a group rather than
-            # picking one arbitrary anchor; preserve the per-PC anchor
-            # for the original 2P case (one incumbent + one joiner).
-            if len(sd.snapshot.characters) >= 3:
-                action = (
-                    "The party has assembled in the scene — describe the "
-                    "shared surroundings in a brief grounding paragraph "
-                    "that establishes the location and mood for everyone "
-                    "present. Use omniscient/scene-wide framing, not any "
-                    "single character's point of view. Do not generate "
-                    "dialogue, decisions, or new actions for any PC."
-                )
-                source_tier = "mp_party_orientation"
-            else:
-                joiner_char_name = (
+            # Per-arrival entry beat (Keith's path #1, sq-playtest 2026-05-12):
+            # every PC gets per-PC POV anchored on the just-joined PC. The
+            # previous ``len(snapshot.characters) >= 3`` omniscient
+            # party-orientation branch (commit ``e23ef6a`` 2026-05-01) was
+            # added to handle a 4-PC simultaneous-commit scenario where the
+            # opener anchored on whoever happened to be ``characters[-1]``.
+            # Under sequential commits — the actual production flow — each
+            # chargen-complete is a discrete event with a well-defined
+            # just-joining PC: ``player_seats[sd.player_id]``. The omniscient
+            # framing then suppressed per-PC POV for every PC from the 3rd
+            # onward (sq-playtest 2026-05-12 Carl/Donut/Katia: Katia got
+            # ``atmospheric, names no PC`` because she was the 3rd commit).
+            #
+            # Resolve joiner_char_name from the seat-map first (authoritative
+            # for the connecting session's PC) and fall back to
+            # ``characters[-1]`` for legacy paths that don't bind player_id.
+            joiner_char_name = (
+                sd.snapshot.player_seats.get(sd.player_id or "", "")
+                or (
                     sd.snapshot.characters[-1].core.name
                     if sd.snapshot.characters
                     else (sd.player_name or "the new arrival")
                 )
-                # Playtest 2026-05-02 [BUG-LOW]: joiner-orientation drifted
-                # off the established scene (host on the Kestrel cockpit;
-                # joiner improvised at Vaskov Centrum East Freight Stair).
-                # The chargen confirmation epilogue promises "the crew is
-                # the crew" — both PCs aboard the same chassis at session
-                # start — and the canned MP opening (mp_galley_jumprest)
-                # anchors the host aboard the Kestrel. Anchor the joiner
-                # explicitly to the location the host's prior turn already
-                # established so the narrator does not invent a new place
-                # for the second PC. Falls back to "the same scene the
-                # other player(s) are in" when no seated PC has a known
-                # location yet (degenerate path, but defensible).
-                #
-                # Wave 2B (story 45-48): pick the location from any
-                # already-seated non-joiner PC's per-character entry.
-                # ``party_location()`` would return None here because the
-                # just-chargen'd joiner doesn't have an entry yet.
-                host_location = ""
-                for _seated_char in sd.snapshot.player_seats.values():
-                    if _seated_char and _seated_char != joiner_char_name:
-                        _here = sd.snapshot.character_locations.get(_seated_char)
-                        if _here:
-                            host_location = _here.strip()
-                            break
-                where_clause = (
-                    f"into the location the prior turn established ({host_location!r})"
-                    if host_location
-                    else "into the same scene the other player(s) are already in"
-                )
-                action = (
-                    f"{joiner_char_name} steps into the scene and orients to "
-                    f"the surroundings — describe their arrival {where_clause} "
-                    "from their point of view in a brief grounding paragraph. "
-                    "Do NOT relocate them to a new location. Do NOT generate "
-                    "dialogue, decisions, or new actions for any other PC "
-                    "already present."
-                )
-                source_tier = "mp_joiner_orientation"
-                # OTEL: surface the anchor decision so the GM panel can
-                # verify the joiner's prompt actually carried the host's
-                # location (CLAUDE.md OTEL principle — Sebastien's
-                # lie-detector). Mirror the watcher_publish payload as a
-                # span.add_event so OTLP exporters (Jaeger / in-memory
-                # test exporter) see it without needing
-                # SIDEQUEST_WATCHER_AS_SPANS=1.
-                anchor_kind = "host_location" if host_location else "fallback_same_scene"
-                _watcher_publish(
-                    "mp_joiner_orientation_anchored",
-                    {
-                        "genre": sd.genre_slug,
-                        "world": sd.world_slug,
-                        "joiner_char_name": joiner_char_name,
-                        "host_location": host_location or None,
-                        "anchor_kind": anchor_kind,
-                    },
-                    component="opening_hook",
-                    severity="info",
-                )
-                span.add_event(
-                    "mp_joiner_orientation_anchored",
-                    {
-                        "event": "mp_joiner_orientation_anchored",
-                        "genre": sd.genre_slug,
-                        "world": sd.world_slug,
-                        "joiner_char_name": joiner_char_name,
-                        "host_location": host_location or "",
-                        "anchor_kind": anchor_kind,
-                    },
-                )
+            )
+            # Playtest 2026-05-02 [BUG-LOW]: joiner-orientation drifted
+            # off the established scene (host on the Kestrel cockpit;
+            # joiner improvised at Vaskov Centrum East Freight Stair).
+            # The chargen confirmation epilogue promises "the crew is
+            # the crew" — both PCs aboard the same chassis at session
+            # start — and the canned MP opening (mp_galley_jumprest)
+            # anchors the host aboard the Kestrel. Anchor the joiner
+            # explicitly to the location the host's prior turn already
+            # established so the narrator does not invent a new place
+            # for the second PC. Falls back to "the same scene the
+            # other player(s) are in" when no seated PC has a known
+            # location yet (degenerate path, but defensible).
+            #
+            # Wave 2B (story 45-48): pick the location from any
+            # already-seated non-joiner PC's per-character entry.
+            # ``party_location()`` would return None here because the
+            # just-chargen'd joiner doesn't have an entry yet.
+            host_location = ""
+            for _seated_char in sd.snapshot.player_seats.values():
+                if _seated_char and _seated_char != joiner_char_name:
+                    _here = sd.snapshot.character_locations.get(_seated_char)
+                    if _here:
+                        host_location = _here.strip()
+                        break
+            where_clause = (
+                f"into the location the prior turn established ({host_location!r})"
+                if host_location
+                else "into the same scene the other player(s) are already in"
+            )
+            # For 3+ PCs, name the other already-seated PCs explicitly so
+            # the narrator has the full table in view when it describes
+            # the arrival ("Carl is already here..."-style). This is the
+            # 3-PC repro's correct shape — Donut's beat referenced Carl
+            # by name, and Katia's beat should reference Carl and Donut.
+            other_pcs = [
+                n
+                for n in sd.snapshot.player_seats.values()
+                if n and n != joiner_char_name
+            ]
+            other_pcs_clause = (
+                f" The other PCs already in the scene: {', '.join(other_pcs)}."
+                if len(other_pcs) >= 2
+                else ""
+            )
+            action = (
+                f"{joiner_char_name} steps into the scene and orients to "
+                f"the surroundings — describe their arrival {where_clause} "
+                "from their point of view in a brief grounding paragraph."
+                f"{other_pcs_clause} "
+                "Do NOT relocate them to a new location. Do NOT generate "
+                "dialogue, decisions, or new actions for any other PC "
+                "already present."
+            )
+            source_tier = "mp_joiner_orientation"
+            # OTEL: surface the anchor decision so the GM panel can
+            # verify the joiner's prompt actually carried the host's
+            # location (CLAUDE.md OTEL principle — Sebastien's
+            # lie-detector). Mirror the watcher_publish payload as a
+            # span.add_event so OTLP exporters (Jaeger / in-memory
+            # test exporter) see it without needing
+            # SIDEQUEST_WATCHER_AS_SPANS=1.
+            anchor_kind = "host_location" if host_location else "fallback_same_scene"
+            _watcher_publish(
+                "mp_joiner_orientation_anchored",
+                {
+                    "genre": sd.genre_slug,
+                    "world": sd.world_slug,
+                    "joiner_char_name": joiner_char_name,
+                    "host_location": host_location or None,
+                    "anchor_kind": anchor_kind,
+                    "seated_count": len(other_pcs) + 1,
+                },
+                component="opening_hook",
+                severity="info",
+            )
+            span.add_event(
+                "mp_joiner_orientation_anchored",
+                {
+                    "event": "mp_joiner_orientation_anchored",
+                    "genre": sd.genre_slug,
+                    "world": sd.world_slug,
+                    "joiner_char_name": joiner_char_name,
+                    "host_location": host_location or "",
+                    "anchor_kind": anchor_kind,
+                    "seated_count": len(other_pcs) + 1,
+                },
+            )
         else:
             action = sd.opening_seed or "I look around and take in my surroundings."
             source_tier = "world_or_genre_hook" if sd.opening_seed else "fallback"

@@ -904,3 +904,128 @@ class TestMPJoinerHostLocationAnchor:
             assert attrs.get("anchor_kind") == "fallback_same_scene"
 
         asyncio.run(body())
+
+
+class TestMPJoinerThirdPlusPCPerPCAnchor:
+    """sq-playtest 2026-05-12 [UX] — Katia (3rd committer) omitted from opener.
+
+    Repro: Carl/Donut/Katia 3-PC MP session, fresh chargen. Three narration
+    cards fire:
+      - Card 1 (party POV, 2nd person): Carl's opener — names no PC.
+      - Card 2 (Donut entry beat): per-PC POV — names Donut and Carl.
+      - Card 3 (atmospheric, 3rd person): names no PC. **Katia invisible.**
+
+    Root cause: the joiner-orientation branch at
+    ``websocket_session_handler.py`` previously switched to omniscient
+    party-orientation framing when ``len(snapshot.characters) >= 3``,
+    deliberately suppressing per-PC POV. The fix was originally added
+    for a 4-PC simultaneous-commit scenario (commit ``e23ef6a``,
+    2026-05-01) but it makes the 3rd+ sequentially-arriving PC
+    invisible.
+
+    Path #1 design (Keith, 2026-05-12): every PC gets a per-arrival
+    entry beat with their own embodiment. With sequential commits, the
+    just-arrived PC is well-defined (``player_seats[player_id]``), so
+    the omniscient fallback is no longer needed.
+    """
+
+    def test_third_pc_commit_uses_per_pc_pov_naming_the_joiner(
+        self,
+        handler: WebSocketSessionHandler,
+        claude_mock,
+        otel_capture: InMemorySpanExporter,
+    ) -> None:
+        """When a 3rd PC completes chargen in MP, the joiner-orientation
+        prompt must name THAT PC explicitly and use per-PC POV — not
+        the party-wide omniscient framing that suppresses any single
+        anchor.
+
+        Tests the canonical Carl/Donut/Katia scenario: snapshot already
+        has Carl + Donut seated with a host location; the connecting
+        session is Katia walking through chargen. The narrator prompt
+        for Katia's commit must reference "Katia steps into the scene"
+        (or similar per-PC framing) — not "The party has assembled".
+        """
+
+        async def body() -> None:
+            from sidequest.game.character import Character
+            from sidequest.game.creature_core import CreatureCore, Inventory
+
+            await _connect(handler)
+            sd = handler._session_data  # type: ignore[attr-defined]
+            assert sd is not None
+
+            # Seed Carl and Donut as already-seated PCs with a known
+            # host location. Katia is about to commit as the 3rd.
+            for name, pid in (("Carl", "carl-id"), ("Donut", "donut-id")):
+                core = CreatureCore(
+                    name=name,
+                    description="d",
+                    personality="p",
+                    inventory=Inventory(),
+                )
+                pc = Character(
+                    core=core,
+                    char_class="Fighter",
+                    race="Human",
+                    backstory="b",
+                )
+                sd.snapshot.characters.append(pc)
+                sd.snapshot.player_seats[pid] = name
+                sd.snapshot.character_locations[name] = "Ashgate ridge road, the Recovery Bench at dawn"
+
+            claude_mock.send_stateless.reset_mock()
+            await _walk_and_confirm(handler)
+
+            calls = claude_mock.send_stateless.call_args_list
+            assert calls, (
+                "3rd-PC joiner-orientation must dispatch at least one "
+                "narrator turn so we can inspect the prompt"
+            )
+            opening_prompt = " ".join(
+                str(calls[0].kwargs.get(k, ""))
+                for k in ("system_prompt", "user_message")
+            )
+
+            # The just-committed PC is the connecting session's PC.
+            # _walk_and_confirm names them — pull the actual name from
+            # the snapshot rather than hard-coding "Katia" so the test
+            # is robust to fixture renames.
+            seated = [n for n in sd.snapshot.player_seats.values() if n]
+            assert len(seated) == 3, (
+                f"Expected 3 seated PCs after Katia commits; got {seated}"
+            )
+            joiner_name = sd.snapshot.characters[-1].core.name
+            assert joiner_name not in ("Carl", "Donut"), (
+                "Joiner must be the just-committed PC (not the pre-seeded host pair)"
+            )
+
+            assert joiner_name in opening_prompt, (
+                f"Joiner-orientation prompt must name the just-joined PC "
+                f"({joiner_name!r}) so the narrator anchors on their POV. "
+                f"Per Keith's path #1, every PC gets a per-arrival entry beat. "
+                f"Got prompt fragment: {opening_prompt[:600]!r}"
+            )
+            # Negative assertion: must NOT use the omniscient
+            # party-orientation framing that suppresses per-PC POV.
+            assert "The party has assembled" not in opening_prompt, (
+                "3+ PC joiner-orientation must use per-PC POV, not "
+                "omniscient party-orientation framing (which deliberately "
+                "elides the just-joined PC's name)"
+            )
+
+            # OTEL: the per-PC anchor span must fire on the 3rd-PC path,
+            # not the legacy mp_party_orientation source_tier.
+            events = [e for span in otel_capture.get_finished_spans() for e in span.events]
+            anchored = [e for e in events if e.name == "mp_joiner_orientation_anchored"]
+            assert anchored, (
+                "mp_joiner_orientation_anchored must fire on every joiner-orientation, "
+                "including the 3rd+ PC case (was previously only fired on the 2-PC branch)"
+            )
+            attrs = dict(anchored[0].attributes or {})
+            assert attrs.get("joiner_char_name") == joiner_name, (
+                f"Anchor event must carry the just-joined PC's name "
+                f"({joiner_name!r}); got {attrs.get('joiner_char_name')!r}"
+            )
+
+        asyncio.run(body())

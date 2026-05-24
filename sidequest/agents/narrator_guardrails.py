@@ -1,13 +1,12 @@
 """Single source of truth for the four Recency-zone narrator guardrails.
 
 ADR-111 §Implementation Notes mandates that the four prose constants
-governing the narrator's `npcs_met` / `confrontation` / `npcs_present` /
-`location` emission rules live in one module. Both the legacy
-Recency-zone registration (`Orchestrator.build_narrator_prompt` on the
-`claude -p` backend) and the migrated cached surfaces (the slimmed
-sidecar `narrator_prompts/output_only_sdk.md` and the `apply_world_patch`
-/ `generate_encounter` tool descriptions) reference the same constants —
-no string duplication, no silent drift across the two paths.
+governing the narrator's `npcs_present` / `confrontation` /
+`npcs_present` (extraction) / `location` emission rules live in one
+module. Post-61-9 the only consumer is the cached SDK surface — the
+slimmed sidecar `narrator_prompts/output_only.md` and the
+`apply_world_patch` / `generate_encounter` tool descriptions reference
+the same constants, no string duplication, no silent drift.
 
 The constants are kept byte-identical to the prior inline strings at
 `orchestrator.py:1764, 1851, 1934, 1989` so the legacy `claude -p` path
@@ -28,7 +27,7 @@ NPC_INTRO_VISUAL_CONSTRAINT: str = (
     "<npc-intro-visual>\n"
     "When you introduce a NEW named NPC for the first time "
     "this session — i.e. you set ``is_new: true`` on their "
-    "entry in ``npcs_met`` — your game_patch MUST also "
+    "entry in ``npcs_present`` — your game_patch MUST also "
     "include a ``visual_scene`` whose ``subject`` describes "
     "that NPC (their appearance, posture, and the moment "
     'the player is meeting them). Use tier ``"portrait"`` '

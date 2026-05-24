@@ -183,9 +183,9 @@ def test_output_only_prose_has_zero_npcs_met_references() -> None:
     """
     assert "npcs_met" not in NARRATOR_OUTPUT_ONLY, (
         "NARRATOR_OUTPUT_ONLY must use ``npcs_present`` exclusively — "
-        f"found ``npcs_met`` reference(s). The codebase parser at "
-        f"``orchestrator.py:439,979,1003`` and 20+ other sites name the "
-        f"sidecar field ``npcs_present``; the prose must follow."
+        "found ``npcs_met`` reference(s). The codebase parser at "
+        "``orchestrator.py:439,979,1003`` and 20+ other sites name the "
+        "sidecar field ``npcs_present``; the prose must follow."
     )
 
 
@@ -386,9 +386,7 @@ async def test_magic_output_rules_section_absent_when_magic_state_none(
         "Fixture invariant: simple_turn_context_turn_three has magic_state=None"
     )
     orch = _make_sdk_orchestrator()
-    _, registry = await orch.build_narrator_prompt(
-        "act", simple_turn_context_turn_three
-    )
+    _, registry = await orch.build_narrator_prompt("act", simple_turn_context_turn_three)
     section = _section_by_name(registry, orch._narrator.name(), "magic_output_rules")
     assert section is None, (
         "Non-magic turn (context.magic_state is None) leaked a "

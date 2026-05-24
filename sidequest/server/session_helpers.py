@@ -65,11 +65,153 @@ from sidequest.telemetry.spans import (
 # narrative_axis sections) or they belong to deferred subsystems with no
 # consumer. Each entry is audit-evidenced — see context-story-57-5.md
 # §Phase B and the Field Audit in .session/57-5-session.md.
+#
+# Story 61-5 / ADR-110 architecture-gate amendment — ``narrative_log``
+# joins the registry. It was already being dropped via an explicit
+# ``state_summary_payload.pop("narrative_log", None)`` below (story 49-1),
+# but the named registry is now the single source of truth for "dropped
+# top-level fields" enforced by the
+# ``test_snapshot_field_governance`` gate (see
+# ``tests/server/test_snapshot_field_governance.py``). The explicit
+# pop remains for defense-in-depth (idempotent) until the gate
+# subsumes it cleanly in a follow-up refactor.
 _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
     "active_tropes",
     "axis_values",
     "genie_wishes",
     "achievement_tracker",
+    "narrative_log",
+)
+
+# Story 61-5 / ADR-110 architecture gate — fields that DO ride into
+# ``snapshot.model_dump()`` and have specific projection behavior that
+# bounds their dump-side size:
+#
+# * ``room_states`` — payload is rewritten to keep only the acting PC's
+#   current room; all other room ids are dropped (story 61-2).
+# * ``npcs`` — payload is rewritten to keep entries passing the
+#   ``is_npc_in_scene`` predicate (location match OR encounter-actor
+#   anchor, story 61-7); nested ``belief_state`` is stripped from each
+#   kept entry (story 61-2).
+# * ``characters`` — nested ``known_facts`` list is truncated to the
+#   last ``_KNOWN_FACTS_TAIL_K`` entries per PC (story 61-2).
+# * ``scenario_state`` — nested ``discovered_clues`` set is capped at
+#   ``_DISCOVERED_CLUES_CAP`` entries (story 61-2).
+#
+# **Governance vs. dispatch.** This registry is a governance artefact
+# consumed by ``test_snapshot_field_governance.py``, NOT a runtime
+# dispatch table. ``_apply_phase_c_projections`` (below) independently
+# hard-codes the same four names — the registry asserts the
+# categorization decision; the helper performs the work. Keeping them
+# in sync is the un-tightened seam called out as a deferred deviation
+# in story 61-5 (see ``.session/61-5-session.md`` §Architect
+# (spec-check)) — a follow-up story may extend the gate to verify
+# projection-consistency by reflecting over the helper's actual payload
+# mutations. The behavior is tested by
+# ``test_61_2_snapshot_seven_field_projection.py`` and
+# ``test_57_5_snapshot_slimming.py``.
+_PHASE_C_PROJECTIONS: tuple[str, ...] = (
+    "room_states",
+    "npcs",
+    "characters",
+    "scenario_state",
+)
+
+# Story 61-5 / ADR-110 architecture gate — fields declared on
+# ``GameSnapshot`` but absent from ``snapshot.model_dump()`` output
+# because their ``Field(...)`` carries ``exclude=True``. These are
+# transient runtime queues that must NEVER ride into a serialization
+# (the narrator prompt, a save file, a state-mirror message) — they
+# re-initialize empty each turn and are reconstructed from durable
+# state. They contribute zero bytes to the dump because pydantic
+# strips them at serialization time.
+#
+# Adding a field here means: the field has ``Field(..., exclude=True)``
+# on its declaration and is verifiably absent from ``model_dump()``.
+# ``test_snapshot_field_governance.py`` enforces this — removing
+# ``exclude=True`` from a field listed here fails the gate, forcing
+# the author to either keep the exclusion or re-categorize the field
+# (project, drop, or document why it's now bounded-by-construction).
+_EXCLUDED_FROM_DUMP: tuple[str, ...] = (
+    # ADR/story reference: session.py:798-799 — transient outbound
+    # dispatch queues. ``exclude=True`` keeps them out of the dump so
+    # a save mid-handler cannot persist a partial queue. They
+    # re-initialize empty on load — correct because auto-fires and
+    # outcomes are derivable from snapshot state on the next
+    # narration turn.
+    "pending_magic_auto_fires",
+    "pending_magic_confrontation_outcome",
+)
+
+# Story 61-5 / ADR-110 architecture gate — fields whose growth is
+# bounded by their own structure rather than by projection logic.
+# Bounded-by-construction means one of:
+#
+#   (a) Scalar primitive (int/float/bool/str/datetime) — fixed wire size.
+#   (b) Bounded enum-shaped string (e.g. ``time_of_day``,
+#       ``campaign_maturity``, ``current_region`` slug).
+#   (c) Single-record optional (``encounter``, ``magic_state``,
+#       ``plotted_course``, ``pending_*``) — one structured value max.
+#   (d) Dict keyed by a finite domain (PC names, body ids, seat ids,
+#       resource pool keys, quest ids, region/room/route slugs) where
+#       the key cardinality is itself a finite gameplay quantity.
+#   (e) List bounded by gameplay convention to small cardinality
+#       (companions, active_seeds, next_turn_directives, etc).
+#
+# Genuinely growing lists that the narrator reads in full but are
+# small-by-gameplay-convention (``lore_established``, ``world_history``,
+# ``npc_pool``) sit in (e) for now. If any of them grows large enough
+# in real play to matter, the bounding decision moves to
+# ``_PHASE_C_PROJECTIONS`` in a follow-up story — that conversation is
+# what this gate exists to force. ``world_history`` is currently
+# P3-deferred (campaign maturity / world materialization not populated
+# in the live build per ``session.py:684``). ``npc_pool`` is the
+# anti-confabulation anchor (context-story-61-2.md §"gaslighting
+# doctrine, MUST survive") — it cannot be projected without breaking
+# the narrator's ability to cite off-stage NPCs.
+_BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
+    # scalars / enum-shaped strings
+    "active_stakes",
+    "atmosphere",
+    "campaign_maturity",
+    "clock_t_hours",
+    "current_region",
+    "days_elapsed",
+    "genre_slug",
+    "last_saved_at",
+    "party_body_id",
+    "player_dead",
+    "time_of_day",
+    "total_beats_fired",
+    "turns_since_meaningful",
+    "world_slug",
+    # single-record optionals / single-record structs
+    "encounter",
+    "magic_state",
+    "pending_resolution_signal",
+    "pending_time_skip_summary",
+    "plotted_course",
+    "turn_manager",
+    # dicts keyed by finite gameplay domains
+    "character_locations",
+    "chassis_autofire_cooldowns",
+    "chassis_registry",
+    "player_seats",
+    "quest_log",
+    "resources",
+    # lists bounded by gameplay convention (small cardinality)
+    "active_seeds",
+    "companions",
+    "discovered_regions",
+    "discovered_rooms",
+    "discovered_routes",
+    "lore_established",
+    "next_turn_directives",
+    "notes",
+    "npc_pool",
+    "quest_anchors",
+    "seed_ghosts",
+    "world_history",
 )
 
 # Story 61-2 / ADR-110 — projection tunings for the four growing fields
@@ -799,6 +941,9 @@ def _build_turn_context(
     # would put the same prose in two zones — high-attention Recency
     # AND decayed Valley — re-creating the attention-decay disease this
     # story exists to cure.
+    # Also enforced via the ``_PHASE_B_DROP_FIELDS`` loop above (story
+    # 61-5 added ``narrative_log`` to the registry); this pop is kept
+    # for defense-in-depth pending follow-up consolidation.
     state_summary_payload.pop("narrative_log", None)
     # Story 45-8 — when the gate is engaged, also redact non-self PCs
     # from the state_summary JSON. Without this redaction the canonical

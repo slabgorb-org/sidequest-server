@@ -1098,16 +1098,16 @@ _SDK_TOOL_OWNED_FIELDS: dict[str, str] = {
     # (update_resource_pool) — narration_apply.apply_magic_working.
     "magic_working": "magic_effects / patches_resource_pool",
     # NOTE: ``confrontation`` (encounter START) is intentionally NOT owned
-    # here. Story 59-1: a tool CANNOT create the encounter on the SDK path —
-    # ``ctx.store.load()`` returns a fresh deserialized snapshot, and the
-    # tool's ``ctx.store.save`` is clobbered at turn end by ``room.save()``,
-    # which persists the room's CANONICAL in-memory snapshot (the tool never
-    # touched it). So engagement is routed through ``result.confrontation``
-    # (set in ``_assemble_turn_result_sdk`` from the begin_confrontation tool
-    # call) and applied by ``narration_apply``'s consumer, which mutates the
-    # canonical snapshot IN PLACE — the single creation mechanism on BOTH
-    # backends. ``begin_confrontation`` is the narrator-facing signal +
-    # validator, not the state writer.
+    # here, and post-Story 59-4 the field is not narrator-emitted at all.
+    # The router-driven dispatch handler at
+    # ``sidequest.agents.subsystems.confrontation.run_confrontation_dispatch``
+    # engages the encounter on the canonical snapshot pre-narrator (the
+    # Intent Router spine, ADR-113). Story 59-1's ``begin_confrontation``
+    # tool + its sidecar lift in ``_assemble_turn_result_sdk`` are retired;
+    # ``result.confrontation`` is not set on the SDK path and the
+    # ``narration_apply`` consumer that read it is gone. If a future
+    # narrator-tool ever sets engagement again, add the key here so the
+    # fail-loud backstop catches double-application.
     # encounter_advances (advance_encounter_beat) +
     # confrontation_advances (advance_confrontation) — beat apply loop.
     "beat_selections": "encounter_advances / confrontation_advances",
@@ -3318,38 +3318,17 @@ class Orchestrator:
             token_count_out=result.output_tokens,
         )
 
-        # Story 59-1: confrontation ENGAGEMENT signal. begin_confrontation
-        # cannot create the encounter itself (its ctx.store write is clobbered
-        # by room.save of the canonical snapshot — see _SDK_TOOL_OWNED_FIELDS
-        # note). Route the requested type onto result.confrontation here so
-        # narration_apply's consumer creates the encounter on the CANONICAL
-        # snapshot, in place, the same single mechanism the legacy backend
-        # uses. Two gates mirror begin_confrontation's own checks so the
-        # assembler honors a call the tool rejected:
-        #   (a) skip if an encounter is already active — the tool returns a
-        #       recoverable error in that case; routing the type would set a
-        #       confrontation that narration_apply silently drops, masking the
-        #       misfire from the watcher/telemetry;
-        #   (b) validate against the genre's offered types so a narrator typo
-        #       cannot reach narration_apply (which raises on an unknown type).
-        _encounter_active = context.encounter is not None and not getattr(
-            context.encounter, "resolved", False
-        )
-        if not _encounter_active:
-            _valid_confrontations = {t for (t, _label, _cat) in context.available_confrontations}
-            for _tc in result.tool_calls:
-                if _tc.name != "begin_confrontation":
-                    continue
-                _ctype = _tc.arguments.get("confrontation_type")
-                if isinstance(_ctype, str) and _ctype in _valid_confrontations:
-                    shared["confrontation"] = _ctype
-                    break
-
-        # No key in _SDK_TOOL_OWNED_FIELDS is added — the shared helper
-        # cannot emit one (structural guarantee). The tools own + persisted
-        # those categories during dispatch; the ledger is SDK-specific, and
-        # ``confrontation`` (no longer owned) is set above when the narrator
-        # called begin_confrontation.
+        # Story 59-4 / ADR-113: the Story 59-1 ``begin_confrontation``
+        # narrator-sidecar engagement signal is retired. Confrontation
+        # engagement is now router-driven by the Intent Router pre-narrator
+        # pass (``sidequest.server.intent_router_pass.execute_intent_router_pre_narrator_pass``),
+        # which calls ``sidequest.agents.subsystems.confrontation.run_confrontation_dispatch``
+        # against the canonical snapshot BEFORE this assembler runs. The
+        # narrator therefore narrates already-real encounter state and has
+        # no signaling channel for engagement; ``result.confrontation`` is
+        # not set on the SDK path. The retired ``begin_confrontation`` tool
+        # stub lives at ``sidequest/agents/tools/_retired/begin_confrontation.py``
+        # with a breadcrumb docstring.
         assembled = NarrationTurnResult(**shared, tool_calls=tool_calls_ledger)
 
         # Fail-loud backstop (CLAUDE.md no silent fallbacks): the tool-owned

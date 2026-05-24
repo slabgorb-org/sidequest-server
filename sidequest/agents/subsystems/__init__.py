@@ -1,16 +1,30 @@
-"""__init__ — DORMANT.
+"""subsystems — Live-path dispatch handler registry for the Intent
+Router engagement spine (ADR-113).
 
-This module is not invoked on the live turn path as of 2026-04-28
-(see docs/superpowers/specs/2026-04-28-localdm-offline-only-design.md).
+The Intent Router (``sidequest/agents/intent_router.py``) decomposes a
+player action into a ``DispatchPackage``; ``run_dispatch_bank`` (this
+module) executes each ``SubsystemDispatch`` against the registered
+handler for its subsystem key, BEFORE the narrator runs.
 
-It is preserved for two consumers:
-  1. The offline LocalDM corpus runner (follow-up story).
-  2. Re-engagement on the live path once ADR-073's local fine-tuned
-     router replaces the Haiku CLI subprocess.
+Registered handlers (post-Story 59-4 cutover):
+  - ``confrontation`` → ``run_confrontation_dispatch`` — engages a
+    structured encounter on the canonical snapshot (the live engager
+    that replaced the retired ``begin_confrontation`` sidecar tool).
+  - ``reflect_absence`` → ``run_reflect_absence`` — narrator directive
+    forcing honest-absence framing when the player addresses someone
+    not present.
+  - ``distinctive_detail_hint`` → ``run_distinctive_detail`` — narrator
+    directive naming a referent by a distinctive detail.
+  - ``npc_agency`` → ``run_npc_agency`` — NPC disposition update.
 
-Unit tests for this module remain in `just check-all` so it does not
-bit-rot. If you find yourself adding a live caller, you are landing
-ADR-073 (or undoing this design); update both ends.
+Note: ``reflect_absence``, ``distinctive_detail_hint``, and
+``npc_agency`` retain the "DORMANT" pedigree comments in their own
+module docstrings from the 2026-04-28 LocalDM shelving — the router
+revival (ADR-113) reaches the bank but those three subsystems are not
+yet emitted by the live router's prompt (Story 59-7 lands their full
+live wiring). They are registered for symmetry with the offline LocalDM
+corpus runner that still uses them; the bank treats their absence from
+real dispatches as a non-event.
 """
 
 from __future__ import annotations
@@ -114,12 +128,14 @@ def get_registered() -> dict[str, SubsystemCallable]:
 
 
 def _register_defaults() -> None:
+    from sidequest.agents.subsystems.confrontation import run_confrontation_dispatch
     from sidequest.agents.subsystems.distinctive_detail import run_distinctive_detail
     from sidequest.agents.subsystems.npc_agency import run_npc_agency
     from sidequest.agents.subsystems.reflect_absence import run_reflect_absence
 
     # Unregister-then-register to keep this import idempotent across test reloads.
     for name, fn in (
+        ("confrontation", run_confrontation_dispatch),
         ("reflect_absence", run_reflect_absence),
         ("distinctive_detail_hint", run_distinctive_detail),
         ("npc_agency", run_npc_agency),

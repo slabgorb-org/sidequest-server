@@ -48,23 +48,23 @@ call. A tool you don't call is a mechanic that never happened.
    registered as a conditional `<critical>` section above when the world
    has an active magic plugin; non-magic worlds never see them.
 
-4. STARTING / ADVANCING A CONFRONTATION OR ENCOUNTER, BEAT SELECTIONS →
-   `begin_confrontation` STARTS one; `advance_confrontation` moves an
-   ALREADY-ACTIVE encounter's dial; `advance_encounter_beat` selects beats.
-   `advance_confrontation` errors when no encounter is active.
-   You MUST call `begin_confrontation` on the SAME turn your prose
-   introduces ANY stake-binding engagement — physical violence, vessel
-   combat, pursuit, bargaining, formal proceedings, bidding, honor
-   challenges, reputational exposure, or any tense standoff where outcomes
-   should be mechanically resolved. Pick the MOST SPECIFIC type the genre
-   offers — the authoritative type list is the `begin_confrontation` tool's
-   enum (which includes `combat`, `brawl`, `ship_combat`, `dogfight`,
-   `negotiation`, `chase`, `trial`, `auction`, `social_duel`, `scandal`);
-    never default to generic `combat` when a specialized type applies. There
-   is no retroactive crediting; Do NOT resolve these narratively without `begin_confrontation`.
-   Err on the side of triggering — the system de-escalates gracefully. Once active, call `advance_encounter_beat` for EVERY actor
-   (player AND NPCs) every encounter turn, with the outcome tier the prose
-   describes (CritFail, Fail, Tie, Success, CritSuccess).
+4. ADVANCING A CONFRONTATION OR ENCOUNTER, BEAT SELECTIONS →
+   `advance_confrontation` moves an ALREADY-ACTIVE encounter's dial;
+   `advance_encounter_beat` selects beats. `advance_confrontation` errors
+   when no encounter is active.
+
+   STARTING a confrontation is NOT your concern — Story 59-4 / ADR-113
+   retired the `begin_confrontation` tool. The Intent Router (a pre-narrator
+   classification pass) reads each player action and engages the
+   confrontation engine on the canonical snapshot BEFORE you run. By the
+   time you see the game state, an active encounter is already real if the
+   player's action warranted one. Narrate the consequence of that real
+   engagement; do not "decide" to start a confrontation, because you have
+   no signaling channel to do so.
+
+   Once active, call `advance_encounter_beat` for EVERY actor (player AND
+   NPCs) every encounter turn, with the outcome tier the prose describes
+   (CritFail, Fail, Tie, Success, CritSuccess).
 
 5. IN-GAME DAY ADVANCEMENT → you MUST call `tick_tropes` with the integer
    day count when narration spans more than one in-game day (overnight

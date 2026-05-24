@@ -2430,15 +2430,9 @@ def _apply_narration_result_to_snapshot(
         from sidequest.agents.confrontation_intent_validator import validate as _validate_intent
         from sidequest.game.beat_kinds import apply_beat
         from sidequest.server.dispatch.confrontation import find_confrontation_def
-        from sidequest.server.dispatch.encounter_lifecycle import (
-            NoOpponentAvailableError,
-            SealedLetterArityError,
-            instantiate_encounter_from_trigger,
-        )
         from sidequest.telemetry.spans import (
             confrontation_unengaged_turn_span,
             encounter_beat_skipped_span,
-            encounter_empty_actor_list_span,
             encounter_resolved_span,
         )
 
@@ -2524,74 +2518,18 @@ def _apply_narration_result_to_snapshot(
 
         outcome.classified_intent = _classified_intent_value
 
-        # (a) Narrator-initiated encounter
-        if result.confrontation and (snapshot.encounter is None or snapshot.encounter.resolved):
-            if not result.npcs_present:
-                with encounter_empty_actor_list_span(
-                    encounter_type=result.confrontation,
-                    genre_slug=snapshot.genre_slug or "",
-                    player_name=player_name,
-                ):
-                    logger.warning(
-                        "encounter.empty_actor_list confrontation=%s player=%s",
-                        result.confrontation,
-                        player_name,
-                    )
-            # Playtest 2026-05-03 [BUG] — confrontation widget showed only
-            # the action-submitter PC even though both PCs played the bundled
-            # MP turn. Bundled-action narration produces ONE narrator call
-            # but every seated PC is in the round by construction, so seat
-            # the other seated PCs as side="player" actors alongside the
-            # submitter. ``player_seats`` maps player_id → character.core.name;
-            # values() is the canonical PC roster for the session. Solo
-            # sessions and pre-MP saves pass an empty list (single-PC actor
-            # array, identical to prior behavior).
-            additional_pc_names = [
-                name for name in snapshot.player_seats.values() if name and name != player_name
-            ]
-            # Story 45-33 (CLAUDE.md "strict helper, lenient caller"): the
-            # lifecycle raises ValueError with an OTEL span when a
-            # category=combat encounter resolves to zero opponents
-            # post-fallback (no narrator npcs AND no registry NPCs at the
-            # player's location). The OTEL span is the lie-detector
-            # signal — the wrapper catches the exception so the narration
-            # turn stays resilient (no crashed turn for an LLM extraction
-            # gap). The encounter is not created and the
-            # ``encounter_empty_actor_list_span`` above already logged the
-            # gap; the GM panel sees both spans and can correlate.
-            try:
-                instantiate_encounter_from_trigger(
-                    snapshot=snapshot,
-                    pack=pack,
-                    encounter_type=result.confrontation,
-                    player_name=player_name,
-                    npcs_present=result.npcs_present,
-                    genre_slug=snapshot.genre_slug,
-                    additional_player_names=additional_pc_names,
-                )
-            except NoOpponentAvailableError as exc:
-                # Narrowly scoped: only the Story 45-33 no-opponent guard is
-                # caught here. The unknown-encounter-type / bad-side
-                # ValueErrors all PROPAGATE — those are config/extraction errors
-                # that the existing test suite asserts crash the turn.
-                logger.warning(
-                    "encounter.no_opponent_available confrontation=%s player=%s reason=%s",
-                    result.confrontation,
-                    player_name,
-                    exc,
-                )
-            except SealedLetterArityError as exc:
-                # Playtest 2026-05-08: narrator triggered a sealed-letter
-                # encounter (1v1 contract) against zero or multiple NPCs.
-                # The OTEL span at the validator already recorded the
-                # rejection; here we keep the turn alive — the narrator's
-                # prose stands, no structured encounter instantiates.
-                logger.warning(
-                    "encounter.sealed_letter_arity_rejected confrontation=%s player=%s reason=%s",
-                    result.confrontation,
-                    player_name,
-                    exc,
-                )
+        # (a) Narrator-initiated encounter creation — REMOVED Story 59-4 (ADR-113).
+        # Confrontation engagement is now router-driven via the Intent Router
+        # pre-narrator pass (``sidequest.server.intent_router_pass``) which
+        # calls ``sidequest.agents.subsystems.confrontation.run_confrontation_dispatch``
+        # against the canonical snapshot BEFORE narration_apply runs. The
+        # field ``result.confrontation`` is no longer set on the SDK path
+        # (the ``_assemble_turn_result_sdk`` lift was removed in the same
+        # cutover) and the retired ``begin_confrontation`` tool no longer
+        # exists. If a stale code path ever sets the field, this block being
+        # absent is the load-bearing guard that prevents encounter creation
+        # outside the router path — single mechanism per problem (memory
+        # rule ``feedback_one_mechanism_per_problem``).
 
         # (b) Apply beat selections (dice-replay turns short-circuit)
         enc = snapshot.encounter

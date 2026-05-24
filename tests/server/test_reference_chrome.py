@@ -70,29 +70,49 @@ def test_lore_page_emits_hero_with_world_name(tmp_path):
     assert 'class="hero"' in html or "<header" in html
 
 
-def test_lore_page_hero_includes_epigraph(tmp_path):
-    """Hero block contains the lore.yaml epigraph text.
+def test_lore_page_hero_emits_pack_epigraph_inside_hero_block(tmp_path):
+    """Hero block contains the per-pack epigraph from ``PACK_EPIGRAPHS``.
 
-    Scoped to the hero region so a regression that breaks the hero but still
-    renders the epigraph elsewhere (e.g. via lore.yaml's normal file section)
-    fails this test."""
+    Story 63-7 changed the source of the hero epigraph: the v3 plan
+    pulls epigraph body + attribution from the pack-level
+    ``PACK_EPIGRAPHS`` constant (ported from ``app.jsx:12-67``), not
+    from the world's ``lore.yaml`` ``epigraph`` field. This test uses
+    a known pack name so the lookup hits, and asserts the bundle-
+    sourced text appears inside the hero region.
+
+    Replaces the 63-4 ``test_lore_page_hero_includes_epigraph`` which
+    looked for a per-world ``lore.yaml`` epigraph string.
+    """
     from sidequest.server.reference_renderer import assemble_lore_page
+    from sidequest.server.reference_theme import PACK_EPIGRAPHS
 
     pack = _seed_pack(tmp_path)
-    world = _seed_world(pack, "glenross")
+    # Rename pack dir to a known PACK_EPIGRAPHS key so the lookup hits.
+    space_opera_pack = pack.parent / "space_opera"
+    pack.rename(space_opera_pack)
+    world = _seed_world(space_opera_pack, "coyote_star")
 
-    html = assemble_lore_page("demo", "glenross", pack, world)
+    html = assemble_lore_page("space_opera", "coyote_star", space_opera_pack, world)
 
-    # Anchor on hero id, then look forward to the first closing tag that ends
-    # the hero block. ValueError on missing id="hero" is the RED-phase signal.
     hero_start = html.index('id="hero"')
-    # Take a generous window past the hero opener — the epigraph must sit inside it.
-    hero_window = html[hero_start : hero_start + 2000]
-    # The end of the hero block ends before the first file section.
+    hero_window = html[hero_start : hero_start + 4000]
     file_section_pos = hero_window.find('class="file"')
     if file_section_pos != -1:
         hero_window = hero_window[:file_section_pos]
-    assert "quiet valley" in hero_window
+    # Pick a distinctive substring from the known PACK_EPIGRAPHS entry.
+    # Avoid apostrophes — the hero escape()s `'` to `&#x27;` so a raw-
+    # apostrophe fragment from the constant won't substring-match the
+    # rendered HTML.
+    body = PACK_EPIGRAPHS["space_opera"]["body"]
+    assert "jump point that leads" in body, (
+        "Fixture drift: expected fragment vanished from PACK_EPIGRAPHS"
+    )
+    expected_fragment = "jump point that leads"
+    assert expected_fragment in hero_window, (
+        "Hero block doesn't contain the space_opera PACK_EPIGRAPHS body — "
+        "the renderer should pull epigraph text from the per-pack constant, "
+        "not from per-world lore.yaml."
+    )
 
 
 def test_lore_page_hero_has_stable_id(tmp_path):
@@ -134,8 +154,7 @@ def test_lore_page_hero_escapes_special_chars(tmp_path):
     world = pack / "worlds" / "evil"
     world.mkdir(parents=True)
     (world / "lore.yaml").write_text(
-        'world_name: "<script>alert(1)</script>"\n'
-        "epigraph: harmless\n"
+        'world_name: "<script>alert(1)</script>"\nepigraph: harmless\n'
     )
 
     html = assemble_lore_page("demo", "evil", pack, world)
@@ -194,32 +213,21 @@ def test_rules_page_emits_contents_rail(tmp_path):
     assert 'class="contents-rail"' in html or 'class="toc"' in html
 
 
-def test_contents_rail_links_to_per_file_section_ids(tmp_path):
-    """TOC entries must reference the same `file-{stem}` ids that section
-    wrappers use, so click-to-jump and scroll-spy work."""
-    from sidequest.server.reference_renderer import assemble_rules_page
-
-    pack = _seed_pack(tmp_path)
-
-    html = assemble_rules_page("demo", pack)
-
-    assert "#file-archetypes" in html
-    assert "#file-classes" in html
-    # And the corresponding section wrappers exist
-    assert 'id="file-archetypes"' in html
-    assert 'id="file-classes"' in html
-
-
-def test_contents_rail_has_scroll_spy_hooks(tmp_path):
-    """Contents rail markup includes data-scroll-spy hooks (or equivalent) so
-    the inline IntersectionObserver script can attach to it."""
-    from sidequest.server.reference_renderer import assemble_rules_page
-
-    pack = _seed_pack(tmp_path)
-
-    html = assemble_rules_page("demo", pack)
-
-    assert "data-scroll-spy" in html or "data-spy" in html
+# Story 63-7 Task H retirements:
+#
+# - ``test_contents_rail_links_to_per_file_section_ids`` retired —
+#   the v3 TOC links to per-pack section ids (``#reckoning``,
+#   ``#bearing``…) sourced from ``PACK_TOC``, not to ``#file-{stem}``.
+#   Replacement coverage lives in
+#   ``test_reference_chrome_v3.py::test_toc_links_resolve_to_section_ids``
+#   which walks every emitted TOC link and asserts a matching section
+#   wrapper exists.
+#
+# - ``test_contents_rail_has_scroll_spy_hooks`` retired —
+#   the v3 scroll-spy queries ``aside.toc-sticky nav.toc a`` directly
+#   (per plan lines 2807-2828); no ``data-scroll-spy`` attribute is
+#   needed. Replacement coverage in
+#   ``test_reference_chrome_v3.py::test_scroll_spy_queries_toc_sticky_nav_toc_anchors``.
 
 
 def test_contents_rail_is_locked_no_toggle(tmp_path):
@@ -239,16 +247,15 @@ def test_contents_rail_is_locked_no_toggle(tmp_path):
     assert "aria-expanded" not in html
 
 
-def test_contents_rail_includes_hero_link_on_lore_page(tmp_path):
-    """Lore page TOC has an entry that targets the hero anchor."""
-    from sidequest.server.reference_renderer import assemble_lore_page
-
-    pack = _seed_pack(tmp_path)
-    world = _seed_world(pack, "glenross")
-
-    html = assemble_lore_page("demo", "glenross", pack, world)
-
-    assert "#hero" in html
+# Story 63-7 Task H retirement:
+#
+# - ``test_contents_rail_includes_hero_link_on_lore_page`` retired —
+#   the v3 design bundle (``app.jsx`` lines 240-262) does NOT include a
+#   hero anchor in the TOC. The hero sits above the ``.layout`` grid
+#   and is always visible at the top of the document; linking to it
+#   from a sticky sidebar is redundant. If hero deep-linking is needed
+#   later, restore via a deliberate spec change, not silent test
+#   retention.
 
 
 # --- Inline scroll-spy JS ---

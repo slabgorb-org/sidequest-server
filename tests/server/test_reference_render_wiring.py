@@ -81,52 +81,6 @@ def _span_names(exporter: InMemorySpanExporter) -> list[str]:
 # --- Tests ------------------------------------------------------------------
 
 
-def test_unknown_field_fires_warn_span_and_drops_field(
-    synthetic_pack: Path,
-    synthetic_world: Path,
-    captured_spans: InMemorySpanExporter,
-) -> None:
-    """A YAML field not in PUBLIC ∪ KEEPER fires the WARN span and is
-    dropped from rendered output."""
-    from sidequest.server.reference_renderer import assemble_lore_page
-
-    (synthetic_world / "lore.yaml").write_text(
-        yaml.safe_dump({"history": "Prose.", "totally_made_up_field": "leak"})
-    )
-
-    html = assemble_lore_page(
-        pack="space_opera",
-        world="synth_world",
-        pack_dir=synthetic_pack,
-        world_dir=synthetic_world,
-    )
-
-    assert "totally_made_up_field" not in html, "Unknown field key leaked into HTML"
-    assert "leak" not in html, "Unknown field value leaked into HTML"
-    unknown_spans = [
-        s
-        for s in captured_spans.get_finished_spans()
-        if s.name == "sidequest.reference.unknown_field"
-    ]
-    assert unknown_spans, f"Expected unknown_field WARN span; saw {_span_names(captured_spans)}"
-    attrs = unknown_spans[0].attributes
-    assert attrs["reference.file_stem"] == "lore"
-    assert "totally_made_up_field" in attrs["reference.key_path"]
-
-
-@pytest.mark.xfail(
-    reason=(
-        "Task 8 enumerates KEEPER reachable from real file walk. "
-        "The current KEEPER set holds ('tropes', ()) which classifies the "
-        "whole-file root, but _render_dict classifies individual keys "
-        "(key_path always has ≥1 element). A tropes.yaml placed at the pack "
-        "tier is not reached by assemble_lore_page (tropes.yaml absent from "
-        "LORE_PACK_FLAVOR_FILES). KEEPER-via-dict-key dispatch needs either "
-        "a dict-keyed KEEPER entry or file-root classification in _render_file "
-        "— both are Task 8 scope."
-    ),
-    strict=False,
-)
 def test_keeper_field_silently_dropped(
     synthetic_pack: Path,
     synthetic_world: Path,

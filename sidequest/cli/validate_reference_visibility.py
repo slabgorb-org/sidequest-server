@@ -62,8 +62,17 @@ def scan_pack(pack_dir: Path) -> list[tuple[str, KeyPath]]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pack_dir", type=Path, help="Path to a genre pack directory")
+    parser.add_argument(
+        "--only-renderer-stems",
+        action="store_true",
+        help="Only report unknowns under stems the reference renderer actually reads.",
+    )
     args = parser.parse_args(argv)
     unclassified = scan_pack(args.pack_dir)
+    if args.only_renderer_stems:
+        from sidequest.server.reference_visibility import PUBLIC_STEMS
+
+        unclassified = [(stem, path) for (stem, path) in unclassified if stem in PUBLIC_STEMS]
     if not unclassified:
         print(f"OK — every field in {args.pack_dir} is classified.")
         return 0

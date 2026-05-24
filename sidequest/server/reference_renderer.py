@@ -60,7 +60,7 @@ from sidequest.server.reference_theme import (
     ReferenceTheme,
     load_reference_theme,
 )
-from sidequest.server.reference_visibility import Visibility, classify, has_registered_entries
+from sidequest.server.reference_visibility import Visibility, classify
 from sidequest.telemetry.spans.reference import (
     reference_hero_unbound_span,
     reference_presenter_error_span,
@@ -188,10 +188,7 @@ def _render_dict(
         )
 
         # Visibility gate (only when we have a context — real file walk).
-        # Skip for stems not yet enumerated (Task 8 populates the full PUBLIC set).
-        # Once Task 8 runs, every reachable stem will have registered entries
-        # and this bypass will be unreachable for live packs.
-        if ctx is not None and has_registered_entries(ctx.file_stem):
+        if ctx is not None:
             vis = classify(ctx.file_stem, child_path)
             if vis is Visibility.KEEPER:
                 # Silent drop — intentional. Load-time validation covers this.
@@ -228,11 +225,8 @@ def _render_dict(
                 parts.append(rendered_value)
             continue
 
-        # Generic fallback — fire INFO span for registered stems only.
-        # Unregistered stems bypass visibility classification entirely (Task 8
-        # will register them), so firing unpresented spans for every field in
-        # every unregistered file would be noise.
-        if ctx is not None and has_registered_entries(ctx.file_stem):
+        # Generic fallback — fire INFO span for ctx-bearing renders.
+        if ctx is not None:
             with reference_unpresented_field_span(
                 pack=ctx.pack,
                 file_stem=ctx.file_stem,

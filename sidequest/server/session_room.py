@@ -320,7 +320,7 @@ class SessionRoom:
         return self._orchestrator
 
     def close_store(self) -> None:
-        """Close the canonical store exactly once. Idempotent.
+        """Tear down the canonical world binding. Idempotent.
 
         Called by ``ws_endpoint`` (sidequest/server/websocket.py finally
         block) when the last player disconnects, AFTER
@@ -331,6 +331,19 @@ class SessionRoom:
         raised or swallowed a save exception so a lost final snapshot
         does not get compounded by a teardown. Safe to call when never
         bound and safe to call multiple times.
+
+        Nulls ``_store``, ``_snapshot``, and ``_session`` together so
+        the slug is fully unbound after the call. The previous shape
+        nulled only ``_store`` but left ``_snapshot`` set, which made
+        the next ``bind_world`` early-return on its
+        ``_snapshot is not None`` idempotency check WITHOUT re-attaching
+        a store — every reconnecting session then built ``_SessionData``
+        with ``store=None`` and crashed at the first
+        ``sd.store.recent_narrative(...)`` call (sq-playtest 2026-05-24
+        "'NoneType' object has no attribute 'recent_narrative'" after
+        last-disconnect → reconnect on dust_and_lead-mp). Complete reset
+        forces the reconnect to re-run the load-or-fresh path in
+        ``handlers/connect.py`` and call ``bind_world`` cleanly.
 
         Also calls ``reset_baselines()`` on the SDK client as part of
         slug-recycle prep. Per Story 61-4 (Architect spec-check A):
@@ -349,6 +362,10 @@ class SessionRoom:
                     self._store.close()
                 finally:
                     self._store = None
+            # Null snapshot + session so the next ``bind_world`` re-binds
+            # fully instead of early-returning on a stale ``_snapshot``.
+            self._snapshot = None
+            self._session = None
 
             orch = self._orchestrator
             if orch is not None:

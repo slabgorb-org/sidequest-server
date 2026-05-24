@@ -269,9 +269,22 @@ def test_no_overlap_between_included_and_excluded():
     assert overlap == set(), f"file appears in both included and excluded: {overlap}"
 
 
+_MINIMAL_THEME_YAML = (
+    "primary: '#5C7A4F'\n"
+    "accent: '#C9A96E'\n"
+    "background: '#F4EBDA'\n"
+    "archetype: parchment\n"
+    "web_font_family: Lora\n"
+    "display_font_family: Playfair Display\n"
+    "dinkus:\n  glyph:\n    light: '—'\n    medium: '❧'\n    heavy: '❧❧❧'\n"
+)
+
+
 def _write_pack(tmp_path: Path, pack: str, files: dict[str, str]) -> Path:
     pack_dir = tmp_path / pack
     pack_dir.mkdir(parents=True)
+    if "theme.yaml" not in files:
+        (pack_dir / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
     for name, contents in files.items():
         (pack_dir / name).write_text(contents)
     return pack_dir
@@ -333,6 +346,7 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     pack_dir = tmp_path / "demo"
     world_dir = pack_dir / "worlds" / "demoworld"
     world_dir.mkdir(parents=True)
+    (pack_dir / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
     (pack_dir / "lore.yaml").write_text("pack_flavor: yes\n")
     (pack_dir / "cultures.yaml").write_text("genre_cultures: yes\n")
     (world_dir / "world.yaml").write_text("world_name: Demoworld\n")

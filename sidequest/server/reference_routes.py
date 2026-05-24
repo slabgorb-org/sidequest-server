@@ -21,6 +21,7 @@ from sidequest.server.reference_renderer import (
     assemble_lore_page,
     assemble_rules_page,
 )
+from sidequest.server.reference_theme import MissingThemeFieldError
 
 _LOG = logging.getLogger(__name__)
 _SAFE_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -94,7 +95,7 @@ def create_reference_router() -> APIRouter:
     # router.mount(StaticFiles(...)), because FastAPI's APIRouter.include_router
     # silently drops Mount routes from sub-routers (only APIRoute / Route /
     # WebSocketRoute propagate). The HTML's
-    # <link href="/reference/static/reference.css"> still resolves correctly.
+    # <link href="/reference/static/theme.css"> still resolves correctly.
     @router.get("/static/{filename}", include_in_schema=False)
     async def static_file(filename: str) -> FileResponse:
         if not _SAFE_STATIC_FILENAME.match(filename):
@@ -110,8 +111,8 @@ def create_reference_router() -> APIRouter:
         pack_dir = _resolve_pack_dir(request, pack)
         try:
             html = assemble_rules_page(pack, pack_dir)
-        except ValueError as exc:
-            _LOG.exception("reference rules page: malformed YAML in %s", pack)
+        except (ValueError, MissingThemeFieldError) as exc:
+            _LOG.exception("reference rules page: render failed for %s", pack)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return HTMLResponse(content=html)
 
@@ -121,8 +122,8 @@ def create_reference_router() -> APIRouter:
         world_dir = _resolve_world_dir(pack_dir, world)
         try:
             html = assemble_lore_page(pack, world, pack_dir, world_dir)
-        except ValueError as exc:
-            _LOG.exception("reference lore page: malformed YAML in %s/%s", pack, world)
+        except (ValueError, MissingThemeFieldError) as exc:
+            _LOG.exception("reference lore page: render failed for %s/%s", pack, world)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return HTMLResponse(content=html)
 

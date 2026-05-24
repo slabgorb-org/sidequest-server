@@ -21,10 +21,22 @@ def _build_app(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+_MINIMAL_THEME_YAML = (
+    "primary: '#5C7A4F'\n"
+    "accent: '#C9A96E'\n"
+    "background: '#F4EBDA'\n"
+    "archetype: parchment\n"
+    "web_font_family: Lora\n"
+    "display_font_family: Playfair Display\n"
+    "dinkus:\n  glyph:\n    light: '—'\n    medium: '❧'\n    heavy: '❧❧❧'\n"
+)
+
+
 def _seed_pack(tmp_path: Path) -> None:
     pack = tmp_path / "demo"
     world = pack / "worlds" / "demoworld"
     world.mkdir(parents=True)
+    (pack / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
     (pack / "archetypes.yaml").write_text("kinds:\n  - sleuth\n")
     (pack / "classes.yaml").write_text("amateur_sleuth:\n  signature: deduce\n")
     (pack / "npcs.yaml").write_text("villain: thedoctor\n")  # MUST be excluded
@@ -108,13 +120,14 @@ def test_missing_search_root_returns_404_not_500(tmp_path):
     assert "(none)" in r.text
 
 
-def test_stylesheet_route_serves_css(tmp_path):
+def test_stylesheet_route_serves_theme_css(tmp_path):
+    """Story 63-4 Task 20 replaced the single ``reference.css`` with bundled
+    ``theme.css`` + ``styles.css``. This test pins the theme.css path."""
     _seed_pack(tmp_path)
     client = _build_app(tmp_path)
-    r = client.get("/reference/static/reference.css")
+    r = client.get("/reference/static/theme.css")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/css")
-    assert "body" in r.text
 
 
 @pytest.mark.parametrize(
@@ -152,12 +165,44 @@ def test_reference_router_registered_in_real_app(tmp_path):
     pack = tmp_path / "demo"
     pack.mkdir()
     (pack / "archetypes.yaml").write_text("kinds:\n  - sleuth\n")
+    (pack / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
 
     app = create_app(genre_pack_search_paths=[tmp_path])
     client = TestClient(app)
     r = client.get("/reference/rules/demo")
     assert r.status_code == 200
     assert "sleuth" in r.text
+
+
+def test_missing_theme_field_returns_500(tmp_path):
+    """A pack with theme.yaml missing a required field (e.g., archetype)
+    must surface as HTTP 500. Regression guard: prior to Story 63-4 the
+    routes caught only ValueError, so MissingThemeFieldError raised by
+    load_reference_theme would have bubbled as an uncaught 500 with no
+    log shape. Both routes now catch MissingThemeFieldError explicitly."""
+    pack = tmp_path / "demo"
+    world = pack / "worlds" / "demoworld"
+    world.mkdir(parents=True)
+    # archetype intentionally omitted — load_reference_theme raises.
+    (pack / "theme.yaml").write_text(
+        "primary: '#5C7A4F'\n"
+        "accent: '#C9A96E'\n"
+        "background: '#F4EBDA'\n"
+        "web_font_family: Lora\n"
+        "display_font_family: Playfair Display\n"
+        "dinkus:\n  glyph:\n    light: '—'\n    medium: '❧'\n    heavy: '❧❧❧'\n"
+    )
+    (pack / "archetypes.yaml").write_text("kinds:\n  - sleuth\n")
+    (world / "world.yaml").write_text("name: Demoworld\n")
+
+    client = _build_app(tmp_path)
+    r_rules = client.get("/reference/rules/demo")
+    assert r_rules.status_code == 500
+    assert "archetype" in r_rules.text.lower()
+
+    r_lore = client.get("/reference/lore/demo/demoworld")
+    assert r_lore.status_code == 500
+    assert "archetype" in r_lore.text.lower()
 
 
 def test_malformed_yaml_returns_500_with_filename(tmp_path, monkeypatch):

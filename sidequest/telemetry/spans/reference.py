@@ -32,11 +32,17 @@ SPAN_REFERENCE_URL_ATTACHED = "sidequest.reference.url_attached"
 SPAN_REFERENCE_URL_SKIPPED = "sidequest.reference.url_skipped"
 SPAN_REFERENCE_URL_FAILED = "sidequest.reference.url_failed"
 
+# Chrome-render failure spans (Story 63-4 Tasks 18 + 21).
+SPAN_REFERENCE_THEME_MISSING = "sidequest.reference.theme_missing"
+SPAN_REFERENCE_HERO_UNBOUND = "sidequest.reference.hero_unbound"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_REFERENCE_URL_ATTACHED,
         SPAN_REFERENCE_URL_SKIPPED,
         SPAN_REFERENCE_URL_FAILED,
+        SPAN_REFERENCE_THEME_MISSING,
+        SPAN_REFERENCE_HERO_UNBOUND,
     }
 )
 
@@ -121,6 +127,46 @@ def reference_url_failed_span(
             keys=keys,
             extras={"reference.reason": reason},
         ),
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- Chrome-render failure spans (Story 63-4) ---
+
+
+@contextmanager
+def reference_theme_missing_span(
+    *,
+    pack: str,
+    field: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """ERROR span fired when theme.yaml lacks a required chrome field.
+
+    The renderer raises ``MissingThemeFieldError`` from inside this span so
+    the OTEL exporter sees the failure status as well as the attributes.
+    """
+    with Span.open(
+        SPAN_REFERENCE_THEME_MISSING,
+        {"reference.pack": pack, "reference.field": field},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_hero_unbound_span(
+    *,
+    pack: str,
+    world: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """WARN span fired when lore.yaml is missing or unbound for a lore page;
+    the hero falls back to the pack name instead of the world name."""
+    with Span.open(
+        SPAN_REFERENCE_HERO_UNBOUND,
+        {"reference.pack": pack, "reference.world": world},
         tracer_override=_tracer,
     ) as span:
         yield span

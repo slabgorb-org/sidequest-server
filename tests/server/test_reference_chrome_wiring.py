@@ -161,19 +161,18 @@ def _extract_emitted_classes(html: str) -> set[str]:
 def _served_css_text() -> str:
     """Read the bundled CSS files the renderer links to.
 
-    The reference renderer emits
-    ``<link rel="stylesheet" href="/reference/static/theme.css">`` and
-    ``<link rel="stylesheet" href="/reference/static/styles.css">`` — see
-    ``_wrap_document`` in ``reference_renderer.py``. The corresponding
-    on-disk files are below ``sidequest/server/static/reference/``. If
-    either file is missing, the bundle has been broken upstream and the
-    test should fail loud — there is no fallback path.
+    The reference renderer emits ``<link>`` tags for ``theme.css``,
+    ``styles.css``, and ``presenters.css`` — see ``_wrap_document`` in
+    ``reference_renderer.py``. The corresponding on-disk files are below
+    ``sidequest/server/static/reference/``. If any file is missing, the
+    bundle has been broken upstream and the test should fail loud.
     """
     # tests/server/ → tests/ → sidequest-server/
     repo_root = Path(__file__).resolve().parents[2]
     base = repo_root / "sidequest" / "server" / "static" / "reference"
     theme = base / "theme.css"
     styles = base / "styles.css"
+    presenters = base / "presenters.css"
     if not theme.is_file():
         raise FileNotFoundError(
             f"Served CSS missing: {theme}. The wiring test cannot compare "
@@ -181,7 +180,15 @@ def _served_css_text() -> str:
         )
     if not styles.is_file():
         raise FileNotFoundError(f"Served CSS missing: {styles}.")
-    return theme.read_text(encoding="utf-8") + "\n" + styles.read_text(encoding="utf-8")
+    if not presenters.is_file():
+        raise FileNotFoundError(f"Served CSS missing: {presenters}.")
+    return (
+        theme.read_text(encoding="utf-8")
+        + "\n"
+        + styles.read_text(encoding="utf-8")
+        + "\n"
+        + presenters.read_text(encoding="utf-8")
+    )
 
 
 def test_every_emitted_class_has_matching_css_rule(tmp_path: Path) -> None:

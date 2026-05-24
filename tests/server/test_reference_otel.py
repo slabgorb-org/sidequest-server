@@ -212,3 +212,127 @@ def test_chrome_failure_spans_registered_in_flat_only_set():
 
     assert SPAN_REFERENCE_THEME_MISSING in FLAT_ONLY_SPANS
     assert SPAN_REFERENCE_HERO_UNBOUND in FLAT_ONLY_SPANS
+
+
+# --- Body-presenter dispatch spans (Story 63-8 / reference-body-presenters plan) ---
+
+
+def test_unknown_field_span_uses_correct_name_and_attrs():
+    """reference_unknown_field_span — WARN; fired when (file_stem, key_path)
+    is in neither PUBLIC nor KEEPER. Dispatcher drops the field."""
+    from sidequest.telemetry.spans.reference import (
+        SPAN_REFERENCE_UNKNOWN_FIELD,
+        reference_unknown_field_span,
+    )
+
+    tracer = MagicMock()
+    cm = tracer.start_as_current_span.return_value
+    cm.__enter__.return_value = MagicMock()
+    cm.__exit__.return_value = False
+
+    with reference_unknown_field_span(
+        pack="space_opera",
+        world="coyote_star",
+        file_stem="lore",
+        key_path=("bogus",),
+        _tracer=tracer,
+    ):
+        pass
+
+    name = tracer.start_as_current_span.call_args[0][0]
+    assert name == SPAN_REFERENCE_UNKNOWN_FIELD == "sidequest.reference.unknown_field"
+    attrs = tracer.start_as_current_span.call_args.kwargs["attributes"]
+    assert attrs["reference.pack"] == "space_opera"
+    assert attrs["reference.world"] == "coyote_star"
+    assert attrs["reference.file_stem"] == "lore"
+    assert attrs["reference.key_path"] == "bogus"
+
+
+def test_unknown_field_span_omits_world_attr_when_none():
+    from sidequest.telemetry.spans.reference import reference_unknown_field_span
+
+    tracer = MagicMock()
+    cm = tracer.start_as_current_span.return_value
+    cm.__enter__.return_value = MagicMock()
+    cm.__exit__.return_value = False
+
+    with reference_unknown_field_span(
+        pack="space_opera",
+        world=None,
+        file_stem="rules",
+        key_path=(),
+        _tracer=tracer,
+    ):
+        pass
+
+    attrs = tracer.start_as_current_span.call_args.kwargs["attributes"]
+    assert "reference.world" not in attrs
+    # Empty key_path renders as a sentinel string
+    assert attrs["reference.key_path"] == "<root>"
+
+
+def test_unpresented_field_span_name_and_attrs():
+    """reference_unpresented_field_span — INFO; fired when a PUBLIC field has
+    no registered presenter; generic fallback renders it."""
+    from sidequest.telemetry.spans.reference import (
+        SPAN_REFERENCE_UNPRESENTED_FIELD,
+        reference_unpresented_field_span,
+    )
+
+    tracer = MagicMock()
+    cm = tracer.start_as_current_span.return_value
+    cm.__enter__.return_value = MagicMock()
+    cm.__exit__.return_value = False
+
+    with reference_unpresented_field_span(
+        pack="space_opera",
+        file_stem="rules",
+        key_path=("misc_setting",),
+        _tracer=tracer,
+    ):
+        pass
+
+    name = tracer.start_as_current_span.call_args[0][0]
+    assert name == SPAN_REFERENCE_UNPRESENTED_FIELD == "sidequest.reference.unpresented_field"
+
+
+def test_presenter_error_span_name_and_attrs():
+    """reference_presenter_error_span — ERROR; fired when a presenter raises.
+    Helper is a thin Span.open wrapper; the dispatcher records the exception
+    itself before re-raising (matches the existing helper shape; no
+    try/except inside the helper)."""
+    from sidequest.telemetry.spans.reference import (
+        SPAN_REFERENCE_PRESENTER_ERROR,
+        reference_presenter_error_span,
+    )
+
+    tracer = MagicMock()
+    cm = tracer.start_as_current_span.return_value
+    cm.__enter__.return_value = MagicMock()
+    cm.__exit__.return_value = False
+
+    with reference_presenter_error_span(
+        pack="space_opera",
+        file_stem="lore",
+        key_path=("history",),
+        _tracer=tracer,
+    ):
+        pass
+
+    name = tracer.start_as_current_span.call_args[0][0]
+    assert name == SPAN_REFERENCE_PRESENTER_ERROR == "sidequest.reference.presenter_error"
+
+
+def test_body_presenter_spans_registered_in_flat_only_set():
+    """The three new dispatch spans must be in FLAT_ONLY_SPANS so the GM-panel
+    agent_span_close fan-out reads them flat."""
+    from sidequest.telemetry.spans._core import FLAT_ONLY_SPANS
+    from sidequest.telemetry.spans.reference import (
+        SPAN_REFERENCE_PRESENTER_ERROR,
+        SPAN_REFERENCE_UNKNOWN_FIELD,
+        SPAN_REFERENCE_UNPRESENTED_FIELD,
+    )
+
+    assert SPAN_REFERENCE_UNKNOWN_FIELD in FLAT_ONLY_SPANS
+    assert SPAN_REFERENCE_UNPRESENTED_FIELD in FLAT_ONLY_SPANS
+    assert SPAN_REFERENCE_PRESENTER_ERROR in FLAT_ONLY_SPANS

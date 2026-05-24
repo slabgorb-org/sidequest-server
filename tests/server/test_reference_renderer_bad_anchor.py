@@ -10,7 +10,6 @@ import yaml
 
 from sidequest.server.reference_renderer import assemble_rules_page
 
-
 _MINIMAL_THEME_YAML = (
     "primary: '#5C7A4F'\n"
     "accent: '#C9A96E'\n"

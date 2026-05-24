@@ -37,6 +37,11 @@ SPAN_REFERENCE_THEME_MISSING = "sidequest.reference.theme_missing"
 SPAN_REFERENCE_HERO_UNBOUND = "sidequest.reference.hero_unbound"
 SPAN_REFERENCE_TOC_MISSING = "sidequest.reference.toc_missing"
 
+# Body-presenter dispatch spans (Story 63-8 / reference-body-presenters plan).
+SPAN_REFERENCE_UNKNOWN_FIELD = "sidequest.reference.unknown_field"
+SPAN_REFERENCE_UNPRESENTED_FIELD = "sidequest.reference.unpresented_field"
+SPAN_REFERENCE_PRESENTER_ERROR = "sidequest.reference.presenter_error"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_REFERENCE_URL_ATTACHED,
@@ -45,6 +50,9 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_THEME_MISSING,
         SPAN_REFERENCE_HERO_UNBOUND,
         SPAN_REFERENCE_TOC_MISSING,
+        SPAN_REFERENCE_UNKNOWN_FIELD,
+        SPAN_REFERENCE_UNPRESENTED_FIELD,
+        SPAN_REFERENCE_PRESENTER_ERROR,
     }
 )
 
@@ -192,6 +200,84 @@ def reference_toc_missing_span(
     with Span.open(
         SPAN_REFERENCE_TOC_MISSING,
         {"reference.pack": pack},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- Body-presenter dispatch spans (Story 63-8) ---
+
+
+@contextmanager
+def reference_unknown_field_span(
+    *,
+    pack: str,
+    world: str | None,
+    file_stem: str,
+    key_path: tuple[str, ...],
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """WARN — fired when a YAML field is in neither PUBLIC nor KEEPER.
+
+    The dispatcher drops the field. Stderr log-once deduping happens in the
+    renderer; the span itself fires every render so OTEL traces stay honest
+    about the per-render state."""
+    attrs: dict[str, Any] = {
+        "reference.pack": pack,
+        "reference.file_stem": file_stem,
+        "reference.key_path": ".".join(key_path) or "<root>",
+    }
+    if world is not None:
+        attrs["reference.world"] = world
+    with Span.open(
+        SPAN_REFERENCE_UNKNOWN_FIELD,
+        attrs,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_unpresented_field_span(
+    *,
+    pack: str,
+    file_stem: str,
+    key_path: tuple[str, ...],
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when a PUBLIC field has no registered presenter; the
+    generic dispatcher renders it as label/value. Intentional fallback, not
+    a defect — surfaced so coverage gaps are visible without alarming."""
+    with Span.open(
+        SPAN_REFERENCE_UNPRESENTED_FIELD,
+        {
+            "reference.pack": pack,
+            "reference.file_stem": file_stem,
+            "reference.key_path": ".".join(key_path) or "<root>",
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_presenter_error_span(
+    *,
+    pack: str,
+    file_stem: str,
+    key_path: tuple[str, ...],
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """ERROR — fired when a presenter raises. Caller (the dispatcher) is
+    responsible for recording the exception and re-raising; this helper
+    matches the thin Span.open shape used by the rest of the module."""
+    with Span.open(
+        SPAN_REFERENCE_PRESENTER_ERROR,
+        {
+            "reference.pack": pack,
+            "reference.file_stem": file_stem,
+            "reference.key_path": ".".join(key_path) or "<root>",
+        },
         tracer_override=_tracer,
     ) as span:
         yield span

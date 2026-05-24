@@ -53,9 +53,11 @@ def test_rules_route_against_live_tea_and_murder(client):
     r = client.get("/reference/rules/tea_and_murder")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
-    # Spec ACs: archetypes and classes are non-optional for tea_and_murder
-    assert "archetypes.yaml" in r.text
-    assert "classes.yaml" in r.text
+    # Spec ACs: archetypes and classes are non-optional for tea_and_murder.
+    # Task 15: both stems have presenters, so <h1>{filename}</h1> is suppressed;
+    # assert on the stable section anchor ids instead.
+    assert 'id="file-archetypes"' in r.text
+    assert 'id="file-classes"' in r.text
 
 
 def test_live_lore_does_not_leak_npcs_or_seed_tropes(client):

@@ -50,6 +50,7 @@ class TestGenreTheme:
             "text": "#CCC",
             "border_style": "solid",
             "web_font_family": "Serif",
+            "display_font_family": "Display",
             "dinkus": {"enabled": True, "cooldown": 2, "default_weight": "medium", "glyph": {}},
             "session_opener": {"enabled": True},
         }

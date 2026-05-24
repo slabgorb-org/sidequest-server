@@ -6,6 +6,7 @@ surface: ""
 text: ""
 border_style: ""
 web_font_family: ""
+display_font_family: ""
 dinkus:
   enabled: false
   cooldown: 0

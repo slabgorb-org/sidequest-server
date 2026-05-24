@@ -122,7 +122,7 @@ from sidequest.protocol.models import (
     Footnote,
 )
 from sidequest.protocol.types import NonBlankString
-from sidequest.server import views
+from sidequest.server import intent_router_pass, views
 from sidequest.server.audio_cue import build_audio_cue_payload
 from sidequest.server.dispatch.chargen_loadout import apply_starting_loadout
 from sidequest.server.dispatch.chargen_summary import render_confirmation_summary
@@ -133,7 +133,6 @@ from sidequest.server.dispatch.opening import (
     record_opening_played,
 )
 from sidequest.server.dispatch.scenario_bind import bind_scenario
-from sidequest.server import intent_router_pass
 from sidequest.server.intent_router_pass import execute_intent_router_pre_narrator_pass
 from sidequest.server.magic_init import init_magic_state_for_session
 from sidequest.server.narration_apply import (

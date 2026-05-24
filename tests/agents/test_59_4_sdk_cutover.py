@@ -44,7 +44,6 @@ to the dict.
 
 from __future__ import annotations
 
-
 # ---------------------------------------------------------------------------
 # AC4 part 1: confrontation absent from _SDK_TOOL_OWNED_FIELDS
 # ---------------------------------------------------------------------------

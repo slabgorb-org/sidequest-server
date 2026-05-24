@@ -83,32 +83,64 @@ _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
     "narrative_log",
 )
 
-# Story 61-5 / ADR-110 architecture gate — fields that ride into
-# ``snapshot.model_dump()`` but are projected to a bounded shape by
-# ``_apply_phase_c_projections`` (below) BEFORE the dump leaves
-# ``_build_turn_context``. Each entry has a specific projection:
+# Story 61-5 / ADR-110 architecture gate — fields that DO ride into
+# ``snapshot.model_dump()`` and have specific projection behavior that
+# bounds their dump-side size:
 #
-# * ``room_states`` — kept entry is the acting PC's current room only;
-#   all other room ids dropped (story 61-2, ADR-110 Phase C).
-# * ``npcs`` — kept entries pass the ``is_npc_in_scene`` predicate
-#   (location match OR encounter-actor anchor, story 61-7); nested
-#   ``belief_state`` is stripped from each kept entry (story 61-2).
+# * ``room_states`` — payload is rewritten to keep only the acting PC's
+#   current room; all other room ids are dropped (story 61-2).
+# * ``npcs`` — payload is rewritten to keep entries passing the
+#   ``is_npc_in_scene`` predicate (location match OR encounter-actor
+#   anchor, story 61-7); nested ``belief_state`` is stripped from each
+#   kept entry (story 61-2).
 # * ``characters`` — nested ``known_facts`` list is truncated to the
 #   last ``_KNOWN_FACTS_TAIL_K`` entries per PC (story 61-2).
 # * ``scenario_state`` — nested ``discovered_clues`` set is capped at
-#   ``_DISCOVERED_CLUES_CAP`` entries, ordered by clue id for
-#   determinism (story 61-2, ADR-110 Phase C).
+#   ``_DISCOVERED_CLUES_CAP`` entries (story 61-2).
 #
-# Adding a field here means: this field's growth in the dump is bounded
-# by projection logic (NOT by the field's own structure). The behavior
-# is tested by ``test_61_2_snapshot_seven_field_projection.py`` and
-# ``test_57_5_snapshot_slimming.py``; the registry membership is tested
-# by ``test_snapshot_field_governance.py``.
+# **Governance vs. dispatch.** This registry is a governance artefact
+# consumed by ``test_snapshot_field_governance.py``, NOT a runtime
+# dispatch table. ``_apply_phase_c_projections`` (below) independently
+# hard-codes the same four names — the registry asserts the
+# categorization decision; the helper performs the work. Keeping them
+# in sync is the un-tightened seam called out as a deferred deviation
+# in story 61-5 (see ``.session/61-5-session.md`` §Architect
+# (spec-check)) — a follow-up story may extend the gate to verify
+# projection-consistency by reflecting over the helper's actual payload
+# mutations. The behavior is tested by
+# ``test_61_2_snapshot_seven_field_projection.py`` and
+# ``test_57_5_snapshot_slimming.py``.
 _PHASE_C_PROJECTIONS: tuple[str, ...] = (
     "room_states",
     "npcs",
     "characters",
     "scenario_state",
+)
+
+# Story 61-5 / ADR-110 architecture gate — fields declared on
+# ``GameSnapshot`` but absent from ``snapshot.model_dump()`` output
+# because their ``Field(...)`` carries ``exclude=True``. These are
+# transient runtime queues that must NEVER ride into a serialization
+# (the narrator prompt, a save file, a state-mirror message) — they
+# re-initialize empty each turn and are reconstructed from durable
+# state. They contribute zero bytes to the dump because pydantic
+# strips them at serialization time.
+#
+# Adding a field here means: the field has ``Field(..., exclude=True)``
+# on its declaration and is verifiably absent from ``model_dump()``.
+# ``test_snapshot_field_governance.py`` enforces this — removing
+# ``exclude=True`` from a field listed here fails the gate, forcing
+# the author to either keep the exclusion or re-categorize the field
+# (project, drop, or document why it's now bounded-by-construction).
+_EXCLUDED_FROM_DUMP: tuple[str, ...] = (
+    # ADR/story reference: session.py:798-799 — transient outbound
+    # dispatch queues. ``exclude=True`` keeps them out of the dump so
+    # a save mid-handler cannot persist a partial queue. They
+    # re-initialize empty on load — correct because auto-fires and
+    # outcomes are derivable from snapshot state on the next
+    # narration turn.
+    "pending_magic_auto_fires",
+    "pending_magic_confrontation_outcome",
 )
 
 # Story 61-5 / ADR-110 architecture gate — fields whose growth is
@@ -156,7 +188,6 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     # single-record optionals / single-record structs
     "encounter",
     "magic_state",
-    "pending_magic_confrontation_outcome",
     "pending_resolution_signal",
     "pending_time_skip_summary",
     "plotted_course",
@@ -178,7 +209,6 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "next_turn_directives",
     "notes",
     "npc_pool",
-    "pending_magic_auto_fires",
     "quest_anchors",
     "seed_ghosts",
     "world_history",

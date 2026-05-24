@@ -1,4 +1,4 @@
-"""Story 61-5 RED — architecture gate: snapshot field governance.
+"""Story 61-5 — architecture gate: snapshot field governance.
 
 ADR-110 §Implementation Notes (2026-05-23 amendment) calls for the
 `_PHASE_B_DROP_FIELDS` list to be "reviewed at every PR that adds a
@@ -6,19 +6,22 @@ ADR-110 §Implementation Notes (2026-05-23 amendment) calls for the
 policy test-enforced.
 
 **The gate.** Every top-level field on ``GameSnapshot`` MUST live in
-exactly one of three named registries in
+exactly one of four named registries in
 ``sidequest.server.session_helpers``:
 
-1. ``_PHASE_B_DROP_FIELDS`` — top-level fields stripped from the per-turn
+1. ``_PHASE_B_DROP_FIELDS`` — fields stripped from the per-turn
    ``<game_state>`` blob entirely (the narrator reads them from
    dedicated prompt sections, or the field has no consumer).
 2. ``_PHASE_C_PROJECTIONS`` — fields that ride into the dump but are
-   projected to a bounded shape (in-scene filter, tail-K window, size
-   cap, or nested-field drop) BEFORE the dump leaves
-   ``_apply_phase_c_projections`` / equivalent.
-3. ``_BOUNDED_BY_CONSTRUCTION`` — fields whose growth is bounded by their
-   own structure (scalar primitives, enums, fixed-size collections,
-   constant-cardinality dicts).
+   projected to a bounded shape by ``_apply_phase_c_projections``
+   (in-scene filter, tail-K window, size cap, or nested-field drop).
+3. ``_BOUNDED_BY_CONSTRUCTION`` — fields whose growth is bounded by
+   their own structure (scalar primitives, enums, fixed-size
+   collections, constant-cardinality dicts).
+4. ``_EXCLUDED_FROM_DUMP`` — fields declared on the model but absent
+   from ``model_dump()`` because their ``Field(...)`` carries
+   ``exclude=True`` (transient runtime queues; reconstructed each turn
+   from durable state).
 
 A future PR that adds a new top-level ``GameSnapshot`` field without
 placing it in exactly one registry fails this test with a precise
@@ -36,68 +39,35 @@ i.e. the tripwire pattern at
 ``tests/dungeon/test_setpiece_attach_wiring.py`` assertion 4.
 
 This test follows that pattern: pydantic
-``GameSnapshot.model_fields.keys()`` is the runtime field set; the
-three registries are the runtime named-tuples. No string matching.
+``GameSnapshot.model_fields`` is the runtime field set; the four
+registries are runtime named tuples; ``Field(...).exclude`` is the
+runtime metadata. No string matching.
 
-**RED state.** This test red-fails today because:
-
-* ``_PHASE_C_PROJECTIONS`` does not yet exist in
-  ``session_helpers.py``.
-* ``_BOUNDED_BY_CONSTRUCTION`` does not yet exist in
-  ``session_helpers.py``.
-* Even if both were added empty, every ``GameSnapshot`` field except
-  the four already in ``_PHASE_B_DROP_FIELDS`` would be unassigned.
-
-Dev's GREEN-phase job is to introduce the two missing registries with
-their authoritative contents and prove this test passes.
+**Story history.** Written RED against a ``session_helpers.py`` that
+lacked ``_PHASE_C_PROJECTIONS``, ``_BOUNDED_BY_CONSTRUCTION``, and
+``_EXCLUDED_FROM_DUMP``; story 61-5 introduced all three together so
+the test ships GREEN. The ``_EXCLUDED_FROM_DUMP`` registry was added
+during reviewer rework to correct a category error (the two
+``Field(exclude=True)`` fields were initially mis-classified as
+bounded-by-construction).
 """
 
 from __future__ import annotations
 
-import pytest
-
 from sidequest.game.session import GameSnapshot
+from sidequest.server import session_helpers as sh
 
-# ---------------------------------------------------------------------------
-# Registry import — the test MUST fail loudly if either registry is missing
-# from session_helpers. Conftest-level imports would convert this into a
-# collection error; importing inside the test lets the diagnostic land in
-# the assertion message where Dev will read it.
-# ---------------------------------------------------------------------------
+# Registry references — module-level so all four are loaded at import
+# time. If any registry is missing from session_helpers, this module
+# fails to collect with a clear AttributeError naming the symbol. That
+# is the loudest possible failure for a missing-registry regression —
+# pytest renders the traceback pointing directly at the offending line
+# and at the session_helpers attribute that's gone.
 
-
-def _import_registries() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """Return ``(drop, projections, bounded)`` from ``session_helpers``.
-
-    Raises ``ImportError`` (caught by callers) if either of the two new
-    registries has not yet been introduced — the failure message names
-    the missing symbol explicitly so the RED diagnostic is unambiguous.
-    """
-    from sidequest.server import session_helpers as sh
-
-    drop = sh._PHASE_B_DROP_FIELDS  # already exists (story 57-5)
-    try:
-        projections = sh._PHASE_C_PROJECTIONS
-    except AttributeError as e:
-        raise ImportError(
-            "session_helpers._PHASE_C_PROJECTIONS is not defined. "
-            "Story 61-5 requires this named tuple to enumerate every "
-            "GameSnapshot field that rides into the dump but is bounded "
-            "by projection (in-scene filter, tail-K, size cap, nested drop). "
-            "See sprint/context/context-story-61-2.md §Per-Field Decision Table."
-        ) from e
-    try:
-        bounded = sh._BOUNDED_BY_CONSTRUCTION
-    except AttributeError as e:
-        raise ImportError(
-            "session_helpers._BOUNDED_BY_CONSTRUCTION is not defined. "
-            "Story 61-5 requires this named tuple to enumerate every "
-            "GameSnapshot field whose growth is bounded by its own "
-            "structure (scalar primitive, enum, fixed-size collection, "
-            "constant-cardinality dict). Compare against "
-            "GameSnapshot.model_fields to determine which fields belong here."
-        ) from e
-    return drop, projections, bounded
+_DROP = sh._PHASE_B_DROP_FIELDS
+_PROJECTIONS = sh._PHASE_C_PROJECTIONS
+_BOUNDED = sh._BOUNDED_BY_CONSTRUCTION
+_EXCLUDED = sh._EXCLUDED_FROM_DUMP
 
 
 # ---------------------------------------------------------------------------
@@ -105,65 +75,75 @@ def _import_registries() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, .
 # ---------------------------------------------------------------------------
 
 
-def test_phase_c_projections_registry_exists() -> None:
+def test_phase_c_projections_registry_is_tuple_of_strs() -> None:
     """``_PHASE_C_PROJECTIONS`` is a tuple-typed registry in session_helpers."""
-    try:
-        _, projections, _ = _import_registries()
-    except ImportError as e:
-        pytest.fail(str(e))
-    assert isinstance(projections, tuple), (
-        f"_PHASE_C_PROJECTIONS must be a tuple[str, ...] for reflection — "
-        f"got {type(projections).__name__}"
+    assert isinstance(_PROJECTIONS, tuple), (
+        "_PHASE_C_PROJECTIONS must be a tuple[str, ...] for reflection — "
+        f"got {type(_PROJECTIONS).__name__}"
     )
-    assert all(isinstance(name, str) for name in projections), (
-        f"_PHASE_C_PROJECTIONS entries must all be str field names — "
-        f"got {[type(n).__name__ for n in projections]}"
+    assert all(isinstance(name, str) for name in _PROJECTIONS), (
+        "_PHASE_C_PROJECTIONS entries must all be str field names — "
+        f"got {[type(n).__name__ for n in _PROJECTIONS]}"
     )
 
 
-def test_bounded_by_construction_registry_exists() -> None:
+def test_bounded_by_construction_registry_is_tuple_of_strs() -> None:
     """``_BOUNDED_BY_CONSTRUCTION`` is a tuple-typed registry in session_helpers."""
-    try:
-        _, _, bounded = _import_registries()
-    except ImportError as e:
-        pytest.fail(str(e))
-    assert isinstance(bounded, tuple), (
-        f"_BOUNDED_BY_CONSTRUCTION must be a tuple[str, ...] for reflection — "
-        f"got {type(bounded).__name__}"
+    assert isinstance(_BOUNDED, tuple), (
+        "_BOUNDED_BY_CONSTRUCTION must be a tuple[str, ...] for reflection — "
+        f"got {type(_BOUNDED).__name__}"
     )
-    assert all(isinstance(name, str) for name in bounded), (
-        f"_BOUNDED_BY_CONSTRUCTION entries must all be str field names — "
-        f"got {[type(n).__name__ for n in bounded]}"
+    assert all(isinstance(name, str) for name in _BOUNDED), (
+        "_BOUNDED_BY_CONSTRUCTION entries must all be str field names — "
+        f"got {[type(n).__name__ for n in _BOUNDED]}"
+    )
+
+
+def test_excluded_from_dump_registry_is_tuple_of_strs() -> None:
+    """``_EXCLUDED_FROM_DUMP`` is a tuple-typed registry in session_helpers."""
+    assert isinstance(_EXCLUDED, tuple), (
+        "_EXCLUDED_FROM_DUMP must be a tuple[str, ...] for reflection — "
+        f"got {type(_EXCLUDED).__name__}"
+    )
+    assert all(isinstance(name, str) for name in _EXCLUDED), (
+        "_EXCLUDED_FROM_DUMP entries must all be str field names — "
+        f"got {[type(n).__name__ for n in _EXCLUDED]}"
     )
 
 
 # ---------------------------------------------------------------------------
-# AC3 + AC4 — every top-level GameSnapshot field is in some registry,
-# discovered via pydantic reflection (not source-text grep).
+# AC3 + AC4 — every top-level GameSnapshot field is in exactly one
+# registry, discovered via pydantic reflection (not source-text grep).
 # ---------------------------------------------------------------------------
 
 
 def test_every_snapshot_field_is_categorized() -> None:
-    """Every ``GameSnapshot`` field is in at least one of the three registries.
+    """Every ``GameSnapshot`` field is in at least one bounding registry.
 
     Failure mode: the diagnostic lists the *unclassified* fields by name
     so Dev knows exactly what is missing a bounding decision. This is
     the architecture gate — a new field on ``GameSnapshot`` cannot land
     without an explicit category placement.
     """
-    drop, projections, bounded = _import_registries()
     all_fields = set(GameSnapshot.model_fields.keys())
-    classified = set(drop) | set(projections) | set(bounded)
+    assert all_fields, (
+        "GameSnapshot.model_fields is empty — pydantic reflection returned "
+        "no fields. Either the model has been gutted or pydantic version "
+        "semantics changed. The architecture gate cannot vacuously pass on "
+        "an empty model."
+    )
+    classified = set(_DROP) | set(_PROJECTIONS) | set(_BOUNDED) | set(_EXCLUDED)
     unclassified = all_fields - classified
     assert not unclassified, (
         f"GameSnapshot has {len(unclassified)} field(s) NOT placed in any "
         f"bounding registry: {sorted(unclassified)}. ADR-110 architecture "
-        f"gate (story 61-5) requires every top-level field to be placed in "
-        f"exactly one of _PHASE_B_DROP_FIELDS (strip entirely), "
-        f"_PHASE_C_PROJECTIONS (project to bounded shape), or "
-        f"_BOUNDED_BY_CONSTRUCTION (growth bounded by structure). "
-        f"If you just added a field to GameSnapshot, you must categorize it "
-        f"in sidequest/server/session_helpers.py."
+        "gate (story 61-5) requires every top-level field to be placed in "
+        "exactly one of _PHASE_B_DROP_FIELDS (strip entirely), "
+        "_PHASE_C_PROJECTIONS (project to bounded shape), "
+        "_BOUNDED_BY_CONSTRUCTION (growth bounded by structure), or "
+        "_EXCLUDED_FROM_DUMP (Field(exclude=True), never serialized). "
+        "If you just added a field to GameSnapshot, you must categorize it "
+        "in sidequest/server/session_helpers.py."
     )
 
 
@@ -180,25 +160,43 @@ def test_no_field_in_multiple_registries() -> None:
     with the two registries it appears in. Overlap means a bounding
     contradiction (e.g. "this field is both dropped AND projected") that
     will silently corrupt the projection pipeline; the gate catches it
-    statically.
+    statically. Also catches intra-registry duplicates (a single tuple
+    listing the same field name twice).
     """
-    drop, projections, bounded = _import_registries()
-    drop_set = set(drop)
-    projections_set = set(projections)
-    bounded_set = set(bounded)
+    registries: dict[str, tuple[str, ...]] = {
+        "_PHASE_B_DROP_FIELDS": _DROP,
+        "_PHASE_C_PROJECTIONS": _PROJECTIONS,
+        "_BOUNDED_BY_CONSTRUCTION": _BOUNDED,
+        "_EXCLUDED_FROM_DUMP": _EXCLUDED,
+    }
 
+    # Intra-registry duplicates: each tuple must have unique entries.
+    intra_dupes: list[tuple[str, list[str]]] = []
+    for reg_name, reg_tuple in registries.items():
+        seen: dict[str, int] = {}
+        for name in reg_tuple:
+            seen[name] = seen.get(name, 0) + 1
+        dupes = sorted(n for n, c in seen.items() if c > 1)
+        if dupes:
+            intra_dupes.append((reg_name, dupes))
+    assert not intra_dupes, (
+        "Registry tuple(s) contain duplicate entries (set() deduplication "
+        "would silently mask this — a tuple is the wrong shape if "
+        "duplicates are intended):\n"
+        + "\n".join(f"  - {reg}: {dupes}" for reg, dupes in intra_dupes)
+    )
+
+    # Cross-registry overlap: each pair of registries must be disjoint.
     overlaps: list[tuple[str, tuple[str, str]]] = []
-    for name in drop_set & projections_set:
-        overlaps.append((name, ("_PHASE_B_DROP_FIELDS", "_PHASE_C_PROJECTIONS")))
-    for name in drop_set & bounded_set:
-        overlaps.append((name, ("_PHASE_B_DROP_FIELDS", "_BOUNDED_BY_CONSTRUCTION")))
-    for name in projections_set & bounded_set:
-        overlaps.append((name, ("_PHASE_C_PROJECTIONS", "_BOUNDED_BY_CONSTRUCTION")))
+    names = list(registries)
+    for i, a in enumerate(names):
+        for b in names[i + 1 :]:
+            for shared in set(registries[a]) & set(registries[b]):
+                overlaps.append((shared, (a, b)))
 
     assert not overlaps, (
         "The following GameSnapshot field(s) appear in MORE THAN ONE "
-        "bounding registry — a field cannot be both dropped and "
-        "projected (or bounded), the categories are exclusive:\n"
+        "bounding registry — the categories are mutually exclusive:\n"
         + "\n".join(f"  - {name!r}: {a} AND {b}" for name, (a, b) in overlaps)
     )
 
@@ -217,64 +215,128 @@ def test_registries_reference_only_real_snapshot_fields() -> None:
     cleaning the registry, or the registry has a typo. Either way it's
     dead config that masquerades as governance — the gate names it.
     """
-    drop, projections, bounded = _import_registries()
     all_fields = set(GameSnapshot.model_fields.keys())
-
-    stray: dict[str, set[str]] = {
-        "_PHASE_B_DROP_FIELDS": set(drop) - all_fields,
-        "_PHASE_C_PROJECTIONS": set(projections) - all_fields,
-        "_BOUNDED_BY_CONSTRUCTION": set(bounded) - all_fields,
+    stray: dict[str, list[str]] = {
+        "_PHASE_B_DROP_FIELDS": sorted(set(_DROP) - all_fields),
+        "_PHASE_C_PROJECTIONS": sorted(set(_PROJECTIONS) - all_fields),
+        "_BOUNDED_BY_CONSTRUCTION": sorted(set(_BOUNDED) - all_fields),
+        "_EXCLUDED_FROM_DUMP": sorted(set(_EXCLUDED) - all_fields),
     }
     stray = {k: v for k, v in stray.items() if v}
     assert not stray, (
         "Registry entries reference field name(s) that are NOT on "
         "GameSnapshot.model_fields (typo or stale entry):\n"
-        + "\n".join(f"  - {registry}: {sorted(names)}" for registry, names in stray.items())
+        + "\n".join(f"  - {registry}: {names}" for registry, names in stray.items())
     )
 
 
 # ---------------------------------------------------------------------------
-# AC7 — guard the known-bad regression: the four-field drop list pre-61-2
-# missed `room_states` / `npcs` / `journal` (memory: runaway-valley incident
-# 2026-05-23 — $313 burn). _PHASE_B_DROP_FIELDS must continue to be the
-# single drop-list source of truth that the snapshot-dump pipeline reads.
+# Substantive correctness — fields in _EXCLUDED_FROM_DUMP must actually
+# have Field(exclude=True) on their declaration. This is the teeth that
+# prevent a future Dev from silently removing `exclude=True` and leaving
+# the field in this registry: the assertion fires loudly.
 # ---------------------------------------------------------------------------
 
 
-def test_phase_b_drop_list_is_single_source_of_truth() -> None:
-    """``_PHASE_B_DROP_FIELDS`` is the registry consumed by the dump pipeline.
+def test_excluded_from_dump_entries_actually_have_exclude_true() -> None:
+    """Every ``_EXCLUDED_FROM_DUMP`` entry has ``Field(..., exclude=True)``.
 
-    This is a behavior test, not a source-grep: we drive
-    ``_apply_phase_c_projections`` (or whatever helper consumes the drop
-    list) and observe the field set actually removed from a dump matches
-    the registry. If a future refactor splits the drop list into a
-    parallel hardcoded list inside ``_build_turn_context``, this test
-    fails because the two diverge — exactly the runaway-valley class of
-    bug ADR-110 §Implementation Notes warns about.
+    Failure mode: an entry in ``_EXCLUDED_FROM_DUMP`` has lost its
+    ``exclude=True`` metadata (or never had it). The diagnostic names
+    the offending field so Dev can either restore the exclusion or move
+    the field to a different registry.
 
-    The current pre-61-5 build wires the drop via the
-    ``_PHASE_B_DROP_FIELDS`` constant directly into
-    ``_build_turn_context`` (see ``session_helpers.py``). The gate test
-    here just enumerates the constant and confirms no field name is
-    duplicated across the registries (delegated to the dedicated overlap
-    test above) — the runtime wiring is exercised by
-    ``test_61_2_snapshot_seven_field_projection.py`` and
-    ``test_57_5_snapshot_slimming.py``.
+    This is the architectural teeth: the gate would otherwise allow a
+    future Dev to remove ``exclude=True`` from a field and leave it
+    classified as "excluded" — which would be a silent regression
+    (the field starts riding into the dump but the gate still calls it
+    not-in-dump). Reflecting on ``Field.exclude`` at test time forces
+    re-categorization.
     """
-    drop, _, _ = _import_registries()
-    # Sanity: the four legacy entries from story 57-5 are still present.
-    # If a future Dev removes any of them, that's a different decision and
-    # should be its own story — this test forces the conversation.
-    legacy_four = {
+    not_excluded: list[str] = []
+    for name in _EXCLUDED:
+        field_info = GameSnapshot.model_fields.get(name)
+        if field_info is None:
+            # Caught separately by test_registries_reference_only_real_snapshot_fields;
+            # skip here so the diagnostic is single-purpose.
+            continue
+        if field_info.exclude is not True:
+            not_excluded.append(name)
+    assert not not_excluded, (
+        "Field(s) in _EXCLUDED_FROM_DUMP no longer have `Field(..., "
+        "exclude=True)` on their GameSnapshot declaration: "
+        f"{sorted(not_excluded)}. Either restore `exclude=True` (likely "
+        "the right answer — these fields are transient dispatch queues "
+        "by design, see session.py:798-799 for the original rationale) "
+        "or move the field to one of the other three registries with a "
+        "matching bounding decision."
+    )
+
+
+def test_excluded_from_dump_entries_actually_absent_from_model_dump() -> None:
+    """Every ``_EXCLUDED_FROM_DUMP`` entry is missing from a default ``model_dump()``.
+
+    Complementary to the ``exclude=True`` assertion above: this drives
+    pydantic at runtime to verify the field is, in fact, absent from
+    the dump. Catches the (unlikely) case where a custom field
+    serializer or model_dump override re-introduces the field despite
+    the ``exclude=True`` metadata.
+    """
+    # Construct a snapshot with the required scalar slugs filled in;
+    # everything else defaults. world_slug and genre_slug are
+    # non-defaultable str fields on GameSnapshot.
+    snap = GameSnapshot(world_slug="test", genre_slug="test")
+    dump_keys = set(snap.model_dump().keys())
+    leaked = sorted(name for name in _EXCLUDED if name in dump_keys)
+    assert not leaked, (
+        f"Field(s) in _EXCLUDED_FROM_DUMP appear in model_dump() output: "
+        f"{leaked}. A custom field serializer or model_dump override is "
+        "re-introducing these fields despite `exclude=True` metadata; "
+        "the registry's contract (these fields never reach the dump) is "
+        "broken."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy-regression guard: the pre-61-2 four-field drop list previously
+# missed `room_states` / `npcs` / `journal` — the runaway-valley incident
+# (2026-05-23, $313 burn). Plus the narrative_log entry added in story 61-5.
+# A future removal of any pinned entry must trip this guard.
+# ---------------------------------------------------------------------------
+
+
+def test_phase_b_drop_list_pins_expected_entries() -> None:
+    """``_PHASE_B_DROP_FIELDS`` contains every entry it was meant to land.
+
+    Scope: name-presence sanity check. The runtime wiring of the drop
+    list (the ``for _drop_field in _PHASE_B_DROP_FIELDS`` loop at
+    ``session_helpers.py:905`` inside ``_build_turn_context``) is
+    exercised end-to-end by ``test_57_5_snapshot_slimming.py`` and
+    ``test_61_2_snapshot_seven_field_projection.py``. This test
+    enumerates the registry contents and asserts every expected entry
+    is still present, so an accidental removal in a future refactor
+    trips the guard regardless of whether the wiring still works.
+
+    If you intentionally moved a field out of the drop list (e.g.
+    promoting it to ``_PHASE_C_PROJECTIONS`` with real projection
+    logic), update ``expected_drop_entries`` below in the same change
+    — do not silently drop the entry.
+    """
+    # Pinned entries: the four from story 57-5 (ADR-110 Phase B), plus
+    # narrative_log added in story 61-5 (was being dropped via a
+    # separate explicit pop at session_helpers.py:802 since story 49-1
+    # and is now unified into the registry).
+    expected_drop_entries = {
         "active_tropes",
         "axis_values",
         "genie_wishes",
         "achievement_tracker",
+        "narrative_log",
     }
-    missing = legacy_four - set(drop)
+    missing = sorted(expected_drop_entries - set(_DROP))
     assert not missing, (
-        f"_PHASE_B_DROP_FIELDS lost legacy story-57-5 entries: "
-        f"{sorted(missing)}. If you intentionally moved a field out of "
-        f"the drop list (e.g. promoting it to a projection), that's a "
-        f"separate story — do not silently drop the entry."
+        f"_PHASE_B_DROP_FIELDS lost expected entries: {missing}. If you "
+        "intentionally moved a field out of the drop list (e.g. promoting "
+        "it to a projection), that's a separate story — update "
+        "`expected_drop_entries` in this test in the same change."
     )

@@ -401,3 +401,62 @@ def test_geography_emits_poi_card_grid(fake_theme: ReferenceTheme) -> None:
     assert "rain-soaked rooftops" in html
     # Unknown-to-presenter fields (visual_prompt) MUST NOT leak as headings
     assert "<h2>visual_prompt" not in html
+
+
+def test_rules_root_emits_axiom_strip(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_rules_root
+
+    node = {
+        "stat_generation": "point_buy",
+        "point_buy_budget": 27,
+        "magic_level": "none",
+        "lethality": "moderate",
+        "tone": "gonzo-sincere",
+        "default_class": "Smuggler",
+        "default_race": "Spacer",
+        "default_time_of_day": "morning",
+        "race_label": "Origin",
+        "ability_score_names": ["STR", "DEX", "CON", "INT", "WIS", "CHA"],
+        "allowed_classes": ["Smuggler", "Pilot", "Medic"],
+        "allowed_races": ["Spacer", "Coreworlder"],
+        "default_location": "The crew quarters of a beat-up freighter.",
+        "custom_rules": {
+            "ship_combat": "Ships have condition tracks, not HP.",
+            "crew_bonds": "Bond advantage on protect rolls.",
+        },
+        "confrontations": "should be ignored",
+        "edge_config": {"thresholds": []},
+    }
+    html = present_rules_root(node, make_ctx("rules", (), fake_theme))
+
+    # Axiom strip — 5 cards in priority order
+    assert html.count('class="ref-stat-card"') == 5
+    # Default frame label grid
+    assert 'class="ref-label-grid"' in html
+    assert ">Smuggler<" in html and ">Spacer<" in html and ">morning<" in html
+    # Origin label (custom race_label) wins over default "Race"
+    assert "Origin" in html
+    # Allowed chips
+    assert html.count('class="ref-chip">') >= 5  # 3 classes + 2 races
+    assert ">Classes<" in html or ">Origins<" in html
+    # Opening location pull-quote
+    assert '<p class="ref-pull-quote' in html
+    assert "crew quarters of a beat-up freighter" in html
+    # Custom rules cards
+    assert html.count('class="ref-card"') >= 2  # both ship_combat and crew_bonds
+    assert "Ships have condition tracks" in html
+    # Silent skip
+    assert "should be ignored" not in html
+    assert "edge_config" not in html
+
+
+def test_rules_root_omits_axioms_for_missing_keys(fake_theme: ReferenceTheme) -> None:
+    from sidequest.server.reference_presenters import present_rules_root
+
+    node = {
+        "stat_generation": "roll_3d6_strict",
+        "magic_level": "none",
+        # lethality, tone, default_class absent
+    }
+    html = present_rules_root(node, make_ctx("rules", (), fake_theme))
+    assert html.count('class="ref-stat-card"') == 2  # only 2 keys present

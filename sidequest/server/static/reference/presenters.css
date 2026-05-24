@@ -210,6 +210,32 @@
 /* --- History block --- */
 .ref-history { margin: 1.5rem 0; }
 
+/* --- Allowed-classes / -races chip strip --- */
+.ref-allowed {
+    margin: 1.5rem 0;
+}
+.ref-allowed h3 {
+    font-family: var(--ref-font-display);
+    color: var(--ref-color-accent);
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin: 0 0 0.5rem 0;
+}
+.ref-allowed > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+/* --- Custom rules vertical card list --- */
+.ref-custom-rules {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
 /* --- Error / unknown banners (dev-only visibility) --- */
 .ref-presenter-error {
     background: rgba(200, 50, 50, 0.15);

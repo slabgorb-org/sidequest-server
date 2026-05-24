@@ -454,3 +454,109 @@ def present_cultures(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("cultures", ())] = present_cultures
+
+
+def _axiom_card(label: str, value: object) -> str:
+    return (
+        '<div class="ref-stat-card">'
+        f'<div class="ref-card__kicker">{escape(label)}</div>'
+        f"<div>{escape(str(value))}</div>"
+        "</div>"
+    )
+
+
+def _label_cell(label: str, value: object) -> str:
+    return (
+        '<div class="ref-label-grid__cell">'
+        f'<div class="ref-card__kicker">{escape(label)}</div>'
+        f"<div>{escape(str(value))}</div>"
+        "</div>"
+    )
+
+
+def _chip_strip(title: str, items: list) -> str:
+    if not items:
+        return ""
+    chips = "".join(f'<span class="ref-chip">{escape(str(name))}</span>' for name in items)
+    return f'<section class="ref-allowed"><h3>{escape(title)}</h3><div>{chips}</div></section>'
+
+
+_AXIOM_PRIORITY: tuple[tuple[str, str], ...] = (
+    ("stat_generation", "Stat Generation"),
+    ("magic_level", "Magic Level"),
+    ("lethality", "Lethality"),
+    ("tone", "Tone"),
+    ("default_class", "Default Class"),
+)
+
+
+def present_rules_root(node: object, ctx: PresenterContext) -> str:
+    """Top-level rules.yaml presenter — emits an axiom strip, default frame,
+    allowed-class/race chip strips, opening location pull-quote, and a
+    vertical custom_rules card list. Mechanical configs (confrontations,
+    resources, edge_config, chargen_field_labels) are intentionally
+    skipped — the rules page is high-altitude orientation, not a full
+    system reference. Their KEEPER paths (narrator_hint descendants) are
+    already covered by reference_visibility."""
+    if not isinstance(node, dict):
+        return ""
+    parts: list[str] = []
+
+    # 1. Axiom strip — only emit cards for keys present in node.
+    cards = [
+        _axiom_card(label, node[key])
+        for key, label in _AXIOM_PRIORITY
+        if key in node and node[key] not in (None, "")
+    ]
+    if cards:
+        parts.append('<div class="ref-stat-strip">' + "".join(cards) + "</div>")
+
+    # 2. Default frame.
+    frame_cells: list[str] = []
+    if node.get("default_class"):
+        frame_cells.append(
+            _label_cell(str(node.get("class_label") or "Class"), node["default_class"])
+        )
+    if node.get("default_race"):
+        frame_cells.append(_label_cell(str(node.get("race_label") or "Race"), node["default_race"]))
+    if node.get("default_time_of_day"):
+        frame_cells.append(_label_cell("Time of Day", node["default_time_of_day"]))
+    if node.get("point_buy_budget"):
+        frame_cells.append(_label_cell("Point Buy", node["point_buy_budget"]))
+    abil = node.get("ability_score_names")
+    if isinstance(abil, list) and abil:
+        frame_cells.append(_label_cell("Ability Scores", ", ".join(str(a) for a in abil)))
+    if frame_cells:
+        parts.append('<div class="ref-label-grid">' + "".join(frame_cells) + "</div>")
+
+    # 3. Allowed-classes / allowed-races chip strips.
+    parts.append(_chip_strip("Classes", node.get("allowed_classes") or []))
+    parts.append(_chip_strip("Origins", node.get("allowed_races") or []))
+
+    # 4. Opening location pull-quote.
+    default_location = node.get("default_location")
+    if default_location:
+        parts.append(
+            f'<p class="ref-pull-quote narrative-flourish">{escape(str(default_location))}</p>'
+        )
+
+    # 5. Custom rules cards.
+    custom = node.get("custom_rules")
+    if isinstance(custom, dict) and custom:
+        cards_html: list[str] = []
+        for key, prose in custom.items():
+            if not prose:
+                continue
+            cards_html.append(
+                '<div class="ref-card">'
+                f'<div class="ref-card__kicker">{escape(_format_chip_label(str(key)))}</div>'
+                f'<p class="ref-card__body">{escape(str(prose))}</p>'
+                "</div>"
+            )
+        if cards_html:
+            parts.append('<section class="ref-custom-rules">' + "".join(cards_html) + "</section>")
+
+    return "".join(parts)
+
+
+PRESENTERS[("rules", ())] = present_rules_root

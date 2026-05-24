@@ -33,7 +33,10 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-from sidequest.agents.llm_factory import _INTENT_ROUTER_MODEL
+from sidequest.agents.llm_factory import (
+    _INTENT_ROUTER_MODEL,
+    IntentRouterEmptyResponse,
+)
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.spans.intent_router import (
     intent_router_decompose_span,
@@ -158,6 +161,23 @@ class IntentRouter:
                 )
                 logger.warning(
                     "intent_router.failed reason=timeout attempt=%d exc=%s",
+                    retry_count,
+                    exc,
+                )
+                continue
+            except IntentRouterEmptyResponse as exc:
+                # SDK call succeeded but Haiku emitted no text — distinct
+                # from transport failure and from unparseable text. Preserve
+                # the diagnostic message (stop_reason, content blocks, usage)
+                # in raw_preview so the GM panel can see why.
+                last_failure = ("empty_response", str(exc))
+                _emit_failed_span(
+                    reason="empty_response",
+                    raw_preview=str(exc)[:_RAW_PREVIEW_LIMIT],
+                    retry_count=retry_count,
+                )
+                logger.warning(
+                    "intent_router.failed reason=empty_response attempt=%d exc=%s",
                     retry_count,
                     exc,
                 )

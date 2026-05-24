@@ -119,6 +119,19 @@ def build_aside_llm() -> _AsideLlm:
 _INTENT_ROUTER_MODEL = "claude-haiku-4-5-20251001"
 
 
+class IntentRouterEmptyResponse(LlmClientError):
+    """Haiku returned a response with no text content.
+
+    Distinct from a transport error or an unparseable text payload — the
+    SDK call succeeded but the model emitted no usable text (refusal,
+    pause-turn, max-tokens-before-first-byte, or an unexpected
+    all-non-text content array). Carries ``stop_reason``, content block
+    types, and usage in the message so the failure mode is identifiable
+    in logs and OTEL ``raw_preview`` instead of surfacing downstream as a
+    confusing ``JSONDecodeError`` on the empty string.
+    """
+
+
 class _IntentRouterLlm:
     """Single-shot Haiku adapter satisfying the Intent Router's ``IntentRouterLLM``.
 
@@ -145,7 +158,20 @@ class _IntentRouterLlm:
             messages=[{"role": "user", "content": user}],
             max_tokens=2048,
         )
-        return "".join(block.text for block in resp.content if block.type == "text")
+        text = "".join(block.text for block in resp.content if block.type == "text")
+        if not text:
+            block_types = [getattr(b, "type", "?") for b in resp.content]
+            usage_repr: str
+            try:
+                usage_repr = repr(resp.usage.model_dump())
+            except Exception:  # noqa: BLE001 — usage shape varies by SDK version
+                usage_repr = repr(getattr(resp, "usage", None))
+            raise IntentRouterEmptyResponse(
+                f"Haiku returned no text content "
+                f"(stop_reason={resp.stop_reason!r}, blocks={block_types}, "
+                f"usage={usage_repr})"
+            )
+        return text
 
 
 def build_intent_router_llm() -> _IntentRouterLlm:

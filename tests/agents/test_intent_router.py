@@ -321,6 +321,49 @@ async def test_intent_router_fail_loud_on_unparseable_output(otel_capture) -> No
 
 
 @pytest.mark.asyncio
+async def test_intent_router_fail_loud_on_empty_response(otel_capture) -> None:
+    """Empty LLM text on both attempts → IntentRouterFailure with
+    ``empty_response`` reason, not ``unparseable``.
+
+    Regression for the live-playtest bug where Haiku returned no text
+    content (e.g. refusal, all-non-text blocks, or zero content blocks)
+    and the failure surfaced as a confusing ``JSONDecodeError`` on the
+    empty string. The producer must categorize this as its own failure
+    mode so the GM panel and operator logs can distinguish "model
+    refused / emitted nothing" from "model produced garbage prose".
+    """
+    from sidequest.agents.intent_router import IntentRouter, IntentRouterFailure
+    from sidequest.agents.llm_factory import IntentRouterEmptyResponse
+
+    diagnostic = IntentRouterEmptyResponse(
+        "Haiku returned no text content (stop_reason='refusal', blocks=[], usage=None)"
+    )
+    llm = _make_sequenced_router_llm(diagnostic, diagnostic)
+    router = IntentRouter(llm=llm)
+
+    with pytest.raises(IntentRouterFailure) as excinfo:
+        await router.decompose(action="x", state_summary={})
+
+    assert llm.complete.await_count == 2
+    assert "empty_response" in str(excinfo.value), (
+        f"failure message must categorize as empty_response; got {excinfo.value!s}"
+    )
+    failed_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.failed"
+    ]
+    assert len(failed_spans) == 2
+    reasons = {dict(s.attributes or {}).get("reason") for s in failed_spans}
+    assert reasons == {"empty_response"}, (
+        f"both attempts must record reason=empty_response; got reasons={reasons}"
+    )
+    preview = str(dict(failed_spans[0].attributes or {}).get("raw_preview", ""))
+    assert "stop_reason" in preview, (
+        f"empty_response raw_preview must carry the diagnostic stop_reason; "
+        f"got preview={preview!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_intent_router_fail_loud_on_schema_invalid_output(otel_capture) -> None:
     """AC-5 (schema-invalid): JSON that fails DispatchPackage pydantic
     validation on both attempts → raises.

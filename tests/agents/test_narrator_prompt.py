@@ -19,7 +19,12 @@ def test_prompt_documents_beat_outcome_tiers():
 
 
 def test_prompt_documents_status_changes_field():
-    assert "status_changes" in NARRATOR_OUTPUT_ONLY
+    """Story 61-9 / ADR-101 amendment: the SDK narrator records status
+    changes by CALLING ``apply_status`` (a tool); the legacy
+    ``status_changes`` sidecar field is gone. The severity enumeration
+    must still appear in the prose so the narrator picks the right tier.
+    """
+    assert "apply_status" in NARRATOR_OUTPUT_ONLY
     for sev in ("Scratch", "Wound", "Scar", "Boon"):
         assert sev in NARRATOR_OUTPUT_ONLY
 

@@ -550,7 +550,14 @@ def test_cli_ollama_unreachable_writes_operator_note(tmp_path: Any, monkeypatch:
 # --------------------------------------------------------------------------- #
 
 
-def test_ac5_cli_imports_build_llm_client_at_module_top() -> None:
+def test_ac5_cli_imports_legacy_backend_classes_at_module_top() -> None:
+    """AC5 (post-61-9): the CLI must import its legacy backend classes
+    at module top so a broken sidequest install fails AT SCRIPT LOAD, not
+    at --help (No Silent Fallbacks). Story 61-9 retired the legacy
+    backends from ``build_llm_client``; the harness now constructs
+    ``ClaudeClient`` and ``OllamaClient`` directly (the classes
+    themselves stay per the story scope-out).
+    """
     src = CLI_PATH.read_text(encoding="utf-8")
     import ast
 
@@ -560,21 +567,25 @@ def test_ac5_cli_imports_build_llm_client_at_module_top() -> None:
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 top_level_import_names.add(alias.name)
-    assert "build_llm_client" in top_level_import_names, (
-        "AC5: CLI must import build_llm_client at module top so a broken "
-        "sidequest install fails at load, not at --help (No Silent Fallbacks)"
+    assert "OllamaClient" in top_level_import_names, (
+        "AC5 (post-61-9): CLI must import OllamaClient at module top so a "
+        "broken sidequest install fails at load, not at --help."
+    )
+    assert "ClaudeClient" in top_level_import_names, (
+        "AC5 (post-61-9): CLI must import ClaudeClient at module top so a "
+        "broken sidequest install fails at load."
     )
 
 
 def test_ac5_cli_guards_against_non_llmclient_backend() -> None:
-    """AC5: like ollama_latency_check.py, the CLI must isinstance-check for
-    LlmClient (send_stateless is unavailable on ToolingLlmClient) rather
-    than blindly calling send_stateless on whatever build_llm_client returns.
+    """AC5: the CLI must isinstance-check the constructed backends for
+    ``LlmClient`` (``send_stateless`` is unavailable on
+    ``ToolingLlmClient``) rather than blindly calling ``send_stateless``.
     """
     src = CLI_PATH.read_text(encoding="utf-8")
     tree_ok = "LlmClient" in src and "isinstance" in src
     assert tree_ok, (
-        "AC5: CLI must guard build_llm_client()'s return with an "
+        "AC5: CLI must guard constructed backends with an "
         "isinstance(..., LlmClient) check (mirror of ollama_latency_check.py)"
     )
 
@@ -593,7 +604,10 @@ def test_ac3_suite_has_no_live_backend_calls() -> None:
 
     src = Path(__file__).read_text(encoding="utf-8")
     tree = ast.parse(src)
-    banned = {"OllamaClient", "ClaudeClient", "AnthropicSdkClient", "build_llm_client"}
+    # Story 61-9 removed ``build_llm_client`` from the CLI's surface; the
+    # banned-construction guard remains for the legacy + SDK classes so the
+    # test suite itself doesn't accidentally hit the network.
+    banned = {"OllamaClient", "ClaudeClient", "AnthropicSdkClient"}
     called: set[str] = set()
     for node in ast.walk(tree):
         if (

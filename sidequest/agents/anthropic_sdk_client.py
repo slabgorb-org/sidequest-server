@@ -627,9 +627,7 @@ class AnthropicSdkClient:
         # defensive read against a partial-init race that today can't
         # occur but would be a silent comparator bug if it ever did.
         warmup = (
-            cost_window is None
-            or input_window is None
-            or len(cost_window) < _BASELINE_WINDOW_K
+            cost_window is None or input_window is None or len(cost_window) < _BASELINE_WINDOW_K
         )
         if warmup:
             baseline_cost = _WARMUP_COST_USD_FLOOR
@@ -669,10 +667,7 @@ class AnthropicSdkClient:
         # the rolling baseline upward.
         absolute_triggered = cost_usd > _ABSOLUTE_COST_USD_FLOOR
         any_triggered = (
-            cost_triggered
-            or io_triggered
-            or input_absolute_triggered
-            or absolute_triggered
+            cost_triggered or io_triggered or input_absolute_triggered or absolute_triggered
         )
 
         if any_triggered:
@@ -732,12 +727,12 @@ class AnthropicSdkClient:
         # observation for this session_id (mirrors the
         # ``_session_cumulative_cost_usd`` dict in the cumulative-cost
         # tracker).
-        self._cost_baseline.setdefault(
-            session_id, deque(maxlen=_BASELINE_WINDOW_K)
-        ).append(cost_usd)
-        self._input_tokens_baseline.setdefault(
-            session_id, deque(maxlen=_BASELINE_WINDOW_K)
-        ).append(input_tokens)
+        self._cost_baseline.setdefault(session_id, deque(maxlen=_BASELINE_WINDOW_K)).append(
+            cost_usd
+        )
+        self._input_tokens_baseline.setdefault(session_id, deque(maxlen=_BASELINE_WINDOW_K)).append(
+            input_tokens
+        )
 
     # ------------------------------------------------------------------
     # session-cumulative cost ceiling (Story 61-followup-D §C)
@@ -775,9 +770,7 @@ class AnthropicSdkClient:
         """
         cumulative = self._session_cumulative_cost_usd.get(session_id, 0.0)
         if cumulative >= self.session_cost_ceiling_usd:
-            raise self._build_ceiling_exceeded(
-                session_id=session_id, cumulative=cumulative
-            )
+            raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
 
     def _update_session_cumulative(
         self,
@@ -806,9 +799,7 @@ class AnthropicSdkClient:
         # happen in practice (the loop raises on first cross) but the
         # guard is cheap.
         if session_id in self._session_ceiling_announced:
-            raise self._build_ceiling_exceeded(
-                session_id=session_id, cumulative=cumulative
-            )
+            raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
 
         logger.error(
             "session.cost_ceiling_exceeded session_id=%s "
@@ -835,9 +826,7 @@ class AnthropicSdkClient:
         # GM-panel event would be permanently lost on retry. Reviewer
         # 2026-05-23 rule-checker finding.
         self._session_ceiling_announced.add(session_id)
-        raise self._build_ceiling_exceeded(
-            session_id=session_id, cumulative=cumulative
-        )
+        raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
 
     def _emit_cost_running_total(
         self,

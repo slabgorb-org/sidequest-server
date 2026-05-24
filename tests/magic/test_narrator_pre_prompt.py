@@ -115,8 +115,14 @@ async def test_narrator_pre_prompt_omits_magic_context_when_state_absent():
 
 
 def test_narrator_output_doc_mentions_magic_working():
-    """NARRATOR_OUTPUT_ONLY documents magic_working as a valid game_patch field."""
-    assert "magic_working" in NARRATOR_OUTPUT_ONLY
+    """NARRATOR_OUTPUT_ONLY documents magic-effect recording.
+
+    Story 61-9 / ADR-101 amendment: the SDK narrator records magic
+    workings by CALLING ``apply_spell_effect`` (a tool); the legacy
+    ``magic_working`` sidecar field is gone. The CRITICAL MAGIC RULE
+    and the innate-magic plugin gate must still appear in the prose so
+    the narrator gates the tool call on plugin state.
+    """
+    assert "apply_spell_effect" in NARRATOR_OUTPUT_ONLY
     assert "CRITICAL MAGIC RULE" in NARRATOR_OUTPUT_ONLY
     assert "innate_v1" in NARRATOR_OUTPUT_ONLY
-    assert "item_legacy_v1" in NARRATOR_OUTPUT_ONLY

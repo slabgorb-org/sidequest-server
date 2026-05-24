@@ -47,13 +47,15 @@ import pydantic
 # at --help (CLAUDE.md: No Silent Fallbacks). AC5 mirrors ollama_latency_check.
 from sidequest.agents.ab_eval_harness import AbEvalHarness
 from sidequest.agents.claude_client import ClaudeClient, LlmClient, LlmClientError
-from sidequest.agents.llm_factory import (
-    ENV_BACKEND,
-    UnknownBackend,
-    build_llm_client,
-)
-from sidequest.agents.ollama_client import OllamaClientError
+from sidequest.agents.ollama_client import DEFAULT_OLLAMA_URL, OllamaClient, OllamaClientError
 from sidequest.corpus.schema import TrainingPair
+
+# Story 61-9 / ADR-101 amendment retired ``claude`` and ``ollama`` from
+# the ``build_llm_client`` factory. This offline A/B eval CLI constructs
+# both legacy clients directly (the classes themselves stay defined per
+# the story scope-out). The CLI is the only remaining consumer of the
+# bare ``ClaudeClient`` / ``OllamaClient`` classes.
+ENV_OLLAMA_URL = "SIDEQUEST_OLLAMA_URL"
 
 EXIT_PASS = 0
 EXIT_CLAUDE_ERROR = 1
@@ -119,22 +121,14 @@ def _load_pairs(path: Path) -> list[TrainingPair]:
 def _build_clients() -> tuple[LlmClient, LlmClient]:
     """Construct the two send_stateless-capable backends.
 
-    Resolves the TEA blocking finding (``build_llm_client()`` returns one
-    client; the A/B needs two): Ollama comes from the factory with the backend
-    env forced (same approach as ollama_latency_check.py); the Claude baseline
-    is a direct ``ClaudeClient`` (the default ``anthropic_sdk`` backend is a
-    ToolingLlmClient with no ``send_stateless``). Both are isinstance-guarded.
+    Both clients are constructed directly (no factory) — story 61-9
+    retired ``claude`` / ``ollama`` from ``build_llm_client``, but the
+    classes themselves stay for this offline A/B eval CLI per the story
+    scope-out. Ollama still honors ``SIDEQUEST_OLLAMA_URL`` so the operator
+    can point at a local daemon.
     """
-    prior = os.environ.get(ENV_BACKEND)
-    try:
-        os.environ[ENV_BACKEND] = "ollama"
-        ollama_client = build_llm_client()
-    finally:
-        if prior is None:
-            os.environ.pop(ENV_BACKEND, None)
-        else:
-            os.environ[ENV_BACKEND] = prior
-
+    base_url = os.environ.get(ENV_OLLAMA_URL, DEFAULT_OLLAMA_URL)
+    ollama_client: LlmClient = OllamaClient(base_url=base_url)
     claude_client: LlmClient = ClaudeClient()
 
     for label, client in (("claude", claude_client), ("ollama", ollama_client)):
@@ -144,8 +138,6 @@ def _build_clients() -> tuple[LlmClient, LlmClient]:
                 f"{type(client).__name__}. The anthropic_sdk ToolingLlmClient "
                 f"is unsupported for the A/B harness."
             )
-    # Both isinstance-guarded above; cast narrows the build_llm_client() union
-    # return (LlmClient | ToolingLlmClient) that the loop cannot prove away.
     return cast(LlmClient, claude_client), cast(LlmClient, ollama_client)
 
 
@@ -197,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         claude_client, ollama_client = _build_clients()
-    except (UnknownBackend, ValueError) as exc:
+    except ValueError as exc:
         print(f"[ab_eval] config error: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
 

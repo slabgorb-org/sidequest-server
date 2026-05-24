@@ -57,6 +57,7 @@ async def test_attach_dungeon_calls_build_llm_client_with_purpose_tool(
     bootstrap path and asserts at least one carries ``purpose="tool"``.
     """
     from sidequest.dungeon import session_integration
+    from tests.dungeon.test_materializer import _reflecting_sdk_client
 
     # Import test fixtures from the existing session_integration test
     # module. Lives in the same package so this is a direct sibling
@@ -67,7 +68,6 @@ async def test_attach_dungeon_calls_build_llm_client_with_purpose_tool(
         _snapshot,
         _sqlite_store,
     )
-    from tests.dungeon.test_materializer import _reflecting_sdk_client
 
     captured_kwargs: list[dict[str, object]] = []
 

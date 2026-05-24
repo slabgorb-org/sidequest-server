@@ -20,7 +20,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from opentelemetry import trace
 
@@ -30,7 +30,8 @@ if TYPE_CHECKING:
     from sidequest.server.session_room import RoomRegistry, SessionRoom
 
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkCostCeilingExceeded
-from sidequest.agents.claude_client import ClaudeClient, LlmClient
+from sidequest.agents.claude_client import LlmClient
+from sidequest.agents.llm_factory import build_llm_client
 from sidequest.agents.orchestrator import TurnContext
 from sidequest.audio.library_backend import LibraryBackend
 from sidequest.daemon_client import (
@@ -1202,7 +1203,12 @@ class WebSocketSessionHandler:
         validator: Validator | None = None,
     ) -> None:
         self._client_factory: Callable[[], LlmClient] = (
-            claude_client_factory if claude_client_factory is not None else ClaudeClient
+            claude_client_factory
+            if claude_client_factory is not None
+            else cast(
+                "Callable[[], LlmClient]",
+                lambda: build_llm_client(purpose="narrator"),
+            )
         )
         self._search_paths: list[Path] = (
             genre_pack_search_paths

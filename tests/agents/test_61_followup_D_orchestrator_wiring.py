@@ -218,12 +218,10 @@ async def test_cost_ceiling_exception_propagates_out_of_orchestrator(
 
     err = excinfo.value
     assert err.session_id == "live-fire-test", (
-        "Propagated exception MUST preserve session_id. Got "
-        f"{err.session_id!r}"
+        f"Propagated exception MUST preserve session_id. Got {err.session_id!r}"
     )
     assert err.ceiling_usd == pytest.approx(10.0), (
-        "Propagated exception MUST preserve ceiling_usd. Got "
-        f"{err.ceiling_usd!r}"
+        f"Propagated exception MUST preserve ceiling_usd. Got {err.ceiling_usd!r}"
     )
     assert err.cumulative_cost_usd >= 10.0, (
         "Propagated exception MUST preserve cumulative_cost_usd ≥ "

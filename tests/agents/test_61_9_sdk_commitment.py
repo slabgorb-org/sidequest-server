@@ -26,7 +26,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # AC-3 — llm_factory.build_llm_client() purpose gate (load-bearing)
 # ---------------------------------------------------------------------------
@@ -135,9 +134,7 @@ class TestNarratorBackendGate:
         client = build_llm_client(purpose="tool")
         assert isinstance(client, ToolingLlmClient)
 
-    def test_purpose_kwarg_is_keyword_only(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_purpose_kwarg_is_keyword_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``purpose`` must be keyword-only so future param additions can't
         silently shift positional meaning. Architect §B recommendation."""
         from sidequest.agents.llm_factory import build_llm_client
@@ -215,9 +212,7 @@ class TestConstantAndFileRename:
 
         prompts_dir = Path(narrator_prompts.__file__).parent
         target = prompts_dir / "output_only.md"
-        assert target.exists(), (
-            f"AC-1: {target} must exist. It is the renamed-SDK prose file."
-        )
+        assert target.exists(), f"AC-1: {target} must exist. It is the renamed-SDK prose file."
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +229,7 @@ class TestBuildOutputFormatSignature:
         sig = inspect.signature(NarratorAgent.build_output_format)
         params = sig.parameters
         assert "tool_backend" not in params, (
-            f"AC-2: build_output_format must not accept tool_backend. "
-            f"Current signature: {sig}"
+            f"AC-2: build_output_format must not accept tool_backend. Current signature: {sig}"
         )
 
     def test_build_output_format_no_kwarg_registers_sdk_prose(self) -> None:
@@ -284,7 +278,6 @@ class TestBuildOutputFormatSignature:
         Wiring Tests).
         """
         from sidequest.agents.narrator import NarratorAgent
-
         from tests.agents.test_57_4_recency_guardrails_migration import (
             _make_sdk_orchestrator,
         )
@@ -375,8 +368,7 @@ class TestRecencyGuardrailsSpanShape:
         assert spans, "Span missing — guarded by sibling test"
         attrs = dict(spans[0].attributes or {})
         assert "tool_backend" not in attrs, (
-            f"Option a: tool_backend attr must be removed from the span. "
-            f"Got attrs={attrs!r}"
+            f"Option a: tool_backend attr must be removed from the span. Got attrs={attrs!r}"
         )
 
     @pytest.mark.asyncio
@@ -386,7 +378,6 @@ class TestRecencyGuardrailsSpanShape:
         """``guardrails_skipped`` is hard-wired to the full ``GUARDRAIL_NAMES``
         tuple — no longer gated on backend (Option a)."""
         from sidequest.agents.narrator_guardrails import GUARDRAIL_NAMES
-
         from tests.agents.test_57_4_recency_guardrails_migration import (
             _make_sdk_orchestrator,
         )
@@ -412,7 +403,6 @@ class TestRecencyGuardrailsSpanShape:
         self, simple_turn_context_turn_three, otel_capture
     ) -> None:
         from sidequest.agents.narrator_guardrails import TOTAL_PROSE_BYTES
-
         from tests.agents.test_57_4_recency_guardrails_migration import (
             _make_sdk_orchestrator,
         )

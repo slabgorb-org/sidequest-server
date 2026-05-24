@@ -10,6 +10,7 @@ start without any code changes.
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from sidequest.server.app import create_app
@@ -32,13 +33,17 @@ def test_create_app_uses_build_llm_client_by_default(monkeypatch):
     assert isinstance(client, AnthropicSdkClient)
 
 
-def test_create_app_honours_ollama_env(monkeypatch):
+def test_create_app_rejects_retired_ollama_env(monkeypatch):
+    """Story 61-9 / ADR-101 amendment: ``ollama`` is retired for any
+    purpose. The lazy ``claude_client_factory`` raises at first call
+    when the env selects a retired backend — fail-loud at the config
+    boundary, no silent fallback to a working narrator."""
+    from sidequest.agents.llm_factory import NarratorBackendRetired
+
     monkeypatch.setenv("SIDEQUEST_LLM_BACKEND", "ollama")
     app = create_app()
-    from sidequest.agents.ollama_client import OllamaClient
-
-    client = app.state.claude_client_factory()
-    assert isinstance(client, OllamaClient)
+    with pytest.raises(NarratorBackendRetired):
+        app.state.claude_client_factory()
 
 
 def test_create_app_discovers_render_root_via_daemon_handshake(

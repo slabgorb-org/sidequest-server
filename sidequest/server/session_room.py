@@ -362,7 +362,7 @@ class SessionRoom:
                     except Exception as exc:
                         _log.warning(
                             "session.reset_baselines_failed slug=%s err=%r",
-                            self._slug,
+                            self.slug,
                             exc,
                         )
 

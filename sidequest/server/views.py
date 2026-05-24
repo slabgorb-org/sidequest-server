@@ -538,6 +538,20 @@ def party_member_from_character(
         ):
             pass
 
+    rig_composure_current: int | None = None
+    rig_composure_max: int | None = None
+    if character.core.rig_pool is not None:
+        rig_composure_current = character.core.rig_pool.current
+        rig_composure_max = character.core.rig_pool.max
+
+    from sidequest.game.rig_crash import DISMOUNTED_STATUS_TEXT, INJURY_STATUS_TEXT
+
+    injury_tags = [
+        s.text
+        for s in character.core.statuses
+        if s.text in (INJURY_STATUS_TEXT, DISMOUNTED_STATUS_TEXT)
+    ]
+
     return PartyMember(
         player_id=NonBlankString(player_id or "anon"),
         name=NonBlankString(player_name or "Player"),
@@ -552,6 +566,9 @@ def party_member_from_character(
         sheet=sheet,
         inventory=inventory_payload,
         class_reference_url=class_reference_url,
+        rig_composure_current=rig_composure_current,
+        rig_composure_max=rig_composure_max,
+        injury_tags=injury_tags,
     )
 
 

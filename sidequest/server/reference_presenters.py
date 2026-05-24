@@ -923,3 +923,45 @@ def present_inventory(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("inventory", ())] = present_inventory
+
+
+def present_equipment_tables(node: object, ctx: PresenterContext) -> str:
+    """Render equipment_tables.yaml — one h3+table per list-valued top-level key."""
+    if not isinstance(node, dict) or not node:
+        return ""
+    parts: list[str] = []
+    for key, value in node.items():
+        if not isinstance(value, list) or not value:
+            continue
+        rows: list[str] = []
+        headers: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                if not headers:
+                    headers = list(item.keys())
+                rows.append(
+                    "<tr>"
+                    + "".join(f"<td>{escape(str(item.get(h, '')))}</td>" for h in headers)
+                    + "</tr>"
+                )
+            else:
+                if not headers:
+                    headers = ["Value"]
+                rows.append(f"<tr><td>{escape(str(item))}</td></tr>")
+        if not rows:
+            continue
+        thead = (
+            "<thead><tr>"
+            + "".join(f"<th>{escape(_format_chip_label(h))}</th>" for h in headers)
+            + "</tr></thead>"
+        )
+        parts.append(
+            f"<h3>{escape(_format_chip_label(str(key)))}</h3>"
+            f'<table class="ref-table">{thead}<tbody>{"".join(rows)}</tbody></table>'
+        )
+    if not parts:
+        return ""
+    return "".join(parts)
+
+
+PRESENTERS[("equipment_tables", ())] = present_equipment_tables

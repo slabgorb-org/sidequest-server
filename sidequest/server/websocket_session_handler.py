@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import os
 import random
 import time
 import uuid
@@ -33,6 +34,7 @@ from sidequest.agents.claude_client import LlmClient
 from sidequest.agents.dispatch_engagement_watcher import (
     run_dispatch_engagement_watcher,
 )
+from sidequest.agents.intent_router import IntentRouterFailure
 from sidequest.agents.llm_factory import build_llm_client
 from sidequest.agents.orchestrator import TurnContext
 from sidequest.audio.library_backend import LibraryBackend
@@ -3272,14 +3274,42 @@ class WebSocketSessionHandler:
                     if pid != sd.player_id and name and name != _acting_player_name
                 ]
                 _intent_router = intent_router_pass.build_intent_router_for_session()
-                _dispatch_package = await execute_intent_router_pre_narrator_pass(
-                    intent_router=_intent_router,
-                    snapshot=snapshot,
-                    pack=sd.genre_pack,
-                    action=action,
-                    player_name=_acting_player_name,
-                    additional_player_names=_additional_player_names or None,
-                )
+                # Opt-in degraded path for live-playtest unblock: when
+                # ``SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL`` is set, an
+                # ``IntentRouterFailure`` after the bounded retry is logged
+                # LOUDLY (WARNING + structured log fields) and the turn
+                # continues with ``dispatch_package=None``. The narrator
+                # already handles None (see orchestrator.py:1599 et al.) —
+                # this is yesterday's pre-ADR-113 behavior, not a silent
+                # fallback. Default (env unset) preserves the ADR-113
+                # fail-loud contract.
+                try:
+                    _dispatch_package = await execute_intent_router_pre_narrator_pass(
+                        intent_router=_intent_router,
+                        snapshot=snapshot,
+                        pack=sd.genre_pack,
+                        action=action,
+                        player_name=_acting_player_name,
+                        additional_player_names=_additional_player_names or None,
+                    )
+                except IntentRouterFailure as exc:
+                    if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):
+                        logger.warning(
+                            "intent_router.degraded_continue genre=%s world=%s "
+                            "player=%s action_len=%d reason=%s — env "
+                            "SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL set; "
+                            "continuing turn with dispatch_package=None "
+                            "(yesterday's narrator-only behavior). NOT a "
+                            "silent fallback — operator opt-in.",
+                            sd.genre_slug,
+                            sd.world_slug,
+                            _acting_player_name,
+                            len(action),
+                            exc,
+                        )
+                        _dispatch_package = None
+                    else:
+                        raise
                 turn_context.dispatch_package = _dispatch_package
                 # The dispatch bank may have mutated snapshot.npcs (e.g. NPC
                 # edge published on confrontation initiation). Refresh

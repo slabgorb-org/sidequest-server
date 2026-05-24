@@ -6,10 +6,14 @@ player action into a ``DispatchPackage``; ``run_dispatch_bank`` (this
 module) executes each ``SubsystemDispatch`` against the registered
 handler for its subsystem key, BEFORE the narrator runs.
 
-Registered handlers (post-Story 59-4 cutover):
+Registered handlers (post-Story 59-5):
   - ``confrontation`` → ``run_confrontation_dispatch`` — engages a
     structured encounter on the canonical snapshot (the live engager
     that replaced the retired ``begin_confrontation`` sidecar tool).
+  - ``magic_working`` → ``run_magic_working_dispatch`` — engages
+    magic on the canonical snapshot via ``apply_magic_working``
+    (replaces the retired ``result.magic_working`` sidecar consumer
+    in ``narration_apply.py``).
   - ``reflect_absence`` → ``run_reflect_absence`` — narrator directive
     forcing honest-absence framing when the player addresses someone
     not present.
@@ -130,12 +134,14 @@ def get_registered() -> dict[str, SubsystemCallable]:
 def _register_defaults() -> None:
     from sidequest.agents.subsystems.confrontation import run_confrontation_dispatch
     from sidequest.agents.subsystems.distinctive_detail import run_distinctive_detail
+    from sidequest.agents.subsystems.magic_working import run_magic_working_dispatch
     from sidequest.agents.subsystems.npc_agency import run_npc_agency
     from sidequest.agents.subsystems.reflect_absence import run_reflect_absence
 
     # Unregister-then-register to keep this import idempotent across test reloads.
     for name, fn in (
         ("confrontation", run_confrontation_dispatch),
+        ("magic_working", run_magic_working_dispatch),
         ("reflect_absence", run_reflect_absence),
         ("distinctive_detail_hint", run_distinctive_detail),
         ("npc_agency", run_npc_agency),

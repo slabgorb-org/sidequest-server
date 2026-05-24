@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from sidequest.magic.models import HardLimit, WorldMagicConfig
-from tests._helpers.session_room import room_for
 
 
 @pytest.fixture()
@@ -146,35 +145,21 @@ def test_apply_magic_working_no_magic_state_raises_parse_error():
         apply_magic_working(snapshot=snapshot, patch_field=patch_field)
 
 
-def test_narration_apply_pipeline_invokes_apply_magic_working(coyote_snapshot):
-    """Wiring test (CLAUDE.md): the apply pipeline must actually call
-    apply_magic_working when the narrator emitted a magic_working field.
+@pytest.mark.asyncio
+async def test_dispatch_handler_invokes_apply_magic_working(coyote_snapshot):
+    """Wiring test (CLAUDE.md): the dispatch handler must actually call
+    apply_magic_working when the router dispatches a magic_working.
 
-    Without this test, the branch in _apply_narration_result_to_snapshot
-    could rot (imported but never reached), which is exactly the failure
-    mode CLAUDE.md "Verify Wiring, Not Just Existence" warns against.
+    Story 59-5 retired the narration_apply sidecar consumer; magic
+    engagement now routes through the dispatch handler pre-narrator.
     """
-    from sidequest.agents.orchestrator import NarrationTurnResult
-    from sidequest.game.turn import TurnManager
+    from sidequest.agents.subsystems.magic_working import run_magic_working_dispatch
     from sidequest.magic.state import BarKey
-    from sidequest.server.narration_apply import (
-        _apply_narration_result_to_snapshot,
-    )
+    from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
-    # Minimum required GameSnapshot fields the apply pipeline reads:
-    # turn_manager.interaction, location, discovered_regions, etc.
-    # We mutate the existing coyote_snapshot to satisfy them rather than
-    # building from scratch; magic_state is already populated.
-    coyote_snapshot.turn_manager = TurnManager()
-    coyote_snapshot.discovered_regions = []
-    coyote_snapshot.quest_log = {}
-    coyote_snapshot.lore_established = []
-    coyote_snapshot.characters = []
-    coyote_snapshot.encounter = None
-
-    result = NarrationTurnResult(
-        narration="some prose",
-        magic_working={
+    dispatch = SubsystemDispatch(
+        subsystem="magic_working",
+        params={
             "plugin": "innate_v1",
             "mechanism": "condition",
             "actor": "sira_mendes",
@@ -184,16 +169,16 @@ def test_narration_apply_pipeline_invokes_apply_magic_working(coyote_snapshot):
             "flavor": "acquired",
             "consent_state": "involuntary",
         },
+        idempotency_key="k-magic-test",
+        visibility=VisibilityTag(visible_to="all"),
     )
 
-    _apply_narration_result_to_snapshot(
-        coyote_snapshot,
-        result,
+    await run_magic_working_dispatch(
+        dispatch,
+        snapshot=coyote_snapshot,
         player_name="Sira",
-        room=room_for(coyote_snapshot),
     )
 
-    # Sanity dropped by 0.05 from 1.00 → 0.95: proves apply_magic_working ran.
     sanity = coyote_snapshot.magic_state.get_bar(
         BarKey(scope="character", owner_id="sira_mendes", bar_id="sanity")
     )

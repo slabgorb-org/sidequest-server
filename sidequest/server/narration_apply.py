@@ -1681,33 +1681,6 @@ def _apply_narration_result_to_snapshot(
     # auto-promotion (Task 3.4) is wired below in the ``else`` branch;
     # the ``magic.working_applied`` OTEL span itself (Task 3.5) is still
     # pending — see that task for the wire-up.
-    magic_working_field = getattr(result, "magic_working", None)
-    if magic_working_field is not None:
-        try:
-            outcome.magic = apply_magic_working(snapshot=snapshot, patch_field=magic_working_field)
-        except MagicWorkingParseError as e:
-            # Log + continue — narration is already delivered; the parse
-            # error must not crash the apply pipeline. Task 3.5 will
-            # promote this to a ``magic.parse_error`` OTEL span so the
-            # GM panel sees it. Until then, structured logging keeps the
-            # failure auditable.
-            logger.warning(
-                "magic.parse_error player=%s reason=%s",
-                player_name,
-                e,
-            )
-        else:
-            # Task 3.4: auto-promote threshold crossings into Status.
-            # Reuses the existing Status renderer downstream — no new UI.
-            # The world's per-bar ``promote_to_status`` block decides the
-            # status text + severity (architect §5.3); bars without that
-            # block produce no promotion (silent skip is intended).
-            _apply_magic_status_promotions(
-                snapshot=snapshot,
-                magic_result=outcome.magic,
-                player_name=player_name,
-            )
-
     # Story 49-3: location-drift repair. Glenross playtest 2026-05-11 —
     # the narrator wrote new ``**Room Title**`` markdown headers across
     # five turns without filling the structured ``patch.location`` field.

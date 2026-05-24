@@ -180,19 +180,26 @@ def test_cleric_chargen_yields_turn_undead_in_state_mirror(cc_pack):
     )
 
     # class_moves: class-specific beats present, universal beats filtered.
-    assert "turn_undead" in sheet.class_moves, (
+    # Each is a resolved ClassMove(id, label, description) — not a raw id.
+    move_ids = {m.id for m in sheet.class_moves}
+    assert "turn_undead" in move_ids, (
         "turn_undead missing from class_moves — encounter_beat_choices not wired or _filter_class_moves broken"
     )
-    assert "pray" in sheet.class_moves, "pray missing from class_moves"
-    assert "shield_bash" in sheet.class_moves, "shield_bash missing from class_moves"
-    assert "attack" not in sheet.class_moves, (
+    assert "pray" in move_ids, "pray missing from class_moves"
+    assert "shield_bash" in move_ids, "shield_bash missing from class_moves"
+    assert "attack" not in move_ids, (
         "attack should be filtered out by _filter_class_moves (_UNIVERSAL_BEATS)"
     )
-    assert "defend" not in sheet.class_moves, (
+    assert "defend" not in move_ids, (
         "defend should be filtered out by _filter_class_moves (_UNIVERSAL_BEATS)"
     )
-    assert "flee" not in sheet.class_moves, (
+    assert "flee" not in move_ids, (
         "flee should be filtered out by _filter_class_moves (_UNIVERSAL_BEATS)"
+    )
+    # Resolution wiring: every move carries a non-empty human label (not the
+    # raw snake_case id). Structural — not coupled to specific label text.
+    assert all(m.label for m in sheet.class_moves), (
+        f"every class_move must resolve to a non-empty label; got {sheet.class_moves!r}"
     )
 
 
@@ -218,16 +225,20 @@ def test_mage_chargen_has_empty_class_signature_but_class_moves(cc_pack):
         f"Mage should have no Class-source abilities; got {[a.name for a in class_source]}"
     )
 
-    assert "cast_spell" in sheet.class_moves, (
+    move_ids = {m.id for m in sheet.class_moves}
+    assert "cast_spell" in move_ids, (
         "cast_spell missing from Mage class_moves — encounter_beat_choices not wired"
     )
-    assert "cast_cantrip" in sheet.class_moves, (
+    assert "cast_cantrip" in move_ids, (
         "cast_cantrip missing from Mage class_moves — encounter_beat_choices not wired"
     )
     # Universal beats must still be filtered for Mage too.
-    assert "attack" not in sheet.class_moves, "attack should be filtered out for Mage"
-    assert "defend" not in sheet.class_moves, "defend should be filtered out for Mage"
-    assert "flee" not in sheet.class_moves, "flee should be filtered out for Mage"
+    assert "attack" not in move_ids, "attack should be filtered out for Mage"
+    assert "defend" not in move_ids, "defend should be filtered out for Mage"
+    assert "flee" not in move_ids, "flee should be filtered out for Mage"
+    assert all(m.label for m in sheet.class_moves), (
+        f"every Mage class_move must resolve to a non-empty label; got {sheet.class_moves!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -18,10 +18,13 @@ from typing import TYPE_CHECKING
 from sidequest.game.status import Status
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from sidequest.game.character import Character
     from sidequest.game.projection.view import SessionGameStateView
+    from sidequest.genre.models.rules import BeatDef, ConfrontationDef
     from sidequest.protocol.messages import PartyStatusMessage
-    from sidequest.protocol.models import PartyMember
+    from sidequest.protocol.models import ClassMove, PartyMember
     from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 
 
@@ -47,6 +50,49 @@ def _filter_class_moves(raw: list[str]) -> list[str]:
     Spec: 2026-05-10 class-mechanical-surface §7.1 — UI receives a clean list.
     """
     return [b for b in raw if b not in _UNIVERSAL_BEATS and "auto-filled" not in b]
+
+
+def _index_beats(confrontations: list[ConfrontationDef]) -> dict[str, BeatDef]:
+    """Flatten every confrontation's beats into an id → BeatDef lookup.
+
+    First definition wins on a duplicate id — the pack loader already
+    guarantees beat ids are unique within the selectable pool, so the
+    ``setdefault`` is defensive, not load-bearing.
+    """
+    index: dict[str, BeatDef] = {}
+    for conf in confrontations:
+        for beat in conf.beats:
+            index.setdefault(beat.id, beat)
+    return index
+
+
+def _resolve_class_moves(ids: list[str], beat_index: Mapping[str, BeatDef]) -> list[ClassMove]:
+    """Resolve filtered beat ids to player-facing ClassMoves.
+
+    ``description`` prefers the most player-facing text available on the
+    BeatDef: ``flavor`` (the BeatTile italic hint) → ``narrator_hint`` →
+    ``effect``. An id with no matching BeatDef degrades to ``label == id``
+    and is logged loudly (no silent fallback) — this should not happen
+    because the loader validates ``encounter_beat_choices`` against the
+    beat pool, so it signals a real pack/wiring bug rather than being
+    swallowed.
+    """
+    from sidequest.protocol.models import ClassMove
+
+    moves: list[ClassMove] = []
+    for beat_id in ids:
+        beat = beat_index.get(beat_id)
+        if beat is None:
+            logger.warning(
+                "views.class_move_unresolved id=%s — beat not found in any "
+                "confrontation pool; rendering raw id as label",
+                beat_id,
+            )
+            moves.append(ClassMove(id=beat_id, label=beat_id, description=None))
+            continue
+        description = beat.flavor or beat.narrator_hint or beat.effect
+        moves.append(ClassMove(id=beat_id, label=beat.label, description=description))
+    return moves
 
 
 def is_hidden_status_list(statuses: list[Status]) -> bool:
@@ -394,14 +440,19 @@ def party_member_from_character(
         f"{item['name']} [equipped]" if item.get("equipped") else item["name"] for item in carried
     ]
 
-    # Compute class_moves from genre pack class definition.
-    class_moves: list[str] = []
+    # Compute class_moves from genre pack class definition, resolving each
+    # beat id to its label + player-readable description (playtest 2026-05-21:
+    # the Abilities panel was showing raw snake_case ids).
+    class_moves: list[ClassMove] = []
     class_def = next(
         (c for c in sd.genre_pack.classes if c.display_name == character.char_class),
         None,
     )
     if class_def is not None:
-        class_moves = _filter_class_moves(class_def.encounter_beat_choices)
+        filtered_ids = _filter_class_moves(class_def.encounter_beat_choices)
+        class_moves = _resolve_class_moves(
+            filtered_ids, _index_beats(sd.genre_pack.rules.confrontations)
+        )
 
     sheet = CharacterSheetDetails(
         race=NonBlankString(character.race),

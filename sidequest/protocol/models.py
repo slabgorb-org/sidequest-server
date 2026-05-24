@@ -362,6 +362,29 @@ class InventoryPayload(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
+# ClassMove — a resolved encounter-beat choice for the Abilities panel
+# ---------------------------------------------------------------------------
+
+
+class ClassMove(ProtocolBase):
+    """A player-facing class move (confrontation beat) for the Abilities panel.
+
+    The class's ``encounter_beat_choices`` are bare beat IDs; this resolves
+    each to its authored ``label`` + a player-readable ``description`` so the
+    UI renders "Cross-Examine" with a tooltip instead of the raw token
+    ``cross_examine`` (playtest 2026-05-21 tea_and_murder/glenross UX bug).
+    """
+
+    id: str
+    """Stable beat id (e.g. ``cross_examine``) — the confrontation engine key."""
+    label: str
+    """Display label from the BeatDef (e.g. "Cross-Examine")."""
+    description: str | None = None
+    """Player-readable hint: BeatDef flavor → narrator_hint → effect, whichever
+    is present first. ``None`` when the beat carries no descriptive text."""
+
+
+# ---------------------------------------------------------------------------
 # CharacterSheetDetails — full character sheet nested inside PartyMember
 # ---------------------------------------------------------------------------
 
@@ -378,8 +401,9 @@ class CharacterSheetDetails(ProtocolBase):
     """Ability scores / stats."""
     abilities: list[AbilityDefinition]
     """Full ability records, including source classification."""
-    class_moves: list[str] = Field(default_factory=list)
-    """Pre-filtered encounter_beat_choices (universal beats + scaffolding stripped)."""
+    class_moves: list[ClassMove] = Field(default_factory=list)
+    """Pre-filtered encounter_beat_choices (universal beats + scaffolding
+    stripped), each resolved to its label + player-readable description."""
     backstory: NonBlankString
     """Character backstory. Non-blank post-chargen."""
     personality: NonBlankString

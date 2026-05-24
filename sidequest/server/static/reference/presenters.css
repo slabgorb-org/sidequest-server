@@ -236,6 +236,19 @@
     margin: 1.5rem 0;
 }
 
+/* --- Power tiers per-class tables --- */
+.ref-power-tiers {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    margin: 1.5rem 0;
+}
+.ref-power-tiers > section h3 {
+    font-family: var(--ref-font-display);
+    color: var(--ref-color-accent);
+    margin: 0 0 0.5rem 0;
+}
+
 /* --- Progression affinity cards --- */
 .ref-progression {
     display: flex;

@@ -778,3 +778,50 @@ def present_magic(node: object, ctx: PresenterContext) -> str:
 
 
 PRESENTERS[("magic", ())] = present_magic
+
+
+def present_power_tiers(node: object, ctx: PresenterContext) -> str:
+    """Render power_tiers.yaml — one table per class. npc column is never emitted."""
+    if not isinstance(node, dict) or not node:
+        return ""
+    sections: list[str] = []
+    for class_name, tiers in node.items():
+        if not isinstance(tiers, list) or not tiers:
+            continue
+        rows: list[str] = []
+        for item in tiers:
+            if not isinstance(item, dict):
+                continue
+            level_range = item.get("level_range")
+            if isinstance(level_range, list) and len(level_range) >= 2:
+                level_cell = f"{level_range[0]}–{level_range[1]}"
+            else:
+                level_cell = str(level_range) if level_range is not None else ""
+            label = str(item.get("label", "")).strip()
+            player = str(item.get("player", "")).strip()
+            rows.append(
+                f"<tr>"
+                f"<td>{escape(level_cell)}</td>"
+                f"<td>{escape(label)}</td>"
+                f"<td>{escape(player)}</td>"
+                f"</tr>"
+            )
+        if not rows:
+            continue
+        thead = (
+            "<thead><tr>"
+            "<th>Level</th><th>Label</th><th>Player View</th>"
+            "</tr></thead>"
+        )
+        sections.append(
+            "<section>"
+            f"<h3>{escape(str(class_name))}</h3>"
+            f'<table class="ref-table">{thead}<tbody>{"".join(rows)}</tbody></table>'
+            "</section>"
+        )
+    if not sections:
+        return ""
+    return '<section class="ref-power-tiers">' + "".join(sections) + "</section>"
+
+
+PRESENTERS[("power_tiers", ())] = present_power_tiers

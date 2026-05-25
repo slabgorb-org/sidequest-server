@@ -26,9 +26,7 @@ from sidequest.cli.validate.pack import load_pack_schema, validate_pack_structur
 
 # Four levels up from this file: tests/cli/validate/ → tests/cli/ → tests/ →
 # sidequest-server/ → oq-2/ ... then into sidequest-content
-schema_path_real = (
-    Path(__file__).resolve().parents[4] / "sidequest-content" / "pack_schema.yaml"
-)
+schema_path_real = Path(__file__).resolve().parents[4] / "sidequest-content" / "pack_schema.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -206,9 +204,7 @@ class TestPresenceGate:
         _minimal_pack(pack_dir)
 
         # Override pack.yaml to declare the magic extension
-        (pack_dir / "pack.yaml").write_text(
-            "extensions: [magic]\n", encoding="utf-8"
-        )
+        (pack_dir / "pack.yaml").write_text("extensions: [magic]\n", encoding="utf-8")
 
         world_dir = pack_dir / "worlds" / "test_world"
         world_dir.mkdir(parents=True)
@@ -324,8 +320,7 @@ class TestContentValidation:
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
 
         assert any("tropes.yaml" in e for e in errors), (
-            f"Expected an ERROR naming 'tropes.yaml' for malformed content, "
-            f"got errors: {errors}"
+            f"Expected an ERROR naming 'tropes.yaml' for malformed content, got errors: {errors}"
         )
 
     def test_malformed_world_archetypes_yaml_fails_with_pydantic_message(
@@ -337,21 +332,16 @@ class TestContentValidation:
 
         # NpcArchetype requires both `name` and `description`; this omits both.
         arch_path = pack_dir / "worlds" / "test_world" / "archetypes.yaml"
-        arch_path.write_text(
-            yaml.dump([{"personality_traits": ["gruff"]}]), encoding="utf-8"
-        )
+        arch_path.write_text(yaml.dump([{"personality_traits": ["gruff"]}]), encoding="utf-8")
 
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
 
         matching = [e for e in errors if "archetypes.yaml" in e]
-        assert matching, (
-            f"Expected an ERROR naming 'archetypes.yaml', got errors: {errors}"
-        )
+        assert matching, f"Expected an ERROR naming 'archetypes.yaml', got errors: {errors}"
         # The pydantic message must be carried through, not just "invalid".
         joined = " ".join(matching).lower()
         assert "name" in joined or "description" in joined or "required" in joined, (
-            f"Error should carry the pydantic message naming the missing field, "
-            f"got: {matching}"
+            f"Error should carry the pydantic message naming the missing field, got: {matching}"
         )
 
     def test_genre_tropes_extra_field_fails(self, tmp_path: Path) -> None:
@@ -373,9 +363,7 @@ class TestContentValidation:
 
     # --- AC1 edge: portrait_manifest accepts BOTH shapes (must not false-fail) ---
 
-    def test_valid_portrait_manifest_characters_shape_passes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_valid_portrait_manifest_characters_shape_passes(self, tmp_path: Path) -> None:
         """portrait_manifest.yaml in ``{characters: [...]}`` form with valid
         entries adds no error."""
         pack_dir = _valid_pack_with_world(tmp_path)
@@ -392,17 +380,13 @@ class TestContentValidation:
             f"Valid {{characters: [...]}} manifest must not error, got: {errors}"
         )
 
-    def test_valid_portrait_manifest_bare_list_shape_passes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_valid_portrait_manifest_bare_list_shape_passes(self, tmp_path: Path) -> None:
         """portrait_manifest.yaml in bare-list form with valid entries adds no
         error."""
         pack_dir = _valid_pack_with_world(tmp_path)
 
         manifest = pack_dir / "worlds" / "test_world" / "portrait_manifest.yaml"
-        manifest.write_text(
-            yaml.dump([{"name": "Aldo", "role": "sheriff"}]), encoding="utf-8"
-        )
+        manifest.write_text(yaml.dump([{"name": "Aldo", "role": "sheriff"}]), encoding="utf-8")
 
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
 
@@ -416,9 +400,7 @@ class TestContentValidation:
         pack_dir = _valid_pack_with_world(tmp_path)
 
         manifest = pack_dir / "worlds" / "test_world" / "portrait_manifest.yaml"
-        manifest.write_text(
-            yaml.dump([{"role": "sheriff"}]), encoding="utf-8"
-        )
+        manifest.write_text(yaml.dump([{"role": "sheriff"}]), encoding="utf-8")
 
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
 
@@ -441,8 +423,7 @@ class TestContentValidation:
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
 
         assert any("world.yaml" in e for e in errors), (
-            f"Invalid world.yaml must be reported loudly (no silent fallback), "
-            f"got errors: {errors}"
+            f"Invalid world.yaml must be reported loudly (no silent fallback), got errors: {errors}"
         )
 
     # --- Control / edge: empty schema-known files are NOT errors ---
@@ -454,15 +435,11 @@ class TestContentValidation:
         pack_dir = _valid_pack_with_world(tmp_path)
 
         # Explicitly write an empty document (parses to None).
-        (pack_dir / "worlds" / "test_world" / "tropes.yaml").write_text(
-            "", encoding="utf-8"
-        )
+        (pack_dir / "worlds" / "test_world" / "tropes.yaml").write_text("", encoding="utf-8")
 
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
 
-        assert errors == [], (
-            f"Empty schema-known file must not produce an error, got: {errors}"
-        )
+        assert errors == [], f"Empty schema-known file must not produce an error, got: {errors}"
 
     # --- AC4: real-content smoke + wiring test ---
 
@@ -472,11 +449,7 @@ class TestContentValidation:
         falsely rejecting shipped content, AND the wiring test that exercises
         validate_pack_structure against real production content.
         """
-        genre_packs_root = (
-            Path(__file__).resolve().parents[4]
-            / "sidequest-content"
-            / "genre_packs"
-        )
+        genre_packs_root = Path(__file__).resolve().parents[4] / "sidequest-content" / "genre_packs"
         if not genre_packs_root.is_dir():
             pytest.skip(f"genre_packs root not found at {genre_packs_root}")
 

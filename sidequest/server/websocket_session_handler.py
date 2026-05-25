@@ -141,14 +141,6 @@ from sidequest.server.narration_apply import (
     _apply_narration_result_to_snapshot,
     _handshake_resolved_tropes,
 )
-from sidequest.server.session_handler import (
-    _AUDIO_INTERPRETER,
-    _build_pc_descriptor,
-    _hash_snapshot,
-    _SessionData,
-    _shared_world_delta_to_state_delta,
-    _State,
-)
 from sidequest.server.session_helpers import (
     _build_cartography_map_message,
     _build_turn_context,
@@ -158,6 +150,14 @@ from sidequest.server.session_helpers import (
     _resolve_location_display,
     _world_history_value,
     build_secret_note_events,
+)
+from sidequest.server.session_state import (
+    _AUDIO_INTERPRETER,
+    _build_pc_descriptor,
+    _hash_snapshot,
+    _SessionData,
+    _shared_world_delta_to_state_delta,
+    _State,
 )
 from sidequest.server.utils import slugify_player_name as _slugify_player_name
 from sidequest.telemetry.phase_timing import PhaseTimings

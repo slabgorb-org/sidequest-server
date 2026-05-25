@@ -225,7 +225,9 @@ def test_maybe_dispatch_audio_swallows_exceptions_from_interpreter(
     handler = sh.WebSocketSessionHandler.__new__(sh.WebSocketSessionHandler)
 
     boom = MagicMock(side_effect=RuntimeError("interpreter blew up"))
-    with patch.object(sh.AudioInterpreter, "interpret", boom):
+    # AudioInterpreter moved to the session_state leaf module (64-6); patch the
+    # canonical class so the shared _AUDIO_INTERPRETER instance picks it up.
+    with patch("sidequest.audio.interpreter.AudioInterpreter.interpret", boom):
         assert handler._maybe_dispatch_audio(sd, result) is None
 
 

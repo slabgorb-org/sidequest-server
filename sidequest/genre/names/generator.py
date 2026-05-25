@@ -248,11 +248,27 @@ def _check_corpus_size(
         )
 
 
+def _resolve_corpus_file(filename: str, corpus_dir: Path, fallback_dirs: list[Path]) -> Path:
+    """Find a corpus file in corpus_dir or fallback directories."""
+    primary = corpus_dir / filename
+    if primary.exists():
+        return primary
+    for fdir in fallback_dirs:
+        candidate = fdir / filename
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        f"Corpus file '{filename}' not found in {corpus_dir} "
+        f"or fallback dirs {fallback_dirs}"
+    )
+
+
 def build_from_culture(
     culture: Culture,
     corpus_dir: Path,
     rng: random.Random | None = None,
     chain_cache: dict[tuple[str, int], str] | None = None,
+    fallback_dirs: list[Path] | None = None,
 ) -> NameGenerator:
     """Build a NameGenerator from a Culture and corpus directory.
 
@@ -266,9 +282,13 @@ def build_from_culture(
         rng: Optional RNG for deterministic output.
         chain_cache: Optional cache of raw corpus text keyed by
                      (corpus_filename, lookback).
+        fallback_dirs: Additional directories to search when a corpus
+                       file is not found in corpus_dir (e.g. the
+                       centralized sidequest-content/corpus/shared/).
     """
     if chain_cache is None:
         chain_cache = {}
+    _fallbacks = fallback_dirs or []
 
     slots: dict[str, SlotGenerator] = {}
 
@@ -280,11 +300,9 @@ def build_from_culture(
         word_list: list[str] = list(slot_config.word_list or [])
 
         if slot_config.names_file:
-            names_path = corpus_dir / slot_config.names_file
-            if not names_path.exists():
-                raise FileNotFoundError(
-                    f"Names file '{slot_config.names_file}' not found at {names_path}"
-                )
+            names_path = _resolve_corpus_file(
+                slot_config.names_file, corpus_dir, _fallbacks
+            )
             word_list = [
                 line.strip()
                 for line in names_path.read_text(encoding="utf-8").splitlines()
@@ -295,11 +313,9 @@ def build_from_culture(
             chain = MarkovChain(lookback=lookback, rng=rng)
 
             for corpus_ref in slot_config.corpora:
-                corpus_path = corpus_dir / corpus_ref.corpus
-                if not corpus_path.exists():
-                    raise FileNotFoundError(
-                        f"Corpus file '{corpus_ref.corpus}' not found at {corpus_path}"
-                    )
+                corpus_path = _resolve_corpus_file(
+                    corpus_ref.corpus, corpus_dir, _fallbacks
+                )
 
                 cache_key = (corpus_ref.corpus, lookback)
                 if cache_key not in chain_cache:
@@ -319,6 +335,12 @@ def build_from_culture(
 
             for reject_file in slot_config.reject_files:
                 reject_path = corpus_dir / reject_file
+                if not reject_path.exists():
+                    for fdir in _fallbacks:
+                        candidate = fdir / reject_file
+                        if candidate.exists():
+                            reject_path = candidate
+                            break
                 if reject_path.exists():
                     chain.load_reject_file(reject_path)
 

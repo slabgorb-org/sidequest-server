@@ -12,7 +12,6 @@ import pytest
 from sidequest.protocol.models import PartyMember
 from sidequest.protocol.types import NonBlankString
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

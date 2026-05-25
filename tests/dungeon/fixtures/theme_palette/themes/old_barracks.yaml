@@ -1,0 +1,22 @@
+# Synthetic test fixture — NOT shipped content. Exercises the
+# built/roomcorridor class and deep eligibility (unbounded depth_band).
+id: old_barracks
+display_name: The Old Barracks
+generator_class: built
+interior:
+  algorithm: roomcorridor
+  params: {}
+  braid_ratio: 0.1
+depth_band: {min: 60.0}
+narrator:
+  register: grave
+  flavor: Rooms off a straight corridor, doors that still hang on their hinges.
+  motifs: [order, abandonment, iron]
+adjacency:
+  prefers: [bone_crypt]
+  avoids: []
+set_pieces:
+  - id: the_armoury_door
+    name: The Armoury Door
+    telegraph: A heavy door, barred from the inside, with old scratch-marks low on the wood.
+    outcome: Whatever barred it from the inside is still in the room with the arms.

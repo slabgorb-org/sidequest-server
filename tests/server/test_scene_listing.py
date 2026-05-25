@@ -46,22 +46,25 @@ def _capture_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict, di
     return captured
 
 
-def _build_dev_scenes_app(
+def _build_app(
     monkeypatch: pytest.MonkeyPatch,
     *,
     save_dir: Path,
     fixtures_dir: Path = CANONICAL_FIXTURES_DIR,
 ):
-    """Construct the app the OLD way (DEV_SCENES=1) — used only for AC-3
-    listing tests where the route must be registered to test the endpoint."""
-    monkeypatch.setenv("DEV_SCENES", "1")
-    monkeypatch.setenv("SIDEQUEST_FIXTURES_DIR", str(fixtures_dir))
+    """Construct a production-shaped FastAPI app with scene-harness routes.
+
+    Scene harness is always registered (Story 51-4 removed the DEV_SCENES gate).
+    """
+    monkeypatch.delenv("DEV_SCENES", raising=False)
+    monkeypatch.delenv("SIDEQUEST_FIXTURES_DIR", raising=False)
 
     from sidequest.server.app import create_app
 
     return create_app(
         save_dir=save_dir,
         genre_pack_search_paths=[],
+        fixtures_dir=fixtures_dir,
     )
 
 
@@ -99,12 +102,7 @@ def test_scene_harness_post_works_without_dev_scenes_env(
     Uses canonical fixtures dir — if the route is registered but hydration
     fails, the wiring test catches the difference between "registered" and
     "functional"."""
-    monkeypatch.delenv("DEV_SCENES", raising=False)
-    monkeypatch.setenv("SIDEQUEST_FIXTURES_DIR", str(CANONICAL_FIXTURES_DIR))
-
-    from sidequest.server.app import create_app
-
-    app = create_app(save_dir=tmp_path, genre_pack_search_paths=[])
+    app = _build_app(monkeypatch, save_dir=tmp_path)
     client = TestClient(app)
 
     r = client.post("/dev/scene/combat_brawl_wasteland")
@@ -122,7 +120,7 @@ def test_listing_endpoint_returns_200(
     tmp_path: Path,
 ) -> None:
     """Story 51-4 AC-3: ``GET /dev/scenes`` must return 200 with a JSON list."""
-    app = _build_dev_scenes_app(monkeypatch, save_dir=tmp_path)
+    app = _build_app(monkeypatch, save_dir=tmp_path)
     client = TestClient(app)
 
     r = client.get("/dev/scenes")
@@ -149,7 +147,7 @@ def test_listing_returns_fixture_metadata_fields(
         encoding="utf-8",
     )
 
-    app = _build_dev_scenes_app(
+    app = _build_app(
         monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
     )
     client = TestClient(app)
@@ -183,7 +181,7 @@ def test_listing_includes_fixtures_without_description(
         encoding="utf-8",
     )
 
-    app = _build_dev_scenes_app(
+    app = _build_app(
         monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
     )
     client = TestClient(app)
@@ -212,7 +210,7 @@ def test_listing_scans_all_valid_yaml_files(
     )
     (fixtures_dir / "readme.txt").write_text("not a fixture", encoding="utf-8")
 
-    app = _build_dev_scenes_app(
+    app = _build_app(
         monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
     )
     client = TestClient(app)
@@ -238,7 +236,7 @@ def test_listing_excludes_invalid_yaml_gracefully(
         "this is not valid fixture yaml\n", encoding="utf-8"
     )
 
-    app = _build_dev_scenes_app(
+    app = _build_app(
         monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
     )
     client = TestClient(app)
@@ -257,7 +255,7 @@ def test_listing_returns_empty_list_when_no_fixtures(
     fixtures_dir = tmp_path / "fixtures"
     fixtures_dir.mkdir()
 
-    app = _build_dev_scenes_app(
+    app = _build_app(
         monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
     )
     client = TestClient(app)
@@ -282,7 +280,7 @@ def test_listing_validates_fixture_names_with_regex(
         "name: Spaced\ngenre: g1\nworld: w1\n", encoding="utf-8"
     )
 
-    app = _build_dev_scenes_app(
+    app = _build_app(
         monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
     )
     client = TestClient(app)
@@ -309,7 +307,7 @@ def test_listing_emits_otel_span(
     )
 
     captured = _capture_events(monkeypatch)
-    app = _build_dev_scenes_app(
+    app = _build_app(
         monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
     )
     client = TestClient(app)
@@ -397,7 +395,7 @@ def test_listing_returns_canonical_fixtures_from_real_dir(
     This is the CLAUDE.md wiring test — it proves ``GET /dev/scenes`` is
     reachable through the production ``create_app()`` factory and actually
     scans the filesystem, not a hardcoded response."""
-    app = _build_dev_scenes_app(monkeypatch, save_dir=tmp_path)
+    app = _build_app(monkeypatch, save_dir=tmp_path)
     client = TestClient(app)
 
     r = client.get("/dev/scenes")

@@ -171,8 +171,7 @@ def test_engagement_draw_respects_already_drawn_seeds():
         f"Expected s3 (the only undrawn seed) to be drawn; active_ids = {active_ids}"
     )
     assert len(snap.active_seeds) == 2, (
-        f"Expected 2 actives (s1 from bootstrap + s3 from engagement); "
-        f"got {len(snap.active_seeds)}"
+        f"Expected 2 actives (s1 from bootstrap + s3 from engagement); got {len(snap.active_seeds)}"
     )
 
 
@@ -192,8 +191,7 @@ def test_engagement_draw_no_op_when_deck_exhausted():
     fn(snap, pack, session_id="session-alpha", engagement_signal="mechanical", now_turn=5)
 
     assert len(snap.active_seeds) == 1, (
-        f"Exhausted deck must not add a seed; active count changed to "
-        f"{len(snap.active_seeds)}"
+        f"Exhausted deck must not add a seed; active count changed to {len(snap.active_seeds)}"
     )
     assert snap.active_seeds[0].id == "s1"
 
@@ -225,7 +223,13 @@ def test_engagement_draw_no_op_when_pack_missing_seed_tropes():
     class _BarePackNoSeedTropes:
         tropes: list = []
 
-    fn(snap, _BarePackNoSeedTropes(), session_id="session-alpha", engagement_signal="social", now_turn=5)
+    fn(
+        snap,
+        _BarePackNoSeedTropes(),
+        session_id="session-alpha",
+        engagement_signal="social",
+        now_turn=5,
+    )
 
     assert snap.active_seeds == []
 
@@ -347,9 +351,7 @@ def test_draw_engaged_seed_has_type_annotations():
 
     sig = inspect.signature(fn)
     hints = fn.__annotations__ if hasattr(fn, "__annotations__") else {}
-    assert "return" in hints, (
-        "draw_engaged_seed must have a return type annotation"
-    )
+    assert "return" in hints, "draw_engaged_seed must have a return type annotation"
     for param_name, param in sig.parameters.items():
         if param_name in ("self", "cls"):
             continue

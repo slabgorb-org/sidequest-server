@@ -37,7 +37,6 @@ from sidequest.genre.models.tropes import SeedTrope
 from sidequest.telemetry import init_tracer
 from sidequest.telemetry.spans import SPAN_SEED_DRAWN
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -137,7 +136,8 @@ def test_engagement_draw_produces_span_through_real_otel_pipeline(otel_capture):
     pack = _Pack([_seedtrope("alpha"), _seedtrope("bravo")])
 
     draw_engaged_seed(
-        snap, pack,
+        snap,
+        pack,
         session_id="session-alpha",
         engagement_signal="mechanical",
         now_turn=5,
@@ -145,9 +145,9 @@ def test_engagement_draw_produces_span_through_real_otel_pipeline(otel_capture):
 
     spans = otel_capture.get_finished_spans()
     engagement_spans = [
-        s for s in spans
-        if s.name == SPAN_SEED_DRAWN
-        and dict(s.attributes or {}).get("trigger") == "engagement"
+        s
+        for s in spans
+        if s.name == SPAN_SEED_DRAWN and dict(s.attributes or {}).get("trigger") == "engagement"
     ]
     assert len(engagement_spans) == 1, (
         f"Expected exactly one {SPAN_SEED_DRAWN!r} span with trigger='engagement'; "
@@ -215,7 +215,8 @@ def test_narrator_sees_engagement_drawn_seed_in_valley_context():
     pack = _Pack(seeds)
 
     draw_engaged_seed(
-        snap, pack,
+        snap,
+        pack,
         session_id="session-alpha",
         engagement_signal="social",
         now_turn=7,

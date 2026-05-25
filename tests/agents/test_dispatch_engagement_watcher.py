@@ -32,8 +32,10 @@ Project rule coverage (CLAUDE.md / SOUL):
 - "Every Test Suite Needs a Wiring Test" — ``test_watcher_wired_into_session_handler``
 - "No Source-Text Wiring Tests" — wiring tests use reflection
   (``module.__dict__``) and behavior assertions, never source-grep
-- "No Silent Fallbacks" — watcher raises on malformed dispatch params
-  (``test_watcher_raises_when_confrontation_dispatch_lacks_type``)
+- "No Silent Fallbacks" — a malformed dispatch (missing required param) is
+  surfaced as a loud mismatch span, NOT a silent no-op and NOT an uncaught
+  crash that would take down post-narration WS turn-delivery
+  (``test_watcher_surfaces_malformed_confrontation_dispatch_as_mismatch_not_crash``)
 - "OTEL Observability Principle" — every mismatch path emits a span;
   every happy path emits ZERO spans (no false positive on quiet turns)
 """
@@ -42,7 +44,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -597,50 +598,73 @@ def test_cross_player_dispatches_also_watched() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_watcher_raises_when_confrontation_dispatch_lacks_type_param() -> None:
+def test_watcher_surfaces_malformed_confrontation_dispatch_as_mismatch_not_crash() -> None:
     """A confrontation dispatch with no ``params["type"]`` is a producer bug.
-    The watcher must raise loudly, NOT silently no-op or default to a
-    permissive match. Silent guard would hide a real router defect."""
+
+    Corrected contract (playtest 2026-05-25): the watcher runs POST-narration
+    in the WS turn pipeline, so an uncaught ``KeyError`` here crashes turn
+    *delivery* and hangs the MP table (the narration had already succeeded).
+    Fail-loud done right surfaces the defect as a ``dispatch_engagement``
+    **mismatch span** — the loudest channel that actually reaches the GM
+    panel — WITHOUT raising. A crash that prevents the span from exporting is
+    the silent-worst mode, not a loud one (memory feedback_no_fallbacks_hard).
+    """
     from sidequest.agents.dispatch_engagement_watcher import (
         run_dispatch_engagement_watcher,
     )
 
-    tracer, _ = _fresh_tracer_and_exporter()
+    tracer, exporter = _fresh_tracer_and_exporter()
     package = _package_with(
         _make_dispatch(subsystem="confrontation", params={})  # missing "type"
     )
     snap = _snapshot()
 
-    with pytest.raises((KeyError, ValueError)):
-        run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+    # MUST NOT raise (crash would close the WS and hang the turn).
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert len(spans) == 1, f"expected 1 malformed-dispatch mismatch span, got {len(spans)}"
+    assert spans[0].name == "dispatch_engagement.confrontation.mismatch"
+    assert "params['type']" in str(dict(spans[0].attributes or {}).get("evidence", "")), (
+        "mismatch evidence must name the missing required param key so the GM "
+        "panel shows exactly what the router omitted"
+    )
 
 
-def test_watcher_raises_when_magic_working_dispatch_lacks_actor_param() -> None:
-    """Same fail-loud discipline for magic_working."""
+def test_watcher_surfaces_malformed_magic_working_dispatch_as_mismatch_not_crash() -> None:
+    """Same corrected contract for magic_working (missing ``actor``)."""
     from sidequest.agents.dispatch_engagement_watcher import (
         run_dispatch_engagement_watcher,
     )
 
-    tracer, _ = _fresh_tracer_and_exporter()
+    tracer, exporter = _fresh_tracer_and_exporter()
     package = _package_with(_make_dispatch(subsystem="magic_working", params={}))
     snap = _snapshot()
 
-    with pytest.raises((KeyError, ValueError)):
-        run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert len(spans) == 1
+    assert spans[0].name == "dispatch_engagement.magic_working.mismatch"
+    assert "params['actor']" in str(dict(spans[0].attributes or {}).get("evidence", ""))
 
 
-def test_watcher_raises_when_scenario_clue_dispatch_lacks_fact_id_param() -> None:
-    """Same fail-loud discipline for scenario_clue."""
+def test_watcher_surfaces_malformed_scenario_clue_dispatch_as_mismatch_not_crash() -> None:
+    """Same corrected contract for scenario_clue (missing ``fact_id``)."""
     from sidequest.agents.dispatch_engagement_watcher import (
         run_dispatch_engagement_watcher,
     )
 
-    tracer, _ = _fresh_tracer_and_exporter()
+    tracer, exporter = _fresh_tracer_and_exporter()
     package = _package_with(_make_dispatch(subsystem="scenario_clue", params={}))
     snap = _snapshot()
 
-    with pytest.raises((KeyError, ValueError)):
-        run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert len(spans) == 1
+    assert spans[0].name == "dispatch_engagement.scenario_clue.mismatch"
+    assert "params['fact_id']" in str(dict(spans[0].attributes or {}).get("evidence", ""))
 
 
 # ---------------------------------------------------------------------------

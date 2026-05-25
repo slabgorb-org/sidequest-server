@@ -24,9 +24,18 @@ driven, not narrator-driven: the producer is the Intent Router (objective
 reality), not the narrator (the suspect under investigation).
 
 Fail-loud discipline (memory ``feedback_no_fallbacks_hard``):
-- Malformed dispatch params (missing ``type`` / ``actor`` / ``fact_id``)
-  raise :class:`KeyError` immediately. A silent guard would hide a real
-  router defect.
+- A malformed dispatch (missing ``type`` / ``actor`` / ``fact_id`` /
+  ``npc_name``) is a real router defect — and it is reported as a
+  **mismatch span**, the loudest channel available here: the
+  ``dispatch_engagement.{subsystem}.mismatch`` span reaches the GM panel
+  with evidence naming the missing key. The watcher does NOT raise on it.
+  This watcher runs POST-narration in the WS turn pipeline; an uncaught
+  ``KeyError`` here propagates to ``ws_endpoint`` and crashes turn
+  *delivery* (playtest 2026-05-25: narration succeeded, len=1626, but the
+  watcher crash closed the socket → MP UI hung). A crash that prevents the
+  span from ever exporting is the *silent-worst* failure mode, not a loud
+  one — the corrected contract surfaces the defect louder AND keeps the
+  turn deliverable.
 - Unknown subsystem names raise :class:`KeyError` via
   :func:`span_name_for_subsystem`.
 
@@ -82,8 +91,18 @@ class DispatchMismatch:
 # ---------------------------------------------------------------------------
 
 
+# Evidence string for a dispatch missing its required identifying param.
+# A missing key is a router defect the watcher SURFACES (mismatch span),
+# not an exception it raises — raising would crash post-narration WS
+# delivery (see module docstring). The evidence names the missing key so
+# the GM panel shows exactly what the router omitted.
+_MALFORMED_EVIDENCE = "malformed dispatch: router omitted required params['{key}'] for {subsystem}"
+
+
 def _check_confrontation_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
-    dispatched_type: str = dispatch.params["type"]  # KeyError = router bug (fail-loud)
+    if "type" not in dispatch.params:
+        return _MALFORMED_EVIDENCE.format(subsystem="confrontation", key="type")
+    dispatched_type: str = dispatch.params["type"]
     encounter = snapshot.encounter
     if encounter is None:
         return "snapshot.encounter is None"
@@ -96,7 +115,9 @@ def _check_confrontation_engaged(dispatch: SubsystemDispatch, snapshot: GameSnap
 
 
 def _check_magic_working_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
-    actor: str = dispatch.params["actor"]  # KeyError = router bug
+    if "actor" not in dispatch.params:
+        return _MALFORMED_EVIDENCE.format(subsystem="magic_working", key="actor")
+    actor: str = dispatch.params["actor"]
     magic_state = snapshot.magic_state
     if magic_state is None:
         return "snapshot.magic_state is None (world has no magic config loaded)"
@@ -106,7 +127,9 @@ def _check_magic_working_engaged(dispatch: SubsystemDispatch, snapshot: GameSnap
 
 
 def _check_scenario_clue_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
-    fact_id: str = dispatch.params["fact_id"]  # KeyError = router bug
+    if "fact_id" not in dispatch.params:
+        return _MALFORMED_EVIDENCE.format(subsystem="scenario_clue", key="fact_id")
+    fact_id: str = dispatch.params["fact_id"]
     scenario = snapshot.scenario_state
     if scenario is None:
         return "snapshot.scenario_state is None"
@@ -116,7 +139,9 @@ def _check_scenario_clue_engaged(dispatch: SubsystemDispatch, snapshot: GameSnap
 
 
 def _check_npc_agency_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
-    npc_name: str = dispatch.params["npc_name"]  # KeyError = router bug
+    if "npc_name" not in dispatch.params:
+        return _MALFORMED_EVIDENCE.format(subsystem="npc_agency", key="npc_name")
+    npc_name: str = dispatch.params["npc_name"]
     needle = npc_name.lower()
     if not any(m.name.lower() == needle for m in snapshot.npc_pool):
         return f"npc_name={npc_name!r} not in snapshot.npc_pool"

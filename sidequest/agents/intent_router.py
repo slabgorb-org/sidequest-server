@@ -111,13 +111,26 @@ For each player action:
      plausibly resolves, set resolved_to=null with confidence=0 — do NOT
      invent a filler.
   2. Emit subsystem dispatches keyed on the action's mechanical intent.
-     Available subsystem keys:
-       - confrontation: structured encounter (combat, negotiation, chase, etc.)
-       - magic_working: spell or magical ability usage
-       - scenario_clue: clue/evidence discovery or advancement
-       - npc_agency: NPC reacts based on established role and disposition
-       - distinctive_detail_hint: name a referent by its distinctive detail
-       - reflect_absence: player addresses someone/something not present
+     Each dispatch carries a free-form ``params`` object. ``params`` is NOT a
+     place to describe the action — it is the typed input the subsystem's
+     handler reads. Emit exactly the keys listed; do not invent extra keys.
+     Available subsystem keys and their required params:
+       - confrontation: structured encounter (combat, negotiation, chase, etc.).
+         params={"type": "<one of game_state.confrontation_types[].type>"}.
+         Choose the single type whose category fits the action (a physical
+         contest → a combat-category type; a parley → a social-category type;
+         a flee/pursue → a movement-category type). The type MUST be one of the
+         values listed in game_state.confrontation_types — never invent a type
+         and never describe the action here instead of naming the type.
+       - magic_working: spell or magical ability usage. params is a
+         MagicWorking-shaped object (the spell/effect fields).
+       - scenario_clue: clue/evidence discovery. params={"fact_id": "<id>"}
+         (optional "summary", "category").
+       - npc_agency: NPC reacts per role and disposition.
+         params={"npc_name": "<name>"} (optional "situation").
+       - distinctive_detail_hint: name a referent by its distinctive detail.
+         params={"target": "<entity id>", "hint": "<detail>"}.
+       - reflect_absence: player addresses someone/something not present.
   3. Emit narrator_instructions — must_narrate / must_not_narrate /
      distinctive_detail_for_referent / canonical_only_do_not_reveal_to_others.
   4. Set confidence_global to your overall confidence across the turn.

@@ -26,6 +26,16 @@ from typing import Any
 
 import click
 import yaml
+from pydantic import BaseModel, ValidationError
+
+# Leaf model modules imported directly (NOT genre.loader) to avoid the
+# session_handler/websocket_session_handler import cycle that the loader graph
+# transitively pulls in (story 64-6). projection.rules and dungeon.themes are
+# imported lazily inside their validators, mirroring loader.py's own lazy import.
+from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
+from sidequest.genre.models.character import NpcArchetype
+from sidequest.genre.models.pack import PortraitManifestEntry
+from sidequest.genre.models.tropes import TropeDefinition
 
 # ---------------------------------------------------------------------------
 # Schema loading
@@ -50,9 +60,7 @@ def load_pack_schema(schema_path: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _check_required_files(
-    directory: Path, required: list[str], label: str
-) -> list[str]:
+def _check_required_files(directory: Path, required: list[str], label: str) -> list[str]:
     """Return error strings for each required file missing from ``directory``."""
     errors: list[str] = []
     for fname in required:
@@ -61,9 +69,7 @@ def _check_required_files(
     return errors
 
 
-def _check_required_dirs(
-    directory: Path, required: list[str], label: str
-) -> list[str]:
+def _check_required_dirs(directory: Path, required: list[str], label: str) -> list[str]:
     """Return error strings for each required directory missing from ``directory``."""
     errors: list[str] = []
     for dname in required:
@@ -111,15 +117,11 @@ def _check_extensions(
     for ext_name in extensions_declared:
         ext_spec = extensions_schema.get(ext_name)
         if not isinstance(ext_spec, dict):
-            errors.append(
-                f"{label}: declared extension '{ext_name}' is not defined in schema"
-            )
+            errors.append(f"{label}: declared extension '{ext_name}' is not defined in schema")
             continue
         for fname in ext_spec.get("files", []):
             if not (directory / fname).is_file():
-                errors.append(
-                    f"{label}: extension '{ext_name}' requires missing file '{fname}'"
-                )
+                errors.append(f"{label}: extension '{ext_name}' requires missing file '{fname}'")
         for dname in ext_spec.get("dirs", []):
             if not (directory / dname).is_dir():
                 errors.append(
@@ -173,6 +175,128 @@ def _check_orphans(
 
 
 # ---------------------------------------------------------------------------
+# Content validation — parse present, schema-known files through their models
+#
+# Structural checks only prove a file EXISTS. These checks prove it PARSES:
+# each present file with a known schema is run through its pydantic model (or
+# loader), and parse/validation failures are reported as ERRORs carrying the
+# filename and the underlying pydantic/YAML message. Files with no registered
+# schema are not touched (no regression of the orphan-warning behavior).
+#
+# Top-level shape matches the loader: tropes.yaml / archetypes.yaml are YAML
+# lists of dicts (loader._load_single_world l.779-791); a non-list / None
+# document is skipped rather than flagged, so empty optional files stay valid.
+# ---------------------------------------------------------------------------
+
+
+def _read_yaml(path: Path, label: str) -> tuple[Any, str | None]:
+    """Read+parse a YAML file. Returns ``(data, error)`` — exactly one is set
+    meaningfully. A parse failure yields ``(None, "<file>: ...")``."""
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8")), None
+    except (yaml.YAMLError, UnicodeDecodeError) as exc:
+        return None, f"{label}: {path.name} is not valid YAML: {exc}"
+
+
+def _validate_list_of_model(path: Path, model: type[BaseModel], label: str) -> list[str]:
+    """Validate a file holding a YAML list of model dicts. Skips absent files
+    and non-list documents (parity with the loader); reports each bad entry."""
+    if not path.is_file():
+        return []
+    data, read_err = _read_yaml(path, label)
+    if read_err is not None:
+        return [read_err]
+    if not isinstance(data, list):
+        return []
+    errors: list[str] = []
+    for idx, entry in enumerate(data):
+        try:
+            model.model_validate(entry)
+        except ValidationError as exc:
+            errors.append(
+                f"{label}: {path.name} entry [{idx}] failed {model.__name__} validation: {exc}"
+            )
+    return errors
+
+
+def _validate_single_model(path: Path, model: type[BaseModel], label: str) -> list[str]:
+    """Validate a file holding a single model mapping. Skips absent/empty files."""
+    if not path.is_file():
+        return []
+    data, read_err = _read_yaml(path, label)
+    if read_err is not None:
+        return [read_err]
+    if data is None:
+        return []
+    try:
+        model.model_validate(data)
+    except ValidationError as exc:
+        return [f"{label}: {path.name} failed {model.__name__} validation: {exc}"]
+    return []
+
+
+def _validate_portrait_manifest(path: Path, label: str) -> list[str]:
+    """Validate portrait_manifest.yaml in both supported shapes:
+    ``{characters: [...]}`` and a bare list (loader._load_portrait_manifest
+    l.638-645). Skips absent/empty files and unrecognized top-level shapes."""
+    if not path.is_file():
+        return []
+    data, read_err = _read_yaml(path, label)
+    if read_err is not None:
+        return [read_err]
+    if isinstance(data, dict) and "characters" in data:
+        entries = data["characters"]
+    elif isinstance(data, list):
+        entries = data
+    else:
+        return []
+    if not isinstance(entries, list):
+        return []
+    errors: list[str] = []
+    for idx, entry in enumerate(entries):
+        try:
+            PortraitManifestEntry.model_validate(entry)
+        except ValidationError as exc:
+            errors.append(
+                f"{label}: {path.name} entry [{idx}] failed PortraitManifestEntry validation: {exc}"
+            )
+    return errors
+
+
+def _validate_projection(path: Path, label: str) -> list[str]:
+    """Validate projection.yaml through the projection loader + validator.
+    Imported lazily, mirroring loader.py l.1145-1146."""
+    if not path.is_file():
+        return []
+    from sidequest.game.projection.rules import load_rules_from_yaml_path
+    from sidequest.game.projection.validator import validate_projection_rules
+
+    try:
+        rules = load_rules_from_yaml_path(path)
+        validate_projection_rules(rules)
+    except Exception as exc:  # noqa: BLE001 — surface any loader/validator failure
+        return [f"{label}: {path.name} failed projection validation: {exc}"]
+    return []
+
+
+def _validate_theme_palette(pack_dir: Path, label: str) -> list[str]:
+    """Validate themes/*.yaml through the strict palette loader when a themes/
+    dir is present. Absent themes/ dir is not an error (palette is
+    dungeon-specific)."""
+    if not (pack_dir / "themes").is_dir():
+        return []
+    from sidequest.dungeon.themes import ThemePaletteMissingError, load_theme_palette
+
+    try:
+        load_theme_palette(pack_dir)
+    except ThemePaletteMissingError:
+        return []
+    except Exception as exc:  # noqa: BLE001 — palette loader fails loud with filename
+        return [f"{label}: themes/ failed palette validation: {exc}"]
+    return []
+
+
+# ---------------------------------------------------------------------------
 # World-level validation
 # ---------------------------------------------------------------------------
 
@@ -194,14 +318,18 @@ def _validate_world(
     """
     label = f"world '{world_dir.name}'"
 
-    # Load world.yaml for draft status and extensions
+    # Load world.yaml for draft status and extensions. A parse failure is a
+    # hard error reported loudly (No Silent Fallbacks) — not swallowed, and not
+    # demoted by draft status (we cannot read the draft flag from broken YAML).
     world_yaml_path = world_dir / "world.yaml"
     world_data: dict[str, Any] = {}
+    hard_errors: list[str] = []
     if world_yaml_path.is_file():
         try:
             world_data = yaml.safe_load(world_yaml_path.read_text(encoding="utf-8")) or {}
-        except (yaml.YAMLError, UnicodeDecodeError):
-            pass
+        except (yaml.YAMLError, UnicodeDecodeError) as exc:
+            hard_errors.append(f"{label}: world.yaml is not valid YAML: {exc}")
+            world_data = {}
     is_draft = bool(world_data.get("draft", False))
 
     world_required_files: list[str] = world_schema.get("required_files", [])
@@ -214,16 +342,10 @@ def _validate_world(
     )
 
     structural_errors: list[str] = []
+    structural_errors.extend(_check_required_files(world_dir, world_required_files, label))
+    structural_errors.extend(_check_required_dirs(world_dir, world_required_dirs, label))
     structural_errors.extend(
-        _check_required_files(world_dir, world_required_files, label)
-    )
-    structural_errors.extend(
-        _check_required_dirs(world_dir, world_required_dirs, label)
-    )
-    structural_errors.extend(
-        _check_extensions(
-            world_dir, world_extensions_declared, world_extensions_schema, label
-        )
+        _check_extensions(world_dir, world_extensions_declared, world_extensions_schema, label)
     )
 
     # Genre-level files are valid overrides at world level — not orphans
@@ -245,11 +367,22 @@ def _validate_world(
         label=label,
     )
 
+    # Content validation: parse present, schema-known world-tier files.
+    content_errors: list[str] = []
+    content_errors.extend(
+        _validate_list_of_model(world_dir / "archetypes.yaml", NpcArchetype, label)
+    )
+    content_errors.extend(
+        _validate_list_of_model(world_dir / "tropes.yaml", TropeDefinition, label)
+    )
+    content_errors.extend(_validate_portrait_manifest(world_dir / "portrait_manifest.yaml", label))
+
     if is_draft:
-        # Demote structural errors to warnings for draft worlds
-        return [], structural_errors + orphan_warnings
+        # Demote structural + content problems to warnings for draft worlds.
+        # A world.yaml parse failure is never demoted — it's an unconditional error.
+        return hard_errors, structural_errors + content_errors + orphan_warnings
     else:
-        return structural_errors, orphan_warnings
+        return hard_errors + structural_errors + content_errors, orphan_warnings
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +390,7 @@ def _validate_world(
 # ---------------------------------------------------------------------------
 
 
-def validate_pack_structure(
-    pack_dir: Path, schema_path: Path
-) -> tuple[list[str], list[str]]:
+def validate_pack_structure(pack_dir: Path, schema_path: Path) -> tuple[list[str], list[str]]:
     """Validate a genre pack directory against the schema.
 
     Returns ``(errors, warnings)``.
@@ -305,10 +436,17 @@ def validate_pack_structure(
 
     # Extension files/dirs
     all_errors.extend(
-        _check_extensions(
-            pack_dir, extensions_declared, genre_extensions_schema, label
-        )
+        _check_extensions(pack_dir, extensions_declared, genre_extensions_schema, label)
     )
+
+    # Content validation: parse present, schema-known genre-tier files.
+    all_errors.extend(_validate_list_of_model(pack_dir / "archetypes.yaml", NpcArchetype, label))
+    all_errors.extend(_validate_list_of_model(pack_dir / "tropes.yaml", TropeDefinition, label))
+    all_errors.extend(
+        _validate_single_model(pack_dir / "archetype_constraints.yaml", ArchetypeConstraints, label)
+    )
+    all_errors.extend(_validate_projection(pack_dir / "projection.yaml", label))
+    all_errors.extend(_validate_theme_palette(pack_dir, label))
 
     # Resolve extension paths for orphan check
     genre_ext_files, genre_ext_dirs = _resolve_extension_paths(
@@ -378,8 +516,7 @@ def _find_default_schema(pack_dir: Path) -> Path:
         search = search.parent
 
     raise FileNotFoundError(
-        f"Could not locate pack_schema.yaml from '{pack_dir}'. "
-        "Pass --schema explicitly."
+        f"Could not locate pack_schema.yaml from '{pack_dir}'. Pass --schema explicitly."
     )
 
 

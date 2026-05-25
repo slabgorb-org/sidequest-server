@@ -101,7 +101,7 @@ class StatusCommand(CommandHandler):
         location = state.party_location(perspective=ch.core.name) or "(unknown location)"
         output = (
             f"{ch.core.name} — Level {ch.core.level} {ch.race} {ch.char_class}\n"
-            f"Edge: {ch.core.edge.current}/{ch.core.edge.max}\n"
+            f"HP: {ch.core.hp.current}/{ch.core.hp.max}\n"
             f"Location: {location} ({state.current_region})"
         )
 

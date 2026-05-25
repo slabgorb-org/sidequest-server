@@ -1624,8 +1624,8 @@ class TestStageCurate:
     2. A curation subprocess failure raises loudly + aborts; the span
        records curated=false + a reason; raw manifest is NOT shipped
        stamped curated.
-    3. Every corpus creature crossing the seam emerges with an EdgePool —
-       no raw cr/hp leaks into the curate-stage output.
+    3. Every corpus creature crossing the seam emerges with an HpPool —
+       no raw cr leaks into the curate-stage output (ADR-114).
     """
 
     async def test_assemble_region_called_with_exact_signal_kwargs_and_is_deterministic(
@@ -1797,7 +1797,7 @@ class TestStageCurate:
         self,
     ) -> None:
         import sidequest.dungeon.materializer as _mat
-        from sidequest.game.creature_core import EdgePool
+        from sidequest.game.creature_core import HpPool
         from sidequest.telemetry.spans.dungeon_materialize import (
             dungeon_materialize_curate_span,
         )
@@ -1856,25 +1856,23 @@ class TestStageCurate:
         creatures = result.creatures_for_region(rid0)
         assert creatures, "curated region must carry its creatures"
         for c in creatures:
-            assert isinstance(c.edge, EdgePool), (
-                f"every corpus creature must emerge with an EdgePool; {c.name!r} has {type(c.edge)}"
+            assert isinstance(c.hp, HpPool), (
+                f"every corpus creature must emerge with an HpPool; {c.name!r} has {type(c.hp)}"
             )
-            assert c.edge.max >= 1 and c.edge.current == c.edge.max
-            # No raw cr/hp may leak onto the curated creature object.
+            assert c.hp.max >= 1 and c.hp.current == c.hp.max
+            # No raw cr may leak onto the curated creature object.
             assert not hasattr(c, "cr"), f"{c.name!r} leaked raw cr"
-            assert not hasattr(c, "hp"), f"{c.name!r} leaked raw hp"
 
         # The big_bad (band `mid` gate, GUARANTEED above) must ALSO be
-        # Edge-translated — decisively, not conditionally.
+        # HP-translated — decisively, not conditionally.
         bb = result.big_bad_for_region(rid0)
         assert bb is not None, (
             "band 'mid' fixture must yield a big_bad so the big_bad "
-            "CR→Edge path is provably exercised"
+            "CR→HP path is provably exercised"
         )
-        assert isinstance(bb.edge, EdgePool)
-        assert bb.edge.max >= 1 and bb.edge.current == bb.edge.max
+        assert isinstance(bb.hp, HpPool)
+        assert bb.hp.max >= 1 and bb.hp.current == bb.hp.max
         assert not hasattr(bb, "cr")
-        assert not hasattr(bb, "hp")
 
     async def test_curate_wired_into_coordinator(self) -> None:
         """Wiring: materialize() reaches _stage_curate with real

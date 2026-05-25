@@ -26,7 +26,7 @@ from sidequest.agents.tool_registry import (
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import tick_tropes as _tick_tropes_module  # noqa: F401
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot, TropeState
 from sidequest.game.turn import TurnManager
@@ -48,7 +48,7 @@ def _character(name: str) -> Character:
         personality="p",
         inventory=Inventory(items=[], gold=0),
         statuses=[],
-        edge=EdgePool(current=10, max=10, base_max=10),
+        hp=HpPool(current=10, max=10, base_max=10),
     )
     return Character(
         core=core,

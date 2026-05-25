@@ -2,7 +2,7 @@
 
 WRITE tool. The narrator says "apply HP damage" — the engine model is
 ADR-078 edge/composure. This tool translates: damage amount is subtracted
-from the target's ``CreatureCore.edge.current`` via ``apply_edge_delta``.
+from the target's ``CreatureCore.hp.current`` via ``apply_hp_delta``.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from sidequest.agents.tools import apply_damage as _apply_damage_module  # noqa:
 from sidequest.game.character import Character
 from sidequest.game.creature_core import (
     CreatureCore,
-    EdgePool,
+    HpPool,
     Inventory,
 )
 from sidequest.game.persistence import SqliteStore
@@ -37,7 +37,7 @@ def _character(name: str, *, edge_current: int = 10, edge_max: int = 10) -> Char
         description="d",
         personality="p",
         inventory=Inventory(),
-        edge=EdgePool(current=edge_current, max=edge_max, base_max=edge_max),
+        hp=HpPool(current=edge_current, max=edge_max, base_max=edge_max),
     )
     return Character(
         core=core,
@@ -54,7 +54,7 @@ def _npc(name: str, *, edge_current: int = 8, edge_max: int = 8) -> Npc:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=edge_current, max=edge_max, base_max=edge_max),
+            hp=HpPool(current=edge_current, max=edge_max, base_max=edge_max),
         ),
     )
 
@@ -122,14 +122,14 @@ async def test_damage_reduces_target_edge() -> None:
     assert p["target"] == "Alice"
     assert p["amount"] == 3
     assert p["damage_type"] == "slashing"
-    assert p["target_edge_after"] == 7
+    assert p["target_hp_after"] == 7
 
     # Persisted: reloading should reflect the mutation.
     reloaded = store.load()
     assert reloaded is not None
     found = reloaded.snapshot.find_creature_core("Alice")
     assert found is not None
-    assert found.edge.current == 7
+    assert found.hp.current == 7
 
 
 async def test_damage_zero_is_noop_but_returns_ok() -> None:
@@ -141,7 +141,7 @@ async def test_damage_zero_is_noop_but_returns_ok() -> None:
     assert r.status is ToolResultStatus.OK
     p = _payload(r)
     assert p["amount"] == 0
-    assert p["target_edge_after"] == 10
+    assert p["target_hp_after"] == 10
     assert p["damage_type"] == "untyped"  # default
     assert p["source"] == ""  # default
 
@@ -158,7 +158,7 @@ async def test_damage_targets_npc() -> None:
     assert r.status is ToolResultStatus.OK
     p = _payload(r)
     assert p["target"] == "Goblin"
-    assert p["target_edge_after"] == 3
+    assert p["target_hp_after"] == 3
     assert p["source"] == "Alice's swing"
 
 
@@ -169,7 +169,7 @@ async def test_damage_clamps_at_zero() -> None:
 
     r = await _call({"target": "Alice", "amount": 99}, ctx)
     assert r.status is ToolResultStatus.OK
-    assert _payload(r)["target_edge_after"] == 0
+    assert _payload(r)["target_hp_after"] == 0
 
 
 async def test_unknown_target_returns_not_found() -> None:
@@ -248,12 +248,12 @@ async def test_otel_span_carries_damage_attrs(otel_capture) -> None:
     assert attrs.get("tool.damage.amount") == 4
     assert attrs.get("tool.damage.damage_type") == "fire"
     assert attrs.get("tool.damage.source") == "lava splash"
-    assert attrs.get("tool.damage.target_edge_after") == 6
-    assert payload["target_edge_after"] == 6
+    assert attrs.get("tool.damage.target_hp_after") == 6
+    assert payload["target_hp_after"] == 6
 
 
 async def test_otel_span_emitted_for_zero_amount(otel_capture) -> None:
-    """amount=0 still emits the span (with target_edge_after unchanged)."""
+    """amount=0 still emits the span (with target_hp_after unchanged)."""
     snap = _build_snapshot(characters=[_character("Alice", edge_current=10)])
     store = _store_with(snap)
     ctx = _make_ctx(store)
@@ -272,7 +272,7 @@ async def test_otel_span_emitted_for_zero_amount(otel_capture) -> None:
     assert write_spans
     attrs = dict(write_spans[-1].attributes or {})
     assert attrs.get("tool.damage.amount") == 0
-    assert attrs.get("tool.damage.target_edge_after") == 10
+    assert attrs.get("tool.damage.target_hp_after") == 10
 
 
 async def test_parallel_damage_against_same_session_runs_sequentially() -> None:
@@ -309,8 +309,8 @@ async def test_parallel_damage_against_same_session_runs_sequentially() -> None:
     assert reloaded is not None
     found = reloaded.snapshot.find_creature_core("Alice")
     assert found is not None
-    assert found.edge.current == 3
+    assert found.hp.current == 3
 
-    # And the payloads' target_edge_after values are a serial sequence:
-    payloads = sorted([json.loads(r.content)["target_edge_after"] for r in results], reverse=True)
+    # And the payloads' target_hp_after values are a serial sequence:
+    payloads = sorted([json.loads(r.content)["target_hp_after"] for r in results], reverse=True)
     assert payloads == [7, 3]

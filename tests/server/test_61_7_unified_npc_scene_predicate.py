@@ -76,7 +76,7 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tools import list_npcs_in_scene as _list_npcs_module  # noqa: F401
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import (
     EncounterActor,
     EncounterMetric,
@@ -117,7 +117,7 @@ def _npc(
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=4, max=4, base_max=4),
+            hp=HpPool(current=4, max=4, base_max=4),
         ),
         current_room=current_room,
         location=location,
@@ -132,7 +132,7 @@ def _character(name: str, *, current_room: str | None = None) -> Character:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         backstory="hero",
         char_class="Delver",
@@ -780,7 +780,7 @@ def test_upstream_creaturecore_validator_blocks_empty_npc_names() -> None:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=4, max=4, base_max=4),
+            hp=HpPool(current=4, max=4, base_max=4),
         )
     assert "name cannot be blank" in str(excinfo.value), (
         f"Expected ``name_non_blank`` validator to reject empty name with "
@@ -799,7 +799,7 @@ def test_upstream_creaturecore_validator_blocks_empty_npc_names() -> None:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=4, max=4, base_max=4),
+            hp=HpPool(current=4, max=4, base_max=4),
         )
 
 

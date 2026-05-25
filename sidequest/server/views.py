@@ -556,8 +556,8 @@ def party_member_from_character(
         player_id=NonBlankString(player_id or "anon"),
         name=NonBlankString(player_name or "Player"),
         character_name=char_name_nbs,
-        current_hp=character.core.edge.current,
-        max_hp=character.core.edge.max,
+        current_hp=character.core.hp.current,
+        max_hp=character.core.hp.max,
         statuses=[s.text for s in character.core.statuses],
         **{"class": class_nbs},  # type: ignore[arg-type]
         level=character.core.level,

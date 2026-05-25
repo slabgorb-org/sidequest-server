@@ -1,4 +1,4 @@
-"""State-patch spans — apply_world_patch, quest updates, handshake delta."""
+"""State-patch spans — apply_world_patch, quest updates, handshake delta, HP delta."""
 
 from __future__ import annotations
 
@@ -50,6 +50,54 @@ SPAN_ROUTES[SPAN_GAME_HANDSHAKE_DELTA_APPLIED] = SpanRoute(
         "resolution_path": (span.attributes or {}).get("resolution_path", ""),
     },
 )
+
+
+# ADR-114 §6 — HP-delta span on the state_patch route.
+# Every real HP mutation in apply_beat_hp_channel emits this span so the
+# GM panel can verify the engine applied ablative damage rather than the
+# narrator improvising a wound (lie-detector discipline, CLAUDE.md).
+SPAN_STATE_PATCH_HP = "state_patch.hp"
+SPAN_ROUTES[SPAN_STATE_PATCH_HP] = SpanRoute(
+    event_type="state_transition",
+    component="combat",
+    extract=lambda span: {
+        "field": "hp",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "delta": (span.attributes or {}).get("delta", 0),
+        "source": (span.attributes or {}).get("source", ""),
+        "current": (span.attributes or {}).get("current", 0),
+        "maximum": (span.attributes or {}).get("maximum", 0),
+    },
+)
+
+
+def state_patch_hp_span(
+    *,
+    actor: str,
+    delta: int,
+    source: str,
+    current: int,
+    maximum: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a state_patch.hp span (ADR-114 §6 lie-detector).
+
+    Not a context manager — the HP delta is a point mutation, not a span
+    of work. Opens and immediately closes the span so the WatcherSpanProcessor
+    can route it to the GM panel's state_transition feed.
+    """
+    attributes: dict[str, Any] = {
+        "field": "hp",
+        "actor": actor,
+        "delta": delta,
+        "source": source,
+        "current": current,
+        "maximum": maximum,
+        **attrs,
+    }
+    with Span.open(SPAN_STATE_PATCH_HP, attributes, tracer_override=_tracer):
+        pass
 
 
 @contextmanager

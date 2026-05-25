@@ -23,7 +23,7 @@ from sidequest.agents.orchestrator import (
     Orchestrator,
 )
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -44,7 +44,7 @@ async def test_arbiter_is_invoked_on_real_prompt_build_path():
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=0, max=10, base_max=10),
+            hp=HpPool(current=0, max=10, base_max=10),
         ),
         backstory="A test hero.",
         char_class="Delver",

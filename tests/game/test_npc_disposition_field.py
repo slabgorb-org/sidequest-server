@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 
-from sidequest.game.creature_core import CreatureCore, EdgePool
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.game.disposition import Attitude, Disposition
 from sidequest.game.session import Npc
 
@@ -32,7 +32,7 @@ def _make_npc(name: str, disposition: int | Disposition = 0) -> Npc:
             name=name,
             description="x",
             personality="x",
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         disposition=disposition,
     )

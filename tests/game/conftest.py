@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from sidequest.game.beat_kinds import apply_beat
-from sidequest.game.creature_core import CreatureCore, placeholder_edge_pool
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.genre.models.rules import BeatDef
 from sidequest.protocol.dice import RollOutcome
@@ -31,7 +31,7 @@ _TAUNT_BEAT = BeatDef.model_validate(
 
 # Enemy strike beat — used by targeting tests (test_taunt_targeting.py).
 # target_edge_delta=3 so apply_beat routes a concrete debit through
-# _opposite_side_first_actor and into CreatureCore.apply_edge_delta.
+# _opposite_side_first_actor and into CreatureCore.apply_hp_delta.
 _ENEMY_STRIKE_BEAT = BeatDef.model_validate(
     {
         "id": "enemy_strike",
@@ -78,16 +78,12 @@ _OUTCOME_MAP: dict[str, RollOutcome] = {
 
 
 def _make_creature_core(name: str, edge_max: int = 10) -> CreatureCore:
-    """Build a minimal CreatureCore for use in edge_resolver mocks."""
-    pool = placeholder_edge_pool()
-    pool.current = edge_max
-    pool.max = edge_max
-    pool.base_max = edge_max
+    """Build a minimal CreatureCore for use in HP mocks."""
     return CreatureCore(
         name=name,
         description=f"{name} (test creature)",
         personality="neutral",
-        edge=pool,
+        hp=HpPool(current=edge_max, max=edge_max, base_max=edge_max),
     )
 
 

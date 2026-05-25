@@ -1,7 +1,7 @@
 """sidequest.game — Phase 1 minimal slice of the game engine.
 
 Phase 1 exports:
-- Character, CreatureCore, EdgePool, EdgeThreshold, Inventory
+- Character, CreatureCore, HpPool, Inventory
 - GameSnapshot, WorldStatePatch, NpcPatch, NpcPoolMember, NarrativeEntry
 - StateDelta (game-layer), StateSnapshot, snapshot, compute_delta
 - TurnManager, TurnPhase
@@ -39,13 +39,11 @@ from sidequest.game.commands import (
     StatusCommand,
 )
 from sidequest.game.creature_core import (
-    PLACEHOLDER_EDGE_BASE_MAX,
     CreatureCore,
-    EdgePool,
-    EdgeThreshold,
+    HpPool,
     Inventory,
-    RecoveryTrigger,
-    placeholder_edge_pool,
+    hp_pool_from_config,
+    hp_pool_from_hp,
 )
 from sidequest.game.delta import (
     StateDelta,
@@ -146,13 +144,11 @@ __all__ = [
     "StateMutationResult",
     "StatusCommand",
     # creature_core
-    "PLACEHOLDER_EDGE_BASE_MAX",
     "CreatureCore",
-    "EdgePool",
-    "EdgeThreshold",
+    "HpPool",
     "Inventory",
-    "RecoveryTrigger",
-    "placeholder_edge_pool",
+    "hp_pool_from_hp",
+    "hp_pool_from_config",
     # delta
     "StateDelta",
     "StateSnapshot",

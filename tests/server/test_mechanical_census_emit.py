@@ -12,7 +12,7 @@ def _store(tmp_path):
     return SqliteStore.open(str(tmp_path / "save.db"))
 
 
-class _Edge:
+class _HpPool:
     current, max, base_max = 10, 10, 10
 
 
@@ -31,7 +31,7 @@ def _char(name):
             "level": 1,
             "acquired_advancements": [],
             "statuses": [],
-            "edge": _Edge(),
+            "hp": _HpPool(),
             "inventory": _Inv(),
         },
     )()

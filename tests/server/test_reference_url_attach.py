@@ -212,7 +212,7 @@ def test_party_member_from_character_attaches_class_reference_url() -> None:
     from unittest.mock import MagicMock
 
     from sidequest.game.character import Character
-    from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
     from sidequest.game.persistence import GameMode
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
@@ -263,7 +263,7 @@ def test_party_member_from_character_attaches_class_reference_url() -> None:
             description="A cat burglar.",
             personality="Sly.",
             inventory=Inventory(),
-            edge=EdgePool(current=8, max=10, base_max=10),
+            hp=HpPool(current=8, max=10, base_max=10),
         ),
         backstory="Grew up in the rookeries.",
         char_class="Burglar",
@@ -290,7 +290,7 @@ def test_party_member_from_character_skips_url_when_class_not_in_pack() -> None:
     from unittest.mock import MagicMock
 
     from sidequest.game.character import Character
-    from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
     from sidequest.game.persistence import GameMode
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
@@ -327,7 +327,7 @@ def test_party_member_from_character_skips_url_when_class_not_in_pack() -> None:
             description="A cat burglar.",
             personality="Sly.",
             inventory=Inventory(),
-            edge=EdgePool(current=8, max=10, base_max=10),
+            hp=HpPool(current=8, max=10, base_max=10),
         ),
         backstory="Grew up in the rookeries.",
         char_class="UnknownClass",
@@ -414,7 +414,7 @@ def test_journal_request_handler_attaches_reference_url_for_lore_match() -> None
     from unittest.mock import MagicMock, patch
 
     from sidequest.game.character import Character, KnownFact
-    from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
     from sidequest.game.persistence import GameMode
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
@@ -452,7 +452,7 @@ def test_journal_request_handler_attaches_reference_url_for_lore_match() -> None
             description="A detective.",
             personality="Sharp.",
             inventory=Inventory(),
-            edge=EdgePool(current=8, max=10, base_max=10),
+            hp=HpPool(current=8, max=10, base_max=10),
         ),
         backstory="From the city.",
         char_class="Detective",
@@ -513,7 +513,7 @@ def test_journal_request_handler_no_url_for_person_fact() -> None:
     from unittest.mock import MagicMock, patch
 
     from sidequest.game.character import Character, KnownFact
-    from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
     from sidequest.game.persistence import GameMode
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
@@ -551,7 +551,7 @@ def test_journal_request_handler_no_url_for_person_fact() -> None:
             description="A detective.",
             personality="Sharp.",
             inventory=Inventory(),
-            edge=EdgePool(current=8, max=10, base_max=10),
+            hp=HpPool(current=8, max=10, base_max=10),
         ),
         backstory="From the city.",
         char_class="Detective",

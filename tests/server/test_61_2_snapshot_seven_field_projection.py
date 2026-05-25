@@ -51,7 +51,7 @@ from sidequest.game.belief_state import (
     BeliefState,
 )
 from sidequest.game.character import Character, KnownFact
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import GameSnapshot, Npc, RoomState
 from sidequest.game.turn import TurnManager
@@ -78,7 +78,7 @@ def _character(
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=8, max=10, base_max=10),
+            hp=HpPool(current=8, max=10, base_max=10),
         ),
         backstory="hero",
         char_class="Delver",
@@ -99,7 +99,7 @@ def _npc(
             description="grizzled veteran",
             personality="dour",
             inventory=Inventory(),
-            edge=EdgePool(current=5, max=5, base_max=5),
+            hp=HpPool(current=5, max=5, base_max=5),
         ),
         last_seen_location=last_seen_location,
         belief_state=belief_state or BeliefState(),
@@ -731,7 +731,7 @@ def test_npc_in_scene_predicate_converges_with_list_npcs_in_scene_tool() -> None
             description="prose-mentioned ghost",
             personality="elusive",
             inventory=Inventory(),
-            edge=EdgePool(current=5, max=5, base_max=5),
+            hp=HpPool(current=5, max=5, base_max=5),
         ),
         last_seen_location="main_hall",
         location="distant_chamber",

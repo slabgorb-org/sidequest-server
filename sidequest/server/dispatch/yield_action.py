@@ -43,9 +43,9 @@ def _refund_edge_for_yielders(
             continue
         count = _statuses_taken_in_encounter(char.core.statuses, encounter_type)
         refund = 1 + count
-        before = char.core.edge.current
-        char.core.apply_edge_delta(refund)
-        total_refund += char.core.edge.current - before
+        before = char.core.hp.current
+        char.core.apply_hp_delta(refund)
+        total_refund += char.core.hp.current - before
     return total_refund
 
 

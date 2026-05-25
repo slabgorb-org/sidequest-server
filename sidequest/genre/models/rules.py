@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.disposition import AttitudeThresholds
+from sidequest.genre.models.inventory import DamageSpec
 
 
 class MoraleTrigger(StrEnum):
@@ -29,6 +30,19 @@ class FleeConsequence(StrEnum):
     chase = "chase"
     surrender = "surrender"
     rout = "rout"
+
+
+class DamageChannel(StrEnum):
+    """HP-damage channel tag on a BeatDef (ADR-114 §5).
+
+    - ``none``:   dial-only beat (angle/push) — never touches HP.
+    - ``strike``: rolls weapon (or override) damage onto target HP.
+    - ``brace``:  mitigates incoming HP damage this round.
+    """
+
+    none = "none"
+    strike = "strike"
+    brace = "brace"
 
 
 class InitiativeRule(BaseModel):
@@ -140,6 +154,13 @@ class BeatDef(BaseModel):
     target_select: str | None = None
     resource_deltas: dict[str, float] | None = None
     class_filter: list[str] | None = None
+    # ADR-114 §5 — HP damage channel.  Independent of ``kind``; a beat can be
+    # kind=strike (dial semantics) and damage_channel=none (pure dial, no HP
+    # hit) — the separation is intentional so social/push beats never
+    # accidentally acquire an HP channel.
+    damage_channel: DamageChannel = DamageChannel.none
+    damage_override: DamageSpec | None = None    # creature natural attack (no catalog weapon)
+    mitigation_override: int | None = None       # brace beat with no armor item
 
     @model_validator(mode="after")
     def _validate(self) -> BeatDef:

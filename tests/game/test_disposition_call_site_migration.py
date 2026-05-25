@@ -36,7 +36,7 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.game.disposition import Attitude, Disposition
 from sidequest.game.session import GameSnapshot, Npc, WorldStatePatch
 from sidequest.server.watcher import WatcherSpanProcessor
@@ -124,7 +124,7 @@ def _make_pc(name: str) -> Character:
             name=name,
             description="x",
             personality="x",
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         char_class="Fighter",
         race="Human",
@@ -138,7 +138,7 @@ def _make_npc_with_disposition(name: str, value: int) -> Npc:
             name=name,
             description="x",
             personality="x",
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         disposition=Disposition(value),
     )

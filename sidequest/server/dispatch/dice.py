@@ -23,12 +23,13 @@ too would double-send to the rolling player.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from sidequest.game.beat_kinds import apply_beat
-from sidequest.game.dice import ResolveError, resolve_dice_with_faces
+from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
 from sidequest.game.encounter import EncounterPhase, StructuredEncounter
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
@@ -54,6 +55,13 @@ from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
     find_confrontation_def,
 )
+from sidequest.server.dispatch.damage_roll import _DAMAGE_THROW_PARAMS, damage_request_from_spec
+from sidequest.server.dispatch.damage_roll import (
+    generate_server_faces as _generate_server_faces,
+)
+from sidequest.server.dispatch.damage_roll import (
+    resolve_damage_spec_from_beat_and_actor as _resolve_damage_spec_from_beat_and_actor,
+)
 from sidequest.telemetry.spans import (
     combat_tick_span,
     emit_dice_request_sent,
@@ -66,6 +74,8 @@ from sidequest.telemetry.spans import (
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
+
+_DICE_RE = re.compile(r"^(?P<count>\d+)d(?P<faces>\d+)$")
 
 
 class DiceDispatchError(Exception):
@@ -377,6 +387,11 @@ def dispatch_dice_throw(
     # exact unfair-combat bug this branch is fixing.
     opposed_pending = cdef.resolution_mode == ResolutionMode.opposed_check
     opposed_player_d20: int | None = None
+    # ADR-114 / Task 7: damage roll payloads built in the else branch below.
+    # Initialized here so the broadcast section can reference them regardless
+    # of which branch executes.
+    damage_request_payload: DiceRequestPayload | None = None
+    damage_result_payload: DiceResultPayload | None = None
 
     if opposed_pending:
         # Pull the raw d20 face for the resolver. The dice pool is
@@ -397,6 +412,93 @@ def dispatch_dice_throw(
         own_delta = 0
         encounter_resolved = False
     else:
+        # ADR-114 / Task 7: damage roll for strike channel beats.
+        # Resolve the weapon DamageSpec BEFORE apply_beat so the resolver
+        # lambda captures a concrete total. The damage roll is server-side
+        # (no UI physics round-trip); we generate random faces, resolve the
+        # total, and broadcast a DICE_REQUEST + DICE_RESULT after the check
+        # broadcast so Sebastien sees the weapon dice animate in the overlay.
+        damage_resolver_fn = None
+
+        damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
+        if damage_channel == "strike" and resolved.outcome not in (
+            RollOutcome.Fail,
+            RollOutcome.CritFail,
+        ):
+            actor_core = snapshot.find_creature_core(character_name)
+            damage_spec = _resolve_damage_spec_from_beat_and_actor(
+                beat=beat,
+                actor_core=actor_core,
+                pack=pack,
+            )
+            if damage_spec is None:
+                logger.warning(
+                    "dice.damage_spec_missing beat=%r actor=%r encounter=%r — "
+                    "strike beat has no resolvable weapon, damage_override, or "
+                    "unarmed default; HP damage skipped (CLAUDE.md no-fabricate)",
+                    payload.beat_id,
+                    character_name,
+                    encounter.encounter_type,
+                )
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "encounter",
+                        "op": "damage_spec_missing",
+                        "beat_id": payload.beat_id,
+                        "actor": character_name,
+                        "rationale": (
+                            "strike channel beat has no damage_override, no "
+                            "weapon with a damage spec in inventory, and no "
+                            "unarmed_damage default on the genre rules — "
+                            "HP path skipped"
+                        ),
+                    },
+                    component="encounter",
+                    severity="warning",
+                )
+            else:
+                dmg_request_id = str(uuid.uuid4())
+                damage_request_payload = damage_request_from_spec(
+                    damage_spec,
+                    request_id=dmg_request_id,
+                    rolling_player_id=rolling_player_id,
+                    character_name=character_name,
+                )
+                dmg_faces = _generate_server_faces(damage_request_payload.dice)
+                dmg_resolved = resolve_dice_with_faces(
+                    damage_request_payload.dice,
+                    dmg_faces,
+                    damage_request_payload.modifier,
+                    damage_request_payload.difficulty,
+                )
+                dmg_total = dmg_resolved.total
+                dmg_seed = generate_dice_seed(session_id, round_number + 1)
+                damage_result_payload = _compose_result_payload(
+                    request=damage_request_payload,
+                    rolls=dmg_resolved.rolls,
+                    total=dmg_total,
+                    outcome=RollOutcome.Success,  # damage rolls have no outcome tier
+                    seed=dmg_seed,
+                    throw_params=_DAMAGE_THROW_PARAMS,
+                )
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "encounter",
+                        "op": "damage_roll_resolved",
+                        "beat_id": payload.beat_id,
+                        "actor": character_name,
+                        "damage_spec": damage_spec.dice,
+                        "bonus": damage_spec.bonus,
+                        "faces": dmg_faces,
+                        "total": dmg_total,
+                        "source": "dice_throw_server_roll",
+                    },
+                    component="encounter",
+                )
+                damage_resolver_fn = lambda: dmg_total  # noqa: E731
+
         apply_result = apply_beat(
             encounter,
             actor,
@@ -404,6 +506,7 @@ def dispatch_dice_throw(
             resolved.outcome,
             turn=round_number,
             edge_resolver=snapshot.find_creature_core,
+            damage_resolver=damage_resolver_fn,
         )
 
         if apply_result.skipped_reason:
@@ -480,8 +583,6 @@ def dispatch_dice_throw(
 
     # Seed drives spectator replay animation only — face values are already
     # authoritative from the rolling player's Rapier settle.
-    from sidequest.game.dice import generate_dice_seed
-
     seed = generate_dice_seed(session_id, round_number)
     result = _compose_result_payload(
         request=request,
@@ -517,6 +618,17 @@ def dispatch_dice_throw(
         res_msg = DiceResultMessage(payload=result, player_id="server")
         room_broadcast(req_msg)
         room_broadcast(res_msg)
+
+        # ADR-114 / Task 7: broadcast damage roll overlay immediately after
+        # the check-roll result so the player sees weapon dice animate before
+        # the CONFRONTATION dial update and the narrator response arrive.
+        # Damage broadcast is gated on a resolved damage_result_payload (only
+        # set when the beat has damage_channel=strike AND a DamageSpec was
+        # found). Skipped on the opposed-pending branch — damage is deferred
+        # alongside beat application on that path.
+        if not opposed_pending and damage_result_payload is not None and damage_request_payload is not None:
+            room_broadcast(DiceRequestMessage(payload=damage_request_payload, player_id="server"))
+            room_broadcast(DiceResultMessage(payload=damage_result_payload, player_id="server"))
 
         # Story 45-3: Mid-turn CONFRONTATION emit. The metric mutation
         # already landed via apply_beat above; without this broadcast the
@@ -652,3 +764,19 @@ def dispatch_dice_throw(
 def new_request_id() -> str:
     """Return a fresh UUID4 string for a DiceRequest correlation id."""
     return str(uuid.uuid4())
+
+
+# ---------------------------------------------------------------------------
+# Damage-roll helpers (ADR-114 / Task 7 → Task 11)
+# ---------------------------------------------------------------------------
+# The three helpers were extracted to ``sidequest.server.dispatch.damage_roll``
+# (Task 11) so that ``narration_apply._resolve_opposed_check_branch`` can also
+# use them without copy-paste. They are re-imported at module top and aliased
+# below for back-compat with any direct callers that reference the private names.
+#
+# ``damage_request_from_spec`` (public) is re-exported from the import block.
+# ``_generate_server_faces`` and ``_resolve_damage_spec_from_beat_and_actor``
+# are re-aliased here as private names (the import block already does this).
+#
+# ``_DAMAGE_THROW_PARAMS`` is also imported from ``damage_roll`` and used in
+# the broadcast composition below.

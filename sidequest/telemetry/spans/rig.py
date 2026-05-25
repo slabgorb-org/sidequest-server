@@ -80,9 +80,10 @@ SPAN_ROUTES[SPAN_RIG_POOL_ZERO_CROSSING] = SpanRoute(
 )
 
 # Story 53-3 / 53-4: rig crash handler emits crash_event when
-# Composure→0 triggers the injury + Edge -1 + dismount consequences.
+# Composure→0 triggers the injury + HP -1 + dismount consequences.
+# ADR-114: span attrs renamed edge_delta/edge_after → hp_delta/hp_after.
 # Inputs (character_id, chassis_id, location, attacker) PLUS the
-# realized consequences (edge_delta, edge_after, injury_status_text,
+# realized consequences (hp_delta, hp_after, injury_status_text,
 # dismounted_status_text) per ADR-031 Layer-2 — the span captures what
 # was decided, not just the inputs, so the GM dashboard renders the
 # crash deterministically without re-reading core state.
@@ -97,8 +98,8 @@ SPAN_ROUTES[SPAN_RIG_POOL_CRASH_EVENT] = SpanRoute(
         "chassis_id": (span.attributes or {}).get("chassis_id", ""),
         "location": (span.attributes or {}).get("location", ""),
         "attacker": (span.attributes or {}).get("attacker", ""),
-        "edge_delta": (span.attributes or {}).get("edge_delta", 0),
-        "edge_after": (span.attributes or {}).get("edge_after", 0),
+        "hp_delta": (span.attributes or {}).get("hp_delta", 0),
+        "hp_after": (span.attributes or {}).get("hp_after", 0),
         "injury_status_text": (span.attributes or {}).get("injury_status_text", ""),
         "dismounted_status_text": (span.attributes or {}).get("dismounted_status_text", ""),
     },

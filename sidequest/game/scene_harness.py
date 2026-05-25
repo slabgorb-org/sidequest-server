@@ -280,7 +280,7 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
     are flattened to the top level. The Python port nests CreatureCore
     under ``Character.core``; this helper un-flattens.
 
-    Legacy ``hp``/``max_hp`` integers are mapped onto :class:`EdgePool`
+    Legacy ``hp``/``max_hp`` integers are mapped onto :class:`HpPool`
     (current/max/base_max). ``ac`` has no current home in the Python
     Character shape and is dropped.
 
@@ -307,7 +307,7 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
     hp = data.get("hp")
     max_hp = data.get("max_hp")
     if isinstance(hp, int) and isinstance(max_hp, int):
-        core_kwargs["edge"] = {"current": hp, "max": max_hp, "base_max": max_hp}
+        core_kwargs["hp"] = {"current": hp, "max": max_hp, "base_max": max_hp}
 
     core = CreatureCore(**core_kwargs)
 

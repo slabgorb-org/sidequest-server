@@ -27,7 +27,7 @@ from sidequest.agents.tools import query_character as _query_character_module  #
 from sidequest.game.character import Character
 from sidequest.game.creature_core import (
     CreatureCore,
-    EdgePool,
+    HpPool,
     Inventory,
 )
 from sidequest.game.persistence import SqliteStore
@@ -39,8 +39,8 @@ from sidequest.game.turn import TurnManager
 def _character(
     name: str,
     *,
-    edge_current: int = 10,
-    edge_max: int = 10,
+    hp_current: int = 10,
+    hp_max: int = 10,
     is_friendly: bool = True,
     char_class: str = "Delver",
     race: str = "Human",
@@ -57,7 +57,7 @@ def _character(
         personality="p",
         inventory=Inventory(items=items or [], gold=gold),
         statuses=statuses or [],
-        edge=EdgePool(current=edge_current, max=edge_max, base_max=edge_max),
+        hp=HpPool(current=hp_current, max=hp_max, base_max=hp_max),
     )
     return Character(
         core=core,
@@ -157,9 +157,9 @@ async def test_happy_path_returns_stats_and_status() -> None:
     assert p["status"][0]["text"] == "inspired"
     assert p["status"][0]["severity"] == "Boon"
     # Edge always present on self (it drives perception coarsening for non-self)
-    assert p["edge_current"] == 10
-    assert p["edge_max"] == 10
-    assert p["edge_fraction"] == 1.0
+    assert p["hp_current"] == 10
+    assert p["hp_max"] == 10
+    assert p["hp_fraction"] == 1.0
     # Non-requested sections absent
     assert "backstory" not in p
     assert "inventory" not in p
@@ -264,8 +264,8 @@ async def test_perception_self_returns_exact_sheet() -> None:
     alice = _character(
         "Alice",
         stats={"str": 14, "dex": 12, "wis": 10},
-        edge_current=6,
-        edge_max=10,
+        hp_current=6,
+        hp_max=10,
     )
     snap = _build_snapshot(characters=[alice])
     store = _store_with(snap)
@@ -284,20 +284,20 @@ async def test_perception_self_returns_exact_sheet() -> None:
     # Exact: stats present with values
     assert payload["stats"] == {"str": 14, "dex": 12, "wis": 10}
     # Exact: edge numbers visible
-    assert payload["edge_current"] == 6
-    assert payload["edge_max"] == 10
-    # No edge_band on self — that's only for coarsened other-PC views
-    assert "edge_band" not in payload
+    assert payload["hp_current"] == 6
+    assert payload["hp_max"] == 10
+    # No hp_band on self — that's only for coarsened other-PC views
+    assert "hp_band" not in payload
 
 
 async def test_perception_other_pc_coarsens_to_band() -> None:
-    """Through dispatch: perspective != target → stats dropped, edge_band added."""
+    """Through dispatch: perspective != target → stats dropped, hp_band added."""
     alice = _character("Alice")
     bob = _character(
         "Bob",
         stats={"str": 16, "dex": 8, "wis": 18},
-        edge_current=4,
-        edge_max=10,
+        hp_current=4,
+        hp_max=10,
         statuses=[Status(text="bleeding", severity=StatusSeverity.Wound)],
         backstory="Bob's secret backstory.",
         items=[{"name": "letter", "qty": 1}],
@@ -329,13 +329,13 @@ async def test_perception_other_pc_coarsens_to_band() -> None:
     assert "stats" not in payload
     assert "inventory" not in payload
     assert "backstory" not in payload
-    assert "edge_current" not in payload
-    assert "edge_max" not in payload
-    assert "edge_fraction" not in payload
+    assert "hp_current" not in payload
+    assert "hp_max" not in payload
+    assert "hp_fraction" not in payload
     # Status kept (visible)
     assert payload["status"][0]["text"] == "bleeding"
-    # Band derived from edge_fraction=0.4 → bloodied (>0.25)
-    assert payload["edge_band"] == "bloodied"
+    # Band derived from hp_fraction=0.4 → bloodied (>0.25)
+    assert payload["hp_band"] == "bloodied"
 
 
 async def test_perception_none_perspective_returns_exact() -> None:
@@ -356,10 +356,10 @@ async def test_perception_none_perspective_returns_exact() -> None:
     assert out.is_error is False
     payload = json.loads(out.content)
     assert payload["stats"] == {"str": 11}
-    assert "edge_band" not in payload
+    assert "hp_band" not in payload
 
 
-async def test_edge_band_thresholds() -> None:
+async def test_hp_band_thresholds() -> None:
     """All five edge bands are reachable through the coarsening rule."""
     alice = _character("Alice")
     # Build PCs at each band boundary.
@@ -373,7 +373,7 @@ async def test_edge_band_thresholds() -> None:
         ("Down", 0, 10, "down"),  # 0.0
     ]
     chars = [alice] + [
-        _character(name, edge_current=cur, edge_max=mx) for name, cur, mx, _ in band_cases
+        _character(name, hp_current=cur, hp_max=mx) for name, cur, mx, _ in band_cases
     ]
     snap = _build_snapshot(characters=chars)
     store = _store_with(snap)
@@ -389,8 +389,8 @@ async def test_edge_band_thresholds() -> None:
             ctx,
         )
         payload = json.loads(out.content)
-        assert payload["edge_band"] == expected_band, (
-            f"{name}: expected {expected_band}, got {payload.get('edge_band')!r}"
+        assert payload["hp_band"] == expected_band, (
+            f"{name}: expected {expected_band}, got {payload.get('hp_band')!r}"
         )
 
 
@@ -430,7 +430,7 @@ async def test_otel_span_self_query_no_coarsening(otel_capture) -> None:
 
 async def test_otel_span_other_pc_marks_coarsened(otel_capture) -> None:
     alice = _character("Alice")
-    bob = _character("Bob", edge_current=3, edge_max=10)
+    bob = _character("Bob", hp_current=3, hp_max=10)
     snap = _build_snapshot(characters=[alice, bob])
     store = _store_with(snap)
     ctx = _make_ctx(store, perspective_pc="Alice")

@@ -20,9 +20,9 @@ from sidequest.game.character import Character
 from sidequest.game.chassis import ChassisInstance
 from sidequest.game.creature_core import (
     CreatureCore,
+    HpPool,
     Inventory,
-    creature_edge_pool_from_hp,
-    placeholder_edge_pool,
+    hp_pool_from_hp,
 )
 from sidequest.game.disposition import Disposition
 from sidequest.game.encounter import StructuredEncounter
@@ -275,13 +275,8 @@ class PartyPeer(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-# Canonical HP→EdgePool translator promoted to
-# ``sidequest.game.creature_core.creature_edge_pool_from_hp`` (Beneath
-# Sünden Plan 7 Task 4) so the NPC-patch path here and the dungeon
-# materializer's CR→Edge seam share ONE implementation. This module-level
-# alias preserves the historical ``session._creature_edge_pool_from_hp``
-# import (existing call sites + tests) without a second copy of the body.
-_creature_edge_pool_from_hp = creature_edge_pool_from_hp
+# Internal alias for the canonical HP seeder — now hp_pool_from_hp (ADR-114).
+_hp_pool_from_hp = hp_pool_from_hp
 
 
 class NpcPatch(BaseModel):
@@ -325,7 +320,7 @@ class NpcPatch(BaseModel):
     as a creature so the materializer applies hostile-disposition default."""
 
     hp: int | None = None
-    """B/X HP from ``creatures.yaml``. Translated to EdgePool per ADR-078
+    """B/X HP from ``creatures.yaml``. Translated to HpPool per ADR-114
     when the runtime Npc is built. Content shape, not runtime shape."""
 
     abilities: list[str] | None = None
@@ -1275,11 +1270,11 @@ class GameSnapshot(BaseModel):
     def _apply_hp_change(self, name: str, delta: int) -> None:
         for ch in self.characters:
             if ch.core.name == name:
-                ch.core.apply_edge_delta(delta)
+                ch.core.apply_hp_delta(delta)
                 return
         for npc in self.npcs:
             if npc.core.name == name:
-                npc.core.apply_edge_delta(delta)
+                npc.core.apply_hp_delta(delta)
                 return
 
     def find_creature_core(self, name: str) -> CreatureCore | None:
@@ -1334,7 +1329,7 @@ class GameSnapshot(BaseModel):
         if patch.morale is not None:
             npc.morale = patch.morale
         if patch.hp is not None:
-            npc.core.edge = _creature_edge_pool_from_hp(patch.hp)
+            npc.core.hp = _hp_pool_from_hp(patch.hp)
 
     def _npc_from_patch(self, patch: NpcPatch) -> Npc:
         # Creature signal: presence of any creature-shape field flags this
@@ -1344,9 +1339,9 @@ class GameSnapshot(BaseModel):
             patch.creature_id is not None or patch.threat_level is not None or patch.hp is not None
         )
         if patch.hp is not None:
-            edge = _creature_edge_pool_from_hp(patch.hp)
+            hp_pool = _hp_pool_from_hp(patch.hp)
         else:
-            edge = placeholder_edge_pool()
+            hp_pool = HpPool(current=10, max=10, base_max=10)
 
         core = CreatureCore(
             name=patch.name,
@@ -1356,7 +1351,7 @@ class GameSnapshot(BaseModel):
             xp=0,
             inventory=Inventory(),
             statuses=[],
-            edge=edge,
+            hp=hp_pool,
         )
         return Npc(
             core=core,
@@ -1377,7 +1372,7 @@ class GameSnapshot(BaseModel):
 
     def lowest_friendly_hp_ratio(self) -> float:
         """Lowest edge fraction among friendly characters. Returns 1.0 if none."""
-        fracs = [ch.edge_fraction() for ch in self.characters if ch.is_friendly]
+        fracs = [ch.hp_fraction() for ch in self.characters if ch.is_friendly]
         return min(fracs) if fracs else 1.0
 
     # ------------------------------------------------------------------

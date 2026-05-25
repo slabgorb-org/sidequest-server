@@ -57,7 +57,7 @@ from sidequest.agents.prompt_framework.types import (
     AttentionZone,
     SectionCategory,
 )
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.disposition import Attitude, Disposition
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import Npc
@@ -85,7 +85,7 @@ def _npc(
         personality="watchful",
         inventory=Inventory(items=[], gold=0),
         statuses=[],
-        edge=EdgePool(current=4, max=4, base_max=4),
+        hp=HpPool(current=4, max=4, base_max=4),
     )
     return Npc(
         core=core,

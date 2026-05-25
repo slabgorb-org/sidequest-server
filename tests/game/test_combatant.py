@@ -8,11 +8,14 @@ structural typing of Character (and eventually Npc).
 Test-porting discipline: every Rust test becomes one pytest function
 with the same name. No idiomatic rewrites.
 
+ADR-114: protocol methods renamed edge/max_edge/edge_fraction →
+hp/max_hp/hp_fraction.
+
 AC3 coverage:
 - `isinstance(character, Combatant)` returns True for any Character instance
-- `edge_fraction(max_edge=0)` returns 0.0 — NOT ZeroDivisionError, NOT 1.0.
-  Port Rust's guard verbatim (Rust: `if self.max_edge() == 0 { return 0.0; }`).
-- `is_broken` == `edge() <= 0` (port verbatim — negative edge IS broken).
+- `hp_fraction(max_hp=0)` returns 0.0 — NOT ZeroDivisionError, NOT 1.0.
+  Port Rust's guard verbatim (Rust: `if self.max_hp() == 0 { return 0.0; }`).
+- `is_broken` == `hp() <= 0` (port verbatim — negative HP IS broken).
 """
 
 from __future__ import annotations
@@ -32,38 +35,38 @@ from sidequest.game.combatant import Combatant
 @dataclass
 class _TestCombatant:
     _name: str
-    _edge: int
-    _max_edge: int
+    _hp: int
+    _max_hp: int
     _level: int
 
     def name(self) -> str:
         return self._name
 
-    def edge(self) -> int:
-        return self._edge
+    def hp(self) -> int:
+        return self._hp
 
-    def max_edge(self) -> int:
-        return self._max_edge
+    def max_hp(self) -> int:
+        return self._max_hp
 
     def level(self) -> int:
         return self._level
 
     def is_broken(self) -> bool:
-        # Rust: `self.edge() <= 0` — negative edge counts as broken.
-        return self.edge() <= 0
+        # Rust: `self.hp() <= 0` — negative HP counts as broken.
+        return self.hp() <= 0
 
-    def edge_fraction(self) -> float:
-        # Rust: `if self.max_edge() == 0 { return 0.0; }`
-        if self.max_edge() == 0:
+    def hp_fraction(self) -> float:
+        # Rust: `if self.max_hp() == 0 { return 0.0; }`
+        if self.max_hp() == 0:
             return 0.0
-        return self.edge() / self.max_edge()
+        return self.hp() / self.max_hp()
 
 
 def warrior() -> _TestCombatant:
     return _TestCombatant(
         _name="Grog",
-        _edge=20,
-        _max_edge=30,
+        _hp=20,
+        _max_hp=30,
         _level=3,
     )
 
@@ -78,51 +81,49 @@ def test_not_broken_with_positive_edge() -> None:
 
 
 def test_broken_at_zero_edge() -> None:
-    c = _TestCombatant(_name="Grog", _edge=0, _max_edge=30, _level=3)
+    c = _TestCombatant(_name="Grog", _hp=0, _max_hp=30, _level=3)
     assert c.is_broken()
 
 
 def test_not_broken_at_one_edge() -> None:
-    c = _TestCombatant(_name="Grog", _edge=1, _max_edge=30, _level=3)
+    c = _TestCombatant(_name="Grog", _hp=1, _max_hp=30, _level=3)
     assert not c.is_broken()
 
 
 def test_broken_at_negative_edge() -> None:
     """Not in Rust test suite, but the Rust trait default impl uses
-    `edge <= 0`. Explicit test so a drift to `== 0` is caught — Character
-    in the Python codebase already has this drift (see delivery finding)."""
-    c = _TestCombatant(_name="Grog", _edge=-5, _max_edge=30, _level=3)
+    `hp <= 0`. Explicit test so a drift to `== 0` is caught."""
+    c = _TestCombatant(_name="Grog", _hp=-5, _max_hp=30, _level=3)
     assert c.is_broken()
 
 
 def test_full_edge_fraction() -> None:
-    c = _TestCombatant(_name="Grog", _edge=30, _max_edge=30, _level=3)
-    assert c.edge_fraction() == pytest.approx(1.0)
+    c = _TestCombatant(_name="Grog", _hp=30, _max_hp=30, _level=3)
+    assert c.hp_fraction() == pytest.approx(1.0)
 
 
 def test_half_edge_fraction() -> None:
-    c = _TestCombatant(_name="Grog", _edge=15, _max_edge=30, _level=3)
-    assert c.edge_fraction() == pytest.approx(0.5)
+    c = _TestCombatant(_name="Grog", _hp=15, _max_hp=30, _level=3)
+    assert c.hp_fraction() == pytest.approx(0.5)
 
 
 def test_zero_edge_fraction() -> None:
-    c = _TestCombatant(_name="Grog", _edge=0, _max_edge=30, _level=3)
-    assert c.edge_fraction() == pytest.approx(0.0)
+    c = _TestCombatant(_name="Grog", _hp=0, _max_hp=30, _level=3)
+    assert c.hp_fraction() == pytest.approx(0.0)
 
 
 def test_zero_max_edge_returns_zero_fraction() -> None:
-    """AC3 edge case — Rust returns 0.0 when max_edge == 0. Not
-    ZeroDivisionError, not 1.0. Port verbatim. Character.edge_fraction
-    returns 1.0 today — that drift is flagged in Delivery Findings."""
-    c = _TestCombatant(_name="Grog", _edge=0, _max_edge=0, _level=3)
-    assert c.edge_fraction() == pytest.approx(0.0)
+    """AC3 edge case — Rust returns 0.0 when max_hp == 0. Not
+    ZeroDivisionError, not 1.0."""
+    c = _TestCombatant(_name="Grog", _hp=0, _max_hp=0, _level=3)
+    assert c.hp_fraction() == pytest.approx(0.0)
 
 
 def test_accessors_return_correct_values() -> None:
     c = warrior()
     assert c.name() == "Grog"
-    assert c.edge() == 20
-    assert c.max_edge() == 30
+    assert c.hp() == 20
+    assert c.max_hp() == 30
     assert c.level() == 3
 
 
@@ -148,7 +149,7 @@ def test_character_satisfies_combatant_protocol() -> None:
     character = make_test_character()
     assert isinstance(character, Combatant), (
         "Character must structurally satisfy Combatant — exposes name(), "
-        "edge(), max_edge(), level(), is_broken(), edge_fraction()"
+        "hp(), max_hp(), level(), is_broken(), hp_fraction()"
     )
 
 
@@ -157,12 +158,12 @@ def test_combatant_protocol_rejects_type_missing_required_method() -> None:
     A type lacking one of the six required methods MUST NOT satisfy."""
 
     class PartiallyCombatant:
-        """Missing max_edge, level, is_broken, edge_fraction."""
+        """Missing max_hp, level, is_broken, hp_fraction."""
 
         def name(self) -> str:
             return "Weak"
 
-        def edge(self) -> int:
+        def hp(self) -> int:
             return 10
 
     c = PartiallyCombatant()

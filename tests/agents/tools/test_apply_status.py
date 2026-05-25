@@ -25,7 +25,7 @@ from sidequest.agents.tools import apply_status as _apply_status_module  # noqa:
 from sidequest.game.character import Character
 from sidequest.game.creature_core import (
     CreatureCore,
-    EdgePool,
+    HpPool,
     Inventory,
 )
 from sidequest.game.persistence import SqliteStore
@@ -40,7 +40,7 @@ def _character(name: str) -> Character:
         description="d",
         personality="p",
         inventory=Inventory(),
-        edge=EdgePool(current=10, max=10, base_max=10),
+        hp=HpPool(current=10, max=10, base_max=10),
     )
     return Character(
         core=core,
@@ -57,7 +57,7 @@ def _npc(name: str) -> Npc:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=8, max=8, base_max=8),
+            hp=HpPool(current=8, max=8, base_max=8),
         ),
     )
 

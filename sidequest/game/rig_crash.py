@@ -34,7 +34,7 @@ from sidequest.telemetry.spans import SPAN_RIG_POOL_CRASH_EVENT, Span
 
 INJURY_STATUS_TEXT = "injury"
 DISMOUNTED_STATUS_TEXT = "dismounted"
-DRIVER_EDGE_HIT = -1
+DRIVER_HP_HIT = -1
 
 
 class RigCrashResult(BaseModel):
@@ -100,14 +100,14 @@ def handle_rig_crash(
     if _already_dismounted(core):
         return None
 
-    edge_before = core.edge.current
-    core.apply_edge_delta(DRIVER_EDGE_HIT)
-    edge_after = core.edge.current
-    # Realized delta — the EdgePool floors at 0, so a driver at 0 Edge
-    # takes the crash but loses no Edge; the span reports what actually
+    hp_before = core.hp.current
+    core.apply_hp_delta(DRIVER_HP_HIT)
+    hp_after = core.hp.current
+    # Realized delta — the HpPool floors at 0, so a driver at 0 HP
+    # takes the crash but loses no HP; the span reports what actually
     # happened, not what was requested (story 53-4 ADR-031 Layer-2
     # contract: capture what was decided).
-    edge_delta = edge_after - edge_before
+    hp_delta = hp_after - hp_before
     core.statuses.append(Status(text=INJURY_STATUS_TEXT, severity=StatusSeverity.Wound))
     core.statuses.append(Status(text=DISMOUNTED_STATUS_TEXT, severity=StatusSeverity.Scar))
 
@@ -118,8 +118,8 @@ def handle_rig_crash(
             "chassis_id": pool.chassis_id,
             "location": location or "",
             "attacker": attacker or "",
-            "edge_delta": edge_delta,
-            "edge_after": edge_after,
+            "hp_delta": hp_delta,
+            "hp_after": hp_after,
             "injury_status_text": INJURY_STATUS_TEXT,
             "dismounted_status_text": DISMOUNTED_STATUS_TEXT,
         },
@@ -129,7 +129,7 @@ def handle_rig_crash(
     return RigCrashResult(
         character_id=pool.character_id,
         chassis_id=pool.chassis_id,
-        edge_after=core.edge.current,
+        edge_after=core.hp.current,
     )
 
 
@@ -168,7 +168,7 @@ def apply_rig_damage(
 
 __all__ = [
     "DISMOUNTED_STATUS_TEXT",
-    "DRIVER_EDGE_HIT",
+    "DRIVER_HP_HIT",
     "INJURY_STATUS_TEXT",
     "RigCrashResult",
     "RigDamageResult",

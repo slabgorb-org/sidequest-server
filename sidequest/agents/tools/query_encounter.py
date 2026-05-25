@@ -35,9 +35,9 @@ Players and neutrals surface raw edge ``current``/``max`` so the
 narrator can pace decisively when an ally is about to drop. This
 mirrors Task 6's "self / exact" rule extended to the whole party.
 
-Cross-tool reuse — ``_edge_band``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Imports :func:`sidequest.agents.narrator_perception_filter._edge_band`
+Cross-tool reuse — ``_hp_band``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Imports :func:`sidequest.agents.narrator_perception_filter._hp_band`
 directly. The underscore is a Python convention, not an enforcement
 boundary; reusing it keeps the severity-band boundaries single-sourced
 (Task 6 owns the canonical definition). If a third caller appears, the
@@ -66,7 +66,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from sidequest.agents.narrator_perception_filter import _edge_band
+from sidequest.agents.narrator_perception_filter import _hp_band
 from sidequest.agents.tool_registry import (
     ToolCategory,
     ToolContext,
@@ -128,20 +128,20 @@ async def query_encounter(args: QueryEncounterArgs, ctx: ToolContext) -> ToolRes
             # Foes: severity band only. No raw edge under any
             # perspective — even the perspective PC's narrator shouldn't
             # see opponent HP as a number.
-            if core is not None and core.edge.max > 0:
-                fraction = core.edge.current / core.edge.max
-                entry["edge_band"] = _edge_band(fraction)
+            if core is not None and core.hp.max > 0:
+                fraction = core.hp.current / core.hp.max
+                entry["hp_band"] = _hp_band(fraction)
             else:
                 # Either no matching creature in the snapshot or a
-                # degenerate edge.max=0 (would zero-div). "unknown" is
+                # degenerate hp.max=0 (would zero-div). "unknown" is
                 # the safe sentinel for the narrator.
-                entry["edge_band"] = "unknown"
+                entry["hp_band"] = "unknown"
         else:
             # players + neutrals — surface raw current/max so the
             # narrator can pace party-side decisions decisively.
             if core is not None:
-                entry["edge_current"] = core.edge.current
-                entry["edge_max"] = core.edge.max
+                entry["hp_current"] = core.hp.current
+                entry["hp_max"] = core.hp.max
         actors_payload.append(entry)
 
     structured_phase: str | None = (

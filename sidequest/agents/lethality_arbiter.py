@@ -9,8 +9,8 @@ Reads:
   - NPC cores present in the scene (`npc_cores_by_name`)
   - BankResult (for future subsystems that emit `data["fatal_hit"]` etc.)
 
-Phase A trigger is edge-based only: any core with `edge.current == 0` fires
-the policy's `verdicts_on_zero_edge` entry. Confrontation-beat-failure and
+Phase A trigger is HP-based (ADR-114): any core with `hp.current == 0` fires
+the policy's `verdicts_on_zero_hp` entry. Confrontation-beat-failure and
 resource-pool-depletion triggers land in Group E when the subsystems that
 produce those signals exist on the Python port.
 
@@ -68,19 +68,19 @@ class LethalityArbiter:
         ) as span:
             result = LethalityResult()
             for player_id, core in pc_cores_by_player.items():
-                if core.edge.current == 0:
+                if core.hp.current == 0:
                     self._emit(
                         result,
                         entity=f"player:{player_id}",
-                        verdict_kind=self._policy.verdicts_on_zero_edge.pc,
+                        verdict_kind=self._policy.verdicts_on_zero_hp.pc,
                         core=core,
                     )
             for npc_name, core in npc_cores_by_name.items():
-                if core.edge.current == 0:
+                if core.hp.current == 0:
                     self._emit(
                         result,
                         entity=f"npc:{npc_name}",
-                        verdict_kind=self._policy.verdicts_on_zero_edge.npc,
+                        verdict_kind=self._policy.verdicts_on_zero_hp.npc,
                         core=core,
                     )
             # Merge decomposer-authored verdicts. Arbiter wins on entity
@@ -102,7 +102,7 @@ class LethalityArbiter:
         core: CreatureCore,
     ) -> None:
         """Append one verdict + its paired must/must-not directives."""
-        cause = f"{core.name} reduced to zero edge (0/{core.edge.max})"
+        cause = f"{core.name} reduced to zero HP (0/{core.hp.max})"
         result.verdicts.append(
             self._build_verdict(
                 entity=entity,

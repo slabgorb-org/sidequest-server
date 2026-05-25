@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from sidequest.game.ability import AbilitySource
 from sidequest.game.builder import (
     CharacterBuilder,
-    EdgeConfigMissingClassError,
+    HpConfigMissingClassError,
     NumericNameError,
     WrongPhaseError,
 )
@@ -493,9 +493,9 @@ class TestEdgeSeeding:
         char = b.build("Kara")
         # Placeholder edge pool → base_max == PLACEHOLDER_EDGE_BASE_MAX (10)
         # Ranger is NOT Fighter, so no +2 stub.
-        assert char.core.edge.base_max == 10
-        assert char.core.edge.max == 10
-        assert char.core.edge.current == 10
+        assert char.core.hp.base_max == 10
+        assert char.core.hp.max == 10
+        assert char.core.hp.current == 10
 
     def test_edge_config_path(self) -> None:
         # Story 39-10: edge_pool_from_config now applies a CON modifier
@@ -534,10 +534,9 @@ class TestEdgeSeeding:
         b.apply_choice(0)
         char = b.build("Kara")
         # Ranger base_max = 6 from edge_config. CON 10 mod = 0. No +2 stub.
-        assert char.core.edge.base_max == 6
-        assert char.core.edge.max == 6
-        assert len(char.core.edge.thresholds) == 1
-        assert char.core.edge.thresholds[0].at == 3
+        assert char.core.hp.base_max == 6
+        assert char.core.hp.max == 6
+        # ADR-114: HpPool has no thresholds — threshold assertions dropped.
 
     def test_edge_config_missing_class_raises(self) -> None:
         """Class declared via chargen but absent from base_max_by_class →
@@ -554,7 +553,7 @@ class TestEdgeSeeding:
         ]
         b = CharacterBuilder(scenes=scenes, rules=rules)
         b.apply_choice(0)
-        with pytest.raises(EdgeConfigMissingClassError) as excinfo:
+        with pytest.raises(HpConfigMissingClassError) as excinfo:
             b.build("Kara")
         assert excinfo.value.class_name == "Ranger"
 
@@ -593,9 +592,9 @@ class TestEdgeSeeding:
         b.apply_choice(0)
         char = b.build("Arc")
         # Base 8 + CON mod 0 = 8. Was 10 with the +2 stub.
-        assert char.core.edge.base_max == 8
-        assert char.core.edge.max == 8
-        assert char.core.edge.current == 8
+        assert char.core.hp.base_max == 8
+        assert char.core.hp.max == 8
+        assert char.core.hp.current == 8
 
     def test_non_fighter_placeholder_unaffected(self) -> None:
         """Placeholder edge pool (no edge_config) path: CON modifier
@@ -604,7 +603,7 @@ class TestEdgeSeeding:
         b = minimal_happy_path_builder()
         char = b.build("Kara")
         # Ranger, placeholder base 10, no stub → still 10.
-        assert char.core.edge.max == 10
+        assert char.core.hp.max == 10
 
 
 # ===========================================================================

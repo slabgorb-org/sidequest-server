@@ -6,8 +6,8 @@ Re-exports everything so `from sidequest.genre.models import X` works for any ty
 from sidequest.genre.models.advancement import (
     AdvancementEffect,
     AdvancementEffectBeatDiscount,
-    AdvancementEffectEdgeMaxBonus,
-    AdvancementEffectEdgeRecovery,
+    AdvancementEffectHpMaxBonus,
+    AdvancementEffectHpRecovery,
     AdvancementEffectLeverageBonus,
     AdvancementEffectLoreRevealBonus,
     AdvancementTier,
@@ -206,8 +206,8 @@ __all__ = [
     # advancement
     "AdvancementEffect",
     "AdvancementEffectBeatDiscount",
-    "AdvancementEffectEdgeMaxBonus",
-    "AdvancementEffectEdgeRecovery",
+    "AdvancementEffectHpMaxBonus",
+    "AdvancementEffectHpRecovery",
     "AdvancementEffectLeverageBonus",
     "AdvancementEffectLoreRevealBonus",
     "AdvancementTier",

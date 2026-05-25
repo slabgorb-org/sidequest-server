@@ -185,11 +185,45 @@ from sidequest.telemetry.spans import (  # noqa: E402
     encounter_metric_advance_span,
     encounter_tag_backfire_span,
     encounter_tag_created_span,
+    state_patch_hp_span,
 )
 from sidequest.telemetry.spans.span import Span  # noqa: E402
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish  # noqa: E402
 
 EdgeResolver = Callable[[str], CreatureCore | None]
+DamageResolver = Callable[[], int]
+
+
+def apply_beat_hp_channel(
+    *,
+    target: CreatureCore,
+    channel: str,
+    damage_total: int,
+    target_mitigation: int,
+    source_beat_id: str = "?",
+) -> int:
+    """Apply a strike beat's damage to target HP after flat mitigation (ADR-114 §2).
+
+    Returns HP actually removed (>= 0). No-op unless channel == "strike".
+    brace supplies mitigation to the NEXT strike (handled at the wiring layer),
+    so it does not mutate HP here. Every real HP delta emits a state_patch span
+    (ADR-114 §6 — GM-panel lie detector)."""
+    if channel != "strike" or damage_total <= 0:
+        return 0
+    applied = max(0, damage_total - max(0, target_mitigation))
+    if applied == 0:
+        return 0
+    before = target.hp.current
+    target.apply_hp_delta(-applied)
+    after = target.hp.current
+    state_patch_hp_span(
+        actor=target.name,
+        delta=-applied,
+        source=source_beat_id,
+        current=after,
+        maximum=target.hp.max,
+    )
+    return before - after
 
 
 @dataclass(frozen=True)
@@ -327,8 +361,8 @@ def numerical_advantage_for(
         core = edge_resolver(actor.name)
         if core is None:
             continue
-        denom = core.edge.max if core.edge.max > 0 else 1
-        fractions.append(core.edge.current / denom)
+        denom = core.hp.max if core.hp.max > 0 else 1
+        fractions.append(core.hp.current / denom)
     return numerical_advantage_modifier(fractions)
 
 
@@ -355,6 +389,7 @@ def apply_beat(
     *,
     turn: int = 0,
     edge_resolver: EdgeResolver | None = None,
+    damage_resolver: DamageResolver | None = None,
 ) -> ApplyResult:
     """Apply one beat at one outcome tier to the encounter.
 
@@ -561,9 +596,9 @@ def apply_beat(
             actor_core = edge_resolver(actor.name)
             if actor_core is None:
                 raise ValueError(f"edge_resolver returned no CreatureCore for actor {actor.name!r}")
-            before = actor_core.edge.current
-            actor_core.apply_edge_delta(-self_edge_delta)
-            after = actor_core.edge.current
+            before = actor_core.hp.current
+            actor_core.apply_hp_delta(-self_edge_delta)
+            after = actor_core.hp.current
             with encounter_edge_debit_span(
                 source_actor=actor.name,
                 target_actor=actor.name,
@@ -605,9 +640,9 @@ def apply_beat(
                                     f"edge_resolver returned no CreatureCore "
                                     f"for target {target_name!r}"
                                 )
-                            before = target_core.edge.current
-                            target_core.apply_edge_delta(-per_target)
-                            after = target_core.edge.current
+                            before = target_core.hp.current
+                            target_core.apply_hp_delta(-per_target)
+                            after = target_core.hp.current
                             with encounter_edge_debit_span(
                                 source_actor=actor.name,
                                 target_actor=target_name,
@@ -632,9 +667,9 @@ def apply_beat(
                         raise ValueError(
                             f"edge_resolver returned no CreatureCore for target {target_name!r}"
                         )
-                    before = target_core.edge.current
-                    target_core.apply_edge_delta(-target_edge_delta)
-                    after = target_core.edge.current
+                    before = target_core.hp.current
+                    target_core.apply_hp_delta(-target_edge_delta)
+                    after = target_core.hp.current
                     with encounter_edge_debit_span(
                         source_actor=actor.name,
                         target_actor=target_name,
@@ -648,6 +683,50 @@ def apply_beat(
                         pass
                     if after <= 0 and composure_break is None:
                         composure_break = (target_name, "target")
+
+    # ADR-114 §2 — damage_channel HP resolution (ADDITIVE to edge_delta path above).
+    # Only fires for strike channel when a damage_resolver is provided.
+    # brace does NOT mutate HP here — it supplies mitigation to the next strike
+    # (the calling layer holds the pending brace value).
+    # When damage_resolver is None and the beat declares a strike channel, the
+    # HP path is skipped — Task 7 injects the real dice resolver; until then
+    # the engine is silent on HP for channel=strike beats (no phantom zero damage).
+    damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
+    if damage_channel == "strike" and damage_resolver is not None:
+        damage_total = damage_resolver()
+        # Resolve target mitigation: beat.mitigation_override takes precedence;
+        # otherwise use the first live opposing actor's equipped armor mitigation
+        # (via edge_resolver — same resolver already required for edge_delta).
+        mitigation_override = getattr(beat, "mitigation_override", None)
+        if mitigation_override is not None:
+            target_mitigation = int(mitigation_override)
+        else:
+            target_mitigation = 0
+            # If we can resolve the target's CreatureCore, look for armor mitigation
+            # in inventory (CatalogItem.mitigation). Kept simple: first live opponent.
+            if edge_resolver is not None:
+                primary_target_name = _opposite_side_first_actor(enc, actor.side)
+                if primary_target_name is not None:
+                    target_core_for_mit = edge_resolver(primary_target_name)
+                    if target_core_for_mit is not None:
+                        for item_dict in target_core_for_mit.inventory.items:
+                            mit = item_dict.get("mitigation")
+                            if mit is not None:
+                                target_mitigation = int(mit)
+                                break
+
+        # Apply HP damage to primary target.
+        primary_target = _opposite_side_first_actor(enc, actor.side)
+        if primary_target is not None and edge_resolver is not None:
+            hp_target = edge_resolver(primary_target)
+            if hp_target is not None:
+                apply_beat_hp_channel(
+                    target=hp_target,
+                    channel="strike",
+                    damage_total=damage_total,
+                    target_mitigation=target_mitigation,
+                    source_beat_id=getattr(beat, "id", "?"),
+                )
 
     enc.beat += 1
     enc.structured_phase = _phase_for_beat(enc.beat)

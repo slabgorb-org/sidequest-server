@@ -52,8 +52,8 @@ from sidequest.agents.orchestrator import (
 )
 from sidequest.game.creature_core import (
     CreatureCore,
+    HpPool,
     Inventory,
-    placeholder_edge_pool,
 )
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
@@ -98,7 +98,7 @@ def _make_npc(
             xp=0,
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         pronouns=pronouns,
         appearance=appearance,

@@ -90,8 +90,8 @@ def test_e2e_chargen_produces_classed_fighter(cc_pack):
 
     assert character.char_class == "Fighter"
     # edge_config[Fighter]=4, plus Story 39-4 hardcoded +2 stub → 6
-    assert character.core.edge.base_max >= cc_pack.rules.edge_config.base_max_by_class["Fighter"]
-    assert character.core.edge.current == character.core.edge.max
+    assert character.core.hp.base_max >= cc_pack.rules.edge_config.base_max_by_class["Fighter"]
+    assert character.core.hp.current == character.core.hp.max
     assert len(character.core.inventory.items) > 0
     # Inventory pulled from fighter_kit only.
     fighter_kit = cc_pack.equipment_tables.class_tables["fighter_kit"]
@@ -106,7 +106,7 @@ def test_e2e_chargen_produces_classed_mage(cc_pack):
     builder = _drive_chargen(cc_pack, target_class="Mage")
     character = builder.build("Wiring")
     assert character.char_class == "Mage"
-    assert character.core.edge.base_max >= cc_pack.rules.edge_config.base_max_by_class["Mage"]
+    assert character.core.hp.base_max >= cc_pack.rules.edge_config.base_max_by_class["Mage"]
     # Mage kit has no armor — should not have any armor items.
     rolled_ids = {i["id"] for i in character.core.inventory.items}
     mage_kit = cc_pack.equipment_tables.class_tables["mage_kit"]

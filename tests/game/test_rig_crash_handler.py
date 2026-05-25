@@ -64,7 +64,7 @@ def _mounted_core(
     has not yet been implemented (we WANT RED at call time, not at
     collection time).
     """
-    from sidequest.game import CreatureCore, EdgePool, Inventory, RigComposurePool
+    from sidequest.game import CreatureCore, HpPool, Inventory, RigComposurePool
 
     pool = RigComposurePool(
         current=composure,
@@ -81,12 +81,10 @@ def _mounted_core(
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        edge=EdgePool(
+        hp=HpPool(
             current=edge_current,
             max=edge_max,
             base_max=edge_max,
-            recovery_triggers=["OnResolution"],
-            thresholds=[],
         ),
         acquired_advancements=[],
         rig_pool=pool,
@@ -164,7 +162,7 @@ def test_handle_rig_crash_applies_minus_one_edge_to_driver() -> None:
 
     handle_rig_crash(core)
 
-    assert core.edge.current == 4
+    assert core.hp.current == 4
 
 
 def test_handle_rig_crash_appends_injury_status_with_wound_severity() -> None:
@@ -226,7 +224,7 @@ def test_handle_rig_crash_returns_typed_result() -> None:
 def test_handle_rig_crash_is_noop_when_rig_pool_is_none() -> None:
     """A character with no rig in inventory has no rig_pool — the handler
     must NOT silently mutate Edge or append statuses on a foot soldier."""
-    from sidequest.game import CreatureCore, EdgePool, Inventory, handle_rig_crash
+    from sidequest.game import CreatureCore, HpPool, Inventory, handle_rig_crash
 
     core = CreatureCore(
         name="Mira",
@@ -236,8 +234,8 @@ def test_handle_rig_crash_is_noop_when_rig_pool_is_none() -> None:
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        edge=EdgePool(
-            current=5, max=5, base_max=5, recovery_triggers=["OnResolution"], thresholds=[]
+        hp=HpPool(
+            current=5, max=5, base_max=5
         ),
         acquired_advancements=[],
     )
@@ -245,7 +243,7 @@ def test_handle_rig_crash_is_noop_when_rig_pool_is_none() -> None:
     result = handle_rig_crash(core)
 
     assert result is None
-    assert core.edge.current == 5
+    assert core.hp.current == 5
     assert core.statuses == []
 
 
@@ -260,7 +258,7 @@ def test_handle_rig_crash_is_noop_when_rig_still_has_composure() -> None:
     result = handle_rig_crash(core)
 
     assert result is None
-    assert core.edge.current == 5
+    assert core.hp.current == 5
     assert core.statuses == []
 
 
@@ -276,13 +274,13 @@ def test_handle_rig_crash_is_idempotent_when_already_dismounted() -> None:
 
     first = handle_rig_crash(core)
     assert first is not None
-    edge_after_first = core.edge.current
+    edge_after_first = core.hp.current
     status_count_after_first = len(core.statuses)
 
     second = handle_rig_crash(core)
 
     assert second is None
-    assert core.edge.current == edge_after_first
+    assert core.hp.current == edge_after_first
     assert len(core.statuses) == status_count_after_first
 
 
@@ -349,7 +347,7 @@ def test_handle_rig_crash_span_captures_consequence_outcomes(monkeypatch) -> Non
     spans at every point where the system makes or executes a decision"
     with fields "what was decided"), the span attrs MUST now also carry:
 
-    - ``edge_delta`` — the signed Edge change applied (``DRIVER_EDGE_HIT``)
+    - ``edge_delta`` — the signed Edge change applied (``DRIVER_HP_HIT``)
     - ``edge_after`` — the driver's Edge after the hit lands
     - ``injury_status_text`` — the appended injury status text
     - ``dismounted_status_text`` — the appended dismount status text
@@ -361,7 +359,7 @@ def test_handle_rig_crash_span_captures_consequence_outcomes(monkeypatch) -> Non
     from sidequest.game import handle_rig_crash
     from sidequest.game.rig_crash import (
         DISMOUNTED_STATUS_TEXT,
-        DRIVER_EDGE_HIT,
+        DRIVER_HP_HIT,
         INJURY_STATUS_TEXT,
     )
     from sidequest.telemetry import spans as _spans
@@ -370,7 +368,7 @@ def test_handle_rig_crash_span_captures_consequence_outcomes(monkeypatch) -> Non
     provider, exporter = _fresh_provider()
     monkeypatch.setattr(_spans, "tracer", lambda: provider.get_tracer("test"))
 
-    # Edge starts at 5; after DRIVER_EDGE_HIT (currently -1) it lands at 4.
+    # Edge starts at 5; after DRIVER_HP_HIT (currently -1) it lands at 4.
     core = _mounted_core(
         name="Mira",
         composure=0,
@@ -385,11 +383,11 @@ def test_handle_rig_crash_span_captures_consequence_outcomes(monkeypatch) -> Non
     assert len(matching) == 1, "exactly one crash_event span per crash"
     attrs = matching[0].attributes
 
-    assert attrs["edge_delta"] == DRIVER_EDGE_HIT, (
-        f"edge_delta must equal DRIVER_EDGE_HIT ({DRIVER_EDGE_HIT}), got {attrs.get('edge_delta')!r}"
+    assert attrs["hp_delta"] == DRIVER_HP_HIT, (
+        f"hp_delta must equal DRIVER_HP_HIT ({DRIVER_HP_HIT}), got {attrs.get('hp_delta')!r}"
     )
-    assert attrs["edge_after"] == 5 + DRIVER_EDGE_HIT, (
-        f"edge_after must reflect the post-crash Edge value, got {attrs.get('edge_after')!r}"
+    assert attrs["hp_after"] == 5 + DRIVER_HP_HIT, (
+        f"hp_after must reflect the post-crash HP value, got {attrs.get('hp_after')!r}"
     )
     assert attrs["injury_status_text"] == INJURY_STATUS_TEXT, (
         f"injury_status_text must match the appended status, got {attrs.get('injury_status_text')!r}"
@@ -405,7 +403,7 @@ def test_handle_rig_crash_span_consequences_floor_edge_at_zero(monkeypatch) -> N
     — Edge pools floor at 0. The span must report ``edge_after=0`` and
     ``edge_delta`` equal to the *realized* delta (i.e., 0 — no Edge was
     actually subtracted because the floor swallowed it), not the
-    requested ``DRIVER_EDGE_HIT``.
+    requested ``DRIVER_HP_HIT``.
 
     Pinning this avoids a future "phantom hit" where the dashboard shows
     edge_delta=-1 against a character who had 0 Edge to lose.
@@ -423,12 +421,12 @@ def test_handle_rig_crash_span_consequences_floor_edge_at_zero(monkeypatch) -> N
     matching = [s for s in exporter.get_finished_spans() if s.name == SPAN_RIG_POOL_CRASH_EVENT]
     assert len(matching) == 1
     attrs = matching[0].attributes
-    assert attrs["edge_after"] == 0
+    assert attrs["hp_after"] == 0
     # Realized delta: the floor swallowed the requested -1, so the span
     # reports what actually happened to the Edge pool, not what was asked.
-    assert attrs["edge_delta"] == 0, (
-        "edge_delta on the span is the realized delta (after flooring), "
-        f"not the requested DRIVER_EDGE_HIT — got {attrs.get('edge_delta')!r}"
+    assert attrs["hp_delta"] == 0, (
+        "hp_delta on the span is the realized delta (after flooring), "
+        f"not the requested DRIVER_HP_HIT — got {attrs.get('hp_delta')!r}"
     )
 
 
@@ -509,7 +507,7 @@ def test_apply_rig_damage_sublethal_damage_does_not_fire_crash() -> None:
     assert result.crash is None
     assert core.rig_pool is not None
     assert core.rig_pool.current == 2
-    assert core.edge.current == 5  # unchanged
+    assert core.hp.current == 5  # unchanged
     assert core.statuses == []
 
 
@@ -528,7 +526,7 @@ def test_apply_rig_damage_lethal_damage_fires_crash() -> None:
     assert result.crash.chassis_id == "rig_tier_1_prospect"
     assert core.rig_pool is not None
     assert core.rig_pool.current == 0
-    assert core.edge.current == 4
+    assert core.hp.current == 4
     assert any(s.text == "dismounted" for s in core.statuses)
     assert any("injur" in s.text.lower() for s in core.statuses)
 
@@ -565,7 +563,7 @@ def test_apply_rig_damage_to_already_wrecked_rig_does_not_re_crash() -> None:
 
     assert result is not None
     assert result.crash is None
-    assert core.edge.current == 5  # NO additional Edge hit
+    assert core.hp.current == 5  # NO additional Edge hit
     # Status list unchanged (still just the one dismounted entry).
     assert sum(1 for s in core.statuses if s.text == "dismounted") == 1
 
@@ -576,7 +574,7 @@ def test_apply_rig_damage_returns_none_when_no_rig_pool() -> None:
     ``apply_rig_damage`` explicitly, so failing to find a rig is a no-op
     signal, not a fallback. ``apply_damage`` is the right tool for raw
     Edge damage."""
-    from sidequest.game import CreatureCore, EdgePool, Inventory, apply_rig_damage
+    from sidequest.game import CreatureCore, HpPool, Inventory, apply_rig_damage
 
     core = CreatureCore(
         name="Mira",
@@ -586,8 +584,8 @@ def test_apply_rig_damage_returns_none_when_no_rig_pool() -> None:
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        edge=EdgePool(
-            current=5, max=5, base_max=5, recovery_triggers=["OnResolution"], thresholds=[]
+        hp=HpPool(
+            current=5, max=5, base_max=5
         ),
         acquired_advancements=[],
     )
@@ -595,7 +593,7 @@ def test_apply_rig_damage_returns_none_when_no_rig_pool() -> None:
     result = apply_rig_damage(core, 3)
 
     assert result is None
-    assert core.edge.current == 5  # unchanged
+    assert core.hp.current == 5  # unchanged
 
 
 def test_apply_rig_damage_rejects_negative_amount() -> None:
@@ -624,7 +622,7 @@ def test_apply_rig_damage_zero_amount_is_noop_with_no_crash() -> None:
     assert result.crash is None
     assert core.rig_pool is not None
     assert core.rig_pool.current == 4
-    assert core.edge.current == 5
+    assert core.hp.current == 5
 
 
 def test_apply_rig_damage_fires_crash_event_span_on_lethal_hit(monkeypatch) -> None:

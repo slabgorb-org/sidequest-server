@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from sidequest.agents.lethality_arbiter import LethalityArbiter, LethalityResult
 from sidequest.agents.subsystems import BankResult
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
-from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroEdge
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
+from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroHp
 from sidequest.protocol.dispatch import (
     DispatchPackage,
     LethalityVerdict,
@@ -27,7 +27,7 @@ def _make_pc(name: str, edge_current: int, edge_max: int = 10) -> CreatureCore:
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        edge=EdgePool(current=edge_current, max=edge_max, base_max=edge_max),
+        hp=HpPool(current=edge_current, max=edge_max, base_max=edge_max),
     )
 
 
@@ -35,7 +35,7 @@ def _heavy_metal_policy() -> LethalityPolicy:
     return LethalityPolicy(
         genre_key="heavy_metal",
         default_reversibility="permanent",
-        verdicts_on_zero_edge=VerdictsOnZeroEdge(pc="dead", npc="dead"),
+        verdicts_on_zero_hp=VerdictsOnZeroHp(pc="dead", npc="dead"),
         soul_md_constraint="genre_truth:lethal_for_this_genre",
         must_narrate="Render the death.",
         must_not_narrate="narrate survival; invent rescue",
@@ -52,7 +52,7 @@ def _empty_package(turn_id: str = "turn-1", player_id: str = "alice") -> Dispatc
 
 
 def test_pc_at_zero_edge_produces_heavy_metal_dead_verdict():
-    """Edge.current == 0 → policy.verdicts_on_zero_edge.pc → verdict emitted."""
+    """Edge.current == 0 → policy.verdicts_on_zero_hp.pc → verdict emitted."""
     arbiter = LethalityArbiter(policy=_heavy_metal_policy())
     pc = _make_pc("Alice", edge_current=0)
     result = arbiter.arbitrate(
@@ -92,7 +92,7 @@ def _caverns_policy() -> LethalityPolicy:
     return LethalityPolicy(
         genre_key="caverns_and_claudes",
         default_reversibility="narrative_only",
-        verdicts_on_zero_edge=VerdictsOnZeroEdge(pc="humiliated", npc="defeated"),
+        verdicts_on_zero_hp=VerdictsOnZeroHp(pc="humiliated", npc="defeated"),
         soul_md_constraint="genre_truth:comedic_danger_no_permadeath",
         must_narrate="Slapstick incapacitation.",
         must_not_narrate="permadeath; solemn eulogy",

@@ -33,9 +33,10 @@ class ProtocolBase(BaseModel):
     """Base class for all sidequest protocol models.
 
     @model_serializer applies Rust-equivalent skip_serializing_if semantics:
-      - None → omitted (Rust Option::is_none), UNLESS the field has None as
-        its declared default (e.g., rig_composure_current = None, which means
-        "no rig" — a meaningful protocol state that must be included)
+      - None → omitted (Rust Option::is_none), UNLESS the field is annotated
+        with json_schema_extra={"include_when_none": True} (e.g.,
+        rig_composure_current, which means "no rig" — a meaningful protocol
+        state that must be included even as None)
       - empty list/dict/str matching its declared default → omitted (Rust is_empty)
       - numeric/bool fields → always present regardless of value
 
@@ -78,16 +79,17 @@ class ProtocolBase(BaseModel):
         result: dict[str, Any] = {}
         for k, v in d.items():
             wire_key = remap.get(k, k)
-            # Handle None values: skip them UNLESS the field has None as its
-            # declared default. Fields like rig_composure_current (nullable rig pool)
-            # have None as their default, meaning "no rig", which is a meaningful
-            # protocol state that must be included in serialization.
+            # Handle None values: skip them UNLESS the field is annotated with
+            # json_schema_extra={"include_when_none": True}. Fields like
+            # rig_composure_current (nullable rig pool) use that annotation to
+            # signal that None is a meaningful protocol state ("no rig") that
+            # must be included. All other None fields are omitted (Rust
+            # Option::is_none behavior).
             if v is None:
                 field_info = _find_field(cls, k)
                 if field_info is not None:
-                    default_val = _field_default(field_info)
-                    # Only skip None if the field's declared default is NOT None
-                    if default_val is not None:
+                    extra = getattr(field_info, "json_schema_extra", None) or {}
+                    if not (isinstance(extra, dict) and extra.get("include_when_none")):
                         continue
                 else:
                     # Field not found in model — skip it (shouldn't happen)

@@ -34,7 +34,7 @@ from sidequest.agents.tool_registry import (
     default_registry,
 )
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import (
     EncounterMetric,
     StructuredEncounter,
@@ -67,7 +67,7 @@ def _npc(
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=4, max=4, base_max=4),
+            hp=HpPool(current=4, max=4, base_max=4),
         ),
         current_room=current_room,
         location=location,
@@ -82,7 +82,7 @@ def _character(name: str, *, current_room: str | None = None) -> Character:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         backstory="hero",
         char_class="Delver",

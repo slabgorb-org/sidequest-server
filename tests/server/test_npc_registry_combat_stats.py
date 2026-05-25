@@ -43,13 +43,12 @@ from sidequest.agents.orchestrator import (
 )
 from sidequest.game.creature_core import (
     CreatureCore,
+    HpPool,
     Inventory,
-    placeholder_edge_pool,
 )
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
-from tests._helpers.session_room import room_for
 from tests._helpers.trigger_encounter import trigger_encounter
 
 _FIXTURE_PACK = Path(__file__).resolve().parents[1] / "fixtures" / "packs" / "test_genre"
@@ -77,7 +76,7 @@ def _make_npc(
             xp=0,
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         pronouns=pronouns,
         appearance=appearance,
@@ -154,21 +153,21 @@ def test_combat_handshake_publishes_edge_onto_opponent_npc(combat_snapshot):
     """
     snap, pack = combat_snapshot
     npc = snap.npcs[0]
-    placeholder_max = npc.core.edge.max
+    placeholder_max = npc.core.hp.max
 
     trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
 
     # The combat dial in test_genre has threshold=10. After publish, the
     # edge pool should be sized to the dial threshold (not the placeholder).
-    assert npc.core.edge.max != placeholder_max or npc.core.edge.max > 0, (
+    assert npc.core.hp.max != placeholder_max or npc.core.hp.max > 0, (
         "edge.max not populated after combat handshake"
     )
-    assert npc.core.edge.current > 0, (
+    assert npc.core.hp.current > 0, (
         "edge.current not populated (or set to 0) at combat start — pool would "
         "appear always-defeated like the Playtest 3 shape"
     )
     # Fresh combat: pool is full (dial.current==0 ⇒ edge.current == edge.max).
-    assert npc.core.edge.current == npc.core.edge.max, (
+    assert npc.core.hp.current == npc.core.hp.max, (
         "fresh combat: edge.current must equal edge.max (no damage taken yet)"
     )
 
@@ -197,8 +196,8 @@ def test_combat_handshake_publishes_edge_for_explicit_npcs_present(combat_snapsh
         ],
     )
     goblin = next(n for n in snap.npcs if n.core.name == "Goblin")
-    assert goblin.core.edge.current > 0
-    assert goblin.core.edge.max > 0
+    assert goblin.core.hp.current > 0
+    assert goblin.core.hp.max > 0
 
 
 def test_non_combat_handshake_leaves_edge_at_placeholder(combat_snapshot):
@@ -221,14 +220,14 @@ def test_non_combat_handshake_leaves_edge_at_placeholder(combat_snapshot):
         )
     )
     halrik = snap.npcs[0]
-    placeholder_max = halrik.core.edge.max
-    placeholder_current = halrik.core.edge.current
+    placeholder_max = halrik.core.hp.max
+    placeholder_current = halrik.core.hp.current
 
     trigger_encounter(snap, pack, "negotiation", "Orin", npcs_present=[])
-    assert halrik.core.edge.max == placeholder_max, (
+    assert halrik.core.hp.max == placeholder_max, (
         "non-combat encounter must NOT publish combat edge"
     )
-    assert halrik.core.edge.current == placeholder_current
+    assert halrik.core.hp.current == placeholder_current
 
 
 # ---------------------------------------------------------------------------

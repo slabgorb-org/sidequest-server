@@ -51,8 +51,8 @@ class NarratorPerceptionFilter:
 #
 # Self / no-perspective: exact payload, untouched.
 # Other party member: identity + visible status kept; sensitive sections
-# (stats / inventory / backstory) dropped; exact edge numbers replaced
-# with an edge_band per ADR-078.
+# (stats / inventory / backstory) dropped; exact hp numbers replaced
+# with an hp_band (ADR-114).
 
 _QC_KEEP_ALWAYS = frozenset(
     {
@@ -67,12 +67,12 @@ _QC_KEEP_ALWAYS = frozenset(
 )
 
 
-def _edge_band(fraction: float) -> str:
-    """Map an edge fraction to its ADR-078 severity band.
+def _hp_band(fraction: float) -> str:
+    """Map an hp fraction to a severity band.
 
     Boundaries match the boundaries in the per-tool spec for Task 6:
     ``unwounded`` >0.75 · ``wounded`` >0.5 · ``bloodied`` >0.25 ·
-    ``staggering`` >0 · ``down`` ==0. Negative edge (over-broken)
+    ``staggering`` >0 · ``down`` ==0. Negative hp (over-broken)
     collapses to ``down``.
     """
     if fraction <= 0.0:
@@ -88,9 +88,9 @@ def _edge_band(fraction: float) -> str:
 
 def _coarsen_query_character(payload: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {k: v for k, v in payload.items() if k in _QC_KEEP_ALWAYS}
-    fraction = payload.get("edge_fraction")
+    fraction = payload.get("hp_fraction")
     if isinstance(fraction, int | float):
-        out["edge_band"] = _edge_band(float(fraction))
+        out["hp_band"] = _hp_band(float(fraction))
     return out
 
 

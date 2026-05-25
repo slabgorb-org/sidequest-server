@@ -22,10 +22,10 @@ from sidequest.game.builder import (
     CannotRevertError,
     ChoiceInput,
     Confirmation,
-    EdgeConfigMissingClassError,
     FreeformInput,
     FreeformNotAllowedError,
     HookType,
+    HpConfigMissingClassError,
     InProgress,
     InvalidChoiceError,
     LoreAnchor,
@@ -302,7 +302,7 @@ class TestBuilderError:
             CannotRevertError(),
             UnknownStatGenerationError(method="weird"),
             NumericNameError(name="7"),
-            EdgeConfigMissingClassError(class_name="Ranger"),
+            HpConfigMissingClassError(class_name="Ranger"),
         ]
         for err in subclasses:
             assert isinstance(err, BuilderError)
@@ -333,8 +333,8 @@ class TestBuilderError:
         assert "'7'" in str(e)
         assert "numeric" in str(e)
 
-    def test_edge_config_missing_class_carries_class(self) -> None:
-        e = EdgeConfigMissingClassError(class_name="Ranger")
+    def test_hp_config_missing_class_carries_class(self) -> None:
+        e = HpConfigMissingClassError(class_name="Ranger")
         assert e.class_name == "Ranger"
         assert "Ranger" in str(e)
 
@@ -348,7 +348,7 @@ class TestBuilderError:
         assert BuilderError.CannotRevert is CannotRevertError
         assert BuilderError.UnknownStatGeneration is UnknownStatGenerationError
         assert BuilderError.NumericName is NumericNameError
-        assert BuilderError.EdgeConfigMissingClass is EdgeConfigMissingClassError
+        assert BuilderError.HpConfigMissingClass is HpConfigMissingClassError
 
     def test_base_catches_subclass(self) -> None:
         """Idiomatic catch: except BuilderError catches any variant."""

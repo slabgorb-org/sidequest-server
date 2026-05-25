@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from sidequest.game.beat_kinds import apply_beat
-from sidequest.game.creature_core import CreatureCore, EdgePool
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.game.encounter import (
     EncounterActor,
     EncounterMetric,
@@ -44,7 +44,7 @@ def _core(name: str, *, current: int = 10, max_: int = 10) -> CreatureCore:
         name=name,
         description="x",
         personality="x",
-        edge=EdgePool(current=current, max=max_, base_max=max_),
+        hp=HpPool(current=current, max=max_, base_max=max_),
     )
 
 
@@ -89,8 +89,8 @@ def test_target_edge_delta_debits_opposing_first_actor_core():
         edge_resolver=cores.get,
     )
 
-    assert promo_core.edge.current == 7
-    assert sam_core.edge.current == 10  # actor untouched when only target_edge_delta set
+    assert promo_core.hp.current == 7
+    assert sam_core.hp.current == 10  # actor untouched when only target_edge_delta set
 
 
 def test_edge_delta_debits_acting_actor_core():
@@ -108,7 +108,7 @@ def test_edge_delta_debits_acting_actor_core():
         edge_resolver=cores.get,
     )
 
-    assert sam_core.edge.current == 8
+    assert sam_core.hp.current == 8
 
 
 def test_target_edge_delta_drives_composure_break_resolves_encounter():
@@ -126,7 +126,7 @@ def test_target_edge_delta_drives_composure_break_resolves_encounter():
         edge_resolver=cores.get,
     )
 
-    assert promo_core.edge.current == 0
+    assert promo_core.hp.current == 0
     assert enc.resolved is True
 
 
@@ -145,7 +145,7 @@ def test_edge_delta_self_break_resolves_encounter():
         edge_resolver=cores.get,
     )
 
-    assert sam_core.edge.current == 0
+    assert sam_core.hp.current == 0
     assert enc.resolved is True
 
 
@@ -215,4 +215,4 @@ def test_target_edge_delta_skipped_when_no_opposing_actor():
         edge_resolver=cores.get,
     )
 
-    assert sam_core.edge.current == 9  # self debit still applied
+    assert sam_core.hp.current == 9  # self debit still applied

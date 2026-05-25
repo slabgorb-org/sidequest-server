@@ -21,7 +21,7 @@ Covers:
 from __future__ import annotations
 
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, RecoveryTrigger
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.genre.models.inventory import (
     CatalogItem,
     InventoryConfig,
@@ -30,20 +30,14 @@ from sidequest.server.dispatch.chargen_loadout import apply_starting_loadout
 
 
 def _make_character(char_class: str = "Delver") -> Character:
-    edge = EdgePool(
-        current=20,
-        max=20,
-        base_max=20,
-        recovery_triggers=[RecoveryTrigger.OnResolution],
-        thresholds=[],
-    )
+    hp = HpPool(current=20, max=20, base_max=20)
     core = CreatureCore(
         name="Rux",
         description="A seasoned delver",
         personality="Curious",
         level=1,
         xp=0,
-        edge=edge,
+        hp=hp,
     )
     return Character(
         core=core,

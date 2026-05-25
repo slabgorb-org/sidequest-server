@@ -452,9 +452,13 @@ class PartyMember(ProtocolBase):
     class_reference_url: str | None = None
     """URL to /reference/rules/<pack>#class-<slug>. Populated when the
     class is a known classes.yaml entry; None otherwise."""
-    rig_composure_current: int | None = None
+    rig_composure_current: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
     """Current rig composure. None when character has no rig."""
-    rig_composure_max: int | None = None
+    rig_composure_max: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
     """Maximum rig composure. None when character has no rig."""
     injury_tags: list[str] = Field(default_factory=list)
     """Crash-related injury statuses (e.g. 'injury', 'dismounted')."""

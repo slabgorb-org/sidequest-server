@@ -523,8 +523,8 @@ def test_sealed_letter_does_not_consume_registry_fallback(sealed_letter_pack):
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.creature_core import (
         CreatureCore,
+        HpPool,
         Inventory,
-        placeholder_edge_pool,
     )
     from sidequest.game.session import Npc
     from sidequest.server.dispatch.encounter_lifecycle import (
@@ -555,7 +555,7 @@ def test_sealed_letter_does_not_consume_registry_fallback(sealed_letter_pack):
                     xp=0,
                     inventory=Inventory(),
                     statuses=[],
-                    edge=placeholder_edge_pool(),
+                    hp=HpPool(current=10, max=10, base_max=10),
                 ),
                 npc_role_id="bystander",
                 last_seen_location="Hangar Bay 7",
@@ -622,8 +622,8 @@ def test_sealed_letter_empty_npcs_present_raises_without_consuming_fallback(
     """
     from sidequest.game.creature_core import (
         CreatureCore,
+        HpPool,
         Inventory,
-        placeholder_edge_pool,
     )
     from sidequest.game.session import Npc
     from sidequest.server.dispatch.encounter_lifecycle import (
@@ -642,7 +642,7 @@ def test_sealed_letter_empty_npcs_present_raises_without_consuming_fallback(
                 xp=0,
                 inventory=Inventory(),
                 statuses=[],
-                edge=placeholder_edge_pool(),
+                hp=HpPool(current=10, max=10, base_max=10),
             ),
             npc_role_id="bystander",
             last_seen_location="Hangar Bay 7",

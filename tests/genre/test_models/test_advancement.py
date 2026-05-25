@@ -7,8 +7,8 @@ from pydantic import ValidationError
 
 from sidequest.genre.models import (
     AdvancementEffectBeatDiscount,
-    AdvancementEffectEdgeMaxBonus,
-    AdvancementEffectEdgeRecovery,
+    AdvancementEffectHpMaxBonus,
+    AdvancementEffectHpRecovery,
     AdvancementEffectLeverageBonus,
     AdvancementEffectLoreRevealBonus,
     AdvancementTier,
@@ -41,11 +41,11 @@ class TestRecoveryTrigger:
 
 class TestAdvancementEffect:
     def test_edge_max_bonus(self) -> None:
-        e = AdvancementEffectEdgeMaxBonus.model_validate({"type": "edge_max_bonus", "amount": 5})
+        e = AdvancementEffectHpMaxBonus.model_validate({"type": "edge_max_bonus", "amount": 5})
         assert e.amount == 5
 
     def test_edge_recovery(self) -> None:
-        e = AdvancementEffectEdgeRecovery.model_validate(
+        e = AdvancementEffectHpRecovery.model_validate(
             {
                 "type": "edge_recovery",
                 "trigger": {"kind": "on_resolution"},

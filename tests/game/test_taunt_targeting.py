@@ -4,7 +4,7 @@ When an enemy strikes and taunt is active, the taunter absorbs the hit
 instead of the default first-listed ally.  These tests drive the REAL
 production path:
 
-    apply_beat → _opposite_side_first_actor (taunt-aware) → CreatureCore.apply_edge_delta
+    apply_beat → _opposite_side_first_actor (taunt-aware) → CreatureCore.apply_hp_delta
 
 Shape A wiring: the bias lives in _opposite_side_first_actor inside
 beat_kinds.py — the same helper that apply_beat's focus/swarm branch
@@ -33,8 +33,8 @@ def test_enemy_strike_without_taunt_hits_first_ally(taunt_test_encounter):
 
     assert enc.taunt.active_actor is None, "taunt must start inactive"
 
-    fighter_before = fighter_core.edge.current
-    cleric_before = cleric_core.edge.current
+    fighter_before = fighter_core.hp.current
+    cleric_before = cleric_core.hp.current
 
     enemy_actor = enc.find_actor("enemy-1")
     assert enemy_actor is not None
@@ -49,12 +49,12 @@ def test_enemy_strike_without_taunt_hits_first_ally(taunt_test_encounter):
     )
 
     # Fighter is first on the player side — absorbs the strike.
-    assert fighter_core.edge.current < fighter_before, (
+    assert fighter_core.hp.current < fighter_before, (
         f"Fighter should be hit (first-actor default); "
-        f"edge {fighter_before} → {fighter_core.edge.current}"
+        f"edge {fighter_before} → {fighter_core.hp.current}"
     )
     # Cleric is untouched.
-    assert cleric_core.edge.current == cleric_before, (
+    assert cleric_core.hp.current == cleric_before, (
         f"Cleric should be untouched (no taunt, fighter is first); "
         f"edge unchanged at {cleric_before}"
     )
@@ -76,8 +76,8 @@ def test_enemy_strike_with_taunt_routes_to_taunter(taunt_test_encounter):
     enc.taunt.activate(actor_id=helper.fighter_id)
     assert enc.taunt.active_actor == helper.fighter_id
 
-    fighter_before = fighter_core.edge.current
-    cleric_before = cleric_core.edge.current
+    fighter_before = fighter_core.hp.current
+    cleric_before = cleric_core.hp.current
 
     enemy_actor = enc.find_actor("enemy-1")
     assert enemy_actor is not None
@@ -91,11 +91,11 @@ def test_enemy_strike_with_taunt_routes_to_taunter(taunt_test_encounter):
         edge_resolver=helper.edge_resolver,
     )
 
-    assert fighter_core.edge.current < fighter_before, (
+    assert fighter_core.hp.current < fighter_before, (
         f"Fighter should absorb the hit (taunt active); "
-        f"edge {fighter_before} → {fighter_core.edge.current}"
+        f"edge {fighter_before} → {fighter_core.hp.current}"
     )
-    assert cleric_core.edge.current == cleric_before, (
+    assert cleric_core.hp.current == cleric_before, (
         f"Cleric should be untouched while taunt is active; edge unchanged at {cleric_before}"
     )
 
@@ -116,8 +116,8 @@ def test_enemy_strike_with_taunt_on_cleric_routes_to_cleric(taunt_test_encounter
     enc.taunt.activate(actor_id=helper.cleric_id)
     assert enc.taunt.active_actor == helper.cleric_id
 
-    fighter_before = fighter_core.edge.current
-    cleric_before = cleric_core.edge.current
+    fighter_before = fighter_core.hp.current
+    cleric_before = cleric_core.hp.current
 
     enemy_actor = enc.find_actor("enemy-1")
     assert enemy_actor is not None
@@ -132,12 +132,12 @@ def test_enemy_strike_with_taunt_on_cleric_routes_to_cleric(taunt_test_encounter
     )
 
     # Cleric is the taunter — she absorbs the hit.
-    assert cleric_core.edge.current < cleric_before, (
+    assert cleric_core.hp.current < cleric_before, (
         f"Cleric should absorb the hit (taunt active on cleric); "
-        f"edge {cleric_before} → {cleric_core.edge.current}"
+        f"edge {cleric_before} → {cleric_core.hp.current}"
     )
     # Fighter is the normal first-actor but is bypassed by taunt bias.
-    assert fighter_core.edge.current == fighter_before, (
+    assert fighter_core.hp.current == fighter_before, (
         f"Fighter should be untouched (taunt redirected to cleric); "
         f"edge unchanged at {fighter_before}"
     )
@@ -165,8 +165,8 @@ def test_spread_damage_redirects_one_ally_to_taunter(taunt_test_encounter):
 
     enc.taunt.activate(actor_id=helper.fighter_id)
 
-    fighter_before = fighter_core.edge.current
-    cleric_before = cleric_core.edge.current
+    fighter_before = fighter_core.hp.current
+    cleric_before = cleric_core.hp.current
 
     enemy_actor = enc.find_actor("enemy-1")
     apply_beat(
@@ -178,8 +178,8 @@ def test_spread_damage_redirects_one_ally_to_taunter(taunt_test_encounter):
         edge_resolver=helper.edge_resolver,
     )
 
-    fighter_drop = fighter_before - fighter_core.edge.current
-    cleric_drop = cleric_before - cleric_core.edge.current
+    fighter_drop = fighter_before - fighter_core.hp.current
+    cleric_drop = cleric_before - cleric_core.hp.current
 
     assert fighter_drop == 6, (
         f"Fighter should absorb own hit (3) + redirected cleric hit (3) = 6; "
@@ -212,8 +212,8 @@ def test_spread_damage_redirect_capped_at_one_per_round(taunt_test_encounter):
 
     enc.taunt.activate(actor_id=helper.fighter_id)
 
-    fighter_before = fighter_core.edge.current
-    cleric_before = cleric_core.edge.current
+    fighter_before = fighter_core.hp.current
+    cleric_before = cleric_core.hp.current
 
     # First spread fires — one redirect consumed.
     apply_beat(
@@ -234,8 +234,8 @@ def test_spread_damage_redirect_capped_at_one_per_round(taunt_test_encounter):
         edge_resolver=helper.edge_resolver,
     )
 
-    fighter_drop = fighter_before - fighter_core.edge.current
-    cleric_drop = cleric_before - cleric_core.edge.current
+    fighter_drop = fighter_before - fighter_core.hp.current
+    cleric_drop = cleric_before - cleric_core.hp.current
 
     assert enc.taunt.redirects_this_round == 1, (
         f"Cap should hold at 1; got {enc.taunt.redirects_this_round}"

@@ -74,7 +74,7 @@ class _Core:
     level = 3
     acquired_advancements = ["adv.iron_grip"]
     statuses = [type("S", (), {"text": "Wound: ribs", "severity": "wound"})()]
-    edge = _Edge()
+    hp = _Edge()
     inventory = _Inv()
 
 
@@ -84,7 +84,7 @@ class _Char:
     abilities = [object(), object()]
 
     def is_broken(self):
-        return self.core.edge.current <= 0
+        return self.core.hp.current <= 0
 
 
 def test_build_pc_census_reads_every_gap_subsystem():
@@ -174,7 +174,7 @@ def test_one_bad_pc_is_isolated_others_and_trope_still_emit(tmp_path, caplog):
             level = 1
             acquired_advancements: list = []
             statuses: list = []
-            edge = type("E", (), {"current": 5, "max": 5, "base_max": 5})()
+            hp = type("E", (), {"current": 5, "max": 5, "base_max": 5})()
             inventory = type("I", (), {"items": [], "gold": 0})()
 
         good = type(
@@ -192,8 +192,8 @@ def test_one_bad_pc_is_isolated_others_and_trope_still_emit(tmp_path, caplog):
             name = "Vex"
 
             @property
-            def edge(self):
-                raise RuntimeError("corrupt edge pool")
+            def hp(self):
+                raise RuntimeError("corrupt hp pool")
 
         bad = type(
             "B",
@@ -252,7 +252,7 @@ def test_census_payload_never_sets_encounter_field(tmp_path):
                 "level": 1,
                 "acquired_advancements": [],
                 "statuses": [],
-                "edge": type("E", (), {"current": 1, "max": 1, "base_max": 1})(),
+                "hp": type("E", (), {"current": 1, "max": 1, "base_max": 1})(),
                 "inventory": type("I", (), {"items": [], "gold": 0})(),
             },
         )()

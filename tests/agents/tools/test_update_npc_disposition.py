@@ -27,7 +27,7 @@ from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import (
     update_npc_disposition as _update_npc_disposition_module,  # noqa: F401
 )
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.disposition import Disposition
 from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot, Npc
@@ -40,7 +40,7 @@ def _npc(name: str, *, disposition: int = 0) -> Npc:
         description="d",
         personality="p",
         inventory=Inventory(),
-        edge=EdgePool(current=4, max=4, base_max=4),
+        hp=HpPool(current=4, max=4, base_max=4),
     )
     return Npc(core=core, disposition=Disposition(disposition))
 

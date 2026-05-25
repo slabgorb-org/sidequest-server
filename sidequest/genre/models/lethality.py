@@ -9,7 +9,10 @@ not at runtime — CLAUDE.md "no silent fallbacks".
 
 The arbiter (sidequest.agents.lethality_arbiter) reads this model to
 decide what verdict shape a given genre produces when a PC or NPC hits
-zero edge, and what narrator-tone constraint envelope ships alongside.
+zero HP, and what narrator-tone constraint envelope ships alongside.
+
+ADR-114: renamed verdicts_on_zero_edge → verdicts_on_zero_hp; the YAML
+key in all lethality_policy.yaml files was updated to match.
 """
 
 from __future__ import annotations
@@ -19,8 +22,8 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from sidequest.protocol.dispatch import LethalityVerdictKind, Reversibility
 
 
-class VerdictsOnZeroEdge(BaseModel):
-    """Per-actor-kind verdict shape when `core.edge.current == 0`."""
+class VerdictsOnZeroHp(BaseModel):
+    """Per-actor-kind verdict shape when `core.hp.current == 0`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -41,7 +44,7 @@ class LethalityPolicy(BaseModel):
 
     genre_key: str
     default_reversibility: Reversibility
-    verdicts_on_zero_edge: VerdictsOnZeroEdge
+    verdicts_on_zero_hp: VerdictsOnZeroHp
     soul_md_constraint: str
     must_narrate: str
     must_not_narrate: str
@@ -54,4 +57,4 @@ class LethalityPolicy(BaseModel):
         return v
 
 
-__all__ = ["LethalityPolicy", "VerdictsOnZeroEdge"]
+__all__ = ["LethalityPolicy", "VerdictsOnZeroHp"]

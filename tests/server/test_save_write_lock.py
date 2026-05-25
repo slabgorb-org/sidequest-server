@@ -23,6 +23,7 @@ Post-fix: zero failures, zero swallowed warnings, every non-NULL
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -30,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
 
+from sidequest.game import persistence as persistence_module
 from sidequest.game.persistence import SAVE_WRITE_LOCK, SqliteStore
 from sidequest.telemetry.watcher_hub import bind_event_store, publish_event
 
@@ -204,6 +206,65 @@ def test_concurrent_writers_no_race(store, caplog):
         "SELECT COUNT(*) FROM turn_telemetry WHERE event_seq IS NOT NULL"
     ).fetchone()[0]
     assert inflight > 0, "no in-transaction telemetry rows — group C never fired"
+
+
+# -------- load-path checkpoint lock regression --------
+
+
+def test_load_canonicalize_checkpoint_holds_write_lock(tmp_path, monkeypatch):
+    """The WAL checkpoint on the ``load()`` canonicalize-backup path must run
+    under ``SAVE_WRITE_LOCK``.
+
+    Regression for the slipped writer the #413 sweep missed: it wrapped the
+    9 obvious writer *methods*, but ``load()`` (a read method) also issues a
+    ``PRAGMA wal_checkpoint(TRUNCATE)`` write when it canonicalizes a legacy
+    save. Under MP reconnect storms an unlocked checkpoint here races a live
+    ``save()`` on another connection → "database is locked".
+
+    We force the canonicalize path by augmenting a freshly-saved snapshot
+    with a legacy ``world_confrontations`` field (which the migration pops,
+    making ``migrated != raw``), then assert the lock is held at the moment
+    the backup copy runs — that copy sits inside the same
+    ``with SAVE_WRITE_LOCK`` block as the checkpoint.
+    """
+    from sidequest.game.session import GameSnapshot
+
+    store = SqliteStore.open(str(tmp_path / "save.db"))
+    store.save(GameSnapshot())
+
+    # Augment the stored snapshot with a legacy field so the next load()
+    # migrates (migrated != raw) and takes the checkpoint+backup branch.
+    with SAVE_WRITE_LOCK, store._conn:
+        row = store._conn.execute("SELECT snapshot_json FROM game_state WHERE id = 1").fetchone()
+        data = json.loads(row["snapshot_json"])
+        data["world_confrontations"] = []
+        store._conn.execute(
+            "UPDATE game_state SET snapshot_json = ? WHERE id = 1",
+            (json.dumps(data),),
+        )
+
+    lock_held_at_copy: dict[str, bool] = {}
+    real_copy2 = persistence_module.shutil.copy2
+
+    def _spy_copy2(src, dst, *args, **kwargs):
+        # copy2 runs immediately after the checkpoint, inside the same
+        # ``with SAVE_WRITE_LOCK`` block — so ownership here proves the
+        # checkpoint write was serialized too.
+        lock_held_at_copy["held"] = SAVE_WRITE_LOCK._is_owned()
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(persistence_module.shutil, "copy2", _spy_copy2)
+
+    result = store.load()
+
+    assert result is not None
+    assert lock_held_at_copy.get("held") is True, (
+        "load()'s canonicalize checkpoint+backup must run under SAVE_WRITE_LOCK"
+    )
+    assert (tmp_path / "save.db.canonicalize.bak").exists(), (
+        "the canonicalize path must have fired (otherwise the test is vacuous)"
+    )
+    store.close()
 
 
 # -------- reentrancy unit test --------

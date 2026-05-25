@@ -1,16 +1,11 @@
-"""prompt_redaction — DORMANT.
+"""prompt_redaction — Visibility filtering for the narrator prompt.
 
-This module is not invoked on the live turn path as of 2026-04-28
-(see docs/superpowers/specs/2026-04-28-localdm-offline-only-design.md).
+Called by the orchestrator before narrator prompt assembly to strip
+dispatches and directives tagged with ``redact_from_narrator_canonical=True``.
+Structural hiding is the primary defense: the narrator cannot leak what
+it was never told.
 
-It is preserved for two consumers:
-  1. The offline LocalDM corpus runner (follow-up story).
-  2. Re-engagement on the live path once ADR-073's local fine-tuned
-     router replaces the Haiku CLI subprocess.
-
-Unit tests for this module remain in `just check-all` so it does not
-bit-rot. If you find yourself adding a live caller, you are landing
-ADR-073 (or undoing this design); update both ends.
+Live on the narrator prompt path since ADR-113 router revival (story 59-4).
 """
 
 from __future__ import annotations

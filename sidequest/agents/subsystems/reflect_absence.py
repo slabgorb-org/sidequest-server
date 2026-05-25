@@ -1,16 +1,10 @@
-"""reflect_absence — DORMANT.
+"""reflect_absence — Live-path subsystem (story 59-7).
 
-This module is not invoked on the live turn path as of 2026-04-28
-(see docs/superpowers/specs/2026-04-28-localdm-offline-only-design.md).
-
-It is preserved for two consumers:
-  1. The offline LocalDM corpus runner (follow-up story).
-  2. Re-engagement on the live path once ADR-073's local fine-tuned
-     router replaces the Haiku CLI subprocess.
-
-Unit tests for this module remain in `just check-all` so it does not
-bit-rot. If you find yourself adding a live caller, you are landing
-ADR-073 (or undoing this design); update both ends.
+Wired onto the live turn path via Intent Router dispatch (ADR-113).
+The bank executor calls this handler when the router emits a
+``reflect_absence`` dispatch; the handler produces ``must_not_narrate``
+and ``must_narrate`` directives forcing the narrator to acknowledge
+absence honestly rather than inventing an NPC or off-screen responder.
 """
 
 from __future__ import annotations

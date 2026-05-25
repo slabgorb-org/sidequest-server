@@ -1,24 +1,15 @@
-"""npc_agency — DORMANT.
+"""npc_agency — Live-path subsystem (story 59-7).
 
-This module is not invoked on the live turn path as of 2026-04-28
-(see docs/superpowers/specs/2026-04-28-localdm-offline-only-design.md).
-
-It is preserved for two consumers:
-  1. The offline LocalDM corpus runner (follow-up story).
-  2. Re-engagement on the live path once ADR-073's local fine-tuned
-     router replaces the Haiku CLI subprocess.
-
-Unit tests for this module remain in `just check-all` so it does not
-bit-rot. If you find yourself adding a live caller, you are landing
-ADR-073 (or undoing this design); update both ends.
+Wired onto the live turn path via Intent Router dispatch (ADR-113).
+The bank executor calls this handler when the router emits an
+``npc_agency`` dispatch; the handler surfaces NPC identity facts as
+narrator directives so the narrator references established NPCs
+rather than inventing new ones.
 
 Wave 2A signature note (story 45-52): the subsystem accepts ``npc_pool``
 (``list[NpcPoolMember]``) instead of the dropped ``npc_registry``. Pool
 members are identity-only — they carry name / role / pronouns / appearance
-but not last-seen tracking. Re-engaging the live path will likely want to
-thread ``snapshot.npcs`` in as well so the directive can mention
-``last_seen_location`` again, but that decision belongs to the
-re-activation story, not this cleanup.
+but not last-seen tracking.
 """
 
 from __future__ import annotations

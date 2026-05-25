@@ -20,6 +20,7 @@ from sidequest.cli.validate.audio import main as audio_main
 from sidequest.cli.validate.locations import main as locations_main
 from sidequest.cli.validate.pack import main as pack_main
 from sidequest.cli.validate.projection_check import main as projection_check_main
+from sidequest.cli.validate.reference_chrome import main as reference_chrome_main
 
 
 @click.group()
@@ -30,6 +31,7 @@ def cli() -> None:
 # ``locations``, ``audio``, and ``pack`` are click.commands — register directly.
 cli.add_command(locations_main, name="locations")
 cli.add_command(audio_main, name="audio")
+cli.add_command(reference_chrome_main, name="reference-chrome")
 cli.add_command(pack_main, name="pack")
 
 

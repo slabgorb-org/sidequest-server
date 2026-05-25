@@ -40,7 +40,6 @@ _STUB_THEME = ReferenceTheme(
         ("lore", "lore"),
         ("world", "world"),
         ("achievements", "achievement"),
-        ("tropes", "trope"),
     ],
 )
 def test_kind_for_stem(stem: str, expected: str) -> None:

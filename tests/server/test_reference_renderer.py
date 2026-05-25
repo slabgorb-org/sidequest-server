@@ -220,6 +220,7 @@ def test_below_depth_cap_renders_normally():
 
 
 def test_rules_files_in_documented_order():
+    # Story 63-5: tropes.yaml removed — keeper-side only per design bundle.
     assert RULES_FILES == (
         "archetypes.yaml",
         "classes.yaml",
@@ -228,7 +229,6 @@ def test_rules_files_in_documented_order():
         "magic.yaml",
         "power_tiers.yaml",
         "achievements.yaml",
-        "tropes.yaml",
         "equipment_tables.yaml",
         "inventory.yaml",
         "beat_vocabulary.yaml",
@@ -264,6 +264,38 @@ def test_npcs_and_seed_tropes_are_excluded():
     assert "npcs.yaml" in EXCLUDED_FILES
     assert "seed_tropes.yaml" in EXCLUDED_FILES
     assert "prompts.yaml" in EXCLUDED_FILES
+
+
+def test_tropes_yaml_excluded_from_rules_files():
+    """Story 63-5 AC-7: tropes.yaml must NOT be in RULES_FILES.
+
+    Tropes are keeper-side only per the design bundle. seed_tropes.yaml was
+    already excluded; tropes.yaml was mistakenly left in RULES_FILES and
+    rendered on rules reference pages.
+    """
+    assert "tropes.yaml" not in RULES_FILES
+    assert "tropes.yaml" in EXCLUDED_FILES
+
+
+def test_tropes_content_never_rendered_on_rules_page(tmp_path):
+    """Story 63-5 AC-8/AC-9: fixture pack with tropes.yaml must NOT render
+    trope content or section headings on the rules page.
+    """
+    from sidequest.server.reference_renderer import assemble_rules_page
+
+    pack_dir = _write_pack(
+        tmp_path,
+        "demo",
+        {
+            "archetypes.yaml": "a: 1\n",
+            "tropes.yaml": _yaml.safe_dump(
+                {"tropes": [{"name": "Keeper Only Trope", "description": "secret"}]}
+            ),
+        },
+    )
+    html = assemble_rules_page("demo", pack_dir)
+    assert "Keeper Only Trope" not in html
+    assert "keeper only" not in html.lower()
 
 
 def test_no_overlap_between_included_and_excluded():

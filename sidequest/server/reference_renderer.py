@@ -101,7 +101,6 @@ _KIND_OVERRIDES: dict[str, str] = {
     "legends": "legend",
     "locations": "location",
     "achievements": "achievement",
-    "tropes": "trope",
     # Story 63-7 Task F: factions.yaml entries get `cult-<slug>` ids
     # (per plan line 2832-2839). Keeps lore-tier list-of-dict items
     # in a distinct namespace from rules-tier classes/archetypes.
@@ -334,7 +333,6 @@ RULES_FILES: tuple[str, ...] = (
     "magic.yaml",
     "power_tiers.yaml",
     "achievements.yaml",
-    "tropes.yaml",
     "equipment_tables.yaml",
     "inventory.yaml",
     "beat_vocabulary.yaml",
@@ -362,9 +360,10 @@ LORE_PACK_FLAVOR_FILES: tuple[str, ...] = (
 
 EXCLUDED_FILES: frozenset[str] = frozenset(
     {
-        # Spoiler-bearing — see iteration 2 of the spec
+        # Spoiler-bearing / keeper-side only
         "npcs.yaml",
         "seed_tropes.yaml",
+        "tropes.yaml",
         # System-tier / metadata / asset config (not player-facing content)
         "prompts.yaml",
         "pack.yaml",

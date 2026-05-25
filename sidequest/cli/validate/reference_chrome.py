@@ -24,5 +24,5 @@ def main(pack_dir: str) -> None:
         theme = load_reference_theme(pack_path)
     except MissingThemeFieldError as exc:
         click.echo(f"[FAIL] {pack_name}: {exc}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     click.echo(f"[OK]   {pack_name}: theme={theme.archetype}/{theme.display_font_family}")

@@ -484,6 +484,7 @@ def generate_enemy(
 ) -> EnemyBlock:
     """Generate a humanoid enemy block from pack rules + archetypes."""
     corpus_dir = genre_dir / "corpus"
+    corpus_fallbacks = [genre_dir.parent.parent / "corpus" / "shared"]
 
     # Class
     allowed_classes = pack.rules.allowed_classes
@@ -573,7 +574,7 @@ def generate_enemy(
     else:
         culture = rng.choice(cultures)
 
-    name = _generate_name(culture, corpus_dir, rng)
+    name = _generate_name(culture, corpus_dir, rng, fallback_dirs=corpus_fallbacks)
 
     # Role
     role = args.role if args.role else archetype.name.lower()
@@ -622,8 +623,13 @@ def generate_enemy(
     )
 
 
-def _generate_name(culture: Culture, corpus_dir: Path, rng: random.Random) -> str:
-    generator = build_from_culture(culture, corpus_dir, rng)
+def _generate_name(
+    culture: Culture,
+    corpus_dir: Path,
+    rng: random.Random,
+    fallback_dirs: list[Path] | None = None,
+) -> str:
+    generator = build_from_culture(culture, corpus_dir, rng, fallback_dirs=fallback_dirs)
     for _ in range(10):
         candidate = generator.generate_person()
         if not candidate:

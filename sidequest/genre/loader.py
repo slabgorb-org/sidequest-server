@@ -713,7 +713,7 @@ def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
     genre_root: Path,
-) -> World:
+) -> World | None:
     """Load a single world from its directory.
 
     Port of Rust load_single_world(). Every world is a leaf — carries
@@ -729,21 +729,51 @@ def _load_single_world(
             can compose genre+world layers — both files are required by
             ``load_world_magic`` (see ``magic_loader.py``).
 
+    Returns:
+        A fully assembled World, or None if the world's world.yaml declares
+        ``draft: true`` (draft worlds are silently skipped at pack load time).
+
     Raises:
         GenreLoadError: If required files are missing or malformed.
     """
     config: WorldConfig = _load_yaml(world_path / "world.yaml", WorldConfig)
+    if config.draft:
+        return None
     lore: WorldLore = _load_yaml(world_path / "lore.yaml", WorldLore)
 
     cartography: CartographyConfig = _load_cartography(world_path / "cartography.yaml")
 
-    cultures_raw = _load_yaml_raw_optional(world_path / "cultures.yaml")
-    cultures: list[Culture] = (
-        [Culture.model_validate(c) for c in cultures_raw] if isinstance(cultures_raw, list) else []
-    )
+    cultures_dir = world_path / "cultures"
+    if cultures_dir.is_dir():
+        cultures: list[Culture] = []
+        for f in sorted(cultures_dir.glob("*.yaml")):
+            if f.name == ".gitkeep":
+                continue
+            raw = _load_yaml_raw(f)
+            # Skip art-pipeline visual-token overlays (have visual_tokens, not name).
+            # These live in cultures/ for the daemon image pipeline and are not
+            # name-generation Culture objects.
+            if not isinstance(raw, dict) or "name" not in raw:
+                continue
+            cultures.append(Culture.model_validate(raw))
+    else:
+        cultures_raw = _load_yaml_raw_optional(world_path / "cultures.yaml")
+        cultures = (
+            [Culture.model_validate(c) for c in cultures_raw]
+            if isinstance(cultures_raw, list)
+            else []
+        )
 
     # Legends: accept either Vec<Legend> (low_fantasy) or map with "legends" key (road_warrior).
-    legends, legends_raw = _load_legends_flexible(world_path / "legends.yaml")
+    legends_dir = world_path / "legends"
+    if legends_dir.is_dir():
+        legends_files = sorted(legends_dir.glob("*.yaml"))
+        legends_files = [f for f in legends_files if f.name != "_meta.yaml" and f.name != ".gitkeep"]
+        legends: list[Legend] = [Legend.model_validate(_load_yaml_raw(f)) for f in legends_files]
+        meta_path = legends_dir / "_meta.yaml"
+        legends_raw: Any = _load_yaml_raw(meta_path) if meta_path.exists() else None
+    else:
+        legends, legends_raw = _load_legends_flexible(world_path / "legends.yaml")
 
     # Load world tropes and resolve inheritance from genre-level tropes
     world_tropes_raw = _load_yaml_raw_optional(world_path / "tropes.yaml")
@@ -1098,10 +1128,12 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         base_archetypes = _load_yaml_optional(content_root / "archetypes_base.yaml", BaseArchetypes)
         npc_traits = _load_yaml_optional(content_root / "npc_traits.yaml", NpcTraitsDatabase)
 
-    # Load worlds and scenarios from subdirectories
-    worlds: dict[str, World] = _load_subdirectories(
+    # Load worlds and scenarios from subdirectories.
+    # _load_single_world returns None for worlds with draft: true — filter them out.
+    worlds_raw: dict[str, World | None] = _load_subdirectories(
         path, "worlds", lambda p: _load_single_world(p, genre_tropes, path)
     )
+    worlds: dict[str, World] = {slug: w for slug, w in worlds_raw.items() if w is not None}
     scenarios: dict[str, ScenarioPack] = _load_subdirectories(
         path, "scenarios", _load_single_scenario
     )

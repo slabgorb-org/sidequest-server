@@ -542,6 +542,7 @@ def generate_npc(
     rng: random.Random,
 ) -> NpcBlock:
     corpus_dir = genre_dir / "corpus"
+    corpus_fallbacks = [genre_dir.parent.parent / "corpus" / "shared"]
 
     world_opt: World | None = pack.worlds.get(args.world) if args.world else None
 
@@ -609,7 +610,7 @@ def generate_npc(
     if archetype is None:
         archetype = rng.choice(effective_archetypes)
 
-    generator = build_from_culture(culture, corpus_dir, rng)
+    generator = build_from_culture(culture, corpus_dir, rng, fallback_dirs=corpus_fallbacks)
     name = ""
     stem_collision_count = 0
     for attempt_index in range(10):

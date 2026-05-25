@@ -484,6 +484,10 @@ async def test_narration_apply_emits_momentum_broadcast_span(
     # Ensure the pack has a "combat" confrontation def the narrator can
     # open (matches the orchestrator mock's confrontation="combat").
     _install_combat_def(sd)
+    # Story 59-4: encounter creation is now router-driven, not narrator-
+    # initiated. Pre-install an active encounter so _execute_narration_turn
+    # sees now_live=True and emits the CONFRONTATION + momentum_broadcast span.
+    _install_active_encounter(sd)
 
     handler._event_log = EventLog(store)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
@@ -502,23 +506,13 @@ async def test_narration_apply_emits_momentum_broadcast_span(
     handler._room = room
     handler._socket_id = socket_ids["actor"]
 
-    # Orchestrator mock: opens a fresh combat confrontation. This is
-    # the branch in _execute_narration_turn that builds the post-
-    # narration CONFRONTATION via build_confrontation_payload + cdef
-    # and routes it through _emit_event. The encounter is currently
-    # None on the snapshot (no _install_active_encounter call) so
-    # confrontation="combat" triggers the now_live=True path that
-    # emits the CONFRONTATION.
-    # Story 45-33: combat encounters require an opponent post-fallback;
-    # supply an explicit goblin so the lifecycle does not raise — the
-    # test's focus is the post-narration momentum-broadcast span fan-out.
-    from sidequest.agents.orchestrator import NpcMention
-
+    # Orchestrator mock: returns narration prose. The encounter already
+    # exists (pre-installed above) so _execute_narration_turn detects
+    # now_live=True and emits the post-narration CONFRONTATION +
+    # momentum_broadcast span.
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="Rux squares off — combat begins.",
-            confrontation="combat",
-            npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
         ),
     )
 

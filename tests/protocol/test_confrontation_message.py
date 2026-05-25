@@ -51,6 +51,7 @@ def test_confrontation_message_roundtrip() -> None:
         "player_metric",
         "opponent_metric",
         "beats",
+        "secondary_stats",
         "genre_slug",
         "mood",
         "active",

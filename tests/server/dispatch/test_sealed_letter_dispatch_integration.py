@@ -55,6 +55,7 @@ from sidequest.server.narration_apply import (
     _apply_narration_result_to_snapshot,
 )
 from tests._helpers.session_room import room_for
+from tests._helpers.trigger_encounter import trigger_encounter
 
 # Real space_opera content carries the sealed_letter dogfight ConfrontationDef
 # and the loaded InteractionTable. The fixture pack at tests/fixtures/packs
@@ -134,19 +135,11 @@ def test_dogfight_instantiation_assigns_red_blue_roles(
     so the sealed-letter handler can find them by role lookup.
     """
     snap, pack = space_opera_snap
-    result = NarrationTurnResult(
-        narration="Twin engines howl as the bandit slashes past your canopy.",
-        confrontation="dogfight",
+    trigger_encounter(
+        snap, pack, "dogfight", "Maverick",
         npcs_present=[
             NpcMention(name="Bandit Ace", role="hostile", side="opponent"),
         ],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Maverick",
-        pack=pack,
-        room=room_for(snap),
     )
 
     enc = snap.encounter
@@ -171,24 +164,15 @@ def test_dogfight_instantiation_rejects_zero_npcs(
 ) -> None:
     """Sealed-letter dogfights need exactly one opponent. Playtest
     2026-05-08: the prior crash-on-arity behavior wedged the player on
-    turn 1 (auto-save + reconnect = sticky crash loop). Now the wrapper
-    catches ``SealedLetterArityError``, fires
-    ``encounter.sealed_letter_arity_rejected``, and the turn continues
-    on prose alone — no encounter instantiates.
+    turn 1 (auto-save + reconnect = sticky crash loop). Now the lifecycle
+    raises ``SealedLetterArityError`` and fires
+    ``encounter.sealed_letter_arity_rejected`` — no encounter instantiates.
     """
+    from sidequest.server.dispatch.encounter_lifecycle import SealedLetterArityError
+
     snap, pack = space_opera_snap
-    result = NarrationTurnResult(
-        narration="An enemy fighter screams toward you.",
-        confrontation="dogfight",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Maverick",
-        pack=pack,
-        room=room_for(snap),
-    )
+    with pytest.raises(SealedLetterArityError):
+        trigger_encounter(snap, pack, "dogfight", "Maverick", npcs_present=[])
     assert snap.encounter is None, "no encounter must instantiate when arity guard fires"
 
     span_names = {span.name for span in otel_capture.get_finished_spans()}
@@ -207,22 +191,17 @@ def test_dogfight_instantiation_rejects_two_npcs(
     1v1 contract refused 3 actors, the turn crashed and auto-save +
     reconnect put the player back on the same crashing turn forever.
     """
+    from sidequest.server.dispatch.encounter_lifecycle import SealedLetterArityError
+
     snap, pack = space_opera_snap
-    result = NarrationTurnResult(
-        narration="Two bandits roll in on your six.",
-        confrontation="dogfight",
-        npcs_present=[
-            NpcMention(name="Bandit One", role="hostile", side="opponent"),
-            NpcMention(name="Bandit Two", role="hostile", side="opponent"),
-        ],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Maverick",
-        pack=pack,
-        room=room_for(snap),
-    )
+    with pytest.raises(SealedLetterArityError):
+        trigger_encounter(
+            snap, pack, "dogfight", "Maverick",
+            npcs_present=[
+                NpcMention(name="Bandit One", role="hostile", side="opponent"),
+                NpcMention(name="Bandit Two", role="hostile", side="opponent"),
+            ],
+        )
     assert snap.encounter is None, "no encounter must instantiate when arity guard fires"
 
     arity_spans = [
@@ -285,18 +264,11 @@ def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
     snap, pack = space_opera_snap
 
     # Turn 1: instantiate the dogfight encounter
-    _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration="The merge: tracers flicker between hulls.",
-            confrontation="dogfight",
-            npcs_present=[
-                NpcMention(name="Iron Fang", role="ace", side="opponent"),
-            ],
-        ),
-        player_name="Vega",
-        pack=pack,
-        room=room_for(snap),
+    trigger_encounter(
+        snap, pack, "dogfight", "Vega",
+        npcs_present=[
+            NpcMention(name="Iron Fang", role="ace", side="opponent"),
+        ],
     )
     enc = snap.encounter
     assert enc is not None
@@ -373,18 +345,11 @@ def test_dogfight_dispatch_does_not_invoke_apply_beat(
     """
     snap, pack = space_opera_snap
 
-    _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration="Merge!",
-            confrontation="dogfight",
-            npcs_present=[
-                NpcMention(name="Wraith", role="hostile", side="opponent"),
-            ],
-        ),
-        player_name="Pilot",
-        pack=pack,
-        room=room_for(snap),
+    trigger_encounter(
+        snap, pack, "dogfight", "Pilot",
+        npcs_present=[
+            NpcMention(name="Wraith", role="hostile", side="opponent"),
+        ],
     )
     enc = snap.encounter
     assert enc is not None
@@ -429,18 +394,11 @@ def test_per_actor_state_round_trip_after_dispatch(
     """
     snap, pack = space_opera_snap
 
-    _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration="Merge.",
-            confrontation="dogfight",
-            npcs_present=[
-                NpcMention(name="Spectre", role="hostile", side="opponent"),
-            ],
-        ),
-        player_name="Lance",
-        pack=pack,
-        room=room_for(snap),
+    trigger_encounter(
+        snap, pack, "dogfight", "Lance",
+        npcs_present=[
+            NpcMention(name="Spectre", role="hostile", side="opponent"),
+        ],
     )
     _apply_narration_result_to_snapshot(
         snap,
@@ -494,18 +452,11 @@ def test_legacy_beat_selection_path_still_works(
     snap, pack = cac_snap
 
     # Turn 1: instantiate combat with a hostile NPC
-    _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration="Goblins leap from the shadows.",
-            confrontation="combat",
-            npcs_present=[
-                NpcMention(name="Goblin", role="hostile", side="opponent"),
-            ],
-        ),
-        player_name="Rux",
-        pack=pack,
-        room=room_for(snap),
+    trigger_encounter(
+        snap, pack, "combat", "Rux",
+        npcs_present=[
+            NpcMention(name="Goblin", role="hostile", side="opponent"),
+        ],
     )
     enc = snap.encounter
     assert enc is not None
@@ -575,26 +526,12 @@ def test_legacy_beat_path_returns_narration_apply_outcome(
     """
     snap, pack = cac_snap
 
-    # Turn 1: instantiate combat. Even with no beat_selections, the
-    # function must return the dataclass (not None, not RollOutcome).
-    inst_outcome = _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration="Goblins leap from the shadows.",
-            confrontation="combat",
-            npcs_present=[
-                NpcMention(name="Goblin", role="hostile", side="opponent"),
-            ],
-        ),
-        player_name="Rux",
-        pack=pack,
-        room=room_for(snap),
-    )
-    assert isinstance(inst_outcome, NarrationApplyOutcome), (
-        f"instantiation turn must return NarrationApplyOutcome, got {type(inst_outcome).__name__}"
-    )
-    assert inst_outcome.sealed_letter is None, (
-        "legacy combat instantiation must not produce a sealed_letter outcome"
+    # Turn 1: instantiate combat with a hostile NPC.
+    trigger_encounter(
+        snap, pack, "combat", "Rux",
+        npcs_present=[
+            NpcMention(name="Goblin", role="hostile", side="opponent"),
+        ],
     )
 
     # Turn 2: drive a beat selection through the legacy apply_beat path.
@@ -646,18 +583,11 @@ def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
     snap, pack = space_opera_snap
 
     # Turn 1: instantiate the dogfight encounter
-    _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration="Merge.",
-            confrontation="dogfight",
-            npcs_present=[
-                NpcMention(name="Reaper", role="ace", side="opponent"),
-            ],
-        ),
-        player_name="Saber",
-        pack=pack,
-        room=room_for(snap),
+    trigger_encounter(
+        snap, pack, "dogfight", "Saber",
+        npcs_present=[
+            NpcMention(name="Reaper", role="ace", side="opponent"),
+        ],
     )
     enc = snap.encounter
     assert enc is not None
@@ -716,18 +646,11 @@ def test_unknown_maneuver_in_sealed_letter_raises(
     ValueError from the dispatch path (CLAUDE.md no-silent-fallback)."""
     snap, pack = space_opera_snap
 
-    _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration="Merge.",
-            confrontation="dogfight",
-            npcs_present=[
-                NpcMention(name="Hydra", role="hostile", side="opponent"),
-            ],
-        ),
-        player_name="Apex",
-        pack=pack,
-        room=room_for(snap),
+    trigger_encounter(
+        snap, pack, "dogfight", "Apex",
+        npcs_present=[
+            NpcMention(name="Hydra", role="hostile", side="opponent"),
+        ],
     )
 
     with pytest.raises(ValueError, match="not in maneuvers_consumed"):

@@ -334,33 +334,10 @@ def test_apply_world_patch_tool_description_carries_location_guardrail() -> None
     )
 
 
-def test_confrontation_guardrail_migrates_into_an_encounter_tool() -> None:
-    """AC1: ``confrontation_trigger_constraint`` migrates into the
-    description of the tool that fires a confrontation. ADR-111
-    §Decision routing table: trigger-fire prose goes to the start-
-    confrontation tool description. The live registry today exposes
-    ``generate_encounter``, ``advance_confrontation``, and
-    ``advance_encounter_beat`` — ADR-111 leaves the per-tool
-    concretization to implementation, so this test pins the contract
-    ("the prose lives on at least one of the confrontation/encounter
-    tools") without over-specifying which.
-    """
-    descriptions = _tool_descriptions()
-    candidate_names = {n for n in descriptions if "confront" in n or "encounter" in n}
-    assert candidate_names, (
-        "No confrontation/encounter tools registered — cannot host the "
-        "confrontation_trigger_constraint migration."
-    )
-    fingerprint = "Do NOT defer it to the"
-    hits = {n for n in candidate_names if fingerprint in descriptions[n]}
-    assert hits, (
-        f"None of the confrontation/encounter tools ({sorted(candidate_names)}) "
-        f"carry the migrated fingerprint {fingerprint!r} from "
-        "confrontation_trigger_constraint. ADR-111 §Decision: the "
-        "trigger-fire-this-turn invariant must live on the start-"
-        "confrontation tool description so the model reads it whenever "
-        "it weighs the call."
-    )
+# Story 59-10: test_confrontation_guardrail_migrates_into_an_encounter_tool
+# removed. The begin_confrontation tool was retired in Story 59-4 (ADR-113);
+# confrontation engagement is now router-driven. The guardrail migration
+# target no longer exists.
 
 
 # ---------------------------------------------------------------------------

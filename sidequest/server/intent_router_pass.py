@@ -39,6 +39,9 @@ from sidequest.agents.subsystems import run_dispatch_bank
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
+from sidequest.telemetry.spans.intent_router import (
+    intent_router_confrontation_vocabulary_span,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +71,11 @@ def build_intent_router_for_session() -> IntentRouter:
     return IntentRouter(llm=build_intent_router_llm())
 
 
-def _build_state_summary(snapshot: GameSnapshot) -> dict[str, Any]:
+def _build_state_summary(
+    snapshot: GameSnapshot,
+    *,
+    pack: GenrePack | None = None,
+) -> dict[str, Any]:
     """Build the slimmed JSON-able state summary the router consumes.
 
     Mirrors the Valley-zone slimming applied to the narrator prompt
@@ -83,12 +90,36 @@ def _build_state_summary(snapshot: GameSnapshot) -> dict[str, Any]:
     about). If the router's needs grow in 59-5+ (richer state for
     magic_working / scenario_clue dispatches), revisit centralizing
     the slimmer.
+
+    Story 59-10: when ``pack`` is provided, appends a compact
+    ``confrontation_types`` projection so the Haiku router knows the
+    valid type names for the current genre pack. Haiku classifies
+    player intent through language understanding — the projection
+    provides the closed enum of available types, not verb lists.
     """
-    return snapshot.model_dump(
+    summary = snapshot.model_dump(
         mode="json",
         exclude_defaults=True,
         exclude_none=True,
     )
+
+    if pack is not None:
+        confrontation_defs = pack.rules.confrontations if pack.rules else []
+        if confrontation_defs:
+            summary["confrontation_types"] = [
+                {
+                    "type": cdef.confrontation_type,
+                    "category": cdef.category,
+                }
+                for cdef in confrontation_defs
+            ]
+            with intent_router_confrontation_vocabulary_span(
+                type_count=len(confrontation_defs),
+                genre_slug=snapshot.genre_slug or "",
+            ):
+                pass
+
+    return summary
 
 
 async def execute_intent_router_pre_narrator_pass(
@@ -118,7 +149,7 @@ async def execute_intent_router_pre_narrator_pass(
     (Story 59-3) catches the resulting dispatch-without-engagement
     mismatch on the post-turn snapshot.
     """
-    state_summary = _build_state_summary(snapshot)
+    state_summary = _build_state_summary(snapshot, pack=pack)
     package = await intent_router.decompose(
         action=action,
         state_summary=state_summary,

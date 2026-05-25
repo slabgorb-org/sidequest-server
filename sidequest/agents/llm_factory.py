@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Any, Literal
 
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.claude_client import LlmClient, LlmClientError
@@ -120,15 +120,15 @@ _INTENT_ROUTER_MODEL = "claude-haiku-4-5-20251001"
 
 
 class IntentRouterEmptyResponse(LlmClientError):
-    """Haiku returned a response with no text content.
+    """Haiku returned a response with no ``tool_use`` block.
 
-    Distinct from a transport error or an unparseable text payload — the
-    SDK call succeeded but the model emitted no usable text (refusal,
+    Distinct from a transport error or a schema-invalid tool input — the
+    SDK call succeeded but the model emitted no usable tool call (refusal,
     pause-turn, max-tokens-before-first-byte, or an unexpected
-    all-non-text content array). Carries ``stop_reason``, content block
-    types, and usage in the message so the failure mode is identifiable
-    in logs and OTEL ``raw_preview`` instead of surfacing downstream as a
-    confusing ``JSONDecodeError`` on the empty string.
+    text-only content array despite a forced ``tool_choice``). Carries
+    ``stop_reason``, content block types, and usage in the message so the
+    failure mode is identifiable in logs and OTEL ``raw_preview`` instead
+    of surfacing downstream as a confusing validation error on ``None``.
     """
 
 
@@ -151,27 +151,49 @@ class _IntentRouterLlm:
 
         self._sdk = AsyncAnthropic(api_key=api_key)
 
-    async def complete(self, *, system: str, user: str) -> str:
+    async def emit_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool_name: str,
+        tool_description: str,
+        tool_schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Force a single tool call and return its structured input (ADR-102).
+
+        ``tool_choice`` pins the model to ``tool_name`` so the response
+        carries a ``tool_use`` block whose ``input`` is already structured
+        — no free-text JSON to parse, no markdown fences to strip.
+        """
         resp = await self._sdk.messages.create(
             model=_INTENT_ROUTER_MODEL,
             system=system,
             messages=[{"role": "user", "content": user}],
+            tools=[
+                {
+                    "name": tool_name,
+                    "description": tool_description,
+                    "input_schema": tool_schema,
+                }
+            ],
+            tool_choice={"type": "tool", "name": tool_name},
             max_tokens=2048,
         )
-        text = "".join(block.text for block in resp.content if block.type == "text")
-        if not text:
-            block_types = [getattr(b, "type", "?") for b in resp.content]
-            usage_repr: str
-            try:
-                usage_repr = repr(resp.usage.model_dump())
-            except Exception:  # noqa: BLE001 — usage shape varies by SDK version
-                usage_repr = repr(getattr(resp, "usage", None))
-            raise IntentRouterEmptyResponse(
-                f"Haiku returned no text content "
-                f"(stop_reason={resp.stop_reason!r}, blocks={block_types}, "
-                f"usage={usage_repr})"
-            )
-        return text
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
+                return dict(block.input)
+        block_types = [getattr(b, "type", "?") for b in resp.content]
+        usage_repr: str
+        try:
+            usage_repr = repr(resp.usage.model_dump())
+        except Exception:  # noqa: BLE001 — usage shape varies by SDK version
+            usage_repr = repr(getattr(resp, "usage", None))
+        raise IntentRouterEmptyResponse(
+            f"Haiku returned no tool_use block "
+            f"(stop_reason={resp.stop_reason!r}, blocks={block_types}, "
+            f"usage={usage_repr})"
+        )
 
 
 def build_intent_router_llm() -> _IntentRouterLlm:

@@ -65,6 +65,15 @@ STABLE_SECTION_NAMES: frozenset[str] = frozenset(
         "genre_extraction",
         "genre_keeper_monologue",
         "genre_town",
+        # Story 61-10 — byte-static narrator prose loaded from .md files
+        # (narrator_prompts/__init__.py) with no runtime interpolation.
+        # Omitted at ADR-098/111 cutover, not deliberately excluded.
+        "narrator_constraints",
+        "narrator_agency",
+        "narrator_consequences",
+        "narrator_pov_rules",
+        "narrator_referral_rule",
+        "narrator_output_style",
     }
 )
 

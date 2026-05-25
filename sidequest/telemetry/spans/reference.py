@@ -42,6 +42,13 @@ SPAN_REFERENCE_UNKNOWN_FIELD = "sidequest.reference.unknown_field"
 SPAN_REFERENCE_UNPRESENTED_FIELD = "sidequest.reference.unpresented_field"
 SPAN_REFERENCE_PRESENTER_ERROR = "sidequest.reference.presenter_error"
 
+# POI landscape-image resolution spans (Story 63-8). The lore page's location
+# cards attach an R2 landscape image when the location slug is in the
+# history.yaml POI manifest. Both outcomes are observable so the GM/dev panel
+# can confirm the renderer ran the lookup rather than silently rendering text.
+SPAN_REFERENCE_POI_IMAGE_RESOLVED = "sidequest.reference.poi_image_resolved"
+SPAN_REFERENCE_POI_IMAGE_NOT_FOUND = "sidequest.reference.poi_image_not_found"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_REFERENCE_URL_ATTACHED,
@@ -53,6 +60,8 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_UNKNOWN_FIELD,
         SPAN_REFERENCE_UNPRESENTED_FIELD,
         SPAN_REFERENCE_PRESENTER_ERROR,
+        SPAN_REFERENCE_POI_IMAGE_RESOLVED,
+        SPAN_REFERENCE_POI_IMAGE_NOT_FOUND,
     }
 )
 
@@ -278,6 +287,54 @@ def reference_presenter_error_span(
             "reference.file_stem": file_stem,
             "reference.key_path": ".".join(key_path) or "<root>",
         },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- POI landscape-image resolution spans (Story 63-8) ---
+
+
+def _poi_attrs(*, pack: str, world: str | None, slug: str) -> dict[str, Any]:
+    attrs: dict[str, Any] = {"reference.pack": pack, "reference.slug": slug}
+    if world is not None:
+        attrs["reference.world"] = world
+    return attrs
+
+
+@contextmanager
+def reference_poi_image_resolved_span(
+    *,
+    pack: str,
+    world: str | None,
+    slug: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when a location card's slug is in the history.yaml POI
+    manifest and an R2 landscape ``<img>`` is emitted into the card."""
+    with Span.open(
+        SPAN_REFERENCE_POI_IMAGE_RESOLVED,
+        _poi_attrs(pack=pack, world=world, slug=slug),
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_poi_image_not_found_span(
+    *,
+    pack: str,
+    world: str | None,
+    slug: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when a rendered location has no matching POI image and the
+    card renders text-only. Missing landscape art is EXPECTED (not every
+    location has one); this is observability, not an error. The span lets the
+    GM/dev panel confirm the lookup ran rather than silently skipping."""
+    with Span.open(
+        SPAN_REFERENCE_POI_IMAGE_NOT_FOUND,
+        _poi_attrs(pack=pack, world=world, slug=slug),
         tracer_override=_tracer,
     ) as span:
         yield span

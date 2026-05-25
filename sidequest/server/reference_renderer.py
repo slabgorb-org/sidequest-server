@@ -182,6 +182,7 @@ def _render_dict(
                 key_path=child_path,
                 theme=ctx.theme,
                 depth=depth + 1,
+                poi_image_slugs=ctx.poi_image_slugs,
             )
             if ctx
             else None
@@ -306,6 +307,7 @@ def _render_list(
                     key_path=ctx.key_path + ("*",),
                     theme=ctx.theme,
                     depth=depth + 1,
+                    poi_image_slugs=ctx.poi_image_slugs,
                 )
                 if ctx
                 else None
@@ -489,6 +491,7 @@ def _render_file(
     pack: str,
     world: str | None,
     theme: ReferenceTheme,
+    poi_image_slugs: frozenset[str] = frozenset(),
 ) -> str:
     if not path.exists():
         return ""
@@ -505,6 +508,7 @@ def _render_file(
         key_path=(),
         theme=theme,
         depth=0,
+        poi_image_slugs=poi_image_slugs,
     )
     # File-root presenter dispatch (key_path == ()). Applies the same
     # visibility gate as _render_dict's child-key path. If KEEPER, drop
@@ -779,6 +783,7 @@ def _file_renders_by_stem(
     world: str | None,
     theme: ReferenceTheme,
     label_suffix: str = "",
+    poi_image_slugs: frozenset[str] = frozenset(),
 ) -> dict[str, str]:
     """Render every existing file from ``files`` in ``base_dir``, keyed by
     stem (without the ``.yaml`` extension)."""
@@ -794,7 +799,9 @@ def _file_renders_by_stem(
                 path, label_suffix, pack=pack, world=world, theme=theme
             )
         else:
-            rendered = _render_file(path, pack=pack, world=world, theme=theme)
+            rendered = _render_file(
+                path, pack=pack, world=world, theme=theme, poi_image_slugs=poi_image_slugs
+            )
         if rendered:
             stem = path.stem
             # Two files with the same stem (e.g. pack-flavor cultures.yaml
@@ -939,6 +946,43 @@ def assemble_rules_page(pack: str, pack_dir: Path) -> str:
     )
 
 
+def _load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
+    """Story 63-8: the set of location slugs that have a generated POI
+    landscape image.
+
+    The manifest is ``history.yaml`` ``points_of_interest[].slug`` (under
+    ``chapters[]`` and/or top-level). Slugs are ``slugify``-normalised so they
+    match the ``location-{slug}`` card ids the geography presenter emits — the
+    authored POI slug (often underscore-style) and the card slug (hyphenated)
+    both pass through ``slugify``."""
+    path = world_dir / "history.yaml"
+    if not path.exists():
+        return frozenset()
+    try:
+        with path.open(encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"history.yaml: malformed YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        return frozenset()
+    pois: list[object] = []
+    chapters = data.get("chapters")
+    if isinstance(chapters, list):
+        for chapter in chapters:
+            if isinstance(chapter, dict) and isinstance(chapter.get("points_of_interest"), list):
+                pois.extend(chapter["points_of_interest"])
+    if isinstance(data.get("points_of_interest"), list):
+        pois.extend(data["points_of_interest"])
+    slugs: set[str] = set()
+    for poi in pois:
+        if not isinstance(poi, dict):
+            continue
+        raw = poi.get("slug") or poi.get("name")
+        if raw and (normalised := slugify(str(raw))):
+            slugs.add(normalised)
+    return frozenset(slugs)
+
+
 def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -> str:
     """Build the /reference/lore/<pack>/<world> HTML document.
 
@@ -955,7 +999,12 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
     hero_html = _build_hero(pack=pack, world=world, world_dir=world_dir)
 
     world_rendered = _file_renders_by_stem(
-        LORE_WORLD_FILES, world_dir, pack=pack, world=world, theme=theme
+        LORE_WORLD_FILES,
+        world_dir,
+        pack=pack,
+        world=world,
+        theme=theme,
+        poi_image_slugs=_load_poi_image_slugs(world_dir),
     )
     flavor_rendered = _file_renders_by_stem(
         LORE_PACK_FLAVOR_FILES,

@@ -387,6 +387,87 @@ def _check_prose(
 # ---------------------------------------------------------------------------
 
 
+def _location_card_slugs(world_dir: Path) -> set[str]:
+    """Slugs of the location cards the lore page actually renders from
+    ``locations.yaml`` — normalised exactly as the reference renderer does."""
+    from sidequest.server.reference_slug import slugify
+
+    path = world_dir / "locations.yaml"
+    if not path.is_file():
+        return set()
+    data = yaml.safe_load(path.read_text()) or {}
+    items: Any = data
+    if isinstance(data, dict):
+        items = next((v for v in data.values() if isinstance(v, list)), [])
+    slugs: set[str] = set()
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict):
+                raw = item.get("id") or item.get("name")
+                if raw and (slug := slugify(str(raw))):
+                    slugs.add(slug)
+    return slugs
+
+
+def _history_poi_slugs(world_dir: Path) -> set[str]:
+    """Story 63-8: POI landscape-image manifest slugs from ``history.yaml``
+    (``chapters[].points_of_interest[]`` and/or top-level), slugify-normalised."""
+    from sidequest.server.reference_slug import slugify
+
+    path = world_dir / "history.yaml"
+    if not path.is_file():
+        return set()
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        return set()
+    pois: list[Any] = []
+    chapters = data.get("chapters")
+    if isinstance(chapters, list):
+        for chapter in chapters:
+            if isinstance(chapter, dict) and isinstance(chapter.get("points_of_interest"), list):
+                pois.extend(chapter["points_of_interest"])
+    if isinstance(data.get("points_of_interest"), list):
+        pois.extend(data["points_of_interest"])
+    slugs: set[str] = set()
+    for poi in pois:
+        if isinstance(poi, dict):
+            raw = poi.get("slug") or poi.get("name")
+            if raw and (slug := slugify(str(raw))):
+                slugs.add(slug)
+    return slugs
+
+
+def _check_poi_image_slugs(
+    result: ValidationResult,
+    *,
+    world_dir: Path,
+    pack: str,
+    world: str,
+) -> None:
+    """Story 63-8 AC-6: every history.yaml POI image-manifest slug must map to
+    a renderable location card. A dangling slug means a generated landscape
+    image that can never attach to anything — flag it loudly."""
+    poi_slugs = _history_poi_slugs(world_dir)
+    if not poi_slugs:
+        return
+    location_slugs = _location_card_slugs(world_dir)
+    for slug in sorted(poi_slugs - location_slugs):
+        result.record(
+            Issue(
+                code="POI_IMAGE_SLUG_UNMATCHED",
+                severity="warning",
+                message=(
+                    f"history.yaml POI slug {slug!r} matches no location card in "
+                    "locations.yaml; its landscape image can never render"
+                ),
+                pack=pack,
+                world=world,
+                region_id=None,
+                file=str(world_dir / "history.yaml"),
+            )
+        )
+
+
 def _validate_one_world(
     result: ValidationResult,
     *,
@@ -457,6 +538,10 @@ def _validate_one_world(
                 room_data.get("description") or "",
                 str(room_path),
             )
+
+    # Story 63-8: POI landscape-image slug consistency (history.yaml manifest
+    # must map to renderable location cards).
+    _check_poi_image_slugs(result, world_dir=world_dir, pack=pack_slug, world=world_slug)
 
 
 # ---------------------------------------------------------------------------

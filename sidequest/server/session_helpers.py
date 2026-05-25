@@ -41,6 +41,8 @@ from sidequest.game.shared_world_delta import (
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.protocol.messages import (
+    CartographyMapMessage,
+    CartographyMapPayload,
     ErrorMessage,
     ErrorPayload,
     PlayerPresenceMessage,
@@ -1284,6 +1286,63 @@ def _resolve_location_display(
     if "_" in location and location == location.lower():
         return humanize_snake_case(location)
     return location
+
+
+def _build_cartography_map_message(
+    pack: GenrePack | None,
+    world_slug: str | None,
+    current_location: str | None,
+    player_id: str = "",
+) -> CartographyMapMessage | None:
+    """Build a MAP_UPDATE message from cartography region data.
+
+    Returns None when the pack has no region-mode cartography.
+    """
+    if pack is None or not world_slug or not current_location:
+        return None
+    world = pack.worlds.get(world_slug)
+    if world is None:
+        return None
+    cart = getattr(world, "cartography", None)
+    if cart is None:
+        return None
+    regions = getattr(cart, "regions", None)
+    if not regions:
+        return None
+    nav_mode = getattr(cart, "navigation_mode", None)
+    if nav_mode is not None and str(nav_mode) == "room_graph":
+        return None
+
+    region_dict: dict[str, dict] = {}
+    for slug, region in regions.items():
+        region_dict[slug] = {
+            "name": region.name,
+            "description": getattr(region, "description", None) or getattr(region, "summary", None),
+            "adjacent": list(getattr(region, "adjacent", [])),
+        }
+
+    routes_list: list[dict] = []
+    for route in getattr(cart, "routes", []):
+        routes_list.append({
+            "name": route.name,
+            "description": getattr(route, "description", None),
+            "from_id": getattr(route, "from_id", None),
+            "to_id": getattr(route, "to_id", None),
+        })
+
+    return CartographyMapMessage(
+        payload=CartographyMapPayload(
+            current_location=current_location,
+            region=world_slug,
+            cartography={
+                "navigation_mode": str(nav_mode) if nav_mode else "region",
+                "starting_region": getattr(cart, "starting_region", ""),
+                "regions": region_dict,
+                "routes": routes_list,
+            },
+        ),
+        player_id=player_id,
+    )
 
 
 def _sfx_ids_from_genre(genre_pack: GenrePack) -> list[str]:

@@ -1238,6 +1238,57 @@ class DungeonMapMessage(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
+# CartographyMapMessage — region-mode map data for the UI MapOverlay
+# ---------------------------------------------------------------------------
+
+
+class CartographyRegionWire(ProtocolBase):
+    """One region in the cartography metadata for the Map tab."""
+
+    name: str
+    description: str | None = None
+    adjacent: list[str] = Field(default_factory=list)
+
+
+class CartographyRouteWire(ProtocolBase):
+    """One route in the cartography metadata."""
+
+    name: str
+    description: str | None = None
+    from_id: str | None = None
+    to_id: str | None = None
+
+
+class CartographyMapPayload(ProtocolBase):
+    """Region-mode cartography data for the MapOverlay component.
+
+    Mirrors the UI's MapState interface. The ``cartography`` field drives
+    the region list view; ``explored`` is empty (no per-room data in
+    region mode).
+    """
+
+    current_location: str
+    region: str = ""
+    explored: list[Any] = Field(default_factory=list)
+    fog_bounds: dict[str, int] = Field(default_factory=lambda: {"width": 0, "height": 0})
+    cartography: dict[str, Any] | None = None
+
+
+class CartographyMapMessage(ProtocolBase):
+    """Sends region-mode cartography data to the UI Map tab.
+
+    Wire type is ``MAP_UPDATE`` — the UI App.tsx handler at
+    ``msg.type === MessageType.MAP_UPDATE`` feeds it to setMapData.
+    Not part of the server MessageType enum (ADR-082 deleted the old
+    MAP_UPDATE pipeline; this is the minimal region-mode replacement).
+    """
+
+    type: Literal["MAP_UPDATE"] = "MAP_UPDATE"
+    payload: CartographyMapPayload
+    player_id: str = ""
+
+
+# ---------------------------------------------------------------------------
 # JOURNAL_REQUEST / JOURNAL_RESPONSE — ADR-100 Seam C (story 50-14)
 # ---------------------------------------------------------------------------
 

@@ -150,6 +150,7 @@ from sidequest.server.session_handler import (
     _State,
 )
 from sidequest.server.session_helpers import (
+    _build_cartography_map_message,
     _build_turn_context,
     _error_msg,
     _render_url_from_path,
@@ -4756,6 +4757,20 @@ class WebSocketSessionHandler:
                         snapshot=snapshot,
                         emit_fn=_emit_shared_world_frame,
                     )
+                    # Region-mode cartography map: emit MAP_UPDATE on
+                    # location change so the Map tab shows the region list.
+                    # No-op for room_graph worlds (they use DUNGEON_MAP).
+                    if _is_region_mode_world and _region_changed:
+                        _cart_map = _build_cartography_map_message(
+                            sd.genre_pack,
+                            sd.world_slug,
+                            snapshot.current_region or snapshot.party_location(
+                                perspective=_acting_for_render_trigger
+                            ),
+                            player_id=sd.player_id,
+                        )
+                        if _cart_map is not None:
+                            _emit_shared_world_frame(_cart_map, "MAP_UPDATE")
                     # Story 54-7 / ADR-109: encounter overlay transitions.
                     # Activate when a fresh encounter goes live this turn
                     # carrying a location_overlay; deactivate when the prior

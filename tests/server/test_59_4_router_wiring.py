@@ -337,7 +337,7 @@ async def test_router_failure_surfaces_loud_after_bounded_retry() -> None:
     # emission as a single coherent contract test (rather than mocking
     # them apart).
     stub_llm = MagicMock()
-    stub_llm.complete = AsyncMock(side_effect=TimeoutError("synthetic"))
+    stub_llm.emit_tool = AsyncMock(side_effect=TimeoutError("synthetic"))
     router = IntentRouter(llm=stub_llm)
 
     with pytest.raises(IntentRouterFailure, match="timeout"):
@@ -352,9 +352,9 @@ async def test_router_failure_surfaces_loud_after_bounded_retry() -> None:
     # Bounded retry: two attempts total. If the helper short-circuits or
     # silently retries beyond the router's contract, this assertion
     # catches it.
-    assert stub_llm.complete.await_count == 2, (
+    assert stub_llm.emit_tool.await_count == 2, (
         f"router contract: one initial attempt + one bounded retry = 2 "
-        f"calls. Got {stub_llm.complete.await_count}. If the helper added "
+        f"calls. Got {stub_llm.emit_tool.await_count}. If the helper added "
         "its own retry layer, that violates the no-fallbacks rule."
     )
 
@@ -433,7 +433,8 @@ async def test_watcher_still_fires_when_new_handler_silently_no_ops() -> None:
     run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
 
     mismatch_spans = [
-        s for s in exporter.get_finished_spans()
+        s
+        for s in exporter.get_finished_spans()
         if s.name == "dispatch_engagement.confrontation.mismatch"
     ]
     assert len(mismatch_spans) == 1, (

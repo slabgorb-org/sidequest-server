@@ -41,7 +41,7 @@ def test_intent_router_importable_from_agents_module() -> None:
     # AsyncMock so the constructor exercises its injection path without
     # hitting the SDK or the network.
     llm = AsyncMock()
-    llm.complete = AsyncMock(return_value="{}")  # never actually called here
+    llm.emit_tool = AsyncMock(return_value={})  # never actually called here
     router = IntentRouter(llm=llm)
     assert router is not None
 
@@ -152,10 +152,11 @@ def test_build_intent_router_llm_fails_loud_without_api_key(
 async def test_intent_router_sdk_adapter_calls_haiku_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-3 behavioral: when the adapter ``complete()`` method runs, the
+    """AC-3 behavioral: when the adapter ``emit_tool()`` method runs, the
     underlying AsyncAnthropic ``messages.create`` is invoked with
-    ``model=claude-haiku-4-5-20251001`` — proving the per-call-type
-    routing wiring is end-to-end, not just a constant assertion.
+    ``model=claude-haiku-4-5-20251001`` AND a forced ``tool_choice`` —
+    proving the ADR-102 tool-use wiring is end-to-end, not just a
+    constant assertion.
     """
     from sidequest.agents.llm_factory import build_intent_router_llm
 
@@ -163,17 +164,28 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
 
     fake_client_instance = AsyncMock()
     fake_response = AsyncMock()
-    # Anthropic SDK response has ``.content`` as a list of blocks, each
-    # block has ``.type`` and ``.text``. We synthesize the minimum
-    # shape the adapter can extract.
-    text_block = type("Block", (), {"type": "text", "text": '{"ok": true}'})()
-    fake_response.content = [text_block]
+    # Anthropic SDK response has ``.content`` as a list of blocks. Under
+    # forced tool_choice the adapter extracts the ``tool_use`` block's
+    # structured ``.input`` — synthesize that minimal shape.
+    tool_block = type(
+        "Block",
+        (),
+        {"type": "tool_use", "name": "emit_dispatch_package", "input": {"ok": True}},
+    )()
+    fake_response.content = [tool_block]
     fake_client_instance.messages.create = AsyncMock(return_value=fake_response)
 
     with patch("anthropic.AsyncAnthropic", return_value=fake_client_instance):
         llm = build_intent_router_llm()
-        await llm.complete(system="sys", user="usr")
+        result = await llm.emit_tool(
+            system="sys",
+            user="usr",
+            tool_name="emit_dispatch_package",
+            tool_description="desc",
+            tool_schema={"type": "object", "properties": {}},
+        )
 
+    assert result == {"ok": True}
     assert fake_client_instance.messages.create.await_count == 1
     await_args = fake_client_instance.messages.create.await_args
     assert await_args is not None
@@ -182,3 +194,7 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
         f"SDK adapter must call AsyncAnthropic.messages.create with "
         f"model=claude-haiku-4-5-20251001; got model={call_kwargs.get('model')!r}"
     )
+    assert call_kwargs.get("tool_choice") == {
+        "type": "tool",
+        "name": "emit_dispatch_package",
+    }, f"adapter must force tool_choice; got {call_kwargs.get('tool_choice')!r}"

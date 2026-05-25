@@ -59,22 +59,51 @@ class IntentRouterFailure(Exception):
 
 
 class IntentRouterLLM(Protocol):
-    """Single-shot LLM contract the router consumes.
+    """Single-shot tool-use LLM contract the router consumes.
 
-    Mirrors the ``AsideLLM`` Protocol at ``sidequest/agents/aside_resolver.py``
-    — one async ``complete`` method, no session state. The SDK-Haiku
-    adapter in ``llm_factory.py`` is the live implementation; tests inject
-    an ``AsyncMock``.
+    Per ADR-102, structured output is produced through native tool-use:
+    the adapter issues a forced ``tool_choice`` call and returns the
+    ``tool_use`` block's already-structured ``input`` dict. There is no
+    free-text JSON to parse — the ``unparseable`` failure mode is gone.
+    Tests inject an ``AsyncMock`` returning a dict; the SDK-Haiku adapter
+    in ``llm_factory.py`` is the live implementation.
     """
 
-    async def complete(self, *, system: str, user: str) -> str: ...
+    async def emit_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool_name: str,
+        tool_description: str,
+        tool_schema: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+
+# ADR-102 tool-use contract: the router forces a single call to this tool
+# whose input_schema IS the DispatchPackage schema, so Haiku returns
+# structured input instead of fenced JSON.
+_TOOL_NAME = "emit_dispatch_package"
+_TOOL_DESCRIPTION = (
+    "Emit the structured DispatchPackage for this single player action. "
+    "Call this tool exactly once. Do not write prose."
+)
+
+
+def _dispatch_tool_schema() -> dict[str, Any]:
+    """Build the tool input_schema from the DispatchPackage model.
+
+    Reuses the same ``model_json_schema()`` path the tool registry uses
+    (``tool_registry.py``) so the schema stays in lockstep with the model.
+    """
+    return DispatchPackage.model_json_schema()
 
 
 _SYSTEM_PROMPT = """You are the Intent Router — an impartial structured-output reader.
 
-Your job: read a player's action + the game state summary, then emit ONE JSON
-object matching the DispatchPackage schema. Never write prose. Never call
-tools. Output JSON only — no preamble, no explanation, no markdown fences.
+Your job: read a player's action + the game state summary, then emit the
+DispatchPackage by calling the ``emit_dispatch_package`` tool exactly once.
+Never write prose. Put every field into the tool input.
 
 For each player action:
   1. Resolve referents (pronouns, ellipses, demonstratives). Every resolution
@@ -96,8 +125,8 @@ For each player action:
 Every dispatch carries a visibility tag. Default visible_to="all" with empty
 perception_fidelity unless the state clearly names asymmetric visibility.
 
-Pydantic rejects unknown fields. Stay inside the schema. Output valid JSON
-only — no preamble, no code fences, no commentary."""
+Pydantic rejects unknown fields. Stay inside the schema. Emit everything
+through the tool input — no preamble, no commentary, no extra text blocks."""
 
 
 def _build_user_prompt(action: str, state_summary: Any) -> str:
@@ -108,7 +137,7 @@ def _build_user_prompt(action: str, state_summary: Any) -> str:
     return (
         f"<game_state>\n{state_text}\n</game_state>\n"
         f"<raw_action>\n{action}\n</raw_action>\n"
-        f"Emit DispatchPackage JSON for this single action."
+        f"Call emit_dispatch_package once for this single action."
     )
 
 
@@ -148,6 +177,7 @@ class IntentRouter:
         rule ``feedback_no_fallbacks_hard``).
         """
         user_prompt = _build_user_prompt(action, state_summary)
+        tool_schema = _dispatch_tool_schema()
         action_length = len(action)
         start_ns = time.perf_counter_ns()
         last_failure: tuple[str, str] | None = None
@@ -155,9 +185,12 @@ class IntentRouter:
         for attempt_index in range(_MAX_TOTAL_ATTEMPTS):
             retry_count = attempt_index  # 0 on first try, 1 on retry.
             try:
-                raw_text = await self._llm.complete(
+                tool_input = await self._llm.emit_tool(
                     system=_SYSTEM_PROMPT,
                     user=user_prompt,
+                    tool_name=_TOOL_NAME,
+                    tool_description=_TOOL_DESCRIPTION,
+                    tool_schema=tool_schema,
                 )
             except TimeoutError as exc:
                 last_failure = ("timeout", str(exc))
@@ -173,10 +206,11 @@ class IntentRouter:
                 )
                 continue
             except IntentRouterEmptyResponse as exc:
-                # SDK call succeeded but Haiku emitted no text — distinct
-                # from transport failure and from unparseable text. Preserve
-                # the diagnostic message (stop_reason, content blocks, usage)
-                # in raw_preview so the GM panel can see why.
+                # SDK call succeeded but Haiku emitted no tool_use block —
+                # distinct from transport failure and from a schema-invalid
+                # tool input. Preserve the diagnostic message (stop_reason,
+                # content blocks, usage) in raw_preview so the GM panel can
+                # see why.
                 last_failure = ("empty_response", str(exc))
                 _emit_failed_span(
                     reason="empty_response",
@@ -204,28 +238,12 @@ class IntentRouter:
                 continue
 
             try:
-                parsed = json.loads(raw_text)
-            except (ValueError, TypeError) as exc:
-                last_failure = ("unparseable", f"{type(exc).__name__}: {exc}")
-                _emit_failed_span(
-                    reason="unparseable",
-                    raw_preview=(raw_text or "")[:_RAW_PREVIEW_LIMIT],
-                    retry_count=retry_count,
-                )
-                logger.warning(
-                    "intent_router.failed reason=unparseable attempt=%d exc=%s",
-                    retry_count,
-                    exc,
-                )
-                continue
-
-            try:
-                pkg = DispatchPackage.model_validate(parsed)
+                pkg = DispatchPackage.model_validate(tool_input)
             except ValidationError as exc:
                 last_failure = ("schema_invalid", type(exc).__name__)
                 _emit_failed_span(
                     reason="schema_invalid",
-                    raw_preview=(raw_text or "")[:_RAW_PREVIEW_LIMIT],
+                    raw_preview=str(tool_input)[:_RAW_PREVIEW_LIMIT],
                     retry_count=retry_count,
                 )
                 logger.warning(

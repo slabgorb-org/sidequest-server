@@ -23,14 +23,17 @@ too would double-send to the rolling player.
 from __future__ import annotations
 
 import logging
+import random
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from sidequest.game.beat_kinds import apply_beat
-from sidequest.game.dice import ResolveError, resolve_dice_with_faces
+from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
 from sidequest.game.encounter import EncounterPhase, StructuredEncounter
 from sidequest.game.session import GameSnapshot
+from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef, ResolutionMode
 from sidequest.protocol.dice import (
@@ -66,6 +69,8 @@ from sidequest.telemetry.spans import (
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
+
+_DICE_RE = re.compile(r"^(?P<count>\d+)d(?P<faces>\d+)$")
 
 
 class DiceDispatchError(Exception):
@@ -377,6 +382,11 @@ def dispatch_dice_throw(
     # exact unfair-combat bug this branch is fixing.
     opposed_pending = cdef.resolution_mode == ResolutionMode.opposed_check
     opposed_player_d20: int | None = None
+    # ADR-114 / Task 7: damage roll payloads built in the else branch below.
+    # Initialized here so the broadcast section can reference them regardless
+    # of which branch executes.
+    damage_request_payload: DiceRequestPayload | None = None
+    damage_result_payload: DiceResultPayload | None = None
 
     if opposed_pending:
         # Pull the raw d20 face for the resolver. The dice pool is
@@ -397,6 +407,93 @@ def dispatch_dice_throw(
         own_delta = 0
         encounter_resolved = False
     else:
+        # ADR-114 / Task 7: damage roll for strike channel beats.
+        # Resolve the weapon DamageSpec BEFORE apply_beat so the resolver
+        # lambda captures a concrete total. The damage roll is server-side
+        # (no UI physics round-trip); we generate random faces, resolve the
+        # total, and broadcast a DICE_REQUEST + DICE_RESULT after the check
+        # broadcast so Sebastien sees the weapon dice animate in the overlay.
+        damage_resolver_fn = None
+
+        damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
+        if damage_channel == "strike" and resolved.outcome not in (
+            RollOutcome.Fail,
+            RollOutcome.CritFail,
+        ):
+            actor_core = snapshot.find_creature_core(character_name)
+            damage_spec = _resolve_damage_spec_from_beat_and_actor(
+                beat=beat,
+                actor_core=actor_core,
+                pack=pack,
+            )
+            if damage_spec is None:
+                logger.warning(
+                    "dice.damage_spec_missing beat=%r actor=%r encounter=%r — "
+                    "strike beat has no resolvable weapon, damage_override, or "
+                    "unarmed default; HP damage skipped (CLAUDE.md no-fabricate)",
+                    payload.beat_id,
+                    character_name,
+                    encounter.encounter_type,
+                )
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "encounter",
+                        "op": "damage_spec_missing",
+                        "beat_id": payload.beat_id,
+                        "actor": character_name,
+                        "rationale": (
+                            "strike channel beat has no damage_override, no "
+                            "weapon with a damage spec in inventory, and no "
+                            "unarmed_damage default on the genre rules — "
+                            "HP path skipped"
+                        ),
+                    },
+                    component="encounter",
+                    severity="warning",
+                )
+            else:
+                dmg_request_id = str(uuid.uuid4())
+                damage_request_payload = damage_request_from_spec(
+                    damage_spec,
+                    request_id=dmg_request_id,
+                    rolling_player_id=rolling_player_id,
+                    character_name=character_name,
+                )
+                dmg_faces = _generate_server_faces(damage_request_payload.dice)
+                dmg_resolved = resolve_dice_with_faces(
+                    damage_request_payload.dice,
+                    dmg_faces,
+                    damage_request_payload.modifier,
+                    damage_request_payload.difficulty,
+                )
+                dmg_total = dmg_resolved.total
+                dmg_seed = generate_dice_seed(session_id, round_number + 1)
+                damage_result_payload = _compose_result_payload(
+                    request=damage_request_payload,
+                    rolls=dmg_resolved.rolls,
+                    total=dmg_total,
+                    outcome=RollOutcome.Success,  # damage rolls have no outcome tier
+                    seed=dmg_seed,
+                    throw_params=_DAMAGE_THROW_PARAMS,
+                )
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "encounter",
+                        "op": "damage_roll_resolved",
+                        "beat_id": payload.beat_id,
+                        "actor": character_name,
+                        "damage_spec": damage_spec.dice,
+                        "bonus": damage_spec.bonus,
+                        "faces": dmg_faces,
+                        "total": dmg_total,
+                        "source": "dice_throw_server_roll",
+                    },
+                    component="encounter",
+                )
+                damage_resolver_fn = lambda: dmg_total  # noqa: E731
+
         apply_result = apply_beat(
             encounter,
             actor,
@@ -404,6 +501,7 @@ def dispatch_dice_throw(
             resolved.outcome,
             turn=round_number,
             edge_resolver=snapshot.find_creature_core,
+            damage_resolver=damage_resolver_fn,
         )
 
         if apply_result.skipped_reason:
@@ -480,8 +578,6 @@ def dispatch_dice_throw(
 
     # Seed drives spectator replay animation only — face values are already
     # authoritative from the rolling player's Rapier settle.
-    from sidequest.game.dice import generate_dice_seed
-
     seed = generate_dice_seed(session_id, round_number)
     result = _compose_result_payload(
         request=request,
@@ -517,6 +613,17 @@ def dispatch_dice_throw(
         res_msg = DiceResultMessage(payload=result, player_id="server")
         room_broadcast(req_msg)
         room_broadcast(res_msg)
+
+        # ADR-114 / Task 7: broadcast damage roll overlay immediately after
+        # the check-roll result so the player sees weapon dice animate before
+        # the CONFRONTATION dial update and the narrator response arrive.
+        # Damage broadcast is gated on a resolved damage_result_payload (only
+        # set when the beat has damage_channel=strike AND a DamageSpec was
+        # found). Skipped on the opposed-pending branch — damage is deferred
+        # alongside beat application on that path.
+        if not opposed_pending and damage_result_payload is not None and damage_request_payload is not None:
+            room_broadcast(DiceRequestMessage(payload=damage_request_payload, player_id="server"))
+            room_broadcast(DiceResultMessage(payload=damage_result_payload, player_id="server"))
 
         # Story 45-3: Mid-turn CONFRONTATION emit. The metric mutation
         # already landed via apply_beat above; without this broadcast the
@@ -652,3 +759,165 @@ def dispatch_dice_throw(
 def new_request_id() -> str:
     """Return a fresh UUID4 string for a DiceRequest correlation id."""
     return str(uuid.uuid4())
+
+
+# ---------------------------------------------------------------------------
+# Damage-roll helpers (ADR-114 / Task 7)
+# ---------------------------------------------------------------------------
+
+_DAMAGE_STAT = Stat("DAMAGE")
+_DAMAGE_THROW_PARAMS = ThrowParams(
+    velocity=(0.0, 4.0, -1.0),
+    angular=(0.5, 0.5, 0.5),
+    position=(0.5, 0.5),
+)
+
+
+def damage_request_from_spec(
+    spec: DamageSpec,
+    *,
+    request_id: str,
+    rolling_player_id: str = "server",
+    character_name: str = "server",
+) -> DiceRequestPayload:
+    """Build a ``DiceRequestPayload`` for a weapon damage roll.
+
+    Parses ``spec.dice`` (NdM notation) into N individual ``DieSpec`` entries
+    (one per die, each with count=1) so the overlay can animate each die
+    independently. ``spec.bonus`` becomes ``modifier``.
+
+    ``stat``, ``difficulty``, and ``context`` are set to damage-roll sentinels
+    — the overlay renders them but the engine doesn't interpret them for
+    outcome resolution (damage rolls have no DC; the check roll already
+    determined hit/miss).
+
+    ``rolling_player_id`` defaults to ``"server"`` for server-originated rolls;
+    override when a specific player should animate the throw.
+
+    Raises ``ValueError`` if the dice string is malformed or uses an
+    unsupported face count (validated at ``DamageSpec`` construction, so this
+    is a belt-and-suspenders guard).
+    """
+    m = _DICE_RE.match(spec.dice.strip())
+    if not m:
+        raise ValueError(
+            f"damage_request_from_spec: malformed dice string {spec.dice!r} "
+            f"(should have been caught at DamageSpec validation)"
+        )
+    count = int(m["count"])
+    faces = int(m["faces"])
+    sides = DieSides.from_wire(faces)
+    if sides is DieSides.Unknown:
+        raise ValueError(
+            f"damage_request_from_spec: unsupported die face count d{faces} "
+            f"in {spec.dice!r}"
+        )
+    # One DieSpec per die so the overlay renders individual dice.
+    dice_pool = [DieSpec(sides=sides, count=1) for _ in range(count)]
+    return DiceRequestPayload(
+        request_id=request_id,
+        rolling_player_id=rolling_player_id,
+        character_name=character_name,
+        dice=dice_pool,
+        modifier=spec.bonus,
+        stat=_DAMAGE_STAT,
+        difficulty=1,  # damage rolls have no DC
+        context="weapon damage",
+    )
+
+
+def _generate_server_faces(dice: list[DieSpec]) -> list[int]:
+    """Roll server-side faces for a damage dice pool.
+
+    Each die in the pool gets a random face in ``1..=sides``. The faces are
+    used to both: (a) build the authoritative ``DiceResultPayload`` for the
+    broadcast, and (b) feed ``resolve_dice_with_faces`` to compute the total.
+
+    Uses ``random.randint`` — no physics, no seed. The seed in the result
+    payload drives spectator replay animation; here it's derived from the
+    session and round like the check-roll path.
+    """
+    faces: list[int] = []
+    for spec in dice:
+        sides = spec.sides.faces()
+        assert sides is not None, f"Unknown die in damage pool: {spec.sides!r}"
+        for _ in range(spec.count):
+            faces.append(random.randint(1, sides))
+    return faces
+
+
+def _resolve_damage_spec_from_beat_and_actor(
+    *,
+    beat: BeatDef,
+    actor_core: object | None,
+    pack: GenrePack,
+) -> DamageSpec | None:
+    """Resolve the weapon DamageSpec for a strike beat.
+
+    Resolution priority (CLAUDE.md no-silent-fallback — skip loudly, never fabricate):
+    1. ``beat.damage_override`` — explicit spec on the beat (natural attack / creature).
+    2. Actor's equipped weapon item dict carrying a ``damage`` dict (from inventory).
+    3. Pack catalog lookup: find the actor's first equipped weapon item by id,
+       then read ``CatalogItem.damage`` from the pack's item catalog.
+    4. No match — returns None; caller must log and skip.
+
+    ``actor_core`` is the actor's ``CreatureCore`` (may be None for actors without
+    a resolved core). ``pack`` is the live genre pack (provides the item catalog).
+    """
+    # Priority 1: beat-level override (natural attack, creature).
+    if beat.damage_override is not None:
+        return beat.damage_override
+
+    # Priority 2 & 3: actor's inventory.
+    if actor_core is None:
+        return None
+
+    inventory_items: list[dict] = getattr(
+        getattr(actor_core, "inventory", None), "items", []
+    )
+    if not inventory_items:
+        return None
+
+    # Priority 2: item dict already carries a serialised damage field.
+    # (This path fires for materialised NPCs whose item dicts were built
+    # with a ``damage`` key.)
+    for item_dict in inventory_items:
+        dmg_raw = item_dict.get("damage")
+        if dmg_raw is not None:
+            if isinstance(dmg_raw, dict):
+                try:
+                    return DamageSpec.model_validate(dmg_raw)
+                except Exception:
+                    logger.warning(
+                        "damage_spec: item %r has unparseable damage dict %r — skipping",
+                        item_dict.get("id"),
+                        dmg_raw,
+                    )
+            elif isinstance(dmg_raw, str):
+                try:
+                    return DamageSpec.model_validate({"dice": dmg_raw})
+                except Exception:
+                    logger.warning(
+                        "damage_spec: item %r has unparseable damage string %r — skipping",
+                        item_dict.get("id"),
+                        dmg_raw,
+                    )
+
+    # Priority 3: pack catalog lookup by item id.
+    catalog = None
+    if pack is not None:
+        inv_config = getattr(pack, "inventory", None)
+        if inv_config is not None:
+            catalog = getattr(inv_config, "item_catalog", None)
+
+    if catalog:
+        catalog_by_id = {c.id: c for c in catalog}
+        for item_dict in inventory_items:
+            item_id = item_dict.get("id")
+            if not item_id:
+                continue
+            catalog_item = catalog_by_id.get(item_id)
+            if catalog_item is not None and catalog_item.damage is not None:
+                return catalog_item.damage
+
+    return None

@@ -25,14 +25,10 @@ Registered handlers (post-Story 59-6):
     directive naming a referent by a distinctive detail.
   - ``npc_agency`` → ``run_npc_agency`` — NPC disposition update.
 
-Note: ``reflect_absence``, ``distinctive_detail_hint``, and
-``npc_agency`` retain the "DORMANT" pedigree comments in their own
-module docstrings from the 2026-04-28 LocalDM shelving — the router
-revival (ADR-113) reaches the bank but those three subsystems are not
-yet emitted by the live router's prompt (Story 59-7 lands their full
-live wiring). They are registered for symmetry with the offline LocalDM
-corpus runner that still uses them; the bank treats their absence from
-real dispatches as a non-event.
+All six subsystems are live on the turn path as of story 59-7. The
+Intent Router's system prompt names them as valid dispatch types and
+the dispatch engagement watcher (story 59-3) has engagement witnesses
+for each.
 """
 
 from __future__ import annotations

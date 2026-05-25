@@ -76,6 +76,9 @@ class DispatchMismatch:
 #   - confrontation: params["type"]   → encounter.encounter_type
 #   - magic_working: params["actor"]  → working_log[*].actor
 #   - scenario_clue: params["fact_id"] → scenario_state.discovered_clues
+#   - npc_agency:    params["npc_name"] → npc_pool[*].name (story 59-7)
+#   - distinctive_detail_hint: always engaged (directive-only, no snapshot dep)
+#   - reflect_absence: always engaged (directive-only, no snapshot dep)
 # ---------------------------------------------------------------------------
 
 
@@ -112,10 +115,33 @@ def _check_scenario_clue_engaged(dispatch: SubsystemDispatch, snapshot: GameSnap
     return None
 
 
+def _check_npc_agency_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
+    npc_name: str = dispatch.params["npc_name"]  # KeyError = router bug
+    needle = npc_name.lower()
+    if not any(m.name.lower() == needle for m in snapshot.npc_pool):
+        return f"npc_name={npc_name!r} not in snapshot.npc_pool"
+    return None
+
+
+def _check_distinctive_detail_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot
+) -> str | None:
+    return None
+
+
+def _check_reflect_absence_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot
+) -> str | None:
+    return None
+
+
 _DISPATCHED_TYPE_KEY: dict[str, str] = {
     "confrontation": "type",
     "magic_working": "actor",
     "scenario_clue": "fact_id",
+    "npc_agency": "npc_name",
+    "distinctive_detail_hint": "target",
+    "reflect_absence": "addressee_hint",
 }
 
 
@@ -123,6 +149,9 @@ _WITNESSES = {
     "confrontation": _check_confrontation_engaged,
     "magic_working": _check_magic_working_engaged,
     "scenario_clue": _check_scenario_clue_engaged,
+    "npc_agency": _check_npc_agency_engaged,
+    "distinctive_detail_hint": _check_distinctive_detail_engaged,
+    "reflect_absence": _check_reflect_absence_engaged,
 }
 
 
@@ -157,9 +186,10 @@ def detect_dispatch_engagement_mismatch(
     (``package=None`` or empty package) return ``[]``.
 
     Subsystems whose names are not in :data:`_WITNESSES` are *ignored* —
-    not every router subsystem is the watcher's concern (e.g. additive
-    subsystems landing in 59-7 like ``npc_agency``, ``distinctive_detail_hint``,
-    ``reflect_absence``). Story 59-7 adds witnesses for those.
+    not every router subsystem is the watcher's concern. As of story 59-7,
+    all six live-path subsystems have witnesses: ``confrontation``,
+    ``magic_working``, ``scenario_clue``, ``npc_agency``,
+    ``distinctive_detail_hint``, ``reflect_absence``.
     """
     if package is None:
         return []

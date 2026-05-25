@@ -82,6 +82,13 @@ For each player action:
      plausibly resolves, set resolved_to=null with confidence=0 — do NOT
      invent a filler.
   2. Emit subsystem dispatches keyed on the action's mechanical intent.
+     Available subsystem keys:
+       - confrontation: structured encounter (combat, negotiation, chase, etc.)
+       - magic_working: spell or magical ability usage
+       - scenario_clue: clue/evidence discovery or advancement
+       - npc_agency: NPC reacts based on established role and disposition
+       - distinctive_detail_hint: name a referent by its distinctive detail
+       - reflect_absence: player addresses someone/something not present
   3. Emit narrator_instructions — must_narrate / must_not_narrate /
      distinctive_detail_for_referent / canonical_only_do_not_reveal_to_others.
   4. Set confidence_global to your overall confidence across the turn.

@@ -1,0 +1,28 @@
+# Synthetic test fixture — NOT shipped content. Exercises the
+# structured/prim class and the non-trap braid_ratio == 0.3 contract.
+id: bone_crypt
+display_name: The Bone Crypt
+generator_class: structured
+interior:
+  algorithm: prim
+  params: {}
+  braid_ratio: 0.3
+depth_band: {min: 30.0, max: 130.0}
+narrator:
+  register: grave
+  flavor: Stacked femurs sorted by length, dust that remembers names.
+  motifs: [ossuary, order, dust]
+adjacency:
+  prefers: [winding_catacomb]
+  avoids: [flooded_grotto]
+set_pieces:
+  - id: the_false_floor
+    name: The False Floor
+    telegraph: One flagstone's mortar is newer and rings hollow under the pole.
+    outcome: Weight on the slab drops it onto upturned iron in the pit beneath.
+    save_or_die: {save: reflex, dc: 16}
+    slots:
+      - name: layout
+        options:
+          - {value: ten_foot_spiked_pit, weight: 2.0}
+          - {value: oubliette, weight: 1.0}

@@ -1,0 +1,23 @@
+# Synthetic test fixture — NOT shipped content. Exercises the
+# labyrinthine/depthfirst class and the braid_ratio == 0.0 contract
+# (spec §5.2: labyrinth-trap stays a pristine perfect maze).
+id: labyrinth_trap
+display_name: The Labyrinth Trap
+generator_class: labyrinthine
+interior:
+  algorithm: depthfirst
+  params: {}
+  braid_ratio: 0.0
+depth_band: {min: 0.0, max: 40.0}
+narrator:
+  register: grave
+  flavor: A perfect maze with one true path and no mercy for the lost.
+  motifs: [maze, dead_ends, the_lost]
+adjacency:
+  prefers: [winding_catacomb]
+  avoids: [flooded_grotto]
+set_pieces:
+  - id: the_one_true_turn
+    name: The One True Turn
+    telegraph: A scuff of many bootprints favours the left fork; the right is unmarked.
+    outcome: The unmarked fork closes the maze behind the party. The marked one does not.

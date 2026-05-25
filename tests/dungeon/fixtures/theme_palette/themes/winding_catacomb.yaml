@@ -1,0 +1,23 @@
+# Synthetic test fixture — NOT shipped content. Exercises the
+# labyrinthine/depthfirst class and the non-trap braid_ratio == 0.3
+# contract (spec §12).
+id: winding_catacomb
+display_name: The Winding Catacomb
+generator_class: labyrinthine
+interior:
+  algorithm: depthfirst
+  params: {}
+  braid_ratio: 0.3
+depth_band: {min: 20.0, max: 80.0}
+narrator:
+  register: grave
+  flavor: Looping galleries that double back on themselves, braided with loops.
+  motifs: [catacomb, loops, dust]
+adjacency:
+  prefers: [bone_crypt, labyrinth_trap]
+  avoids: []
+set_pieces:
+  - id: the_doubled_gallery
+    name: The Doubled Gallery
+    telegraph: The same chipped urn appears twice — the gallery has looped.
+    outcome: Backtracking costs time the party does not have; the loops are real.

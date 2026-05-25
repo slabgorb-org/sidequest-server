@@ -1,48 +1,51 @@
-"""WIRING: load the REAL shipped caverns_and_claudes themes/ scaffold and
-cross-validate it against the REAL Plan-1 interiors registry + Plan-3
-depth_score scale.
+"""WIRING: load a synthetic themes/ scaffold and cross-validate the loader
+against the REAL Plan-1 interiors registry + Plan-3 depth_score scale.
 
 Per CLAUDE.md "Every Test Suite Needs a Wiring Test": Plan 4's runtime
 consumer (Plan 7's materializer building a depth-filtered theme_pool,
 Plan 6's set-piece roll) is an honest deferral — same stance as Plans
-2 & 3. This test proves the loader is wired to real content + real
-sibling modules, not unit-isolated against synthetic fixtures only.
+2 & 3. This test proves the loader is wired to its real sibling modules
+(interiors.ALGORITHMS, the DungeonTheme/SetPiece pydantic schema, the
+_CLASS_ALGORITHM invariant) by feeding it a fixture palette that
+deliberately exercises every generator class and algorithm.
+
+The fixture under tests/dungeon/fixtures/theme_palette/ is owned by this
+suite — it is NOT a live genre pack. Shipped-content completeness (every
+generator class has an authored theme) is enforced separately by the pack
+validator (`just content-validate`), not coupled into the server unit
+suite. See epic 64.
 """
+
+from pathlib import Path
 
 import pytest
 
 from sidequest.dungeon.interiors import ALGORITHMS
 from sidequest.dungeon.themes import ThemePalette, load_theme_palette
 
+FIXTURE_PACK = Path(__file__).parent / "fixtures" / "theme_palette"
+
 
 @pytest.fixture(scope="module")
-def palette(content_dir) -> ThemePalette:
-    pack = content_dir / "genre_packs" / "caverns_and_claudes"
-    return load_theme_palette(pack)
+def palette() -> ThemePalette:
+    return load_theme_palette(FIXTURE_PACK)
 
 
 def test_scaffold_covers_exactly_the_four_generator_classes(palette: ThemePalette):
     classes = {t.generator_class for t in palette.themes.values()}
-    # DELIBERATE completeness contract (Plan 4 scaffold acceptance criterion),
-    # NOT latent fragility: every generator_class the engine supports must
-    # have >=1 authored theme — a class with no content path is a silent gap
-    # (CLAUDE.md No Silent Fallbacks). If a later plan adds a generator_class
-    # to themes._CLASS_ALGORITHM, this MUST fail until a matching theme is
-    # authored (or this gate is consciously relaxed). It is not an interiors
-    # regression — it is this contract doing its job.
+    # The fixture palette deliberately authors one theme per generator_class
+    # so the loader is exercised across the full _CLASS_ALGORITHM surface.
+    # Shipped-content completeness (every class has a real authored theme) is
+    # the pack validator's job (`just content-validate`), not this suite's.
     assert classes == {"organic", "labyrinthine", "structured", "built"}
 
 
 def test_scaffold_exercises_exactly_every_interior_algorithm(palette: ThemePalette):
     used = {t.interior.algorithm for t in palette.themes.values()}
-    # DELIBERATE completeness contract (Plan 4 scaffold acceptance criterion),
-    # NOT latent fragility: the scaffold must exercise EVERY generator in the
-    # real interiors.ALGORITHMS registry — a registered generator with no
-    # authored theme is a silent dead path (CLAUDE.md No Silent Fallbacks). If
-    # a later plan adds an algorithm to interiors.ALGORITHMS, this MUST fail
-    # until a matching theme is authored (or this gate is consciously relaxed).
-    # A failure here is NOT an interiors-module regression — it is this
-    # cross-repo content-coverage contract doing its job; add a theme.
+    # The fixture palette deliberately exercises EVERY generator in the real
+    # interiors.ALGORITHMS registry — a genuine cross-module wire (not a copied
+    # enum) proving the loader resolves each algorithm. If a later plan adds an
+    # algorithm to interiors.ALGORITHMS, add a matching fixture theme here.
     assert used == set(ALGORITHMS)  # cellular, depthfirst, prim, roomcorridor
 
 

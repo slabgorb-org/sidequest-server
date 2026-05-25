@@ -1,0 +1,22 @@
+# Synthetic test fixture — NOT shipped content. Exercises the
+# organic/cellular class and surface eligibility (depth_band min 0.0).
+id: flooded_grotto
+display_name: The Flooded Grotto
+generator_class: organic
+interior:
+  algorithm: cellular
+  params: {}
+  braid_ratio: 0.2
+depth_band: {min: 0.0, max: 50.0}
+narrator:
+  register: grave
+  flavor: Black water over uneven stone, the ceiling lost above the lamplight.
+  motifs: [water, dark, cold]
+adjacency:
+  prefers: []
+  avoids: [bone_crypt, labyrinth_trap]
+set_pieces:
+  - id: the_rising_pool
+    name: The Rising Pool
+    telegraph: The waterline on the wall is wet a hand's-width above the current surface.
+    outcome: The pool is filling. The way back floods before the way forward does.

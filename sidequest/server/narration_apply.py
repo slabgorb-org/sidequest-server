@@ -48,6 +48,7 @@ from sidequest.magic.models import Flag, MagicWorking
 from sidequest.magic.state import ApplyWorkingResult, ThresholdCrossingEvent
 from sidequest.magic.validator import validate as magic_validate
 from sidequest.protocol.dice import RollOutcome
+from sidequest.protocol.messages import DiceRequestMessage, DiceResultMessage
 from sidequest.server.dispatch.confrontation import resolve_magic_confrontation
 from sidequest.server.dispatch.sealed_letter import (
     SealedLetterOutcome,
@@ -2695,6 +2696,11 @@ def _apply_narration_result_to_snapshot(
                         pending_player_actor=opposed_player_actor,
                         turn=snapshot.turn_manager.interaction,
                         snapshot=snapshot,
+                        # ADR-114 / Task 11 — damage roll injection on opposed path.
+                        pack=pack,
+                        room_broadcast=room.broadcast if room is not None else None,
+                        rolling_player_id=acting_character_name or player_name,
+                        session_round=snapshot.turn_manager.round,
                     )
                     if outcome_obj.encounter_resolved:
                         snapshot.pending_resolution_signal = _build_resolution_signal(enc)
@@ -3625,6 +3631,10 @@ def _resolve_opposed_check_branch(
     pending_player_actor: str | None,
     turn: int,
     snapshot: GameSnapshot,
+    pack: GenrePack | None = None,
+    room_broadcast: Any = None,
+    rolling_player_id: str = "server",
+    session_round: int = 0,
 ) -> _OpposedBranchOutcome:
     """Run the opposed-check dispatch branch.
 
@@ -3645,14 +3655,39 @@ def _resolve_opposed_check_branch(
     - The player's beat_id is not in ``pack_beats``.
     - No opponent-side beat selection is present in ``selections``.
     - The opponent's beat_id is not in ``pack_beats``.
+
+    ADR-114 / Task 11 — ``pack``, ``room_broadcast``, ``rolling_player_id``,
+    and ``session_round`` enable strike-beat HP damage on the opposed path.
+    When ``pack`` is provided and a strike beat lands (tier not Fail/CritFail),
+    the damage spec is resolved, server-side faces are rolled, and a
+    DICE_REQUEST + DICE_RESULT pair is broadcast before ``apply_beat`` so the
+    player overlay shows the weapon dice (Sebastien's "show me the math").
+    If no DamageSpec resolves, we log + skip (no phantom damage).
     """
+    import uuid
+
     from sidequest.game.beat_kinds import apply_beat
+    from sidequest.game.dice import generate_dice_seed, resolve_dice_with_faces
     from sidequest.game.opposed_check import resolve_opponent_modifier, resolve_opposed_check
+    from sidequest.protocol.dice import DiceResultPayload as _DiceResultPayload
+    from sidequest.protocol.dice import RollOutcome as _DmgRollOutcome
+    from sidequest.protocol.dice import ThrowParams as _DmgThrowParams
+    from sidequest.server.dispatch.damage_roll import (
+        damage_request_from_spec as _damage_request_from_spec,
+    )
+    from sidequest.server.dispatch.damage_roll import (
+        generate_server_faces as _gen_server_faces,
+    )
+    from sidequest.server.dispatch.damage_roll import (
+        resolve_damage_spec_from_beat_and_actor as _resolve_dmg_spec,
+    )
     from sidequest.telemetry.spans import (
         encounter_beat_skipped_span,
         encounter_opposed_roll_resolved_span,
         encounter_resolved_span,
     )
+
+    _FAIL_TIERS = frozenset([RollOutcome.Fail, RollOutcome.CritFail])
 
     if pending_player_d20 is None or pending_player_beat_id is None or pending_player_actor is None:
         raise ValueError(
@@ -4030,6 +4065,108 @@ def _resolve_opposed_check_branch(
             ),
         )
     for sel_actor, sel_beat, beat_id, sel_tier, sel_source in apply_targets:
+        # ADR-114 / Task 11 — strike-beat HP damage on the opposed path.
+        # Mirror the exact logic from dice.py's non-opposed branch: for each
+        # actor whose beat has damage_channel=strike AND whose tier is not
+        # Fail/CritFail, resolve the DamageSpec, roll server-side faces,
+        # broadcast DICE_REQUEST + DICE_RESULT, and pass damage_resolver to
+        # apply_beat so apply_beat_hp_channel fires. No phantom damage —
+        # if no DamageSpec resolves, log + skip (same behaviour as dice.py).
+        damage_resolver_fn = None
+        damage_channel = str(getattr(sel_beat, "damage_channel", "none") or "none")
+        if pack is not None and damage_channel == "strike" and sel_tier not in _FAIL_TIERS:
+            actor_core = snapshot.find_creature_core(sel_actor.name)
+            dmg_spec = _resolve_dmg_spec(
+                beat=sel_beat,
+                actor_core=actor_core,
+                pack=pack,
+            )
+            if dmg_spec is None:
+                logger.warning(
+                    "opposed_check.damage_spec_missing beat=%r actor=%r encounter=%r "
+                    "— strike beat has no resolvable weapon, damage_override, or "
+                    "unarmed default; HP damage skipped (CLAUDE.md no-fabricate)",
+                    beat_id,
+                    sel_actor.name,
+                    encounter.encounter_type,
+                )
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "encounter",
+                        "op": "damage_spec_missing",
+                        "beat_id": beat_id,
+                        "actor": sel_actor.name,
+                        "source": sel_source,
+                        "rationale": (
+                            "opposed_check strike beat has no damage_override, "
+                            "no weapon with a damage spec in inventory, and no "
+                            "unarmed_damage default on the genre rules — HP path skipped"
+                        ),
+                    },
+                    component="encounter",
+                    severity="warning",
+                )
+            else:
+                dmg_request_id = str(uuid.uuid4())
+                dmg_request_payload = _damage_request_from_spec(
+                    dmg_spec,
+                    request_id=dmg_request_id,
+                    rolling_player_id=rolling_player_id,
+                    character_name=sel_actor.name,
+                )
+                dmg_faces = _gen_server_faces(dmg_request_payload.dice)
+                dmg_resolved = resolve_dice_with_faces(
+                    dmg_request_payload.dice,
+                    dmg_faces,
+                    dmg_request_payload.modifier,
+                    dmg_request_payload.difficulty,
+                )
+                dmg_total = dmg_resolved.total
+                dmg_seed = generate_dice_seed(
+                    f"{encounter.encounter_type}-{sel_actor.name}", session_round
+                )
+                dmg_result_payload = _DiceResultPayload(
+                    request_id=dmg_request_id,
+                    rolling_player_id=rolling_player_id,
+                    character_name=sel_actor.name,
+                    rolls=dmg_resolved.rolls,
+                    modifier=dmg_request_payload.modifier,
+                    total=dmg_total,
+                    difficulty=dmg_request_payload.difficulty,
+                    outcome=_DmgRollOutcome.Success,  # damage rolls have no outcome tier
+                    seed=dmg_seed,
+                    throw_params=_DmgThrowParams(
+                        velocity=(0.0, 4.0, -1.0),
+                        angular=(0.5, 0.5, 0.5),
+                        position=(0.5, 0.5),
+                    ),
+                )
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "encounter",
+                        "op": "damage_roll_resolved",
+                        "beat_id": beat_id,
+                        "actor": sel_actor.name,
+                        "actor_side": sel_actor.side,
+                        "damage_spec": dmg_spec.dice,
+                        "bonus": dmg_spec.bonus,
+                        "faces": dmg_faces,
+                        "total": dmg_total,
+                        "source": sel_source,
+                    },
+                    component="encounter",
+                )
+                if room_broadcast is not None:
+                    room_broadcast(
+                        DiceRequestMessage(payload=dmg_request_payload, player_id="server")
+                    )
+                    room_broadcast(
+                        DiceResultMessage(payload=dmg_result_payload, player_id="server")
+                    )
+                damage_resolver_fn = lambda _t=dmg_total: _t  # noqa: E731
+
         applied = apply_beat(
             encounter,
             sel_actor,
@@ -4037,6 +4174,7 @@ def _resolve_opposed_check_branch(
             sel_tier,
             turn=turn,
             edge_resolver=snapshot.find_creature_core,
+            damage_resolver=damage_resolver_fn,
         )
         if applied.skipped_reason is not None:
             with encounter_beat_skipped_span(

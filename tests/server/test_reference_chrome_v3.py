@@ -475,35 +475,26 @@ def test_toc_links_resolve_to_section_ids(tmp_path: Path) -> None:
 def test_unknown_pack_falls_back_to_default_toc_and_fires_error_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC4 + AC10: unknown pack name → renderer emits the documented
-    2-item default TOC AND fires ``sidequest.reference.toc_missing``
-    ERROR span. NOT a silent fallback — the GM panel surfaces the gap.
+    """AC4 + AC10: unknown pack name → rules page uses DEFAULT_RULES_TOC
+    (universal for all packs), lore page falls through to DEFAULT_TOC and
+    fires ``sidequest.reference.toc_missing`` ERROR span.
 
-    Per plan line 2780, the default TOC is:
-        [{"num":"I","id":"reckoning","label":"The World"},
-         {"num":"II","id":"bearing","label":"Bearing & Make"}]
-
-    Span emission is verified by monkeypatching the span helper rather
-    than installing a global ``TracerProvider`` exporter. Replacing the
-    global provider races under ``pytest-xdist -n auto`` (a parallel
-    worker may have set the provider first; subsequent set calls are
-    silently ignored). The monkeypatch isolates each worker.
+    Rules pages use a dedicated rules-oriented TOC (DEFAULT_RULES_TOC)
+    that covers all rules content regardless of pack, so no toc_missing
+    span is needed. The lore-page path still fires the span for
+    unknown packs via ``_pack_toc_entries``.
     """
     from sidequest.server import reference_renderer
     from sidequest.server.reference_renderer import assemble_rules_page
 
     pack = _seed_pack(tmp_path, pack_name="never_real_pack")
 
-    # Wrap the real span helper so we observe invocations while still
-    # exercising the production code path (open context, yield, close).
     calls: list[dict[str, str]] = []
     from contextlib import contextmanager
 
     @contextmanager
     def _spy(*, pack: str, _tracer: object = None):
         calls.append({"pack": pack})
-        # Re-enter the real helper so the actual OTEL span fires too
-        # (we're not stubbing — we're spying).
         from sidequest.telemetry.spans.reference import (
             reference_toc_missing_span as real_helper,
         )
@@ -515,20 +506,17 @@ def test_unknown_pack_falls_back_to_default_toc_and_fires_error_span(
 
     html = assemble_rules_page("never_real_pack", pack)
 
-    # Default-TOC entries must appear in the rendered TOC.
-    assert "#reckoning" in html, (
-        "AC4: unknown pack should render the 2-item default TOC starting "
-        "with 'I. The World' / id=reckoning per plan line 2780."
-    )
-    assert "#bearing" in html, "AC4: unknown pack default TOC missing 'bearing' id"
+    # Rules page uses DEFAULT_RULES_TOC — all rules-relevant sections present.
+    assert "#bearing" in html, "Rules page must have bearing section"
+    assert "#edge" in html, "Rules page must have edge (rules) section"
+    assert "#affinities" in html, "Rules page must have affinities (magic) section"
+    assert "#achievements" in html, "Rules page must have achievements section"
 
-    # And the ERROR span helper must have been invoked exactly with the
-    # unknown pack name (loud-fail path, not silent fallback).
-    assert calls, (
-        "AC10: unknown pack must fire `sidequest.reference.toc_missing` "
-        "ERROR span — silent fallback to default TOC is forbidden."
+    # Rules pages do NOT fire toc_missing span — they use a universal TOC.
+    assert not calls, (
+        "Rules page uses DEFAULT_RULES_TOC for all packs — "
+        "toc_missing span should not fire."
     )
-    assert calls[0]["pack"] == "never_real_pack"
 
 
 def test_toc_missing_span_helper_is_importable() -> None:

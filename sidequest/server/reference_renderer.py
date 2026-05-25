@@ -51,6 +51,7 @@ from sidequest.server.reference_presenters import (
 )
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import (
+    DEFAULT_RULES_TOC,
     DEFAULT_TOC,
     PACK_BLURBS,
     PACK_EPIGRAPHS,
@@ -621,7 +622,7 @@ def _pack_toc_entries(pack: str) -> list[dict[str, str]]:
     return entries
 
 
-def _build_toc(pack: str) -> str:
+def _build_toc(pack: str, *, toc_entries: list[dict[str, str]] | None = None) -> str:
     """Per-pack table of contents — emits
     ``<aside class="toc-sticky"><nav class="toc"><div class="toc-title">Contents</div><ol>…</ol></nav></aside>``.
 
@@ -631,7 +632,7 @@ def _build_toc(pack: str) -> str:
     ``.toc ol`` rule strips default list markers and ``.toc-num`` provides
     the visible numbering.
     """
-    entries = _pack_toc_entries(pack)
+    entries = toc_entries if toc_entries is not None else _pack_toc_entries(pack)
     items = "".join(
         f'<li><a href="#{escape(entry["id"])}">'
         f'<span class="toc-num">{escape(entry["num"])}.</span>'
@@ -810,6 +811,8 @@ def _file_renders_by_stem(
 def _wrap_sections_by_toc(
     pack: str,
     rendered_by_stem: dict[str, str],
+    *,
+    toc_entries: list[dict[str, str]] | None = None,
 ) -> str:
     """Bucket the rendered file fragments into per-TOC-id sections.
 
@@ -820,7 +823,7 @@ def _wrap_sections_by_toc(
     Stems not referenced by any TOC entry render afterwards in their
     existing per-file wrappers so content is never silently dropped.
     """
-    entries = _pack_toc_entries(pack)
+    entries = toc_entries if toc_entries is not None else _pack_toc_entries(pack)
     used_stems: set[str] = set()
     parts: list[str] = []
     for entry in entries:
@@ -854,6 +857,7 @@ def _wrap_document(
     theme: ReferenceTheme,
     world: str | None = None,
     hero_html: str = "",
+    toc_entries: list[dict[str, str]] | None = None,
 ) -> str:
     """Assemble the final HTML document.
 
@@ -882,7 +886,7 @@ def _wrap_document(
     """
     anchors = _collect_anchor_ids(hero_html + body)
     island = f'<script id="ref-anchors" type="application/json">{json.dumps(anchors)}</script>'
-    toc = _build_toc(pack)
+    toc = _build_toc(pack, toc_entries=toc_entries)
     return (
         "<!doctype html>"
         f"{_document_root_open(pack=pack, world=world, archetype=theme.archetype)}"
@@ -920,10 +924,11 @@ def assemble_rules_page(pack: str, pack_dir: Path) -> str:
     ``PACK_LABELS[pack]`` (no lore.yaml at the pack tier).
     """
     theme = load_reference_theme(pack_dir)
+    rules_toc = list(DEFAULT_RULES_TOC)
     rendered_by_stem = _file_renders_by_stem(
         RULES_FILES, pack_dir, pack=pack, world=None, theme=theme
     )
-    body = _wrap_sections_by_toc(pack, rendered_by_stem)
+    body = _wrap_sections_by_toc(pack, rendered_by_stem, toc_entries=rules_toc)
     hero_html = _build_hero(pack=pack, world=None, world_dir=None)
     return _wrap_document(
         title=f"{pack} — Rules",
@@ -931,6 +936,7 @@ def assemble_rules_page(pack: str, pack_dir: Path) -> str:
         pack=pack,
         theme=theme,
         hero_html=hero_html,
+        toc_entries=rules_toc,
     )
 
 

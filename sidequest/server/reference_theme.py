@@ -337,6 +337,17 @@ DEFAULT_TOC: list[dict[str, str]] = [
 ]
 
 
+DEFAULT_RULES_TOC: list[dict[str, str]] = [
+    {"num": "I", "id": "bearing", "label": "Characters"},
+    {"num": "II", "id": "edge", "label": "Rules"},
+    {"num": "III", "id": "affinities", "label": "Magic"},
+    {"num": "IV", "id": "power-tiers", "label": "Power Tiers"},
+    {"num": "V", "id": "inventory", "label": "Inventory"},
+    {"num": "VI", "id": "vocab", "label": "Beat Vocabulary"},
+    {"num": "VII", "id": "achievements", "label": "Achievements"},
+]
+
+
 # Section-id → file-stem mapping. Maps each ``PACK_TOC`` entry's ``id``
 # to the list of YAML file stems whose rendered content belongs in that
 # section. The reference renderer wraps the concatenated file renders
@@ -357,9 +368,10 @@ TOC_TO_FILES: dict[str, list[str]] = {
         "progression",
     ],
     "edge": ["rules"],
-    "confrontations": ["rules", "tropes"],
+    "confrontations": ["tropes"],
     "affinities": ["magic"],
     "power-tiers": ["power_tiers"],
     "inventory": ["inventory", "equipment_tables"],
     "vocab": ["beat_vocabulary"],
+    "achievements": ["achievements"],
 }

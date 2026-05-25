@@ -134,3 +134,63 @@ def ensure_initial_draw(
         ):
             pass
     snapshot.active_seeds = drawn
+
+
+def draw_engaged_seed(
+    snapshot: GameSnapshot,
+    pack: Any,
+    *,
+    session_id: str,
+    engagement_signal: str,
+    now_turn: int,
+) -> None:
+    """Draw one seed from the deck in response to player engagement.
+
+    Reuses the ``SeedDeck`` (22-1) with ``drawn_ids`` reconstructed from
+    the snapshot's active seeds and ghosts — no new persistence. The
+    caller is responsible for gating on engagement thresholds (e.g.
+    ``active_seeds < 2``); this function draws unconditionally if the
+    deck has remaining seeds.
+
+    Emits ``SPAN_SEED_DRAWN`` with ``trigger="engagement"`` so the GM
+    panel can distinguish mid-session draws from bootstrap draws.
+    """
+    seeds: list[SeedTrope] = list(getattr(pack, "seed_tropes", []) or [])
+    if not seeds:
+        return
+
+    drawn_ids = {s.id for s in snapshot.active_seeds} | {g.id for g in snapshot.seed_ghosts}
+
+    deck = SeedDeck(
+        genre_id=snapshot.genre_slug,
+        world_id=snapshot.world_slug,
+        session_id=session_id,
+        seeds=seeds,
+        drawn_ids=drawn_ids,
+    )
+
+    seed = deck.draw()
+    if seed is None:
+        return
+
+    snapshot.active_seeds.append(
+        SeedState(
+            id=seed.id,
+            name=seed.name,
+            activated_at_turn=now_turn,
+            flavor_tags=list(seed.flavor_tags),
+            lifespan_turns=seed.lifespan_turns,
+            delivery_hints=list(seed.delivery_hints),
+        )
+    )
+
+    with Span.open(
+        SPAN_SEED_DRAWN,
+        {
+            "seed_id": seed.id,
+            "trigger": "engagement",
+            "session_id": session_id,
+            "activated_at_turn": now_turn,
+        },
+    ):
+        pass

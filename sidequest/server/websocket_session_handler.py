@@ -3266,9 +3266,7 @@ class WebSocketSessionHandler:
                 # level (``intent_router_pass.build_intent_router_for_session``)
                 # so tests monkeypatch it to a stub — tests MUST NOT spawn
                 # a real Claude client.
-                _acting_player_name = (
-                    snapshot.player_seats.get(sd.player_id, "") or sd.player_id
-                )
+                _acting_player_name = snapshot.player_seats.get(sd.player_id, "") or sd.player_id
                 _additional_player_names = [
                     name
                     for pid, name in snapshot.player_seats.items()
@@ -3589,6 +3587,29 @@ class WebSocketSessionHandler:
                         sd.genre_pack,
                         now_turn=snapshot.turn_manager.interaction,
                     )
+
+                    # Story 22-5: engagement-triggered seed injection.
+                    # When the dispatch package contains subsystem
+                    # dispatches (player engaged mechanically or socially)
+                    # and the snapshot has fewer than 2 active seeds, draw
+                    # a fresh seed from the remaining deck. Reuses the
+                    # same session_id as the initial draw for deck
+                    # reproducibility.
+                    if (
+                        _dispatch_package is not None
+                        and any(pd.dispatch for pd in _dispatch_package.per_player)
+                        and len(snapshot.active_seeds) < 2
+                        and getattr(sd.genre_pack, "seed_tropes", None)
+                    ):
+                        from sidequest.game.seed_tick import draw_engaged_seed  # noqa: PLC0415
+
+                        draw_engaged_seed(
+                            snapshot,
+                            sd.genre_pack,
+                            session_id=seed_session_id,
+                            engagement_signal="dispatch",
+                            now_turn=snapshot.turn_manager.interaction,
+                        )
 
                     # Story 45-20: trope-resolution handshake. Diffs the
                     # baseline captured at the top of this method against
@@ -4764,9 +4785,8 @@ class WebSocketSessionHandler:
                         _cart_map = _build_cartography_map_message(
                             sd.genre_pack,
                             sd.world_slug,
-                            snapshot.current_region or snapshot.party_location(
-                                perspective=_acting_for_render_trigger
-                            ),
+                            snapshot.current_region
+                            or snapshot.party_location(perspective=_acting_for_render_trigger),
                             player_id=sd.player_id,
                         )
                         if _cart_map is not None:
@@ -5268,13 +5288,10 @@ class WebSocketSessionHandler:
             # Resolve joiner_char_name from the seat-map first (authoritative
             # for the connecting session's PC) and fall back to
             # ``characters[-1]`` for legacy paths that don't bind player_id.
-            joiner_char_name = (
-                sd.snapshot.player_seats.get(sd.player_id or "", "")
-                or (
-                    sd.snapshot.characters[-1].core.name
-                    if sd.snapshot.characters
-                    else (sd.player_name or "the new arrival")
-                )
+            joiner_char_name = sd.snapshot.player_seats.get(sd.player_id or "", "") or (
+                sd.snapshot.characters[-1].core.name
+                if sd.snapshot.characters
+                else (sd.player_name or "the new arrival")
             )
             # Playtest 2026-05-02 [BUG-LOW]: joiner-orientation drifted
             # off the established scene (host on the Kestrel cockpit;
@@ -5311,9 +5328,7 @@ class WebSocketSessionHandler:
             # 3-PC repro's correct shape — Donut's beat referenced Carl
             # by name, and Katia's beat should reference Carl and Donut.
             other_pcs = [
-                n
-                for n in sd.snapshot.player_seats.values()
-                if n and n != joiner_char_name
+                n for n in sd.snapshot.player_seats.values() if n and n != joiner_char_name
             ]
             other_pcs_clause = (
                 f" The other PCs already in the scene: {', '.join(other_pcs)}."

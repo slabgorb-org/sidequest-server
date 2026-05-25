@@ -1,0 +1,9 @@
+chapters:
+  - label: The Drowned Years
+    description: A test chapter whose POI manifest entry points at no location.
+    points_of_interest:
+      - name: Ghost Station
+        slug: ghost-station
+        region: dockside
+        type: ruin
+        description: A POI image manifest entry with no matching location card.

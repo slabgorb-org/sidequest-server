@@ -1,0 +1,9 @@
+chapters:
+  - label: The First Reckoning
+    description: A test chapter providing the POI image manifest.
+    points_of_interest:
+      - name: Vaskov Centrum
+        slug: vaskov-centrum
+        region: habitable_world
+        type: city
+        description: A POI with a generated landscape image in R2.

@@ -3590,6 +3590,29 @@ class WebSocketSessionHandler:
                         now_turn=snapshot.turn_manager.interaction,
                     )
 
+                    # Story 22-5: engagement-triggered seed injection.
+                    # When the dispatch package contains subsystem
+                    # dispatches (player engaged mechanically or socially)
+                    # and the snapshot has fewer than 2 active seeds, draw
+                    # a fresh seed from the remaining deck. Reuses the
+                    # same session_id as the initial draw for deck
+                    # reproducibility.
+                    if (
+                        _dispatch_package is not None
+                        and any(pd.dispatch for pd in _dispatch_package.per_player)
+                        and len(snapshot.active_seeds) < 2
+                        and getattr(sd.genre_pack, "seed_tropes", None)
+                    ):
+                        from sidequest.game.seed_tick import draw_engaged_seed  # noqa: PLC0415
+
+                        draw_engaged_seed(
+                            snapshot,
+                            sd.genre_pack,
+                            session_id=seed_session_id,
+                            engagement_signal="dispatch",
+                            now_turn=snapshot.turn_manager.interaction,
+                        )
+
                     # Story 45-20: trope-resolution handshake. Diffs the
                     # baseline captured at the top of this method against
                     # the post-recompute snapshot to detect any trope that

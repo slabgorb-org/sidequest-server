@@ -281,6 +281,8 @@ def register_daemon_temp_orphans(app: FastAPI, temp_parent: str | os.PathLike[st
             continue
         if not child.name.startswith("sq-daemon-"):
             continue
+        if not any(child.iterdir()):
+            continue
         try:
             if register_root(app, child):
                 registered += 1

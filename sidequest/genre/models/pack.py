@@ -91,6 +91,7 @@ class PackMeta(BaseModel):
     differentiation: str | None = None
     lobby_blurb: str | None = None
     recommended_players: RecommendedPlayers | None = None
+    extensions: list[str] = Field(default_factory=list)
 
 
 class PortraitManifestEntry(BaseModel):

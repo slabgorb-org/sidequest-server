@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from sidequest.game.session import SeedGhost, SeedState
 from sidequest.genre.models.tropes import SeedTrope
+from sidequest.telemetry.spans import SPAN_SEED_FIRED, Span
 
 
 def _render_active(state: SeedState, trope: SeedTrope | None) -> str:
@@ -67,12 +68,15 @@ def build_seed_context_block(
     if not active_seeds and not seed_ghosts:
         return None
 
-    # Always open and close the wrapper tag together — sibling discipline
-    # of <magic-context> / <game_state> in orchestrator.py. The empty-
-    # input early-return above prevents emitting a stub wrapper.
+    for s in active_seeds:
+        with Span.open(SPAN_SEED_FIRED, {"seed_id": s.id}):
+            pass
+
     sections: list[str] = ["<seed-context>"]
     if active_seeds:
-        body = [_render_active(s, seed_trope_by_id.get(s.id)) for s in active_seeds]
+        body: list[str] = []
+        for s in active_seeds:
+            body.append(_render_active(s, seed_trope_by_id.get(s.id)))
         sections.append("[ACTIVE SEEDS]\n" + "\n".join(body))
     if seed_ghosts:
         body = [_render_ghost(g) for g in seed_ghosts]

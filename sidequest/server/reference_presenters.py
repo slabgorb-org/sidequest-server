@@ -15,8 +15,13 @@ from html import escape
 
 import yaml
 
+from sidequest.server.asset_urls import resolve_asset_url
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import ReferenceTheme
+from sidequest.telemetry.spans.reference import (
+    reference_poi_image_not_found_span,
+    reference_poi_image_resolved_span,
+)
 
 KeyPath = tuple[str, ...]
 
@@ -29,6 +34,11 @@ class PresenterContext:
     key_path: KeyPath
     theme: ReferenceTheme
     depth: int
+    # Story 63-8: location slugs (already slugified) that have a generated POI
+    # landscape image in R2. Built by ``assemble_lore_page`` from
+    # ``history.yaml`` ``points_of_interest[].slug`` and threaded down through
+    # the render walk. A location card emits an ``<img>`` iff its slug is here.
+    poi_image_slugs: frozenset[str] = frozenset()
 
 
 Presenter = Callable[[object, PresenterContext], str]
@@ -180,6 +190,37 @@ def _format_chip_label(value: str) -> str:
     return " ".join(part.capitalize() for part in str(value).replace("_", " ").split())
 
 
+def _poi_image_html(*, slug: str, name: str, ctx: PresenterContext) -> str:
+    """Story 63-8: an R2 landscape ``<img>`` for a location card, or "".
+
+    Emits the image iff the location ``slug`` is in ``ctx.poi_image_slugs``
+    (the history.yaml POI manifest). Fires an OTEL span on both outcomes so
+    the decision is observable. Border/shadow tint uses the per-pack theme
+    accent. Returns "" (text-only card) when there is no matching image — a
+    spanned, observable skip, not a silent fallback."""
+    if ctx.world is None:
+        # No world context → no POI image possible. Observable, not silent.
+        with reference_poi_image_not_found_span(pack=ctx.pack, world=None, slug=slug):
+            pass
+        return ""
+    if slug in ctx.poi_image_slugs:
+        src = resolve_asset_url(f"genre_packs/{ctx.pack}/worlds/{ctx.world}/assets/poi/{slug}.png")
+        with reference_poi_image_resolved_span(pack=ctx.pack, world=ctx.world, slug=slug):
+            pass
+        # Escape the accent: it lands in a style= attribute and, while theme.yaml is
+        # first-party today, the renderer's invariant is to escape every interpolation
+        # (and the creator-authoring roadmap makes pack content less-trusted).
+        accent = escape(ctx.theme.palette_accent)
+        return (
+            f'<img class="ref-card__poi" src="{escape(src)}" alt="{escape(name)}" '
+            f'loading="lazy" style="width:100%;border:2px solid {accent};'
+            f'box-shadow:0 2px 8px {accent}33;" />'
+        )
+    with reference_poi_image_not_found_span(pack=ctx.pack, world=ctx.world, slug=slug):
+        pass
+    return ""
+
+
 def present_lore_geography(node: object, ctx: PresenterContext) -> str:
     # Accept both a top-level list and a dict with a single list-valued key
     # (e.g. {locations: [...]}).
@@ -206,10 +247,12 @@ def present_lore_geography(node: object, ctx: PresenterContext) -> str:
             chips.append(f'<span class="ref-chip">{escape(_format_chip_label(type_))}</span>')
         if region:
             chips.append(f'<span class="ref-chip">{escape(_format_chip_label(region))}</span>')
+        img_html = _poi_image_html(slug=slug, name=name, ctx=ctx)
         cards.append(
             f'<article class="ref-card" id="location-{slug}">'
             '<div class="ref-card__kicker">Location</div>'
             f'<h3 class="ref-card__title">{escape(name)}</h3>'
+            + img_html
             + (f'<div class="ref-card__meta">{"".join(chips)}</div>' if chips else "")
             + (f'<div class="ref-card__summary">{escape(environment)}</div>' if environment else "")
             + (f'<p class="ref-card__body">{escape(description)}</p>' if description else "")
@@ -805,9 +848,7 @@ def present_magic(node: object, ctx: PresenterContext) -> str:
     sources = magic.get("allowed_sources")
     if isinstance(sources, list) and sources:
         if all(isinstance(s, str) for s in sources):
-            strip = _chip_strip(
-                "Sources of Power", [_format_chip_label(str(s)) for s in sources]
-            )
+            strip = _chip_strip("Sources of Power", [_format_chip_label(str(s)) for s in sources])
             if strip:
                 parts.append(strip)
         else:
@@ -882,7 +923,9 @@ def present_magic(node: object, ctx: PresenterContext) -> str:
                 rows.append(f"<li>{escape(_format_chip_label(c))}</li>")
         if rows:
             parts.append(
-                '<section class="ref-allowed"><h3>Counters</h3><ul>' + "".join(rows) + "</ul></section>"
+                '<section class="ref-allowed"><h3>Counters</h3><ul>'
+                + "".join(rows)
+                + "</ul></section>"
             )
 
     # Manifestation: {modes, domains}.

@@ -1,0 +1,6 @@
+locations:
+  - id: harbor-gate
+    name: Harbor Gate
+    region: dockside
+    type: gate
+    description: The seaward entrance to the lower city.

@@ -159,9 +159,7 @@ def draw_engaged_seed(
     if not seeds:
         return
 
-    drawn_ids = {s.id for s in snapshot.active_seeds} | {
-        g.id for g in snapshot.seed_ghosts
-    }
+    drawn_ids = {s.id for s in snapshot.active_seeds} | {g.id for g in snapshot.seed_ghosts}
 
     deck = SeedDeck(
         genre_id=snapshot.genre_slug,

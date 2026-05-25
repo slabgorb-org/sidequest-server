@@ -47,7 +47,7 @@ def _mounted_core(
 ):
     """Local copy of the helper in tests/game/test_rig_crash_handler.py —
     integration tests should not cross-import from sibling test suites."""
-    from sidequest.game import CreatureCore, EdgePool, Inventory, RigComposurePool
+    from sidequest.game import CreatureCore, HpPool, Inventory, RigComposurePool
 
     pool = RigComposurePool(
         current=composure,
@@ -64,12 +64,10 @@ def _mounted_core(
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        edge=EdgePool(
+        hp=HpPool(
             current=edge_current,
             max=edge_max,
             base_max=edge_max,
-            recovery_triggers=["OnResolution"],
-            thresholds=[],
         ),
         acquired_advancements=[],
         rig_pool=pool,
@@ -331,8 +329,8 @@ async def test_rig_pool_crash_event_reaches_watcher_with_consequences(
     ``state_transition`` (component=rig, op=crash_event) carrying the
     three consequence outcomes:
 
-    - ``edge_delta`` — the realized Edge change
-    - ``edge_after`` — the post-crash Edge value
+    - ``hp_delta`` — the realized HP change
+    - ``hp_after`` — the post-crash HP value
     - ``injury_status_text`` — the appended injury text
     - ``dismounted_status_text`` — the appended dismount text
 
@@ -344,7 +342,7 @@ async def test_rig_pool_crash_event_reaches_watcher_with_consequences(
     from sidequest.game import handle_rig_crash
     from sidequest.game.rig_crash import (
         DISMOUNTED_STATUS_TEXT,
-        DRIVER_EDGE_HIT,
+        DRIVER_HP_HIT,
         INJURY_STATUS_TEXT,
     )
 
@@ -375,8 +373,8 @@ async def test_rig_pool_crash_event_reaches_watcher_with_consequences(
     assert fields["chassis_id"] == "rig_tier_1_prospect"
     assert fields["location"] == "dust_canyon"
     assert fields["attacker"] == "raider_chief"
-    assert fields["edge_delta"] == DRIVER_EDGE_HIT
-    assert fields["edge_after"] == 5 + DRIVER_EDGE_HIT
+    assert fields["hp_delta"] == DRIVER_HP_HIT
+    assert fields["hp_after"] == 5 + DRIVER_HP_HIT
     assert fields["injury_status_text"] == INJURY_STATUS_TEXT
     assert fields["dismounted_status_text"] == DISMOUNTED_STATUS_TEXT
 

@@ -44,8 +44,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 
 from sidequest.game.creature_core import (
     CreatureCore,
+    HpPool,
     Inventory,
-    placeholder_edge_pool,
 )
 from sidequest.game.migrations import migrate_legacy_snapshot
 from sidequest.game.session import GameSnapshot, Npc
@@ -54,7 +54,6 @@ from sidequest.genre.loader import load_genre_pack
 from sidequest.server.watcher import WatcherSpanProcessor
 from sidequest.telemetry import spans as spans_module
 from sidequest.telemetry.watcher_hub import watcher_hub
-from tests._helpers.session_room import room_for
 from tests._helpers.trigger_encounter import trigger_encounter
 
 _FIXTURE_PACK = Path(__file__).resolve().parents[1] / "fixtures" / "packs" / "test_genre"
@@ -114,7 +113,7 @@ def _make_npc(name: str, *, location: str | None = None, turn: int = 0) -> Npc:
             xp=0,
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         npc_role_id="hostile",
         last_seen_location=location,

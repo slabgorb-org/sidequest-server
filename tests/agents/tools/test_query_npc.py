@@ -21,7 +21,7 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import query_npc as _query_npc_module  # noqa: F401
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.disposition import Disposition
 from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot, Npc
@@ -54,7 +54,7 @@ def _npc(
         personality=personality,
         inventory=Inventory(items=[], gold=0),
         statuses=[],
-        edge=EdgePool(current=4, max=4, base_max=4),
+        hp=HpPool(current=4, max=4, base_max=4),
     )
     return Npc(
         core=core,

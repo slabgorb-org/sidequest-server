@@ -2236,20 +2236,19 @@ class WebSocketSessionHandler:
         except BuilderError as exc:
             return [_error_msg(f"Character build failed: {exc!r}")]
 
-        # ADR-014 / ADR-078: emit edge.current/.max instead of `hp` — the
-        # field formerly labelled `hp` was already pulling from edge, so the
-        # name was misleading the OTEL dashboard. `schema=adr-014` lets us
-        # find the rename in audits.
+        # ADR-114: emit hp_current/hp_max (HP is the ablative pool per
+        # ADR-114, reversing ADR-078). `schema=adr-114` lets us find
+        # this seam in audits.
         span.add_event(
             "character_creation.character_built",
             {
                 "event": "character_built",
-                "schema": "adr-014",
+                "schema": "adr-114",
                 "name": character.core.name,
                 "class": character.char_class,
                 "race": character.race,
-                "edge_current": character.core.edge.current,
-                "edge_max": character.core.edge.max,
+                "hp_current": character.core.hp.current,
+                "hp_max": character.core.hp.max,
                 "player_id": player_id,
             },
         )
@@ -2903,18 +2902,16 @@ class WebSocketSessionHandler:
             self._room.transition_to_playing(player_id)
 
         sd.builder = None
-        # ADR-014 / ADR-078: HP was removed in favor of EdgePool (composure).
-        # Log surface-level mechanical state as edge=current/max so playtest
-        # logs match the actual schema instead of leaking a stale `hp=N` field.
-        # `schema=adr-014` is grep-able so future regressions (re-introduction
-        # of an `hp` integer on CreatureCore) are auditable.
+        # ADR-114 (supersedes ADR-078): HP is back as the personal vitality track.
+        # Log surface-level mechanical state as hp=current/max.
+        # `schema=adr-114` is grep-able so future audits can find this seam.
         logger.info(
-            "chargen.complete schema=adr-014 char_name=%s class=%s race=%s edge=%d/%d",
+            "chargen.complete schema=adr-114 char_name=%s class=%s race=%s hp=%d/%d",
             character.core.name,
             character.char_class,
             character.race,
-            character.core.edge.current,
-            character.core.edge.max,
+            character.core.hp.current,
+            character.core.hp.max,
         )
 
         payload = CharacterCreationPayload(

@@ -18,7 +18,7 @@ distribution logic.
 from __future__ import annotations
 
 from sidequest.game.beat_kinds import apply_beat
-from sidequest.game.creature_core import CreatureCore, EdgePool
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.game.encounter import (
     EncounterActor,
     EncounterMetric,
@@ -45,7 +45,7 @@ def _core(name: str, *, current: int = 10, max_: int = 10) -> CreatureCore:
         name=name,
         description="x",
         personality="x",
-        edge=EdgePool(current=current, max=max_, base_max=max_),
+        hp=HpPool(current=current, max=max_, base_max=max_),
     )
 
 
@@ -82,9 +82,9 @@ def test_default_target_select_is_focus_single_target():
         edge_resolver=cores.get,
     )
 
-    assert cores["Mook0"].edge.current == 7  # full debit on first opponent
-    assert cores["Mook1"].edge.current == 10  # untouched
-    assert cores["Mook2"].edge.current == 10  # untouched
+    assert cores["Mook0"].hp.current == 7  # full debit on first opponent
+    assert cores["Mook1"].hp.current == 10  # untouched
+    assert cores["Mook2"].hp.current == 10  # untouched
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +106,9 @@ def test_spread_divides_debit_across_all_live_opponents():
         edge_resolver=cores.get,
     )
 
-    assert cores["Mook0"].edge.current == 8
-    assert cores["Mook1"].edge.current == 8
-    assert cores["Mook2"].edge.current == 8
+    assert cores["Mook0"].hp.current == 8
+    assert cores["Mook1"].hp.current == 8
+    assert cores["Mook2"].hp.current == 8
 
 
 def test_spread_floor_divides_remainder_dropped():
@@ -126,9 +126,9 @@ def test_spread_floor_divides_remainder_dropped():
     )
 
     # 7 // 3 = 2; remainder of 1 is dropped (genre-truthful AOE attenuation).
-    assert cores["Mook0"].edge.current == 8
-    assert cores["Mook1"].edge.current == 8
-    assert cores["Mook2"].edge.current == 8
+    assert cores["Mook0"].hp.current == 8
+    assert cores["Mook1"].hp.current == 8
+    assert cores["Mook2"].hp.current == 8
 
 
 def test_spread_with_one_opponent_acts_like_focus():
@@ -144,7 +144,7 @@ def test_spread_with_one_opponent_acts_like_focus():
         edge_resolver=cores.get,
     )
 
-    assert cores["Mook0"].edge.current == 6
+    assert cores["Mook0"].hp.current == 6
 
 
 def test_spread_skips_withdrawn_opponents():
@@ -163,9 +163,9 @@ def test_spread_skips_withdrawn_opponents():
     )
 
     # 2 live opponents → 6 // 2 = 3 each.
-    assert cores["Mook0"].edge.current == 7
-    assert cores["Mook1"].edge.current == 10  # withdrawn, untouched
-    assert cores["Mook2"].edge.current == 7
+    assert cores["Mook0"].hp.current == 7
+    assert cores["Mook1"].hp.current == 10  # withdrawn, untouched
+    assert cores["Mook2"].hp.current == 7
 
 
 def test_spread_drops_to_zero_marks_composure_break():
@@ -187,7 +187,7 @@ def test_spread_drops_to_zero_marks_composure_break():
         edge_resolver=cores.get,
     )
 
-    assert cores["Mook0"].edge.current == 0
+    assert cores["Mook0"].hp.current == 0
     assert enc.resolved is True
     assert enc.outcome == "composure_break:Mook0"
 
@@ -211,9 +211,9 @@ def test_swarm_targets_first_opponent_like_focus():
         edge_resolver=cores.get,
     )
 
-    assert cores["Mook0"].edge.current == 7
-    assert cores["Mook1"].edge.current == 10
-    assert cores["Mook2"].edge.current == 10
+    assert cores["Mook0"].hp.current == 7
+    assert cores["Mook1"].hp.current == 10
+    assert cores["Mook2"].hp.current == 10
 
 
 # ---------------------------------------------------------------------------

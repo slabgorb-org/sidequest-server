@@ -61,7 +61,7 @@ def _qc_payload(
     *,
     character_id: str = "Bob",
     name: str = "Bob",
-    edge_fraction: float = 0.4,
+    hp_fraction: float = 0.4,
     stats: dict | None = None,
     inventory: dict | None = None,
     backstory: str | None = None,
@@ -74,9 +74,9 @@ def _qc_payload(
         "char_class": "Delver",
         "pronouns": "they/them",
         "is_friendly": True,
-        "edge_current": int(edge_fraction * 10),
-        "edge_max": 10,
-        "edge_fraction": edge_fraction,
+        "hp_current": int(hp_fraction * 10),
+        "hp_max": 10,
+        "hp_fraction": hp_fraction,
     }
     if stats is not None:
         p["stats"] = stats
@@ -124,7 +124,7 @@ def test_query_character_rule_other_pc_coarsens() -> None:
     f = NarratorPerceptionFilter()
     payload = _qc_payload(
         character_id="Bob",
-        edge_fraction=0.4,  # → bloodied
+        hp_fraction=0.4,  # → bloodied
         stats={"str": 16},
         inventory={"items": [], "gold": 0},
         backstory="secret",
@@ -146,12 +146,12 @@ def test_query_character_rule_other_pc_coarsens() -> None:
     assert "stats" not in coarsened
     assert "inventory" not in coarsened
     assert "backstory" not in coarsened
-    assert "edge_current" not in coarsened
-    assert "edge_max" not in coarsened
-    assert "edge_fraction" not in coarsened
+    assert "hp_current" not in coarsened
+    assert "hp_max" not in coarsened
+    assert "hp_fraction" not in coarsened
     # Status kept; band derived
     assert coarsened["status"] == [{"text": "bleeding", "severity": "Wound"}]
-    assert coarsened["edge_band"] == "bloodied"
+    assert coarsened["hp_band"] == "bloodied"
 
 
 # ---------------------------------------------------------------------------

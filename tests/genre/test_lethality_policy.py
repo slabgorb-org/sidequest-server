@@ -12,7 +12,7 @@ from sidequest.genre.lethality_policy_loader import (
     LethalityPolicyMissingError,
     load_lethality_policy,
 )
-from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroEdge
+from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroHp
 
 CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
@@ -21,20 +21,20 @@ def test_minimal_policy_roundtrips():
     policy = LethalityPolicy(
         genre_key="caverns_and_claudes",
         default_reversibility="narrative_only",
-        verdicts_on_zero_edge=VerdictsOnZeroEdge(pc="humiliated", npc="defeated"),
+        verdicts_on_zero_hp=VerdictsOnZeroHp(pc="humiliated", npc="defeated"),
         soul_md_constraint="genre_truth:comedic_danger_no_permadeath",
         must_narrate="A beat of slapstick pain. Keep it comedic.",
         must_not_narrate="graphic permadeath; somber elegy; last-rites speech",
     )
     assert policy.genre_key == "caverns_and_claudes"
     assert policy.default_reversibility == "narrative_only"
-    assert policy.verdicts_on_zero_edge.pc == "humiliated"
+    assert policy.verdicts_on_zero_hp.pc == "humiliated"
 
 
 def test_unknown_verdict_kind_rejected():
     """Validator must reject verdict kinds not in the LethalityVerdictKind literal."""
     with pytest.raises(ValidationError):
-        VerdictsOnZeroEdge(pc="obliterated", npc="defeated")  # "obliterated" not in enum
+        VerdictsOnZeroHp(pc="obliterated", npc="defeated")  # "obliterated" not in enum
 
 
 def test_extra_fields_forbidden():
@@ -43,7 +43,7 @@ def test_extra_fields_forbidden():
         LethalityPolicy(
             genre_key="x",
             default_reversibility="permanent",
-            verdicts_on_zero_edge=VerdictsOnZeroEdge(pc="dead", npc="dead"),
+            verdicts_on_zero_hp=VerdictsOnZeroHp(pc="dead", npc="dead"),
             soul_md_constraint="x",
             must_narrate="x",
             must_not_narrate="x",
@@ -57,7 +57,7 @@ def test_must_narrate_and_must_not_narrate_both_non_blank():
         LethalityPolicy(
             genre_key="x",
             default_reversibility="permanent",
-            verdicts_on_zero_edge=VerdictsOnZeroEdge(pc="dead", npc="dead"),
+            verdicts_on_zero_hp=VerdictsOnZeroHp(pc="dead", npc="dead"),
             soul_md_constraint="x",
             must_narrate="",
             must_not_narrate="nope",
@@ -74,7 +74,7 @@ def test_loader_reads_valid_yaml(tmp_path: Path):
         textwrap.dedent("""
         genre_key: caverns_and_claudes
         default_reversibility: narrative_only
-        verdicts_on_zero_edge:
+        verdicts_on_zero_hp:
           pc: humiliated
           npc: defeated
         soul_md_constraint: "genre_truth:comedic_danger_no_permadeath"
@@ -84,7 +84,7 @@ def test_loader_reads_valid_yaml(tmp_path: Path):
     )
     policy = load_lethality_policy(pack_dir)
     assert policy.genre_key == "caverns_and_claudes"
-    assert policy.verdicts_on_zero_edge.pc == "humiliated"
+    assert policy.verdicts_on_zero_hp.pc == "humiliated"
 
 
 def test_loader_fails_loud_on_missing_file(tmp_path: Path):
@@ -103,7 +103,7 @@ def test_loader_rejects_genre_key_mismatch(tmp_path: Path):
         textwrap.dedent("""
         genre_key: some_other_pack
         default_reversibility: permanent
-        verdicts_on_zero_edge:
+        verdicts_on_zero_hp:
           pc: dead
           npc: dead
         soul_md_constraint: x
@@ -127,7 +127,7 @@ def test_genre_pack_exposes_lethality_policy():
     pack = load_genre_pack(CONTENT_GENRE_PACKS / "caverns_and_claudes")
     assert pack.lethality_policy is not None
     assert pack.lethality_policy.genre_key == "caverns_and_claudes"
-    assert pack.lethality_policy.verdicts_on_zero_edge.pc == "humiliated"
+    assert pack.lethality_policy.verdicts_on_zero_hp.pc == "humiliated"
 
 
 def test_load_genre_pack_wraps_malformed_lethality_policy_in_genre_load_error(tmp_path):
@@ -148,7 +148,7 @@ def test_load_genre_pack_wraps_malformed_lethality_policy_in_genre_load_error(tm
     (dst / "lethality_policy.yaml").write_text(
         "genre_key: caverns_and_claudes\n"
         "default_reversibility: INVALID_ENUM_VALUE\n"
-        "verdicts_on_zero_edge:\n"
+        "verdicts_on_zero_hp:\n"
         "  pc: humiliated\n"
         "  npc: defeated\n"
         "soul_md_constraint: x\n"

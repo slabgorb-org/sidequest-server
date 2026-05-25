@@ -99,9 +99,9 @@ def _build_full_payload(character: Character) -> dict[str, Any]:
         "char_class": character.char_class,
         "pronouns": character.pronouns,
         "is_friendly": character.is_friendly,
-        "edge_current": character.core.edge.current,
-        "edge_max": character.core.edge.max,
-        "edge_fraction": character.edge_fraction(),
+        "hp_current": character.core.hp.current,
+        "hp_max": character.core.hp.max,
+        "hp_fraction": character.hp_fraction(),
     }
 
 

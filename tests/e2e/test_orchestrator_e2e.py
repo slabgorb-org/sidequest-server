@@ -20,10 +20,9 @@ from sidequest.agents.orchestrator import (
     NarrationTurnResult,
     Orchestrator,
     TurnContext,
-    run_narration_turn,
 )
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, Inventory, placeholder_edge_pool
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, load_genre_pack
 
@@ -107,7 +106,7 @@ def build_minimal_test_session(genre_slug: str = "caverns_and_claudes") -> GameS
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        edge=placeholder_edge_pool(),
+        hp=HpPool(current=10, max=10, base_max=10),
     )
     character = Character(
         core=core,
@@ -167,13 +166,15 @@ async def test_narrator_turn_end_to_end_with_caverns_claudes():
 
     client = ClaudeClient(spawn_fn=make_canned_narrator_spawn(canned_narration))
 
-    result = await run_narration_turn(
-        client=client,
-        session=session,
-        genre=pack,
-        player_action="look around",
+    context = TurnContext(
         character_name="Kael",
+        genre=genre_slug,
+        genre_prompts=pack.prompts,
+        current_location=session.location or "The Entrance Hall",
+        state_summary="{}",
     )
+    orch = Orchestrator(client=client)
+    result = await orch.run_narration_turn("look around", context)
 
     # Core narration assertions
     assert isinstance(result, NarrationTurnResult)
@@ -260,13 +261,15 @@ async def test_narrator_turn_e2e_degraded_on_claude_failure():
 
     client = ClaudeClient(spawn_fn=failing_spawn)
 
-    result = await run_narration_turn(
-        client=client,
-        session=session,
-        genre=pack,
-        player_action="look around",
+    context = TurnContext(
         character_name="Kael",
+        genre=genre_slug,
+        genre_prompts=pack.prompts,
+        current_location=session.location or "The Entrance Hall",
+        state_summary="{}",
     )
+    orch = Orchestrator(client=client)
+    result = await orch.run_narration_turn("look around", context)
 
     assert result.is_degraded
     assert result.narration  # degraded narration is still present

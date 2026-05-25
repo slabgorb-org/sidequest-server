@@ -20,7 +20,7 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.game.session import GameSnapshot, Npc, WorldStatePatch
 from sidequest.server.watcher import WatcherSpanProcessor
 from sidequest.telemetry import spans as spans_module
@@ -33,7 +33,7 @@ def _make_pc(name: str) -> Character:
             name=name,
             description="x",
             personality="x",
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         char_class="Fighter",
         race="Human",
@@ -47,7 +47,7 @@ def _make_npc(name: str, disposition: int) -> Npc:
             name=name,
             description="x",
             personality="x",
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         disposition=disposition,
     )

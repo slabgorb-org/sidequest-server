@@ -172,7 +172,7 @@ def test_rig_pool_crash_event_route_registered() -> None:
 def test_rig_pool_crash_event_route_extracts_inputs_and_consequences() -> None:
     """The extract lambda for ``rig_pool.crash_event`` returns the
     inputs (character_id, chassis_id, location, attacker) AND the three
-    consequence outcomes (edge_delta, edge_after, injury_status_text,
+    consequence outcomes (hp_delta, hp_after, injury_status_text,
     dismounted_status_text) — the ADR-031 Layer-2 contract: capture
     what was decided, not just the inputs.
 
@@ -188,8 +188,8 @@ def test_rig_pool_crash_event_route_extracts_inputs_and_consequences() -> None:
             "chassis_id": "rig_tier_1_prospect",
             "location": "dust_canyon",
             "attacker": "raider_chief",
-            "edge_delta": -1,
-            "edge_after": 4,
+            "hp_delta": -1,
+            "hp_after": 4,
             "injury_status_text": "Hurt in the crash",
             "dismounted_status_text": "dismounted",
         },
@@ -204,8 +204,8 @@ def test_rig_pool_crash_event_route_extracts_inputs_and_consequences() -> None:
     assert fields["location"] == "dust_canyon"
     assert fields["attacker"] == "raider_chief"
     # Consequences (53-4 contract — new)
-    assert fields["edge_delta"] == -1
-    assert fields["edge_after"] == 4
+    assert fields["hp_delta"] == -1
+    assert fields["hp_after"] == 4
     assert fields["injury_status_text"] == "Hurt in the crash"
     assert fields["dismounted_status_text"] == "dismounted"
 
@@ -226,8 +226,8 @@ def test_rig_pool_crash_event_route_handles_missing_optional_attrs() -> None:
             "chassis_id": "rig_tier_1_prospect",
             "location": "",
             "attacker": "",
-            "edge_delta": -1,
-            "edge_after": 4,
+            "hp_delta": -1,
+            "hp_after": 4,
             "injury_status_text": "Hurt in the crash",
             "dismounted_status_text": "dismounted",
         },

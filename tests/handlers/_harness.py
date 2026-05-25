@@ -35,7 +35,7 @@ from typing import Any
 import sidequest.agents.llm_factory as _llm_factory
 import sidequest.telemetry.setup as _telemetry_setup
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.persistence import GameMode, SqliteStore
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
@@ -146,7 +146,7 @@ def _character(name: str) -> Character:
             description="a test delver",
             personality="curious",
             inventory=Inventory(),
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         backstory="A test hero.",
         char_class="Delver",

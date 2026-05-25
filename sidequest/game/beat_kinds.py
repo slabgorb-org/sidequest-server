@@ -327,8 +327,8 @@ def numerical_advantage_for(
         core = edge_resolver(actor.name)
         if core is None:
             continue
-        denom = core.edge.max if core.edge.max > 0 else 1
-        fractions.append(core.edge.current / denom)
+        denom = core.hp.max if core.hp.max > 0 else 1
+        fractions.append(core.hp.current / denom)
     return numerical_advantage_modifier(fractions)
 
 
@@ -561,9 +561,9 @@ def apply_beat(
             actor_core = edge_resolver(actor.name)
             if actor_core is None:
                 raise ValueError(f"edge_resolver returned no CreatureCore for actor {actor.name!r}")
-            before = actor_core.edge.current
-            actor_core.apply_edge_delta(-self_edge_delta)
-            after = actor_core.edge.current
+            before = actor_core.hp.current
+            actor_core.apply_hp_delta(-self_edge_delta)
+            after = actor_core.hp.current
             with encounter_edge_debit_span(
                 source_actor=actor.name,
                 target_actor=actor.name,
@@ -605,9 +605,9 @@ def apply_beat(
                                     f"edge_resolver returned no CreatureCore "
                                     f"for target {target_name!r}"
                                 )
-                            before = target_core.edge.current
-                            target_core.apply_edge_delta(-per_target)
-                            after = target_core.edge.current
+                            before = target_core.hp.current
+                            target_core.apply_hp_delta(-per_target)
+                            after = target_core.hp.current
                             with encounter_edge_debit_span(
                                 source_actor=actor.name,
                                 target_actor=target_name,
@@ -632,9 +632,9 @@ def apply_beat(
                         raise ValueError(
                             f"edge_resolver returned no CreatureCore for target {target_name!r}"
                         )
-                    before = target_core.edge.current
-                    target_core.apply_edge_delta(-target_edge_delta)
-                    after = target_core.edge.current
+                    before = target_core.hp.current
+                    target_core.apply_hp_delta(-target_edge_delta)
+                    after = target_core.hp.current
                     with encounter_edge_debit_span(
                         source_actor=actor.name,
                         target_actor=target_name,

@@ -35,7 +35,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot, NarrativeEntry
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -57,7 +57,7 @@ def _character(name: str) -> Character:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=8, max=10, base_max=10),
+            hp=HpPool(current=8, max=10, base_max=10),
         ),
         backstory="hero",
         char_class="Delver",

@@ -31,7 +31,7 @@ from sidequest.game.beat_kinds import (
     numerical_advantage_for,
     numerical_advantage_modifier,
 )
-from sidequest.game.creature_core import CreatureCore, EdgePool
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.game.encounter import (
     EncounterActor,
     EncounterMetric,
@@ -135,7 +135,7 @@ def _core(name: str, *, current: int = 10, max_: int = 10) -> CreatureCore:
         name=name,
         description="x",
         personality="x",
-        edge=EdgePool(current=current, max=max_, base_max=max_),
+        hp=HpPool(current=current, max=max_, base_max=max_),
     )
 
 

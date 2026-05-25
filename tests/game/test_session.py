@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from sidequest.game.creature_core import CreatureCore, Inventory, placeholder_edge_pool
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.delta import compute_delta, snapshot
 from sidequest.game.session import (
     GameSnapshot,
@@ -139,15 +139,15 @@ def test_apply_patch_lore_extends():
 
 def test_apply_patch_hp_changes():
     s = _make_snapshot()
-    before = s.characters[0].core.edge.current
+    before = s.characters[0].core.hp.current
     s.apply_world_patch(WorldStatePatch(hp_changes={"Thorn Ironhide": -3}))
-    assert s.characters[0].core.edge.current == before - 3
+    assert s.characters[0].core.hp.current == before - 3
 
 
 def test_apply_patch_hp_floored_at_zero():
     s = _make_snapshot()
     s.apply_world_patch(WorldStatePatch(hp_changes={"Thorn Ironhide": -1000}))
-    assert s.characters[0].core.edge.current == 0
+    assert s.characters[0].core.hp.current == 0
 
 
 def test_apply_patch_npc_attitudes():
@@ -158,7 +158,7 @@ def test_apply_patch_npc_attitudes():
             personality="Gruff",
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         disposition=0,
     )
@@ -182,7 +182,7 @@ def test_apply_patch_npc_upsert_existing():
             personality="Wise",
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
         )
     )
     s = _make_snapshot()
@@ -233,8 +233,8 @@ def test_npc_patch_creature_fields_default_to_none() -> None:
     assert patch.morale is None
 
 
-def test_apply_patch_creature_translates_hp_to_edge() -> None:
-    """Patch with creature ``hp`` materializes an Npc with EdgePool seeded from hp."""
+def test_apply_patch_creature_translates_hp_to_hp_pool() -> None:
+    """Patch with creature ``hp`` materializes an Npc with HpPool seeded from hp."""
     s = _make_snapshot()
     s.apply_world_patch(
         WorldStatePatch(
@@ -255,10 +255,10 @@ def test_apply_patch_creature_translates_hp_to_edge() -> None:
     assert moth.threat_level == 1
     assert moth.morale == "cowardly"
     assert moth.abilities == ["Color Feed — Drains pigment from cloth."]
-    # EdgePool seeded full from B/X hp
-    assert moth.core.edge.current == 1
-    assert moth.core.edge.max == 1
-    assert moth.core.edge.base_max == 1
+    # HpPool seeded full from B/X hp
+    assert moth.core.hp.current == 1
+    assert moth.core.hp.max == 1
+    assert moth.core.hp.base_max == 1
     # Level reflects threat_level
     assert moth.core.level == 1
     # Creatures default hostile (matches encountergen output)
@@ -272,7 +272,7 @@ def test_apply_patch_creature_hp_zero_clamps_to_one() -> None:
         WorldStatePatch(npcs_present=[NpcPatch(name="Faint Echo", creature_id="echo", hp=0)])
     )
     echo = next(n for n in s.npcs if n.core.name == "Faint Echo")
-    assert echo.core.edge.max == 1
+    assert echo.core.hp.max == 1
 
 
 def test_apply_patch_creature_threat_level_seeds_level_field() -> None:
@@ -292,7 +292,7 @@ def test_apply_patch_creature_threat_level_seeds_level_field() -> None:
     )
     boss = next(n for n in s.npcs if n.core.name == "Patient Butcher")
     assert boss.core.level == 4
-    assert boss.core.edge.max == 30
+    assert boss.core.hp.max == 30
 
 
 def test_apply_patch_human_npc_unchanged_by_creature_signal_absence() -> None:
@@ -308,11 +308,11 @@ def test_apply_patch_human_npc_unchanged_by_creature_signal_absence() -> None:
     assert mira.morale is None
     # Human NPC default disposition is neutral
     assert int(mira.disposition) == 0
-    # Placeholder edge pool (not creature-seeded)
-    assert mira.core.edge.max > 1  # PLACEHOLDER_EDGE_BASE_MAX is the constant
+    # Placeholder hp pool (not creature-seeded)
+    assert mira.core.hp.max > 1  # PLACEHOLDER_EDGE_BASE_MAX is the constant
 
 
-def test_apply_patch_creature_merge_updates_edge_and_flavor() -> None:
+def test_apply_patch_creature_merge_updates_hp_and_flavor() -> None:
     """Re-emitting a creature patch updates EdgePool, abilities, and morale in place."""
     s = _make_snapshot()
     # First emission — chalk_moth at hp=1
@@ -337,7 +337,7 @@ def test_apply_patch_creature_merge_updates_edge_and_flavor() -> None:
         )
     )
     moth = next(n for n in s.npcs if n.core.name == "Chalk Moth")
-    assert moth.core.edge.max == 3
+    assert moth.core.hp.max == 3
     assert moth.morale == "enraged"
     assert moth.abilities == ["Shimmer Cloud — Disorients onlookers."]
 
@@ -370,20 +370,17 @@ def test_creature_npc_roundtrips_through_json() -> None:
     assert moth.threat_level == 1
     assert moth.abilities == ["Color Feed — Drains pigment."]
     assert moth.morale == "cowardly"
-    assert moth.core.edge.max == 1
+    assert moth.core.hp.max == 1
 
 
-def test_creature_edge_pool_from_hp_helper() -> None:
-    """Direct test of the HP→Edge translation helper."""
-    from sidequest.game.session import _creature_edge_pool_from_hp
+def test_hp_pool_from_hp_helper() -> None:
+    """Direct test of the HP seeding helper."""
+    from sidequest.game.session import _hp_pool_from_hp
 
-    pool = _creature_edge_pool_from_hp(12)
+    pool = _hp_pool_from_hp(12)
     assert pool.current == 12
     assert pool.max == 12
     assert pool.base_max == 12
-    # Same recovery trigger as placeholder_edge_pool
-    assert len(pool.recovery_triggers) == 1
-    assert pool.thresholds == []
 
 
 def test_creature_threat_level_only_still_signals_creature_branch() -> None:
@@ -407,7 +404,7 @@ def test_lowest_friendly_hp_ratio_full():
 
 def test_lowest_friendly_hp_ratio_damaged():
     s = _make_snapshot()
-    s.characters[0].core.edge.current = s.characters[0].core.edge.max // 2
+    s.characters[0].core.hp.current = s.characters[0].core.hp.max // 2
     ratio = s.lowest_friendly_hp_ratio()
     assert 0.4 < ratio < 0.6
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.server.dispatch.encounter_lifecycle import (
-    NoOpponentAvailableError,
     instantiate_encounter_from_trigger,
 )
 

@@ -7,7 +7,7 @@ Per ADR-033 (Genre Mechanics — Confrontations & Resource Pools), resource
 pools are **session-scoped**, not per-actor: they live on
 ``GameSnapshot.resources: dict[str, ResourcePool]`` and are addressed by
 pool name alone. Per-actor edge is its own thing — already covered by
-``apply_damage`` (Task 3) via ``CreatureCore.apply_edge_delta``.
+``apply_damage`` (Task 3) via ``CreatureCore.apply_hp_delta``.
 
 Forwarding ``target`` would propagate that misread through the SDK schema
 and confuse the narrator about scope. So this adapter drops ``target``

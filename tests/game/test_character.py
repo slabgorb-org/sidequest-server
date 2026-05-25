@@ -12,8 +12,8 @@ from sidequest.game.ability import AbilitySource
 from sidequest.game.character import AbilityDefinition, Character, KnownFact
 from sidequest.game.creature_core import (
     CreatureCore,
+    HpPool,
     Inventory,
-    placeholder_edge_pool,
 )
 
 # ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ def make_test_character() -> Character:
             xp=0,
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
             acquired_advancements=[],
         ),
         backstory="Raised in the iron mines",
@@ -69,16 +69,16 @@ def test_combatant_name():
     assert c.name() == "Thorn Ironhide"
 
 
-def test_combatant_edge():
-    """Rust: combatant_edge"""
+def test_combatant_hp():
+    """Rust: combatant_edge (renamed hp, ADR-114)"""
     c = make_test_character()
-    assert c.edge() == c.core.edge.current
+    assert c.hp() == c.core.hp.current
 
 
 def test_combatant_max_edge():
     """Rust: combatant_max_edge"""
     c = make_test_character()
-    assert c.max_edge() == c.core.edge.max
+    assert c.max_hp() == c.core.hp.max
 
 
 def test_combatant_level():
@@ -96,7 +96,7 @@ def test_combatant_not_broken_at_full_edge():
 def test_combatant_broken_at_zero_edge():
     """Rust: combatant_broken_at_zero_edge"""
     c = make_test_character()
-    c.core.edge.current = 0
+    c.core.hp.current = 0
     assert c.is_broken()
 
 
@@ -108,16 +108,16 @@ def test_combatant_broken_at_zero_edge():
 def test_apply_damage_via_edge():
     """Rust: apply_damage_via_edge"""
     c = make_test_character()
-    before = c.core.edge.current
-    c.core.edge.apply_delta(-3)
-    assert c.core.edge.current == before - 3
+    before = c.core.hp.current
+    c.core.hp.apply_delta(-3)
+    assert c.core.hp.current == before - 3
 
 
 def test_damage_floored_at_zero():
     """Rust: damage_floored_at_zero"""
     c = make_test_character()
-    c.core.edge.apply_delta(-1000)
-    assert c.core.edge.current == 0
+    c.core.hp.apply_delta(-1000)
+    assert c.core.hp.current == 0
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ def test_json_roundtrip():
     json_str = c.model_dump_json()
     back = Character.model_validate_json(json_str)
     assert back.core.name == "Thorn Ironhide"
-    assert back.core.edge.base_max == c.core.edge.base_max
+    assert back.core.hp.base_max == c.core.hp.base_max
     assert back.core.level == 3
 
 
@@ -145,7 +145,7 @@ def test_blank_backstory_rejected():
                 personality="Z",
                 inventory=Inventory(),
                 statuses=[],
-                edge=placeholder_edge_pool(),
+                hp=HpPool(current=10, max=10, base_max=10),
             ),
             backstory="",
             char_class="Fighter",
@@ -162,7 +162,7 @@ def test_blank_char_class_rejected():
                 personality="Z",
                 inventory=Inventory(),
                 statuses=[],
-                edge=placeholder_edge_pool(),
+                hp=HpPool(current=10, max=10, base_max=10),
             ),
             backstory="A fine backstory",
             char_class="",
@@ -186,7 +186,7 @@ def test_nonblank_fields_validated():
             personality="z",
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
         )
     with pytest.raises(ValidationError):
         CreatureCore(
@@ -195,7 +195,7 @@ def test_nonblank_fields_validated():
             personality="z",
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
         )
     # valid
     cc = CreatureCore(
@@ -204,7 +204,7 @@ def test_nonblank_fields_validated():
         personality="calm",
         inventory=Inventory(),
         statuses=[],
-        edge=placeholder_edge_pool(),
+        hp=HpPool(current=10, max=10, base_max=10),
     )
     assert cc.name == "valid"
 
@@ -266,19 +266,19 @@ def test_character_with_abilities():
 
 def test_edge_fraction_full():
     c = make_test_character()
-    assert c.edge_fraction() == 1.0
+    assert c.hp_fraction() == 1.0
 
 
 def test_edge_fraction_half():
     c = make_test_character()
-    c.core.edge.current = c.core.edge.max // 2
-    assert abs(c.edge_fraction() - 0.5) < 0.01
+    c.core.hp.current = c.core.hp.max // 2
+    assert abs(c.hp_fraction() - 0.5) < 0.01
 
 
 def test_edge_fraction_zero_max_returns_zero():
     """Rust-verbatim: ``Combatant::edge_fraction`` returns ``0.0`` when
     ``max_edge == 0`` (NOT ``1.0``). Drift fixed in story 42-1."""
     c = make_test_character()
-    c.core.edge.max = 0
-    c.core.edge.current = 0
-    assert c.edge_fraction() == 0.0
+    c.core.hp.max = 0
+    c.core.hp.current = 0
+    assert c.hp_fraction() == 0.0

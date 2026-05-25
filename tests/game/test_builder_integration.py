@@ -194,9 +194,9 @@ def test_builder_walks_caverns_and_claudes_to_character(caverns_pack: object) ->
     # final base_max is 6, not 4. Verify the floor (config value)
     # is met and current==max.
     config_max = pack.rules.edge_config.base_max_by_class[character.char_class]  # type: ignore[attr-defined]
-    assert character.core.edge.base_max >= config_max
-    assert character.core.edge.max == character.core.edge.base_max
-    assert character.core.edge.current == character.core.edge.max
+    assert character.core.hp.base_max >= config_max
+    assert character.core.hp.max == character.core.hp.base_max
+    assert character.core.hp.current == character.core.hp.max
 
     # Backstory: non-blank, came from some path (fragments/tables/
     # mechanical/fallback).

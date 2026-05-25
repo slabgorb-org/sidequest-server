@@ -1,4 +1,4 @@
-"""Group C end-to-end: a turn with a PC at zero edge produces paired
+"""Group C end-to-end: a turn with a PC at zero hp produces paired
 must_narrate / must_not_narrate directives in the captured narrator prompt,
 and the policy's tone text is the one that shows up — proving the per-pack
 lethality_policy.yaml routes all the way through to the narrator.
@@ -23,9 +23,8 @@ from sidequest.agents.orchestrator import (
 from sidequest.game.character import Character
 from sidequest.game.creature_core import (
     CreatureCore,
-    EdgePool,
+    HpPool,
     Inventory,
-    placeholder_edge_pool,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
@@ -45,7 +44,7 @@ def _character(name: str, edge_current: int) -> Character:
         description="d",
         personality="p",
         inventory=Inventory(),
-        edge=EdgePool(current=edge_current, max=10, base_max=10),
+        hp=HpPool(current=edge_current, max=10, base_max=10),
     )
     return Character(
         core=core,
@@ -127,7 +126,7 @@ async def test_zero_edge_pc_in_caverns_injects_comedic_directives():
 
 async def test_no_lethality_directives_when_character_above_zero_edge():
     """Healthy PC — policy is loaded but the arbiter fires zero verdicts."""
-    _ = placeholder_edge_pool  # silence unused-import warning if style check ever runs
+    pass  # no longer importing placeholder_edge_pool (ADR-114)
     sd = _session("mutant_wasteland", "flickering_reach", _character("Alice", edge_current=7))
     ctx = _build_turn_context(sd)
     ctx.dispatch_package = _dispatch_package()

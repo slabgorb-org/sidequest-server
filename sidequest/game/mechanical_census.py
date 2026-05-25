@@ -63,12 +63,12 @@ def build_pc_census(
 ) -> dict:
     """Project ONE seated PC's canonical mechanical state to a plain dict.
 
-    Reads (confirmed from source): edge = single EdgePool (R3); xp/level/
+    Reads (confirmed from source): hp = single HpPool (R3, ADR-114); xp/level/
     acquired_advancements from core (R4 — no tier/pending); location string
     + chassis current_room (R6); inventory aggregated digest (R7). Never
     raises on a partial model — missing attrs degrade to honest None/[]."""
     core = character.core
-    edge = core.edge
+    edge = core.hp
     statuses = [
         {"text": getattr(s, "text", ""), "severity": getattr(s, "severity", "")}
         for s in (getattr(core, "statuses", None) or [])

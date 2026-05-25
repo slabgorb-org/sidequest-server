@@ -896,8 +896,8 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
     """
     from sidequest.game.creature_core import (
         CreatureCore,
+        HpPool,
         Inventory,
-        placeholder_edge_pool,
     )
 
     core = CreatureCore(
@@ -908,7 +908,7 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        edge=placeholder_edge_pool(),
+        hp=HpPool(current=10, max=10, base_max=10),
     )
     return Npc(
         core=core,

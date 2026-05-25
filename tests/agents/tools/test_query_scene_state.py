@@ -44,7 +44,7 @@ from sidequest.agents.tool_registry import (
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import query_scene_state as _query_scene_state_module  # noqa: F401
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import EncounterMetric, StructuredEncounter
 from sidequest.game.persistence import SqliteStore
 from sidequest.game.scenario_state import ScenarioState
@@ -63,7 +63,7 @@ def _character(name: str, *, current_room: str | None = None) -> Character:
         personality="p",
         inventory=Inventory(items=[], gold=0),
         statuses=[],
-        edge=EdgePool(current=10, max=10, base_max=10),
+        hp=HpPool(current=10, max=10, base_max=10),
     )
     return Character(
         core=core,

@@ -1,6 +1,6 @@
 import pytest
 
-from sidequest.game.creature_core import RecoveryTrigger
+from sidequest.game.creature_core import HpPool
 from sidequest.game.encounter import (
     EncounterActor,
     EncounterMetric,
@@ -10,10 +10,6 @@ from sidequest.game.persistence import GameMode, SqliteStore
 from sidequest.game.status import Status, StatusSeverity
 from sidequest.server.dispatch.yield_action import handle_yield
 from sidequest.server.session_room import SessionRoom
-
-
-def test_recovery_trigger_on_yield_constant():
-    assert RecoveryTrigger.OnYield == "OnYield"
 
 
 def _room_for(snap, tmp_path):
@@ -75,13 +71,13 @@ def test_yield_refunds_edge_one_plus_status_count(
             ),
         ]
     )
-    sam.core.edge.current = 0
-    sam.core.edge.max = 5
+    sam.core.hp.current = 0
+    sam.core.hp.max = 5
     snap.characters.append(sam)
     room = _room_for(snap, tmp_path)
     handle_yield(snap, room=room, player_id="p1", player_name="Sam")
     # Both statuses created in this encounter → refund 1 + 2 = 3
-    assert sam.core.edge.current == 3
+    assert sam.core.hp.current == 3
     assert snap.pending_resolution_signal.edge_refreshed == 3
 
 
@@ -100,25 +96,25 @@ def test_yield_does_not_count_pre_existing_statuses(
             created_in_encounter=None,
         )
     )
-    sam.core.edge.current = 0
-    sam.core.edge.max = 5
+    sam.core.hp.current = 0
+    sam.core.hp.max = 5
     snap.characters.append(sam)
     room = _room_for(snap, tmp_path)
     handle_yield(snap, room=room, player_id="p1", player_name="Sam")
     # Pre-existing status not in this encounter → refund 1 + 0 = 1
-    assert sam.core.edge.current == 1
+    assert sam.core.hp.current == 1
 
 
 def test_yield_caps_at_edge_max(snapshot_with_pack, character_named_sam, tmp_path):
     snap, _ = snapshot_with_pack
     snap.encounter = _enc()
     sam = character_named_sam
-    sam.core.edge.current = 4
-    sam.core.edge.max = 5
+    sam.core.hp.current = 4
+    sam.core.hp.max = 5
     snap.characters.append(sam)
     room = _room_for(snap, tmp_path)
     handle_yield(snap, room=room, player_id="p1", player_name="Sam")
-    assert sam.core.edge.current == 5  # capped at max
+    assert sam.core.hp.current == 5  # capped at max
 
 
 def test_yield_with_no_active_encounter_raises(snapshot_with_pack, character_named_sam, tmp_path):
@@ -137,12 +133,12 @@ def test_yield_with_two_pcs_first_yield_keeps_encounter_active(snapshot_with_pac
     snap.encounter = enc
     # Each PC needs a Character entry
     from sidequest.game.character import Character
-    from sidequest.game.creature_core import CreatureCore, placeholder_edge_pool
+    from sidequest.game.creature_core import CreatureCore
 
     snap.characters.append(
         Character(
             core=CreatureCore(
-                name="Sam", description="x", personality="x", edge=placeholder_edge_pool()
+                name="Sam", description="x", personality="x", hp=HpPool(current=10, max=10, base_max=10)
             ),
             backstory="x",
             char_class="Rogue",
@@ -152,7 +148,7 @@ def test_yield_with_two_pcs_first_yield_keeps_encounter_active(snapshot_with_pac
     snap.characters.append(
         Character(
             core=CreatureCore(
-                name="Alex", description="x", personality="x", edge=placeholder_edge_pool()
+                name="Alex", description="x", personality="x", hp=HpPool(current=10, max=10, base_max=10)
             ),
             backstory="x",
             char_class="Warrior",

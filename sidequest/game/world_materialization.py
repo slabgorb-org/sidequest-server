@@ -32,8 +32,8 @@ from opentelemetry import trace
 from sidequest.game.character import Character
 from sidequest.game.creature_core import (
     CreatureCore,
+    HpPool,
     Inventory,
-    placeholder_edge_pool,
 )
 from sidequest.game.history_chapter import (
     ChapterCharacter,
@@ -329,9 +329,8 @@ class WorldBuilder:
         only non-empty fields on the chapter overwrite.
 
         Note: hp/max_hp/ac from chapter are intentionally unused — the
-        placeholder EdgePool stays as-is (Epic 39 wires per-class edge
-        seeding from YAML). These chapter fields are advisory defaults,
-        not a silent fallback.
+        HpPool seeds from hp_pool_from_config at chargen; these chapter
+        fields are advisory defaults, not a silent fallback (ADR-114).
         """
         if not snap.characters:
             name = char_data.name if char_data.name else "Adventurer"
@@ -352,7 +351,7 @@ class WorldBuilder:
                 xp=0,
                 inventory=Inventory(),
                 statuses=[],
-                edge=placeholder_edge_pool(),
+                hp=HpPool(current=10, max=10, base_max=10),
                 acquired_advancements=[],
             )
             snap.characters.append(
@@ -522,7 +521,7 @@ class WorldBuilder:
             xp=0,
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
             acquired_advancements=[],
         )
         snap.npcs.append(
@@ -830,7 +829,7 @@ def preload_authored_npcs(
             xp=0,
             inventory=Inventory(),
             statuses=[],
-            edge=placeholder_edge_pool(),
+            hp=HpPool(current=10, max=10, base_max=10),
             acquired_advancements=[],
         )
         runtime = Npc(

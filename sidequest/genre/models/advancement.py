@@ -66,8 +66,8 @@ class LoreRevealScope(StrEnum):
 # ---------------------------------------------------------------------------
 
 
-class AdvancementEffectEdgeMaxBonus(BaseModel):
-    """Raise core.edge.max by amount on grant."""
+class AdvancementEffectHpMaxBonus(BaseModel):
+    """Raise core.hp.max by amount on grant (ADR-114: was AdvancementEffectEdgeMaxBonus)."""
 
     model_config = {"extra": "forbid"}
 
@@ -75,8 +75,8 @@ class AdvancementEffectEdgeMaxBonus(BaseModel):
     amount: int
 
 
-class AdvancementEffectEdgeRecovery(BaseModel):
-    """Add a new RecoveryTrigger to the creature's pool."""
+class AdvancementEffectHpRecovery(BaseModel):
+    """Add a new RecoveryTrigger to the creature's pool (ADR-114: was AdvancementEffectEdgeRecovery)."""
 
     model_config = {"extra": "forbid"}
 
@@ -116,8 +116,8 @@ class AdvancementEffectLoreRevealBonus(BaseModel):
 
 
 AdvancementEffect = Annotated[
-    AdvancementEffectEdgeMaxBonus
-    | AdvancementEffectEdgeRecovery
+    AdvancementEffectHpMaxBonus
+    | AdvancementEffectHpRecovery
     | AdvancementEffectBeatDiscount
     | AdvancementEffectLeverageBonus
     | AdvancementEffectLoreRevealBonus,

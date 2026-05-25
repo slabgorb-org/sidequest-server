@@ -1,19 +1,13 @@
-"""Regression: chargen.complete must not leak the legacy `hp=N` field.
+"""Regression: chargen.complete OTEL event must expose hp_current/hp_max fields.
 
-ADR-014 ("Diamonds and Coal") and ADR-078 ("Edge / Composure") removed the
-hit-points field from CreatureCore in favor of an EdgePool. The chargen
-completion path used to log ``chargen.complete ... hp=N`` and emit an OTEL
-event with an ``hp`` key — both pulled from ``character.core.edge.current``
-under a misleading name. Sebastien-axis (mechanics-first) players notice
-this immediately and ask why HP is showing when the schema says it
-shouldn't.
+ADR-114 reinstated HP as the personal vitality track (reversing ADR-078).
+The chargen completion path emits a ``character_creation.character_built``
+OTEL event with ``hp_current`` and ``hp_max`` attributes.
 
-This regression test locks in the rename:
+This regression test locks in the schema:
 
-- The ``chargen.complete`` info-log line carries ``schema=adr-014`` and
-  ``edge=current/max`` and contains no bare ``hp=`` substring.
-- The OTEL ``character_creation.character_built`` event has no ``hp`` key
-  and exposes ``edge_current`` / ``edge_max`` instead.
+- The OTEL ``character_creation.character_built`` event has ``hp_current``
+  and ``hp_max`` (ADR-114), not the legacy ``edge_current`` / ``edge_max``.
 """
 
 from __future__ import annotations
@@ -154,26 +148,23 @@ class TestChargenCompleteNoHpLeak:
             ]
             assert chargen_lines, "expected at least one chargen.complete log line"
 
-            # Must carry the ADR-014 schema marker so future regressions are
+            # Must carry the ADR-114 schema marker so future regressions are
             # grep-able in the playtest log corpus.
-            assert any("schema=adr-014" in line for line in chargen_lines), (
-                f"chargen.complete missing schema=adr-014: {chargen_lines!r}"
+            assert any("schema=adr-114" in line for line in chargen_lines), (
+                f"chargen.complete missing schema=adr-114: {chargen_lines!r}"
             )
 
-            # No bare `hp=N` token (ADR-014 removed the HP field). We
-            # specifically guard against the legacy `hp=10` template the
-            # log used to render. A trailing `hp=` would be an
-            # equally-bad regression.
+            # HP mechanical state must be present (ADR-114 reinstated HP;
+            # Sebastien/Jade axis: mechanical visibility on completion).
+            assert any(re.search(r"\bhp=\d+/\d+", line) for line in chargen_lines), (
+                f"chargen.complete missing hp=N/M: {chargen_lines!r}"
+            )
+
+            # No bare `edge=N/M` token (ADR-078 removed; ADR-114 reinstated HP).
             for line in chargen_lines:
-                assert not re.search(r"\bhp=\d", line), (
-                    f"chargen.complete leaks legacy hp= field: {line!r}"
+                assert not re.search(r"\bedge=\d+/\d+", line), (
+                    f"chargen.complete leaks legacy edge=N/M field: {line!r}"
                 )
-
-            # Edge mechanical state must be present in some form (Sebastien
-            # axis: mechanical visibility on completion).
-            assert any(re.search(r"\bedge=\d+/\d+", line) for line in chargen_lines), (
-                f"chargen.complete missing edge=N/M: {chargen_lines!r}"
-            )
 
         asyncio.run(body())
 
@@ -190,13 +181,12 @@ class TestChargenCompleteNoHpLeak:
 
             for ev in built_events:
                 attrs = dict(ev.attributes or {})
-                assert "hp" not in attrs, f"character_built event leaks legacy `hp` key: {attrs!r}"
-                # ADR-014 fields must be present so the dashboard can show
+                # ADR-114 fields must be present so the dashboard can show
                 # the actual schema.
-                assert "edge_current" in attrs, (
-                    f"character_built event missing edge_current: {attrs!r}"
+                assert "hp_current" in attrs, (
+                    f"character_built event missing hp_current: {attrs!r}"
                 )
-                assert "edge_max" in attrs, f"character_built event missing edge_max: {attrs!r}"
-                assert attrs.get("schema") == "adr-014"
+                assert "hp_max" in attrs, f"character_built event missing hp_max: {attrs!r}"
+                assert attrs.get("schema") == "adr-114"
 
         asyncio.run(body())

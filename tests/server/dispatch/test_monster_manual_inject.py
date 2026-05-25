@@ -241,9 +241,9 @@ def test_inject_materializes_encounter_creatures_with_hostile_disposition() -> N
     assert int(npc.disposition) == -20
     assert npc.threat_level == 2
     assert npc.creature_id == "salt_burrower"
-    # HP→EdgePool translation (ADR-078).
-    assert npc.core.edge.current == 12
-    assert npc.core.edge.max == 12
+    # HP seeded into HpPool (ADR-114).
+    assert npc.core.hp.current == 12
+    assert npc.core.hp.max == 12
 
 
 def test_inject_out_of_combat_caps_encounters() -> None:

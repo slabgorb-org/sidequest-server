@@ -11,8 +11,8 @@ import pytest
 
 from sidequest.agents.lethality_arbiter import LethalityArbiter
 from sidequest.agents.subsystems import BankResult
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
-from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroEdge
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
+from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroHp
 from sidequest.protocol.dispatch import DispatchPackage, PlayerDispatch
 from sidequest.telemetry.spans import SPAN_INTENT_ROUTER_LETHALITY_ARBITRATE
 
@@ -44,7 +44,7 @@ def _policy() -> LethalityPolicy:
     return LethalityPolicy(
         genre_key="heavy_metal",
         default_reversibility="permanent",
-        verdicts_on_zero_edge=VerdictsOnZeroEdge(pc="dead", npc="dead"),
+        verdicts_on_zero_hp=VerdictsOnZeroHp(pc="dead", npc="dead"),
         soul_md_constraint="c",
         must_narrate="x",
         must_not_narrate="y",
@@ -57,7 +57,7 @@ def _pc(current: int) -> CreatureCore:
         description="d",
         personality="p",
         inventory=Inventory(),
-        edge=EdgePool(current=current, max=10, base_max=10),
+        hp=HpPool(current=current, max=10, base_max=10),
     )
 
 

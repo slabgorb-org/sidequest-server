@@ -30,7 +30,7 @@ from sidequest.agents.tools import (
     advance_encounter_beat as _advance_encounter_beat_module,  # noqa: F401
 )
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import (
     EncounterMetric,
     StructuredEncounter,
@@ -51,7 +51,7 @@ def _character(name: str) -> Character:
         personality="p",
         inventory=Inventory(items=[], gold=0),
         statuses=[],
-        edge=EdgePool(current=10, max=10, base_max=10),
+        hp=HpPool(current=10, max=10, base_max=10),
     )
     return Character(
         core=core,

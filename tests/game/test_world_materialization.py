@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 
+from sidequest.game.creature_core import HpPool
 from sidequest.game.history_chapter import (
     ChapterCharacter,
     ChapterNarrativeEntry,
@@ -413,7 +414,6 @@ class TestWorldBuilderBuild:
         from sidequest.game.creature_core import (
             CreatureCore,
             Inventory,
-            placeholder_edge_pool,
         )
         from sidequest.game.session import GameSnapshot, Npc
         from sidequest.game.turn import TurnManager
@@ -429,7 +429,7 @@ class TestWorldBuilderBuild:
                     name="LegacyDrakul",
                     description="From a save predating §B.",
                     personality="Neutral.",
-                    edge=placeholder_edge_pool(),
+                    hp=HpPool(current=10, max=10, base_max=10),
                     inventory=Inventory(),
                 ),
                 disposition=0,

@@ -1,21 +1,21 @@
-"""Tool: apply_damage — narrator-driven HP damage → engine edge delta.
+"""Tool: apply_damage — narrator-driven HP damage.
 
-Translation (ADR-078):
-    The narrator's mental model still speaks "HP damage" (the universal
-    tabletop verb). The engine model is *edge / composure* — there is no
-    HP field. This adapter performs the translation at the boundary:
+Under ADR-114 (supersedes ADR-078) the engine model IS HP — this tool
+applies HP damage directly; there is no translation layer. It remains the
+narrator's freeform/environmental damage path, complementary to the beat
+strike channel (beat_kinds.py).
 
-        narrator: apply_damage(target=Alice, amount=4, ...)
-                        |
-                        v
-        engine:   CreatureCore.apply_edge_delta(-4)
+    narrator: apply_damage(target=Alice, amount=4, ...)
+                    |
+                    v
+    engine:   CreatureCore.apply_hp_delta(-4)
 
-    The OTEL attribute name is ``tool.damage.target_edge_after`` (and the
-    payload field is ``target_edge_after``) on purpose — propagating the
-    misleading "hp" name into new code would muddle the ADR-078 model
-    every time a future reader touches it. The tool-name surface
-    (``apply_damage``) is the only place the legacy verb survives, because
-    that's the word the narrator actually uses.
+The OTEL attribute name is ``tool.damage.target_hp_after`` (and the
+payload field is ``target_hp_after``) — propagating the old "edge" name
+into new code after ADR-114 would muddle the model every time a future
+reader touches it. The tool-name surface (``apply_damage``) is the only
+place the legacy verb survives, because that's the word the narrator
+actually uses.
 
 The OTEL span is emitted via the Phase B Registry dispatcher
 (``tool.write.apply_damage``); this handler enriches it with the
@@ -74,11 +74,11 @@ async def apply_damage(args: ApplyDamageArgs, ctx: ToolContext) -> ToolResult:
     if core is None:
         return ToolResult.not_found(f"unknown target: {args.target!r}")
 
-    # Translate "damage amount" → negative edge delta. amount=0 is a
-    # deliberate no-op but we still walk the persistence path so the
-    # span lands and any narrator audit trail stays consistent.
-    core.apply_edge_delta(-args.amount)
-    target_edge_after = core.edge.current
+    # Apply damage as a negative HP delta. amount=0 is a deliberate no-op
+    # but we still walk the persistence path so the span lands and any
+    # narrator audit trail stays consistent.
+    core.apply_hp_delta(-args.amount)
+    target_hp_after = core.hp.current
 
     ctx.store.save(snapshot)
 
@@ -86,7 +86,7 @@ async def apply_damage(args: ApplyDamageArgs, ctx: ToolContext) -> ToolResult:
     ctx.otel_span.set_attribute("tool.damage.amount", args.amount)
     ctx.otel_span.set_attribute("tool.damage.damage_type", args.damage_type)
     ctx.otel_span.set_attribute("tool.damage.source", args.source)
-    ctx.otel_span.set_attribute("tool.damage.target_edge_after", target_edge_after)
+    ctx.otel_span.set_attribute("tool.damage.target_hp_after", target_hp_after)
 
     return ToolResult.ok(
         {
@@ -94,6 +94,6 @@ async def apply_damage(args: ApplyDamageArgs, ctx: ToolContext) -> ToolResult:
             "amount": args.amount,
             "damage_type": args.damage_type,
             "source": args.source,
-            "target_edge_after": target_edge_after,
+            "target_hp_after": target_hp_after,
         }
     )

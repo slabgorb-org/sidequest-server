@@ -11,7 +11,7 @@ through, and that the OTEL span fires.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from opentelemetry import trace as otel_trace

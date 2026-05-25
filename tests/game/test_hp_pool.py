@@ -1,4 +1,3 @@
-import pytest
 from sidequest.game.creature_core import HpPool, hp_pool_from_hp
 
 

@@ -94,21 +94,21 @@ def _publish_combat_edge_to_npcs(
     """Story 45-21 / 45-52: publish dial-derived edge onto opponent ``Npc``s.
 
     For each opponent-side ``EncounterActor`` whose ``name`` matches an
-    ``Npc`` in ``snapshot.npcs``, overwrite the npc's ``core.edge`` pool
+    ``Npc`` in ``snapshot.npcs``, overwrite the npc's ``core.hp`` pool
     using the opponent dial as the canonical pool size:
 
         max     = opponent_metric.threshold
         current = max(1, threshold - current)
 
     The opponent dial is ascending — when ``current`` reaches ``threshold``
-    the opponent loses (= defeated). Inverting it into a descending edge
+    the opponent loses (= defeated). Inverting it into a descending HP
     view gives narrator / GM panel a consistent "current > 0 = alive"
     read while keeping the dial as the single source of truth.
 
     Renamed from ``_publish_combat_stats_to_registry`` in story 45-52 —
-    the legacy ``npc_registry`` is gone; per ADR-078 (HP→Edge) and
+    the legacy ``npc_registry`` is gone; per ADR-114 (HP restored) and
     ADR-014 (materialization seam) the canonical home for runtime
-    creature pools is ``Npc.core.edge``. Emits one
+    creature pools is ``Npc.core.hp``. Emits one
     ``npc.edge_published`` OTEL span per write so the GM panel can verify
     the seam fired.
 
@@ -126,12 +126,10 @@ def _publish_combat_edge_to_npcs(
         # Defensive: a zero-threshold dial would publish current=0/max=0,
         # which is exactly the bug shape this story exists to fix.
         return
-    edge_max = threshold
-    # EdgePool requires a positive ceiling (see ``_creature_edge_pool_from_hp``)
-    # — clamp to 1 so an opponent already at the dial cap still publishes a
-    # representable pool. Dead-from-publish would be a contradiction since
-    # we are at encounter start.
-    edge_current = max(1, threshold - current_dial)
+    hp_max = threshold
+    # HpPool requires a positive ceiling — clamp to 1 so an opponent already
+    # at the dial cap still publishes a representable pool.
+    hp_current = max(1, threshold - current_dial)
 
     by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
@@ -140,13 +138,13 @@ def _publish_combat_edge_to_npcs(
         npc = by_name.get(actor.name)
         if npc is None:
             continue
-        npc.core.edge.max = edge_max
-        npc.core.edge.base_max = edge_max
-        npc.core.edge.current = edge_current
+        npc.core.hp.max = hp_max
+        npc.core.hp.base_max = hp_max
+        npc.core.hp.current = hp_current
         with npc_edge_published_span(
             npc_name=actor.name,
-            current=edge_current,
-            max=edge_max,
+            current=hp_current,
+            max=hp_max,
             source=source,
             turn_number=turn,
         ):

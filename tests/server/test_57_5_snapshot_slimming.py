@@ -52,7 +52,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -74,7 +74,7 @@ def _character(name: str) -> Character:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=8, max=10, base_max=10),
+            hp=HpPool(current=8, max=10, base_max=10),
         ),
         backstory="hero",
         char_class="Delver",
@@ -101,7 +101,7 @@ def _npc(name: str, *, last_seen_location: str | None = "Main Hall") -> Npc:
             description="grizzled veteran",
             personality="dour",
             inventory=Inventory(),
-            edge=EdgePool(current=5, max=5, base_max=5),
+            hp=HpPool(current=5, max=5, base_max=5),
         ),
         last_seen_location=last_seen_location,
     )

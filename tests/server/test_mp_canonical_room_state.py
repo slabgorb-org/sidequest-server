@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from sidequest.agents.orchestrator import Orchestrator
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot
 from sidequest.server.session_room import SessionRoom
@@ -35,7 +35,7 @@ def _char(name: str) -> Character:
             description="d",
             personality="p",
             inventory=Inventory(),
-            edge=EdgePool(current=10, max=10, base_max=10),
+            hp=HpPool(current=10, max=10, base_max=10),
         ),
         backstory=f"{name}'s tale.",
         char_class="Delver",

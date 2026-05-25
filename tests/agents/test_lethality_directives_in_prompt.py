@@ -18,8 +18,8 @@ from sidequest.agents.orchestrator import (
     Orchestrator,
     TurnContext,
 )
-from sidequest.game.creature_core import CreatureCore, EdgePool, Inventory
-from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroEdge
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
+from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroHp
 from sidequest.protocol.dispatch import (
     DispatchPackage,
     PlayerDispatch,
@@ -33,7 +33,7 @@ def _policy() -> LethalityPolicy:
     return LethalityPolicy(
         genre_key="heavy_metal",
         default_reversibility="permanent",
-        verdicts_on_zero_edge=VerdictsOnZeroEdge(pc="dead", npc="dead"),
+        verdicts_on_zero_hp=VerdictsOnZeroHp(pc="dead", npc="dead"),
         soul_md_constraint="genre_truth:lethal_for_this_genre",
         must_narrate="Render the death with specific brutal detail.",
         must_not_narrate="invent rescue; narrate survival",
@@ -46,7 +46,7 @@ def _pc(current: int) -> CreatureCore:
         description="d",
         personality="p",
         inventory=Inventory(),
-        edge=EdgePool(current=current, max=10, base_max=10),
+        hp=HpPool(current=current, max=10, base_max=10),
     )
 
 

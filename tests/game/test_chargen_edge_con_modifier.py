@@ -23,7 +23,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from sidequest.game import creature_core as creature_core_mod
 from sidequest.game.builder import CharacterBuilder
-from sidequest.game.creature_core import edge_pool_from_config
+from sidequest.game.creature_core import hp_pool_from_config
 from sidequest.genre.models.character import (
     CharCreationChoice,
     CharCreationScene,
@@ -111,7 +111,7 @@ def _builder_with_class_and_con(class_name: str, con_score: int) -> CharacterBui
 # ===========================================================================
 
 
-class TestEdgePoolFromConfigConModifier:
+class TestHpPoolFromConfigConModifier:
     """Direct unit tests on the function — bypasses the builder."""
 
     @pytest.mark.parametrize(
@@ -143,11 +143,11 @@ class TestEdgePoolFromConfigConModifier:
             ("Thief", 17, 5),  # mod +3
         ],
     )
-    def test_edge_pool_applies_con_modifier(
+    def test_hp_pool_applies_con_modifier(
         self, class_name: str, con_score: int, expected_max: int
     ) -> None:
         cfg = _caverns_edge_config()
-        pool = edge_pool_from_config(cfg, class_name, con_score=con_score)
+        pool = hp_pool_from_config(cfg, class_name, con_score=con_score)
         assert pool.base_max == expected_max, (
             f"{class_name} with CON {con_score}: expected base_max={expected_max}, "
             f"got {pool.base_max}"
@@ -159,7 +159,7 @@ class TestEdgePoolFromConfigConModifier:
         """CON 3 across every class must floor at 1 — character is alive."""
         cfg = _caverns_edge_config()
         for class_name in ("Fighter", "Cleric", "Mage", "Thief"):
-            pool = edge_pool_from_config(cfg, class_name, con_score=3)
+            pool = hp_pool_from_config(cfg, class_name, con_score=3)
             assert pool.base_max >= 1, f"{class_name} CON 3 collapsed below 1"
             assert pool.max >= 1
 
@@ -172,7 +172,7 @@ class TestEdgePoolFromConfigConModifier:
             ("Mage", 2),
             ("Thief", 2),
         ):
-            pool = edge_pool_from_config(cfg, class_name, con_score=10)
+            pool = hp_pool_from_config(cfg, class_name, con_score=10)
             assert pool.base_max == expected_base
 
 
@@ -187,44 +187,44 @@ class TestBuilderEdgeSeedingWithCon:
     def test_fighter_con_17_seeds_edge_7(self) -> None:
         b = _builder_with_class_and_con("Fighter", 17)
         char = b.build("Boudica")
-        assert char.core.edge.base_max == 7
-        assert char.core.edge.max == 7
-        assert char.core.edge.current == 7
+        assert char.core.hp.base_max == 7
+        assert char.core.hp.max == 7
+        assert char.core.hp.current == 7
 
     def test_fighter_con_9_seeds_edge_3(self) -> None:
         """The +2 stub previously made this also land at 6; new formula gives 3."""
         b = _builder_with_class_and_con("Fighter", 9)
         char = b.build("Old Marcus")
-        assert char.core.edge.base_max == 3
-        assert char.core.edge.max == 3
+        assert char.core.hp.base_max == 3
+        assert char.core.hp.max == 3
 
     def test_fighter_con_3_floors_at_1(self) -> None:
         b = _builder_with_class_and_con("Fighter", 3)
         char = b.build("Sickly Tom")
-        assert char.core.edge.base_max == 1
-        assert char.core.edge.max == 1
-        assert char.core.edge.current == 1
+        assert char.core.hp.base_max == 1
+        assert char.core.hp.max == 1
+        assert char.core.hp.current == 1
 
     def test_mage_con_17_seeds_edge_5(self) -> None:
         """Mage base 2 + CON +3 = 5. Universal: CON applies to all classes."""
         b = _builder_with_class_and_con("Mage", 17)
         char = b.build("Iron-lunged Mage")
-        assert char.core.edge.base_max == 5
+        assert char.core.hp.base_max == 5
 
     def test_cleric_con_14_seeds_edge_5(self) -> None:
         b = _builder_with_class_and_con("Cleric", 14)
         char = b.build("Hale Cleric")
-        assert char.core.edge.base_max == 5
+        assert char.core.hp.base_max == 5
 
     def test_fighter_plus_two_stub_no_longer_applied(self) -> None:
         """Regression: with CON 10 (mod 0), Fighter should land at base 4, not
         base + 2 = 6. If this asserts 6, the Story 39-4 stub is still alive."""
         b = _builder_with_class_and_con("Fighter", 10)
         char = b.build("Average Fighter")
-        assert char.core.edge.base_max == 4, (
+        assert char.core.hp.base_max == 4, (
             "Fighter +2 stub appears to still be applied — story 39-10 retires it"
         )
-        assert char.core.edge.max == 4
+        assert char.core.hp.max == 4
 
 
 # ===========================================================================
@@ -248,10 +248,10 @@ def _events_by_name(exporter: InMemorySpanExporter) -> dict[str, list]:
 
 
 class TestEdgeSeededOtelEvent:
-    """`chargen.edge_seeded` must carry the new CON-mod fields; the legacy
+    """`chargen.hp_seeded` must carry the new CON-mod fields; the legacy
     `chargen.advancement_stub_applied` must no longer be emitted."""
 
-    def test_edge_seeded_event_includes_con_modifier_and_formula(self) -> None:
+    def test_hp_seeded_event_includes_con_modifier_and_formula(self) -> None:
         provider, exporter = _fresh_otel()
         tracer = provider.get_tracer("test")
 
@@ -260,10 +260,10 @@ class TestEdgeSeededOtelEvent:
             b.build("Boudica")
 
         events = _events_by_name(exporter)
-        assert "chargen.edge_seeded" in events, (
-            f"chargen.edge_seeded missing; events seen: {sorted(events)}"
+        assert "chargen.hp_seeded" in events, (
+            f"chargen.hp_seeded missing; events seen: {sorted(events)}"
         )
-        attrs = dict(events["chargen.edge_seeded"][0].attributes or {})
+        attrs = dict(events["chargen.hp_seeded"][0].attributes or {})
         assert attrs.get("con_modifier") == 3, (
             f"con_modifier should be +3 for CON 17; got {attrs!r}"
         )
@@ -274,7 +274,7 @@ class TestEdgeSeededOtelEvent:
         # post-modifier value, not the unmodified class base.
         assert attrs.get("base_max") == 7
 
-    def test_edge_seeded_event_records_negative_con_modifier(self) -> None:
+    def test_hp_seeded_event_records_negative_con_modifier(self) -> None:
         provider, exporter = _fresh_otel()
         tracer = provider.get_tracer("test")
 
@@ -283,7 +283,7 @@ class TestEdgeSeededOtelEvent:
             b.build("Old Marcus")
 
         events = _events_by_name(exporter)
-        attrs = dict(events["chargen.edge_seeded"][0].attributes or {})
+        attrs = dict(events["chargen.hp_seeded"][0].attributes or {})
         assert attrs.get("con_modifier") == -1
         assert attrs.get("base_max") == 3
 
@@ -309,17 +309,17 @@ class TestEdgeSeededOtelEvent:
 # ===========================================================================
 
 
-class TestChargenAccumulatorFlowsConIntoEdge:
-    """Spy on edge_pool_from_config to prove the builder passes con_score
+class TestChargenAccumulatorFlowsConIntoHp:
+    """Spy on hp_pool_from_config to prove the builder passes con_score
     drawn from the rolled stats — not just a default. This catches the
     failure mode where Dev extends the function signature but forgets to
     update the call site (CLAUDE.md 'Verify Wiring, Not Just Existence')."""
 
-    def test_builder_passes_rolled_con_to_edge_pool_from_config(
+    def test_builder_passes_rolled_con_to_hp_pool_from_config(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         captured: dict[str, object] = {}
-        real_fn = creature_core_mod.edge_pool_from_config
+        real_fn = creature_core_mod.hp_pool_from_config
 
         def spy(
             edge_config: object,
@@ -333,7 +333,7 @@ class TestChargenAccumulatorFlowsConIntoEdge:
             return real_fn(edge_config, class_name, *args, **kwargs)
 
         # Patch where builder.py imports it from (creature_core).
-        monkeypatch.setattr("sidequest.game.builder.edge_pool_from_config", spy)
+        monkeypatch.setattr("sidequest.game.builder.hp_pool_from_config", spy)
 
         b = _builder_with_class_and_con("Fighter", 14)
         b.build("Wired Fighter")

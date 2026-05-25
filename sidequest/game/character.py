@@ -154,31 +154,31 @@ class Character(BaseModel):
         """Character display name."""
         return self.core.name
 
-    def edge(self) -> int:
-        """Current composure (edge) value."""
-        return self.core.edge.current
+    def hp(self) -> int:
+        """Current HP value (ADR-114)."""
+        return self.core.hp.current
 
-    def max_edge(self) -> int:
-        """Maximum composure value."""
-        return self.core.edge.max
+    def max_hp(self) -> int:
+        """Maximum HP value (ADR-114)."""
+        return self.core.hp.max
 
     def level(self) -> int:
         """Character level."""
         return self.core.level
 
     def is_broken(self) -> bool:
-        """True when edge is at or below zero (combatant is down).
+        """True when HP is at or below zero (combatant is down).
 
-        ``self.edge() <= 0`` — negative edge counts as broken.
+        ``self.hp() <= 0`` — negative HP counts as broken.
         """
-        return self.core.edge.current <= 0
+        return self.core.hp.current <= 0
 
-    def edge_fraction(self) -> float:
-        """Edge fraction as float in [0.0, 1.0].
+    def hp_fraction(self) -> float:
+        """HP fraction as float in [0.0, 1.0].
 
-        Returns ``0.0`` when ``max_edge == 0`` (NOT ``1.0``, NOT
+        Returns ``0.0`` when ``max_hp == 0`` (NOT ``1.0``, NOT
         ``ZeroDivisionError``).
         """
-        if self.core.edge.max == 0:
+        if self.core.hp.max == 0:
             return 0.0
-        return self.core.edge.current / self.core.edge.max
+        return self.core.hp.current / self.core.hp.max

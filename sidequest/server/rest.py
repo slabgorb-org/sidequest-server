@@ -413,22 +413,25 @@ def create_rest_router() -> APIRouter:
                 )
             players: list[dict[str, Any]] = []
             for char in snap.characters:
-                hp = getattr(char, "hp", None)
-                max_hp = getattr(char, "hp_max", None)
-                # Character.name / Character.level are Combatant-equivalent
-                # methods (Rust port — see sidequest/game/character.py:148-162),
-                # not attributes. getattr returns the bound method; call it.
+                # Character.name / Character.level / Character.hp / Character.max_hp
+                # are Combatant-equivalent methods (Rust port — see
+                # sidequest/game/character.py:148-162), not attributes.
+                # getattr returns the bound method; call it.
                 name_attr = getattr(char, "name", None)
                 level_attr = getattr(char, "level", 1)
+                hp_attr = getattr(char, "hp", None)
+                max_hp_attr = getattr(char, "max_hp", None)
                 resolved_name = name_attr() if callable(name_attr) else name_attr
                 resolved_level = level_attr() if callable(level_attr) else level_attr
+                resolved_hp = hp_attr() if callable(hp_attr) else hp_attr
+                resolved_max_hp = max_hp_attr() if callable(max_hp_attr) else max_hp_attr
                 players.append(
                     {
                         "player_name": getattr(char, "player_name", "") or "",
                         "character_name": resolved_name,
                         "character_class": getattr(char, "archetype", "") or "",
-                        "character_hp": int(hp) if hp is not None else 0,
-                        "character_max_hp": int(max_hp) if max_hp is not None else 0,
+                        "character_hp": int(resolved_hp) if resolved_hp is not None else 0,
+                        "character_max_hp": int(resolved_max_hp) if resolved_max_hp is not None else 0,
                         "character_level": int(resolved_level or 1),
                         "character_xp": int(getattr(char, "xp", 0) or 0),
                         "region_id": snap.current_region or "",

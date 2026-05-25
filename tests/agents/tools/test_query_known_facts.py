@@ -30,7 +30,7 @@ from sidequest.agents.tools import query_known_facts as _query_known_facts_modul
 from sidequest.game.character import Character, KnownFact
 from sidequest.game.creature_core import (
     CreatureCore,
-    EdgePool,
+    HpPool,
     Inventory,
 )
 from sidequest.game.persistence import SqliteStore
@@ -50,7 +50,7 @@ def _character(
         personality="p",
         inventory=Inventory(items=[], gold=0),
         statuses=[],
-        edge=EdgePool(current=10, max=10, base_max=10),
+        hp=HpPool(current=10, max=10, base_max=10),
     )
     return Character(
         core=core,

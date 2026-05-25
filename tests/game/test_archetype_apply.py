@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from sidequest.game.archetype_apply import apply_archetype_resolved
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore, EdgePool, RecoveryTrigger
+from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.genre.archetype.resolved import ArchetypeResolved
 from sidequest.genre.archetype.shim import ArchetypeResolution, ResolutionSource
 from sidequest.genre.models.archetype_constraints import PairingWeight
@@ -24,20 +24,13 @@ from sidequest.protocol.provenance import (
 
 
 def _make_character(char_class: str = "Delver", race: str = "Human") -> Character:
-    edge = EdgePool(
-        current=20,
-        max=20,
-        base_max=20,
-        recovery_triggers=[RecoveryTrigger.OnResolution],
-        thresholds=[],
-    )
     core = CreatureCore(
         name="Rux",
         description="A seasoned delver",
         personality="Curious",
         level=1,
         xp=0,
-        edge=edge,
+        hp=HpPool(current=20, max=20, base_max=20),
     )
     return Character(
         core=core, backstory="An orphan of the Reach.", char_class=char_class, race=race
@@ -132,4 +125,4 @@ def test_apply_preserves_other_fields() -> None:
     assert char.backstory == "Sealed in amber for a thousand years."
     assert char.hooks == ["debt to the Reach", "forgotten home"]
     assert char.core.name == "Rux"
-    assert char.core.edge.current == 20
+    assert char.core.hp.current == 20

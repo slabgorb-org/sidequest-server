@@ -1,6 +1,6 @@
 genre_key: intent_test_pack
 default_reversibility: permanent
-verdicts_on_zero_edge:
+verdicts_on_zero_hp:
   pc: dead
   npc: dead
 soul_md_constraint: "genre_truth:fixture_default_lethal"

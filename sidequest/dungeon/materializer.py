@@ -168,7 +168,7 @@ from sidequest.dungeon.themes import ThemePalette
 from sidequest.game.cookbook.assemble import assemble_region
 from sidequest.game.cookbook.loader import CookbookBundle
 from sidequest.game.cookbook.models import GeneratedRoomDescription, RegionContentManifest
-from sidequest.game.creature_core import EdgePool, creature_edge_pool_from_hp
+from sidequest.game.creature_core import HpPool, hp_pool_from_hp
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.spans.dungeon_materialize import (
     dungeon_curate_degraded_span,
@@ -265,14 +265,13 @@ _BRAID_FIXED_POINT = 0x5EED  # == 24301
 _CR_HP = 8
 
 
-def _edge_from_cr(cr: float) -> EdgePool:
-    """CR → HP-equivalent → canonical EdgePool (the owned seam).
+def _hp_from_cr(cr: float) -> HpPool:
+    """CR → HP-equivalent → canonical HpPool (the owned seam, ADR-114).
 
-    Funnels through the ONE promoted ``creature_edge_pool_from_hp`` so the
-    pool shape (full, ``OnResolution`` recovery, empty thresholds) is byte
-    identical to the NPC-patch path and ``placeholder_edge_pool``. Not a
-    per-call ``if cr is not None`` guard — every creature crossing the
-    cookbook seam is translated here, end to end.
+    Funnels through the ONE ``hp_pool_from_hp`` so the pool shape (full,
+    seeds from authored hp) is consistent with the NPC-patch path and
+    world_materialization. Not a per-call ``if cr is not None`` guard —
+    every creature crossing the cookbook seam is translated here, end to end.
 
     ``round()`` is banker's rounding; safe for all SRD CRs at
     ``_CR_HP=8`` (every ``cr*8`` is integral, so no half-integer boundary
@@ -280,7 +279,7 @@ def _edge_from_cr(cr: float) -> EdgePool:
     re-verify the half-integer rounding boundary.
     """
     hp = max(1, round(cr * _CR_HP))
-    return creature_edge_pool_from_hp(hp)
+    return hp_pool_from_hp(hp)
 
 
 def _region_interior_seed(campaign_seed: int, expansion_id: int, region_id: str) -> int:
@@ -450,13 +449,13 @@ class RegionFill:
 class CuratedCreature:
     """One curated creature crossing the cookbook→materializer seam.
 
-    The cookbook ships raw corpus rows (``cr``/``xp``); ADR-078 forbids
-    raw HP/CR on a materialized actor. This object is what survives the
+    The cookbook ships raw corpus rows (``cr``/``xp``); ADR-114 requires
+    HP-based pools on materialized actors. This object is what survives the
     seam: identity (``name``/``creature_type``), the curator-refined
-    ``telegraph``, and an :class:`EdgePool` (``edge``) — NO ``cr``, NO
-    ``hp``, NO ``xp`` (the same shape discipline as
+    ``telegraph``, and an :class:`HpPool` (``hp``) — NO ``cr``, NO
+    ``xp`` (the same shape discipline as
     ``world_materialization._apply_npc`` building ``CreatureCore(...,
-    edge=<EdgePool>)``; we mirror the *shape* without fabricating the
+    hp=<HpPool>)``; we mirror the *shape* without fabricating the
     non-blank ``description``/``personality`` ``CreatureCore`` demands —
     those are Task 6's snapshot-application concern, not curate's).
     """
@@ -464,7 +463,7 @@ class CuratedCreature:
     name: str
     creature_type: str
     telegraph: str
-    edge: EdgePool
+    hp: HpPool
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,8 +475,8 @@ class RegionCuration:
     to the seam, the post-curation output is NOT seed-reproducible — the save, not the
     seed, is truth (spec §7). This is the curate stage's OUTPUT; applying
     it to a ``GameSnapshot`` / persisting it is Task 6 (commit). Because
-    every creature here already carries an :class:`EdgePool` and no raw
-    cr/hp, Task 6 commits an Edge-only snapshot (no raw-cr-in-committed-
+    every creature here already carries an :class:`HpPool` and no raw
+    cr, Task 6 commits an HP-seeded snapshot (no raw-cr-in-committed-
     snapshot — flagged for Task 6's snapshot-application binding).
 
     Note: ``frozen`` blocks field reassignment but the dict/list fields
@@ -979,7 +978,7 @@ def _creatures_from_manifest(
                 name=str(row["name"]),
                 creature_type=str(row.get("type", "")),
                 telegraph=str(row.get("telegraph", "")),
-                edge=_edge_from_cr(float(row["cr"])),
+                hp=_hp_from_cr(float(row["cr"])),
             )
         )
     big_bad: CuratedCreature | None = None
@@ -1005,7 +1004,7 @@ def _creatures_from_manifest(
             name=str(bb_src.get("name", "")),
             creature_type="big_bad",
             telegraph=str(bb_src.get("min_band", "")),
-            edge=_edge_from_cr(float(bb_cr)),
+            hp=_hp_from_cr(float(bb_cr)),
         )
     return creatures, big_bad
 
@@ -1070,8 +1069,8 @@ async def _stage_curate(
     a single call, the codebase-idiomatic SDK precedent) to select/refine
     to ship quality. Every corpus creature crossing the seam (wandering
     rows AND big_bad) is CR→Edge translated via the single canonical
-    ``creature_edge_pool_from_hp`` — no raw cr/hp leaks into the
-    curate-stage OUTPUT (so Task 6 commits Edge-only).
+    ``hp_pool_from_hp`` — no raw cr/hp leaks into the
+    curate-stage OUTPUT (so Task 6 commits HP-seeded actors).
 
     ``async def``: ``complete_with_tools`` is a coroutine and the event
     loop is owned by the caller (uvicorn in prod, pytest-asyncio
@@ -1308,7 +1307,7 @@ async def _stage_curate(
                         name=str(row["name"]),
                         creature_type=str(row.get("type", "")),
                         telegraph=str(row.get("telegraph", "")),
-                        edge=_edge_from_cr(float(row["cr"])),
+                        hp=_hp_from_cr(float(row["cr"])),
                     )
                 )
             region_creatures[region_id] = creatures
@@ -1341,7 +1340,7 @@ async def _stage_curate(
                     name=str(bb_v.get("name", "")),
                     creature_type="big_bad",
                     telegraph=str(bb_v.get("min_band", "")),
-                    edge=_edge_from_cr(float(bb_cr)),
+                    hp=_hp_from_cr(float(bb_cr)),
                 )
 
     # Lie-detector summary on the curate STAGE span. `curated` is the

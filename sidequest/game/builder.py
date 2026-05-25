@@ -459,17 +459,6 @@ class NumericNameError(BuilderError):
         )
 
 
-class EdgeConfigMissingClassError(BuilderError):
-    """Genre pack declared `edge_config` but omitted a `base_max_by_class`
-    entry for the character's class. Fails chargen loudly (story 39-3) —
-    silently reverting to the placeholder would hide content bugs.
-    """
-
-    def __init__(self, class_name: str) -> None:
-        self.class_name = class_name
-        super().__init__(f"edge_config.base_max_by_class missing entry for class '{class_name}'")
-
-
 class HpConfigMissingClassError(BuilderError):
     """Genre pack declared an HP config but omitted a `base_max_by_class`
     entry for the character's class. Fails chargen loudly (ADR-114) —
@@ -511,7 +500,6 @@ BuilderError.NoScenes = NoScenesError  # type: ignore[attr-defined]
 BuilderError.CannotRevert = CannotRevertError  # type: ignore[attr-defined]
 BuilderError.UnknownStatGeneration = UnknownStatGenerationError  # type: ignore[attr-defined]
 BuilderError.NumericName = NumericNameError  # type: ignore[attr-defined]
-BuilderError.EdgeConfigMissingClass = EdgeConfigMissingClassError  # type: ignore[attr-defined]
 BuilderError.HpConfigMissingClass = HpConfigMissingClassError  # type: ignore[attr-defined]
 
 
@@ -2514,7 +2502,7 @@ __all__ = [
     "CannotRevertError",
     "UnknownStatGenerationError",
     "NumericNameError",
-    "EdgeConfigMissingClassError",
+    "HpConfigMissingClassError",
     "PoolValueNotPresentError",
     "UnfilledArrangementError",
     "NoQualifyingClassesError",

@@ -25,7 +25,9 @@ from typing import Any
 import pytest
 
 import sidequest.server.session_handler  # noqa: F401 — ordering side-effect
+from sidequest.game.region_init import RegionInitError
 from sidequest.server.websocket_session_handler import (
+    _bind_current_region_from_opening,
     _populate_opening_directive_on_chargen_complete,
     _should_fire_opening_narration,
 )
@@ -297,3 +299,114 @@ def test_should_fire_opening_room_reports_one_player() -> None:
         snapshot=SimpleNamespace(characters=[object()]),
     )
     assert _should_fire_opening_narration(sd, room=room) is True
+
+
+# ---- current_region binding from opening.setting.region_id ------------
+#
+# Playtest 2026-05-25 [BUG] flickering_reach: the active location never
+# advanced from the spawn region because region_init seeds current_region
+# from cartography.starting_region, but the opening anchors the party at a
+# different cartography node and the narrator only emits a free-text label.
+# The opening now declares an authored setting.region_id; the binding helper
+# rebinds current_region to it (emitting a state_patch.current_region span)
+# and fails loud on a dangling region_id.
+
+
+def _region_pack(regions: list[str]) -> SimpleNamespace:
+    """A pack whose test_world cartography declares ``regions`` as nodes."""
+    cartography = SimpleNamespace(regions={r: object() for r in regions})
+    world = SimpleNamespace(cartography=cartography)
+    return SimpleNamespace(worlds={"test_world": world})
+
+
+def _opening_with_region(region_id: str | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        id="either_blind_reach_dusk_frogs",
+        setting=SimpleNamespace(region_id=region_id),
+    )
+
+
+def _region_snapshot(current_region: str) -> SimpleNamespace:
+    return SimpleNamespace(current_region=current_region, discovered_regions=[current_region])
+
+
+def test_bind_region_rebinds_and_emits_patch_span(captured_events) -> None:
+    """Opening declares a region_id that differs from the spawn region →
+    current_region is rebound, discovered_regions gains it, and a
+    ``state_patch.current_region`` watcher event fires (GM-panel lie
+    detector per CLAUDE.md OTEL principle). The helper returns the bound id.
+    """
+    snap = _region_snapshot("toods_dome")
+    bound = _bind_current_region_from_opening(
+        snap,
+        _region_pack(["toods_dome", "blind_reach"]),
+        "test_world",
+        _opening_with_region("blind_reach"),
+    )
+    assert bound == "blind_reach"
+    assert snap.current_region == "blind_reach"
+    assert "blind_reach" in snap.discovered_regions
+
+    patches = [
+        (fields, meta) for et, fields, meta in captured_events if et == "state_patch.current_region"
+    ]
+    assert patches, f"expected state_patch.current_region span; captured: {captured_events}"
+    fields, meta = patches[0]
+    assert fields["current_region"] == "blind_reach"
+    assert fields["prior_current_region"] == "toods_dome"
+    assert fields["source"] == "opening.setting.region_id"
+    assert meta["component"] == "opening_hook"
+
+
+def test_bind_region_noop_when_already_bound(captured_events) -> None:
+    """Re-binding to the region current_region already holds is a silent
+    no-op — no redundant patch (the task forbids redundant patches)."""
+    snap = _region_snapshot("blind_reach")
+    bound = _bind_current_region_from_opening(
+        snap,
+        _region_pack(["toods_dome", "blind_reach"]),
+        "test_world",
+        _opening_with_region("blind_reach"),
+    )
+    assert bound is None
+    assert snap.current_region == "blind_reach"
+    assert captured_events == []
+
+
+def test_bind_region_noop_when_no_region_id(captured_events) -> None:
+    """An opening with no region_id (chassis-anchored / unbound location)
+    leaves current_region untouched and emits nothing."""
+    snap = _region_snapshot("toods_dome")
+    bound = _bind_current_region_from_opening(
+        snap,
+        _region_pack(["toods_dome", "blind_reach"]),
+        "test_world",
+        _opening_with_region(None),
+    )
+    assert bound is None
+    assert snap.current_region == "toods_dome"
+    assert captured_events == []
+
+
+def test_bind_region_fails_loud_on_dangling_region_id(captured_events) -> None:
+    """A region_id that is NOT a cartography node is a pack-authoring bug:
+    raise RegionInitError + emit a ``current_region.bind_failed`` ERROR span.
+    No silent fallback, no fuzzy free-text match (CLAUDE.md No-Silent-Fallbacks).
+    """
+    snap = _region_snapshot("toods_dome")
+    with pytest.raises(RegionInitError, match="not a declared cartography region"):
+        _bind_current_region_from_opening(
+            snap,
+            _region_pack(["toods_dome", "blind_reach"]),
+            "test_world",
+            _opening_with_region("nonexistent_node"),
+        )
+    fails = [
+        (fields, meta) for et, fields, meta in captured_events if et == "current_region.bind_failed"
+    ]
+    assert fails, f"expected current_region.bind_failed ERROR span; captured: {captured_events}"
+    fields, meta = fails[0]
+    assert fields["declared_region_id"] == "nonexistent_node"
+    assert meta["severity"] == "error"
+    # current_region untouched — no half-applied rebind.
+    assert snap.current_region == "toods_dome"

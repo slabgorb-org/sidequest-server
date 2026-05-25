@@ -190,7 +190,7 @@ def _populate_opening_directive_on_chargen_complete(
     pack: GenrePack,
     world_slug: str,
     mode: object,
-) -> None:
+) -> str | None:
     """Resolve and stash an Opening directive at chargen-completion time.
 
     Called from the ``is_first_commit`` branch of
@@ -207,6 +207,14 @@ def _populate_opening_directive_on_chargen_complete(
       first_turn_invitation
     - sets ``session_data.opening_directive`` to the rendered directive
     - sets ``session_data._resolved_opening_id`` for the played-span
+    - binds ``snapshot.current_region`` to the opening's authored
+      ``setting.region_id`` (a real cartography node) when it differs from
+      the spawn region, emitting a ``state_patch.current_region`` OTEL span
+
+    Returns the cartography region id the opening rebound ``current_region``
+    to (so the caller can fire the opening LOCATION_DESCRIPTION for that
+    region), or ``None`` when no rebind happened — no ``region_id`` declared,
+    the region was already bound, or an early bail-out path was taken.
 
     No-ops gracefully when:
     - ``opening_directive`` is already populated (idempotency for
@@ -362,6 +370,115 @@ def _populate_opening_directive_on_chargen_complete(
     # return true on turn 1. Idempotent: only writes when an entry is
     # absent. Both PCs land on the same string, so consensus matches.
     _bootstrap_character_locations_from_opening(snapshot, opening)
+
+    # Playtest 2026-05-25 [BUG] flickering_reach MP: the active location never
+    # advances from the spawn region. ``init_region_location`` seeds
+    # ``current_region`` from ``cartography.starting_region`` (toods_dome),
+    # but the opening anchors the party at Salt Camp / Blind Reach canyon — a
+    # different cartography node. The narrator only emits a free-text
+    # ``location_label``, never a region_id, so the Location panel + Map +
+    # OTEL State stayed pinned to the spawn region. The opening now declares an
+    # explicit ``setting.region_id`` (an authored binding to a real cartography
+    # node); bind ``current_region`` to it here so the region-mode
+    # LOCATION_DESCRIPTION + Map + OTEL State all agree with the prose.
+    return _bind_current_region_from_opening(snapshot, pack, world_slug, opening)
+
+
+def _bind_current_region_from_opening(
+    snapshot: GameSnapshot,
+    pack: GenrePack,
+    world_slug: str,
+    opening: object,
+) -> str | None:
+    """Bind ``snapshot.current_region`` to the opening's declared ``region_id``.
+
+    The opening's ``setting.region_id`` is an authored binding to a real
+    cartography graph node (the free-text ``location_label`` is prose only and
+    is never a region id). When the opening declares a ``region_id``:
+
+    - If it IS a declared cartography region, set ``snapshot.current_region``
+      to it (and dedup-append to ``discovered_regions``), emit a
+      ``current_region`` state-patch OTEL span, and return the bound id so the
+      caller can fire the opening LOCATION_DESCRIPTION for it. Only emits/
+      returns when the canonical id actually CHANGED — re-binding to the same
+      region is a silent no-op (no redundant patch).
+    - If it is NOT a declared region, FAIL LOUD: emit a
+      ``current_region.bind_failed`` ERROR span and raise. A bad binding is a
+      pack-authoring bug (per CLAUDE.md No-Silent-Fallbacks) — never fuzzy-
+      match the free-text label to a node, never leave the region Unknown.
+
+    Returns the bound region id when it changed, else ``None`` (no region_id
+    declared, or already bound to that region).
+    """
+    region_id = getattr(getattr(opening, "setting", None), "region_id", None)
+    if not region_id:
+        return None
+
+    world = pack.worlds.get(world_slug)
+    cartography = getattr(world, "cartography", None) if world is not None else None
+    regions = getattr(cartography, "regions", {}) or {}
+    opening_id = getattr(opening, "id", "") or ""
+
+    if region_id not in regions:
+        _watcher_publish(
+            "current_region.bind_failed",
+            {
+                "opening_id": opening_id,
+                "declared_region_id": region_id,
+                "world": world_slug,
+                "declared_regions": sorted(regions),
+                "reason": "region_id_not_a_cartography_node",
+            },
+            component="opening_hook",
+            severity="error",
+        )
+        trace.get_current_span().add_event(
+            "current_region.bind_failed",
+            {
+                "event": "current_region.bind_failed",
+                "opening_id": opening_id,
+                "declared_region_id": region_id,
+                "world": world_slug,
+                "declared_regions": ",".join(sorted(regions)),
+            },
+        )
+        raise RegionInitError(
+            f"opening '{opening_id}' setting.region_id '{region_id}' is not a "
+            f"declared cartography region (declared: {sorted(regions)})"
+        )
+
+    prior_region = snapshot.current_region or ""
+    if prior_region == region_id:
+        return None  # already bound — no redundant patch
+
+    snapshot.current_region = region_id
+    if region_id not in snapshot.discovered_regions:
+        snapshot.discovered_regions.append(region_id)
+
+    _watcher_publish(
+        "state_patch.current_region",
+        {
+            "opening_id": opening_id,
+            "current_region": region_id,
+            "prior_current_region": prior_region,
+            "source": "opening.setting.region_id",
+            "world": world_slug,
+        },
+        component="opening_hook",
+        severity="info",
+    )
+    trace.get_current_span().add_event(
+        "state_patch.current_region",
+        {
+            "event": "state_patch.current_region",
+            "opening_id": opening_id,
+            "current_region": region_id,
+            "prior_current_region": prior_region,
+            "source": "opening.setting.region_id",
+            "world": world_slug,
+        },
+    )
+    return region_id
 
 
 def _bootstrap_character_locations_from_opening(snapshot: GameSnapshot, opening: object) -> None:
@@ -2993,13 +3110,36 @@ class WebSocketSessionHandler:
         # already set, emits ``opening.skipped`` watcher events
         # otherwise), so the second committer's call succeeds with
         # the full party seated.
-        _populate_opening_directive_on_chargen_complete(
+        rebound_region = _populate_opening_directive_on_chargen_complete(
             session_data=sd,
             snapshot=sd.snapshot,
             pack=sd.genre_pack,
             world_slug=sd.world_slug,
             mode=sd.mode,
         )
+
+        # Playtest 2026-05-25 [BUG] flickering_reach: the region-mode
+        # LOCATION_DESCRIPTION emit above (line ~2595) fired against the
+        # spawn region (``starting_region``), but the opening anchors the
+        # party at a different cartography node. When the opening rebound
+        # ``current_region`` to its authored ``setting.region_id``, fire the
+        # corrected LOCATION_DESCRIPTION for the opening's region so the UI
+        # Location tab + Map agree with the prose. ``rebound_region`` is the
+        # canonical node id (already validated against ``cartography.regions``
+        # inside the populator) — only set when it actually changed.
+        if rebound_region:
+
+            def _opening_emit_region_location(msg: object, _kind: str) -> None:
+                out.append(msg)
+
+            _maybe_emit_location_description(
+                self,
+                sd=sd,
+                snapshot=sd.snapshot,
+                actor=None,
+                emit_fn=_opening_emit_region_location,
+                room_id_override=rebound_region,
+            )
 
         # Opening-turn bootstrap (Slice H / connect.rs:2270). Fires
         # narrator with opening_seed + opening_directive (Early zone),

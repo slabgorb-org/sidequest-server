@@ -183,6 +183,7 @@ class OpeningSetting(BaseModel):
     chassis_instance: str | None = None
     interior_room: str | None = None
     location_label: str | None = None
+    region_id: str | None = None
     situation: str = ""
     present_npcs: list[str] = Field(default_factory=list)
 

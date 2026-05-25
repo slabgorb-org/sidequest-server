@@ -464,6 +464,49 @@ def _validate_present_npcs_resolve(
             )
 
 
+def _validate_opening_region_bindings(
+    openings: list[Opening],
+    cartography: CartographyConfig,
+    *,
+    world_slug: str,
+) -> None:
+    """Every opening's ``setting.region_id`` must resolve to a real cartography node.
+
+    Playtest 2026-05-25 [BUG] flickering_reach: ``current_region`` is a
+    load-bearing region id (it MUST be a declared cartography node — see
+    :func:`sidequest.game.region_init.init_region_location`), but the narrator
+    only emits a free-text ``location_label`` and never a region id. An opening
+    that anchors the party somewhere other than ``cartography.starting_region``
+    must declare an explicit ``setting.region_id`` so the server can rebind
+    ``current_region`` to the opening's location at chargen-complete.
+
+    This validator enforces the authored binding at load time: every
+    location-anchored opening that declares a ``region_id`` must name a real
+    region in ``cartography.regions``. No silent fallback / no fuzzy free-text
+    matching (CLAUDE.md No-Silent-Fallbacks): a dangling ``region_id`` is a
+    pack-authoring bug and fails the world load loudly.
+
+    Worlds whose cartography declares no regions (legacy flavor-only
+    cartography) cannot validate region ids; any ``region_id`` declared there
+    is treated as an authoring error and reported, rather than silently
+    accepted.
+    """
+    region_ids = set(cartography.regions)
+    for op in openings:
+        region_id = op.setting.region_id
+        if region_id is None:
+            continue
+        if region_id not in region_ids:
+            raise GenreLoadError(
+                path=f"worlds/{world_slug}/openings.yaml",
+                detail=(
+                    f"opening {op.id!r} declares setting.region_id "
+                    f"{region_id!r}, which is not a declared cartography "
+                    f"region. Known regions: {sorted(region_ids)}"
+                ),
+            )
+
+
 def _validate_opening_bank_coverage(
     openings: list[Opening],
     chargen_backgrounds: list[str],
@@ -849,6 +892,7 @@ def _load_single_world(
     _validate_crew_npc_references(chassis_instances, authored_npcs, world_slug=world_path.name)
     _validate_authored_npc_uniqueness(authored_npcs, world_slug=world_path.name)
     _validate_present_npcs_resolve(openings, authored_npcs, world_slug=world_path.name)
+    _validate_opening_region_bindings(openings, cartography, world_slug=world_path.name)
 
     # Validators 7 + 8 (opening bank coverage). Derive chargen backgrounds
     # from the canonical "background" scene in char_creation.yaml. Worlds

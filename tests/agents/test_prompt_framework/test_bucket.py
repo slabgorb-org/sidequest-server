@@ -151,6 +151,106 @@ def test_genre_chargen_resolves_to_user():
     )
 
 
+# --- Story 61-10: byte-static narrator prose promotion ----------------------
+#
+# Six narrator prose sections are loaded byte-exactly from static .md files
+# (narrator_prompts/__init__.py) with no runtime interpolation. They meet
+# STABLE_SECTION_NAMES' criterion ("byte-identical across every turn of the
+# same game") and belong in the System bucket. They were omitted at the
+# ADR-098/111 cutover, not deliberately excluded.
+
+_STORY_61_10_SECTIONS: frozenset[str] = frozenset(
+    {
+        "narrator_constraints",
+        "narrator_agency",
+        "narrator_consequences",
+        "narrator_pov_rules",
+        "narrator_referral_rule",
+        "narrator_output_style",
+    }
+)
+
+
+class TestStory6110ByteStaticProsePromotion:
+    """Story 61-10 — promote six byte-static narrator prose sections."""
+
+    def test_all_six_in_stable_section_names(self):
+        """AC-1: All six sections appear in STABLE_SECTION_NAMES."""
+        missing = _STORY_61_10_SECTIONS - STABLE_SECTION_NAMES
+        assert not missing, (
+            f"Story 61-10: these byte-static narrator prose sections are "
+            f"missing from STABLE_SECTION_NAMES: {sorted(missing)}"
+        )
+
+    def test_each_resolves_to_system_bucket(self):
+        """AC-2: default_bucket_for_section returns System for each."""
+        for name in sorted(_STORY_61_10_SECTIONS):
+            assert default_bucket_for_section(name) == SectionBucket.System, (
+                f"{name!r} should resolve to SectionBucket.System after "
+                f"promotion — currently resolves to User because it is "
+                f"not in STABLE_SECTION_NAMES"
+            )
+
+    def test_minimum_contents_includes_promoted_sections(self):
+        """AC-3: snapshot of STABLE_SECTION_NAMES includes all six."""
+        expected = {
+            "narrator_identity",
+            "narrator_dialogue",
+            "soul_principles",
+            "output_format",
+            "genre_identity",
+            "genre_narrator_voice",
+            "genre_npc_voice",
+            "genre_world_state",
+            "narrator_vocabulary",
+            "genre_transition_hints",
+            "genre_extraction",
+            "genre_keeper_monologue",
+            "genre_town",
+            # Story 61-10 promotions:
+            "narrator_constraints",
+            "narrator_agency",
+            "narrator_consequences",
+            "narrator_pov_rules",
+            "narrator_referral_rule",
+            "narrator_output_style",
+        }
+        missing = expected - set(STABLE_SECTION_NAMES)
+        assert not missing, (
+            f"STABLE_SECTION_NAMES snapshot is missing sections: {sorted(missing)}"
+        )
+
+    def test_narrator_constraints_resolves_to_system(self):
+        """Per-section pin — constraints.md (~112 tok)."""
+        assert default_bucket_for_section("narrator_constraints") == SectionBucket.System
+        assert "narrator_constraints" in STABLE_SECTION_NAMES
+
+    def test_narrator_agency_resolves_to_system(self):
+        """Per-section pin — agency.md (~201 tok)."""
+        assert default_bucket_for_section("narrator_agency") == SectionBucket.System
+        assert "narrator_agency" in STABLE_SECTION_NAMES
+
+    def test_narrator_consequences_resolves_to_system(self):
+        """Per-section pin — consequences.md (~71 tok)."""
+        assert default_bucket_for_section("narrator_consequences") == SectionBucket.System
+        assert "narrator_consequences" in STABLE_SECTION_NAMES
+
+    def test_narrator_pov_rules_resolves_to_system(self):
+        """Per-section pin — pov_rules.md (~200 tok)."""
+        assert default_bucket_for_section("narrator_pov_rules") == SectionBucket.System
+        assert "narrator_pov_rules" in STABLE_SECTION_NAMES
+
+    def test_narrator_referral_rule_resolves_to_system(self):
+        """Per-section pin — referral_rule.md (~65 tok)."""
+        assert default_bucket_for_section("narrator_referral_rule") == SectionBucket.System
+        assert "narrator_referral_rule" in STABLE_SECTION_NAMES
+
+    def test_narrator_output_style_resolves_to_system(self):
+        """Per-section pin — output_style.md (~115 tok)."""
+        assert default_bucket_for_section("narrator_output_style") == SectionBucket.System
+        assert "narrator_output_style" in STABLE_SECTION_NAMES
+
+
 def test_genre_combat_voice_remains_in_user_bucket():
     """ADR-112 §Defer regression guard — ``genre_combat_voice`` stays uncached.
 

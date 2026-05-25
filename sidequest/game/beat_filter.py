@@ -50,8 +50,21 @@ def beats_available_for(
 
     pool: list[BeatDef] = []
     for beat in confrontation.beats:
+        # Gate 1 — class_filter whitelist. A non-empty class_filter restricts
+        # the beat to the listed classes; class restriction is enforced HERE.
         if beat.class_filter is not None and class_def.display_name not in beat.class_filter:
             continue
+        # Universal beats (class_filter is None) are available to every class
+        # without per-class ``encounter_beat_choices`` enumeration — this is
+        # the documented "class_filter None = universal" semantics. The
+        # ``encounter_beat_choices`` whitelist (gate 2 below) curates only
+        # class-specific beats; applying it to universals filtered out every
+        # non-combat confrontation's beats (chase/negotiation/standoff are all
+        # universal and no class enumerates them), starving the UI of choices.
+        if beat.class_filter is None:
+            pool.append(beat)
+            continue
+        # Gate 2 — per-class whitelist for class-specific beats.
         if beat.id not in class_def.encounter_beat_choices:
             continue
         if beat.id == "cast_spell":

@@ -559,8 +559,18 @@ class SqliteStore:
             bak_path = self._path.with_suffix(self._path.suffix + ".canonicalize.bak")
             if not bak_path.exists():
                 try:
-                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    shutil.copy2(self._path, bak_path)
+                    # A WAL checkpoint is a WRITE — it must serialize against
+                    # every other save-DB writer via SAVE_WRITE_LOCK, same as
+                    # the writer methods. This sits inside the read-path
+                    # ``load()`` and so was missed by the #413 writer-method
+                    # sweep; under MP reconnect storms (each reconnect loads
+                    # the shared save) an unlocked checkpoint here races a
+                    # live ``save()`` on another connection → "database is
+                    # locked". RLock is reentrant, so this is safe even if a
+                    # caller already holds the lock.
+                    with SAVE_WRITE_LOCK:
+                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        shutil.copy2(self._path, bak_path)
                 except (OSError, sqlite3.Error) as bak_exc:
                     # Defense-in-depth, not primary gate: don't block load.
                     logger.warning(

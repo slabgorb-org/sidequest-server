@@ -249,6 +249,12 @@ async def test_cache_usage_carries_real_sdk_numbers_not_estimates(
     assert isinstance(usage["cache_ttl"], str) and usage["cache_ttl"], (
         f"cache_ttl must be a non-empty string; got {usage['cache_ttl']!r}"
     )
+    # Per-turn health band rides the same live event so the GM panel can color
+    # $/turn. WIRING: must be emitted on the real run_narration_turn path, not
+    # just computable in isolation.
+    assert usage["cost_band"] in {"all_systems_go", "needs_work", "stop_everything"}, (
+        f"cost_band must be a valid band string on the live turn; got {usage['cost_band']!r}"
+    )
 
 
 @pytest.mark.asyncio

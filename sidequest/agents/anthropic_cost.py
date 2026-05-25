@@ -64,6 +64,32 @@ _PRICING: dict[str, ModelPricing] = {
 }
 
 
+# Per-turn cost health bands (USD/turn). The meaningful efficiency signal is
+# cost-per-turn, not daily total — a long playtest can spend a lot in aggregate
+# while every turn stays cheap. Thresholds set by Keith 2026-05-25:
+#   < $0.05/turn          → healthy
+#   $0.05 – $0.12/turn    → elevated, watch cache write/read ratio
+#   > $0.12/turn          → runaway, something is wrong (cache not hitting)
+# Boundaries: green is strictly below NEEDS_WORK; red is strictly above STOP;
+# the inclusive [0.05, 0.12] middle is "needs work".
+COST_BAND_NEEDS_WORK_USD = 0.05
+COST_BAND_STOP_USD = 0.12
+
+
+def cost_band(cost_usd: float) -> str:
+    """Classify one turn's total spend into a self-explaining health band.
+
+    Operates on the per-turn total (sum of compute_cost_usd across every
+    tool-loop iteration), surfaced as the ``narration.turn.cost_band`` OTEL
+    attribute so the GM panel can color $/turn at a glance.
+    """
+    if cost_usd > COST_BAND_STOP_USD:
+        return "stop_everything"
+    if cost_usd >= COST_BAND_NEEDS_WORK_USD:
+        return "needs_work"
+    return "all_systems_go"
+
+
 def model_pricing(model: str) -> ModelPricing:
     try:
         return _PRICING[model]

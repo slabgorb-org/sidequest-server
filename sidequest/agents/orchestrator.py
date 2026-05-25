@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 # module import time. Required for the SDK path; the streaming/sync ClaudeClient
 # paths do not depend on the registry.
 import sidequest.agents.tools  # noqa: F401  (registration side effect)
+from sidequest.agents.anthropic_cost import cost_band
 from sidequest.agents.claude_client import (
     ClaudeClient,
     ClaudeResponse,
@@ -3886,6 +3887,13 @@ class Orchestrator:
                 # telemetry/spans/cost.py:15; the GM panel reads this to
                 # show $/turn next to cache hit-rate (Task B1).
                 span.set_attribute("narration.turn.total_cost_usd", result.cumulative_cost_usd)
+                # Per-turn health band (all_systems_go / needs_work /
+                # stop_everything) so the GM panel can color $/turn without
+                # re-deriving thresholds. cost-per-turn, not daily total, is the
+                # efficiency signal — see anthropic_cost.cost_band.
+                span.set_attribute(
+                    "narration.turn.cost_band", cost_band(result.cumulative_cost_usd)
+                )
                 span.set_attribute("narration.turn.tool_call_count", len(result.tool_calls))
 
                 # ADR-103 / CLAUDE.md OTEL principle: emit the per-call
@@ -3930,6 +3938,7 @@ class Orchestrator:
                 "cache_write_5m": result.cached_input_write_5m_tokens,
                 "cache_write_1h": result.cached_input_write_1h_tokens,
                 "cost_usd": result.cumulative_cost_usd,
+                "cost_band": cost_band(result.cumulative_cost_usd),
                 "cache_ttl": getattr(self._client, "cache_ttl", "n/a"),
             }
             _pub_prompt("prompt_assembled", _prompt_payload, component="prompt_builder")

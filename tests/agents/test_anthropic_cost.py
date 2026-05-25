@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 
 from sidequest.agents.anthropic_cost import (
+    COST_BAND_NEEDS_WORK_USD,
+    COST_BAND_STOP_USD,
     UnknownModel,
     compute_cost_usd,
+    cost_band,
     model_pricing,
 )
 
@@ -91,3 +94,33 @@ def test_input_tokens_does_not_double_count_cached() -> None:
     # Cached read: 900 @ $0.30/M = 0.00027
     # Total: 0.00057 (not 0.0033, which would be 1100 @ $3/M)
     assert cost == pytest.approx(0.00057, rel=1e-6)
+
+
+# --- Per-turn cost bands (thresholds set by Keith 2026-05-25) ---
+# < $0.05 healthy · [$0.05, $0.12] watch · > $0.12 runaway.
+
+
+def test_cost_band_threshold_constants() -> None:
+    assert COST_BAND_NEEDS_WORK_USD == 0.05
+    assert COST_BAND_STOP_USD == 0.12
+
+
+def test_cost_band_all_systems_go_below_5_cents() -> None:
+    assert cost_band(0.0) == "all_systems_go"
+    assert cost_band(0.04999) == "all_systems_go"
+
+
+def test_cost_band_needs_work_is_inclusive_at_lower_bound() -> None:
+    # Exactly $0.05 is "needs work", not "all systems go".
+    assert cost_band(0.05) == "needs_work"
+    assert cost_band(0.10) == "needs_work"
+
+
+def test_cost_band_needs_work_is_inclusive_at_upper_bound() -> None:
+    # Exactly $0.12 is still "needs work"; only strictly above trips runaway.
+    assert cost_band(0.12) == "needs_work"
+
+
+def test_cost_band_stop_everything_above_12_cents() -> None:
+    assert cost_band(0.1201) == "stop_everything"
+    assert cost_band(0.17198) == "stop_everything"  # the 05-22 footgun, per-turn-equiv

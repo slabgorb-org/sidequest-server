@@ -128,9 +128,7 @@ def test_image_emitted_only_for_slug_in_poi_set(fake_theme: ReferenceTheme) -> N
 
 def test_no_image_no_placeholder_when_slug_absent(fake_theme: ReferenceTheme) -> None:
     """A location with no POI image renders text-only — no <img>, no placeholder."""
-    html = present_lore_geography(
-        _two_locations(), make_ctx_pois(fake_theme, frozenset())
-    )
+    html = present_lore_geography(_two_locations(), make_ctx_pois(fake_theme, frozenset()))
     assert "<img" not in html
     assert "placeholder" not in html.lower()
     # Text content for both cards still renders.
@@ -171,6 +169,33 @@ def test_image_border_uses_theme_accent(fake_theme: ReferenceTheme) -> None:
     assert fake_theme.palette_accent in card, (
         "POI image card should carry the theme accent colour in its border/shadow style"
     )
+
+
+def test_image_accent_is_html_escaped() -> None:
+    """The accent lands in a style= attribute; it MUST be html-escaped so a crafted
+    accent can't break out of the attribute and inject markup (renderer's
+    escape-every-interpolation invariant; theme.yaml becomes less-trusted under the
+    creator-authoring roadmap). Regression for reviewer finding on story 63-8."""
+    malicious = ReferenceTheme(
+        archetype="terminal",
+        palette_primary="#4A90D9",
+        palette_accent='#fff" onerror="alert(1)',
+        palette_background="#0D1117",
+        web_font_family="Rajdhani",
+        display_font_family="Orbitron",
+        dinkus_light="·",
+        dinkus_medium="✦",
+        dinkus_heavy="✦✦",
+    )
+    html = present_lore_geography(
+        [{"id": "vaskov-centrum", "name": "Vaskov Centrum", "description": "x"}],
+        make_ctx_pois(malicious, frozenset({"vaskov-centrum"})),
+    )
+    # No attribute breakout: the raw quote sequence must not survive into the output.
+    assert '#fff" onerror' not in html
+    assert 'onerror="alert(1)"' not in html
+    # The quote was escaped.
+    assert "&quot;" in html
 
 
 # ---------------------------------------------------------------------------

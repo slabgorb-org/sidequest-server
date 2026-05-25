@@ -199,12 +199,18 @@ def _poi_image_html(*, slug: str, name: str, ctx: PresenterContext) -> str:
     accent. Returns "" (text-only card) when there is no matching image — a
     spanned, observable skip, not a silent fallback."""
     if ctx.world is None:
+        # No world context → no POI image possible. Observable, not silent.
+        with reference_poi_image_not_found_span(pack=ctx.pack, world=None, slug=slug):
+            pass
         return ""
     if slug in ctx.poi_image_slugs:
         src = resolve_asset_url(f"genre_packs/{ctx.pack}/worlds/{ctx.world}/assets/poi/{slug}.png")
         with reference_poi_image_resolved_span(pack=ctx.pack, world=ctx.world, slug=slug):
             pass
-        accent = ctx.theme.palette_accent
+        # Escape the accent: it lands in a style= attribute and, while theme.yaml is
+        # first-party today, the renderer's invariant is to escape every interpolation
+        # (and the creator-authoring roadmap makes pack content less-trusted).
+        accent = escape(ctx.theme.palette_accent)
         return (
             f'<img class="ref-card__poi" src="{escape(src)}" alt="{escape(name)}" '
             f'loading="lazy" style="width:100%;border:2px solid {accent};'

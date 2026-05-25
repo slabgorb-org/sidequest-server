@@ -34,7 +34,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.agents.subsystems import (
-    SubsystemOutput,
     run_dispatch_bank,
 )
 from sidequest.game.npc_pool import NpcPoolMember
@@ -45,7 +44,6 @@ from sidequest.protocol.dispatch import (
     SubsystemDispatch,
     VisibilityTag,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
@@ -146,9 +144,7 @@ async def test_ac1_npc_agency_dispatch_engages_handler_through_bank(otel_capture
 
     spans = otel_capture.get_finished_spans()
     sub_spans = [s for s in spans if s.name == "intent_router.subsystem"]
-    npc_spans = [
-        s for s in sub_spans if dict(s.attributes or {}).get("subsystem") == "npc_agency"
-    ]
+    npc_spans = [s for s in sub_spans if dict(s.attributes or {}).get("subsystem") == "npc_agency"]
     assert len(npc_spans) == 1, (
         f"expected exactly 1 intent_router.subsystem span for npc_agency; "
         f"got {len(npc_spans)} (all sub spans: "
@@ -224,9 +220,7 @@ async def test_ac3_reflect_absence_dispatch_engages_handler_through_bank(otel_ca
     spans = otel_capture.get_finished_spans()
     sub_spans = [s for s in spans if s.name == "intent_router.subsystem"]
     ra_spans = [
-        s
-        for s in sub_spans
-        if dict(s.attributes or {}).get("subsystem") == "reflect_absence"
+        s for s in sub_spans if dict(s.attributes or {}).get("subsystem") == "reflect_absence"
     ]
     assert len(ra_spans) == 1
     assert dict(ra_spans[0].attributes or {})["produced_directives"] == 2
@@ -355,9 +349,7 @@ def test_ac5_watcher_witnesses_include_reflect_absence():
     """AC5: _WITNESSES must include reflect_absence."""
     from sidequest.agents.dispatch_engagement_watcher import _WITNESSES
 
-    assert "reflect_absence" in _WITNESSES, (
-        "watcher _WITNESSES must include reflect_absence."
-    )
+    assert "reflect_absence" in _WITNESSES, "watcher _WITNESSES must include reflect_absence."
 
 
 def test_ac5_dispatched_type_key_includes_all_three():
@@ -406,8 +398,7 @@ def test_ac5_npc_agency_dispatched_with_npc_not_in_pool_emits_mismatch():
 
     spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
     assert len(spans) == 1, (
-        f"expected 1 mismatch span for npc_agency; got {len(spans)}: "
-        f"{[s.name for s in spans]}"
+        f"expected 1 mismatch span for npc_agency; got {len(spans)}: {[s.name for s in spans]}"
     )
     assert spans[0].name == "dispatch_engagement.npc_agency.mismatch"
     attrs = dict(spans[0].attributes or {})
@@ -539,8 +530,7 @@ def test_ac5_multiple_59_7_subsystems_in_one_turn_watched_independently():
 
     spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
     assert len(spans) == 1, (
-        f"expected 1 mismatch (npc_agency only); got {len(spans)}: "
-        f"{[s.name for s in spans]}"
+        f"expected 1 mismatch (npc_agency only); got {len(spans)}: {[s.name for s in spans]}"
     )
     assert spans[0].name == "dispatch_engagement.npc_agency.mismatch"
 
@@ -578,9 +568,7 @@ def test_intent_router_prompt_includes_reflect_absence_in_vocabulary():
     """The router's system prompt must mention reflect_absence."""
     from sidequest.agents.intent_router import _SYSTEM_PROMPT
 
-    assert "reflect_absence" in _SYSTEM_PROMPT, (
-        "_SYSTEM_PROMPT must mention reflect_absence."
-    )
+    assert "reflect_absence" in _SYSTEM_PROMPT, "_SYSTEM_PROMPT must mention reflect_absence."
 
 
 # ---------------------------------------------------------------------------
@@ -605,18 +593,14 @@ def test_distinctive_detail_module_no_longer_marked_dormant():
     """distinctive_detail module docstring must not contain 'DORMANT'."""
     import sidequest.agents.subsystems.distinctive_detail as mod
 
-    assert "DORMANT" not in (mod.__doc__ or ""), (
-        "distinctive_detail.__doc__ still says DORMANT."
-    )
+    assert "DORMANT" not in (mod.__doc__ or ""), "distinctive_detail.__doc__ still says DORMANT."
 
 
 def test_reflect_absence_module_no_longer_marked_dormant():
     """reflect_absence module docstring must not contain 'DORMANT'."""
     import sidequest.agents.subsystems.reflect_absence as mod
 
-    assert "DORMANT" not in (mod.__doc__ or ""), (
-        "reflect_absence.__doc__ still says DORMANT."
-    )
+    assert "DORMANT" not in (mod.__doc__ or ""), "reflect_absence.__doc__ still says DORMANT."
 
 
 def test_prompt_redaction_module_no_longer_marked_dormant():

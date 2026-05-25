@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -71,6 +72,17 @@ class AsideResolution:
     grounded_on: tuple[str, ...]
 
 
+_FENCE_RE = re.compile(r"```(?:json)?\s*\n([\s\S]*?)\n```")
+
+
+def _extract_json(raw: str) -> str:
+    """Strip markdown code fences if present, returning the inner JSON."""
+    m = _FENCE_RE.search(raw)
+    if m:
+        return m.group(1).strip()
+    return raw.strip()
+
+
 class AsideLLM(Protocol):
     async def complete(self, *, system: str, user: str) -> str: ...
 
@@ -109,7 +121,7 @@ class AsideResolver:
                 grounded_on=(),
             )
         try:
-            data = json.loads(raw)
+            data = json.loads(_extract_json(raw))
             outcome = str(data.get("outcome", ""))
             if outcome not in _VALID_OUTCOMES:
                 raise ValueError(f"invalid outcome {outcome!r}")

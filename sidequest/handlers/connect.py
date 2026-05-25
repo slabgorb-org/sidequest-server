@@ -53,6 +53,7 @@ from sidequest.server.session_handler import (
     _State,
 )
 from sidequest.server.session_helpers import (
+    _build_cartography_map_message,
     _error_msg,
     _presence_msg,
     _resolve_location_display,
@@ -1419,6 +1420,19 @@ class ConnectHandler:
                             player_id=player_id,
                         )
                     )
+                # Region-mode cartography map: emit MAP_UPDATE so the Map tab
+                # shows the pack's region list on connect/resume. Room-graph
+                # worlds (beneath_sunden etc.) use DUNGEON_MAP instead.
+                cart_map_msg = _build_cartography_map_message(
+                    session._session_data.genre_pack
+                    if session._session_data is not None
+                    else None,
+                    row.world_slug,
+                    resume_loc,
+                    player_id=player_id,
+                )
+                if cart_map_msg is not None:
+                    bootstrap_msgs.append(cart_map_msg)
                 # Confrontation re-emit on slug-resume (playtest 2026-05-02).
                 # Without this, reloading a tab mid-confrontation drops the
                 # right-pane "Confrontation" tab — the steady-state encounter

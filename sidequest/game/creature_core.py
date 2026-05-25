@@ -119,6 +119,49 @@ def creature_edge_pool_from_hp(hp: int) -> EdgePool:
     )
 
 
+class HpPool(BaseModel):
+    """First-class ablative hit-point pool (ADR-114 §1).
+
+    Reintroduces personal vitality/damage tracking, reversing ADR-078's
+    deletion of HP in favor of composure (:class:`EdgePool`). ``current``
+    is clamped to ``[0, max]``. Mirrors ``EdgePool.apply_delta`` so callers
+    re-pointed from edge→hp keep the same delta contract.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    current: int
+    max: int
+    base_max: int
+
+    def apply_delta(self, delta: int) -> int:
+        """Apply an HP delta. Returns new current value.
+
+        Positive delta increases current (capped at max).
+        Negative delta decreases current (floored at 0).
+        """
+        raw = self.current + delta
+        self.current = max(0, min(self.max, raw))
+        return self.current
+
+
+def hp_pool_from_hp(hp: int) -> HpPool:
+    """Seed an :class:`HpPool` from an authored HP value (ADR-114 §1).
+
+    The SINGLE canonical HP seeder. Seeds the pool full
+    (``current == max == base_max``). REPLACES
+    ``creature_edge_pool_from_hp``, which re-interpreted authored HP as
+    composure; under ADR-114 the same B/X ``hp`` integer in content YAML is
+    once again personal vitality, not composure.
+
+    Floored at 1 because a pool needs a positive ceiling — a creature
+    authored with ``hp: 0`` must still be representable/alive as a
+    materialized actor.
+    """
+    seed = max(1, hp)
+    return HpPool(current=seed, max=seed, base_max=seed)
+
+
 class EdgeConfigMissingClassError(KeyError):
     """Genre pack declared `edge_config` but omitted a `base_max_by_class`
     entry for the character's class.
@@ -202,7 +245,7 @@ class CreatureCore(BaseModel):
 
     Embedded via composition in both Character and Npc.
 
-    P1-required: name, description, personality, level, edge, inventory, statuses.
+    P1-required: name, description, personality, level, hp, inventory, statuses.
     P2-deferred: acquired_advancements (advancement system, Epic 39-8).
     """
 
@@ -215,7 +258,7 @@ class CreatureCore(BaseModel):
     xp: int = 0
     inventory: Inventory = Field(default_factory=Inventory)
     statuses: list[Status] = Field(default_factory=list)
-    edge: EdgePool = Field(default_factory=placeholder_edge_pool)
+    hp: HpPool = Field(default_factory=lambda: HpPool(current=10, max=10, base_max=10))
     # Vessel-attached composure pool (Epic 53, story 53-2). None for any
     # character without a rig in inventory; populated by
     # ``sidequest.game.vessel_tags.bind_rig_pool_from_inventory`` at
@@ -257,6 +300,6 @@ class CreatureCore(BaseModel):
             raise ValueError("personality cannot be blank")
         return v
 
-    def apply_edge_delta(self, delta: int) -> int:
-        """Apply an edge delta and return the new current value."""
-        return self.edge.apply_delta(delta)
+    def apply_hp_delta(self, delta: int) -> int:
+        """Apply an HP delta and return the new current value."""
+        return self.hp.apply_delta(delta)

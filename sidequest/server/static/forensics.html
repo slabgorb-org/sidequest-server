@@ -76,11 +76,17 @@ const rail = document.getElementById('rail');
 const main = document.getElementById('main');
 let curSlug = null;
 let curTimeline = [];
+let curRound = null;   // P2.2 — selected round, drives ←/→ keyboard scrub
 let saves = [];
 // mechStateCache: round -> state string ('absent'|'populated'|'static'|…)
 // populated on column-click as the per-round mechanical bundle is fetched.
 // The strip mechanical row re-renders each time a new column is visited.
 const mechStateCache = new Map();
+// factCountCache: round -> cumulative-derived KnownFacts count, populated on
+// column-click exactly like mechStateCache (same R8 no-extra-fetch contract —
+// the timeline endpoint carries no per-round fact counts). The P2.1 flatline
+// annotation reads this, so it sharpens as the GM scrubs the game.
+const factCountCache = new Map();
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -117,7 +123,9 @@ async function selectSave(slug, el){
   if(!Array.isArray(tl) || !tl.length){
     main.innerHTML = '<section><p class="sub">No narrative rounds in this save.</p></section>'; return; }
   curTimeline = tl;
-  mechStateCache.clear();  // reset per-round cache when a new save is selected
+  curRound = null;
+  mechStateCache.clear();  // reset per-round caches when a new save is selected
+  factCountCache.clear();
   const sv = saves.find(s => s.slug === slug);
   main.innerHTML =
     '<section><p class="lbl">macro — '+esc(slug)+' · '+esc(tl.length)+
@@ -128,6 +136,32 @@ async function selectSave(slug, el){
       '<div id="axis" class="sub" style="font-size:11px;margin-top:4px"></div></section>'+
     '<div id="drill"><section><p class="sub">Pick a round above.</p></section></div>';
   renderStrip(tl);
+}
+
+// P2.1 — find the first round that opens a ≥5-round stretch where cumulative
+// KnownFacts never grow ("narrator stopped grounding here"). Reads only the
+// rounds the GM has visited (factCountCache); honest gaps in the cache break a
+// run rather than guessing across them. Returns {round, len} or null.
+function flatlineSpan(tl){
+  let best = null;            // {round (start of the flat run), len}
+  let runLen = 0;            // rounds in the current flat run (incl. anchor)
+  let startRound = null;     // round that anchors the current flat run
+  let prevCount = null, prevRound = null;
+  for(const t of tl){
+    const c = factCountCache.get(t.round);
+    if(c == null){           // unvisited round — can't assert flat; break the run
+      prevCount = null; prevRound = null; runLen = 0; startRound = null; continue;
+    }
+    if(prevCount != null && c === prevCount){
+      if(runLen === 0){ runLen = 2; startRound = prevRound; }  // anchor + this round
+      else runLen++;
+      if(runLen >= 5 && (!best || runLen > best.len)) best = {round: startRound, len: runLen};
+    } else {
+      runLen = 0; startRound = null;
+    }
+    prevCount = c; prevRound = t.round;
+  }
+  return best;
 }
 
 // P0.2 — the whole game as one small-multiple strip, replacing the 117-row
@@ -156,10 +190,15 @@ function renderStrip(tl){
     rect.setAttribute('height', h);
     rect.setAttribute('fill', c === 0 ? 'var(--absent)' : '#3a4a63');
     rect.dataset.round = t.round;
+    // P2.3 — native <title> hover, parity with the dashboard's flame-bar
+    // title= convention (no floating JS tooltip layer). Carries the same
+    // sparkline datum the row encodes plus the cached cumulative-facts count.
+    const fc = factCountCache.get(t.round);
     const tip = document.createElementNS(SVGNS, 'title');
     tip.textContent = 'Round '+t.round+' · seq '+(t.seq_start??'–')+'–'+
       (t.seq_end??'–')+' · '+(Object.entries(t.event_kind_counts||{})
-      .map(([k,v])=>k+'×'+v).join(' ') || 'no events');
+      .map(([k,v])=>k+'×'+v).join(' ') || 'no events')+
+      ' · facts known '+(fc == null ? '? (click to load)' : fc);
     rect.appendChild(tip);
     rect.addEventListener('click', () => selectTurn(t.round));
     svg.appendChild(rect);
@@ -187,10 +226,31 @@ function renderStrip(tl){
     mr.appendChild(mtip);
     svg.appendChild(mr);
   });
+  // P2.1 — annotate the round that opens a ≥5-round cumulative-facts flatline.
+  // Honest: only over the visited span (factCountCache); the marker appears
+  // once the GM has scrubbed enough adjacent rounds to prove the plateau.
+  const fl = flatlineSpan(tl);
+  if(fl != null){
+    const idx = tl.findIndex(t => t.round === fl.round);
+    if(idx >= 0){
+      const x = PAD + idx*bw;
+      const mark = document.createElementNS(SVGNS, 'line');
+      mark.setAttribute('x1', x.toFixed(2)); mark.setAttribute('x2', x.toFixed(2));
+      mark.setAttribute('y1', '0'); mark.setAttribute('y2', (H - 12).toFixed(2));
+      mark.setAttribute('stroke', 'var(--absent)');
+      mark.setAttribute('stroke-dasharray', '2 2');
+      const mtip = document.createElementNS(SVGNS, 'title');
+      mtip.textContent = 'narrator stopped grounding here — cumulative facts '+
+        'flat for '+fl.len+' rounds from R'+fl.round;
+      mark.appendChild(mtip);
+      svg.appendChild(mark);
+    }
+  }
   // sparse round axis: first · mid · last
   const ax = document.getElementById('axis');
   const f = tl[0].round, m = tl[Math.floor(n/2)].round, l = tl[n-1].round;
-  ax.textContent = 'R'+f+'  …  R'+m+'  …  R'+l;
+  ax.textContent = 'R'+f+'  …  R'+m+'  …  R'+l +
+    (fl != null ? '   ⚠ facts flatline from R'+fl.round+' ('+fl.len+' rounds)' : '');
 }
 
 function markSel(round){
@@ -223,7 +283,32 @@ function storedRows(snap){
   return rows;
 }
 
+// P1.3 — best-effort divergence between what the narrator BELIEVED (derived
+// KnownFacts) and the stored ground-truth snapshot. Derived and stored share
+// no join key, so alignment is by semantic category only — substring overlap,
+// case-folded. We never fabricate a join: a missing signal on either side is
+// reported as 'unknown', not as a match or a divergence. Returns one tag row
+// {label, derived, stored, status} where status ∈ ok|diverged|unknown.
+function divergeRow(label, derivedVals, storedVals){
+  const d = (derivedVals||[]).map(s => String(s||'').trim()).filter(Boolean);
+  const s = (storedVals||[]).map(v => String(v||'').trim()).filter(Boolean);
+  const dTxt = d.length ? d.join(', ') : '—';
+  const sTxt = s.length ? s.join(', ') : '—';
+  if(!d.length || !s.length) return {label, derived:dTxt, stored:sTxt, status:'unknown'};
+  const lc = a => a.map(x => x.toLowerCase());
+  const dl = lc(d), sl = lc(s);
+  const overlap = dl.some(x => sl.some(y => x.includes(y) || y.includes(x)));
+  return {label, derived:dTxt, stored:sTxt, status: overlap ? 'ok' : 'diverged'};
+}
+
+function divergeTag(status){
+  if(status === 'ok') return '<span class="ok">✓</span>';
+  if(status === 'diverged') return '<span class="warn">⚠ diverged</span>';
+  return '<span class="tier-absent">· no shared signal</span>';
+}
+
 async function selectTurn(round){
+  curRound = +round;   // P2.2 — anchor for ←/→ keyboard scrub
   markSel(round);
   const drill = document.getElementById('drill');
   drill.innerHTML = '<section><p class="sub">Loading round '+esc(round)+'…</p></section>';
@@ -235,13 +320,16 @@ async function selectTurn(round){
   try { snap = await getJSON('/api/debug/save/'+
     encodeURIComponent(curSlug)+'/snapshot'); } catch(e){ snap = {error:e.message}; }
 
-  // cache the tri-state for the mechanical strip lane and re-render the lane
-  const mechState = (b.mechanical && b.mechanical.state) || 'absent';
-  mechStateCache.set(round, mechState);
-  if(curTimeline.length) renderStrip(curTimeline);
-
   // ---- DERIVED summary (KnownFacts the narrator had by this round) ----
   const derEntries = Object.entries(b.derived || {});
+
+  // cache the tri-state (mech lane) + cumulative-fact count (P2.1 flatline /
+  // P2.3 tooltip) and re-render the strip so both reflect this visit
+  const mechState = (b.mechanical && b.mechanical.state) || 'absent';
+  mechStateCache.set(round, mechState);
+  factCountCache.set(+round, derEntries.length);
+  if(curTimeline.length) renderStrip(curTimeline);
+
   const cats = {};
   for(const [,v] of derEntries){
     const c = (v.value && v.value.category) || '—';
@@ -299,6 +387,35 @@ async function selectTurn(round){
   ];
   const recCol = '<div class="kv">'+ recRows.map(([k,v]) =>
     '<span class="k">'+esc(k)+'</span><span class="tier-stored">'+esc(v)+'</span>').join('') +'</div>';
+
+  // ---- P1.3 divergence: derived belief vs stored snapshot, by category ----
+  // location: places the narrator grounded this round vs the snapshot's
+  // character_locations values. party: stored PC/character names (from
+  // character_locations keys + player_seats) vs the same, against derived
+  // Person-category facts the narrator knew. Best-effort, no fabricated join.
+  const snapLocs = (snap && snap.character_locations) || {};
+  const storedLocVals = Object.values(snapLocs);
+  const storedParty = [
+    ...Object.keys(snapLocs),
+    ...Object.keys((snap && snap.player_seats) || {}),
+    ...((snap && snap.characters) || []).map(c => (c.core && c.core.name) || c.name),
+  ].filter(Boolean);
+  const derivedPersons = derEntries
+    .filter(([,v]) => v.value && v.value.category === 'Person')
+    .map(([,v]) => v.value.summary);
+  const divRows = [
+    divergeRow('location', placesThisRound, storedLocVals),
+    divergeRow('party', derivedPersons, storedParty),
+  ];
+  const divBlock = (snap && !snap.error)
+    ? '<div class="kv" style="margin-top:8px">'+ divRows.map(r =>
+        '<span class="k">'+esc(r.label)+' '+divergeTag(r.status)+'</span>'+
+        '<span><span class="tier-derived">'+esc(r.derived)+'</span>'+
+        '<span class="tier-absent"> vs </span>'+
+        '<span class="tier-stored">'+esc(r.stored)+'</span></span>').join('') +
+      '</div>'
+    : '<div class="kv" style="margin-top:8px"><span class="k">divergence</span>'+
+      '<span class="tier-absent">— snapshot unavailable</span></div>';
 
   // ---- evidence (collapsed) ----
   const narr = (b.narrative||[]).map(nn =>
@@ -390,7 +507,10 @@ async function selectTurn(round){
       ' (SideQuest stores no per-round snapshot — see terminal snapshot below)</p>'+ unp +
       '<div class="cmp"><div class="d"><h3>DERIVED — narrator believed (by R'+esc(round)+
         ')</h3>'+derCol+'</div>'+
-      '<div class="s"><h3>RECORDED THIS ROUND</h3>'+recCol+'</div></div></section>'+
+      '<div class="s"><h3>RECORDED THIS ROUND</h3>'+recCol+'</div></div>'+
+      '<p class="lbl" style="margin-top:12px">divergence · derived belief vs stored '+
+        'snapshot (semantic, best-effort — no shared join key)</p>'+ divBlock +
+      '</section>'+
     '<section><p class="lbl">evidence</p>'+
       '<details><summary>narrative<span class="meta">round '+esc(round)+
         '</span></summary><div class="ev-body">'+narr+'</div></details>'+
@@ -421,6 +541,22 @@ async function selectTurn(round){
         '<pre class="tier-stored">'+j(snap)+'</pre></div></details></div></details>'+
     '</section>';
 }
+
+// P2.2 — ←/→ scrub between rounds, matching a GM stepping through the game.
+// Drives the same selectTurn path a strip-column click uses. Ignored while
+// typing in a field and when no round is selected yet.
+document.addEventListener('keydown', e => {
+  if(e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const t = e.target;
+  if(t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  if(!curTimeline.length) return;
+  let idx = curTimeline.findIndex(x => +x.round === curRound);
+  if(idx < 0) idx = (e.key === 'ArrowRight') ? -1 : curTimeline.length;  // first/last step
+  const next = idx + (e.key === 'ArrowRight' ? 1 : -1);
+  if(next < 0 || next >= curTimeline.length) return;
+  e.preventDefault();
+  selectTurn(curTimeline[next].round);
+});
 
 loadSaves();
 </script>

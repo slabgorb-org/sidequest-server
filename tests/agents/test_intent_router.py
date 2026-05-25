@@ -199,6 +199,50 @@ async def test_intent_router_forces_dispatch_package_tool(
 
 
 @pytest.mark.asyncio
+async def test_intent_router_prompt_documents_subsystem_params_contract(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """Regression (playtest 2026-05-25): the router must TELL the model what
+    ``params`` each subsystem expects, or Haiku fills the free-form ``params``
+    dict with an ad-hoc semantic descriptor instead of the contract the
+    dispatch handler reads.
+
+    The live failure: a contested grapple routed correctly to
+    ``subsystem=confrontation`` but emitted ``params={'action_type':
+    'resistance_against_grapple', 'mechanic': 'strength_contest', ...}`` with
+    NO ``type`` key. ``run_confrontation_dispatch`` requires
+    ``params['type']`` (a ConfrontationDef type from the pack) and raised
+    ValueError → zero engagement, Edge never ablated. The router already
+    receives the valid ``confrontation_types`` enum in game_state (Story
+    59-10); the prompt just never bound it to ``params['type']``.
+
+    This asserts on the ``system`` prompt the router actually sends to the
+    LLM (a behavioral observation of the producer, like
+    ``test_intent_router_forces_dispatch_package_tool`` asserts on the sent
+    ``tool_name``) — NOT a source-text grep of production files.
+    """
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="I grab him and wrench him out of the pool", state_summary={})
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    # The confrontation params contract MUST be communicated, bound to the
+    # closed enum already supplied in game_state.confrontation_types.
+    assert "confrontation_types" in system, (
+        "router prompt must point the model at the confrontation_types enum "
+        "for choosing the confrontation params['type']"
+    )
+    assert 'params={"type"' in system, (
+        "router prompt must document that a confrontation dispatch's params "
+        "carry the chosen confrontation type as params['type'] — without this "
+        'the handler raises ValueError("missing required params[\'type\']")'
+    )
+
+
+@pytest.mark.asyncio
 async def test_intent_router_decompose_quiet_turn_empty_dispatch(
     haiku_response_quiet_turn: str,
 ) -> None:

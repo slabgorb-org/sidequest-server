@@ -44,8 +44,11 @@ def _class(display_name, choices):
 
 
 def test_universal_beats_visible_to_every_class():
+    # A universal beat (class_filter=None) is available even when the class's
+    # encounter_beat_choices does NOT enumerate it — encounter_beat_choices
+    # curates class-specific beats only (see beats_available_for gate docs).
     cd = _confrontation([_beat("attack")])
-    fighter = _class("Fighter", ["attack"])
+    fighter = _class("Fighter", ["some_other_beat"])  # attack NOT whitelisted
     out = beats_available_for(cd, fighter, spell_slots_remaining=0.0)
     assert [b.id for b in out] == ["attack"]
 
@@ -57,11 +60,36 @@ def test_class_filter_excludes_other_classes():
     assert out == []
 
 
-def test_encounter_beat_choices_narrows_pool():
-    cd = _confrontation([_beat("attack"), _beat("flee")])
-    fighter = _class("Fighter", ["attack"])  # excludes flee
+def test_encounter_beat_choices_narrows_class_specific_beats():
+    # Gate 2 (encounter_beat_choices) narrows CLASS-SPECIFIC beats: a beat
+    # gated to Fighter but absent from the Fighter's whitelist is excluded.
+    cd = _confrontation(
+        [_beat("cleave", class_filter=["Fighter"]), _beat("parry", class_filter=["Fighter"])]
+    )
+    fighter = _class("Fighter", ["cleave"])  # parry not whitelisted
     out = beats_available_for(cd, fighter, spell_slots_remaining=0.0)
-    assert [b.id for b in out] == ["attack"]
+    assert [b.id for b in out] == ["cleave"]
+
+
+def test_encounter_beat_choices_does_not_narrow_universal_beats():
+    # Regression (playtest 2026-05-25, beneath_sunden MP): a chase
+    # confrontation's beats are universal (no class_filter) and no class
+    # enumerates them in encounter_beat_choices. Previously gate 2 filtered
+    # them ALL out → the per-PC confrontation payload had zero beats → the
+    # table soft-locked with nothing to select. Universal beats must reach
+    # every class regardless of the (combat-oriented) whitelist.
+    chase = ConfrontationDef(
+        type="chase",
+        label="Corridor Pursuit",
+        category="movement",
+        player_metric=MetricDef(name="separation", starting=0, threshold=7),
+        opponent_metric=MetricDef(name="pursuit", starting=0, threshold=7),
+        beats=[_beat("sprint"), _beat("duck_through"), _beat("barricade"), _beat("douse_torch")],
+    )
+    # Fighter's whitelist is combat-only — lists none of the chase beats.
+    fighter = _class("Fighter", ["attack", "defend", "flee", "cleave"])
+    out = beats_available_for(chase, fighter, spell_slots_remaining=0.0)
+    assert [b.id for b in out] == ["sprint", "duck_through", "barricade", "douse_torch"]
 
 
 def test_cast_spell_filtered_when_no_slots():

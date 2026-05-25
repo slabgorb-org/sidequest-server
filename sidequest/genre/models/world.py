@@ -283,3 +283,5 @@ class WorldConfig(BaseModel):
     era: str | int | None = None
     tone: str | None = None
     cover_poi: str | None = None
+    draft: bool = False
+    extensions: list[str] = Field(default_factory=list)

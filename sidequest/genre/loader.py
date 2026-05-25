@@ -713,7 +713,7 @@ def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
     genre_root: Path,
-) -> World:
+) -> World | None:
     """Load a single world from its directory.
 
     Port of Rust load_single_world(). Every world is a leaf — carries
@@ -729,10 +729,16 @@ def _load_single_world(
             can compose genre+world layers — both files are required by
             ``load_world_magic`` (see ``magic_loader.py``).
 
+    Returns:
+        A fully assembled World, or None if the world's world.yaml declares
+        ``draft: true`` (draft worlds are silently skipped at pack load time).
+
     Raises:
         GenreLoadError: If required files are missing or malformed.
     """
     config: WorldConfig = _load_yaml(world_path / "world.yaml", WorldConfig)
+    if config.draft:
+        return None
     lore: WorldLore = _load_yaml(world_path / "lore.yaml", WorldLore)
 
     cartography: CartographyConfig = _load_cartography(world_path / "cartography.yaml")
@@ -1098,10 +1104,12 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         base_archetypes = _load_yaml_optional(content_root / "archetypes_base.yaml", BaseArchetypes)
         npc_traits = _load_yaml_optional(content_root / "npc_traits.yaml", NpcTraitsDatabase)
 
-    # Load worlds and scenarios from subdirectories
-    worlds: dict[str, World] = _load_subdirectories(
+    # Load worlds and scenarios from subdirectories.
+    # _load_single_world returns None for worlds with draft: true — filter them out.
+    worlds_raw: dict[str, World | None] = _load_subdirectories(
         path, "worlds", lambda p: _load_single_world(p, genre_tropes, path)
     )
+    worlds: dict[str, World] = {slug: w for slug, w in worlds_raw.items() if w is not None}
     scenarios: dict[str, ScenarioPack] = _load_subdirectories(
         path, "scenarios", _load_single_scenario
     )

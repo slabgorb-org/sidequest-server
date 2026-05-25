@@ -518,19 +518,18 @@ async def test_seed_injection_fires_otel_span(otel_capture):
     await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     spans = otel_capture.get_finished_spans()
-    seed_spans = [s for s in spans if "seed" in s.name.lower()]
-    assert seed_spans, (
-        "No OTEL span containing 'seed' fired during prompt build. The "
+    # Filter for the wrapper span specifically — 22-4 adds per-seed
+    # ``seed.fired`` spans that also match "seed" but carry seed_id
+    # instead of active_count/ghost_count.
+    wrapper_spans = [s for s in spans if s.name == "narrator.seed_context"]
+    assert wrapper_spans, (
+        "No narrator.seed_context span fired during prompt build. The "
         "GM panel cannot prove seed injection engaged without a span. "
         "Per CLAUDE.md OTEL Observability Principle: every subsystem "
-        "decision must emit a span. Names referenced in plan: "
-        "``narrator.seed_context_rendered`` (preferred), "
-        "``seed_injection``, or sibling-of `narrator.trope_engine`."
+        "decision must emit a span."
     )
 
-    # Pin the attributes Sebastien's GM panel will surface in 22-4.
-    span = seed_spans[0]
-    attrs = dict(span.attributes or {})
+    attrs = dict(wrapper_spans[0].attributes or {})
     assert attrs.get("active_count") == 2, (
         f"Expected active_count=2 on seed span; got attrs={attrs}. "
         "Sebastien's panel filters on these counts — wrong values "
@@ -554,13 +553,12 @@ async def test_seed_span_fires_even_with_empty_lists(otel_capture):
     await orch.build_narrator_prompt("act", _turn_context(snapshot=snap, pack=pack))
 
     spans = otel_capture.get_finished_spans()
-    seed_spans = [s for s in spans if "seed" in s.name.lower()]
-    assert seed_spans, (
-        "No seed span fired on an empty-state prompt build. Span must "
-        "fire every turn — silence-by-absence is indistinguishable "
-        "from renderer-not-invoked. Sebastien needs the always-emit "
-        "signal."
+    wrapper_spans = [s for s in spans if s.name == "narrator.seed_context"]
+    assert wrapper_spans, (
+        "No narrator.seed_context span fired on an empty-state prompt "
+        "build. Span must fire every turn — silence-by-absence is "
+        "indistinguishable from renderer-not-invoked."
     )
-    attrs = dict(seed_spans[0].attributes or {})
+    attrs = dict(wrapper_spans[0].attributes or {})
     assert attrs.get("active_count") == 0
     assert attrs.get("ghost_count") == 0

@@ -744,35 +744,162 @@ def present_progression(node: object, ctx: PresenterContext) -> str:
 PRESENTERS[("progression", ())] = present_progression
 
 
+def _magic_scalar_default(node: dict, key: str) -> str | None:
+    """Read a magic field's player-facing scalar, tolerating both magic.yaml
+    shapes: a nested ``{key: {default: <v>, permitted: [...]}}`` block OR a
+    flat ``{key_default: <v>}`` / ``{key: <scalar>}``. Returns only the
+    *default* (the evocative one-word state) — the ``permitted`` enum is
+    tuning noise and is suppressed.
+    """
+    block = node.get(key)
+    if isinstance(block, dict):
+        val = block.get("default")
+    elif isinstance(block, str):
+        val = block
+    else:
+        val = node.get(f"{key}_default")
+    val = str(val).strip() if val is not None else ""
+    return val or None
+
+
 def present_magic(node: object, ctx: PresenterContext) -> str:
-    """Render magic.yaml as a label-grid of genre, sources, and plugins."""
+    """Render magic.yaml as player-facing prose.
+
+    magic.yaml ships in two shapes across packs: a flat root dict (caverns,
+    space_opera) and a dict wrapped under a top-level ``magic:`` key
+    (mutant_wasteland, road_warrior, spaghetti_western, tea_and_murder,
+    heavy_metal worlds). This presenter unwraps the wrapper and renders the
+    player-meaningful fields (sources of power, costs, hard limits, counters,
+    manifestation) as cards/chips. Dev-tuning and DM-voice keys — intensity
+    numbers, permitted-enum ranges, reliability internals, player_options
+    flags, plugin lists, and ``narrator_register`` (a DM instruction) — are
+    deliberately suppressed; they are not player-facing reference content.
+    Returning non-empty for any populated magic.yaml prevents the generic
+    renderer from falling through to a raw config dump (playtest 2026-05-25).
+    """
     if not isinstance(node, dict):
         return ""
+    inner = node.get("magic")
+    magic = inner if isinstance(inner, dict) else node
+    if not isinstance(magic, dict):
+        return ""
+
+    parts: list[str] = []
+
+    # Label grid: genre + single-word world state (default only, no enum).
     cells: list[str] = []
-    genre = str(node.get("genre", "")).strip()
+    genre = str(magic.get("genre", "")).strip()
     if genre:
         cells.append(_label_cell("Genre", genre))
-    allowed_sources = node.get("allowed_sources")
-    if isinstance(allowed_sources, list) and allowed_sources:
-        chips = ", ".join(str(s) for s in allowed_sources)
-        cells.append(
-            '<div class="ref-label-grid__cell">'
-            '<div class="ref-card__kicker">Sources</div>'
-            f"<div>{escape(chips)}</div>"
-            "</div>"
+    knowledge = _magic_scalar_default(magic, "world_knowledge")
+    if knowledge:
+        cells.append(_label_cell("Common Knowledge", _format_chip_label(knowledge)))
+    attitude = _magic_scalar_default(magic, "visibility")
+    if attitude:
+        cells.append(_label_cell("Attitude", _format_chip_label(attitude)))
+    if cells:
+        parts.append('<div class="ref-label-grid">' + "".join(cells) + "</div>")
+
+    # Sources of power: list[str] (flat) or list[dict] (wrapped, with
+    # label + examples). DM-voice ``narrator_note`` is intentionally dropped.
+    sources = magic.get("allowed_sources")
+    if isinstance(sources, list) and sources:
+        if all(isinstance(s, str) for s in sources):
+            strip = _chip_strip(
+                "Sources of Power", [_format_chip_label(str(s)) for s in sources]
+            )
+            if strip:
+                parts.append(strip)
+        else:
+            cards: list[str] = []
+            for src in sources:
+                if isinstance(src, str):
+                    label, examples = _format_chip_label(src), []
+                elif isinstance(src, dict):
+                    label = str(
+                        src.get("label") or _format_chip_label(str(src.get("id", "")))
+                    ).strip()
+                    examples = src.get("examples") if isinstance(src.get("examples"), list) else []
+                else:
+                    continue
+                if not label:
+                    continue
+                body = ""
+                if examples:
+                    chips = "".join(
+                        f'<span class="ref-chip">{escape(str(e))}</span>' for e in examples
+                    )
+                    body = f"<div>{chips}</div>"
+                cards.append(
+                    '<article class="ref-card">'
+                    '<div class="ref-card__kicker">Source</div>'
+                    f"<h3>{escape(label)}</h3>{body}</article>"
+                )
+            if cards:
+                parts.append(
+                    '<section class="ref-allowed"><h3>Sources of Power</h3>'
+                    '<div class="ref-card-grid">' + "".join(cards) + "</div></section>"
+                )
+
+    # Costs: required_costs (wrapped) or cost_types (flat).
+    costs = magic.get("required_costs")
+    if not (isinstance(costs, list) and costs):
+        costs = magic.get("cost_types")
+    if isinstance(costs, list) and costs:
+        strip = _chip_strip("Every Working Costs", [_format_chip_label(str(c)) for c in costs])
+        if strip:
+            parts.append(strip)
+
+    # Hard limits: dict {name: verdict} or list[str].
+    limits = magic.get("hard_limits")
+    if isinstance(limits, dict) and limits:
+        rows = "".join(
+            f"<li><strong>{escape(_format_chip_label(str(k)))}</strong>: "
+            f"{escape(_format_chip_label(str(v)))}</li>"
+            for k, v in limits.items()
         )
-    permitted_plugins = node.get("permitted_plugins")
-    if isinstance(permitted_plugins, list) and permitted_plugins:
-        chips = ", ".join(str(p) for p in permitted_plugins)
-        cells.append(
-            '<div class="ref-label-grid__cell">'
-            '<div class="ref-card__kicker">Plugins</div>'
-            f"<div>{escape(chips)}</div>"
-            "</div>"
-        )
-    if not cells:
-        return ""
-    return '<div class="ref-label-grid">' + "".join(cells) + "</div>"
+        parts.append(f'<section class="ref-allowed"><h3>Hard Limits</h3><ul>{rows}</ul></section>')
+    elif isinstance(limits, list) and limits:
+        strip = _chip_strip("Hard Limits", [_format_chip_label(str(x)) for x in limits])
+        if strip:
+            parts.append(strip)
+
+    # Counters: list[dict {id, description}] or list[str].
+    counters = magic.get("counter")
+    if isinstance(counters, list) and counters:
+        rows: list[str] = []
+        for c in counters:
+            if isinstance(c, dict):
+                label = _format_chip_label(str(c.get("id", "")))
+                desc = str(c.get("description", "")).strip()
+                if not label:
+                    continue
+                rows.append(
+                    f"<li><strong>{escape(label)}</strong>"
+                    f"{(' — ' + escape(desc)) if desc else ''}</li>"
+                )
+            elif isinstance(c, str):
+                rows.append(f"<li>{escape(_format_chip_label(c))}</li>")
+        if rows:
+            parts.append(
+                '<section class="ref-allowed"><h3>Counters</h3><ul>' + "".join(rows) + "</ul></section>"
+            )
+
+    # Manifestation: {modes, domains}.
+    manifestation = magic.get("manifestation")
+    if isinstance(manifestation, dict):
+        modes = manifestation.get("modes")
+        if isinstance(modes, list) and modes:
+            strip = _chip_strip("Manifests As", [_format_chip_label(str(m)) for m in modes])
+            if strip:
+                parts.append(strip)
+        domains = manifestation.get("domains")
+        if isinstance(domains, list) and domains:
+            strip = _chip_strip("Domains", [_format_chip_label(str(d)) for d in domains])
+            if strip:
+                parts.append(strip)
+
+    return "".join(parts)
 
 
 PRESENTERS[("magic", ())] = present_magic

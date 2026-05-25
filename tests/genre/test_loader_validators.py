@@ -236,9 +236,7 @@ def test_fallback_opening_covers_all() -> None:
 def _cartography(region_ids: list[str]) -> CartographyConfig:
     return CartographyConfig(
         starting_region=region_ids[0] if region_ids else "",
-        regions={
-            rid: Region(name=rid, summary="s", description="d") for rid in region_ids
-        },
+        regions={rid: Region(name=rid, summary="s", description="d") for rid in region_ids},
     )
 
 
@@ -255,9 +253,7 @@ def test_opening_region_id_resolves_to_node() -> None:
 def test_opening_region_id_dangling_fails() -> None:
     """region_id that is not a cartography node fails the world load loudly —
     no silent fallback, no fuzzy free-text match."""
-    op = _make_opening(
-        OpeningSetting(location_label="somewhere", region_id="not_a_region")
-    )
+    op = _make_opening(OpeningSetting(location_label="somewhere", region_id="not_a_region"))
     with pytest.raises(GenreLoadError, match="not a declared cartography region"):
         _validate_opening_region_bindings(
             [op], _cartography(["toods_dome", "blind_reach"]), world_slug="testworld"

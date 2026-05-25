@@ -348,9 +348,7 @@ def test_bind_region_rebinds_and_emits_patch_span(captured_events) -> None:
     assert "blind_reach" in snap.discovered_regions
 
     patches = [
-        (fields, meta)
-        for et, fields, meta in captured_events
-        if et == "state_patch.current_region"
+        (fields, meta) for et, fields, meta in captured_events if et == "state_patch.current_region"
     ]
     assert patches, f"expected state_patch.current_region span; captured: {captured_events}"
     fields, meta = patches[0]
@@ -404,9 +402,7 @@ def test_bind_region_fails_loud_on_dangling_region_id(captured_events) -> None:
             _opening_with_region("nonexistent_node"),
         )
     fails = [
-        (fields, meta)
-        for et, fields, meta in captured_events
-        if et == "current_region.bind_failed"
+        (fields, meta) for et, fields, meta in captured_events if et == "current_region.bind_failed"
     ]
     assert fails, f"expected current_region.bind_failed ERROR span; captured: {captured_events}"
     fields, meta = fails[0]

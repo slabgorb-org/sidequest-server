@@ -584,22 +584,74 @@ def test_progression_empty_returns_empty_string(fake_theme: ReferenceTheme) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_magic_emits_label_grid(fake_theme: ReferenceTheme) -> None:
+def test_magic_flat_shape_renders_sources_and_costs(fake_theme: ReferenceTheme) -> None:
+    """Flat root shape (caverns / space_opera): genre + string sources + costs.
+    Source ids are humanized; ``permitted_plugins`` (dev plugin config) is
+    suppressed, not surfaced on the player page."""
     from sidequest.server.reference_presenters import present_magic
 
     node = {
         "genre": "space_opera",
         "allowed_sources": ["innate", "item_based"],
         "permitted_plugins": ["psionics", "force_fields"],
+        "cost_types": ["vitality", "backlash"],
+        "hard_limits": {"resurrection": "forbidden"},
     }
     html = present_magic(node, make_ctx("magic", (), fake_theme))
     assert "ref-label-grid" in html
-    assert "innate" in html
-    assert "item_based" in html
-    assert "psionics" in html
-    assert "Sources" in html
+    assert "Sources of Power" in html
+    assert "Innate" in html and "Item Based" in html
+    assert "Every Working Costs" in html and "Vitality" in html
+    assert "Hard Limits" in html and "Resurrection" in html
+    # permitted_plugins is dev config — must NOT leak onto the player page.
+    assert "psionics" not in html and "force_fields" not in html
+    # No raw config-key headings.
     assert "<h2>genre</h2>" not in html
     assert "<h2>allowed_sources</h2>" not in html
+
+
+def test_magic_wrapped_shape_renders_prose_not_raw_dump(fake_theme: ReferenceTheme) -> None:
+    """Wrapped ``magic:`` shape (mutant_wasteland et al.): the presenter
+    unwraps and renders player prose. The playtest bug was that this shape
+    returned '' → the generic renderer dumped raw config keys (intensity,
+    permitted ranges, player_options, narrator_register). Assert the
+    player-meaningful fields render AND the dev-tuning / DM-voice keys are
+    suppressed."""
+    from sidequest.server.reference_presenters import present_magic
+
+    node = {
+        "magic": {
+            "intensity": {"default": 0.6, "permitted": [0.3, 0.9]},
+            "world_knowledge": {"default": "acknowledged", "permitted": ["acknowledged"]},
+            "visibility": {"default": "feared", "permitted": ["feared", "regulated"]},
+            "allowed_sources": [
+                {"id": "innate", "label": "Innate (mutation)", "examples": ["born mutant"]},
+                {"id": "learned", "label": "Learned (discipline)"},
+            ],
+            "required_costs": ["backlash", "vitality"],
+            "hard_limits": {"resurrection": "forbidden", "mind_compulsion": "with_cost"},
+            "counter": [{"id": "suppressors", "description": "Old-world dampening tech"}],
+            "manifestation": {"modes": ["reflexive", "invoked"], "domains": ["physical", "psychic"]},
+            "narrator_register": "Mutations are visibly costly. Don't narrate clean superpowers.",
+            "player_options": {"can_build_caster": True, "mutation_outcomes_visible": False},
+        }
+    }
+    html = present_magic(node, make_ctx("magic", (), fake_theme))
+    assert html, "wrapped magic.yaml must render non-empty (else generic renderer raw-dumps)"
+    # Player-meaningful content renders.
+    assert "Innate (mutation)" in html and "Learned (discipline)" in html
+    assert "born mutant" in html
+    assert "Every Working Costs" in html and "Backlash" in html
+    assert "Hard Limits" in html and "Resurrection" in html and "Mind Compulsion" in html
+    assert "Counters" in html and "Suppressors" in html
+    assert "Manifests As" in html and "Reflexive" in html
+    assert "Feared" in html and "Acknowledged" in html
+    # Suppressed dev-tuning / DM-voice keys must NOT leak.
+    assert "0.6" not in html and "0.3" not in html  # intensity numbers
+    assert "permitted" not in html.lower()  # enum ranges
+    assert "narrator_register" not in html and "visibly costly" not in html  # DM voice
+    assert "player_options" not in html and "can_build_caster" not in html
+    assert "mutation_outcomes_visible" not in html
 
 
 def test_magic_empty_returns_empty_string(fake_theme: ReferenceTheme) -> None:
@@ -607,6 +659,8 @@ def test_magic_empty_returns_empty_string(fake_theme: ReferenceTheme) -> None:
 
     assert present_magic({}, make_ctx("magic", (), fake_theme)) == ""
     assert present_magic({"unrelated_key": "x"}, make_ctx("magic", (), fake_theme)) == ""
+    # Empty wrapper also yields nothing (no spurious sections).
+    assert present_magic({"magic": {}}, make_ctx("magic", (), fake_theme)) == ""
 
 
 # ---------------------------------------------------------------------------

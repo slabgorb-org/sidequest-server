@@ -5,10 +5,15 @@ Port of sidequest-genre/src/models/inventory.rs.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from sidequest.protocol.dice import DieSides
+
+_DICE_RE = re.compile(r"^(?P<count>\d+)d(?P<faces>\d+)$")
 
 
 class CurrencyConfig(BaseModel):
@@ -28,6 +33,29 @@ class CurrencyConfig(BaseModel):
     secondary: Any = None  # some packs declare a secondary currency (dict or string)
 
 
+class DamageSpec(BaseModel):
+    """Weapon damage descriptor (ADR-114 §3). SWN-native dice (1d6…2d12) so the
+    value is concrete and feeds the ADR-074/075 dice overlay directly."""
+
+    model_config = {"extra": "forbid"}
+
+    dice: str          # "NdM" — M must be a supported DieSides face count
+    bonus: int = 0
+
+    @field_validator("dice")
+    @classmethod
+    def _valid_dice(cls, v: str) -> str:
+        m = _DICE_RE.match(v.strip())
+        if not m:
+            raise ValueError(f"damage dice {v!r} is not NdM notation")
+        count, faces = int(m["count"]), int(m["faces"])
+        if count < 1:
+            raise ValueError(f"damage dice {v!r} needs at least 1 die")
+        if DieSides.from_wire(faces) is DieSides.Unknown:
+            raise ValueError(f"damage dice {v!r} uses unsupported face count d{faces}")
+        return v
+
+
 class CatalogItem(BaseModel):
     """A single item in the genre pack's item catalog."""
 
@@ -45,6 +73,8 @@ class CatalogItem(BaseModel):
     lore: str = ""
     narrative_weight: Any = None  # accepts string or numeric
     resource_ticks: int | None = None
+    damage: DamageSpec | None = None    # weapons
+    mitigation: int | None = None       # armor: flat damage reduction (SWN soak)
 
 
 class CarryMode(StrEnum):

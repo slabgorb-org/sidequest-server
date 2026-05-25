@@ -265,16 +265,20 @@ def _validate_portrait_manifest(path: Path, label: str) -> list[str]:
 
 def _validate_projection(path: Path, label: str) -> list[str]:
     """Validate projection.yaml through the projection loader + validator.
-    Imported lazily, mirroring loader.py l.1145-1146."""
+
+    Imports are lazy (mirroring loader.py l.1145-1146 — the loader also defers
+    the projection import) and live inside the try so an import failure is
+    reported as an error tied to the file rather than crashing the whole run.
+    """
     if not path.is_file():
         return []
-    from sidequest.game.projection.rules import load_rules_from_yaml_path
-    from sidequest.game.projection.validator import validate_projection_rules
-
     try:
+        from sidequest.game.projection.rules import load_rules_from_yaml_path
+        from sidequest.game.projection.validator import validate_projection_rules
+
         rules = load_rules_from_yaml_path(path)
         validate_projection_rules(rules)
-    except Exception as exc:  # noqa: BLE001 — surface any loader/validator failure
+    except Exception as exc:  # noqa: BLE001 — surface any import/loader/validator failure
         return [f"{label}: {path.name} failed projection validation: {exc}"]
     return []
 

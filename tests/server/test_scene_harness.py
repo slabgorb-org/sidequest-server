@@ -70,74 +70,21 @@ def _build_dev_scenes_app(
     save_dir: Path,
     fixtures_dir: Path = CANONICAL_FIXTURES_DIR,
 ):
-    """Construct a production-shaped FastAPI app with ``DEV_SCENES=1`` set.
+    """Construct a production-shaped FastAPI app with scene-harness routes.
 
     Uses the real ``create_app()`` factory — not a hand-built ``FastAPI()``
     — because the wiring-test rule (CLAUDE.md) requires every test suite
     to verify the component is reachable through production code paths.
-    """
-    monkeypatch.setenv("DEV_SCENES", "1")
-    monkeypatch.setenv("SIDEQUEST_FIXTURES_DIR", str(fixtures_dir))
 
-    # Importing inside the helper keeps the env mutation in scope for the
-    # one-shot factory call — ``create_app()`` reads the env at construction
-    # time per ADR-092 §Decision point 1.
+    Scene harness is always registered (Story 51-4 removed the DEV_SCENES gate).
+    """
     from sidequest.server.app import create_app
 
     return create_app(
         save_dir=save_dir,
         genre_pack_search_paths=[],
+        fixtures_dir=fixtures_dir,
     )
-
-
-# ── AC-2: route absent without DEV_SCENES=1 ─────────────────────────────────
-
-
-def test_scene_route_absent_when_dev_scenes_env_unset(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """ADR-092 §Decision point 1: when ``DEV_SCENES`` is unset, the
-    ``/dev/scene/{name}`` route MUST NOT be registered. POST returns 404
-    (FastAPI's default for unmatched path) — production builds carry
-    ZERO scene-harness surface."""
-    monkeypatch.delenv("DEV_SCENES", raising=False)
-
-    from sidequest.server.app import create_app
-
-    app = create_app(save_dir=tmp_path, genre_pack_search_paths=[])
-
-    # The route must not appear in ``app.routes`` at all — not present-but-403,
-    # not present-but-redirected. Absent.
-    paths = {getattr(r, "path", "") for r in app.routes}
-    scene_routes = [p for p in paths if "/dev/scene" in p]
-    assert scene_routes == [], (
-        f"DEV_SCENES unset — /dev/scene/* must not be registered, found: {scene_routes!r}"
-    )
-
-    client = TestClient(app)
-    r = client.post("/dev/scene/combat_brawl_wasteland")
-    assert r.status_code == 404, (
-        f"DEV_SCENES unset — POST /dev/scene/combat_brawl_wasteland must 404, got {r.status_code}"
-    )
-
-
-def test_scene_route_absent_when_dev_scenes_env_set_to_zero(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Only the exact string ``"1"`` enables the route. ``"0"``, ``"false"``,
-    ``""`` — all keep the production-safe default. This is a "fail-closed"
-    test: ambiguity in the flag value must NOT silently enable dev surface."""
-    monkeypatch.setenv("DEV_SCENES", "0")
-
-    from sidequest.server.app import create_app
-
-    app = create_app(save_dir=tmp_path, genre_pack_search_paths=[])
-
-    client = TestClient(app)
-    r = client.post("/dev/scene/combat_brawl_wasteland")
-    assert r.status_code == 404, f"DEV_SCENES=0 must keep the route absent, got {r.status_code}"
 
 
 # ── AC-1: route present + happy path ────────────────────────────────────────

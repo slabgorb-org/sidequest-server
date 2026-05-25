@@ -79,6 +79,7 @@ def create_app(
     genre_pack_search_paths: list[Path] | None = None,
     save_dir: Path | None = None,
     ui_dist: Path | None = None,
+    fixtures_dir: Path | None = None,
 ) -> FastAPI:
     """Construct the FastAPI application.
 
@@ -94,6 +95,8 @@ def create_app(
             env. When unset OR pointing at a missing directory, the UI
             mount is skipped — local Vite dev (5173) handles serving;
             the tunneled production-style path requires this to be set.
+        fixtures_dir: Directory containing scene harness fixture YAMLs.
+            Defaults to ``scenarios/fixtures`` relative to cwd.
     """
     resolved_save_dir: Path = save_dir or (Path.home() / ".sidequest" / "saves")
     resolved_search_paths: list[Path] = (
@@ -272,23 +275,18 @@ def create_app(
     # --- Reference pages (/reference/rules/*, /reference/lore/*) ---
     app.include_router(create_reference_router())
 
-    # --- Dev-gated scene-harness route (ADR-092). ---
-    # Strictly ``DEV_SCENES=1`` enables. Any other value (``0``, ``""``,
-    # unset, ``"true"``) keeps the route absent — fail-closed so
-    # production builds carry zero scene-harness surface.
-    import os as _os
+    # --- Scene-harness routes (ADR-092). ---
+    # Always registered — Cloudflare Zero Trust gates access at the tunnel
+    # layer; the former DEV_SCENES env var added zero security value.
+    from sidequest.server.scene_harness_router import create_scene_harness_router
 
-    if _os.environ.get("DEV_SCENES") == "1":
-        from sidequest.server.scene_harness_router import create_scene_harness_router
-
-        fixtures_env = _os.environ.get("SIDEQUEST_FIXTURES_DIR")
-        fixtures_dir = Path(fixtures_env) if fixtures_env else Path("scenarios/fixtures")
-        app.state.fixtures_dir = fixtures_dir
-        app.include_router(create_scene_harness_router())
-        logger.info(
-            "scene_harness.route_registered fixtures_dir=%s",
-            fixtures_dir,
-        )
+    resolved_fixtures_dir = fixtures_dir or Path("scenarios/fixtures")
+    app.state.fixtures_dir = resolved_fixtures_dir
+    app.include_router(create_scene_harness_router())
+    logger.info(
+        "scene_harness.route_registered fixtures_dir=%s",
+        resolved_fixtures_dir,
+    )
 
     # --- Chassis interior map (Ship tab) ---
     from sidequest.interior.dispatch import interior_router

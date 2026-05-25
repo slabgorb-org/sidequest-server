@@ -1,8 +1,9 @@
-"""Dev-gated ``POST /dev/scene/{name}`` route (ADR-092).
+"""Scene-harness routes (ADR-092).
 
-Registered into the FastAPI app only when ``DEV_SCENES=1`` is set when
-``create_app()`` runs. Production builds carry zero scene-harness
-surface — the router is not even constructed.
+``POST /dev/scene/{name}`` — hydrate a fixture into a playable save.
+``GET /dev/scenes`` — list available fixture metadata for the UI picker.
+
+Always registered — Cloudflare Zero Trust gates access at the tunnel layer.
 
 Wires together the existing pieces:
 
@@ -24,9 +25,11 @@ Span vocabulary (asserted by ``tests/server/test_scene_harness.py``):
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date as _date_cls
 from pathlib import Path
 
+import yaml
 from fastapi import APIRouter, HTTPException, Request
 
 from sidequest.game.game_slug import generate_slug
@@ -42,6 +45,8 @@ from sidequest.game.scene_harness import (
     hydrate_fixture,
 )
 from sidequest.telemetry import watcher_hub as _hub
+
+_FIXTURE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +174,37 @@ def create_scene_harness_router() -> APIRouter:
         )
 
         return {"slug": slug}
+
+    @router.get("/dev/scenes")
+    async def list_scenes(request: Request) -> list[dict[str, str | None]]:
+        fixtures_dir: Path = request.app.state.fixtures_dir
+        results: list[dict[str, str | None]] = []
+
+        if fixtures_dir.is_dir():
+            for yaml_path in sorted(fixtures_dir.glob("*.yaml")):
+                stem = yaml_path.stem
+                if not _FIXTURE_NAME_RE.match(stem):
+                    continue
+                try:
+                    raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+                except Exception:
+                    logger.warning("scene_harness.list.skip_invalid path=%s", yaml_path)
+                    continue
+                if not isinstance(raw, dict) or "genre" not in raw or "world" not in raw:
+                    continue
+                results.append({
+                    "name": stem,
+                    "genre": raw["genre"],
+                    "world": raw["world"],
+                    "description": raw.get("description"),
+                })
+
+        _hub.publish_event(
+            "scene_harness.list",
+            {"fixture_count": len(results), "fixtures_dir": str(fixtures_dir)},
+            component="scene_harness",
+        )
+        return results
 
     return router
 

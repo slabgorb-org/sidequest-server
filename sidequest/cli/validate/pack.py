@@ -194,26 +194,23 @@ def _validate_world(
     """
     label = f"world '{world_dir.name}'"
 
-    # Check draft status
+    # Load world.yaml for draft status and extensions
     world_yaml_path = world_dir / "world.yaml"
-    is_draft = False
+    world_data: dict[str, Any] = {}
     if world_yaml_path.is_file():
         try:
-            raw = yaml.safe_load(world_yaml_path.read_text(encoding="utf-8")) or {}
-            is_draft = bool(raw.get("draft", False))
+            world_data = yaml.safe_load(world_yaml_path.read_text(encoding="utf-8")) or {}
         except (yaml.YAMLError, UnicodeDecodeError):
-            pass  # Treat unreadable world.yaml as non-draft; missing file handled below
+            pass
+    is_draft = bool(world_data.get("draft", False))
 
     world_required_files: list[str] = world_schema.get("required_files", [])
     world_required_dirs: list[str] = world_schema.get("required_dirs", [])
     world_extensions_schema: dict[str, Any] = world_schema.get("extensions", {})
+    world_extensions_declared: list[str] = world_data.get("extensions", [])
 
-    # World doesn't have its own extensions declared in world.yaml (no schema field
-    # for that today), so we only check the world's required files/dirs.
-    # If a world needs extension files, they're checked via the genre pack's
-    # extensions_declared list against world_extensions_schema.
     world_ext_files, world_ext_dirs = _resolve_extension_paths(
-        genre_extensions_declared, world_extensions_schema
+        world_extensions_declared, world_extensions_schema
     )
 
     structural_errors: list[str] = []
@@ -225,9 +222,17 @@ def _validate_world(
     )
     structural_errors.extend(
         _check_extensions(
-            world_dir, genre_extensions_declared, world_extensions_schema, label
+            world_dir, world_extensions_declared, world_extensions_schema, label
         )
     )
+
+    # Genre-level files are valid overrides at world level — not orphans
+    genre_required = genre_schema.get("required_files", [])
+    genre_ext_all_files: set[str] = set()
+    for ext_name in genre_extensions_declared:
+        ext_spec = genre_schema.get("extensions", {}).get(ext_name, {})
+        for f in ext_spec.get("files", []):
+            genre_ext_all_files.add(f)
 
     orphan_warnings = _check_orphans(
         directory=world_dir,
@@ -235,8 +240,8 @@ def _validate_world(
         required_dirs=world_required_dirs,
         extension_files=world_ext_files,
         extension_dirs=world_ext_dirs,
-        genre_required_files=[],
-        genre_extension_files=set(),
+        genre_required_files=genre_required,
+        genre_extension_files=genre_ext_all_files,
         label=label,
     )
 

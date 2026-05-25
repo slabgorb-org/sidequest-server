@@ -9,6 +9,7 @@ from sidequest.genre.loader import (
     _validate_authored_npc_uniqueness,
     _validate_crew_npc_references,
     _validate_opening_bank_coverage,
+    _validate_opening_region_bindings,
     _validate_opening_setting_references,
     _validate_present_npcs_resolve,
 )
@@ -22,6 +23,7 @@ from sidequest.genre.models.rigs_world import (
     ChassisInstanceConfig,
     OceanScores,
 )
+from sidequest.genre.models.world import CartographyConfig, Region
 
 
 def _make_chassis(crew_npcs: list[str] | None = None) -> ChassisInstanceConfig:
@@ -218,4 +220,54 @@ def test_fallback_opening_covers_all() -> None:
         [solo_fallback, mp],
         chargen_backgrounds=["Far Landing Raised Me", "Wirework Made Me"],
         world_slug="testworld",
+    )
+
+
+# ---- opening setting.region_id binds to a cartography node ------------
+#
+# Playtest 2026-05-25 [BUG] flickering_reach: current_region is a load-bearing
+# cartography node id, but openings declared only free-text location_labels and
+# the world's starting_region matched none of them, so the party spawned
+# pointing at a region the opening never visited. Openings now declare an
+# explicit setting.region_id; this validator enforces at load time that every
+# declared region_id resolves to a real cartography node (no fuzzy matching).
+
+
+def _cartography(region_ids: list[str]) -> CartographyConfig:
+    return CartographyConfig(
+        starting_region=region_ids[0] if region_ids else "",
+        regions={
+            rid: Region(name=rid, summary="s", description="d") for rid in region_ids
+        },
+    )
+
+
+def test_opening_region_id_resolves_to_node() -> None:
+    """region_id naming a declared cartography region passes."""
+    op = _make_opening(
+        OpeningSetting(location_label="the western wall at dusk", region_id="blind_reach")
+    )
+    _validate_opening_region_bindings(
+        [op], _cartography(["toods_dome", "blind_reach"]), world_slug="testworld"
+    )
+
+
+def test_opening_region_id_dangling_fails() -> None:
+    """region_id that is not a cartography node fails the world load loudly —
+    no silent fallback, no fuzzy free-text match."""
+    op = _make_opening(
+        OpeningSetting(location_label="somewhere", region_id="not_a_region")
+    )
+    with pytest.raises(GenreLoadError, match="not a declared cartography region"):
+        _validate_opening_region_bindings(
+            [op], _cartography(["toods_dome", "blind_reach"]), world_slug="testworld"
+        )
+
+
+def test_opening_without_region_id_is_skipped() -> None:
+    """An opening that declares no region_id is unconstrained by this validator
+    (region binding is opt-in for openings that anchor away from spawn)."""
+    op = _make_opening(OpeningSetting(location_label="the Promenade"))
+    _validate_opening_region_bindings(
+        [op], _cartography(["toods_dome", "blind_reach"]), world_slug="testworld"
     )

@@ -227,6 +227,30 @@ def edge_pool_from_config(edge_config: object, class_name: str, *, con_score: in
     )
 
 
+class HpConfigMissingClassError(KeyError):
+    """Genre pack declared an HP config but omitted a base_max entry for the
+    character's class. Fail loud at the boundary (SOUL.md: no silent fallbacks)."""
+
+    def __init__(self, class_name: str) -> None:
+        self.class_name = class_name
+        super().__init__(f"hp base_max_by_class missing entry for class '{class_name}'")
+
+
+def hp_pool_from_config(hp_config: object, class_name: str, *, con_score: int) -> HpPool:
+    """Build a genre-authored HpPool from class base + CON modifier (ADR-114 §1,
+    re-pointing ADR-078's 2026-05-10 CON-mod seed from Edge to HP).
+
+    base_max = max(1, base_max_by_class[class_name] + floor((con_score - 10) / 2)).
+    `hp_config` is typed `object` to avoid a circular import with the genre layer;
+    duck-type `base_max_by_class`."""
+    base_max_by_class = getattr(hp_config, "base_max_by_class", {})
+    if class_name not in base_max_by_class:
+        raise HpConfigMissingClassError(class_name=class_name)
+    con_modifier = (con_score - 10) // 2
+    base_max = max(1, base_max_by_class[class_name] + con_modifier)
+    return HpPool(current=base_max, max=base_max, base_max=base_max)
+
+
 class Inventory(BaseModel):
     """Character inventory ledger — append-only item history and gold.
 

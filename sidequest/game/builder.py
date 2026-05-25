@@ -17,12 +17,12 @@ from sidequest.game.ability import AbilitySource
 from sidequest.game.character import AbilityDefinition, Character
 from sidequest.game.creature_core import (
     CreatureCore,
+    HpPool,
     Inventory,
-    edge_pool_from_config,
-    placeholder_edge_pool,
+    hp_pool_from_config,
 )
 from sidequest.game.creature_core import (
-    EdgeConfigMissingClassError as _CoreEdgeConfigMissingClassError,
+    HpConfigMissingClassError as _CoreHpConfigMissingClassError,
 )
 from sidequest.genre.models.character import (
     BackstoryTables,
@@ -470,6 +470,17 @@ class EdgeConfigMissingClassError(BuilderError):
         super().__init__(f"edge_config.base_max_by_class missing entry for class '{class_name}'")
 
 
+class HpConfigMissingClassError(BuilderError):
+    """Genre pack declared an HP config but omitted a `base_max_by_class`
+    entry for the character's class. Fails chargen loudly (ADR-114) —
+    silently reverting to a default would hide content bugs.
+    """
+
+    def __init__(self, class_name: str) -> None:
+        self.class_name = class_name
+        super().__init__(f"hp base_max_by_class missing entry for class '{class_name}'")
+
+
 class PoolValueNotPresentError(Exception):
     """assign_stat called with a value not currently in the arrangement pool."""
 
@@ -501,6 +512,7 @@ BuilderError.CannotRevert = CannotRevertError  # type: ignore[attr-defined]
 BuilderError.UnknownStatGeneration = UnknownStatGenerationError  # type: ignore[attr-defined]
 BuilderError.NumericName = NumericNameError  # type: ignore[attr-defined]
 BuilderError.EdgeConfigMissingClass = EdgeConfigMissingClassError  # type: ignore[attr-defined]
+BuilderError.HpConfigMissingClass = HpConfigMissingClassError  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -2163,40 +2175,40 @@ class CharacterBuilder:
         # Stub seam — next story owns Item-source ability population (spec §6.2).
         _seed_item_abilities(abilities, kit_def=getattr(self, "_kit_def", None))
 
-        # EdgePool seeding: edge_config path OR placeholder for legacy
-        # packs (Story 39-3). Missing class → raise the builder's
-        # EdgeConfigMissingClassError, not the core module's error
-        # directly. Story 39-10: feed rolled CON into the seed so every
-        # class gets a CON modifier; the Story 39-4 Fighter +2 stub is
-        # retired here.
+        # HpPool seeding (ADR-114): re-points the ADR-078 edge_config seed
+        # from Edge to ablative HP. The genre-model field is still named
+        # `edge_config`; we read its `base_max_by_class` for the HP pool
+        # (the genre-model field is not renamed in this task). Missing
+        # class → raise the builder's HpConfigMissingClassError, not the
+        # core module's error directly. Rolled CON feeds the seed so every
+        # class gets a CON modifier (class_base + con_mod).
         if self._edge_config is not None:
             con_score = int(stats.get("CON", 10))
             con_modifier = (con_score - 10) // 2
             try:
-                edge = edge_pool_from_config(self._edge_config, class_str, con_score=con_score)
-            except _CoreEdgeConfigMissingClassError as e:
-                raise EdgeConfigMissingClassError(class_name=e.class_name) from None
+                hp = hp_pool_from_config(self._edge_config, class_str, con_score=con_score)
+            except _CoreHpConfigMissingClassError as e:
+                raise HpConfigMissingClassError(class_name=e.class_name) from None
             span.add_event(
-                "chargen.edge_seeded",
+                "chargen.hp_seeded",
                 {
                     "source": "edge_config",
                     "class": class_str,
-                    "base_max": edge.base_max,
+                    "base_max": hp.base_max,
                     "con_score": con_score,
                     "con_modifier": con_modifier,
                     "seed_formula": "class_base+con_mod",
-                    "threshold_count": len(edge.thresholds),
                 },
             )
         else:
-            edge = placeholder_edge_pool()
+            hp = HpPool(current=10, max=10, base_max=10)
             span.add_event(
-                "chargen.edge_seeded",
+                "chargen.hp_seeded",
                 {
-                    "source": "placeholder",
+                    "source": "default",
                     "class": class_str,
-                    "base_max": edge.base_max,
-                    "reason": "genre pack has no edge_config",
+                    "base_max": hp.base_max,
+                    "reason": "genre pack has no hp config",
                     "severity": "warn",
                 },
             )
@@ -2227,7 +2239,7 @@ class CharacterBuilder:
                 xp=0,
                 inventory=Inventory(items=items, gold=0),
                 statuses=[],
-                edge=edge,
+                hp=hp,
                 acquired_advancements=[],
             ),
             backstory=backstory_text,

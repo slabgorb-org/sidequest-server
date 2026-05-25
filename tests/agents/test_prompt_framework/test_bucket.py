@@ -216,9 +216,7 @@ class TestStory6110ByteStaticProsePromotion:
             "narrator_output_style",
         }
         missing = expected - set(STABLE_SECTION_NAMES)
-        assert not missing, (
-            f"STABLE_SECTION_NAMES snapshot is missing sections: {sorted(missing)}"
-        )
+        assert not missing, f"STABLE_SECTION_NAMES snapshot is missing sections: {sorted(missing)}"
 
     def test_narrator_constraints_resolves_to_system(self):
         """Per-section pin — constraints.md (~112 tok)."""

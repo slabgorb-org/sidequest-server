@@ -61,6 +61,7 @@ from sidequest.genre.loader import load_genre_pack
 from sidequest.protocol.dice import RollOutcome
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 from tests._helpers.session_room import room_for
+from tests._helpers.trigger_encounter import trigger_encounter
 
 # Frozen fixture pack — same trick used in test_encounter_apply_narration.py
 # to dodge the session-wide GenreLoader cache.
@@ -191,18 +192,7 @@ def test_handshake_registers_npc_from_registry_when_npcs_present_empty(
     plays out as a one-sided dial advance for 6+ rounds.
     """
     snap, pack = playtest3_snapshot
-    result = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges from the dark.",
-        confrontation="combat",
-        npcs_present=[],  # extraction dropped it; this is the bug shape
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
 
     enc = snap.encounter
     assert enc is not None, "encounter was not instantiated"
@@ -226,18 +216,7 @@ def test_handshake_registers_multiple_npcs_from_registry(playtest3_snapshot):
             last_seen_turn=3,
         )
     )
-    result = NarrationTurnResult(
-        narration="Two creatures circle Orin.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
     enc = snap.encounter
     assert enc is not None
     actor_names = {a.name for a in enc.actors}
@@ -259,18 +238,7 @@ def test_handshake_skips_registry_npcs_at_other_locations(playtest3_snapshot):
             last_seen_turn=2,
         )
     )
-    result = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
     enc = snap.encounter
     assert enc is not None
     actor_names = {a.name for a in enc.actors}
@@ -289,9 +257,8 @@ def test_handshake_prefers_explicit_npcs_present_when_provided(
     explicit list.
     """
     snap, pack = playtest3_snapshot
-    result = NarrationTurnResult(
-        narration="A Goblin appears, not the scavenger.",
-        confrontation="combat",
+    trigger_encounter(
+        snap, pack, "combat", "Orin",
         npcs_present=[
             NpcMention(
                 name="Goblin",
@@ -299,13 +266,6 @@ def test_handshake_prefers_explicit_npcs_present_when_provided(
                 role="hostile",
             ),
         ],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
     )
     enc = snap.encounter
     assert enc is not None
@@ -329,18 +289,7 @@ def test_per_actor_state_isolated_for_player_and_opponent_after_handshake(
     the Crawling Scavenger's damage.
     """
     snap, pack = playtest3_snapshot
-    result = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
     enc = snap.encounter
     assert enc is not None
 
@@ -374,18 +323,7 @@ def test_opponent_beat_advances_opponent_metric_after_handshake(
     snap, pack = playtest3_snapshot
 
     # Step 1: encounter starts with both actors registered.
-    start = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        start,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
     assert snap.encounter is not None
 
     # Step 2: an opponent-side beat (Crawling Scavenger attacks). Pre-fix
@@ -429,18 +367,7 @@ def test_per_side_metrics_track_player_and_opponent_independently(
     snap, pack = playtest3_snapshot
 
     # Start the encounter.
-    start = NarrationTurnResult(
-        narration="Combat begins.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        start,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
     assert snap.encounter is not None
 
     # Player attacks (explicit-action path so the SOUL gate doesn't drop it).
@@ -520,18 +447,7 @@ def test_encounter_init_span_carries_actor_count_and_combatant_names(
     the actors array got populated or not.
     """
     snap, pack = playtest3_snapshot
-    result = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
 
     spans_by_name = {s.name: s for s in otel_capture.get_finished_spans()}
     init_span = spans_by_name.get("encounter.confrontation_initiated")
@@ -572,18 +488,7 @@ def test_six_round_combat_keeps_named_npc_in_actors(playtest3_snapshot):
     snap, pack = playtest3_snapshot
 
     # Round 0: encounter starts.
-    start = NarrationTurnResult(
-        narration="The Crawling Scavenger emerges.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        start,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
     assert snap.encounter is not None
     enc = snap.encounter
 

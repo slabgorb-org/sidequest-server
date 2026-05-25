@@ -105,6 +105,36 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_LETHALITY_ARBITRATE] = SpanRoute(
 )
 
 
+SPAN_INTENT_ROUTER_CONFRONTATION_VOCABULARY = "intent_router.confrontation_vocabulary"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_CONFRONTATION_VOCABULARY] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.confrontation_vocabulary",
+        "type_count": (span.attributes or {}).get("type_count", 0),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_confrontation_vocabulary_span(
+    *,
+    type_count: int,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires when confrontation type vocabulary is injected into the router's
+    state summary."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_CONFRONTATION_VOCABULARY,
+        {"type_count": type_count, "genre_slug": genre_slug, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 @contextmanager
 def intent_router_decompose_span(
     *,

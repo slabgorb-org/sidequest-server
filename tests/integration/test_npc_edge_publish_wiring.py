@@ -42,7 +42,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-from sidequest.agents.orchestrator import NarrationTurnResult
 from sidequest.game.creature_core import (
     CreatureCore,
     Inventory,
@@ -52,11 +51,11 @@ from sidequest.game.migrations import migrate_legacy_snapshot
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
-from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 from sidequest.server.watcher import WatcherSpanProcessor
 from sidequest.telemetry import spans as spans_module
 from sidequest.telemetry.watcher_hub import watcher_hub
 from tests._helpers.session_room import room_for
+from tests._helpers.trigger_encounter import trigger_encounter
 
 _FIXTURE_PACK = Path(__file__).resolve().parents[1] / "fixtures" / "packs" / "test_genre"
 
@@ -149,18 +148,7 @@ async def test_npc_edge_published_reaches_hub_via_span_route(
     snap.character_locations["Orin"] = "Mawdeep Caverns"
     snap.npcs.append(_make_npc("Crawling Scavenger", location="Mawdeep Caverns", turn=3))
 
-    result = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
     await asyncio.sleep(0.05)
 
     edge_events = [

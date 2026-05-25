@@ -39,7 +39,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from sidequest.agents.orchestrator import (
-    NarrationTurnResult,
     NpcMention,
 )
 from sidequest.game.creature_core import (
@@ -50,8 +49,8 @@ from sidequest.game.creature_core import (
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
-from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 from tests._helpers.session_room import room_for
+from tests._helpers.trigger_encounter import trigger_encounter
 
 _FIXTURE_PACK = Path(__file__).resolve().parents[1] / "fixtures" / "packs" / "test_genre"
 
@@ -157,18 +156,7 @@ def test_combat_handshake_publishes_edge_onto_opponent_npc(combat_snapshot):
     npc = snap.npcs[0]
     placeholder_max = npc.core.edge.max
 
-    result = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges from the dark.",
-        confrontation="combat",
-        npcs_present=[],  # Playtest 3 shape — extraction dropped the adversary
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
 
     # The combat dial in test_genre has threshold=10. After publish, the
     # edge pool should be sized to the dial threshold (not the placeholder).
@@ -202,19 +190,11 @@ def test_combat_handshake_publishes_edge_for_explicit_npcs_present(combat_snapsh
             last_seen_turn=3,
         )
     )
-    result = NarrationTurnResult(
-        narration="A goblin lunges.",
-        confrontation="combat",
+    trigger_encounter(
+        snap, pack, "combat", "Orin",
         npcs_present=[
             NpcMention(name="Goblin", side="opponent", role="hostile"),
         ],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
     )
     goblin = next(n for n in snap.npcs if n.core.name == "Goblin")
     assert goblin.core.edge.current > 0
@@ -244,18 +224,7 @@ def test_non_combat_handshake_leaves_edge_at_placeholder(combat_snapshot):
     placeholder_max = halrik.core.edge.max
     placeholder_current = halrik.core.edge.current
 
-    result = NarrationTurnResult(
-        narration="Brother Halrik raises an eyebrow.",
-        confrontation="negotiation",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "negotiation", "Orin", npcs_present=[])
     assert halrik.core.edge.max == placeholder_max, (
         "non-combat encounter must NOT publish combat edge"
     )
@@ -274,18 +243,7 @@ def test_otel_span_emitted_on_npc_edge_publish(combat_snapshot, otel_capture):
     actually engaged or Claude is just improvising.
     """
     snap, pack = combat_snapshot
-    result = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
 
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "npc.edge_published"]
     assert spans, (
@@ -318,18 +276,7 @@ def test_handshake_still_registers_actors_after_edge_publish(combat_snapshot):
     Story 45-18 actor-registration handshake.
     """
     snap, pack = combat_snapshot
-    result = NarrationTurnResult(
-        narration="The Crawling Scavenger lunges.",
-        confrontation="combat",
-        npcs_present=[],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name="Orin",
-        pack=pack,
-        room=room_for(snap),
-    )
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
     enc = snap.encounter
     assert enc is not None
     actor_names = {a.name for a in enc.actors}

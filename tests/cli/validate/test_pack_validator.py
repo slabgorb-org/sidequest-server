@@ -13,10 +13,8 @@ All content fixtures are synthesised in ``tmp_path`` per test.
 
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
 
-import pytest
 import yaml
 
 from sidequest.cli.validate.pack import load_pack_schema, validate_pack_structure

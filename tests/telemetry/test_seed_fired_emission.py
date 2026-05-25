@@ -30,7 +30,6 @@ from sidequest.game.session import SeedGhost, SeedState
 from sidequest.genre.models.tropes import SeedTrope
 from sidequest.telemetry import init_tracer
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

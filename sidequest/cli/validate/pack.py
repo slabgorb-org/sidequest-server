@@ -27,7 +27,6 @@ from typing import Any
 import click
 import yaml
 
-
 # ---------------------------------------------------------------------------
 # Schema loading
 # ---------------------------------------------------------------------------
@@ -159,9 +158,6 @@ def _check_orphans(
     for d in required_dirs + list(extension_dirs):
         top = Path(d).parts[0]
         known_top_dirs.add(top)
-    for d in genre_required_files:  # not dirs but keep shape consistent
-        pass
-    # worlds is always known at genre level (it's in required_dirs but let's be explicit)
     known_top_dirs.add("worlds")
 
     warnings: list[str] = []
@@ -169,12 +165,10 @@ def _check_orphans(
         name = item.name
         if name.startswith("."):
             continue
-        if item.is_file():
-            if name not in known_files:
-                warnings.append(f"{label}: orphan file '{name}' (not in schema)")
-        elif item.is_dir():
-            if name not in known_top_dirs:
-                warnings.append(f"{label}: orphan directory '{name}' (not in schema)")
+        if item.is_file() and name not in known_files:
+            warnings.append(f"{label}: orphan file '{name}' (not in schema)")
+        elif item.is_dir() and name not in known_top_dirs:
+            warnings.append(f"{label}: orphan directory '{name}' (not in schema)")
     return warnings
 
 

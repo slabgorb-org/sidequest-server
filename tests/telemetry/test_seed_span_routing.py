@@ -21,7 +21,6 @@ covered by ``test_seed_fired_emission.py`` and the existing
 
 from __future__ import annotations
 
-
 # ---------------------------------------------------------------------------
 # AC1 — New span constants exist and are importable
 # ---------------------------------------------------------------------------

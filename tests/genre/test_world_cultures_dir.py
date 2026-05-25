@@ -1,6 +1,7 @@
 """Verify cultures and legends can be loaded from directories."""
 
 from pathlib import Path
+
 import yaml
 
 from sidequest.genre.models.culture import Culture

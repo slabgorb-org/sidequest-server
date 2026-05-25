@@ -397,8 +397,8 @@ def _apply_phase_c_projections(
 
 
 if TYPE_CHECKING:
-    from sidequest.server.session_handler import _SessionData
     from sidequest.server.session_room import SessionRoom
+    from sidequest.server.session_state import _SessionData
 
 logger = logging.getLogger(__name__)
 
@@ -1323,12 +1323,14 @@ def _build_cartography_map_message(
 
     routes_list: list[dict] = []
     for route in getattr(cart, "routes", []):
-        routes_list.append({
-            "name": route.name,
-            "description": getattr(route, "description", None),
-            "from_id": getattr(route, "from_id", None),
-            "to_id": getattr(route, "to_id", None),
-        })
+        routes_list.append(
+            {
+                "name": route.name,
+                "description": getattr(route, "description", None),
+                "from_id": getattr(route, "from_id", None),
+                "to_id": getattr(route, "to_id", None),
+            }
+        )
 
     return CartographyMapMessage(
         payload=CartographyMapPayload(

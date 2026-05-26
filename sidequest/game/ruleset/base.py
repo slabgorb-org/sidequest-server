@@ -53,7 +53,7 @@ class RulesetModule(ABC):
         attacker_stats: dict[str, int],
         attacker_core: object | None,
         target_core: object | None,
-    ) -> "AttackRollParams":
+    ) -> AttackRollParams:
         """Modifier + target number for one attack. native: stat mod vs beat DC.
         SWN: attack_bonus + skill + attr-mod vs target AC."""
 

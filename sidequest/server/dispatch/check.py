@@ -11,15 +11,14 @@ overlay, narrator) ignore these fields when the roll was server-side.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from sidequest.game.dice import resolve_dice_with_faces
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.protocol.dice import (
     DiceRequestPayload,
     DiceResultPayload,
-    DieGroupResult,
     DieSides,
     DieSpec,
     RollOutcome,

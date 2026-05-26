@@ -694,7 +694,7 @@ class RulesConfig(BaseModel):
     swn: SwnConfig | None = None
 
     @model_validator(mode="after")
-    def _populate_swn_defaults(self) -> "RulesConfig":
+    def _populate_swn_defaults(self) -> RulesConfig:
         """Auto-populate swn block with SRD defaults when ruleset == "swn"."""
         if self.ruleset == "swn" and self.swn is None:
             object.__setattr__(self, "swn", SwnConfig())

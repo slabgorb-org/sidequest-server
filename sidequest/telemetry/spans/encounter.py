@@ -56,6 +56,37 @@ SPAN_ROUTES[SPAN_ENCOUNTER_CONFRONTATION_INITIATED] = SpanRoute(
         "genre_slug": (span.attributes or {}).get("genre_slug", ""),
     },
 )
+# ADR-116 ("A Confrontation Requires an Other"): confrontation participant
+# membership is observable. ``participant.joined`` fires when the engine seats
+# an actor (esp. an opponent sourced from the location roster for a chase);
+# ``participant.left`` fires when an opponent withdraws and the encounter
+# resolves because no Other remains. ``source`` distinguishes router-named
+# from location-fallback seating so the GM panel can answer "why is this
+# pursuer here?".
+SPAN_PARTICIPANT_JOINED = "participant.joined"
+SPAN_ROUTES[SPAN_PARTICIPANT_JOINED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "participant.joined",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "name": (span.attributes or {}).get("name", ""),
+        "side": (span.attributes or {}).get("side", ""),
+        "source": (span.attributes or {}).get("source", ""),
+    },
+)
+SPAN_PARTICIPANT_LEFT = "participant.left"
+SPAN_ROUTES[SPAN_PARTICIPANT_LEFT] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "participant.left",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "name": (span.attributes or {}).get("name", ""),
+        "side": (span.attributes or {}).get("side", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+    },
+)
 SPAN_ENCOUNTER_EMPTY_ACTOR_LIST = "encounter.empty_actor_list"
 SPAN_ROUTES[SPAN_ENCOUNTER_EMPTY_ACTOR_LIST] = SpanRoute(
     event_type="state_transition",
@@ -317,6 +348,60 @@ def encounter_confrontation_initiated_span(
     with Span.open(
         SPAN_ENCOUNTER_CONFRONTATION_INITIATED,
         {"encounter_type": encounter_type, "genre_slug": genre_slug, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def participant_joined_span(
+    *,
+    encounter_type: str,
+    name: str,
+    side: str,
+    source: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """ADR-116: an actor was seated into a confrontation. ``source`` is
+    ``router_named`` or ``location_fallback`` so the GM panel can audit
+    where a (esp. opponent-side) participant came from."""
+    with Span.open(
+        SPAN_PARTICIPANT_JOINED,
+        {
+            "encounter_type": encounter_type,
+            "name": name,
+            "side": side,
+            "source": source,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def participant_left_span(
+    *,
+    encounter_type: str,
+    name: str,
+    side: str,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """ADR-116: an opponent withdrew. Emitted alongside end-on-no-Other
+    resolution so the GM panel sees the confrontation ended because the
+    Other left, not because a dial hit threshold."""
+    with Span.open(
+        SPAN_PARTICIPANT_LEFT,
+        {
+            "encounter_type": encounter_type,
+            "name": name,
+            "side": side,
+            "reason": reason,
+            **attrs,
+        },
         tracer_override=_tracer,
     ) as span:
         yield span

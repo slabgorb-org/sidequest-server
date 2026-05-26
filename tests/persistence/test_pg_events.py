@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
 from sidequest.game import db_pool
 from sidequest.game.pg import sessions
-from sidequest.game.pg.events import PgEventStore
+from sidequest.game.pg._conn import session_tx
+from sidequest.game.pg.events import PgEventStore, PgSaveTransaction
 from sidequest.game.projection_filter import FilterDecision
 
 
@@ -53,3 +55,54 @@ def test_projection_upsert_then_read(store) -> None:
     )
     rows = store.read_projection_since(player_id="p1", since_seq=0)
     assert len(rows) == 1 and rows[0].include is False
+
+
+def test_write_telemetry_in_frame_and_out_of_frame(store) -> None:
+    """write_telemetry rides the turn's locked transaction (census primitive).
+
+    In-frame: event_seq is the real seq from append_event in the same tx.
+    Out-of-frame: event_seq/round are NULL — guards the nullable columns.
+    """
+    pool = store._pool
+    sid = store._sid
+
+    # IN-FRAME: append + telemetry in the same locked transaction.
+    with session_tx(pool, sid) as conn:
+        tx = PgSaveTransaction(conn, sid)
+        ev = tx.append_event(kind="NARRATION", payload_json="{}")
+        tx.write_telemetry(
+            event_seq=ev.seq,
+            round=1,
+            ts=datetime.now(tz=UTC).isoformat(),
+            component="mechanical",
+            event_type="x",
+            payload_json="{}",
+        )
+        in_frame_seq = ev.seq
+
+    # Fresh connection after the tx committed — the row is durable.
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT event_seq, round FROM turn_telemetry WHERE session_id = %s AND event_seq = %s",
+            (sid, in_frame_seq),
+        ).fetchone()
+    assert row is not None and row[0] == in_frame_seq and row[1] == 1
+
+    # OUT-OF-FRAME: NULL event_seq + NULL round must not raise.
+    with session_tx(pool, sid) as conn:
+        tx = PgSaveTransaction(conn, sid)
+        tx.write_telemetry(
+            event_seq=None,
+            round=None,
+            ts=datetime.now(tz=UTC).isoformat(),
+            component="c",
+            event_type="y",
+            payload_json="{}",
+        )
+
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT event_seq, round FROM turn_telemetry WHERE session_id = %s AND event_type = %s",
+            (sid, "y"),
+        ).fetchone()
+    assert row is not None and row[0] is None and row[1] is None

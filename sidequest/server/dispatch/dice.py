@@ -28,12 +28,12 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from sidequest.game.beat_kinds import apply_beat
 from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
 from sidequest.game.encounter import EncounterPhase, StructuredEncounter
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
-from sidequest.genre.models.rules import BeatDef, ConfrontationDef, ResolutionMode
+from sidequest.genre.models.rules import ConfrontationDef, ResolutionMode
 from sidequest.protocol.dice import (
     DiceRequestPayload,
     DiceResultPayload,
@@ -53,14 +53,10 @@ from sidequest.protocol.messages import (
 from sidequest.protocol.types import Stat
 from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
-    find_confrontation_def,
 )
 from sidequest.server.dispatch.damage_roll import _DAMAGE_THROW_PARAMS, damage_request_from_spec
 from sidequest.server.dispatch.damage_roll import (
     generate_server_faces as _generate_server_faces,
-)
-from sidequest.server.dispatch.damage_roll import (
-    resolve_damage_spec_from_beat_and_actor as _resolve_damage_spec_from_beat_and_actor,
 )
 from sidequest.telemetry.spans import (
     combat_tick_span,
@@ -122,35 +118,6 @@ class DiceThrowOutcome:
     opposed_pending: bool = False
     opposed_player_d20: int | None = None
     opposed_player_beat_id: str | None = None
-
-
-def _stat_modifier(stats: dict[str, int], stat_check: str) -> int:
-    """D&D-style modifier: ``floor((score - 10) / 2)``.
-
-    Matches Rust ``(stat_val - 10) / 2`` with integer truncation. Missing
-    stats default to 0 (stat score 10) — same as Rust's ``unwrap_or(0)``.
-    """
-    score = stats.get(stat_check)
-    if score is None:
-        # Try case-insensitive fallback since the character's stats dict
-        # may be UPPERCASE or TitleCase depending on the genre pack.
-        for k, v in stats.items():
-            if k.upper() == stat_check.upper():
-                score = v
-                break
-    if score is None:
-        return 0
-    return (score - 10) // 2
-
-
-def _compute_dc(beat: BeatDef) -> int:
-    """Derive DC from beat ``base`` magnitude, clamped 10..=30.
-
-    Port of Rust ``(10u32 + beat_metric_delta.unsigned_abs() * 2).clamp(10, 30)``.
-    Big metric swings need bigger checks — the clamp keeps any degenerate
-    pack data from producing an unreachable or trivial DC.
-    """
-    return max(10, min(30, 10 + abs(beat.base) * 2))
 
 
 def _build_request_payload(
@@ -287,8 +254,10 @@ def dispatch_dice_throw(
     if encounter is None or encounter.resolved:
         raise DiceDispatchError("DICE_THROW with beat_id requires an active encounter")
 
-    cdef: ConfrontationDef | None = find_confrontation_def(
-        pack.rules.confrontations if pack.rules else [],
+    ruleset = get_ruleset_module(pack.rules.ruleset)
+
+    cdef: ConfrontationDef | None = ruleset.find_confrontation(
+        pack.rules.confrontations,
         encounter.encounter_type,
     )
     if cdef is None:
@@ -315,8 +284,8 @@ def dispatch_dice_throw(
             f"invalid stat_check {beat.stat_check!r} on beat {payload.beat_id!r}: {exc}"
         ) from exc
 
-    modifier = _stat_modifier(character_stats, beat.stat_check)
-    difficulty = _compute_dc(beat)
+    modifier = ruleset.stat_modifier(character_stats, beat.stat_check)
+    difficulty = ruleset.compute_dc(beat)
 
     request = _build_request_payload(
         request_id=payload.request_id,
@@ -426,7 +395,7 @@ def dispatch_dice_throw(
             RollOutcome.CritFail,
         ):
             actor_core = snapshot.find_creature_core(character_name)
-            damage_spec = _resolve_damage_spec_from_beat_and_actor(
+            damage_spec = ruleset.resolve_damage(
                 beat=beat,
                 actor_core=actor_core,
                 pack=pack,
@@ -499,11 +468,11 @@ def dispatch_dice_throw(
                 )
                 damage_resolver_fn = lambda: dmg_total  # noqa: E731
 
-        apply_result = apply_beat(
-            encounter,
-            actor,
-            beat,
-            resolved.outcome,
+        apply_result = ruleset.apply_beat(
+            encounter=encounter,
+            actor=actor,
+            beat=beat,
+            outcome=resolved.outcome,
             turn=round_number,
             edge_resolver=snapshot.find_creature_core,
             damage_resolver=damage_resolver_fn,
@@ -626,7 +595,11 @@ def dispatch_dice_throw(
         # set when the beat has damage_channel=strike AND a DamageSpec was
         # found). Skipped on the opposed-pending branch — damage is deferred
         # alongside beat application on that path.
-        if not opposed_pending and damage_result_payload is not None and damage_request_payload is not None:
+        if (
+            not opposed_pending
+            and damage_result_payload is not None
+            and damage_request_payload is not None
+        ):
             room_broadcast(DiceRequestMessage(payload=damage_request_payload, player_id="server"))
             room_broadcast(DiceResultMessage(payload=damage_result_payload, player_id="server"))
 
@@ -771,12 +744,15 @@ def new_request_id() -> str:
 # ---------------------------------------------------------------------------
 # The three helpers were extracted to ``sidequest.server.dispatch.damage_roll``
 # (Task 11) so that ``narration_apply._resolve_opposed_check_branch`` can also
-# use them without copy-paste. They are re-imported at module top and aliased
-# below for back-compat with any direct callers that reference the private names.
+# use them without copy-paste. They are re-imported at module top for use here.
 #
 # ``damage_request_from_spec`` (public) is re-exported from the import block.
-# ``_generate_server_faces`` and ``_resolve_damage_spec_from_beat_and_actor``
-# are re-aliased here as private names (the import block already does this).
+# ``_generate_server_faces`` is re-aliased as a private name (the import block
+# already does this) and used in the strike-damage branch above.
+#
+# Damage resolution itself now routes through ``ruleset.resolve_damage()`` (the
+# bound RulesetModule), so ``resolve_damage_spec_from_beat_and_actor`` is no
+# longer imported here directly.
 #
 # ``_DAMAGE_THROW_PARAMS`` is also imported from ``damage_roll`` and used in
 # the broadcast composition below.

@@ -3528,9 +3528,9 @@ def _roll_d20_server_side() -> int:
 def _opposed_dc(beat: Any) -> int:
     """Per-side DC derived from beat ``base`` magnitude, clamped 10..=30.
 
-    Mirrors ``sidequest.server.dispatch.dice._compute_dc`` so a player
-    using the dispatch path and an opponent using this resolver land on
-    the same DC for the same beat.
+    Mirrors ``sidequest.game.ruleset.native.NativeRulesetModule.compute_dc``
+    so a player using the dispatch path and an opponent using this resolver
+    land on the same DC for the same beat.
     """
     return max(10, min(30, 10 + abs(getattr(beat, "base", 1)) * 2))
 

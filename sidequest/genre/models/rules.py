@@ -159,8 +159,8 @@ class BeatDef(BaseModel):
     # hit) — the separation is intentional so social/push beats never
     # accidentally acquire an HP channel.
     damage_channel: DamageChannel = DamageChannel.none
-    damage_override: DamageSpec | None = None    # creature natural attack (no catalog weapon)
-    mitigation_override: int | None = None       # brace beat with no armor item
+    damage_override: DamageSpec | None = None  # creature natural attack (no catalog weapon)
+    mitigation_override: int | None = None  # brace beat with no armor item
 
     @model_validator(mode="after")
     def _validate(self) -> BeatDef:
@@ -598,6 +598,9 @@ class RulesConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    ruleset: str = (
+        "native"  # bound RulesetModule slug (pluggable-SRD Spec 0). Default = current dial engine.
+    )
     tone: str = ""
     lethality: str = ""
     magic_level: str = ""

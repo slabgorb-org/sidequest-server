@@ -14,9 +14,10 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from sidequest.game.event_log import EventRow
-from sidequest.game.persistence import SAVE_WRITE_LOCK, SqliteStore
+from sidequest.game.persistence import SAVE_WRITE_LOCK, SavedSession, SqliteStore
 from sidequest.game.projection.cache import CachedDecision
 from sidequest.game.projection_filter import FilterDecision
+from sidequest.game.session import GameSnapshot, NarrativeEntry
 from sidequest.telemetry.spans import projection_cache_fill_span
 
 
@@ -106,3 +107,23 @@ class SqliteSaveRepository:
                 (player_id, since_seq),
             ).fetchall()
         return [CachedDecision(event_seq=r[0], include=bool(r[1]), payload_json=r[2]) for r in rows]
+
+    # Snapshot + narrative surface (ADR-115 D8). Production paths reach the
+    # bound SaveRepository for these (session_helpers builds
+    # TurnContext.recent_narrative_log via recent_narrative; turn_manager's
+    # round_invariant reads max_narrative_round; the apply pipeline calls save).
+    # The shim delegates to its backing SqliteStore until F1 deletes it.
+    def save(self, snapshot: GameSnapshot) -> None:
+        self._store.save(snapshot)
+
+    def load(self) -> SavedSession | None:
+        return self._store.load()
+
+    def append_narrative(self, entry: NarrativeEntry) -> None:
+        self._store.append_narrative(entry)
+
+    def max_narrative_round(self) -> int:
+        return self._store.max_narrative_round()
+
+    def recent_narrative(self, limit: int) -> list[NarrativeEntry]:
+        return self._store.recent_narrative(limit)

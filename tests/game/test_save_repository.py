@@ -1,17 +1,20 @@
 """SaveRepository interface + SqliteSaveRepository adapter tests.
 
-Protocol growth note (ADR-115 A7)
-----------------------------------
+Protocol growth note (ADR-115 A7 / D8)
+---------------------------------------
 The ``SaveRepository`` Protocol was grown in A7 to the full typed surface
 (snapshots, narrative, scrapbook, promotions, session lifecycle).
-``SqliteSaveRepository`` implements only the original Slice-1a surface
-(events + projection_cache) and is deleted in F1.  It therefore no longer
-satisfies ``isinstance(x, SaveRepository)`` for the grown Protocol — that
-isinstance check now lives in ``tests/persistence/test_pg_save_repository.py``
-over ``PgSaveRepository``, which implements the full surface.
+``SqliteSaveRepository`` implements the events + projection_cache surface plus
+(D8) snapshot save/load and narrative read/write — the methods production
+paths reach through the bound repository when the in-memory shim is the test
+double. It still does not implement the full Protocol (scrapbook, promotions,
+session lifecycle) and is deleted in F1, so it does not satisfy
+``isinstance(x, SaveRepository)`` for the grown Protocol — that isinstance
+check lives in ``tests/persistence/test_pg_save_repository.py`` over
+``PgSaveRepository``, which implements the full surface.
 
-The Slice-1a *behaviour* tests below remain valid against
-``SqliteSaveRepository`` — they exercise the methods it does implement.
+The *behaviour* tests below remain valid against ``SqliteSaveRepository`` —
+they exercise the methods it does implement.
 """
 
 from __future__ import annotations
@@ -165,3 +168,47 @@ def test_connect_constructs_event_log_over_repository():
         decision=FilterDecision(include=True, payload_json="{}"),
     )
     assert cache.read_since(player_id="p1", since_seq=0)[0].event_seq == row.seq
+
+
+# ---------------------------------------------------------------------------
+# Snapshot + narrative delegation (ADR-115 D8)
+# ---------------------------------------------------------------------------
+# Production code reaches the bound SaveRepository for snapshot save/load and
+# narrative reads/writes (e.g. session_helpers builds TurnContext.recent_
+# narrative_log via repository.recent_narrative; turn_manager.round_invariant
+# reads repository.max_narrative_round). The SqliteSaveRepository test shim
+# wraps a real SqliteStore, so it delegates these to the backing store. Until
+# F1 deletes the shim, these delegations keep the in-memory test double able to
+# back those production paths.
+
+
+def test_adapter_delegates_narrative_to_backing_store():
+    from sidequest.game.session import NarrativeEntry
+
+    repo = _repo()
+    assert repo.max_narrative_round() == 0
+    assert repo.recent_narrative(5) == []
+
+    repo.append_narrative(NarrativeEntry(round=1, author="narrator", content="A"))
+    repo.append_narrative(NarrativeEntry(round=2, author="player", content="B"))
+
+    assert repo.max_narrative_round() == 2
+    assert [e.content for e in repo.recent_narrative(1)] == ["B"]
+    assert [e.content for e in repo.recent_narrative(5)] == ["A", "B"]
+
+
+def test_adapter_delegates_snapshot_save_load_to_backing_store():
+    from sidequest.game.session import GameSnapshot
+
+    store = SqliteStore.open_in_memory()
+    store.init_session("caverns_and_claudes", "iron_mines")
+    repo = SqliteSaveRepository(store)
+
+    assert repo.load() is None  # nothing saved yet
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="iron_mines")
+    repo.save(snap)
+
+    loaded = repo.load()
+    assert loaded is not None
+    assert loaded.snapshot.genre_slug == "caverns_and_claudes"
+    assert loaded.snapshot.world_slug == "iron_mines"

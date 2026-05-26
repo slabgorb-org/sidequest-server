@@ -170,6 +170,11 @@ class PgSnapshotStore:
             ) from exc
 
         # Read session metadata from the sessions table (absorbs session_meta).
+        # NOTE: _load_meta() and _recent_narrative() below each borrow their own
+        # pooled connection, so these reads are NOT in a single MVCC snapshot with
+        # the game_state SELECT above. Under a concurrent save_snapshot the
+        # snapshot body and sessions.last_played could differ by one turn —
+        # accepted as cosmetic on the solo-load / forensic path.
         meta = self._load_meta() or SessionMeta(
             genre_slug=snapshot.genre_slug,
             world_slug=snapshot.world_slug,

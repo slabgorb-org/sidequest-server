@@ -63,6 +63,23 @@ def test_save_load_snapshot_roundtrip(store: PgSnapshotStore) -> None:
     assert loaded.snapshot.world_slug == "test_world"
     assert loaded.snapshot.atmosphere == "dark and stormy"
 
+    # Step-1 spec: the stored snapshot_json text is the faithful serialization
+    # that load_snapshot reads back. Read the raw text directly from game_state
+    # and prove it deserializes to the same stamped snapshot load_snapshot saw.
+    pool = store._pool
+    sid = store._session_id
+    with pool.connection() as conn:
+        raw = conn.execute(
+            "SELECT snapshot_json FROM game_state WHERE session_id = %s",
+            (sid,),
+        ).fetchone()[0]
+    # The raw text is what load_snapshot deserializes — round-trips to the same
+    # stamped form (last_saved_at stamped at save time by save_snapshot).
+    from_raw = GameSnapshot.model_validate(json.loads(raw))
+    assert from_raw == loaded.snapshot
+    # And the raw text is byte-identical to re-serializing that stamped form.
+    assert raw == loaded.snapshot.model_dump_json()
+
 
 def test_save_load_snapshot_meta_fields(store: PgSnapshotStore) -> None:
     """SavedSession.meta fields come from the sessions row."""
@@ -188,6 +205,24 @@ def test_save_world_save_overwrites_previous(store: PgSnapshotStore) -> None:
     assert loaded.delve_count == 7
 
 
+def test_load_world_save_raises_on_invalid_json(store: PgSnapshotStore) -> None:
+    """Corrupt payload_json raises SaveSchemaIncompatibleError — not swallowed.
+
+    Mirrors test_load_snapshot_raises_on_invalid_json, exercising
+    load_world_save's currently-untested except path.
+    """
+    pool = store._pool
+    sid = store._session_id
+    now = datetime.now(tz=UTC).isoformat()
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO world_save (session_id, payload_json, saved_at) VALUES (%s, %s, %s)",
+            (sid, "NOT VALID JSON", now),
+        )
+    with pytest.raises(SaveSchemaIncompatibleError):
+        store.load_world_save()
+
+
 # ---------------------------------------------------------------------------
 # Two independent sessions do not cross-contaminate
 # ---------------------------------------------------------------------------
@@ -198,22 +233,26 @@ def test_two_sessions_are_isolated(monkeypatch, migrated_db: str) -> None:
     monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
     db_pool.close_pool()
     pool = db_pool.get_pool()
+    try:
+        slug_a = _unique_slug()
+        slug_b = _unique_slug()
+        sid_a = sessions.ensure_session(
+            pool, slug=slug_a, mode="solo", genre_slug="g", world_slug="w"
+        )
+        sid_b = sessions.ensure_session(
+            pool, slug=slug_b, mode="solo", genre_slug="g", world_slug="w"
+        )
 
-    slug_a = _unique_slug()
-    slug_b = _unique_slug()
-    sid_a = sessions.ensure_session(pool, slug=slug_a, mode="solo", genre_slug="g", world_slug="w")
-    sid_b = sessions.ensure_session(pool, slug=slug_b, mode="solo", genre_slug="g", world_slug="w")
+        store_a = PgSnapshotStore(pool, session_id=sid_a)
+        store_b = PgSnapshotStore(pool, session_id=sid_b)
 
-    store_a = PgSnapshotStore(pool, session_id=sid_a)
-    store_b = PgSnapshotStore(pool, session_id=sid_b)
+        snap_a = GameSnapshot(genre_slug="g", world_slug="w", atmosphere="session_a")
+        store_a.save_snapshot(snap_a)
 
-    snap_a = GameSnapshot(genre_slug="g", world_slug="w", atmosphere="session_a")
-    store_a.save_snapshot(snap_a)
-
-    # B has no snapshot yet; A's snapshot is invisible to B.
-    assert store_b.load_snapshot() is None
-    loaded_a = store_a.load_snapshot()
-    assert loaded_a is not None
-    assert loaded_a.snapshot.atmosphere == "session_a"
-
-    db_pool.close_pool()
+        # B has no snapshot yet; A's snapshot is invisible to B.
+        assert store_b.load_snapshot() is None
+        loaded_a = store_a.load_snapshot()
+        assert loaded_a is not None
+        assert loaded_a.snapshot.atmosphere == "session_a"
+    finally:
+        db_pool.close_pool()

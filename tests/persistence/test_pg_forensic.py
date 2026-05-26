@@ -16,10 +16,15 @@ producing the same 'YYYY-MM-DDThh:mm:ss.ffffff+00:00' format for every
 column in every table.  Lexical ordering of two identically-formatted
 ISO-8601 strings is always correct (the format sorts as wall-clock time).
 Therefore _NORM_EV_TS is NOT applied in PgForensicReader.
-Evidence: the boundary assertions in test_build_timeline_round_boundaries
-prove that seeded events land in the correct rounds without any
-normalisation — the fixture seeds narrative rows AFTER events and the
-boundary is still computed correctly.
+Evidence: the boundary assertions in test_build_timeline_seq_range /
+test_build_timeline_event_kind_counts prove that seeded events land in the
+correct rounds without any normalisation.  The fixture writes the
+narrative_log row FIRST, then the round's events — matching production order
+(the persistence phase writes narrative_log before the broadcast phase emits
+events; websocket_session_handler.py ~4000 vs ~4265).  So narrative_log holds
+the lowest created_at for its round, and the round's events sort after it but
+before the next round's narrative — exactly the boundary the algorithm relies
+on.
 """
 
 from __future__ import annotations
@@ -62,7 +67,10 @@ def forensic_env(monkeypatch, migrated_db: str):
     Round 1: event seq 1 (NARRATION with footnote), seq 2 (SCRAPBOOK_ENTRY)
     Round 2: event seq 3 (NARRATION), seq 4 (ENCOUNTER_START)
 
-    Narrative entries written AFTER events (mirrors production order).
+    Narrative entries written FIRST (before each round's events), matching
+    production order: the persistence phase writes narrative_log before the
+    broadcast/emit_event phase. narrative_log thus holds the lowest created_at
+    for its round, which is the boundary the timeline algorithm relies on.
     Telemetry rows: one in-frame (seq=1, round=1) + one out-of-frame (seq=None, round=2).
     Scrapbook entry: round=1 (turn_id=1).
     Projection row: event_seq=1, player_id="p1", include=True.
@@ -254,10 +262,14 @@ def test_list_saves_shape_keys(forensic_env) -> None:
         "world",
         "created_at",
         "last_played",
+        "last_activity_ts",
         "telemetry_rows",
         "mechanical_rows",
     }
     assert set(row.keys()) == expected_keys
+    # last_activity_ts is the int-ms equivalent of SQLite's file mtime,
+    # derived from last_played (shape parity with forensic_query.list_saves).
+    assert isinstance(row["last_activity_ts"], int)
 
 
 def test_list_saves_cross_session_isolation(forensic_env) -> None:
@@ -278,6 +290,15 @@ def test_list_saves_cross_session_isolation(forensic_env) -> None:
     row_b = next(s for s in saves if s["slug"] == slug_b)
     assert row_a["genre"] == "caverns"
     assert row_b["genre"] == "neon"
+
+
+def test_list_saves_sorted_by_last_activity_desc(forensic_env) -> None:
+    """list_saves returns rows newest-first by last_activity_ts (matches
+    forensic_query.list_saves' file-mtime DESC sort)."""
+    reader = forensic_env["reader"]
+    saves = reader.list_saves()
+    tss = [s["last_activity_ts"] for s in saves]
+    assert tss == sorted(tss, reverse=True)
 
 
 # ---------------------------------------------------------------------------

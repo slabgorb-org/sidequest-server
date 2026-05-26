@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 
+import psycopg
 from psycopg_pool import ConnectionPool
 
 from sidequest.game.event_log import EventRow
@@ -100,7 +102,7 @@ def _empty_mechanical() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _round_boundaries(conn, session_id: int) -> list[tuple[int, str]]:
+def _round_boundaries(conn: psycopg.Connection, session_id: int) -> list[tuple[int, str]]:
     """Ordered (round_number, min_created_at) per round in narrative_log."""
     rows = conn.execute(
         "SELECT round_number, MIN(created_at) AS first_ts "
@@ -114,7 +116,7 @@ def _round_boundaries(conn, session_id: int) -> list[tuple[int, str]]:
 
 
 def _events_for_round(
-    conn,
+    conn: psycopg.Connection,
     session_id: int,
     lo_ts: str,
     hi_ts: str | None,
@@ -160,7 +162,7 @@ def _events_for_round(
 
 
 def _telemetry_for_round(
-    conn, session_id: int, seq_start: int, seq_end: int, round_number: int
+    conn: psycopg.Connection, session_id: int, seq_start: int, seq_end: int, round_number: int
 ) -> dict:
     """Read this round's turn_telemetry rows and fold them.
 
@@ -212,7 +214,7 @@ def _telemetry_for_round(
 
 
 def _mechanical_for_round(
-    conn, session_id: int, seq_start: int, seq_end: int, round_number: int
+    conn: psycopg.Connection, session_id: int, seq_start: int, seq_end: int, round_number: int
 ) -> dict:
     """Read this round's component='mechanical' rows + the previous census
     round's rows; fold into a per-PC diff.
@@ -319,10 +321,16 @@ class PgForensicReader:
             world         — world_slug
             created_at    — ISO-8601 TEXT
             last_played   — ISO-8601 TEXT
+            last_activity_ts — int ms; derived from last_played
+                               (datetime.fromisoformat(last_played).timestamp()*1000).
+                               A faithful — arguably better — equivalent of SQLite's
+                               save-file mtime: it is the session's true last-activity
+                               instant rather than a filesystem proxy.
             telemetry_rows   — COUNT(*) from turn_telemetry
             mechanical_rows  — COUNT(*) FILTER (WHERE component='mechanical')
 
-        Sorted newest-first by last_played (matches the SQLite sort by mtime).
+        Sorted newest-first by last_activity_ts DESC (matches the SQLite sort
+        by file mtime).
         """
         with self._pool.connection() as conn:
             rows = conn.execute(
@@ -344,18 +352,21 @@ class PgForensicReader:
                 """,
             ).fetchall()
 
-        return [
+        out = [
             {
                 "slug": r[0],
                 "genre": r[1],
                 "world": r[2],
                 "created_at": r[3],
                 "last_played": r[4],
+                "last_activity_ts": int(datetime.fromisoformat(r[4]).timestamp() * 1000),
                 "telemetry_rows": int(r[5]),
                 "mechanical_rows": int(r[6]),
             }
             for r in rows
         ]
+        out.sort(key=lambda row: row["last_activity_ts"], reverse=True)
+        return out
 
     # ------------------------------------------------------------------
     # build_timeline
@@ -459,35 +470,25 @@ class PgForensicReader:
                 for r in narr_rows
             ]
 
-            # -- timeline entry for seq boundaries ------------------------
+            # -- seq boundaries for this round ----------------------------
+            # We only need seq_start/seq_end here, so compute exactly that —
+            # not the full timeline entry (build_timeline owns event_kind_counts
+            # and narrative_authors; computing them here would be a wasted SQL
+            # round-trip per call).
             bounds = _round_boundaries(conn, session_id)
-            entry: dict | None = None
+            seq_start: int | None = None
+            seq_end: int | None = None
             for idx, (rnd, lo_ts) in enumerate(bounds):
                 if rnd == round_number:
                     hi_ts = bounds[idx + 1][1] if idx + 1 < len(bounds) else None
                     evs = _events_for_round(conn, session_id, lo_ts, hi_ts, first_round=(idx == 0))
-                    kind_counts: dict[str, int] = {}
-                    for e in evs:
-                        k = e[1]
-                        kind_counts[k] = kind_counts.get(k, 0) + 1
-                    author_rows = conn.execute(
-                        "SELECT DISTINCT author FROM narrative_log "
-                        "WHERE session_id = %s AND round_number = %s "
-                        "ORDER BY author",
-                        (session_id, round_number),
-                    ).fetchall()
-                    entry = {
-                        "round": rnd,
-                        "seq_start": evs[0][0] if evs else None,
-                        "seq_end": evs[-1][0] if evs else None,
-                        "event_kind_counts": kind_counts,
-                        "narrative_authors": [r[0] for r in author_rows],
-                        "ts": lo_ts,
-                    }
+                    if evs:
+                        seq_start = evs[0][0]
+                        seq_end = evs[-1][0]
                     break
 
             # -- empty bundle when round is unknown or has no events ------
-            if entry is None or entry["seq_start"] is None:
+            if seq_start is None:
                 return {
                     "round": round_number,
                     "narrative": narrative,
@@ -500,8 +501,9 @@ class PgForensicReader:
                     "mechanical": _empty_mechanical(),
                 }
 
-            seq_start: int = entry["seq_start"]
-            seq_end: int = entry["seq_end"]
+            # seq_start/seq_end are set together; the guard above proves both
+            # are non-None here.
+            assert seq_end is not None
 
             # -- telemetry + mechanical fold ------------------------------
             telemetry = _telemetry_for_round(conn, session_id, seq_start, seq_end, round_number)

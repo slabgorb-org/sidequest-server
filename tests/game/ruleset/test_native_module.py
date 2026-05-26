@@ -1,8 +1,10 @@
-"""Characterization tests for the two resolution free-functions in dice.py.
+"""Tests for native dial/confrontation resolution behind the RulesetModule seam.
 
-These tests lock the CURRENT behavior of ``_stat_modifier`` and ``_compute_dc``
-before they are relocated into a NativeRulesetModule.  They must pass against
-the existing code without any production changes.
+This file holds BOTH:
+  * characterization tests that lock the current behavior of the legacy
+    ``_stat_modifier`` and ``_compute_dc`` free-functions in dice.py, and
+  * equivalence tests proving ``NativeRulesetModule`` reproduces those functions
+    exactly (it wraps/delegates rather than relocating them).
 """
 
 import pytest
@@ -46,6 +48,10 @@ def test_stat_modifier_case_insensitive_lookup() -> None:
 from sidequest.game.ruleset.native import NativeRulesetModule  # noqa: E402
 
 _NATIVE = NativeRulesetModule()
+
+
+def test_native_slug_is_native() -> None:
+    assert NativeRulesetModule.slug == "native"
 
 
 @pytest.mark.parametrize("score,expected", [(10, 0), (12, 1), (8, -1), (18, 4), (3, -4), (20, 5)])

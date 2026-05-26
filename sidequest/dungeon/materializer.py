@@ -167,7 +167,7 @@ from sidequest.game.cookbook.assemble import assemble_region
 from sidequest.game.cookbook.loader import CookbookBundle
 from sidequest.game.cookbook.models import GeneratedRoomDescription, RegionContentManifest
 from sidequest.game.creature_core import HpPool, hp_pool_from_hp
-from sidequest.game.repository import DungeonRepository
+from sidequest.game.repository import DungeonRepository, DungeonTransaction
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.spans.dungeon_materialize import (
     dungeon_curate_degraded_span,
@@ -1413,7 +1413,7 @@ def _stage_attach(
     curation: RegionCuration | None,
     snapshot: GameSnapshot | None,
     pack_tropes: Any,
-    dungeon_repository: DungeonRepository | None,
+    tx: DungeonTransaction | None,
     span: _otel_trace.Span,
 ) -> AttachResult:
     """Plan 7 Task 5: attach stage — region-graph attach + depth scoring +
@@ -1498,10 +1498,12 @@ def _stage_attach(
             "pack_tropes=None is not valid (No Silent Fallbacks). "
             "Production sourcing is the Task-7 session-wiring concern."
         )
-    if dungeon_repository is None:
+    if tx is None:
         raise ValueError(
-            "_stage_attach requires a real DungeonRepository — "
-            "dungeon_repository=None is not valid (No Silent Fallbacks)"
+            "_stage_attach requires the open DungeonTransaction — "
+            "tx=None is not valid (No Silent Fallbacks). ADR-115 D6: attach "
+            "threads ride the SAME txn the commit stage commits, so an attach "
+            "thread + a commit_expansion PersistError roll back together."
         )
 
     # Step 1: attach_expansion — mutates + re-verifies the GLOBAL
@@ -1568,7 +1570,7 @@ def _stage_attach(
                     pack_tropes=pack_tropes,
                     snapshot=snapshot,
                     manifest=manifest,
-                    store=dungeon_repository,
+                    store=tx,
                     threads_lit_per_expansion=request.burst_magnitude,
                     threads_already_lit=threads_already_lit,
                     started_at_depth_score=started_at_depth_score,
@@ -1668,16 +1670,24 @@ def _stage_commit(
     expansion: Expansion | None,
     attach_result: AttachResult | None,
     dungeon_repository: DungeonRepository | None,
+    tx: DungeonTransaction | None,
     span: _otel_trace.Span,
     fill_result: Mapping[str, RegionFill] | None = None,
-) -> None:
-    """Plan 7 Task 6: commit stage — one transaction, caller-owned
-    boundary, seed-as-Expansion-0, rollback on PersistError.
+) -> tuple[Path | None, dict[str, GeneratedRoomDescription]]:
+    """Plan 7 Task 6: commit stage — rides the SAME transaction the attach
+    stage wrote its threads into (ADR-115 D6), seed-as-Expansion-0, rollback
+    on PersistError.
 
     The whole materialized expansion **plus its started threads** is
     written to the live save in ONE Plan 5 transaction and is
-    *immediately live* on success (spec §7.5). The caller (this stage)
-    owns the transaction boundary — ``DungeonStore`` never autocommits.
+    *immediately live* on success (spec §7.5). The ``materialize()``
+    coordinator owns the transaction boundary: it opens ONE
+    ``dungeon_repository.transaction()`` spanning ``_stage_attach`` (which
+    opened the complication threads on ``tx``) AND this stage. A
+    ``commit_expansion`` PersistError therefore rolls back the attach-stage
+    threads together with the expansion — NO half-attached expansion / NO
+    orphan ledger (the Plan-5 atomicity contract). ``DungeonStore`` never
+    autocommits.
 
     Sequence (all on ``persistence``'s connection, ONE txn):
 
@@ -1710,20 +1720,20 @@ def _stage_commit(
        — :func:`_new_frontier_edges`, no invented edges) are
        ``put_frontier``'d within the same txn.
     5. The complication-ledger rows are ALREADY in this uncommitted
-       connection: Task 5's ``_stage_attach`` called
-       ``attach_set_piece`` → ``store.open_thread`` on the same
-       connection. Task 6 does NOT re-open threads; the txn it commits
-       already contains them.
+       transaction: ``_stage_attach`` called ``attach_set_piece`` →
+       ``tx.open_thread`` on the SAME ``tx`` connection (ADR-115 D6). Task 6
+       does NOT re-open threads; the txn it commits already contains them.
 
-    On success the connection is committed (``conn.commit()``) → the
-    expansion is immediately live. On ``PersistError`` (``commit_expansion``
-    can write region A before region B's ``IntegrityError``; **SQLite does
-    NOT auto-rollback**) the connection is rolled back
-    (``conn.rollback()``) so NO half-attached expansion / NO orphan ledger
-    rows survive — then the error re-raises loudly (No Silent Fallbacks).
-    Either way a routed marker is set on the commit span (lie-detector
-    visibility — the Task-2 lesson) and ``frontier.expand`` is emitted
-    when the frontier is updated.
+    On clean exit of the coordinator's ``with dungeon_repository.transaction()``
+    the connection is committed → the expansion AND its threads are
+    immediately live. On ``PersistError`` (``commit_expansion`` can write
+    region A before region B's ``IntegrityError``) the outer
+    ``transaction()`` context manager rolls the whole txn back — discarding
+    the expansion rows, frontier edges, mutations AND the attach-stage
+    threads together — so NO half-attached expansion / NO orphan ledger rows
+    survive, then re-raises loudly (No Silent Fallbacks). A routed marker is
+    set on the commit span (lie-detector visibility — the Task-2 lesson) and
+    ``frontier.expand`` is emitted when the frontier is updated.
 
     Invariants (No Silent Fallbacks):
     - ``graph``/``expansion``/``curation``/``attach_result``/``persistence``
@@ -1732,6 +1742,12 @@ def _stage_commit(
     - ``PersistError`` → rollback + routed failure marker + re-raise; a
       partial/half-committed expansion is NEVER shipped.
     - ``AttachReport.rolled`` is persisted-as-is, NEVER recomputed.
+
+    Returns ``(world_dir, composed_by_region)`` — the post-commit room-YAML
+    emit data, computed here (under the txn) but written by the coordinator
+    AFTER the txn commits so a rolled-back expansion deposits no orphan files
+    (Story 55-1 invariant). ``world_dir`` is ``None`` when there is nothing to
+    emit (no composed descriptions, or genre/world slug unset).
     """
     if graph is None:
         raise ValueError(
@@ -1760,15 +1776,29 @@ def _stage_commit(
     if dungeon_repository is None:
         raise ValueError(
             "_stage_commit requires a real DungeonRepository — "
-            "dungeon_repository=None is not valid (No Silent Fallbacks)"
+            "dungeon_repository=None is not valid (No Silent Fallbacks); the "
+            "fresh-save reads (load_map/load_frontier) borrow pooled "
+            "connections off it"
+        )
+    if tx is None:
+        raise ValueError(
+            "_stage_commit requires the open DungeonTransaction — tx=None is "
+            "not valid (No Silent Fallbacks). ADR-115 D6: this stage writes "
+            "into the SAME txn _stage_attach opened its threads on, so the "
+            "expansion + its threads commit (or roll back) atomically."
         )
 
-    # ADR-115 D6: the PgDungeonRepository.transaction() context manager owns
-    # the commit/rollback boundary. All writes inside the ``with`` block are
-    # one atomic Postgres transaction; PersistError propagates out and the
-    # context manager rolls back automatically — no explicit conn.rollback()
-    # needed. Reads before the transaction (load_map, load_frontier) each
-    # borrow a pooled connection.
+    # ADR-115 D6: the ``materialize()`` coordinator owns ONE
+    # ``dungeon_repository.transaction()`` spanning BOTH _stage_attach (which
+    # opened the complication threads on this ``tx``) and this stage. This
+    # stage does NOT open its own transaction — it writes into the passed-in
+    # ``tx`` and the coordinator's ``with`` block commits on clean exit / rolls
+    # back on PersistError. Rolling back therefore discards the attach-stage
+    # threads together with the expansion (Plan-5 atomicity: NO orphan ledger).
+    # The fresh-save reads (load_map, load_frontier) borrow a separate pooled
+    # connection off the repo — they read committed state (dungeon_map /
+    # dungeon_frontier, tables attach never touches), so fresh-save detection
+    # is unaffected by the uncommitted attach threads.
 
     # Loud fresh-save detection (introspection, NOT an assumption): a
     # save is fresh iff the dungeon map AND frontier are both empty. On a
@@ -1795,61 +1825,61 @@ def _stage_commit(
     generator_version = _live_persistence.GENERATOR_VERSION
 
     try:
-        with dungeon_repository.transaction() as tx:
-            if is_fresh_save:
-                entrance = graph.nodes.get(graph.entrance_id)
-                if entrance is None:
-                    raise PersistError(
-                        f"Seed=Expansion-0: entrance {graph.entrance_id!r} is not "
-                        f"in the graph — cannot seed a fresh save (No Silent "
-                        f"Fallbacks)"
-                    )
-                tx.commit_expansion(
-                    Expansion(expansion_id=0, new_nodes=[entrance], new_edges=[]),
-                    graph,
-                    generator_version=generator_version,
+        if is_fresh_save:
+            entrance = graph.nodes.get(graph.entrance_id)
+            if entrance is None:
+                raise PersistError(
+                    f"Seed=Expansion-0: entrance {graph.entrance_id!r} is not "
+                    f"in the graph — cannot seed a fresh save (No Silent "
+                    f"Fallbacks)"
                 )
-
-            # Story 52-3 — thread fill-stage masks into the generated
-            # expansion's commit (the materializer.py:57 gap). The seed
-            # (Expansion 0) commit above passes NO masks: the entrance has
-            # no fill grid (Seed=Expansion-0 contract). Regions whose
-            # fill_result entry has no mask (e.g. test fixtures that
-            # construct RegionFill directly) are absent from the masks
-            # dict → their dungeon_map.mask BLOB stays NULL.
-            expansion_masks: dict[str, dict] | None = None
-            if fill_result is not None:
-                expansion_masks = {
-                    rid: rf.mask.to_dict() for rid, rf in fill_result.items() if rf.mask is not None
-                } or None
             tx.commit_expansion(
-                expansion,
+                Expansion(expansion_id=0, new_nodes=[entrance], new_edges=[]),
                 graph,
                 generator_version=generator_version,
-                masks=expansion_masks,
             )
 
-            # RECONCILE SEAM A: persist the spec §7 freeze target
-            # AttachReport.rolled EXACTLY as attach produced it (never
-            # recomputed) via the real Plan 5 append-only primitive. One
-            # mutation row per (region, set-piece) attach report.
-            rolled_persisted = 0
-            for report in attach_result.attach_reports:
-                tx.record_mutation(
-                    report.region_id,
-                    "setpiece_state",
-                    {
-                        "setpiece_id": report.setpiece_id,
-                        "region_id": report.region_id,
-                        "rolled": dict(report.rolled.slots),
-                    },
-                )
-                rolled_persisted += 1
+        # Story 52-3 — thread fill-stage masks into the generated
+        # expansion's commit (the materializer.py:57 gap). The seed
+        # (Expansion 0) commit above passes NO masks: the entrance has
+        # no fill grid (Seed=Expansion-0 contract). Regions whose
+        # fill_result entry has no mask (e.g. test fixtures that
+        # construct RegionFill directly) are absent from the masks
+        # dict → their dungeon_map.mask BLOB stays NULL.
+        expansion_masks: dict[str, dict] | None = None
+        if fill_result is not None:
+            expansion_masks = {
+                rid: rf.mask.to_dict() for rid, rf in fill_result.items() if rf.mask is not None
+            } or None
+        tx.commit_expansion(
+            expansion,
+            graph,
+            generator_version=generator_version,
+            masks=expansion_masks,
+        )
 
-            for fe in new_frontier:
-                tx.put_frontier(fe)
-        # transaction() commits on clean exit; rolls back on any exception
-        # (including PersistError) — no explicit conn.commit()/rollback().
+        # RECONCILE SEAM A: persist the spec §7 freeze target
+        # AttachReport.rolled EXACTLY as attach produced it (never
+        # recomputed) via the real Plan 5 append-only primitive. One
+        # mutation row per (region, set-piece) attach report.
+        rolled_persisted = 0
+        for report in attach_result.attach_reports:
+            tx.record_mutation(
+                report.region_id,
+                "setpiece_state",
+                {
+                    "setpiece_id": report.setpiece_id,
+                    "region_id": report.region_id,
+                    "rolled": dict(report.rolled.slots),
+                },
+            )
+            rolled_persisted += 1
+
+        for fe in new_frontier:
+            tx.put_frontier(fe)
+        # The coordinator's ``with dungeon_repository.transaction()`` commits on
+        # clean exit (after _stage_attach + _stage_commit) and rolls back on any
+        # exception — no explicit conn.commit()/rollback() here.
     except PersistError as exc:
         span.set_attribute("error", str(exc))
         span.set_attribute("reason", f"commit: {exc}")
@@ -1865,32 +1895,13 @@ def _stage_commit(
     span.set_attribute("frontier_edges_added", len(new_frontier))
     span.set_attribute("generator_version", generator_version)
 
-    # Story 55-1 / ADR-109 §5.2: write per-region YAMLs alongside the
-    # ADR-096 mask sidecar. Runs AFTER ``conn.commit()`` so a
-    # rolled-back expansion never produces orphan files on disk; a
-    # commit that succeeded but emit that fails leaves the
-    # materialization live in DB without a YAML — the freeze invariant
-    # ensures the next re-materialization will skip the frozen DB
-    # state and emit the YAML cleanly.
-    composed_by_region: dict[str, GeneratedRoomDescription] = {}
-    for node in expansion.new_nodes:
-        manifest = curation.region_manifests.get(node.id)
-        if manifest is None or not manifest.room_descriptions:
-            continue
-        composed_by_region[node.id] = manifest.room_descriptions[0]
-
-    if composed_by_region:
-        world_dir = _resolve_world_dir(request)
-        if world_dir is not None:
-            _stage_emit_room_yamls(
-                world_dir=world_dir,
-                composed_by_region=composed_by_region,
-            )
-
     # Plan 7 owns frontier.expand: emit one per new unexpanded frontier
     # edge so the GM panel sees the dungeon's frontier actually grew (the
     # OTEL Observability Principle — the frontier update must be
-    # observable, not just asserted by narration).
+    # observable, not just asserted by narration). These fire after the
+    # writes land in the txn; they are pure observability, so emitting
+    # before the coordinator's COMMIT flush is fine (a PersistError above
+    # propagates and skips them).
     for fe in new_frontier:
         with frontier_expand_span(
             expansion_id=request.expansion_id,
@@ -1900,6 +1911,22 @@ def _stage_commit(
             spawn_depth_score=fe.spawn_depth_score,
         ):
             pass
+
+    # Story 55-1 / ADR-109 §5.2: per-region YAML emit data. The disk write
+    # itself is the coordinator's job AFTER the tx commits — ADR-115 D6 made
+    # the coordinator own the commit boundary, so a rolled-back expansion must
+    # never deposit orphan files on disk. We compute the (world_dir,
+    # composed_by_region) here (we hold curation/expansion) and return it so
+    # the coordinator emits post-commit.
+    composed_by_region: dict[str, GeneratedRoomDescription] = {}
+    for node in expansion.new_nodes:
+        manifest = curation.region_manifests.get(node.id)
+        if manifest is None or not manifest.room_descriptions:
+            continue
+        composed_by_region[node.id] = manifest.room_descriptions[0]
+
+    world_dir = _resolve_world_dir(request) if composed_by_region else None
+    return world_dir, composed_by_region
 
 
 def _stage_emit_room_yamls(
@@ -2079,35 +2106,57 @@ async def materialize(
                 span=curate_span,
             )
 
-        with dungeon_materialize_attach_span(expansion_id=request.expansion_id) as attach_span:
-            attach_result = _stage_attach(
-                request,
-                graph=graph,
-                expansion=expansion,
-                palette=palette,
-                curation=curation,
-                snapshot=snapshot,
-                pack_tropes=pack_tropes,
-                dungeon_repository=dungeon_repository,
-                span=attach_span,
-            )
+        # ADR-115 D6: ONE transaction spans BOTH _stage_attach (which opens
+        # the complication threads on ``tx``) and _stage_commit (which writes
+        # the expansion/frontier/mutations on the SAME ``tx``). A
+        # commit_expansion PersistError therefore rolls back the attach-stage
+        # threads together with the expansion — restoring the Plan-5 atomicity
+        # contract (NO half-attached expansion / NO orphan ledger). Both stages
+        # are SYNC and run back-to-back with NO ``await`` between them, so the
+        # pooled connection is never held across an await/LLM call (the async
+        # curate stage already ran, above, OUTSIDE this txn).
+        with dungeon_repository.transaction() as tx:
+            with dungeon_materialize_attach_span(expansion_id=request.expansion_id) as attach_span:
+                attach_result = _stage_attach(
+                    request,
+                    graph=graph,
+                    expansion=expansion,
+                    palette=palette,
+                    curation=curation,
+                    snapshot=snapshot,
+                    pack_tropes=pack_tropes,
+                    tx=tx,
+                    span=attach_span,
+                )
 
-        with dungeon_materialize_commit_span(expansion_id=request.expansion_id) as commit_span:
-            # Thread the attach stage's AttachResult into commit: its
-            # ``attach_reports[].rolled`` is the spec §7 freeze target Task
-            # 6 PERSISTS and NEVER recomputes (save-is-truth). Discarding
-            # it here would force Task 6 to re-roll. ``expansion``/``graph``
-            # carry the depth-scored attached topology commit_expansion +
-            # new-frontier-edge derivation read. ``_stage_commit`` is SYNC
-            # (commit_expansion/put_frontier are sync) — a plain call inside
-            # this async coordinator, never awaited.
-            _stage_commit(
-                request,
-                graph=graph,
-                curation=curation,
-                expansion=expansion,
-                attach_result=attach_result,
-                dungeon_repository=dungeon_repository,
-                span=commit_span,
-                fill_result=fill_result,
+            with dungeon_materialize_commit_span(expansion_id=request.expansion_id) as commit_span:
+                # Thread the attach stage's AttachResult into commit: its
+                # ``attach_reports[].rolled`` is the spec §7 freeze target Task
+                # 6 PERSISTS and NEVER recomputes (save-is-truth). Discarding
+                # it here would force Task 6 to re-roll. ``expansion``/``graph``
+                # carry the depth-scored attached topology commit_expansion +
+                # new-frontier-edge derivation read. ``_stage_commit`` is SYNC
+                # (commit_expansion/put_frontier are sync) — a plain call inside
+                # this async coordinator, never awaited. It returns the
+                # post-commit YAML-emit data (computed under the txn) so the
+                # disk write runs only AFTER a clean commit, below.
+                world_dir, composed_by_region = _stage_commit(
+                    request,
+                    graph=graph,
+                    curation=curation,
+                    expansion=expansion,
+                    attach_result=attach_result,
+                    dungeon_repository=dungeon_repository,
+                    tx=tx,
+                    span=commit_span,
+                    fill_result=fill_result,
+                )
+        # The txn committed on clean exit of the ``with`` above (or rolled the
+        # whole attach+commit back on PersistError). The per-region room YAMLs
+        # are written ONLY now — after a clean commit — so a rolled-back
+        # expansion never deposits orphan files on disk (Story 55-1 invariant).
+        if world_dir is not None and composed_by_region:
+            _stage_emit_room_yamls(
+                world_dir=world_dir,
+                composed_by_region=composed_by_region,
             )

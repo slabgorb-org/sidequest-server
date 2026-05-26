@@ -264,6 +264,17 @@ class DungeonTransaction(Protocol):
 
     def record_mutation(self, region_id: str, kind: str, payload: dict) -> None: ...
 
+    # Complication-ledger thread surface (ADR-115 D6 atomicity fix).
+    #
+    # ``attach_set_piece`` (the Plan-6 coalescence entry) writes its threads
+    # through these on the SAME locked connection that the materialize commit
+    # rides, so a ``commit_expansion`` ``PersistError`` rolls back the
+    # attach-stage threads together with the expansion (Plan-5 atomicity
+    # contract: NO half-attached expansion / NO orphan ledger).
+    def open_thread(self, thread: ComplicationThread) -> None: ...
+
+    def open_threads(self) -> list[ComplicationThread]: ...
+
 
 @runtime_checkable
 class DungeonRepository(Protocol):

@@ -309,6 +309,8 @@ class TestMaterializePipelineSpans:
 
     async def test_five_stage_spans_emitted_in_order_nested_under_parent(
         self,
+        monkeypatch: Any,
+        migrated_db: str,
     ) -> None:
         """Run materialize with a patched stage executor so all five stages
         run (no early-exit on NotImplementedError). Assert:
@@ -320,7 +322,6 @@ class TestMaterializePipelineSpans:
         from sidequest.dungeon.materializer import (
             materialize,
         )
-        from sidequest.dungeon.persistence import DungeonStore
         from sidequest.telemetry.spans.dungeon_materialize import (
             SPAN_DUNGEON_MATERIALIZE,
             SPAN_DUNGEON_MATERIALIZE_ATTACH,
@@ -329,9 +330,14 @@ class TestMaterializePipelineSpans:
             SPAN_DUNGEON_MATERIALIZE_DESIGN,
             SPAN_DUNGEON_MATERIALIZE_FILL,
         )
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
+        # ADR-115 D6: the coordinator opens dungeon_repository.transaction()
+        # spanning attach+commit, so the repo must be a real PgDungeonRepository
+        # (DungeonStore has no transaction()). The five stages are no-op'd, so
+        # the txn is opened+committed empty — this test asserts ONLY span
+        # nesting/order.
+        _pool, store, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         exporter, _provider, real_tracer = _otel_in_memory()
         original_tracer_fn = _spans_module.tracer
@@ -364,11 +370,18 @@ class TestMaterializePipelineSpans:
             # all stage logic — it only asserts span nesting/order.
             return (object(), object())
 
+        def _commit_noop(*args: object, **kwargs: object) -> tuple[object, dict]:
+            # ADR-115 D6: _stage_commit returns (world_dir, composed_by_region)
+            # for the coordinator's post-commit YAML emit; the coordinator
+            # unconditionally unpacks it. Stub honors that contract (None
+            # world_dir → no emit) while no-op'ing the commit logic.
+            return (None, {})
+
         _mat_module._stage_design = _design_noop  # type: ignore[assignment]
         _mat_module._stage_fill = _noop  # type: ignore[assignment]
         _mat_module._stage_curate = _async_noop  # type: ignore[assignment]
         _mat_module._stage_attach = _noop  # type: ignore[assignment]
-        _mat_module._stage_commit = _noop  # type: ignore[assignment]
+        _mat_module._stage_commit = _commit_noop  # type: ignore[assignment]
         try:
             req = self._build_request()
             # snapshot/pack_tropes/claude_client are required materialize()
@@ -2602,7 +2615,7 @@ class TestStageAttach:
                     curation=curation,
                     snapshot=snapshot,
                     pack_tropes=pack,
-                    dungeon_repository=store,
+                    tx=store,
                     span=span,
                 )
         finally:
@@ -2734,7 +2747,7 @@ class TestStageAttach:
                     curation=curation,
                     snapshot=snapshot,
                     pack_tropes=pack,
-                    dungeon_repository=store,
+                    tx=store,
                     span=span,
                 )
         finally:
@@ -2880,7 +2893,7 @@ class TestStageAttach:
                     curation=curation,
                     snapshot=snapshot,
                     pack_tropes=pack,
-                    dungeon_repository=store,
+                    tx=store,
                     span=span,
                 )
         finally:
@@ -2920,7 +2933,9 @@ class TestStageAttach:
     # coordinator discards the AttachResult (the pre-fix state).
     # -----------------------------------------------------------------------
 
-    async def test_coordinator_threads_attach_result_into_commit(self) -> None:
+    async def test_coordinator_threads_attach_result_into_commit(
+        self, monkeypatch: Any, migrated_db: str
+    ) -> None:
         """materialize() must pass the SAME AttachResult instance
         _stage_attach returned into _stage_commit as ``attach_result`` —
         carrying attach_reports whose entries have ``.rolled`` (the spec §7
@@ -2933,9 +2948,9 @@ class TestStageAttach:
         import sidequest.dungeon.materializer as _mat_module
         import sidequest.telemetry.spans as _spans_module
         from sidequest.dungeon.materializer import AttachResult, materialize
-        from sidequest.dungeon.persistence import DungeonStore
         from sidequest.dungeon.region_graph import RegionNode
         from sidequest.dungeon.themes import ThemePalette
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
         # A palette whose single set-piece-bearing theme is eligible at the
         # frontier depth, bound to a real cookbook look so curate's
@@ -2957,9 +2972,11 @@ class TestStageAttach:
             campaign_seed=7, expansion_id=1, spawn_depth_score=0.0
         )
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        # ADR-115 D6: the coordinator opens dungeon_repository.transaction()
+        # and the REAL _stage_attach writes its threads through that tx, so a
+        # real PgDungeonRepository is required (DungeonStore has no
+        # transaction()).
+        _pool, store, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         # Capture the REAL AttachResult _stage_attach produces (wrap the
         # real stage — do NOT stub it; we want the genuine freeze targets).
@@ -2974,8 +2991,11 @@ class TestStageAttach:
 
         # Capture _stage_commit's kwargs and DO NOT raise (so the
         # coordinator runs to completion and we can assert the thread).
-        def _capturing_commit(*args: Any, **kwargs: Any) -> None:
+        # _stage_commit returns (world_dir, composed_by_region) post-D6; the
+        # coordinator unpacks it, so the stub mirrors that shape.
+        def _capturing_commit(*args: Any, **kwargs: Any) -> tuple[object, dict]:
             captured["commit_kwargs"] = kwargs
+            return (None, {})
 
         _mat_module._stage_attach = _wrapped_attach  # type: ignore[assignment]
         _mat_module._stage_commit = _capturing_commit  # type: ignore[assignment]
@@ -3233,20 +3253,26 @@ class TestStageCommit:
 
         assert calls["n"] >= 1, "the injected put_frontier was never reached"
 
-        # The commit-stage writes (inside transaction()) are ROLLED BACK on
-        # PersistError — expansion rows, frontier edges, and mutations all
-        # discard. The attach-stage thread writes (open_thread via
-        # PgDungeonRepository.open_thread, which uses its own session_tx)
-        # are committed independently BEFORE the commit transaction opens;
-        # they survive the rollback by design — the PG implementation does
-        # not re-wrap attach writes inside the commit transaction boundary.
+        # ADR-115 D6 atomicity contract: the coordinator owns ONE transaction
+        # spanning _stage_attach (which opened the complication threads on
+        # ``tx``) AND _stage_commit. A commit_expansion/put_frontier
+        # PersistError rolls the WHOLE txn back — expansion rows, frontier
+        # edges, mutations AND the attach-stage threads all discard together.
+        # NO half-attached expansion / NO orphan ledger (the Plan-5 contract
+        # the D6 lift regressed and this guard pins restored).
         assert repo.load_map(entrance_id="entrance").nodes == {}, (
-            "half-attached expansion survived — _stage_commit did not "
-            "roll back on PersistError (the transaction() boundary must "
-            "discard the half-written txn)"
+            "half-attached expansion survived — the materialize transaction() "
+            "boundary must discard the half-written txn on PersistError"
         )
         assert repo.load_frontier() == [], "orphan frontier rows survived"
         assert repo.load_mutations() == [], "orphan setpiece-state mutation rows survived rollback"
+        assert repo.open_threads() == [], (
+            "orphan ledger threads survived rollback — the attach-stage "
+            "open_thread writes must ride the SAME txn the commit rolls back "
+            "(ADR-115 D6: open_thread on the materialize transaction, not its "
+            "own session_tx). A non-empty list means attach threads committed "
+            "independently of the expansion (the regression)."
+        )
 
     async def test_generator_version_bump_does_not_regenerate_frozen_region(
         self, monkeypatch: Any, migrated_db: str
@@ -3382,7 +3408,13 @@ class TestStageCommit:
             original_tracer_fn = _spans_module.tracer
             _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
             try:
-                with dungeon_materialize_commit_span(expansion_id=2) as span2:
+                # ADR-115 D6: the coordinator owns the txn; this focused
+                # direct call opens one and passes it as ``tx`` (mirrors the
+                # production attach+commit single-transaction boundary).
+                with (
+                    dungeon_materialize_commit_span(expansion_id=2) as span2,
+                    repo.transaction() as tx2,
+                ):
                     _stage_commit(
                         request2,
                         curation=curation2,
@@ -3390,6 +3422,7 @@ class TestStageCommit:
                         expansion=exp2,
                         attach_result=attach_result2,
                         dungeon_repository=repo,
+                        tx=tx2,
                         span=span2,
                     )
             finally:

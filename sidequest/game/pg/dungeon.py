@@ -230,6 +230,75 @@ class PgDungeonTransaction:
         except psycopg.Error as exc:
             raise DatabaseError(f"record_mutation failed: {exc}") from exc
 
+    # ------------------------------------------------------------------
+    # complication ledger (ADR-115 D6 atomicity fix)
+    #
+    # These mirror PgDungeonRepository.open_thread / open_threads byte-for-byte
+    # (same SQL, same ledger.add span, same duplicate-thread_id loud raise) but
+    # execute on the transaction's OWN locked connection (self._conn) WITHOUT
+    # opening a fresh session_tx. attach_set_piece writes its threads through
+    # these so a later commit_expansion PersistError rolls them back together
+    # with the expansion (Plan-5 atomicity: NO orphan ledger).
+    # ------------------------------------------------------------------
+
+    def open_thread(self, thread: ComplicationThread) -> None:
+        """Insert a new complication thread (status='open') on this txn's conn."""
+        with ledger_add_span(
+            thread_id=thread.thread_id,
+            kind=thread.kind,
+            origin_region_id=thread.origin_region_id,
+        ):
+            now = datetime.now(tz=UTC).isoformat()
+            try:
+                self._conn.execute(
+                    "INSERT INTO dungeon_complication_ledger "
+                    "(session_id, thread_id, origin_region_id, kind, status, "
+                    " started_at_depth_score, payload, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        self._sid,
+                        thread.thread_id,
+                        thread.origin_region_id,
+                        thread.kind,
+                        thread.status,
+                        thread.started_at_depth_score,
+                        json.dumps(thread.payload),
+                        now,
+                    ),
+                )
+            except psycopg.errors.UniqueViolation as exc:
+                raise PersistError(f"thread {thread.thread_id!r} already open: {exc}") from exc
+            except psycopg.Error as exc:
+                raise DatabaseError(f"open_thread failed: {exc}") from exc
+
+    def open_threads(self) -> list[ComplicationThread]:
+        """Return all status='open' threads (ORDER BY thread_id) on this txn's conn.
+
+        Reads on ``self._conn`` so dedup/coalescence within one attach pass sees
+        threads opened earlier in the SAME transaction (read-your-writes).
+        """
+        rows = self._conn.execute(
+            "SELECT thread_id, origin_region_id, kind, status, "
+            "started_at_depth_score, payload "
+            "FROM dungeon_complication_ledger "
+            "WHERE session_id = %s AND status = 'open' ORDER BY thread_id",
+            (self._sid,),
+        ).fetchall()
+        try:
+            return [
+                ComplicationThread(
+                    thread_id=r[0],
+                    origin_region_id=r[1],
+                    kind=r[2],
+                    status=r[3],
+                    started_at_depth_score=r[4],
+                    payload=json.loads(r[5]),
+                )
+                for r in rows
+            ]
+        except json.JSONDecodeError as exc:
+            raise SerializationError(f"corrupt thread payload: {exc}") from exc
+
 
 # ---------------------------------------------------------------------------
 # Repository (outer facade; reads borrow from pool, writes via transaction)

@@ -72,9 +72,9 @@ def detect_scrapbook_coverage_gaps(
     Read-only. Uses typed repository methods; opens no new connections
     and writes nothing.
 
-    :param repository: SaveRepository for the slot being resumed.  Both
-        ``SqliteStore`` (which now exposes ``scrapbook_turn_ids``) and
-        ``PgSaveRepository`` satisfy this surface (ADR-115 D3).
+    :param repository: SaveRepository for the slot being resumed.
+        ``PgSaveRepository`` satisfies this surface (ADR-115 D3); it
+        provides ``max_narrative_round`` and ``scrapbook_turn_ids``.
     :param snapshot: Loaded GameSnapshot. Read for span attribution
         (``genre``, ``world``); state is not mutated.
     :param slug: Optional slot slug for span attribution. Empty string on

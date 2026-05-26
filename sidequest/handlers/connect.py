@@ -1136,12 +1136,10 @@ class ConnectHandler:
             # query per reconnect, not one per row.
             # ADR-115 D3: lifted from raw store._conn.execute onto the typed
             # scrapbook_image_url_map() method (PgSaveRepository delegates to
-            # PgScrapbookStore; SqliteStore exposes an identical typed wrapper).
-            _scrapbook_image_urls: dict[int, str] = {}
-            try:
-                _scrapbook_image_urls = _pg_repository.scrapbook_image_url_map()
-            except Exception as exc:  # noqa: BLE001 — replay must not crash on a metadata read
-                logger.warning("scrapbook.image_url_replay_lookup_failed error=%s", exc)
+            # PgScrapbookStore). No swallow: a failed metadata read must fail
+            # loud — silently emptying the map re-introduces the very
+            # "scrapbook images lost on reload" bug this map exists to fix.
+            _scrapbook_image_urls: dict[int, str] = _pg_repository.scrapbook_image_url_map()
             if session._projection_cache is not None:
                 cached_rows = session._projection_cache.read_since(
                     player_id=session._current_player_id,

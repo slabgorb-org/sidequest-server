@@ -813,41 +813,6 @@ class SqliteStore:
             last_played=_parse_rfc3339(row[3]),
         )
 
-    def scrapbook_turn_ids(self, *, max_turn: int) -> set[int]:
-        """Return distinct turn_ids with at least one scrapbook entry.
-
-        Mirrors ``PgScrapbookStore.scrapbook_turn_ids`` (ADR-115 A6).
-        Filters ``turn_id >= 1 AND turn_id <= max_turn`` — rows with
-        turn_id <= 0 are noise (test fixture artifacts or pre-lockstep
-        stragglers) and excluded. Returns an empty set when ``max_turn == 0``
-        (fresh save has no rounds).
-
-        Added in D3 so that ``detect_scrapbook_coverage_gaps`` can call a
-        typed repository method instead of reaching into ``_conn`` directly.
-        """
-        if max_turn <= 0:
-            return set()
-        rows = self._conn.execute(
-            "SELECT DISTINCT turn_id FROM scrapbook_entries WHERE turn_id >= 1 AND turn_id <= ?",
-            (max_turn,),
-        ).fetchall()
-        return {int(r[0]) for r in rows}
-
-    def scrapbook_image_url_map(self) -> dict[int, str]:
-        """Return ``{turn_id: image_url}`` for all non-NULL image_url rows.
-
-        Mirrors ``PgScrapbookStore.scrapbook_image_url_map`` (ADR-115 A6).
-        Added in D3 so the replay map in connect.py can use a typed method.
-        """
-        rows = self._conn.execute(
-            "SELECT turn_id, image_url FROM scrapbook_entries WHERE image_url IS NOT NULL"
-        ).fetchall()
-        result: dict[int, str] = {}
-        for turn_id, url in rows:
-            if isinstance(turn_id, int) and isinstance(url, str) and url:
-                result[turn_id] = url
-        return result
-
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()

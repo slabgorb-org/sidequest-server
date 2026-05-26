@@ -21,7 +21,11 @@ from sidequest.server.dispatch.damage_roll import resolve_damage_spec_from_beat_
 
 
 def _stat_score(stats: dict[str, int], stat_check: str) -> int | None:
-    """Look up a stat score, mirroring dice._stat_modifier's case-insensitive fallback."""
+    """Look up a stat score with the case-insensitive ability-key fallback.
+
+    This is the relocated native-dial lookup (formerly dice._stat_modifier): try the
+    exact key, then any key matching case-insensitively, else None (caller maps to 0).
+    """
     score = stats.get(stat_check)
     if score is None:
         for k, v in stats.items():

@@ -39,7 +39,10 @@ def test_dispatch_skill_check_success():
     assert outcome.outcome is RollOutcome.Success
     assert outcome.result.total == 12
     assert outcome.result.difficulty == 10
-    assert sent, "dispatch_check did not broadcast the roll to the room"
+    assert len(sent) == 2, (
+        f"dispatch_check must broadcast exactly 2 messages (DiceRequest then DiceResult); "
+        f"got {len(sent)}: {[type(m).__name__ for m in sent]}"
+    )
 
 
 def test_dispatch_save_against_target():
@@ -90,6 +93,30 @@ def test_dispatch_save_tie():
     )
     assert outcome.outcome is RollOutcome.Tie
     assert outcome.result.difficulty == 13
+
+
+def test_dispatch_check_unknown_kind_raises():
+    """dispatch_check raises ValueError for an unrecognised kind — fails loud
+    per CLAUDE.md No Silent Fallbacks."""
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown kind"):
+        dispatch_check(
+            kind="bogus",
+            attribute=None,
+            save=None,
+            skill_level=0,
+            difficulty_key=None,
+            level=1,
+            label="bad kind test",
+            character_stats={},
+            faces=[10],
+            pack=_swn_pack(),
+            rolling_player_id="p1",
+            character_name="Bob",
+            session_id="s1",
+            room_broadcast=None,
+        )
 
 
 def test_check_emits_otel_span(monkeypatch):

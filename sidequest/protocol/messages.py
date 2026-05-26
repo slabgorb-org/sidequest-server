@@ -1128,6 +1128,40 @@ class DiceThrowMessage(ProtocolBase):
     player_id: str = ""
 
 
+class CheckThrowPayload(ProtocolBase):
+    """Client -> server: initiate a non-beat SWN skill check or save.
+
+    ``kind="skill_check"`` resolves 2d6 via ``ruleset.check_params``;
+    ``kind="save"`` resolves 1d20 via ``ruleset.save_params``.
+    ``faces`` carries the physics-settled die values from the client 3D overlay
+    — the server uses them via ``resolve_dice_with_faces`` (physics-is-the-roll,
+    ADR-074) so the outcome matches what the player saw animate.
+    """
+
+    kind: str
+    """``"skill_check"`` | ``"save"``."""
+    attribute: str | None = None
+    """Stat name for skill_check (e.g. ``"DEXTERITY"``). None for save."""
+    save: str | None = None
+    """Save category for save: ``"physical"`` | ``"evasion"`` | ``"mental"``."""
+    skill_level: int = 0
+    """Skill rank modifier (0–4 per SWN)."""
+    difficulty_key: str | None = None
+    """Difficulty ladder key for skill_check (e.g. ``"tricky"``, ``"hard"``)."""
+    label: str = ""
+    """Human-readable label surfaced in DiceRequest.context and OTEL span."""
+    faces: list[int]
+    """Physics-settled die face values from the client 3D overlay."""
+
+
+class CheckThrowMessage(ProtocolBase):
+    """GameMessage::CheckThrow — client submits faces for a non-beat SWN check/save."""
+
+    type: Literal[MessageType.CHECK_THROW] = MessageType.CHECK_THROW
+    payload: CheckThrowPayload
+    player_id: str = ""
+
+
 class DiceResultMessage(ProtocolBase):
     """GameMessage::DiceResult — server broadcasts resolved outcome."""
 
@@ -1391,6 +1425,7 @@ _Phase1Variant = Annotated[
     | AudioCueMessage
     | DiceRequestMessage
     | DiceThrowMessage
+    | CheckThrowMessage
     | DiceResultMessage
     | OrbitalIntentMessage
     | OrbitalChartMessage

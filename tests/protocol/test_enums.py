@@ -242,10 +242,14 @@ def test_message_type_complete_count() -> None:
     GameBoard ErrorBoundary catch can release the crashed player from the MP
     turn barrier instead of orphaning the table's turn. Intentional addition;
     bumped 51 → 52.
+    CHECK_THROW added for non-beat SWN skill checks and saves (2d6 / d20).
+    Client rolls in the 3D overlay and submits settled faces; server resolves
+    via dispatch_check and broadcasts DiceRequest + DiceResult. Intentional
+    addition; bumped 52 → 53.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 52
+    assert len(MessageType) == 53
 
 
 # ===========================================================================

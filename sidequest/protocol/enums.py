@@ -80,6 +80,10 @@ class MessageType(StrEnum):
     DICE_REQUEST = "DICE_REQUEST"
     DICE_THROW = "DICE_THROW"
     DICE_RESULT = "DICE_RESULT"
+    # Non-beat SWN skill check or save (2d6 / d20). Client rolls in the 3D
+    # overlay and submits settled faces; the server resolves via dispatch_check
+    # and broadcasts DiceRequest + DiceResult to the room.
+    CHECK_THROW = "CHECK_THROW"
     BEAT_SELECTION = "BEAT_SELECTION"
     SCRAPBOOK_ENTRY = "SCRAPBOOK_ENTRY"
     YIELD = "YIELD"

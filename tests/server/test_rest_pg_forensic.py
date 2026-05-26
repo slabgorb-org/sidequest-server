@@ -365,3 +365,41 @@ def test_debug_state_unknown_session_key_empty(pg_rest_env) -> None:
     resp = client.get("/api/debug/state?session_key=does-not-exist")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_debug_state_survives_one_bad_save(pg_rest_env) -> None:
+    """One unloadable session must not 500 the whole State tab.
+
+    Wiring test for the "never-500 forensics" invariant (D7 review): the
+    pg_rest_env fixture already seeded one good session; here we add a second
+    session whose persisted ``game_state.snapshot_json`` is corrupt (non-JSON
+    text), so ``PgSaveRepository.load()`` raises ``SaveSchemaIncompatibleError``
+    inside the debug_state per-slug body. The endpoint must log+skip that slug
+    and still return the GOOD session's view — not propagate the exception as a
+    500 that blanks the entire dashboard.
+    """
+    client = pg_rest_env["client"]
+    good_slug = pg_rest_env["slug"]
+
+    # Seed a valid session row, then poison its game_state row with non-JSON
+    # text. snapshot_json is a TEXT column, so the corruption only surfaces at
+    # load()-time deserialization — exactly the runtime failure the per-slug
+    # try/except must contain.
+    pool = db_pool.get_pool()
+    bad_slug = _slug("bad")
+    bad_sid = sessions.ensure_session(
+        pool, slug=bad_slug, mode="solo", genre_slug="caverns", world_slug="beneath_sunden"
+    )
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO game_state (session_id, snapshot_json, saved_at) VALUES (%s, %s, %s)",
+            (bad_sid, "this is not valid json {{{", _now()),
+        )
+
+    resp = client.get("/api/debug/state")
+    assert resp.status_code == 200, f"one bad save 500'd the State tab — body: {resp.text}"
+    body = resp.json()
+    keys = [v["session_key"] for v in body]
+    # The good session survives; the bad one is logged-and-skipped (no view).
+    assert good_slug in keys, f"good session missing after bad-save skip: {keys}"
+    assert bad_slug not in keys

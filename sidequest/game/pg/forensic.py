@@ -64,6 +64,22 @@ def _safe_json(raw: str | None):
         return {"__unparseable__": raw}
 
 
+def _safe_json_logged(raw: str | None, *, context: str):
+    """``_safe_json`` that logs loudly when the column is unparseable.
+
+    The bare ``_safe_json`` returns the ``{"__unparseable__": raw}`` sentinel
+    silently — fine for the bulk event/projection display path where the
+    sentinel is surfaced verbatim to the GM panel. But for the snapshot and
+    encounter-events reads a corrupt column should be *observable* in the
+    server log (No-Silent-Fallbacks), matching ``_safe_json_list``. Same
+    return contract as ``_safe_json``.
+    """
+    parsed = _safe_json(raw)
+    if isinstance(parsed, dict) and "__unparseable__" in parsed:
+        logger.warning("pg.forensic.%s unparseable raw=%r", context, raw)
+    return parsed
+
+
 def _safe_json_list(raw: str | None) -> list:
     """Read-only display decode for list-typed stored columns.
 
@@ -388,7 +404,7 @@ class PgForensicReader:
             ).fetchone()
         if row is None or row[0] is None:
             return {}
-        parsed = _safe_json(row[0])
+        parsed = _safe_json_logged(row[0], context="snapshot_json")
         return parsed if isinstance(parsed, dict) else {}
 
     # ------------------------------------------------------------------
@@ -414,7 +430,7 @@ class PgForensicReader:
             {
                 "seq": r[0],
                 "kind": r[1],
-                "payload": _safe_json(r[2]),
+                "payload": _safe_json_logged(r[2], context="encounter_events"),
                 "created_at": r[3],
             }
             for r in rows

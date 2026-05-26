@@ -321,17 +321,30 @@ def create_rest_router() -> APIRouter:
             save_rows = reader.list_saves()
         for save_row in save_rows:
             slug = save_row["slug"]
-            game = _pg_sessions.get_game(pool, slug=slug)
-            if game is None:
+            # Per-slug resilience (restored in D7 review): one bad save — a
+            # session row with a mode value GameMode() rejects, or a snapshot
+            # that load() can't deserialize — must not 500 the entire State
+            # tab. Log loudly (No-Silent-Fallbacks: this is observable, not a
+            # quiet alternative path) and skip just that slug.
+            try:
+                game = _pg_sessions.get_game(pool, slug=slug)
+                if game is None:
+                    continue
+                repository = PgSaveRepository.for_slug(
+                    pool,
+                    slug=slug,
+                    mode=GameMode(game.mode),
+                    genre_slug=game.genre_slug,
+                    world_slug=game.world_slug,
+                )
+                saved = repository.load()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "debug_state.session_load_failed slug=%s error=%s",
+                    slug,
+                    exc,
+                )
                 continue
-            repository = PgSaveRepository.for_slug(
-                pool,
-                slug=slug,
-                mode=GameMode(game.mode),
-                genre_slug=game.genre_slug,
-                world_slug=game.world_slug,
-            )
-            saved = repository.load()
             if saved is None:
                 continue
             snap = saved.snapshot

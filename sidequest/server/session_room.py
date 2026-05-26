@@ -198,6 +198,12 @@ class SessionRoom:
     # (advances on narrative beats only).
     _dispatch_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _last_dispatched_round: int = 0
+    # Story 67-1: player_ids that signalled a client render crash during the
+    # CURRENT interaction and had NOT yet submitted. They are dropped from the
+    # turn-barrier denominator for this interaction only, so a crashed client
+    # never orphans the table's turn. Cleared on drain (per-turn reset point)
+    # exactly like ``_pending_actions``.
+    _crash_released: set[str] = field(default_factory=set)
 
     # ------------------------------------------------------------------
     # Canonical world state (ADR-037 Python port). The room owns the
@@ -693,6 +699,30 @@ class SessionRoom:
                 action=action,
             )
 
+    def has_pending_actions(self) -> bool:
+        """True if any player's action is buffered for the current interaction.
+
+        Story 67-1: the crash handler only releases the barrier when a turn is
+        actually in flight (someone has submitted). With no pending actions a
+        crash signal is a clean no-op — there is no turn to orphan.
+        """
+        with self._lock:
+            return bool(self._pending_actions)
+
+    def mark_crash_released(self, player_id: str) -> None:
+        """Drop a crashed player from this interaction's barrier denominator.
+
+        Story 67-1. Idempotent — a duplicate crash signal for the same player
+        does not double-count.
+        """
+        with self._lock:
+            self._crash_released.add(player_id)
+
+    def crash_released_count(self) -> int:
+        """Number of players crash-released for the current interaction (Story 67-1)."""
+        with self._lock:
+            return len(self._crash_released)
+
     def first_pending_at_monotonic(self) -> float | None:
         """Read the timestamp stamped when the buffer transitioned from empty.
 
@@ -713,6 +743,10 @@ class SessionRoom:
             drained = list(self._pending_actions.items())
             self._pending_actions.clear()
             self._first_pending_at_monotonic = None
+            # Story 67-1: crash-release is scoped to the interaction that just
+            # dispatched. Reset it here so a crash in turn N never leaks into
+            # turn N+1's barrier math.
+            self._crash_released.clear()
         return drained
 
     @property

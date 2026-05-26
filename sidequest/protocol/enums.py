@@ -50,6 +50,14 @@ class MessageType(StrEnum):
     ACTION_QUEUE = "ACTION_QUEUE"
     CHAPTER_MARKER = "CHAPTER_MARKER"
     ERROR = "ERROR"
+    # Story 67-1: inbound crash signal from a client whose render subtree
+    # threw (e.g. a GameBoard ErrorBoundary catch). The socket stays open, so
+    # the server would otherwise keep awaiting this player at the submit-and-
+    # wait barrier forever. The CLIENT_ERROR handler drops the crashed player
+    # from the current interaction's awaited count and re-evaluates the barrier
+    # — releasing ONLY on an explicit crash signal, never on a slow typist's
+    # silence (CLAUDE.md: never rush a slow typist).
+    CLIENT_ERROR = "CLIENT_ERROR"
     ACTION_REVEAL = "ACTION_REVEAL"
     # ADR-107 (story 50-25): out-of-band OOC GM reply to a player aside.
     # NEVER a turn record — does not advance the world, turn/round, the

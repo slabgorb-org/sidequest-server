@@ -24,6 +24,7 @@ from sidequest.telemetry.spans import (
     encounter_resolved_span,
     encounter_sealed_letter_arity_rejected_span,
     npc_edge_published_span,
+    participant_joined_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -151,10 +152,24 @@ def _publish_combat_edge_to_npcs(
             pass
 
 
+# ADR-116 ("A Confrontation Requires an Other"): a confrontation needs at
+# least one opponent-side participant. Adversarial categories source an
+# opponent (and fail loud if none is available); a one-sided "chase" is not a
+# confrontation — it's narration ("race against time"). Staged rollout:
+# ``combat`` and ``movement`` are enforced now; ``social`` / ``pre_combat`` are
+# deferred pending validation against the social-first packs (victoria,
+# tea_and_murder) so we don't regress a parley shape.
+_ADVERSARIAL_CATEGORIES = frozenset({"combat", "movement"})
+
+
+def _is_adversarial(category: str) -> bool:
+    return category in _ADVERSARIAL_CATEGORIES
+
+
 def _npc_fallback_at_location(
     snapshot: GameSnapshot,
     *,
-    is_combat: bool,
+    adversarial: bool,
     acting_character_name: str | None = None,
 ) -> tuple[list, bool]:
     """Synthesise NpcMention entries from snapshot.npcs at the player's location.
@@ -175,11 +190,14 @@ def _npc_fallback_at_location(
     pulled into the encounter — that would over-register characters who
     happened to be in the roster at all.
 
-    Side: combat encounters default to ``opponent`` for the fallback NPCs
-    (the per-side dials require this so the opposing-side dial can advance
-    when the NPC's beat fires). Non-combat encounters use ``neutral`` —
-    the narrator can re-classify them on a later turn via an explicit
-    ``npcs_present`` mention.
+    Side: adversarial encounters (combat + movement/chase, per ADR-116
+    ``_is_adversarial``) default to ``opponent`` for the fallback NPCs/mobs —
+    the per-side dials require this so the opposing-side dial can advance when
+    the pursuer's beat fires (a chase pursuer filed ``neutral`` froze the dial
+    at 0, story 59-13). Non-adversarial encounters use ``neutral`` — the
+    narrator can re-classify them on a later turn via an explicit
+    ``npcs_present`` mention. ``snapshot.npcs`` carries both narrator-declared
+    NPCs and bestiary mobs (``creature_id`` set); both are seatable here.
 
     Returns ``(mentions, location_available)`` so the caller can decorate
     the empty-result span: ``location_available=False`` means the player
@@ -195,7 +213,7 @@ def _npc_fallback_at_location(
     location = snapshot.party_location(perspective=acting_character_name)
     if not location:
         return [], False
-    default_side = "opponent" if is_combat else "neutral"
+    default_side = "opponent" if adversarial else "neutral"
     fallback: list = []
     for npc in snapshot.npcs:
         if npc.last_seen_location != location:
@@ -284,28 +302,34 @@ def instantiate_encounter_from_trigger(
     # the former is a legitimate empty-scene shape. The flag rides on the
     # ``encounter.no_opponent_available`` span below.
     location_available = True
+    seating_source = "router_named"
     if not npcs_present and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup:
+        seating_source = "location_fallback"
         npcs_present, location_available = _npc_fallback_at_location(
             snapshot,
-            is_combat=cdef.category == "combat",
+            adversarial=_is_adversarial(cdef.category),
             acting_character_name=player_name,
         )
 
-    # Story 45-33: combat empty+empty guard (CLAUDE.md "No Silent Fallbacks").
-    # If narrator's ``npcs_present`` was empty AND ``_npc_fallback_at_location``
-    # returned empty (no NPCs at the player's location, or no resolved
-    # location), a category=combat encounter would currently instantiate
-    # with ``actors=[player only]`` — the original Playtest 3 (Orin) bug
-    # shape. Refuse here and surface the lie-detector signal via OTEL so
-    # the GM panel can confirm the guard engaged.
+    # Story 45-33 / ADR-116: adversarial empty+empty guard (CLAUDE.md "No
+    # Silent Fallbacks"). If narrator's ``npcs_present`` was empty AND
+    # ``_npc_fallback_at_location`` returned empty (no NPCs/mobs at the
+    # player's location, or no resolved location), an adversarial encounter
+    # would instantiate with ``actors=[player only]`` — the original
+    # Playtest 3 (Orin) combat bug shape, and the frozen-dial chase shape
+    # (story 59-13). Refuse here and surface the lie-detector signal via OTEL.
     #
     # Sealed-letter encounters bypass this guard — their own validator below
-    # carries a more specific error message ("got 0 npcs_present") that
-    # downstream tooling already keys on. Non-combat (social, movement) is
-    # also exempt: a parley or chase with a solo player is a legitimate
-    # one-on-one scene shape that the narrator can populate on a later beat.
+    # carries a more specific error message ("got 0 npcs_present").
+    #
+    # ADR-116 corrects story 45-33's movement exemption: "solo" means one
+    # PLAYER, never "no opponent". A chase requires a pursuer; a one-sided
+    # chase is not a confrontation — it's narration ("race against time"),
+    # which the dispatch handler renders as prose when this raises. ``social``
+    # / ``pre_combat`` remain exempt for now (staged rollout — see
+    # ``_ADVERSARIAL_CATEGORIES``).
     if (
-        cdef.category == "combat"
+        _is_adversarial(cdef.category)
         and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup
         and not npcs_present
     ):
@@ -318,8 +342,9 @@ def instantiate_encounter_from_trigger(
         ):
             pass
         raise NoOpponentAvailableError(
-            f"no opponent available for combat encounter {encounter_type!r} "
-            f"after npc-location fallback (player_name={player_name!r}, "
+            f"no opponent available for adversarial encounter {encounter_type!r} "
+            f"(category={cdef.category!r}) after npc-location fallback "
+            f"(player_name={player_name!r}, "
             f"location={snapshot.party_location(perspective=player_name)!r}, "
             f"location_available={location_available})"
         )
@@ -388,6 +413,20 @@ def instantiate_encounter_from_trigger(
                 side_raw = getattr(npc, "side", None) or "neutral"
                 side = _validate_side(npc_name, side_raw)
                 actors.append(EncounterActor(name=npc_name, role=role, side=side))
+
+        # ADR-116: membership entry is observable. Emit a participant.joined
+        # span per seated actor carrying side + source so the GM panel can
+        # answer "why is this pursuer here?" (router-named vs sourced from the
+        # location roster). Point-in-time span; ``: pass`` like the other
+        # guard spans above.
+        for actor in actors:
+            with participant_joined_span(
+                encounter_type=encounter_type,
+                name=actor.name,
+                side=actor.side,
+                source="seat" if actor.side == "player" else seating_source,
+            ):
+                pass
 
         # Story 45-18 AC3: GM-panel observability.
         # Decorate the init span with the registered combatants so Keith can

@@ -156,9 +156,7 @@ def test_chase_seats_room_npc_as_opponent():
     the PC's location, must seat that NPC as ``side="opponent"`` — not the
     current ``neutral`` (which can never drive the opponent dial)."""
     snap = _snap_with_pc_at_location()
-    snap.npcs.append(
-        _make_npc("Road Raider", role="hostile", last_seen_location=_LOCATION)
-    )
+    snap.npcs.append(_make_npc("Road Raider", role="hostile", last_seen_location=_LOCATION))
     pack = _load_pack()
 
     trigger_encounter(snap, pack, "chase", _PC, npcs_present=[])
@@ -203,9 +201,7 @@ def test_chase_opponent_seating_emits_participant_joined_span(otel_capture):
     seating an opponent emits a ``participant.joined`` span carrying the
     side so the GM panel can answer 'why is this pursuer here?'."""
     snap = _snap_with_pc_at_location()
-    snap.npcs.append(
-        _make_npc("Road Raider", role="hostile", last_seen_location=_LOCATION)
-    )
+    snap.npcs.append(_make_npc("Road Raider", role="hostile", last_seen_location=_LOCATION))
     pack = _load_pack()
 
     trigger_encounter(snap, pack, "chase", _PC, npcs_present=[])
@@ -280,9 +276,7 @@ def test_chase_dial_advances_after_production_seating():
     opponent takes a chase beat. Fails today because the pursuer is seated
     neutral, so ``apply_beat`` skips it (skipped_reason=neutral_actor)."""
     snap = _snap_with_pc_at_location()
-    snap.npcs.append(
-        _make_npc("Road Raider", role="hostile", last_seen_location=_LOCATION)
-    )
+    snap.npcs.append(_make_npc("Road Raider", role="hostile", last_seen_location=_LOCATION))
     pack = _load_pack()
 
     trigger_encounter(snap, pack, "chase", _PC, npcs_present=[])
@@ -294,9 +288,7 @@ def test_chase_dial_advances_after_production_seating():
         ],
         npcs_present=[NpcMention(name="Road Raider", side="opponent", role="hostile")],
     )
-    _apply_narration_result_to_snapshot(
-        snap, result, _PC, pack=pack, room=room_for(snap)
-    )
+    _apply_narration_result_to_snapshot(snap, result, _PC, pack=pack, room=room_for(snap))
 
     enc = snap.encounter
     assert enc is not None
@@ -347,9 +339,7 @@ def test_chase_resolves_when_last_opponent_withdraws(otel_capture):
     # Drive a production turn-apply; with no live Other remaining, the
     # encounter must resolve. (Seam is Dev's to wire per ADR-116 §4.)
     result = NarrationTurnResult(narration="The pursuer peels off into the dust.")
-    _apply_narration_result_to_snapshot(
-        snap, result, _PC, pack=pack, room=room_for(snap)
-    )
+    _apply_narration_result_to_snapshot(snap, result, _PC, pack=pack, room=room_for(snap))
 
     assert snap.encounter.resolved is True, (
         "chase did not resolve after its last opponent withdrew — "

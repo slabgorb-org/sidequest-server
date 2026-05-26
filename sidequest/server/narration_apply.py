@@ -3090,7 +3090,42 @@ def _apply_narration_result_to_snapshot(
         player_name=player_name,
     )
 
+    # ADR-116 §4 — end-on-no-Other. A confrontation ends when its last live
+    # opponent leaves, not only when a dial hits threshold.
+    _resolve_if_no_opponent_remains(snapshot)
+
     return outcome
+
+
+def _resolve_if_no_opponent_remains(snapshot: GameSnapshot) -> None:
+    """ADR-116 §4 — end-on-no-Other (mirror of the player-side yield resolver
+    in ``server/dispatch/yield_action.py``).
+
+    If an active confrontation has seated opponents but none remain live (all
+    ``withdrawn``), resolve it — a confrontation ends when there is no longer
+    an Other, not only when a dial reaches threshold. Emits ``participant.left``
+    per departed opponent so the GM panel sees WHY the encounter ended.
+    """
+    from sidequest.game.encounter import EncounterPhase
+    from sidequest.telemetry.spans import participant_left_span
+
+    enc = getattr(snapshot, "encounter", None)
+    if enc is None or enc.resolved:
+        return
+    opponents = [a for a in enc.actors if a.side == "opponent"]
+    if not opponents or any(not a.withdrawn for a in opponents):
+        return
+    for opp in opponents:
+        with participant_left_span(
+            encounter_type=enc.encounter_type,
+            name=opp.name,
+            side="opponent",
+            reason="withdrawn",
+        ):
+            pass
+    enc.resolved = True
+    enc.outcome = "opponent_withdrew"
+    enc.structured_phase = EncounterPhase.Resolution
 
 
 def _apply_companion_changes(

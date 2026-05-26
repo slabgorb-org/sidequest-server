@@ -31,7 +31,10 @@ from sidequest.audio.library_backend import LibraryBackend
 from sidequest.game.builder import CharacterBuilder
 from sidequest.game.history_chapter import HistoryChapter
 from sidequest.game.lore_store import LoreStore
-from sidequest.game.persistence import SqliteStore
+from sidequest.game.pg.dungeon import PgDungeonRepository
+from sidequest.game.pg.save_repository import PgSaveRepository
+from sidequest.game.pg.telemetry import PgTelemetrySink
+from sidequest.game.repository import DungeonRepository, SaveRepository, TelemetrySink
 from sidequest.game.session import GameSnapshot
 from sidequest.game.shared_world_delta import SharedWorldDelta
 from sidequest.game.weather import WeatherState
@@ -42,6 +45,8 @@ from sidequest.server.image_pacing import ImagePacingThrottle
 from sidequest.server.session_helpers import _resolve_acting_character_name
 
 if TYPE_CHECKING:
+    from psycopg_pool import ConnectionPool
+
     from sidequest.dungeon.lookahead_worker import LookaheadWorkerHandle
     from sidequest.game.monster_manual import MonsterManual
     from sidequest.game.persistence import GameMode
@@ -134,6 +139,45 @@ def _build_pc_descriptor(sd: _SessionData, pc_slug: str) -> dict | None:
     }
 
 
+def _build_pg_repos_for_slug(
+    pool: ConnectionPool,
+    *,
+    slug: str,
+    mode: str,
+    genre_slug: str,
+    world_slug: str,
+) -> tuple[PgSaveRepository, PgDungeonRepository, PgTelemetrySink]:
+    """Construct all three Postgres repositories for a session slug (ADR-115 D1).
+
+    Called from the connect handler after the game row has been resolved.
+    ``PgSaveRepository.for_slug`` is idempotent on ``session_slug`` — safe to
+    call on every connect for an existing session.
+
+    Returns a ``(repository, dungeon_repository, telemetry_sink)`` triple
+    whose members all share the same ``session_id``.
+
+    This is a synchronous call (``ensure_session`` uses a psycopg_pool
+    borrowed connection).  The connect handler runs the whole path in an
+    async function; call this inside
+    ``await anyio.to_thread.run_sync(lambda: _build_pg_repos_for_slug(...))``
+    when the surrounding async context needs strict event-loop hygiene.  The
+    existing connect handler pattern calls blocking operations directly (e.g.
+    ``GenreLoader.load``), so the convention of calling sync DB helpers from
+    async is already established here — D1 follows the same pattern.
+    """
+    repository = PgSaveRepository.for_slug(
+        pool,
+        slug=slug,
+        mode=mode,
+        genre_slug=genre_slug,
+        world_slug=world_slug,
+    )
+    session_id = repository.session_id
+    dungeon_repository = PgDungeonRepository(pool, session_id=session_id)
+    telemetry_sink = PgTelemetrySink(pool, session_id)
+    return repository, dungeon_repository, telemetry_sink
+
+
 class _State(Enum):
     AwaitingConnect = auto()
     Creating = auto()
@@ -149,7 +193,9 @@ class _SessionData:
     player_name: str
     player_id: str
     snapshot: GameSnapshot
-    store: SqliteStore
+    repository: SaveRepository  # PgSaveRepository — ADR-115 D1 (replaces SqliteStore)
+    dungeon_repository: DungeonRepository  # PgDungeonRepository — ADR-115 D1
+    telemetry_sink: TelemetrySink  # PgTelemetrySink — ADR-115 D1
     genre_pack: GenrePack
     orchestrator: Orchestrator
     # Back-reference to the per-slug SessionRoom. Populated by the connect

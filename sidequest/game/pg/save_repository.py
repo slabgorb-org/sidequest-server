@@ -68,6 +68,11 @@ class PgSaveRepository:
         self._scrapbook = PgScrapbookStore(pool, session_id=session_id)
         self._promotions = PgPromotionStore(pool, session_id=session_id)
 
+    @property
+    def session_id(self) -> int:
+        """Public accessor for the bound session_id (ADR-115 D1)."""
+        return self._sid
+
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------

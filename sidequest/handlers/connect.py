@@ -269,10 +269,31 @@ class ConnectHandler:
             store.initialize()
             from sidequest.telemetry.watcher_hub import bind_event_store as _bind_event_store
 
-            _bind_event_store(store)
             row = get_game(store, slug)
             if row is None:
                 return [_error_msg(f"unknown game slug: {slug}")]
+
+            # ADR-115 D1: construct Postgres repositories for the live session.
+            # The SqliteStore above is kept for room.bind_world + forensic/TG-E reads
+            # (D2 will migrate room.bind_world; D3-D7 migrate the remaining consumers).
+            from sidequest.game import db_pool as _db_pool
+            from sidequest.server.session_state import _build_pg_repos_for_slug
+
+            _pg_pool = _db_pool.get_pool()
+            _pg_repository, _pg_dungeon_repository, _pg_telemetry_sink = _build_pg_repos_for_slug(
+                _pg_pool,
+                slug=slug,
+                mode=str(row.mode.value) if hasattr(row.mode, "value") else str(row.mode),
+                genre_slug=row.genre_slug,
+                world_slug=row.world_slug,
+            )
+            # D1: bind the Postgres save repository to the watcher hub for encounter
+            # event persistence.  watcher_hub._maybe_persist_encounter_row and
+            # _persist_turn_telemetry still reach ._conn on the bound object — those
+            # raw reach-throughs are D5's to remove.  Passing the repository here
+            # is the minimal D1 seam: it replaces bind_event_store(store) and the
+            # hub stores the repository for D5 to wire properly.
+            _bind_event_store(_pg_repository)
             if not player_id:
                 player_id = str(uuid.uuid4())
 
@@ -767,12 +788,15 @@ class ConnectHandler:
                 world_slug=row.world_slug,
                 player_name=display_name,
                 player_id=player_id,
-                # ADR-037 Python port: take snapshot/store directly from the
-                # canonical room binding so future readers see the contract
-                # explicitly. Equivalent to the local ``snapshot``/``store``
-                # references after the idempotent ``bind_world`` above.
+                # ADR-037 Python port: snapshot still comes from the canonical
+                # room binding so all sessions share the same in-memory object.
                 snapshot=room.snapshot,
-                store=room.store,
+                # ADR-115 D1: carry the three Postgres repositories on the session.
+                # room.store (SqliteStore) is kept alive on the room for D2-D7
+                # consumers; _SessionData no longer holds a SqliteStore reference.
+                repository=_pg_repository,
+                dungeon_repository=_pg_dungeon_repository,
+                telemetry_sink=_pg_telemetry_sink,
                 genre_pack=genre_pack,
                 orchestrator=shared_orchestrator,
                 _room=room,  # back-reference for downstream Session access (Task D)

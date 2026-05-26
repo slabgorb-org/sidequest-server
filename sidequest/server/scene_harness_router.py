@@ -163,6 +163,21 @@ def create_scene_harness_router() -> APIRouter:
             world_slug=snapshot.world_slug,
         )
 
+        # ADR-115 D1: also register the session in Postgres so the pg
+        # repositories are available when the connect handler resumes
+        # from this slug.  The SQLite write above is kept intact (D2 will
+        # migrate room.bind_world; D3-D7 migrate remaining consumers).
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.server.session_state import _build_pg_repos_for_slug
+
+        _build_pg_repos_for_slug(
+            _db_pool.get_pool(),
+            slug=slug,
+            mode="solo",
+            genre_slug=snapshot.genre_slug,
+            world_slug=snapshot.world_slug,
+        )
+
         _hub.publish_event(
             "scene_harness.persist.ok",
             {
@@ -192,12 +207,14 @@ def create_scene_harness_router() -> APIRouter:
                     continue
                 if not isinstance(raw, dict) or "genre" not in raw or "world" not in raw:
                     continue
-                results.append({
-                    "name": stem,
-                    "genre": raw["genre"],
-                    "world": raw["world"],
-                    "description": raw.get("description"),
-                })
+                results.append(
+                    {
+                        "name": stem,
+                        "genre": raw["genre"],
+                        "world": raw["world"],
+                        "description": raw.get("description"),
+                    }
+                )
 
         _hub.publish_event(
             "scene_harness.list",

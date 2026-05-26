@@ -203,6 +203,10 @@ def test_append_encounter_event_returns_event_row_with_seq(repo_and_sink) -> Non
 
     assert row.seq >= 1
     assert row.kind == "ENCOUNTER_START"
+    # Guards the documented CURRENT_TIMESTAMP → ISO-now change: created_at is a
+    # non-empty ISO-8601 string parseable by datetime.fromisoformat.
+    assert isinstance(row.created_at, str) and row.created_at
+    datetime.fromisoformat(row.created_at)
 
     with pool.connection() as conn:
         db_row = conn.execute(

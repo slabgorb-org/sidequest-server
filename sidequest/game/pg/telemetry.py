@@ -39,12 +39,7 @@ from psycopg_pool import ConnectionPool
 
 from sidequest.game.event_log import EventRow
 from sidequest.game.pg._conn import session_tx
-from sidequest.game.pg.events import PgSaveTransaction
-
-_INSERT_TELEMETRY = """
-INSERT INTO turn_telemetry (session_id, event_seq, round, ts, component, event_type, payload_json)
-VALUES (%s, %s, %s, %s, %s, %s, %s)
-"""
+from sidequest.game.pg.events import _INSERT_TELEMETRY, PgSaveTransaction
 
 
 class PgTelemetrySink:

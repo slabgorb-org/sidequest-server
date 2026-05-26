@@ -327,7 +327,19 @@ def _opening_with_region(region_id: str | None) -> SimpleNamespace:
 
 
 def _region_snapshot(current_region: str) -> SimpleNamespace:
-    return SimpleNamespace(current_region=current_region, discovered_regions=[current_region])
+    # Movement subsystem §Q0: _bind_current_region_from_opening now seeds the
+    # per-PC region map after binding the anchor. Fit the lightweight mock to
+    # the new shape — empty seats/pc_regions + a no-op seed stub (this test
+    # exercises the anchor rebind + watcher event, not per-PC seeding, which is
+    # covered in tests/game/test_pc_regions.py).
+    snap = SimpleNamespace(
+        current_region=current_region,
+        discovered_regions=[current_region],
+        player_seats={},
+        pc_regions={},
+    )
+    snap.seed_pc_regions = lambda region_id, **_: 0
+    return snap
 
 
 def test_bind_region_rebinds_and_emits_patch_span(captured_events) -> None:

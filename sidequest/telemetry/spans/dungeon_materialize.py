@@ -312,6 +312,9 @@ SPAN_ROUTES[SPAN_FRONTIER_REGION_TRANSITION] = SpanRoute(
         "from_region": _attr("from_region")(s),
         "to_region": _attr("to_region")(s),
         "observers": _attr("observers")(s),
+        # Movement subsystem §Q2 — WHICH PC moved (split-party legibility;
+        # two PCs moving = two spans with distinct pc_name).
+        "pc_name": _attr("pc_name")(s),
     },
 )
 
@@ -570,17 +573,20 @@ def frontier_region_transition_span(
     from_region: str,
     to_region: str,
     observers: int,
+    pc_name: str = "",
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
     """Open the ``frontier.region_transition`` span for one real
-    production region transition (Plan 7 Task 6 wiring seam)."""
+    production PER-PC region transition (Plan 7 Task 6 wiring seam,
+    Movement subsystem §Q2). ``pc_name`` is which PC moved."""
     with Span.open(
         SPAN_FRONTIER_REGION_TRANSITION,
         {
             "from_region": from_region,
             "to_region": to_region,
             "observers": observers,
+            "pc_name": pc_name,
             **attrs,
         },
         tracer_override=_tracer,

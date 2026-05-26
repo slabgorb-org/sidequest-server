@@ -59,6 +59,10 @@ def init_region_location(snap: GameSnapshot, cartography: CartographyConfig) -> 
     snap.current_region = starting
     if starting not in snap.discovered_regions:
         snap.discovered_regions.append(starting)
+    # Movement subsystem §Q0: seed seated PCs' per-PC region from the turn-1
+    # starting region so region_for(perspective=pc) resolves by movement time
+    # (no current_region fallback).
+    snap.seed_pc_regions(starting)
     return starting
 
 

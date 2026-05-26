@@ -109,15 +109,19 @@ def registered_observer_count() -> int:
 def notify_region_transition(
     snapshot: GameSnapshot,
     *,
+    pc_name: str,
     from_region: str | None,
     to_region: str,
 ) -> None:
-    """Fire the frontier seam for one real region transition.
+    """Fire the frontier seam for one real PER-PC region transition.
 
-    Called from ``GameSnapshot._apply_world_patch_inner`` AFTER
-    ``snap.current_region`` is set to ``to_region`` (the real production
-    region-transition point). ``from_region`` is the pre-transition
-    region (may be ``""``/``None`` before the first region is set).
+    Called from ``GameSnapshot._apply_world_patch_inner`` AFTER the moving
+    PC's ``pc_regions[pc_name]`` is set to ``to_region`` (the real production
+    per-PC region-transition point — Movement subsystem §Q2). ``pc_name`` is
+    WHICH PC moved (split-party legibility); the spawn/teleport anchor path
+    passes the seated PCs it seeded (or a ``"__anchor__"`` sentinel when no PC
+    is seated yet). ``from_region`` is that PC's pre-transition region (may be
+    ``""``/``None`` before their first region is set).
 
     Two real effects, in order:
 
@@ -139,18 +143,24 @@ def notify_region_transition(
         from_region=from_region or "",
         to_region=to_region,
         observers=len(_OBSERVERS),
+        pc_name=pc_name,
     ):
-        # 1. Promote-to-active: the crossed-into region is now recognized
-        #    (ADR-055 region_init dedup-append, extended).
+        # 1. Promote-to-active: the crossed-into region is now recognized in
+        #    the SHARED fog-of-war set (a region ANY PC entered is on the
+        #    whole table's map — the existing fog model; ADR-055 region_init
+        #    dedup-append, extended).
         if to_region not in snapshot.discovered_regions:
             snapshot.discovered_regions.append(to_region)
 
         # 2. Frontier-approach dispatch to Task 7's worker(s). Snapshot
         #    of the list so an observer that (un)registers mid-dispatch
         #    does not mutate the iteration. Loud: no try/except swallow.
+        #    ``pc_name`` threads through so the worker materializes the
+        #    frontier around THIS PC's new region (split-party legibility).
         for observer in list(_OBSERVERS):
             observer(
                 snapshot=snapshot,
+                pc_name=pc_name,
                 from_region=from_region,
                 to_region=to_region,
             )

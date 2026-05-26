@@ -454,6 +454,9 @@ def _bind_current_region_from_opening(
     snapshot.current_region = region_id
     if region_id not in snapshot.discovered_regions:
         snapshot.discovered_regions.append(region_id)
+    # Movement subsystem §Q0: seed seated PCs' per-PC region (chargen complete,
+    # seats known) so region_for(perspective=pc) resolves by movement time.
+    snapshot.seed_pc_regions(region_id)
 
     _watcher_publish(
         "state_patch.current_region",

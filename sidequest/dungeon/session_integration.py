@@ -212,6 +212,10 @@ async def attach_dungeon_to_session(
             snapshot.current_region = ENTRANCE_ID
             if ENTRANCE_ID not in snapshot.discovered_regions:
                 snapshot.discovered_regions.append(ENTRANCE_ID)
+            # Movement subsystem §Q0: seed seated PCs' per-PC region so
+            # region_for(perspective=pc) resolves by movement time (no
+            # current_region fallback).
+            snapshot.seed_pc_regions(ENTRANCE_ID)
             _span.set_attribute("bound_current_region", ENTRANCE_ID)
 
         handle = register_lookahead_worker(

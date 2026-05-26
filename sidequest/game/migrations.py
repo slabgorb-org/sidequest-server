@@ -237,6 +237,56 @@ def _migrate_s3_party_location(out: dict[str, Any]) -> dict[str, Any] | None:
     return {"s3_party_location_seeded": seeded}
 
 
+def _migrate_s4_pc_regions(out: dict[str, Any]) -> dict[str, Any] | None:
+    """S4 (Movement subsystem §Q0) — seed per-PC ``pc_regions`` from the
+    legacy party-level ``current_region`` anchor.
+
+    Pre-this-story saves carry only the singular ``current_region`` (the
+    party-level region). The per-PC model needs ``pc_regions[name]`` for each
+    seated PC; ``region_for`` NEVER falls back to ``current_region`` (No Silent
+    Fallbacks), so an unmigrated save would have no per-PC region at all. This
+    migration seeds it.
+
+    Behaviour (mirrors ``_migrate_s3_party_location``):
+    - If ``pc_regions`` is already present and truthy: no-op (canonical save —
+      do not clobber live per-PC truth).
+    - If ``current_region`` is absent/falsy: no-op (nothing to seed from).
+    - If ``player_seats`` is absent/empty: no-op (no seated PCs to seed).
+    - Otherwise seed ``pc_regions[name] = current_region`` for each seated PC.
+
+    ``current_region`` is RETAINED (it stays the spawn/teleport anchor) — NOT
+    dropped. Returns OTEL attributes when any seat was seeded, else None.
+    """
+    if out.get("pc_regions"):
+        return None
+
+    current_region = out.get("current_region")
+    if not current_region:
+        return None
+
+    seats = out.get("player_seats") or {}
+    if not isinstance(seats, dict) or not seats:
+        return None
+
+    pc_regions = out.setdefault("pc_regions", {})
+    if not isinstance(pc_regions, dict):
+        return None
+
+    seeded = 0
+    for character_name in seats.values():
+        if not character_name:
+            continue
+        if character_name in pc_regions:
+            continue
+        pc_regions[character_name] = current_region
+        seeded += 1
+
+    if seeded == 0:
+        return None
+
+    return {"s4_pc_regions_seeded": seeded}
+
+
 def migrate_legacy_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     """Rewrite a legacy snapshot dict into the canonical shape.
 
@@ -253,6 +303,7 @@ def migrate_legacy_snapshot(data: dict[str, Any]) -> dict[str, Any]:
         _migrate_s1_world_confrontations,
         _migrate_s2_npc_registry_split,
         _migrate_s3_party_location,
+        _migrate_s4_pc_regions,
     ):
         attrs = sub(out)
         if attrs is not None:

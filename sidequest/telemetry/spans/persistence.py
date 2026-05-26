@@ -92,6 +92,28 @@ SPAN_ROUTES[SPAN_PARTY_LOCATION_QUERY] = SpanRoute(
 
 
 # ---------------------------------------------------------------------------
+# Snapshot per-PC region query — Movement subsystem §Q0 (per-PC analogue of
+# the party-location query above). Emitted by ``GameSnapshot.region_for()``.
+# Same three-mode contract over ``pc_regions`` instead of ``character_locations``
+# — ``party_split=True`` flags seated PCs in disagreement on their graph region
+# (a genuinely split party, per ADR-037). The GM panel's lie-detector for the
+# movement subsystem: it can SEE a split rather than trusting one stream of prose.
+# ---------------------------------------------------------------------------
+SPAN_REGION_QUERY = "snapshot.region_query"
+SPAN_ROUTES[SPAN_REGION_QUERY] = SpanRoute(
+    event_type="state_transition",
+    component="snapshot",
+    extract=lambda span: {
+        "field": "snapshot",
+        "op": "region_query",
+        "perspective_supplied": (span.attributes or {}).get("perspective_supplied", False),
+        "consensus_found": (span.attributes or {}).get("consensus_found", False),
+        "party_split": (span.attributes or {}).get("party_split", False),
+    },
+)
+
+
+# ---------------------------------------------------------------------------
 # Session lifecycle — sidequest/game/persistence.py
 # Fires every time SqliteStore.init_session() runs — including on a fresh
 # slot — so the GM panel gets the negative confirmation that reinit ran

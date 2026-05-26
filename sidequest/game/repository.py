@@ -1,4 +1,4 @@
-"""Persistence repository interface (ADR-115, Phase 0 → A7, B1).
+"""Persistence repository interface (ADR-115, Phase 0 → A7, B1, C1).
 
 Decouples save-store consumers from the concrete storage engine. The
 ``transaction()`` context manager is the unit-of-work seam: multiple
@@ -12,6 +12,8 @@ Slice 1a (initial):  append_event / read_events_since / latest_event_seq /
 A7 (this file):      Full typed surface — snapshots, narrative, scrapbook,
                      promotions, session lifecycle, write_telemetry.
 B1 (this file):      DungeonRepository Protocol — dungeon persistence surface.
+C1 (this file):      TelemetrySink Protocol — out-of-frame telemetry + encounter
+                     event writes (PgTelemetrySink implementation in pg/telemetry.py).
 
 Compatibility note
 ------------------
@@ -172,6 +174,44 @@ class SaveRepository(Protocol):
     def get_game(self, *, slug: str) -> GameRow | None: ...
 
     def close(self) -> None: ...
+
+
+# ---------------------------------------------------------------------------
+# Telemetry sink (ADR-115 C1)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class TelemetrySink(Protocol):
+    """Out-of-frame telemetry + encounter-event persistence.
+
+    ONE SINK, TWO ENTRY POINTS (not a parallel mechanism):
+
+    * ``record()``                — out-of-frame standalone write (event_seq=NULL).
+      Mirrors the ``else: with conn:`` branch of
+      ``watcher_hub._persist_turn_telemetry``.
+
+    * ``append_encounter_event()`` — appends to the events table and returns
+      an EventRow.  Replaces ``watcher_hub._maybe_persist_encounter_row``'s
+      raw ``INSERT INTO events``.
+
+    The THIRD entry point — the in-frame path where telemetry rides the open
+    turn transaction — lives on ``SaveTransaction.write_telemetry``, NOT here.
+    That path is called by ``emit_mechanical_census`` inside the ``emit_event``
+    transaction in Task-Group D; it commits atomically with the event row.
+    """
+
+    def record(
+        self,
+        *,
+        round: int | None,
+        ts: str,
+        component: str,
+        event_type: str,
+        payload_json: str,
+    ) -> None: ...
+
+    def append_encounter_event(self, *, kind: str, payload_json: str) -> EventRow: ...
 
 
 # ---------------------------------------------------------------------------

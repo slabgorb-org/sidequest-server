@@ -362,6 +362,41 @@ def test_current_region_anchor_fires_transition_per_seated_pc() -> None:
     )
 
 
+def test_current_region_anchor_no_seated_pc_fires_single_sentinel_transition() -> None:
+    """No seated PCs AND no characters (the dungeon-bootstrap wiring-test shape,
+    e.g. ``GameSnapshot(genre_slug=..., world_slug=...)`` before chargen): the
+    spawn anchor must still fire EXACTLY ONE frontier transition (pc_name
+    ``"__anchor__"``) so the look-ahead worker stays engaged — and must NOT
+    leak a junk ``pc_regions["__anchor__"]`` entry. This is the content-free
+    proxy for the materializer/lookahead wiring tests' single-fire assertion."""
+    from sidequest.dungeon.frontier_hook import (
+        register_frontier_observer,
+        unregister_frontier_observer,
+    )
+
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+
+    seen: list[str] = []
+
+    def _spy(*, snapshot: Any, pc_name: str, from_region: str | None, to_region: str) -> None:
+        seen.append(pc_name)
+
+    register_frontier_observer(_spy)
+    try:
+        snap.apply_world_patch(WorldStatePatch(current_region="entrance"))
+    finally:
+        unregister_frontier_observer(_spy)
+
+    assert seen == ["__anchor__"], (
+        "no-seated-PC spawn bootstrap must fire exactly one sentinel transition"
+    )
+    assert snap.current_region == "entrance"
+    assert "__anchor__" not in snap.pc_regions, (
+        "the sentinel pc_name must NOT leak into pc_regions"
+    )
+    assert snap.pc_regions == {}, "no seated PC / character → nothing to seed"
+
+
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ import pytest
 
 import sidequest.server.session_handler  # noqa: F401 — ordering side-effect
 from sidequest.game.region_init import RegionInitError
-from sidequest.server.websocket_session_handler import (
+from sidequest.server.websocket_handlers.opening_helpers import (
     _bind_current_region_from_opening,
     _populate_opening_directive_on_chargen_complete,
     _should_fire_opening_narration,
@@ -48,7 +48,7 @@ def captured_events(monkeypatch) -> list[tuple[str, dict, dict]]:
         captured.append((event_type, fields, {"component": component, "severity": severity}))
 
     monkeypatch.setattr(
-        "sidequest.server.websocket_session_handler._watcher_publish",
+        "sidequest.server.websocket_handlers.opening_helpers._watcher_publish",
         fake_publish,
     )
     return captured
@@ -193,7 +193,7 @@ def test_populate_emits_skip_event_on_resolution_failed(captured_events, monkeyp
         raise OpeningResolutionError("no opening matches mode=multiplayer player_count=1")
 
     monkeypatch.setattr(
-        "sidequest.server.websocket_session_handler._resolve_opening_post_chargen",
+        "sidequest.server.websocket_handlers.opening_helpers._resolve_opening_post_chargen",
         boom,
     )
 

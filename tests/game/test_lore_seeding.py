@@ -295,7 +295,7 @@ def test_websocket_session_handler_imports_genre_and_world_seeders() -> None:
     is therefore: the handler imports ``seed_world_lore`` (which itself
     fans out to the genre + world seeders).
     """
-    import sidequest.server.websocket_session_handler as wsh
+    import sidequest.server.websocket_handlers.chargen_mixin as wsh
 
     assert hasattr(wsh, "seed_world_lore"), (
         "websocket_session_handler must import seed_world_lore — the "

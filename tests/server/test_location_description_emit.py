@@ -275,7 +275,9 @@ def test_emit_fires_no_source_when_neither_path_resolves(tmp_path, monkeypatch):
     when the lie detector is firing — silent skip would mask a real
     content gap. Mirrors the watcher contract documented on the helper.
     """
-    from sidequest.server import websocket_session_handler as wsh
+    from sidequest.server.websocket_handlers import (
+        map_emit as wsh,  # patches _watcher_publish where the helper now binds it
+    )
     from sidequest.server.websocket_session_handler import (
         _maybe_emit_location_description,
     )

@@ -787,7 +787,7 @@ class TestArchetypeGateResolverRaised:
                 raise GenreValidationError(message="test-forced resolver raise")
 
             monkeypatch.setattr(
-                "sidequest.server.websocket_session_handler.resolve_archetype",
+                "sidequest.server.websocket_handlers.chargen_mixin.resolve_archetype",
                 _raise,
             )
 
@@ -972,7 +972,7 @@ class TestArchetypeGateDiscriminatorRobustness:
                 }
 
             monkeypatch.setattr(
-                "sidequest.server.websocket_session_handler.apply_archetype_resolved",
+                "sidequest.server.websocket_handlers.chargen_mixin.apply_archetype_resolved",
                 _apply_with_slash,
             )
             # Both hints set — so the resolver is reached and the patched

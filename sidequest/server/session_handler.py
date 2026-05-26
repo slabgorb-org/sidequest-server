@@ -342,9 +342,11 @@ from sidequest.server.session_helpers import (  # noqa: E402 — back-compat re-
     build_secret_note_events,
     emit_secret_notes,
 )
+from sidequest.server.websocket_handlers.opening_helpers import (  # noqa: E402 — back-compat re-export
+    _populate_opening_directive_on_chargen_complete,
+)
 from sidequest.server.websocket_session_handler import (  # noqa: E402 — back-compat re-export
     WebSocketSessionHandler,
-    _populate_opening_directive_on_chargen_complete,
 )
 
 __all__ = [

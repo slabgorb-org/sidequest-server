@@ -257,7 +257,7 @@ def dispatch_dice_throw(
     ruleset = get_ruleset_module(pack.rules.ruleset)
 
     cdef: ConfrontationDef | None = ruleset.find_confrontation(
-        pack.rules.confrontations if pack.rules else [],
+        pack.rules.confrontations,
         encounter.encounter_type,
     )
     if cdef is None:
@@ -744,12 +744,15 @@ def new_request_id() -> str:
 # ---------------------------------------------------------------------------
 # The three helpers were extracted to ``sidequest.server.dispatch.damage_roll``
 # (Task 11) so that ``narration_apply._resolve_opposed_check_branch`` can also
-# use them without copy-paste. They are re-imported at module top and aliased
-# below for back-compat with any direct callers that reference the private names.
+# use them without copy-paste. They are re-imported at module top for use here.
 #
 # ``damage_request_from_spec`` (public) is re-exported from the import block.
-# ``_generate_server_faces`` and ``_resolve_damage_spec_from_beat_and_actor``
-# are re-aliased here as private names (the import block already does this).
+# ``_generate_server_faces`` is re-aliased as a private name (the import block
+# already does this) and used in the strike-damage branch above.
+#
+# Damage resolution itself now routes through ``ruleset.resolve_damage()`` (the
+# bound RulesetModule), so ``resolve_damage_spec_from_beat_and_actor`` is no
+# longer imported here directly.
 #
 # ``_DAMAGE_THROW_PARAMS`` is also imported from ``damage_roll`` and used in
 # the broadcast composition below.

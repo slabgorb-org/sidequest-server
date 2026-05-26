@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from sidequest.game.ruleset.native import NativeRulesetModule
+from tests.game.ruleset._dispatch_fixture import resolve_one_combat_beat
 
 
 def test_dispatch_uses_bound_module_for_stat_and_dc():
@@ -24,8 +25,6 @@ def test_dispatch_uses_bound_module_for_stat_and_dc():
     spy.compute_dc = spy_dc  # type: ignore[method-assign]
 
     with patch("sidequest.server.dispatch.dice.get_ruleset_module", return_value=spy):
-        from tests.game.ruleset._dispatch_fixture import resolve_one_combat_beat
-
         outcome = resolve_one_combat_beat()
 
     assert calls["stat_modifier"] >= 1, "dispatch did not route stat_modifier through the module"

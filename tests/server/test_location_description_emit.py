@@ -402,3 +402,129 @@ def test_emit_includes_active_overlay_in_payload(tmp_path, monkeypatch):
     assert overlay_summary.prose_suffix == "Smoke drifts from the alley."
     assert overlay_summary.entity_delta_count == 1
     assert "Smoke drifts" in sent_msg.payload.prose
+
+
+# ---------------------------------------------------------------------------
+# Story 63-6: LocationPanel region-header reference deep-link.
+#
+# The region header in LocationPanel becomes a hyperlink into the
+# /reference/lore wiki when the region has a lore-page anchor. The
+# authoritative source of "which regions have a lore anchor" is the world's
+# history.yaml points_of_interest[].slug set (Story 63-8) — the same manifest
+# the lore page's geography presenter uses to emit `location-{slug}` card ids.
+# These are RED tests for that wiring; production code does not exist yet.
+# ---------------------------------------------------------------------------
+
+
+def test_location_description_payload_accepts_reference_url():
+    """AC2: LocationDescriptionPayload carries an optional reference_url.
+
+    The model uses extra=forbid, so this raises until the field is added —
+    a clean RED. The field is the region-header deep-link URL.
+    """
+    from sidequest.protocol.models import LocationDescriptionPayload
+
+    p = LocationDescriptionPayload(
+        region_id="test_room",
+        prose="x",
+        reference_url="/reference/lore/test_pack/test_world#location-test-room",
+    )
+    assert p.reference_url == "/reference/lore/test_pack/test_world#location-test-room"
+
+
+def test_location_description_payload_reference_url_defaults_none():
+    """AC1 graceful default: omitting reference_url yields None, so old
+    snapshots and region-mode worlds without lore anchors round-trip cleanly."""
+    from sidequest.protocol.models import LocationDescriptionPayload
+
+    p = LocationDescriptionPayload(region_id="test_room", prose="x")
+    assert p.reference_url is None
+
+
+def test_emit_populates_reference_url_when_region_is_a_known_poi(tmp_path, monkeypatch):
+    """AC1 wiring (positive): a region whose slug is in the world's
+    history.yaml points_of_interest gets a region-header lore URL on the
+    emitted payload.
+
+    POI slugs are the authoritative source of which locations have a
+    /reference/lore anchor (Story 63-8 `_load_poi_image_slugs`). This keeps
+    the dev honest: the handler must actually resolve the region against that
+    manifest and set the field — not leave it defaulted to None.
+    """
+    from sidequest.protocol.messages import LocationDescriptionMessage
+    from sidequest.server.websocket_session_handler import (
+        _maybe_emit_location_description,
+    )
+
+    genre_root = _seed_synthetic_world(tmp_path)
+    world_dir = genre_root / "worlds" / "test_world"
+    # The region "test_room" is a point of interest with a lore page anchor.
+    (world_dir / "history.yaml").write_text(
+        "points_of_interest:\n"
+        "  - slug: test_room\n"
+        "    name: Test Square\n"
+    )
+    _patch_genre_loader_find(monkeypatch, genre_root)
+
+    emit_fn = MagicMock()
+    sd = MagicMock()
+    sd.genre_slug = "test_pack"
+    sd.world_slug = "test_world"
+    sd.player_id = ""
+    sd.genre_pack = MagicMock()
+    sd.genre_pack.worlds = {"test_world": MagicMock()}
+    snapshot = MagicMock()
+    snapshot.character_locations = {"alice": "test_room"}
+
+    _maybe_emit_location_description(
+        MagicMock(),
+        sd=sd,
+        snapshot=snapshot,
+        actor="alice",
+        emit_fn=emit_fn,
+    )
+
+    emit_fn.assert_called_once()
+    sent_msg = emit_fn.call_args.args[0]
+    assert isinstance(sent_msg, LocationDescriptionMessage)
+    assert sent_msg.payload.reference_url == (
+        "/reference/lore/test_pack/test_world#location-test-room"
+    )
+
+
+def test_emit_reference_url_is_none_when_region_has_no_poi_anchor(tmp_path, monkeypatch):
+    """AC1 wiring (graceful None / no silent fallback): a region with no
+    matching POI slug emits reference_url=None — never a guessed or broken URL.
+
+    The synthetic world has no history.yaml, so there are no lore anchors.
+    """
+    from sidequest.protocol.messages import LocationDescriptionMessage
+    from sidequest.server.websocket_session_handler import (
+        _maybe_emit_location_description,
+    )
+
+    genre_root = _seed_synthetic_world(tmp_path)  # no history.yaml -> no POIs
+    _patch_genre_loader_find(monkeypatch, genre_root)
+
+    emit_fn = MagicMock()
+    sd = MagicMock()
+    sd.genre_slug = "test_pack"
+    sd.world_slug = "test_world"
+    sd.player_id = ""
+    sd.genre_pack = MagicMock()
+    sd.genre_pack.worlds = {"test_world": MagicMock()}
+    snapshot = MagicMock()
+    snapshot.character_locations = {"alice": "test_room"}
+
+    _maybe_emit_location_description(
+        MagicMock(),
+        sd=sd,
+        snapshot=snapshot,
+        actor="alice",
+        emit_fn=emit_fn,
+    )
+
+    emit_fn.assert_called_once()
+    sent_msg = emit_fn.call_args.args[0]
+    assert isinstance(sent_msg, LocationDescriptionMessage)
+    assert sent_msg.payload.reference_url is None

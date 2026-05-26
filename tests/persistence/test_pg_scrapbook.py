@@ -108,13 +108,33 @@ def test_update_image_url_returns_false_when_no_row_at_all(store) -> None:
 
 
 def test_update_image_url_targets_most_recent_null_row(store) -> None:
-    """Two rows for the same turn — update patches the most-recently-inserted NULL one."""
+    """Two NULL-image rows for the same turn — update patches EXACTLY ONE (the
+    most-recently-inserted), proving the LIMIT-1/DESC-id CTE targeting.
+
+    The image_url_map keys by turn_id, so it can't distinguish one-vs-both
+    patched. We assert directly against the table: exactly one row at this
+    turn has a non-NULL image_url and exactly one is still NULL.
+    """
     store.append_scrapbook_entry(**_entry_kwargs(turn_id=2, image_url=None))
     store.append_scrapbook_entry(**_entry_kwargs(turn_id=2, image_url=None))
-    # Only ONE row should be updated (the most recent).
     result = store.update_scrapbook_image_url(turn_id=2, image_url="https://cdn/t2.jpg")
     assert result is True
-    # Exactly one entry in the map (the most-recent patched row).
+
+    # Raw count: exactly one row patched, exactly one still NULL.
+    with store._pool.connection() as conn:
+        non_null = conn.execute(
+            "SELECT COUNT(*) FROM scrapbook_entries "
+            "WHERE session_id = %s AND turn_id = %s AND image_url IS NOT NULL",
+            (store._sid, 2),
+        ).fetchone()[0]
+        still_null = conn.execute(
+            "SELECT COUNT(*) FROM scrapbook_entries "
+            "WHERE session_id = %s AND turn_id = %s AND image_url IS NULL",
+            (store._sid, 2),
+        ).fetchone()[0]
+    assert non_null == 1, "LIMIT-1 CTE must patch exactly one row, not both"
+    assert still_null == 1, "the other NULL-image row must remain untouched"
+
     url_map = store.scrapbook_image_url_map()
     assert url_map.get(2) == "https://cdn/t2.jpg"
 
@@ -138,12 +158,16 @@ def test_turn_ids_capped_at_max_turn(store) -> None:
 
 
 def test_turn_ids_excludes_turn_zero(store) -> None:
-    """turn_id=0 is noise — must not appear even if somehow written."""
-    # We can't INSERT turn_id=0 directly via our adapter (it starts at 1 per design),
-    # but confirm that scrapbook_turn_ids with max_turn=10 never returns 0.
-    store.append_scrapbook_entry(**_entry_kwargs(turn_id=1))
+    """A row written at turn_id=0 must be EXCLUDED by the ``turn_id >= 1`` lower bound.
+
+    Writes a single turn_id=0 row (the adapter accepts it), then asserts the
+    returned set is empty — proving the row was persisted-but-filtered, not
+    merely absent.
+    """
+    store.append_scrapbook_entry(**_entry_kwargs(turn_id=0))
     ids = store.scrapbook_turn_ids(max_turn=10)
     assert 0 not in ids
+    assert ids == set(), "turn_id=0 is the only row; the lower bound must exclude it"
 
 
 def test_turn_ids_distinct_for_repeated_same_turn(store) -> None:

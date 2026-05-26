@@ -3423,6 +3423,20 @@ class WebSocketSessionHandler:
                 # fallback. Default (env unset) preserves the ADR-113
                 # fail-loud contract.
                 try:
+                    # Movement subsystem (§0 context threading): the
+                    # dungeon graph store + palette + worker handle live on
+                    # the lookahead handle (wired by attach_dungeon_to_session
+                    # for beneath_sunden; None for every other world). Derive
+                    # them so run_movement_dispatch can resolve against the
+                    # real graph. None on non-procedural worlds → the handler
+                    # fails loud with no_dungeon_store (no silent fallback).
+                    _lookahead_handle = getattr(sd, "lookahead_handle", None)
+                    _dungeon_store = (
+                        _lookahead_handle.persistence if _lookahead_handle is not None else None
+                    )
+                    _dungeon_palette = (
+                        _lookahead_handle.palette if _lookahead_handle is not None else None
+                    )
                     _dispatch_package = await execute_intent_router_pre_narrator_pass(
                         intent_router=_intent_router,
                         snapshot=snapshot,
@@ -3430,6 +3444,9 @@ class WebSocketSessionHandler:
                         action=action,
                         player_name=_acting_player_name,
                         additional_player_names=_additional_player_names or None,
+                        dungeon_store=_dungeon_store,
+                        palette=_dungeon_palette,
+                        lookahead_handle=_lookahead_handle,
                     )
                 except IntentRouterFailure as exc:
                     if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):

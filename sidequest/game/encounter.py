@@ -105,8 +105,12 @@ class EncounterActor(BaseModel):
     """A character assigned to an encounter role.
 
     ``side`` is closed: ``player`` (allies), ``opponent`` (anyone the party
-    is fighting), ``neutral`` (bystanders, narrators, audience). Set at
-    instantiation from the narrator's payload; engine never infers it.
+    is fighting), ``neutral`` (bystanders, narrators, audience). The narrator's
+    payload sets ``side`` when it names participants; when it doesn't, the
+    engine seats an opponent for an *adversarial* confrontation (combat /
+    movement) from the location roster — ADR-116 ("A Confrontation Requires an
+    Other"), see ``_npc_fallback_at_location`` / ``_is_adversarial``. Non-
+    adversarial fallback participants default to ``neutral``.
 
     ``withdrawn`` flips True when the actor yields. Withdrawn actors are
     skipped by ``_apply_beat`` and emit a ``beat_skipped`` watcher event.

@@ -620,6 +620,10 @@ class LocationDescriptionPayload(BaseModel):
     terrain: str | None = None
     entities: list[LocationEntity] = Field(default_factory=list)
     overlays: list[LocationDescriptionOverlaySummary] = Field(default_factory=list)
+    # Story 63-6: deep-link from the region header into the /reference/lore
+    # wiki. None when the region has no lore-page anchor (region-mode worlds,
+    # old snapshots) — the UI then renders the header as plain text.
+    reference_url: str | None = None
 
 
 class LocationOverlayChangedPayload(BaseModel):

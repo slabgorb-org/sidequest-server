@@ -946,7 +946,7 @@ def assemble_rules_page(pack: str, pack_dir: Path) -> str:
     )
 
 
-def _load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
+def load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
     """Story 63-8: the set of location slugs that have a generated POI
     landscape image.
 
@@ -1004,7 +1004,7 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
         pack=pack,
         world=world,
         theme=theme,
-        poi_image_slugs=_load_poi_image_slugs(world_dir),
+        poi_image_slugs=load_poi_image_slugs(world_dir),
     )
     flavor_rendered = _file_renders_by_stem(
         LORE_PACK_FLAVOR_FILES,

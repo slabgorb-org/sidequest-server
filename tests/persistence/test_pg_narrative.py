@@ -234,3 +234,56 @@ def test_read_narration_backfill_zero_limit_returns_empty(store_with_events) -> 
     )
     rows = narr.read_narration_backfill(player_id="p1", limit=0)
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# cross-session isolation — guards against a dropped session_id predicate
+# ---------------------------------------------------------------------------
+
+
+def test_cross_session_isolation(monkeypatch, migrated_db: str) -> None:
+    """A store bound to session B must see NONE of session A's rows.
+
+    Seeds narrative + events + projection for A, then asserts B's
+    PgNarrativeStore/PgEventStore observe an empty narrative log,
+    max_narrative_round 0, and empty backfill — catching any read whose
+    WHERE lost its ``session_id = %s`` filter.
+    """
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    pool = db_pool.get_pool()
+    try:
+        slug_a = f"iso_a_{uuid.uuid4().hex[:8]}"
+        slug_b = f"iso_b_{uuid.uuid4().hex[:8]}"
+        sid_a = sessions.ensure_session(
+            pool, slug=slug_a, mode="solo", genre_slug="g", world_slug="w"
+        )
+        sid_b = sessions.ensure_session(
+            pool, slug=slug_b, mode="solo", genre_slug="g", world_slug="w"
+        )
+
+        narr_a = PgNarrativeStore(pool, session_id=sid_a)
+        evts_a = PgEventStore(pool, session_id=sid_a)
+        narr_b = PgNarrativeStore(pool, session_id=sid_b)
+
+        # Seed session A only.
+        narr_a.append_narrative(_entry(round=4, content="A's secret"))
+        ev = evts_a.append_event(kind="NARRATION", payload_json='{"text":"A"}')
+        evts_a.write_projection(
+            event_seq=ev.seq,
+            player_id="p1",
+            decision=FilterDecision(include=True, payload_json='{"text":"A"}'),
+        )
+
+        # B sees nothing.
+        assert narr_b.recent_narrative(10) == []
+        assert narr_b.max_narrative_round() == 0
+        assert narr_b.read_narration_backfill(player_id="p1", limit=5) == []
+
+        # A still sees its own (sanity — the filter didn't over-prune).
+        assert narr_a.max_narrative_round() == 4
+        assert len(narr_a.recent_narrative(10)) == 1
+        assert len(narr_a.read_narration_backfill(player_id="p1", limit=5)) == 1
+    finally:
+        db_pool.close_pool()

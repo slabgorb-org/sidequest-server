@@ -199,6 +199,9 @@ class PgNarrativeStore:
                 tags = json.loads(tags_json)
             except Exception:
                 tags = []
+            # narrative_log stores only round/author/content/tags — so
+            # encounter_tags/speaker/entry_type take their model defaults here
+            # (mirrors SqliteStore.recent_narrative).
             entries.append(
                 NarrativeEntry(
                     timestamp=0,
@@ -243,8 +246,12 @@ class PgNarrativeStore:
         """Fetch the last ``limit`` NARRATIONs and interleaved CHAPTER_MARKERs
         from the event log, filtered through the projection cache for this player.
 
-        Translates the four SQL reads in ``views.backfill_last_narration_block``
+        Translates the SQL reads in ``views.backfill_last_narration_block``
         to Postgres (``?``→``%s``, ``session_id = %s`` added to every WHERE).
+        Reads 1 (oldest NARRATION seq) and 2 (the CHAPTER_MARKER /
+        COALESCE(MAX(seq)…) marker subquery) keep their verbatim shape; the
+        prior Read-3 event fetch + per-row Read-4 projection lookup are
+        collapsed into ONE inner JOIN (N+1 avoidance on the reconnect hot path).
 
         Returns ``list[BackfillRow]`` in seq-ascending order (chapter markers
         before their narration).  Only rows where ``projection_cache.include=1``
@@ -310,32 +317,35 @@ class PgNarrativeStore:
 
         with self._pool.connection() as conn:
             # ----------------------------------------------------------------
-            # Read 3: all NARRATION + CHAPTER_MARKER events in the window
+            # Reads 3+4 collapsed into ONE query (N+1 avoidance — this fires on
+            # every browser reconnect once D3 wires it into views.backfill).
+            #
+            # The INNER JOIN on projection_cache (PK (session_id, event_seq,
+            # player_id) → at most one row per event) plus the include=1 /
+            # payload_json IS NOT NULL filter is semantically identical to the
+            # prior Read-3 fetch + per-row Read-4 lookup-and-skip loop:
+            #   - events with no cache row for this player → dropped by INNER JOIN
+            #   - cache rows with include=0 → dropped by pc.include = 1
+            #   - cache rows with NULL payload → dropped by IS NOT NULL
+            # ``include`` is INTEGER 1/0 (A3 write encoding), so pc.include = 1.
             # ----------------------------------------------------------------
             rows = conn.execute(
-                "SELECT seq, kind FROM events "
-                "WHERE session_id = %s AND kind IN ('NARRATION', 'CHAPTER_MARKER') "
-                "  AND seq >= %s "
-                "ORDER BY seq ASC",
-                (self._session_id, lower_bound),
+                "SELECT e.seq, e.kind, pc.payload_json "
+                "FROM events e "
+                "JOIN projection_cache pc "
+                "  ON pc.session_id = e.session_id "
+                " AND pc.player_id = %s "
+                " AND pc.event_seq = e.seq "
+                "WHERE e.session_id = %s "
+                "  AND e.kind IN ('NARRATION', 'CHAPTER_MARKER') "
+                "  AND e.seq >= %s "
+                "  AND pc.include = 1 "
+                "  AND pc.payload_json IS NOT NULL "
+                "ORDER BY e.seq ASC",
+                (player_id, self._session_id, lower_bound),
             ).fetchall()
 
-        results: list[BackfillRow] = []
-        for seq_raw, kind in rows:
-            seq_i = int(seq_raw)
-            # ----------------------------------------------------------------
-            # Read 4: projection_cache lookup per event seq
-            # ----------------------------------------------------------------
-            with self._pool.connection() as conn:
-                cache_row = conn.execute(
-                    "SELECT include, payload_json FROM projection_cache "
-                    "WHERE session_id = %s AND player_id = %s AND event_seq = %s",
-                    (self._session_id, player_id, seq_i),
-                ).fetchone()
-
-            if cache_row is None or not bool(cache_row[0]) or cache_row[1] is None:
-                continue
-
-            results.append(BackfillRow(seq=seq_i, kind=str(kind), payload_json=str(cache_row[1])))
-
-        return results
+        return [
+            BackfillRow(seq=int(seq_raw), kind=str(kind), payload_json=str(payload_json))
+            for seq_raw, kind, payload_json in rows
+        ]

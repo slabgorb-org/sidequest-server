@@ -297,9 +297,8 @@ class PgSnapshotStore:
     def _recent_narrative(self, limit: int) -> list[NarrativeEntry]:
         """Return the ``limit`` most-recent narrative entries, oldest-first.
 
-        Inline port of ``SqliteStore.recent_narrative``.  A5 (PgNarrativeStore)
-        will provide a proper facade; until then this reads directly from the
-        ``narrative_log`` table.
+        Inline port of ``SqliteStore.recent_narrative``.
+        # TODO(D3): consolidate — delegate to PgNarrativeStore.recent_narrative (now available).
 
         The ordering sub-query mirrors the SQLite version exactly:
         take the top-N by descending ``id`` (insertion order), then sort

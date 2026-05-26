@@ -735,7 +735,21 @@ class SessionRoom:
             playing = sum(
                 1 for seat in self._seated.values() if seat.state == LobbyState.PLAYING
             )
-            return playing - len(self._crash_released)
+            raw = playing - len(self._crash_released)
+        # Review finding [SEC] (2026-05-26): surface an underflow rather than
+        # let recheck_barrier's `<= 0` guard silently freeze the interaction.
+        # With crash-release bound to the sending socket this should not occur
+        # short of every PLAYING peer crashing — in which case there is
+        # genuinely no one left to dispatch, and 0 is the honest answer — but a
+        # negative value signals state corruption and must not pass quietly.
+        if raw < 0:
+            _log.warning(
+                "session.effective_barrier_underflow slug=%s playing=%d crash_released=%d",
+                self.slug,
+                playing,
+                len(self._crash_released),
+            )
+        return max(0, raw)
 
     def first_pending_at_monotonic(self) -> float | None:
         """Read the timestamp stamped when the buffer transitioned from empty.

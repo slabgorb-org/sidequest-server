@@ -55,7 +55,18 @@ class ClientErrorHandler:
         payload = msg.payload  # type: ignore[attr-defined]
         reason = getattr(payload, "reason", "render_crash")
         component = getattr(payload, "component", "")
-        crashed_id = (msg.player_id or sd.player_id or "")  # type: ignore[attr-defined]
+        # Review finding [SEC] (2026-05-26): bind the crash to THIS socket's own
+        # player, never the client-controlled msg.player_id — otherwise player A
+        # could send CLIENT_ERROR{player_id: B} to evict B from the turn barrier
+        # without B crashing (SOUL.md Agency / ADR-104-105). The honest UI sends
+        # player_id="" by design, so sd.player_id is the only correct source.
+        crashed_id = sd.player_id or ""
+        # No silent fallback (CLAUDE.md): a CLIENT_ERROR with no resolvable
+        # player is unactionable — reject it loudly instead of marking a
+        # phantom empty-string participant crash-released.
+        if not crashed_id:
+            logger.warning("session.client_error_no_player_id slug=%s", room.slug)
+            return []
 
         # No turn in flight (nobody has submitted) → nothing to orphan.
         if not room.has_pending_actions():

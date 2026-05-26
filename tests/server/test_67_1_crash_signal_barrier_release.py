@@ -145,6 +145,15 @@ async def test_crash_signal_releases_barrier_and_dispatches_remaining(
         seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar")],
         active_player=("p1", "Gladstone"),
     )
+    # p2's own handler — the crash signal travels over the crashing client's
+    # OWN socket (attribution binds to sd.player_id, not msg.player_id).
+    handler2, _sd2, _ = session_handler_factory(
+        slug="crash-release-dispatch",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar")],
+        active_player=("p2", "Zanzibar"),
+        existing_room=room,
+    )
     room._seated["p1"].state = LobbyState.PLAYING  # noqa: SLF001
     room._seated["p2"].state = LobbyState.PLAYING  # noqa: SLF001
 
@@ -155,6 +164,7 @@ async def test_crash_signal_releases_barrier_and_dispatches_remaining(
         return []
 
     handler._execute_narration_turn = fake_execute  # type: ignore[method-assign]
+    handler2._execute_narration_turn = fake_execute  # type: ignore[method-assign]
 
     # p1 submits — barrier waits on p2 (1 of 2 PLAYING submitted).
     submit = PlayerActionMessage(
@@ -167,9 +177,8 @@ async def test_crash_signal_releases_barrier_and_dispatches_remaining(
     assert result == [], "Precondition: p1's submission must buffer (barrier waits on p2)"
     assert captured == [], "Precondition: narrator must NOT have fired yet"
 
-    # p2's GameBoard crashes → CLIENT_ERROR over the still-open socket.
-    crash = _build_crash_message("p2")
-    await handler.handle_message(crash)
+    # p2's GameBoard crashes → CLIENT_ERROR over p2's OWN still-open socket.
+    await handler2.handle_message(_build_crash_message("p2"))
 
     assert len(captured) == 1, (
         f"After p2's crash signal, the barrier must release p2 and dispatch "
@@ -278,6 +287,53 @@ async def test_crash_release_in_three_player_room_then_remaining_submit_fires(
 
 
 @pytest.mark.asyncio
+async def test_crash_signal_attribution_binds_to_sender_not_spoofed_player_id(
+    session_handler_factory,
+) -> None:
+    """Review finding [SEC] (2026-05-26): a CLIENT_ERROR must crash-release the
+    SENDER's own player, never a client-supplied msg.player_id. Otherwise p1
+    could send CLIENT_ERROR{player_id: p2} to evict p2 from the barrier without
+    p2 crashing (SOUL.md Agency / ADR-104-105).
+
+    Scenario: 2 PLAYING peers. p1 submits (barrier waits on p2). p1's socket
+    then sends a SPOOFED crash naming p2. Pre-fix this released p2 and fired the
+    barrier (p1 already submitted, so effective dropped to 1 → dispatch without
+    p2). Post-fix the handler ignores msg.player_id and attributes the crash to
+    p1 (the sender) — who has already submitted, so the already-submitted guard
+    makes it a no-op. p2 is NOT evicted; the barrier keeps waiting on p2.
+    """
+    from sidequest.server.session_room import LobbyState  # type: ignore[attr-defined]
+
+    handler1, _sd1, room = session_handler_factory(
+        slug="crash-spoof-guard",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar")],
+        active_player=("p1", "Gladstone"),
+    )
+    room._seated["p1"].state = LobbyState.PLAYING  # noqa: SLF001
+    room._seated["p2"].state = LobbyState.PLAYING  # noqa: SLF001
+
+    handler1._execute_narration_turn = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    # p1 submits — barrier waits on p2.
+    await handler1._handle_player_action(
+        PlayerActionMessage(
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I submit")),
+            player_id="p1",
+        )
+    )
+    # p1's socket sends a crash signal SPOOFING p2's id.
+    await handler1.handle_message(_build_crash_message("p2"))
+
+    handler1._execute_narration_turn.assert_not_called()
+    assert room.snapshot.turn_manager.get_phase().name == "InputCollection", (
+        "A spoofed CLIENT_ERROR naming another player must NOT release that "
+        "player — attribution binds to the sender's session (p1, already "
+        "submitted → no-op). p2 must still hold the barrier."
+    )
+
+
+@pytest.mark.asyncio
 async def test_crash_release_emits_otel_spans(session_handler_factory) -> None:
     """The crash-release dispatch must emit ``mp.player_crash_released`` (the
     new lie-detector span) AND the existing ``mp.barrier_fired``. Per the OTEL
@@ -294,10 +350,18 @@ async def test_crash_release_emits_otel_spans(session_handler_factory) -> None:
         seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar")],
         active_player=("p1", "Gladstone"),
     )
+    handler2, _sd2, _ = session_handler_factory(
+        slug="crash-release-otel",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar")],
+        active_player=("p2", "Zanzibar"),
+        existing_room=room,
+    )
     room._seated["p1"].state = LobbyState.PLAYING  # noqa: SLF001
     room._seated["p2"].state = LobbyState.PLAYING  # noqa: SLF001
 
     handler._execute_narration_turn = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    handler2._execute_narration_turn = AsyncMock(return_value=[])  # type: ignore[method-assign]
 
     await handler._handle_player_action(
         PlayerActionMessage(
@@ -306,11 +370,10 @@ async def test_crash_release_emits_otel_spans(session_handler_factory) -> None:
         )
     )
 
-    # Patch the watcher at the crash handler's module. Dev: emit the
-    # release span from sidequest/handlers/client_error.py via the same
-    # _watcher_publish helper the barrier path uses.
+    # Patch the watcher at the crash handler's module. The release span fires
+    # from sidequest/handlers/client_error.py — crash arrives over p2's own socket.
     with patch("sidequest.handlers.client_error._watcher_publish") as wp:  # type: ignore[attr-defined]
-        await handler.handle_message(_build_crash_message("p2"))
+        await handler2.handle_message(_build_crash_message("p2"))
 
     event_names = [call.args[0] for call in wp.call_args_list]
     assert "mp.player_crash_released" in event_names, (
@@ -482,6 +545,13 @@ async def test_crash_release_dispatch_excludes_crashed_players_content(
         seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar")],
         active_player=("p1", "Gladstone"),
     )
+    handler2, _sd2, _ = session_handler_factory(
+        slug="crash-firewall",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar")],
+        active_player=("p2", "Zanzibar"),
+        existing_room=room,
+    )
     room._seated["p1"].state = LobbyState.PLAYING  # noqa: SLF001
     room._seated["p2"].state = LobbyState.PLAYING  # noqa: SLF001
 
@@ -492,6 +562,7 @@ async def test_crash_release_dispatch_excludes_crashed_players_content(
         return []
 
     handler._execute_narration_turn = fake_execute  # type: ignore[method-assign]
+    handler2._execute_narration_turn = fake_execute  # type: ignore[method-assign]
 
     await handler._handle_player_action(
         PlayerActionMessage(
@@ -501,7 +572,8 @@ async def test_crash_release_dispatch_excludes_crashed_players_content(
             player_id="p1",
         )
     )
-    await handler.handle_message(_build_crash_message("p2"))
+    # p2's crash arrives over p2's own socket.
+    await handler2.handle_message(_build_crash_message("p2"))
 
     assert len(captured) == 1, "Crash must release the barrier and dispatch once"
     assert "Zanzibar" not in captured[0], (

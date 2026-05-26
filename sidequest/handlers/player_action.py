@@ -124,6 +124,86 @@ def _broadcast_player_speech_to_party(
             )
 
 
+async def dispatch_fired_barrier(
+    session: WebSocketSessionHandler,
+    *,
+    sd: object,
+    snapshot: object,
+    turn_context: object,
+    playing_count: int,
+    timings: PhaseTimings,
+) -> list[object]:
+    """Elect a single dispatcher, drain the buffer, and run the narrator turn.
+
+    Shared by the PLAYER_ACTION barrier-fire path (the last submission flips
+    the barrier) and the Story 67-1 CLIENT_ERROR crash-release path (a crash
+    drops the last awaited player so the existing submissions satisfy the
+    barrier). Both arrive here only once the barrier has already flipped off
+    ``InputCollection``; this owns the one-dispatch-per-interaction CAS, the
+    player-speech surfacing, the ``mp.round_dispatched`` span, and the combined
+    multi-PC action assembly.
+    """
+    # Elect a single dispatcher per round via asyncio.Lock + the
+    # last_dispatched_round CAS guard.
+    async with session._room.dispatch_lock:
+        # CAS guard uses interaction (monotonic per-narration counter) not
+        # round (which advances on narrative beats, not every turn).
+        current_interaction = snapshot.turn_manager.interaction
+        if session._room.last_dispatched_round >= current_interaction:
+            # Lost the race; another handler already dispatched.
+            return []
+        session._room.last_dispatched_round = current_interaction
+        # Capture the barrier-wait BEFORE drain — drain clears it. The
+        # timestamp was stamped on the first submission into an empty buffer;
+        # "now minus that" is the wall-clock the dispatching player actually
+        # waited for the slowest peer.
+        barrier_wait_started_at = session._room.first_pending_at_monotonic()
+        pending = session._room.drain_pending_actions()
+    if barrier_wait_started_at is not None:
+        wait_ms = max(
+            0,
+            round((time.monotonic() - barrier_wait_started_at) * 1000),
+        )
+        timings.record_phase("mp_barrier_wait", wait_ms)
+
+    # Playtest 2026-05-17: surface each PC's verbatim spoken dialogue to the
+    # whole party before the narrator dispatch, so peers see what was said
+    # aloud (the narrator can't echo it per SOUL.md Agency).
+    _broadcast_player_speech_to_party(
+        session._room,
+        pending,
+        round_no=snapshot.turn_manager.round,
+    )
+
+    _watcher_publish(
+        "mp.round_dispatched",
+        {
+            "slug": session._room.slug,
+            "round": snapshot.turn_manager.round,
+            # Story 45-2: report the count the barrier actually used (playing
+            # peers), not the raw seat dict size.
+            "player_count": playing_count,
+            "action_lengths": {pid: len(p.action) for pid, p in pending},
+            "combined_action_len": (
+                sum(len(p.action) for _, p in pending)
+                + sum(len(p.character_name) + 2 for _, p in pending)
+            ),
+        },
+        component="multiplayer",
+    )
+
+    combined_action = "\n".join(f"{p.character_name}: {p.action}" for _, p in pending)
+    # Tag the TurnContext so build_narrator_prompt renders a multi-PC
+    # declaration block instead of attributing every line to the dispatch
+    # winner.
+    turn_context.merged_player_actions = [(p.character_name, p.action) for _, p in pending]
+    return await session._execute_narration_turn(
+        sd,
+        combined_action,
+        turn_context,
+    )
+
+
 class PlayerActionHandler:
     """Handle a PLAYER_ACTION message (player narration submission).
 
@@ -415,7 +495,11 @@ class PlayerActionHandler:
             # sees the lobby_participant_count vs active_turn_count
             # divergence — abandoned seats are NOT counted as participants
             # because they're reclaimable orphans, not active lobby members).
-            playing_count = session._room.playing_player_count()
+            # Story 67-1: the denominator also drops players crash-released
+            # this interaction, so a client that crashed earlier this turn
+            # does not keep the barrier waiting on a submission that will
+            # never come (effective_barrier_count = PLAYING − crash-released).
+            playing_count = session._room.effective_barrier_count()
             lobby_participant_count = session._room.non_abandoned_player_count()
             snapshot.turn_manager.set_player_count(playing_count)
             snapshot.turn_manager.submit_input(sd.player_id)
@@ -512,86 +596,18 @@ class PlayerActionHandler:
                 # handle the actual narration when the last submission arrives.
                 return []
 
-            # Barrier fired — elect a single dispatcher per round via
-            # asyncio.Lock + last_dispatched_round CAS guard.
-            async with session._room.dispatch_lock:
-                # CAS guard uses interaction (monotonic per-narration counter)
-                # not round (which advances on narrative beats, not every turn).
-                current_interaction = snapshot.turn_manager.interaction
-                if session._room.last_dispatched_round >= current_interaction:
-                    # Lost the race; another handler already dispatched.
-                    return []
-                session._room.last_dispatched_round = current_interaction
-                # Capture the barrier-wait BEFORE drain — drain clears it.
-                # The timestamp was stamped on the first submission into an
-                # empty buffer; "now minus that" is the wall-clock the
-                # dispatching player actually waited for the slowest peer.
-                barrier_wait_started_at = session._room.first_pending_at_monotonic()
-                pending = session._room.drain_pending_actions()
-            if barrier_wait_started_at is not None:
-                wait_ms = max(
-                    0,
-                    round((time.monotonic() - barrier_wait_started_at) * 1000),
-                )
-                timings.record_phase("mp_barrier_wait", wait_ms)
-
-            # Playtest 2026-05-17: surface each PC's verbatim spoken
-            # dialogue to the whole party before the narrator dispatch,
-            # so peers see what was said aloud (the narrator can't echo
-            # it per SOUL.md Agency).
-            _broadcast_player_speech_to_party(
-                session._room,
-                pending,
-                round_no=snapshot.turn_manager.round,
+            # Barrier fired — elect a dispatcher, drain, and narrate. Sealed
+            # reveals are NOT cleared here (Playtest 2026-05-17, Keith): wiping
+            # them blanked the whole table during the narrator-thinking gap.
+            # They stay visible until the client flushes on NARRATION_END.
+            return await dispatch_fired_barrier(
+                session,
+                sd=sd,
+                snapshot=snapshot,
+                turn_context=turn_context,
+                playing_count=playing_count,
+                timings=timings,
             )
-
-            # Playtest 2026-05-17 (Keith): sealed reveals are NOT cleared
-            # at barrier-fire. Wiping them here blanked the whole table
-            # for the entire narrator-thinking gap right after everyone
-            # sealed. The sealed turns now stay visible until the turn
-            # resolves — the client flushes the reveal strip on
-            # NARRATION_END (the round boundary). ADR-051's round counter
-            # does not advance every turn, so the client's round-advance
-            # failsafe alone cannot clear per-turn; NARRATION_END is the
-            # reliable per-turn signal. The disconnect-path
-            # _broadcast_cleared_to_party (session_room.py) is unaffected
-            # — a vanished player's stale row should still clear at once.
-
-            _watcher_publish(
-                "mp.round_dispatched",
-                {
-                    "slug": session._room.slug,
-                    "round": snapshot.turn_manager.round,
-                    # Story 45-2: report the count the barrier actually used
-                    # (playing peers), not the raw seat dict size. Pre-fix this
-                    # diverged from `barrier.wait.active_turn_count` for the
-                    # same round, telling Sebastien's GM panel two different
-                    # numbers about the same dispatch.
-                    "player_count": playing_count,
-                    "action_lengths": {pid: len(p.action) for pid, p in pending},
-                    "combined_action_len": (
-                        sum(len(p.action) for _, p in pending)
-                        + sum(len(p.character_name) + 2 for _, p in pending)
-                    ),
-                },
-                component="multiplayer",
-            )
-
-            combined_action = "\n".join(f"{p.character_name}: {p.action}" for _, p in pending)
-            # Tag the TurnContext so build_narrator_prompt renders a multi-PC
-            # declaration block instead of attributing every line to the
-            # dispatch winner. Without this, the prompt read
-            # "Laverne says: Shirley: ...\nLaverne: ..." which both
-            # mis-attributed Shirley's declaration to Laverne and invited
-            # the LLM to put dialogue in either PC's mouth (2026-04-29
-            # multiplayer playtest, SOUL.md "Agency" violation).
-            turn_context.merged_player_actions = [(p.character_name, p.action) for _, p in pending]
-            result = await session._execute_narration_turn(
-                sd,
-                combined_action,
-                turn_context,
-            )
-            return result
 
         # Single-player path (room is None) — preserve original behavior.
         return await session._execute_narration_turn(sd, action, turn_context)

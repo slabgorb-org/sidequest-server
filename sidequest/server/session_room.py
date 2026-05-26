@@ -198,6 +198,12 @@ class SessionRoom:
     # (advances on narrative beats only).
     _dispatch_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _last_dispatched_round: int = 0
+    # Story 67-1: player_ids that signalled a client render crash during the
+    # CURRENT interaction and had NOT yet submitted. They are dropped from the
+    # turn-barrier denominator for this interaction only, so a crashed client
+    # never orphans the table's turn. Cleared on drain (per-turn reset point)
+    # exactly like ``_pending_actions``.
+    _crash_released: set[str] = field(default_factory=set)
 
     # ------------------------------------------------------------------
     # Canonical world state (ADR-037 Python port). The room owns the
@@ -693,6 +699,58 @@ class SessionRoom:
                 action=action,
             )
 
+    def has_pending_actions(self) -> bool:
+        """True if any player's action is buffered for the current interaction.
+
+        Story 67-1: the crash handler only releases the barrier when a turn is
+        actually in flight (someone has submitted). With no pending actions a
+        crash signal is a clean no-op — there is no turn to orphan.
+        """
+        with self._lock:
+            return bool(self._pending_actions)
+
+    def mark_crash_released(self, player_id: str) -> None:
+        """Drop a crashed player from this interaction's barrier denominator.
+
+        Story 67-1. Idempotent — a duplicate crash signal for the same player
+        does not double-count.
+        """
+        with self._lock:
+            self._crash_released.add(player_id)
+
+    def effective_barrier_count(self) -> int:
+        """The submit-and-wait barrier denominator: PLAYING peers minus those
+        crash-released this interaction (Story 67-1).
+
+        This is the ONE source of truth for "how many submissions does the
+        barrier need". Both the normal submission path (`player_action.py`)
+        and the crash-release path (`client_error.py`) read it, so a crash
+        that does not *immediately* satisfy the barrier still lowers the
+        denominator the NEXT normal submitter is measured against — otherwise
+        a crash in a 3+ player room only worked when it happened to be the
+        last awaited slot. A crashed client stays `PLAYING` (its socket is
+        open), so `playing_player_count()` alone would keep counting it.
+        """
+        with self._lock:
+            playing = sum(
+                1 for seat in self._seated.values() if seat.state == LobbyState.PLAYING
+            )
+            raw = playing - len(self._crash_released)
+        # Review finding [SEC] (2026-05-26): surface an underflow rather than
+        # let recheck_barrier's `<= 0` guard silently freeze the interaction.
+        # With crash-release bound to the sending socket this should not occur
+        # short of every PLAYING peer crashing — in which case there is
+        # genuinely no one left to dispatch, and 0 is the honest answer — but a
+        # negative value signals state corruption and must not pass quietly.
+        if raw < 0:
+            _log.warning(
+                "session.effective_barrier_underflow slug=%s playing=%d crash_released=%d",
+                self.slug,
+                playing,
+                len(self._crash_released),
+            )
+        return max(0, raw)
+
     def first_pending_at_monotonic(self) -> float | None:
         """Read the timestamp stamped when the buffer transitioned from empty.
 
@@ -713,6 +771,10 @@ class SessionRoom:
             drained = list(self._pending_actions.items())
             self._pending_actions.clear()
             self._first_pending_at_monotonic = None
+            # Story 67-1: crash-release is scoped to the interaction that just
+            # dispatched. Reset it here so a crash in turn N never leaks into
+            # turn N+1's barrier math.
+            self._crash_released.clear()
         return drained
 
     @property

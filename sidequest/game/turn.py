@@ -97,6 +97,32 @@ class TurnManager(BaseModel):
             self.phase = TurnPhase.IntentRouting
             submitted.clear()
 
+    def recheck_barrier(self, effective_count: int) -> bool:
+        """Re-evaluate the InputCollection barrier against a reduced denominator.
+
+        Story 67-1: a crashed client is dropped from the awaited count without
+        ever submitting. After that drop the barrier may already be satisfied
+        by the players who DID submit, but ``submit_input`` only re-checks on a
+        submission — and the remaining players have already submitted, so no
+        further submission is coming. This recomputes the predicate against
+        ``effective_count`` (PLAYING peers minus crash-released awaiters) and
+        fires the barrier if the existing submissions satisfy it.
+
+        Returns ``True`` if the barrier fired (phase advanced to IntentRouting),
+        ``False`` otherwise. A no-op when not in InputCollection or when
+        ``effective_count <= 0`` (never release a turn with nobody left to act).
+        """
+        if self.phase != TurnPhase.InputCollection:
+            return False
+        if effective_count <= 0:
+            return False
+        submitted: set[str] = object.__getattribute__(self, "_submitted")
+        if len(submitted) >= effective_count:
+            self.phase = TurnPhase.IntentRouting
+            submitted.clear()
+            return True
+        return False
+
     def record_interaction(self) -> None:
         """Record a player-narrator interaction. Resets phase to InputCollection.
 

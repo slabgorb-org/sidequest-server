@@ -1710,6 +1710,7 @@ class WebSocketSessionHandler:
         if registry is None:
             from sidequest.handlers.action_reveal import HANDLER as ACTION_REVEAL_HANDLER
             from sidequest.handlers.character_creation import HANDLER as CHARACTER_CREATION_HANDLER
+            from sidequest.handlers.client_error import HANDLER as CLIENT_ERROR_HANDLER
             from sidequest.handlers.dice_throw import HANDLER as DICE_THROW_HANDLER
             from sidequest.handlers.journal_request import HANDLER as JOURNAL_REQUEST_HANDLER
             from sidequest.handlers.orbital_intent import HANDLER as ORBITAL_INTENT_HANDLER
@@ -1724,6 +1725,7 @@ class WebSocketSessionHandler:
                 "CHARACTER_CREATION": CHARACTER_CREATION_HANDLER,
                 "PLAYER_SEAT": PLAYER_SEAT_HANDLER,
                 "DICE_THROW": DICE_THROW_HANDLER,
+                "CLIENT_ERROR": CLIENT_ERROR_HANDLER,
                 "YIELD": YIELD_HANDLER,
                 "ORBITAL_INTENT": ORBITAL_INTENT_HANDLER,
                 "ACTION_REVEAL": ACTION_REVEAL_HANDLER,

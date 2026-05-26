@@ -162,6 +162,22 @@ class NarrationSegmentPayload(ProtocolBase):
 # ---------------------------------------------------------------------------
 
 
+class ClientErrorPayload(ProtocolBase):
+    """A client-side render crash report (Story 67-1).
+
+    Sent by an ErrorBoundary catch over the still-open socket so the server
+    can release the crashed player from the turn barrier. ``reason`` is a
+    coarse machine tag ("render_crash"); ``component`` names the boundary
+    that caught it ("GameBoard"). Both feed the ``mp.player_crash_released``
+    OTEL span so the GM panel can see exactly what released the barrier.
+    """
+
+    reason: str = "render_crash"
+    """Coarse machine-readable cause tag. Default covers the only sender today."""
+    component: str = ""
+    """The boundary/component name that caught the crash (e.g. "GameBoard")."""
+
+
 class SpokenLinePayload(ProtocolBase):
     """One verbatim line a PC spoke aloud, attributed to that PC.
 
@@ -853,6 +869,23 @@ class NarrationSegmentMessage(ProtocolBase):
     player_id: str = ""
 
 
+class ClientErrorMessage(ProtocolBase):
+    """GameMessage::ClientError wire representation (Story 67-1).
+
+    Inbound only — a client signalling that its render subtree crashed (a
+    GameBoard ErrorBoundary catch). Because the WebSocket survives a React
+    render crash, the server cannot otherwise tell a crashed client apart
+    from a present-but-quiet one; this explicit signal lets the submit-and-
+    wait barrier release the crashed player for the current interaction
+    instead of orphaning the whole table's turn. ``player_id`` identifies
+    who crashed.
+    """
+
+    type: Literal[MessageType.CLIENT_ERROR] = MessageType.CLIENT_ERROR
+    payload: ClientErrorPayload
+    player_id: str = ""
+
+
 class PlayerSpeechMessage(ProtocolBase):
     """GameMessage::PlayerSpeech wire representation (playtest 2026-05-17).
 
@@ -1331,6 +1364,7 @@ _Phase1Variant = Annotated[
     PlayerActionMessage
     | NarrationMessage
     | NarrationSegmentMessage
+    | ClientErrorMessage
     | PlayerSpeechMessage
     | NarrationEndMessage
     | SecretNoteMessage

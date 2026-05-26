@@ -238,10 +238,14 @@ def test_message_type_complete_count() -> None:
     channel for encounter location overlay state. Fires on encounter
     activate/deactivate touching a bound_room_id. Intentional addition;
     bumped 50 → 51.
+    Story 67-1 added CLIENT_ERROR — the inbound render-crash signal so a
+    GameBoard ErrorBoundary catch can release the crashed player from the MP
+    turn barrier instead of orphaning the table's turn. Intentional addition;
+    bumped 51 → 52.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 51
+    assert len(MessageType) == 52
 
 
 # ===========================================================================

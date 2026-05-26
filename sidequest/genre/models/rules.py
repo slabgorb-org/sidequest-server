@@ -161,6 +161,12 @@ class BeatDef(BaseModel):
     damage_channel: DamageChannel = DamageChannel.none
     damage_override: DamageSpec | None = None  # creature natural attack (no catalog weapon)
     mitigation_override: int | None = None  # brace beat with no armor item
+    # SWN attack parameters — only meaningful when the pack binds `ruleset: swn`.
+    # ``attack_bonus`` is the attacker's class/level attack-bonus progression value.
+    # ``combat_skill`` is the relevant Combat/* skill level (0 = untrained).
+    # Both default to 0 so native-module packs require no YAML changes.
+    attack_bonus: int = 0
+    combat_skill: int = 0
 
     @model_validator(mode="after")
     def _validate(self) -> BeatDef:

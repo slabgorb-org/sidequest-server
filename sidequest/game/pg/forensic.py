@@ -369,6 +369,58 @@ class PgForensicReader:
         return out
 
     # ------------------------------------------------------------------
+    # snapshot_json — raw stored snapshot for the forensics panel
+    # ------------------------------------------------------------------
+
+    def snapshot_json(self, session_id: int) -> dict:
+        """Raw persisted ``game_state.snapshot_json`` for one session.
+
+        Read-only decode for the forensics 'final stored snapshot' panel —
+        returns the stored dict verbatim, never deserializes through the
+        domain model (that's PgSaveRepository.load's job). ``{}`` when the
+        session has no game_state row or the stored value is not a JSON
+        object. PG port of the SQLite snapshot-endpoint raw read.
+        """
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT snapshot_json FROM game_state WHERE session_id = %s",
+                (session_id,),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return {}
+        parsed = _safe_json(row[0])
+        return parsed if isinstance(parsed, dict) else {}
+
+    # ------------------------------------------------------------------
+    # encounter_events
+    # ------------------------------------------------------------------
+
+    def encounter_events(self, session_id: int) -> list[dict]:
+        """Ordered ENCOUNTER_* event rows for one session.
+
+        PG port of persistence.query_encounter_events — the GM panel's
+        EncounterTab timeline read. Return shape is identical
+        (seq, kind, payload, created_at), so D7's REST endpoint swaps only
+        the data source.
+        """
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT seq, kind, payload_json, created_at FROM events "
+                "WHERE session_id = %s AND kind LIKE 'ENCOUNTER_%%' "
+                "ORDER BY seq",
+                (session_id,),
+            ).fetchall()
+        return [
+            {
+                "seq": r[0],
+                "kind": r[1],
+                "payload": _safe_json(r[2]),
+                "created_at": r[3],
+            }
+            for r in rows
+        ]
+
+    # ------------------------------------------------------------------
     # build_timeline
     # ------------------------------------------------------------------
 

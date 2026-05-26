@@ -120,3 +120,17 @@ def test_projection_cache_no_longer_exposes_in_transaction():
     repo = SqliteSaveRepository(SqliteStore.open_in_memory())
     cache = ProjectionCache(repo)
     assert not hasattr(cache, "write_in_transaction")
+
+
+def test_connect_constructs_event_log_over_repository():
+    repo = SqliteSaveRepository(SqliteStore.open_in_memory())
+    log = EventLog(repo)
+    cache = ProjectionCache(repo)
+    assert isinstance(log.repository, SaveRepository)
+    row = log.append(kind="NARRATION", payload_json="{}")
+    cache.write(
+        event_seq=row.seq,
+        player_id="p1",
+        decision=FilterDecision(include=True, payload_json="{}"),
+    )
+    assert cache.read_since(player_id="p1", since_seq=0)[0].event_seq == row.seq

@@ -718,11 +718,6 @@ class SessionRoom:
         with self._lock:
             self._crash_released.add(player_id)
 
-    def crash_released_count(self) -> int:
-        """Number of players crash-released for the current interaction (Story 67-1)."""
-        with self._lock:
-            return len(self._crash_released)
-
     def effective_barrier_count(self) -> int:
         """The submit-and-wait barrier denominator: PLAYING peers minus those
         crash-released this interaction (Story 67-1).

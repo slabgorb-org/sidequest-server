@@ -18,7 +18,11 @@ from sidequest.game.db_config import alembic_url
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: the default (True) silently disables every
+    # logger not named in alembic.ini — including app loggers like
+    # sidequest.dungeon.materializer — which kills caplog capture for the rest of
+    # the pytest process (ADR-115 D8 cross-suite contamination).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # A URL set programmatically (tests pass one via set_main_option) wins;
 # otherwise resolve from the environment. No silent localhost default.

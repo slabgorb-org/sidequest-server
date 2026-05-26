@@ -215,6 +215,29 @@ class TelemetrySink(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Forensic reader (ADR-115 C2)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ForensicReader(Protocol):
+    """MVCC read-side forensics over Postgres (ADR-115 C2).
+
+    All methods are read-only: plain pooled connections under MVCC — no
+    session_tx, no FOR UPDATE.  Return shapes are identical to
+    forensic_query.py so that D7 REST endpoints swap only the data source.
+
+    Concrete implementation: ``PgForensicReader`` in ``pg/forensic.py``.
+    """
+
+    def list_saves(self) -> list[dict]: ...
+
+    def build_timeline(self, session_id: int) -> list[dict]: ...
+
+    def build_turn_bundle(self, session_id: int, round_number: int) -> dict: ...
+
+
+# ---------------------------------------------------------------------------
 # Dungeon persistence (ADR-115 B1)
 # ---------------------------------------------------------------------------
 

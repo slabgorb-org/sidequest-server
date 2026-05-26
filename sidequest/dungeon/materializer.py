@@ -1669,7 +1669,7 @@ def _stage_commit(
     curation: RegionCuration | None,
     expansion: Expansion | None,
     attach_result: AttachResult | None,
-    dungeon_repository: DungeonRepository | None,
+    is_fresh_save: bool,
     tx: DungeonTransaction | None,
     span: _otel_trace.Span,
     fill_result: Mapping[str, RegionFill] | None = None,
@@ -1695,9 +1695,9 @@ def _stage_commit(
        ``commit_expansion`` persists ONLY ``expansion.new_nodes``; the
        surface entrance has ``expansion_id == 0`` and belongs to NO
        generated ``Expansion.new_nodes``, so it is never persisted by a
-       generated commit. On a *fresh* save (``load_map`` empty AND
-       ``load_frontier`` empty — introspected loudly, never assumed) the
-       entrance is committed first as
+       generated commit. On a *fresh* save (``is_fresh_save`` — the
+       coordinator's loud ``load_map`` + ``load_frontier`` introspection,
+       never assumed) the entrance is committed first as
        ``Expansion(expansion_id=0, new_nodes=[entrance], new_edges=[])``
        (entrance ``depth_score`` is the frozen root ``0.0``). On a
        non-fresh save the entrance is already frozen — re-committing it
@@ -1736,9 +1736,10 @@ def _stage_commit(
     ``frontier.expand`` is emitted when the frontier is updated.
 
     Invariants (No Silent Fallbacks):
-    - ``graph``/``expansion``/``curation``/``attach_result``/``persistence``
+    - ``graph``/``expansion``/``curation``/``attach_result``/``tx``
       must be real objects — ``None`` is rejected loudly.
-    - Fresh-save detection is loud introspection, never an assumption.
+    - ``is_fresh_save`` is the coordinator's loud introspection (load_map +
+      load_frontier), never an assumption.
     - ``PersistError`` → rollback + routed failure marker + re-raise; a
       partial/half-committed expansion is NEVER shipped.
     - ``AttachReport.rolled`` is persisted-as-is, NEVER recomputed.
@@ -1773,13 +1774,6 @@ def _stage_commit(
             "attach_result=None is not valid (No Silent Fallbacks); the "
             "AttachReport.rolled freeze targets must be threaded by identity"
         )
-    if dungeon_repository is None:
-        raise ValueError(
-            "_stage_commit requires a real DungeonRepository — "
-            "dungeon_repository=None is not valid (No Silent Fallbacks); the "
-            "fresh-save reads (load_map/load_frontier) borrow pooled "
-            "connections off it"
-        )
     if tx is None:
         raise ValueError(
             "_stage_commit requires the open DungeonTransaction — tx=None is "
@@ -1795,19 +1789,11 @@ def _stage_commit(
     # ``tx`` and the coordinator's ``with`` block commits on clean exit / rolls
     # back on PersistError. Rolling back therefore discards the attach-stage
     # threads together with the expansion (Plan-5 atomicity: NO orphan ledger).
-    # The fresh-save reads (load_map, load_frontier) borrow a separate pooled
-    # connection off the repo — they read committed state (dungeon_map /
-    # dungeon_frontier, tables attach never touches), so fresh-save detection
-    # is unaffected by the uncommitted attach threads.
-
-    # Loud fresh-save detection (introspection, NOT an assumption): a
-    # save is fresh iff the dungeon map AND frontier are both empty. On a
-    # fresh save the surface entrance has never been persisted (it belongs
-    # to no generated Expansion.new_nodes) so we must seed it as
-    # Expansion 0 before the first generated expansion is committed.
-    existing_map = dungeon_repository.load_map(entrance_id=graph.entrance_id)
-    existing_frontier = dungeon_repository.load_frontier()
-    is_fresh_save = not existing_map.nodes and not existing_frontier
+    #
+    # ``is_fresh_save`` is the coordinator's loud introspection (load_map +
+    # load_frontier both empty), computed BEFORE the txn opens so the txn holds
+    # exactly one pooled connection for its lifetime (no transient second borrow
+    # inside the with-block).
 
     new_frontier = _new_frontier_edges(request, expansion=expansion, graph=graph)
 
@@ -2075,6 +2061,12 @@ async def materialize(
             "worker/session supplies the SDK client via build_llm_client(); "
             "No Silent Fallbacks — no implicit ClaudeClient())"
         )
+    if graph is None:
+        raise ValueError(
+            "materialize requires a real RegionGraph — graph=None is not valid "
+            "(No Silent Fallbacks); the coordinator reads graph.entrance_id for "
+            "fresh-save detection and every stage threads it"
+        )
     curation_client = claude_client
 
     # The per-region look is derived from each region's theme INSIDE
@@ -2105,6 +2097,19 @@ async def materialize(
                 claude_client=curation_client,
                 span=curate_span,
             )
+
+        # Loud fresh-save detection (introspection, NOT an assumption): a save
+        # is fresh iff the dungeon map AND frontier are both empty. On a fresh
+        # save the surface entrance has never been persisted (it belongs to no
+        # generated Expansion.new_nodes) so _stage_commit must seed it as
+        # Expansion 0 before the first generated expansion is committed. These
+        # reads run BEFORE the txn opens so the txn holds exactly ONE pooled
+        # connection for its lifetime — the seed race is still caught loudly by
+        # the Expansion-0 freeze PersistError, and per-session materialization
+        # is already serialized.
+        existing_map = dungeon_repository.load_map(entrance_id=graph.entrance_id)
+        existing_frontier = dungeon_repository.load_frontier()
+        is_fresh_save = not existing_map.nodes and not existing_frontier
 
         # ADR-115 D6: ONE transaction spans BOTH _stage_attach (which opens
         # the complication threads on ``tx``) and _stage_commit (which writes
@@ -2146,7 +2151,7 @@ async def materialize(
                     curation=curation,
                     expansion=expansion,
                     attach_result=attach_result,
-                    dungeon_repository=dungeon_repository,
+                    is_fresh_save=is_fresh_save,
                     tx=tx,
                     span=commit_span,
                     fill_result=fill_result,

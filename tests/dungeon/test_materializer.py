@@ -384,6 +384,13 @@ class TestMaterializePipelineSpans:
         _mat_module._stage_commit = _commit_noop  # type: ignore[assignment]
         try:
             req = self._build_request()
+            # ADR-115 D6 follow-up: the coordinator reads graph.entrance_id for
+            # fresh-save detection BEFORE the txn opens (and rejects graph=None
+            # loudly), so this span-ordering test passes a minimal real graph.
+            # The empty repo makes load_map/load_frontier return empty; stages
+            # stay no-op'd so the test still asserts ONLY span nesting/order.
+            from sidequest.dungeon.region_graph import RegionGraph  # noqa: PLC0415
+
             # snapshot/pack_tropes/claude_client are required materialize()
             # params (Task 5 / Task 4 SDK); the curate+attach stages are
             # monkeypatched to no-ops here so the values are never read —
@@ -392,7 +399,7 @@ class TestMaterializePipelineSpans:
             # (unchanged Task-1 contract).
             await materialize(
                 req,
-                graph=None,
+                graph=RegionGraph(entrance_id="entrance"),
                 bundle=None,
                 palette=None,
                 dungeon_repository=store,
@@ -3421,7 +3428,7 @@ class TestStageCommit:
                         graph=live,
                         expansion=exp2,
                         attach_result=attach_result2,
-                        dungeon_repository=repo,
+                        is_fresh_save=False,
                         tx=tx2,
                         span=span2,
                     )

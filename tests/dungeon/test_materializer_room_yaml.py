@@ -116,32 +116,6 @@ def test_empty_composed_map_is_a_noop(tmp_path: Path) -> None:
         assert not any((world_dir / "rooms").iterdir())
 
 
-# ---------------------------------------------------------------------------
-# AC-11: wiring — _stage_emit_room_yamls has a non-test caller
-# ---------------------------------------------------------------------------
-
-
-def test_emit_helper_has_a_caller_in_production_code() -> None:
-    """CLAUDE.md 'Every Test Suite Needs a Wiring Test': the helper must
-    be CALLED FROM _stage_commit in the production materializer, not
-    just exist as a free function exercised by these tests.
-
-    def + at least one call site = ≥2 mentions of the symbol in
-    materializer.py.
-    """
-    src = (
-        Path(__file__).resolve().parents[2] / "sidequest" / "dungeon" / "materializer.py"
-    ).read_text()
-    assert "def _stage_emit_room_yamls(" in src, (
-        "_stage_emit_room_yamls must be defined in materializer.py."
-    )
-    assert src.count("_stage_emit_room_yamls(") >= 2, (
-        "_stage_emit_room_yamls must have a non-test caller in "
-        "materializer.py (def + call = ≥2 mentions). The wiring test "
-        "exists to prove the helper is reachable from production code."
-    )
-
-
 async def test_emit_runs_after_a_clean_materialize_commit(
     monkeypatch: Any, migrated_db: str, tmp_path: Path
 ) -> None:

@@ -298,8 +298,11 @@ class ConnectHandler:
                     f"PG get_game returned None after ensure_session for slug={slug!r} — "
                     "this should be impossible; check PG connectivity and sessions table."
                 )
-            # D2: bind the Postgres save repository to the watcher hub.
-            _bind_event_store(_pg_repository)
+            # D5: bind the Postgres TelemetrySink to the watcher hub so
+            # out-of-frame watcher publishes (and encounter rows) persist via
+            # the sink's own session_tx. The in-frame census path threads the
+            # turn tx explicitly through emit_event → emit_mechanical_census.
+            _bind_event_store(_pg_telemetry_sink)
             if not player_id:
                 player_id = str(uuid.uuid4())
 

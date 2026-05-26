@@ -27,10 +27,12 @@ import builtins
 import json
 import logging
 import os
-import sqlite3
 from collections import deque
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from sidequest.game.repository import SaveTransaction, TelemetrySink
 
 logger = logging.getLogger(__name__)
 
@@ -261,33 +263,31 @@ else:
 
 
 # ---------------------------------------------------------------------------
-# Process-wide event store binding — persists encounter state_transition events
-# to the SQLite events table. Bound at session-handler startup; global by
-# design (one session per process during playtest). See Task 20 doc comment.
+# Process-wide TelemetrySink binding (ADR-115 D5) — persists out-of-frame
+# turn_telemetry rows and encounter state_transition events to Postgres.
+# Bound at session-handler startup; global by design (one session per process
+# during playtest).
+#
+# The in-frame telemetry path does NOT live here: it rides the open turn
+# transaction via ``SaveTransaction.write_telemetry`` (same connection),
+# threaded explicitly through ``publish_event(..., tx=, event_seq=)``. We never
+# borrow a second pooled connection (sink.record / append_encounter_event each
+# take the per-session FOR UPDATE row lock) while the turn tx is open on the
+# same session — that would self-deadlock. So the in-frame/out-of-frame split
+# is decided by the EXPLICIT ``tx`` parameter, never by sniffing connection
+# state (the deleted ``conn.in_transaction`` / ``MAX(seq)`` heuristic).
 # ---------------------------------------------------------------------------
 
-_event_store = None  # bound at session-handler startup; weakref-safe by class id
-
-# Per-write save-DB serialization is now provided by the process-wide
-# ``SAVE_WRITE_LOCK`` (RLock) from ``sidequest.game.persistence``. See
-# that module's doc block for the acquire-order rule and the consumer
-# list. The two persistence helpers below acquire the same lock as
-# every other writer (persistence.py, server/emitters.py). The lock is
-# imported lazily inside each helper (function-local) to avoid a
-# module-scope circular import: persistence.py imports watcher_hub at
-# line 27, so a module-scope ``from persistence import SAVE_WRITE_LOCK``
-# here would fail when persistence is imported first (partial module).
-# ``SAVE_WRITE_LOCK`` is also exposed as a module attribute via
-# ``__getattr__`` below so external assertions can verify the binding.
+_telemetry_sink: TelemetrySink | None = None  # bound at session-handler startup
 
 
-def bind_event_store(store) -> None:
-    """Bind a SqliteStore so encounter watcher events persist as rows.
+def bind_event_store(telemetry_sink: TelemetrySink | None) -> None:
+    """Bind a TelemetrySink so out-of-frame watcher events persist as rows.
 
     Multiple binds replace; ``None`` clears (used by tests).
     """
-    global _event_store
-    _event_store = store
+    global _telemetry_sink
+    _telemetry_sink = telemetry_sink
 
 
 _KIND_BY_OP: dict[str, str] = {
@@ -309,106 +309,105 @@ _KIND_BY_OP: dict[str, str] = {
 }
 
 
-def _maybe_persist_encounter_row(event: dict) -> None:
-    global _event_store
-    if _event_store is None:
+def _maybe_persist_encounter_row(event_type: str, fields: dict, component: str) -> None:
+    """Append one encounter ``events`` row for gated state_transition events.
+
+    Replaces the raw ``_conn.execute(INSERT INTO events) + commit`` with the
+    bound sink's ``append_encounter_event`` (its own ``session_tx``).
+
+    Encounter ops fire during resolution, OUTSIDE the turn-tx block, so the
+    sink's own session_tx is correct and cannot contend with an open turn —
+    we do NOT thread ``tx`` into the encounter path.
+
+    Fully wrapped: ANY failure loud-logs and returns. Never raises, never
+    stalls the turn, never falls back to an alternative store.
+    """
+    sink = _telemetry_sink
+    if sink is None:
+        return  # legacy/in-memory session: no durable save bound (not an error)
+    if event_type != "state_transition":
         return
-    if event.get("event_type") != "state_transition":
-        return
-    fields = event.get("fields", {})
     if fields.get("field") != "encounter":
         return
     op = str(fields.get("op", ""))
     kind = _KIND_BY_OP.get(op)
     if kind is None:
         return
-    payload = json.dumps(fields, default=_json_default)
     try:
-        from sidequest.game.persistence import SAVE_WRITE_LOCK
-
-        with SAVE_WRITE_LOCK:
-            _event_store._conn.execute(
-                "INSERT INTO events (kind, payload_json, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-                (kind, payload),
-            )
-            _event_store._conn.commit()
-    except sqlite3.ProgrammingError as exc:
-        # The bound store's connection has been closed out from under us
-        # (typical: session disconnect closed the store but never called
-        # ``bind_event_store(None)``; or tests that close the store via
-        # ``store.close()`` without unbinding first). Treat the binding
-        # as stale and clear it so the next caller doesn't hit the same
-        # dead handle. We log loudly (warning, not silent) so the GM
-        # panel / OTEL trail records the recovery — silently swallowing
-        # would mask a real lifecycle mismatch.
+        payload = json.dumps(fields, default=_json_default)
+        sink.append_encounter_event(kind=kind, payload_json=payload)
+    except Exception:  # noqa: BLE001 — telemetry must never crash a turn
         logger.warning(
-            "watcher_hub.event_store_closed — clearing stale binding (kind=%s op=%s err=%s)",
+            "watcher_hub.encounter_row_failed kind=%s op=%s",
             kind,
             op,
-            exc,
+            exc_info=True,
         )
-        _event_store = None
+        return
 
 
-def _persist_turn_telemetry(event: dict) -> None:
-    """Append one raw turn_telemetry row for every watcher publish.
+def _persist_turn_telemetry(
+    event_type: str,
+    fields: dict,
+    component: str,
+    *,
+    tx: SaveTransaction | None,
+    event_seq: int | None,
+) -> None:
+    """Append one turn_telemetry row for a watcher publish.
 
-    Reuses the same process-global ``_event_store`` binding that
-    ``_maybe_persist_encounter_row`` uses (bound at connect time; its
-    ``_conn`` is the same connection the C2 turn transaction writes
-    events/projection_cache through).
+    The in-frame vs out-of-frame split is decided by the EXPLICIT ``tx``
+    parameter (NO connection-state sniffing — the ``conn.in_transaction`` /
+    ``MAX(seq)`` heuristic is deleted):
 
-    Transaction discipline (the load-bearing invariant): under this
-    codebase's default *deferred* isolation, ``conn.in_transaction`` is
-    True iff a write transaction is already open on the connection. In the
-    turn path the first DML is the C2 ``events`` INSERT, so
-    ``in_transaction`` True ⟺ this turn's event row already exists ⟺
-    ``MAX(seq) FROM events`` is that in-flight row. So:
+      * ``tx is not None`` -> ``tx.write_telemetry(event_seq=event_seq, ...)``
+        rides the open turn transaction on the SAME connection. ``event_seq``
+        is the turn event's seq. Commits/rolls back atomically with the event.
+      * ``tx is None`` -> ``_telemetry_sink.record(...)`` opens its own short
+        session_tx; ``event_seq`` is NULL (fired outside an event frame). If
+        no sink is bound (legacy/in-memory session) this is a no-op — not an
+        error, mirroring the historical ``store is None`` guard.
 
-      * in_transaction  -> join the open turn txn (NO commit); attribute
-        ``event_seq = MAX(seq)``; the row commits/rolls back atomically
-        with ``events``/``projection_cache``.
-      * not in_transaction -> own short ``with conn:`` txn; ``event_seq``
-        is NULL (fired outside an event frame — the spec's NULL case).
+    Never borrows a second pooled connection while ``tx`` is open: when
+    ``tx`` is set we write THROUGH ``tx``, never through the sink. So the
+    deadlock constraint (sink.record takes the per-session FOR UPDATE lock the
+    open turn already holds) cannot be violated.
 
-    Fully wrapped: ANY failure logs loudly (``turn_telemetry.sink_failed``)
-    and returns. Never raises, never stalls the turn, never writes to a
-    different DB (No-Silent-Fallbacks).
+    Fully wrapped: ANY failure loud-logs (``turn_telemetry.sink_failed``) and
+    returns. Never raises, never stalls the turn, never writes to a different
+    DB (No-Silent-Fallbacks — a loud-logged drop, not a fallback path).
     """
-    store = _event_store
-    if store is None:
-        return  # legacy/in-memory session: no durable save bound (not an error)
+    rnd = fields.get("round") if isinstance(fields, dict) else None
+    if not isinstance(rnd, int):
+        rnd = None
+    ts = datetime.now(UTC).isoformat()
+    payload_json = json.dumps(fields, default=_json_default)
     try:
-        conn = store._conn
-        component = event.get("component", "sidequest-server")
-        event_type = event.get("event_type", "")
-        fields = event.get("fields", {})
-        payload_json = json.dumps(fields, default=_json_default)
-        rnd = fields.get("round") if isinstance(fields, dict) else None
-        if not isinstance(rnd, int):
-            rnd = None
-        ts = datetime.now(UTC).isoformat()
-        insert = (
-            "INSERT INTO turn_telemetry "
-            "(event_seq, round, ts, component, event_type, payload_json) "
-            "VALUES (?, ?, ?, ?, ?, ?)"
-        )
-        from sidequest.game.persistence import SAVE_WRITE_LOCK
-
-        with SAVE_WRITE_LOCK:
-            if conn.in_transaction:
-                ev_seq = conn.execute("SELECT MAX(seq) FROM events").fetchone()[0]
-                conn.execute(
-                    insert, (ev_seq, rnd, ts, component, event_type, payload_json)
-                )  # NO commit: rides the open turn (C2) transaction
-            else:
-                with conn:
-                    conn.execute(insert, (None, rnd, ts, component, event_type, payload_json))
+        if tx is not None:
+            tx.write_telemetry(
+                event_seq=event_seq,
+                round=rnd,
+                ts=ts,
+                component=component,
+                event_type=event_type,
+                payload_json=payload_json,
+            )
+        else:
+            sink = _telemetry_sink
+            if sink is None:
+                return  # legacy/in-memory session: no durable save bound (not an error)
+            sink.record(
+                round=rnd,
+                ts=ts,
+                component=component,
+                event_type=event_type,
+                payload_json=payload_json,
+            )
     except Exception:  # noqa: BLE001 — telemetry must never crash a turn
         logger.warning(
             "turn_telemetry.sink_failed component=%s event_type=%s",
-            event.get("component"),
-            event.get("event_type"),
+            component,
+            event_type,
             exc_info=True,
         )
         return
@@ -480,6 +479,8 @@ def publish_event(
     *,
     component: str = "sidequest-server",
     severity: str = "info",
+    tx: SaveTransaction | None = None,
+    event_seq: int | None = None,
 ) -> None:
     """Publish a semantic WatcherEvent to the dashboard.
 
@@ -502,6 +503,11 @@ def publish_event(
         component grouping. Examples: ``orchestrator``, ``npc_registry``,
         ``state.location``, ``prompt_builder``, ``rag``.
     :param severity: ``info`` | ``warning`` | ``error``.
+    :param tx: When set, the open turn ``SaveTransaction`` — the telemetry
+        row rides it (same connection) with ``event_seq``. When ``None`` the
+        write goes out-of-frame through the bound ``TelemetrySink`` with a
+        NULL event_seq. EXPLICIT — no connection-state sniffing.
+    :param event_seq: The turn event's seq when ``tx`` is set; NULL otherwise.
     """
     watcher_hub.publish(
         {
@@ -512,8 +518,8 @@ def publish_event(
             "fields": fields,
         }
     )
-    _maybe_persist_encounter_row({"event_type": event_type, "fields": fields})
-    _persist_turn_telemetry({"event_type": event_type, "fields": fields, "component": component})
+    _maybe_persist_encounter_row(event_type, fields, component)
+    _persist_turn_telemetry(event_type, fields, component, tx=tx, event_seq=event_seq)
     if _watcher_as_spans_enabled():
         _emit_watcher_span(event_type, fields, component, severity)
 
@@ -526,24 +532,3 @@ def synthetic_spans_count() -> int:
     Cheap (single attribute read); safe from any thread.
     """
     return _synthetic_spans_minted
-
-
-def __getattr__(name: str):
-    """Lazy module attribute access for ``SAVE_WRITE_LOCK``.
-
-    Exposes the process-wide ``SAVE_WRITE_LOCK`` from
-    ``sidequest.game.persistence`` as a module attribute without a
-    module-scope import (which would cause a circular import because
-    ``persistence.py`` imports ``watcher_hub`` at module scope).
-
-    Only triggered on first access of the attribute name; Python caches
-    the result in the module's ``__dict__`` so subsequent lookups are
-    O(1) dict reads.
-    """
-    if name == "SAVE_WRITE_LOCK":
-        from sidequest.game.persistence import SAVE_WRITE_LOCK
-
-        # Cache in module dict so future accesses bypass __getattr__
-        globals()["SAVE_WRITE_LOCK"] = SAVE_WRITE_LOCK
-        return SAVE_WRITE_LOCK
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

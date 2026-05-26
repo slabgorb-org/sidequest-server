@@ -258,6 +258,8 @@ def emit_event(
                 emit_mechanical_census(
                     room,
                     handler._session_data.snapshot if handler._session_data else None,
+                    tx=tx,
+                    event_seq=seq,
                 )
 
             if room is not None and projection_filter is not None:

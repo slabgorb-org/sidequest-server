@@ -225,27 +225,26 @@ _install_genre_loader_cache_patch()
 
 @pytest.fixture(autouse=True)
 def _watcher_hub_event_store_isolation():
-    """Autouse guard: clear the watcher_hub ``_event_store`` binding
-    between tests.
+    """Autouse guard: clear the watcher_hub ``_telemetry_sink`` binding
+    between tests (ADR-115 D5 renamed ``_event_store`` → ``_telemetry_sink``).
 
     Several tests reach the slug-connect handler path, which calls
-    ``bind_event_store(store)`` on a SqliteStore that lives only for the
+    ``bind_event_store(sink)`` on a TelemetrySink that lives only for the
     duration of that test. Without this fixture, the binding survives —
-    the store gets closed by session teardown (or by the test going out
-    of scope), but the global pointer in ``sidequest.telemetry.watcher_hub``
-    still references the dead handle. The next test that publishes a
-    persistable encounter event hits ``sqlite3.ProgrammingError: Cannot
-    operate on a closed database`` (full-suite flake — passes in
-    isolation, fails when ``test_stale_slot_reinit_wire.py`` runs first).
+    the sink's pool gets closed by session teardown (or by the test going
+    out of scope), but the global pointer in
+    ``sidequest.telemetry.watcher_hub`` still references the dead handle.
+    The next test that publishes a persistable event would then hit a
+    closed-pool error (full-suite flake — passes in isolation).
 
     This fixture restores the pre-test binding state on teardown so each
     test starts with whatever binding it sets up itself (typically None).
     """
     from sidequest.telemetry import watcher_hub
 
-    prior = watcher_hub._event_store
+    prior = watcher_hub._telemetry_sink
     yield
-    watcher_hub._event_store = prior
+    watcher_hub._telemetry_sink = prior
 
 
 @pytest.fixture(autouse=True)

@@ -185,7 +185,9 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
         emitted_messages.append((kind, msg))
 
     watcher_events: list[tuple[str, dict[str, Any]]] = []
-    original_publish = wsh._watcher_publish
+    from sidequest.server.websocket_handlers import map_emit
+
+    original_publish = map_emit._watcher_publish
 
     def capture_watcher(
         event: str,
@@ -197,7 +199,7 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
         watcher_events.append((event, dict(attrs)))
         return original_publish(event, attrs, component=component, severity=severity)
 
-    monkeypatch.setattr(wsh, "_watcher_publish", capture_watcher)
+    monkeypatch.setattr(map_emit, "_watcher_publish", capture_watcher)
 
     wsh._maybe_emit_tactical_grid(
         None,

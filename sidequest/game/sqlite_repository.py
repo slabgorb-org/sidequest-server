@@ -8,6 +8,7 @@ state.
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -24,7 +25,7 @@ class _SqliteSaveTransaction:
     commit — the owning ``SqliteSaveRepository.transaction()`` block commits
     on clean exit, rolls back on exception."""
 
-    def __init__(self, conn) -> None:  # sqlite3.Connection
+    def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
     def append_event(self, *, kind: str, payload_json: str) -> EventRow:

@@ -115,6 +115,7 @@ class CreatureCore(BaseModel):
     inventory: Inventory = Field(default_factory=Inventory)
     statuses: list[Status] = Field(default_factory=list)
     hp: HpPool = Field(default_factory=lambda: HpPool(current=10, max=10, base_max=10))
+    armor_class: int = 10  # SWN ascending AC; unarmored = 10. Seeded from content armor.
     # Vessel-attached composure pool (Epic 53, story 53-2). None for any
     # character without a rig in inventory; populated by
     # ``sidequest.game.vessel_tags.bind_rig_pool_from_inventory`` at

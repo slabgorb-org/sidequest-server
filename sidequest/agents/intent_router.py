@@ -130,6 +130,17 @@ For each player action:
          params={"npc_name": "<name>"} (optional "situation").
        - distinctive_detail_hint: name a referent by its distinctive detail.
          params={"target": "<entity id>", "hint": "<detail>"}.
+       - movement: the party physically relocates between dungeon regions
+         (descend, ascend, go through an exit, retreat). params={
+           "direction": "<one of: deeper | back | toward_exit>",
+           "exit_descriptor": "<optional free-text label of the exit the
+                               player named, e.g. 'the iron stair', 'the
+                               crack in the east wall'>"
+         }.
+         Emit movement ONLY for genuine region relocation, not look-around /
+         search / examine. NEVER emit a region id — you do not know the
+         graph. Describe WHICH exit by exit_descriptor only; the engine
+         resolves it.
        - reflect_absence: player addresses someone/something not present.
   3. Emit narrator_instructions — must_narrate / must_not_narrate /
      distinctive_detail_for_referent / canonical_only_do_not_reveal_to_others.

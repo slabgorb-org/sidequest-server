@@ -370,6 +370,12 @@ class WorldStatePatch(BaseModel):
     quest_updates: dict[str, str] | None = None
     notes: list[str] | None = None
     current_region: str | None = None
+    # Movement subsystem §Q2 — per-PC region delta {player_name: region_id}.
+    # A dict (not a scalar) so one patch can express a one-PC move OR a batch
+    # seed; movement always writes a single-entry dict for its own player_name.
+    # Distinct from ``current_region`` (the party-level spawn/teleport anchor):
+    # per-PC moves go through ``pc_region``, never ``current_region``.
+    pc_region: dict[str, str] | None = None
     discovered_regions: list[str] | None = None
     discovered_routes: list[str] | None = None
     discover_regions: list[str] | None = None
@@ -760,6 +766,17 @@ class GameSnapshot(BaseModel):
     # keep their existing behavior.
     character_locations: dict[str, str] = Field(default_factory=dict)
 
+    # Movement subsystem §Q0 — per-PC graph region id (player_name -> region_id).
+    # The per-PC analogue of the party-level ``current_region``: it is what the
+    # frontier/materializer key off under a split party (PCs in different graph
+    # regions simultaneously). Mirrors the ``character_locations`` shape exactly
+    # (the ADR-037 per-player-state precedent), but holds the GRAPH NODE id, not
+    # the free-text scene string. ``current_region`` is retained as the
+    # spawn/teleport anchor + derived consensus accessor (see ``region_for``);
+    # movement writes ``pc_regions`` and NEVER reads back through
+    # ``current_region`` (No Silent Fallbacks).
+    pc_regions: dict[str, str] = Field(default_factory=dict)
+
     # Combat state (P1-required: permadeath / death detection)
     player_dead: bool = False
 
@@ -986,6 +1003,107 @@ class GameSnapshot(BaseModel):
             pass
         return consensus
 
+    def region_for(self, *, perspective: str | None = None) -> str | None:
+        """Resolve "which graph region is this PC in" from ``pc_regions``.
+
+        The per-PC analogue of :meth:`party_location`, mirroring its EXACT
+        three-mode contract — but over the per-PC GRAPH region map
+        (``pc_regions``) rather than the scene-string map
+        (``character_locations``):
+
+        1. ``perspective`` supplied — returns ``pc_regions[perspective]`` or
+           ``None`` if that PC has no entry. The ``None`` is the SIGNAL of a
+           missing/unseeded entry; the FAIL-LOUD on a missing entry is the
+           Phase-2 movement caller's job. ``region_for`` itself returns ``None``
+           per the :meth:`party_location` contract (parity).
+        2. ``perspective`` omitted, all seated PCs present & agree — returns
+           that consensus region id.
+        3. ``perspective`` omitted, seated PCs disagree (or any seated PC lacks
+           an entry) — returns ``None`` (callers render "(party split)").
+
+        **NEVER falls back to the singular ``current_region`` in any mode**
+        (No Silent Fallbacks): ``current_region`` is the spawn/teleport anchor,
+        not the per-PC truth. Emits ``snapshot.region_query`` for the GM panel
+        (the movement lie-detector); ``party_split=True`` flags a genuinely
+        split party.
+        """
+        from sidequest.telemetry.spans import SPAN_REGION_QUERY, Span
+
+        perspective_supplied = perspective is not None
+
+        if perspective_supplied:
+            value = self.pc_regions.get(perspective) if perspective else None
+            with Span.open(
+                SPAN_REGION_QUERY,
+                {
+                    "perspective_supplied": True,
+                    "consensus_found": False,
+                    "party_split": False,
+                },
+            ):
+                pass
+            return value
+
+        seated = [name for name in self.player_seats.values() if name]
+        if not seated:
+            with Span.open(
+                SPAN_REGION_QUERY,
+                {
+                    "perspective_supplied": False,
+                    "consensus_found": False,
+                    "party_split": False,
+                },
+            ):
+                pass
+            return None
+
+        regions = [self.pc_regions.get(name) for name in seated]
+        if any(r is None for r in regions) or len(set(regions)) != 1:
+            with Span.open(
+                SPAN_REGION_QUERY,
+                {
+                    "perspective_supplied": False,
+                    "consensus_found": False,
+                    "party_split": True,
+                },
+            ):
+                pass
+            return None
+
+        consensus_region = regions[0]
+        with Span.open(
+            SPAN_REGION_QUERY,
+            {
+                "perspective_supplied": False,
+                "consensus_found": True,
+                "party_split": False,
+            },
+        ):
+            pass
+        return consensus_region
+
+    def seed_pc_regions(self, region_id: str, *, only_missing: bool = True) -> int:
+        """Seed seated PCs' ``pc_regions`` entries with ``region_id``.
+
+        The ONE seeding mechanism (No parallel paths). For each seated PC
+        (``player_seats.values()`` non-empty; else fall to ``self.characters``
+        core names, mirroring the ``WorldStatePatch.location`` fan-out), set
+        ``pc_regions[name] = region_id`` — only for PCs lacking an entry when
+        ``only_missing`` (the spawn-anchor / migration default), or
+        unconditionally when ``only_missing=False``. Returns the count seeded.
+        """
+        seated = [name for name in self.player_seats.values() if name]
+        if not seated and self.characters:
+            seated = [c.core.name for c in self.characters]
+
+        seeded = 0
+        for name in seated:
+            if only_missing and name in self.pc_regions:
+                continue
+            self.pc_regions[name] = region_id
+            seeded += 1
+        return seeded
+
     # ------------------------------------------------------------------
     # State mutation methods
     # ------------------------------------------------------------------
@@ -1097,30 +1215,79 @@ class GameSnapshot(BaseModel):
             self.quest_log.update(patch.quest_updates)
         if patch.notes is not None:
             self.notes = patch.notes
+        if patch.pc_region is not None:
+            # Movement subsystem §Q2 — the PER-PC region-transition point.
+            # Movement (Phase 2) emits a one-entry ``pc_region`` dict for the
+            # moving PC; a batch seed may carry several. For each entry, set the
+            # PC's region and (on a genuine change to a non-empty target) fire
+            # the frontier seam scoped to THAT pc_name — one applier, one
+            # transition, one materialize, per PC (the split-party primitive).
+            # Lazy import — sidequest.dungeon depends on game models, so a
+            # top-level import would invert the dependency.
+            from sidequest.dungeon.frontier_hook import notify_region_transition
+
+            for pc_name, to_region in patch.pc_region.items():
+                prev = self.pc_regions.get(pc_name)
+                self.pc_regions[pc_name] = to_region
+                if to_region and to_region != prev:
+                    notify_region_transition(
+                        self,
+                        pc_name=pc_name,
+                        from_region=prev or None,
+                        to_region=to_region,
+                    )
         if patch.current_region is not None:
-            # The REAL production region-transition point (ADR-011
-            # WorldStatePatch apply — the only code that mutates
-            # current_region mid-session). Beneath Sünden Plan 7 Task 6
-            # hooks the frontier-crossing / frontier-approach seam here
-            # (extending this point + ADR-055 region_init dedup-append,
-            # NOT a parallel nav path). Fire only on a genuine region
-            # change (different, non-empty target) so the look-ahead is
-            # never spuriously enqueued (No Silent Fallbacks). Lazy import
-            # — sidequest.dungeon depends on game models, so a top-level
-            # import would invert the dependency (the watcher_hub
-            # lazy-import precedent two methods up).
+            # The party-level spawn/teleport ANCHOR (ADR-011 WorldStatePatch
+            # apply). Retained for the seed/spawn-anchor + scripted-teleport
+            # path — Beneath Sünden Plan 7 Task 6 hooks the frontier-crossing
+            # seam here (extending this point + ADR-055 region_init
+            # dedup-append, NOT a parallel nav path). Movement NEVER sets
+            # ``current_region``; it sets ``pc_region``.
+            #
+            # Movement subsystem §Q0/§Q2: the anchor now ALSO seeds seated PCs
+            # lacking a ``pc_regions`` entry (so the anchor populates per-PC
+            # truth), and fires the frontier transition PER seeded PC that
+            # moved to the new anchor — keeping the bootstrap look-ahead seam
+            # live under the per-PC model. With no seated PCs (and no
+            # characters), a single sentinel-PC anchor transition still fires
+            # so the spawn bootstrap (e.g. a fresh dungeon with chargen not yet
+            # wired) keeps the look-ahead worker engaged (No Silent Fallbacks).
+            # Lazy import — see the pc_region block above.
+            from sidequest.dungeon.frontier_hook import notify_region_transition
+
             _prev_region = self.current_region
             self.current_region = patch.current_region
-            if patch.current_region and patch.current_region != _prev_region:
-                from sidequest.dungeon.frontier_hook import (
-                    notify_region_transition,
-                )
 
-                notify_region_transition(
-                    self,
-                    from_region=_prev_region or None,
-                    to_region=patch.current_region,
-                )
+            if patch.current_region and patch.current_region != _prev_region:
+                # Capture which seated PCs were NOT yet at the new anchor, then
+                # seed them. Those are exactly the PCs who "moved" to the anchor.
+                seated = [name for name in self.player_seats.values() if name]
+                if not seated and self.characters:
+                    seated = [c.core.name for c in self.characters]
+                moved_pcs = [
+                    name for name in seated if self.pc_regions.get(name) != patch.current_region
+                ]
+                self.seed_pc_regions(patch.current_region)
+
+                if moved_pcs:
+                    for pc_name in moved_pcs:
+                        notify_region_transition(
+                            self,
+                            pc_name=pc_name,
+                            from_region=_prev_region or None,
+                            to_region=patch.current_region,
+                        )
+                else:
+                    # No seated PC / no character: the spawn-bootstrap anchor
+                    # still fires ONE transition so the look-ahead worker stays
+                    # engaged. Sentinel pc_name — informational only (the
+                    # observer/worker keys off to_region, not pc_name).
+                    notify_region_transition(
+                        self,
+                        pc_name="__anchor__",
+                        from_region=_prev_region or None,
+                        to_region=patch.current_region,
+                    )
         if patch.discovered_regions is not None:
             # Stories 45-16 + 45-17: validate, then canonicalize-dedup.
             # 45-16 rejected non-room shapes (brackets, multiline);

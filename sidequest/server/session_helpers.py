@@ -196,6 +196,9 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "turn_manager",
     # dicts keyed by finite gameplay domains
     "character_locations",
+    # Movement subsystem §Q0: per-PC region map (player_name -> region_id),
+    # bounded by the seated-PC count exactly like character_locations.
+    "pc_regions",
     "chassis_autofire_cooldowns",
     "chassis_registry",
     "player_seats",
@@ -691,6 +694,10 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
             snapshot.current_region = entrance
             if entrance not in snapshot.discovered_regions:
                 snapshot.discovered_regions.append(entrance)
+            # Movement subsystem §Q0: per-turn self-heal also re-seeds seated
+            # PCs' per-PC region so region_for(perspective=pc) resolves (no
+            # current_region fallback).
+            snapshot.seed_pc_regions(entrance)
             span.set_attribute("bound_entrance", True)
             span.set_attribute("healed_from", _unbound_from)
             logger.error(

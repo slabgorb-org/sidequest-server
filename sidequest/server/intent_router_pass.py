@@ -130,6 +130,9 @@ async def execute_intent_router_pre_narrator_pass(
     action: str,
     player_name: str,
     additional_player_names: list[str] | None = None,
+    dungeon_store: Any | None = None,
+    palette: Any | None = None,
+    lookahead_handle: Any | None = None,
 ) -> DispatchPackage:
     """Run the IntentRouter and dispatch bank pre-narrator.
 
@@ -163,12 +166,18 @@ async def execute_intent_router_pre_narrator_pass(
             "player_name": player_name,
             "npcs_present": [],
             "additional_player_names": additional_player_names,
+            # Movement subsystem (§0 context threading): the live region
+            # graph + palette + worker handle the movement handler needs.
+            # The bank signature-filters context, so subsystems that do not
+            # declare these kwargs are unaffected.
+            "dungeon_store": dungeon_store,
+            "palette": palette,
+            "lookahead_handle": lookahead_handle,
         },
     )
 
     logger.debug(
-        "intent_router_pass.complete turn_id=%s dispatch_count=%d "
-        "player=%s encounter_engaged=%s",
+        "intent_router_pass.complete turn_id=%s dispatch_count=%d player=%s encounter_engaged=%s",
         package.turn_id,
         sum(len(pd.dispatch) for pd in package.per_player)
         + sum(len(ca.dispatch) for ca in package.cross_player),

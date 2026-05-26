@@ -84,12 +84,14 @@ def test_apply_world_patch_region_transition_fires_frontier_hook() -> None:
 
     seen: list[dict[str, Any]] = []
 
-    def _spy(*, snapshot: Any, from_region: str | None, to_region: str) -> None:
-        # The real Task-7-shaped observer signature; here it just records
-        # that the production transition reached the seam.
+    def _spy(*, snapshot: Any, pc_name: str, from_region: str | None, to_region: str) -> None:
+        # The real Task-7-shaped observer signature (now per-PC: pc_name is
+        # which PC moved — Movement subsystem §Q2); here it just records that
+        # the production transition reached the seam.
         seen.append(
             {
                 "snapshot_is": snapshot is snap,
+                "pc_name": pc_name,
                 "from_region": from_region,
                 "to_region": to_region,
             }

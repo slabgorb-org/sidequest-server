@@ -152,10 +152,16 @@ class LookaheadWorkerHandle:
         self,
         *,
         snapshot: Any,
+        pc_name: str,
         from_region: str | None,
         to_region: str,
     ) -> None:
         """The THIN SYNC observer registered on Task 6's producer.
+
+        Movement subsystem §Q2: ``pc_name`` is which PC moved (split-party
+        legibility — threaded into the lookahead span for GM visibility). The
+        worker still materializes the frontier around ``to_region``; pc_name is
+        informational this phase.
 
         Schedules the async worker fire-and-forget and returns
         immediately WITHOUT raising — the central constraint. The
@@ -175,6 +181,7 @@ class LookaheadWorkerHandle:
             # transition already happened: surface loud-on-span, do not
             # propagate into the sync path.
             with frontier_lookahead_span(to_region=to_region, heading=from_region or "") as span:
+                span.set_attribute("pc_name", pc_name)
                 span.set_attribute("error", "no_running_event_loop")
                 span.set_attribute(
                     "reason",
@@ -211,6 +218,7 @@ class LookaheadWorkerHandle:
                 with frontier_lookahead_span(
                     to_region=to_region, heading=from_region or ""
                 ) as span:
+                    span.set_attribute("pc_name", pc_name)
                     span.set_attribute("no_frontier_along_heading", True)
                     span.set_attribute("targets", 0)
                 return
@@ -218,6 +226,7 @@ class LookaheadWorkerHandle:
             self._schedule(loop, edges=targets, to_region=to_region, snapshot=snapshot)
         except Exception as exc:  # noqa: BLE001 — central constraint: never re-raise into the sync transition
             with frontier_lookahead_span(to_region=to_region, heading=from_region or "") as span:
+                span.set_attribute("pc_name", pc_name)
                 span.set_attribute("error", type(exc).__name__)
                 span.set_attribute(
                     "reason",

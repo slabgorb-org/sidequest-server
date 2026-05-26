@@ -1,4 +1,18 @@
-"""SaveRepository interface + SqliteSaveRepository adapter tests."""
+"""SaveRepository interface + SqliteSaveRepository adapter tests.
+
+Protocol growth note (ADR-115 A7)
+----------------------------------
+The ``SaveRepository`` Protocol was grown in A7 to the full typed surface
+(snapshots, narrative, scrapbook, promotions, session lifecycle).
+``SqliteSaveRepository`` implements only the original Slice-1a surface
+(events + projection_cache) and is deleted in F1.  It therefore no longer
+satisfies ``isinstance(x, SaveRepository)`` for the grown Protocol — that
+isinstance check now lives in ``tests/persistence/test_pg_save_repository.py``
+over ``PgSaveRepository``, which implements the full surface.
+
+The Slice-1a *behaviour* tests below remain valid against
+``SqliteSaveRepository`` — they exercise the methods it does implement.
+"""
 
 from __future__ import annotations
 
@@ -19,8 +33,23 @@ def _repo() -> SqliteSaveRepository:
     return SqliteSaveRepository(SqliteStore.open_in_memory())
 
 
-def test_adapter_satisfies_protocol():
-    assert isinstance(_repo(), SaveRepository)
+def test_sqlite_adapter_implements_slice_1a_surface():
+    """SqliteSaveRepository has the Slice-1a methods required by its consumers.
+
+    Full-Protocol isinstance is checked in test_pg_save_repository.py.
+    SqliteSaveRepository is deleted in F1; this test exists until then.
+    """
+    repo = _repo()
+    # Structural check: the Slice-1a methods the existing callers use are present.
+    for attr in (
+        "transaction",
+        "append_event",
+        "read_events_since",
+        "latest_event_seq",
+        "write_projection",
+        "read_projection_since",
+    ):
+        assert callable(getattr(repo, attr, None)), f"missing Slice-1a method: {attr}"
 
 
 def test_append_event_assigns_monotonic_seq():
@@ -126,7 +155,9 @@ def test_connect_constructs_event_log_over_repository():
     repo = SqliteSaveRepository(SqliteStore.open_in_memory())
     log = EventLog(repo)
     cache = ProjectionCache(repo)
-    assert isinstance(log.repository, SaveRepository)
+    # log.repository is the same SqliteSaveRepository passed in.
+    # isinstance vs full SaveRepository Protocol is tested in test_pg_save_repository.py.
+    assert log.repository is repo
     row = log.append(kind="NARRATION", payload_json="{}")
     cache.write(
         event_seq=row.seq,

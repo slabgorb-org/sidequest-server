@@ -283,7 +283,7 @@ class ConnectHandler:
             _pg_repository, _pg_dungeon_repository, _pg_telemetry_sink = _build_pg_repos_for_slug(
                 _pg_pool,
                 slug=slug,
-                mode=str(row.mode.value) if hasattr(row.mode, "value") else str(row.mode),
+                mode=str(row.mode),  # GameMode(StrEnum) is its value; no silent fallback
                 genre_slug=row.genre_slug,
                 world_slug=row.world_slug,
             )
@@ -342,7 +342,7 @@ class ConnectHandler:
             with mp_slug_connect_span(
                 slug=slug,
                 player_id=player_id,
-                mode=str(row.mode.value) if hasattr(row.mode, "value") else str(row.mode),
+                mode=str(row.mode),  # GameMode(StrEnum) is its value; no silent fallback
             ) as _mp_span:
                 room = session._room_registry.get_or_create(slug, mode=GameMode(row.mode))
                 # Snapshot pause state BEFORE connecting so we can detect

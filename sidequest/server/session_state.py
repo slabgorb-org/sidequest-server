@@ -156,14 +156,9 @@ def _build_pg_repos_for_slug(
     Returns a ``(repository, dungeon_repository, telemetry_sink)`` triple
     whose members all share the same ``session_id``.
 
-    This is a synchronous call (``ensure_session`` uses a psycopg_pool
-    borrowed connection).  The connect handler runs the whole path in an
-    async function; call this inside
-    ``await anyio.to_thread.run_sync(lambda: _build_pg_repos_for_slug(...))``
-    when the surrounding async context needs strict event-loop hygiene.  The
-    existing connect handler pattern calls blocking operations directly (e.g.
-    ``GenreLoader.load``), so the convention of calling sync DB helpers from
-    async is already established here — D1 follows the same pattern.
+    Synchronous (``ensure_session`` borrows a pooled connection).  Follows the
+    existing connect-handler convention of calling blocking DB/IO helpers
+    directly from the async path (e.g. ``GenreLoader.load``).
     """
     repository = PgSaveRepository.for_slug(
         pool,

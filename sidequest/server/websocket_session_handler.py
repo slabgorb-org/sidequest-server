@@ -36,7 +36,6 @@ from sidequest.agents.dispatch_engagement_watcher import (
 from sidequest.agents.intent_router import IntentRouterFailure
 from sidequest.agents.llm_factory import build_llm_client
 from sidequest.agents.orchestrator import TurnContext
-from sidequest.audio.library_backend import LibraryBackend
 from sidequest.daemon_client import (
     DaemonClient,
     DaemonRequestError,
@@ -88,14 +87,11 @@ from sidequest.game.world_materialization import (
 )
 from sidequest.genre.archetype.shim import resolve_archetype
 from sidequest.genre.error import GenreValidationError
-from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
-from sidequest.genre.models.pack import GenrePack
+from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS
 from sidequest.genre.models.world import NavigationMode
 from sidequest.protocol import GameMessage
 from sidequest.protocol.enums import MessageType
 from sidequest.protocol.messages import (
-    AudioCueMessage,
-    AudioCuePayload,
     ChapterMarkerMessage,
     ChapterMarkerPayload,
     CharacterCreationMessage,
@@ -122,7 +118,6 @@ from sidequest.protocol.models import (
 )
 from sidequest.protocol.types import NonBlankString
 from sidequest.server import intent_router_pass, views
-from sidequest.server.audio_cue import build_audio_cue_payload
 from sidequest.server.dispatch.chargen_loadout import apply_starting_loadout
 from sidequest.server.dispatch.chargen_summary import render_confirmation_summary
 from sidequest.server.dispatch.opening import (
@@ -146,7 +141,6 @@ from sidequest.server.session_helpers import (
     build_secret_note_events,
 )
 from sidequest.server.session_state import (
-    _AUDIO_INTERPRETER,
     _build_pc_descriptor,
     _hash_snapshot,
     _SessionData,
@@ -158,10 +152,6 @@ from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.spans import (
     SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED,
     SPAN_CHARGEN_ARCHETYPE_GATE_EVALUATED,
-    audio_backend_disabled_span,
-    audio_backend_enabled_span,
-    audio_dispatched_span,
-    audio_skipped_span,
     encounter_momentum_broadcast_span,
     orchestrator_process_action_span,
     round_invariant_span,
@@ -186,6 +176,12 @@ tracer = trace.get_tracer("sidequest.server.session_handler")
 # (e.g. ``session_handler``) keep working unchanged. Only the names actually
 # referenced from this module are re-imported; helpers used solely by their
 # sibling group (e.g. ``_build_dungeon_map_payload``) stay private to it.
+# The audio-dispatch methods moved to a mixin; the class inherits them so
+# ``self._audio_skip`` / ``self._maybe_dispatch_audio`` and external callers
+# resolve unchanged via the MRO.
+from sidequest.server.websocket_handlers.audio_mixin import (  # noqa: E402
+    AudioDispatchMixin,
+)
 from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
     _maybe_emit_dungeon_map,
     _maybe_emit_location_description,
@@ -198,7 +194,7 @@ from sidequest.server.websocket_handlers.opening_helpers import (  # noqa: E402
 )
 
 
-class WebSocketSessionHandler:
+class WebSocketSessionHandler(AudioDispatchMixin):
     """Per-connection session: state machine + dispatch.
 
     Created fresh per WebSocket connection by the /ws endpoint factory.
@@ -4531,62 +4527,6 @@ class WebSocketSessionHandler:
         return messages
 
     # ------------------------------------------------------------------
-    # Audio DJ backend construction
-    # ------------------------------------------------------------------
-
-    def _build_audio_backend(
-        self,
-        genre_slug: str,
-        genre_pack: GenrePack,
-    ) -> LibraryBackend | None:
-        """Construct the per-session LibraryBackend, or None when the
-        genre pack has no resolvable on-disk audio directory.
-
-        Emits a watcher event when audio is disabled so the GM panel
-        can tell whether a silent turn is because the narration had
-        no cues or because audio is off entirely."""
-        try:
-            pack_dir = GenreLoader().find(genre_slug)
-        except Exception as exc:  # noqa: BLE001 — best-effort; never crash connect
-            # Span emission replaces the prior direct ``_watcher_publish`` —
-            # ``WatcherSpanProcessor`` re-emits via
-            # ``SPAN_ROUTES[SPAN_AUDIO_BACKEND_DISABLED]``.
-            with audio_backend_disabled_span(
-                reason="pack_dir_missing",
-                genre=genre_slug,
-            ):
-                logger.warning(
-                    "audio.backend_skipped reason=pack_dir_missing genre=%s error=%s",
-                    genre_slug,
-                    exc,
-                )
-            return None
-
-        audio_cfg = genre_pack.audio
-        if not audio_cfg.mood_tracks and not audio_cfg.themes and not audio_cfg.sfx_library:
-            with audio_backend_disabled_span(
-                reason="empty_config",
-                genre=genre_slug,
-            ):
-                logger.info(
-                    "audio.backend_skipped reason=empty_config genre=%s",
-                    genre_slug,
-                )
-            return None
-
-        with audio_backend_enabled_span(
-            genre=genre_slug,
-            mood_count=len(audio_cfg.mood_tracks) + len(audio_cfg.themes),
-            sfx_count=len(audio_cfg.sfx_library),
-        ):
-            logger.info(
-                "audio.backend_ready genre=%s pack_dir=%s",
-                genre_slug,
-                pack_dir,
-            )
-        return LibraryBackend(audio_cfg, base_path=pack_dir)
-
-    # ------------------------------------------------------------------
     # Visual-scene render dispatch
     # ------------------------------------------------------------------
 
@@ -5075,119 +5015,6 @@ class WebSocketSessionHandler:
             payload=RenderQueuedPayload(render_id=render_id),
             player_id=player_id,
         )
-
-    # ------------------------------------------------------------------
-    # Audio DJ dispatch — runs after NARRATION, ships AUDIO_CUE alongside.
-    # Synchronous filesystem lookup; no daemon round-trip, no placeholder
-    # message. See docs/superpowers/specs/2026-04-23-audio-dj-wiring-design.md
-    # ------------------------------------------------------------------
-
-    def _maybe_dispatch_audio(
-        self,
-        sd: _SessionData,
-        result: object,
-    ) -> AudioCueMessage | None:
-        """Run the DJ: interpret narration → resolve tracks → return an
-        AudioCueMessage, or None if any precondition fails. Best-effort;
-        exceptions are caught and logged so audio never crashes a turn."""
-        from sidequest.agents.orchestrator import NarrationTurnResult
-
-        if not isinstance(result, NarrationTurnResult):
-            return None
-        if sd.audio_backend is None:
-            self._audio_skip(sd, "no_audio_config")
-            return None
-        narration = (result.narration or "").strip()
-        if not narration:
-            self._audio_skip(sd, "no_narration")
-            return None
-
-        try:
-            # Keep the span open across interpret + payload build so its
-            # attributes can carry the *final* DJ decision (mood/track/
-            # sfx). Playtest 2026-04-24 "sidequest.audio.dispatch span has
-            # zero attributes — blind OTEL" — the prior impl opened the
-            # span with no attributes and the GM panel couldn't tell why
-            # the client was firing "Unable to decode audio data".
-            with tracer.start_as_current_span("sidequest.audio.dispatch") as span:
-                span.set_attribute("genre", sd.genre_slug)
-                span.set_attribute("turn_number", sd.snapshot.turn_manager.interaction)
-                cues = _AUDIO_INTERPRETER.interpret(
-                    narration,
-                    sd.audio_backend._config,  # type: ignore[attr-defined]
-                )
-                payload = build_audio_cue_payload(
-                    cues,
-                    audio_backend=sd.audio_backend,
-                    genre_slug=sd.genre_slug,
-                )
-                # Emit the resolved cue shape so the GM panel can correlate
-                # a turn's dispatch with the client-side decode errors.
-                span.set_attribute("mood", payload.mood or "")
-                span.set_attribute("music_track", payload.music_track or "")
-                span.set_attribute("sfx_count", len(payload.sfx_triggers))
-                if payload.sfx_triggers:
-                    # Spans accept list attributes; truncate to keep the
-                    # trace payload bounded even with long SFX batches.
-                    span.set_attribute(
-                        "sfx_triggers",
-                        list(payload.sfx_triggers[:16]),
-                    )
-                span.set_attribute(
-                    "reason",
-                    "empty_cues"
-                    if payload.mood is None and not payload.sfx_triggers
-                    else "dispatched",
-                )
-        except Exception as exc:  # noqa: BLE001 — best-effort; never crash a turn
-            logger.warning("audio.dispatch_failed error=%s", exc)
-            self._audio_skip(sd, "error", extra={"error": type(exc).__name__})
-            return None
-
-        if payload.mood is None and not payload.sfx_triggers:
-            self._audio_skip(sd, "empty_cues")
-            return None
-
-        self._audio_dispatched(sd, payload)
-        return AudioCueMessage(
-            payload=payload,
-            player_id=sd.player_id,
-        )
-
-    def _audio_skip(
-        self,
-        sd: _SessionData,
-        reason: str,
-        *,
-        extra: dict[str, object] | None = None,
-    ) -> None:
-        # Span emission replaces the prior direct ``_watcher_publish`` —
-        # ``WatcherSpanProcessor`` re-emits via
-        # ``SPAN_ROUTES[SPAN_AUDIO_SKIPPED]``. ``extra`` is JSON-encoded
-        # because OTEL drops dict attribute values; the route extract
-        # returns the JSON string for dashboard parity.
-        with audio_skipped_span(
-            reason=reason,
-            turn_number=sd.snapshot.turn_manager.interaction,
-            extra=extra,
-        ):
-            pass
-
-    def _audio_dispatched(
-        self,
-        sd: _SessionData,
-        payload: AudioCuePayload,
-    ) -> None:
-        # Span emission replaces the prior direct ``_watcher_publish`` —
-        # ``WatcherSpanProcessor`` re-emits via
-        # ``SPAN_ROUTES[SPAN_AUDIO_DISPATCHED]``.
-        with audio_dispatched_span(
-            turn_number=sd.snapshot.turn_manager.interaction,
-            mood=payload.mood or "",
-            music_track=payload.music_track or "",
-            sfx_count=len(payload.sfx_triggers),
-        ):
-            pass
 
     # ------------------------------------------------------------------
     # Lore embedding — RAG retrieval (pre-turn) + worker dispatch (post-turn)

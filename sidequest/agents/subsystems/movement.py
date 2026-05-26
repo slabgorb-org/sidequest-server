@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 from sidequest.agents.subsystems import SubsystemOutput
 from sidequest.dungeon.region_graph.model import RegionGraph
 from sidequest.dungeon.region_projection import RegionExit, project_region
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
 from sidequest.game.session import GameSnapshot, WorldStatePatch
 from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch, VisibilityTag
 from sidequest.telemetry.spans import movement_resolved_span, movement_unresolved_span
@@ -43,10 +44,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Seed=Expansion-0 contract's fixed entrance anchor (load_map needs it to
-# rebuild the graph). Mirrors lookahead_worker._ENTRANCE_ID /
-# seed_bootstrap.ENTRANCE_ID — kept local so the handler does not reach
-# into the worker's private name.
-_ENTRANCE_ID = "entrance"
+# rebuild the graph). Single-sourced from the public seed_bootstrap.ENTRANCE_ID
+# (imported above) so this never silently diverges if the anchor id changes.
 
 # §Q1 step 4 / O3: hardcoded kind→synonym table for v1 (exit-vocabulary in
 # content YAML is a documented follow-up for Jade). ``secret`` is NEVER

@@ -28,6 +28,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from sidequest.game.beat_kinds import _opposite_side_first_actor
 from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
 from sidequest.game.encounter import EncounterPhase, StructuredEncounter
 from sidequest.game.ruleset import get_ruleset_module
@@ -284,8 +285,20 @@ def dispatch_dice_throw(
             f"invalid stat_check {beat.stat_check!r} on beat {payload.beat_id!r}: {exc}"
         ) from exc
 
-    modifier = ruleset.stat_modifier(character_stats, beat.stat_check)
-    difficulty = ruleset.compute_dc(beat)
+    # Generalized attack setup: the module computes modifier + target number with the target
+    # in hand, so SWN reads target AC. native ignores the cores and reproduces stat_mod vs DC.
+    target_core = None
+    if encounter is not None:
+        target_name = _opposite_side_first_actor(encounter, "player")
+        if target_name is not None:
+            target_core = snapshot.find_creature_core(target_name)
+    attacker_core = snapshot.find_creature_core(character_name)
+    attack = ruleset.attack_params(
+        beat=beat, attacker_stats=character_stats,
+        attacker_core=attacker_core, target_core=target_core,
+    )
+    modifier = attack.modifier
+    difficulty = attack.target_number
 
     request = _build_request_payload(
         request_id=payload.request_id,

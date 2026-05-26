@@ -471,6 +471,12 @@ async def test_dungeon_map_frame_is_emitted_to_ui(
             captured.append((msg, kind))
 
         sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
+        # Per-PC (Movement subsystem §Q-map / OP1): the YOU-ARE-HERE marker is
+        # this connection's PC region, resolved player_id -> seat -> PC ->
+        # region_for(perspective=pc), never the singular current_region. Seat
+        # _FakeSessionData.player_id ("p1") on a PC standing in the entrance.
+        snap.player_seats = {"p1": "Rux"}
+        snap.pc_regions = {"Rux": "entrance"}
         _maybe_emit_dungeon_map(None, sd=sd, snapshot=snap, emit_fn=_emit)
 
         dmaps = [m for m, k in captured if k == "DUNGEON_MAP"]

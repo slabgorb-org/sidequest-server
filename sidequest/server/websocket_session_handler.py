@@ -26,7 +26,10 @@ from typing import TYPE_CHECKING, cast
 from opentelemetry import trace
 
 if TYPE_CHECKING:
+    from sidequest.dungeon.region_graph.model import RegionGraph
+    from sidequest.dungeon.themes import ThemePalette
     from sidequest.handlers.base import MessageHandler
+    from sidequest.protocol.messages import DungeonMapPayload
     from sidequest.protocol.models import EncounterLocationOverlay, LocationEntity
     from sidequest.server.session_room import RoomRegistry, SessionRoom
 
@@ -1189,6 +1192,148 @@ def _maybe_emit_location_overlay_changed(
         emit_fn(msg, "LOCATION_OVERLAY_CHANGED")  # type: ignore[operator]
 
 
+def _resolve_connection_pc_region(
+    snapshot: GameSnapshot, player_id: str
+) -> tuple[str | None, str | None]:
+    """OP1 — resolve THIS connection's PC and its graph region.
+
+    The connection's identity is ``sd.player_id``; ``snapshot.player_seats``
+    maps ``player_id`` -> seated ``character.core.name`` (see
+    ``GameSnapshot.player_seats``). The per-PC region is then
+    ``region_for(perspective=<character_name>)`` — the SAME per-PC perspective
+    accessor the rest of the code uses (mirrors ``character_locations`` /
+    ``party_location``), NEVER the singular ``current_region``.
+
+    Returns ``(pc_name, pc_region)``:
+      - ``(None, None)`` — ``player_id`` maps to no seated character
+        (spectator / GM-panel connection). Caller emits
+        ``dungeon.map_skipped(no_pc_region)`` — per OP1, a connection with no
+        seated PC gets the skip, NOT the consensus view, for v1.
+      - ``(pc_name, None)`` — seated PC has no ``pc_regions`` entry. Caller
+        also skips (loud) — NEVER falls back to ``current_region``.
+      - ``(pc_name, region_id)`` — the per-connection YOU-ARE-HERE region.
+    """
+    pc_name = snapshot.player_seats.get(player_id) if player_id else None
+    if not pc_name:
+        return None, None
+    return pc_name, snapshot.region_for(perspective=pc_name)
+
+
+def _load_dungeon_map_context(
+    sd: _SessionData,
+) -> tuple[RegionGraph, ThemePalette, str] | None:
+    """Load the live region graph + theme palette for the dungeon-map emit.
+
+    The single content/IO seam (DungeonStore.load_map, GenreLoader,
+    load_theme_palette). Returns ``(graph, palette, entrance_id)`` or
+    ``None`` for a clean skip:
+      - other-world no-op (``applies_to`` False) — silent (the per-turn
+        ``dungeon.region_projection`` span already records it);
+      - missing schema / empty map — emits ``dungeon.map_skipped`` (loud).
+
+    Lazy imports: ``sidequest.dungeon`` depends on game models (the
+    frontier-hook lazy-import precedent)."""
+    from sidequest.dungeon.persistence import DatabaseError, DungeonStore
+    from sidequest.dungeon.region_projection import applies_to
+    from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
+    from sidequest.dungeon.themes import load_theme_palette
+    from sidequest.genre.loader import (
+        DEFAULT_GENRE_PACK_SEARCH_PATHS,
+        GenreLoader,
+    )
+
+    if not applies_to(sd.genre_slug, sd.world_slug):
+        return None  # the per-turn dungeon.region_projection span already
+        # records the other-world no-op; a second event here is noise.
+
+    store = DungeonStore(sd.store.connection())
+    try:
+        graph = store.load_map(entrance_id=ENTRANCE_ID)
+    except DatabaseError as exc:
+        _watcher_publish(
+            "dungeon.map_skipped",
+            {"world": sd.world_slug, "reason": f"no_schema: {exc}"},
+            component="dungeon",
+            severity="warning",
+        )
+        logger.warning("dungeon.map_skipped no schema: %s", exc)
+        return None
+    if not graph.nodes:
+        _watcher_publish(
+            "dungeon.map_skipped",
+            {"world": sd.world_slug, "reason": "empty_map"},
+            component="dungeon",
+            severity="warning",
+        )
+        logger.warning("dungeon.map_skipped empty dungeon_map")
+        return None
+
+    loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
+    world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
+    palette = load_theme_palette(world_dir.parent.parent)
+    return graph, palette, ENTRANCE_ID
+
+
+def _build_dungeon_map_payload(
+    *,
+    graph: RegionGraph,
+    palette: ThemePalette,
+    pc_region: str,
+    discovered_regions: list[str],
+    entrance_id: str,
+) -> DungeonMapPayload:
+    """Build a ``DungeonMapPayload`` with a per-PC YOU-ARE-HERE marker.
+
+    ``pc_region`` is THIS connection's PC region (§Q-map). ``discovered_regions``
+    is the SHARED fog-of-war set — a region any PC entered is on the whole
+    table's map; only the YOU-ARE-HERE marker (``is_current_room`` /
+    ``current_location`` / ``region``) is per-PC."""
+    from sidequest.protocol.messages import (
+        DungeonMapExit,
+        DungeonMapLocation,
+        DungeonMapPayload,
+    )
+
+    nodes = graph.nodes
+    edges = graph.edges
+
+    discovered = [r for r in discovered_regions if r in nodes]
+    # Fog of war: never leak undiscovered regions. If discovered_regions is
+    # somehow empty but this PC's region is bound, at least show that.
+    if not discovered and pc_region in nodes:
+        discovered = [pc_region]
+
+    explored: list[DungeonMapLocation] = []
+    for rid in discovered:
+        node = nodes[rid]
+        try:
+            display = palette.get(node.theme).display_name
+        except KeyError:
+            display = rid  # fail-soft label; the span/log below is loud
+        room_exits = [
+            DungeonMapExit(target=(e.b if e.a == rid else e.a), exit_type=e.kind)
+            for e in edges
+            if rid in (e.a, e.b) and not e.hidden  # secrets stay off the map
+        ]
+        explored.append(
+            DungeonMapLocation(
+                id=rid,
+                name=display,
+                type="region",
+                connections=[x.target for x in room_exits],
+                room_exits=room_exits,
+                room_type="entrance" if rid == entrance_id else "normal",
+                is_current_room=(rid == pc_region),
+            )
+        )
+
+    return DungeonMapPayload(
+        current_location=pc_region,
+        region=pc_region,
+        explored=explored,
+    )
+
+
 def _maybe_emit_dungeon_map(
     handler: object,
     *,
@@ -1210,104 +1355,67 @@ def _maybe_emit_dungeon_map(
     reason) otherwise, so the GM panel sees the UI seam engaged — never a
     silent skip. A live turn never hard-fails on a dungeon defect.
 
-    Lazy imports: ``sidequest.dungeon`` depends on game models (the
-    frontier-hook lazy-import precedent)."""
-    from sidequest.dungeon.persistence import DatabaseError, DungeonStore
-    from sidequest.dungeon.region_projection import applies_to
-    from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
-    from sidequest.dungeon.themes import load_theme_palette
-    from sidequest.genre.loader import (
-        DEFAULT_GENRE_PACK_SEARCH_PATHS,
-        GenreLoader,
-    )
-    from sidequest.protocol.messages import (
-        DungeonMapExit,
-        DungeonMapLocation,
-        DungeonMapMessage,
-        DungeonMapPayload,
-    )
+    Per-PC (Movement subsystem §Q-map / OP1): the YOU-ARE-HERE marker is
+    THIS connection's PC region (``player_id`` -> seat -> PC ->
+    ``region_for(perspective=pc)``), NOT the singular ``current_region``.
+    A connection with no seated PC / no ``pc_regions`` entry emits
+    ``dungeon.map_skipped(no_pc_region)`` — loud, NEVER a silent fall-through
+    to the stale ``current_region``. ``discovered_regions`` stays SHARED."""
+    from sidequest.protocol.messages import DungeonMapMessage
 
-    if not applies_to(sd.genre_slug, sd.world_slug):
-        return  # the per-turn dungeon.region_projection span already
-        # records the other-world no-op; a second event here is noise.
+    player_id = getattr(sd, "player_id", "")
 
-    store = DungeonStore(sd.store.connection())
-    try:
-        graph = store.load_map(entrance_id=ENTRANCE_ID)
-    except DatabaseError as exc:
+    # OP1 — resolve this connection's PC region BEFORE the content load so a
+    # spectator / unseated connection skips loudly with no stale fallback.
+    pc_name, pc_region = _resolve_connection_pc_region(snapshot, player_id)
+    if not pc_region:
         _watcher_publish(
             "dungeon.map_skipped",
-            {"world": sd.world_slug, "reason": f"no_schema: {exc}"},
+            {
+                "world": sd.world_slug,
+                "reason": "no_pc_region",
+                "player_id": player_id,
+                "pc_name": pc_name or "",
+            },
             component="dungeon",
             severity="warning",
         )
-        logger.warning("dungeon.map_skipped no schema: %s", exc)
-        return
-    if not graph.nodes:
-        _watcher_publish(
-            "dungeon.map_skipped",
-            {"world": sd.world_slug, "reason": "empty_map"},
-            component="dungeon",
-            severity="warning",
+        logger.warning(
+            "dungeon.map_skipped no_pc_region player_id=%s pc_name=%s",
+            player_id,
+            pc_name,
         )
-        logger.warning("dungeon.map_skipped empty dungeon_map")
         return
 
-    loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
-    world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
-    palette = load_theme_palette(world_dir.parent.parent)
+    ctx = _load_dungeon_map_context(sd)
+    if ctx is None:
+        return  # other-world no-op or map_skipped already emitted by loader.
+    graph, palette, entrance_id = ctx
 
-    current_region = snapshot.current_region or ""
-    discovered = [r for r in snapshot.discovered_regions if r in graph.nodes]
-    # Fog of war: never leak undiscovered regions. If discovered_regions
-    # is somehow empty but a current_region is bound, at least show that.
-    if not discovered and current_region in graph.nodes:
-        discovered = [current_region]
-
-    explored: list[DungeonMapLocation] = []
-    for rid in discovered:
-        node = graph.nodes[rid]
-        try:
-            display = palette.get(node.theme).display_name
-        except KeyError:
-            display = rid  # fail-soft label; the span/log below is loud
-        room_exits = [
-            DungeonMapExit(target=(e.b if e.a == rid else e.a), exit_type=e.kind)
-            for e in graph.edges
-            if rid in (e.a, e.b) and not e.hidden  # secrets stay off the map
-        ]
-        explored.append(
-            DungeonMapLocation(
-                id=rid,
-                name=display,
-                type="region",
-                connections=[x.target for x in room_exits],
-                room_exits=room_exits,
-                room_type="entrance" if rid == ENTRANCE_ID else "normal",
-                is_current_room=(rid == current_region),
-            )
-        )
-
-    payload = DungeonMapPayload(
-        current_location=current_region,
-        region=current_region,
-        explored=explored,
+    payload = _build_dungeon_map_payload(
+        graph=graph,
+        palette=palette,
+        pc_region=pc_region,
+        discovered_regions=list(snapshot.discovered_regions),
+        entrance_id=entrance_id,
     )
-    msg = DungeonMapMessage(payload=payload, player_id=getattr(sd, "player_id", ""))
+    msg = DungeonMapMessage(payload=payload, player_id=player_id)
     _watcher_publish(
         "dungeon.map_emitted",
         {
             "world": sd.world_slug,
-            "current_region": current_region,
-            "discovered_regions": len(explored),
+            "pc_name": pc_name,
+            "pc_region": pc_region,
+            "discovered_regions": len(payload.explored),
             "total_regions": len(graph.nodes),
         },
         component="dungeon",
     )
     logger.info(
-        "dungeon.map_emitted current=%s discovered=%d/%d",
-        current_region,
-        len(explored),
+        "dungeon.map_emitted pc=%s region=%s discovered=%d/%d",
+        pc_name,
+        pc_region,
+        len(payload.explored),
         len(graph.nodes),
     )
     emit_fn(msg, "DUNGEON_MAP")  # type: ignore[operator]

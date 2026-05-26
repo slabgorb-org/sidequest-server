@@ -308,7 +308,7 @@ async def test_sdk_path_builds_toolcontext_with_real_ids_and_lore_store(
         world_id="mawdeep",
         session_id="2026-05-14-caverns_mawdeep-28",
         turn_number=7,
-        store=store,
+        repository=store,
         lore_store=lore,
         monster_manual=manual,
     )
@@ -340,7 +340,7 @@ async def test_sdk_path_no_context_missing_ids_warning_when_ids_present(
         world_id="mawdeep",
         session_id="2026-05-14-caverns_mawdeep-28",
         turn_number=7,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=_seeded_lore_store(),
     )
     with caplog.at_level(logging.WARNING):
@@ -388,7 +388,7 @@ async def test_sdk_path_context_missing_lore_store_fires_when_ids_present_but_lo
         world_id="mawdeep",
         session_id="2026-05-23-caverns_mawdeep-1",
         turn_number=3,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=None,
     )
     with caplog.at_level(logging.WARNING):
@@ -421,7 +421,7 @@ async def test_sdk_path_context_missing_lore_store_silent_when_fully_wired(
         world_id="mawdeep",
         session_id="2026-05-23-caverns_mawdeep-1",
         turn_number=3,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=_seeded_lore_store(),
     )
     with caplog.at_level(logging.WARNING):
@@ -501,7 +501,7 @@ async def test_sdk_path_lore_store_warning_publishes_watcher_event(
             world_id="mawdeep",
             session_id="2026-05-23-caverns_mawdeep-1",
             turn_number=3,
-            store=MagicMock(),
+            repository=MagicMock(),
             lore_store=None,
         )
         await _run_sdk_and_capture_ctx(monkeypatch, ctx)

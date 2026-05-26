@@ -1253,7 +1253,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
 # Task E1.5-B — SDK-path tool-owned / presentation partition.
 #
 # On the SDK narration path the 26 WRITE tools mutate AND persist
-# (``ctx.store.save``) game state during the tool-dispatch loop. The
+# (``ctx.repository.save``) game state during the tool-dispatch loop. The
 # narrator ALSO emits a sidecar ``game_patch`` block (the prompt still
 # injects ``narrator_output_only``). Feeding that sidecar through the
 # normal assembler would make ``narration_apply`` re-apply every
@@ -3469,7 +3469,7 @@ class Orchestrator:
         Distinct from :meth:`_assemble_turn_result` (the ClaudeClient
         sync/streaming assembler, which stays byte-for-byte unchanged for
         its callers). On the SDK path the 26 WRITE tools already mutated AND
-        persisted (``ctx.store.save``) game state during the tool-dispatch
+        persisted (``ctx.repository.save``) game state during the tool-dispatch
         loop, so re-applying the narrator's sidecar would double-apply.
 
         The split:
@@ -3967,7 +3967,7 @@ class Orchestrator:
             _pub_prompt("prompt_assembled", _prompt_payload, component="prompt_builder")
 
             # Task E1.5-B — hybrid split. The WRITE tools already mutated +
-            # persisted (``ctx.store.save``) every tool-owned state category
+            # persisted (``ctx.repository.save``) every tool-owned state category
             # during the dispatch loop above. ``_assemble_turn_result_sdk``
             # builds the NarrationTurnResult so the tool-owned fields are
             # ZEROED (narration_apply must not re-apply them) while

@@ -357,7 +357,7 @@ async def test_sdk_path_builds_toolcontext_with_grounding(
         world_id="glenross",
         session_id="2026-05-21-tea_and_murder_glenross-1",
         turn_number=3,
-        store=MagicMock(),
+        repository=MagicMock(),
         weather_state=weather,
         world_demographics=_DEMOGRAPHICS,
         world_calendar=_CALENDAR,
@@ -393,7 +393,7 @@ async def test_sdk_path_leaves_toolcontext_grounding_none_when_unwired(
         world_id="mawdeep",
         session_id="adhoc",
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
     )
 
     tool_ctx = await _run_sdk_and_capture_tool_ctx(monkeypatch, ctx)

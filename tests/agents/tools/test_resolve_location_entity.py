@@ -37,36 +37,11 @@ from sidequest.agents.tools.resolve_location_entity import (
 )
 from sidequest.protocol.models import LocationEntity, LocationEntityBinding
 
-# Path is only needed for the tmp_path fixture type annotations; keep it.
+from .conftest import make_mock_repository
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-def _make_mock_repository() -> MagicMock:
-    """Return a MagicMock repository with the PG SaveRepository interface for
-    location promotions.  ``list_location_promotions`` is backed by a real
-    list so tests can assert on written rows without coupling to SqliteStore.
-    """
-    _rows: list[Any] = []
-
-    repo = MagicMock()
-
-    def _list(*, region_id: str) -> list[Any]:
-        return [r for r in _rows if r.region_id == region_id]
-
-    def _upsert(row: Any) -> None:
-        # Replace existing row with same (region_id, entity_id) or append.
-        for i, existing in enumerate(_rows):
-            if existing.region_id == row.region_id and existing.entity_id == row.entity_id:
-                _rows[i] = row
-                return
-        _rows.append(row)
-
-    repo.list_location_promotions.side_effect = _list
-    repo.upsert_location_promotion.side_effect = _upsert
-    return repo
 
 
 def _authored() -> list[LocationEntity]:
@@ -91,7 +66,7 @@ def _build_ctx(
     """Build a real ToolContext with a mock SaveRepository (PG interface) and
     a stubbed GenrePack whose ``worlds[world_id].cartography.regions[region_id]``
     has the supplied entities."""
-    repo = _make_mock_repository()
+    repo = make_mock_repository()
 
     region = MagicMock()
     region.entities = entities if entities is not None else _authored()
@@ -214,9 +189,7 @@ async def test_proactive_miss_returns_not_found(tmp_path: Path) -> None:
     assert result.message is not None
     assert "the dragon" in result.message
     # And no row was minted.
-    assert (
-        ctx.repository.list_location_promotions(region_id="the_glenross_arms") == []
-    )
+    assert ctx.repository.list_location_promotions(region_id="the_glenross_arms") == []
 
 
 # ---------------------------------------------------------------------------
@@ -289,9 +262,7 @@ async def test_unknown_region_returns_not_found(tmp_path: Path) -> None:
     result = await resolve_location_entity(args, ctx)
     assert result.status is ToolResultStatus.NOT_FOUND
     # Critically, no promotions written for the bogus region.
-    assert (
-        ctx.repository.list_location_promotions(region_id="nonexistent_region") == []
-    )
+    assert ctx.repository.list_location_promotions(region_id="nonexistent_region") == []
 
 
 async def test_missing_genre_pack_returns_not_found(tmp_path: Path) -> None:
@@ -304,7 +275,7 @@ async def test_missing_genre_pack_returns_not_found(tmp_path: Path) -> None:
         session_id="s",
         perspective_pc=None,
         turn_number=1,
-        repository=_make_mock_repository(),
+        repository=make_mock_repository(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         genre_pack=None,

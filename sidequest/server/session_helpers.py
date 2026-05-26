@@ -1149,7 +1149,7 @@ def _build_turn_context(
         # tools read through ToolContext.
         world_id=sd.world_slug,
         session_id=sd.game_slug,
-        store=sd.repository,
+        repository=sd.repository,
         # Story 59-1: the SDK ToolContext stamps this so begin_confrontation
         # can validate the requested confrontation type against the genre. The
         # tool signals; narration_apply creates the encounter on the canonical

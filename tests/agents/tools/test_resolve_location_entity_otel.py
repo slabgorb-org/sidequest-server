@@ -16,7 +16,6 @@ spans actually fire from the tool execution path.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -33,6 +32,8 @@ from sidequest.agents.tools.resolve_location_entity import (
     resolve_location_entity,
 )
 from sidequest.protocol.models import LocationEntity, LocationEntityBinding
+
+from .conftest import make_mock_repository
 
 
 @pytest.fixture
@@ -59,26 +60,6 @@ def _authored() -> list[LocationEntity]:
     ]
 
 
-def _make_mock_repository() -> MagicMock:
-    """Mock SaveRepository with PG location-promotion interface."""
-    _rows: list[Any] = []
-    repo = MagicMock()
-
-    def _list(*, region_id: str) -> list[Any]:
-        return [r for r in _rows if r.region_id == region_id]
-
-    def _upsert(row: Any) -> None:
-        for i, existing in enumerate(_rows):
-            if existing.region_id == row.region_id and existing.entity_id == row.entity_id:
-                _rows[i] = row
-                return
-        _rows.append(row)
-
-    repo.list_location_promotions.side_effect = _list
-    repo.upsert_location_promotion.side_effect = _upsert
-    return repo
-
-
 def _build_ctx(
     tmp_path: Path,
     *,
@@ -103,7 +84,7 @@ def _build_ctx(
         session_id="test-session",
         perspective_pc=None,
         turn_number=turn_number,
-        repository=_make_mock_repository(),
+        repository=make_mock_repository(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         genre_pack=genre_pack,

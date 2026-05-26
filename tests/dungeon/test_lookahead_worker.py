@@ -12,15 +12,15 @@ Three plan bullets, TDD:
      ``apply_world_patch`` region transition (the central constraint).
 
 No mocking of the dungeon/persistence/region_graph layer — real
-``DungeonStore`` on a real connection, real ``materialize()`` pipeline
-through Tasks 1–6, real ``frontier_hook`` producer. The ONLY mock is the
-curation LLM call (an injected ToolingLlmClient-shaped fake — the Task-4
-SDK precedent; never a real network call).
+``PgDungeonRepository`` over a migrated Postgres database, real
+``materialize()`` pipeline through Tasks 1–6, real ``frontier_hook``
+producer. The ONLY mock is the curation LLM call (an injected
+ToolingLlmClient-shaped fake — the Task-4 SDK precedent; never a real
+network call).
 """
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
 
 import pytest
@@ -41,14 +41,8 @@ def _restore_frontier_observers() -> Any:
         frontier_hook._OBSERVERS[:] = before
 
 
-def _mem_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-async def _seed_expansion_one(store: Any) -> Any:
-    """Run the REAL coordinator for expansion 1 so the store carries a
+async def _seed_expansion_one(dungeon_repository: Any) -> Any:
+    """Run the REAL coordinator for expansion 1 so the repository carries a
     committed seed + expansion 1 + REAL unexpanded frontier edges rooted
     at exp001.r* (Task 6 derived them). Returns the resolved palette."""
     from tests.dungeon.test_materializer import (
@@ -60,7 +54,7 @@ async def _seed_expansion_one(store: Any) -> Any:
     theme_id = "lookahead_unit_crypt"
     palette = _commit_palette(theme_id)
     graph = _seed_graph_themed(theme_id)
-    await _materialize_full(graph=graph, palette=palette, store=store)
+    await _materialize_full(graph=graph, palette=palette, dungeon_repository=dungeon_repository)
     return palette
 
 
@@ -77,7 +71,7 @@ def _otel_in_memory() -> tuple[Any, Any, Any]:
     return exporter, provider, provider.get_tracer("test")
 
 
-def _register(store: Any, palette: Any, *, lookahead_breadth: int = 1) -> Any:
+def _register(dungeon_repository: Any, palette: Any, *, lookahead_breadth: int = 1) -> Any:
     from sidequest.dungeon.lookahead_worker import register_lookahead_worker
     from tests.dungeon.test_materializer import (
         _attach_pack,
@@ -86,7 +80,7 @@ def _register(store: Any, palette: Any, *, lookahead_breadth: int = 1) -> Any:
     )
 
     return register_lookahead_worker(
-        persistence=store,
+        persistence=dungeon_repository,
         bundle=_real_cookbook_bundle(),
         palette=palette,
         pack_tropes=_attach_pack("cave_in"),
@@ -109,7 +103,10 @@ def _fresh_snapshot(region: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-async def test_two_rapid_signals_same_edge_materialize_once_deduped_span() -> None:
+async def test_two_rapid_signals_same_edge_materialize_once_deduped_span(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     """Two rapid approach signals for the SAME frontier edge → EXACTLY
     ONE materialisation (one new expansion committed, not two) and the
     second signal emits a ``frontier.lookahead`` span with
@@ -118,25 +115,23 @@ async def test_two_rapid_signals_same_edge_materialize_once_deduped_span() -> No
     Decisive: must FAIL if the in-flight dedupe is removed (two materialise
     runs would commit two expansions / collide on the frozen region ids)."""
     import sidequest.telemetry.spans as _spans_module
-    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.game.session import WorldStatePatch
     from sidequest.telemetry.spans.dungeon_materialize import (
         SPAN_FRONTIER_LOOKAHEAD,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
-    conn = _mem_conn()
-    store = DungeonStore(conn)
-    store.ensure_schema()
-    palette = await _seed_expansion_one(store)
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    palette = await _seed_expansion_one(repo)
 
-    frontier = store.load_frontier()
+    frontier = repo.load_frontier()
     target = frontier[0].from_region_id
 
     exporter, _provider, real_tracer = _otel_in_memory()
     original_tracer_fn = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
 
-    obs = _register(store, palette)
+    obs = _register(repo, palette)
     try:
         snap = _fresh_snapshot(target)
         # TWO rapid region-transition signals for the SAME edge, before
@@ -152,7 +147,7 @@ async def test_two_rapid_signals_same_edge_materialize_once_deduped_span() -> No
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
 
     # EXACTLY ONE look-ahead expansion committed (id 2), never two.
-    nodes = store.load_map(entrance_id="entrance").nodes.values()
+    nodes = repo.load_map(entrance_id="entrance").nodes.values()
     lookahead_expansions = {n.expansion_id for n in nodes if n.expansion_id >= 2}
     assert lookahead_expansions == {2}, (
         f"expected exactly one look-ahead expansion (id 2); got "
@@ -177,26 +172,27 @@ async def test_two_rapid_signals_same_edge_materialize_once_deduped_span() -> No
 # ---------------------------------------------------------------------------
 
 
-async def test_lookahead_breadth_one_materializes_only_heading_edge() -> None:
+async def test_lookahead_breadth_one_materializes_only_heading_edge(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     """``lookahead_breadth=1`` → only the single approaching (heading)
     edge is materialised. A region-transition into a region with exactly
     one rooted frontier edge commits exactly ONE new expansion."""
-    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.game.session import WorldStatePatch
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
-    conn = _mem_conn()
-    store = DungeonStore(conn)
-    store.ensure_schema()
-    palette = await _seed_expansion_one(store)
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    palette = await _seed_expansion_one(repo)
 
-    frontier = store.load_frontier()
+    frontier = repo.load_frontier()
     # Each exp001.r* region roots exactly one frontier edge (Task 6
     # _new_frontier_edges: one edge per new node). Pick one.
     target = frontier[0].from_region_id
     rooted = [fe for fe in frontier if fe.from_region_id == target]
     assert len(rooted) == 1, "test precondition: one rooted edge per region"
 
-    obs = _register(store, palette, lookahead_breadth=1)
+    obs = _register(repo, palette, lookahead_breadth=1)
     try:
         snap = _fresh_snapshot(target)
         snap.apply_world_patch(WorldStatePatch(current_region=target))
@@ -204,7 +200,7 @@ async def test_lookahead_breadth_one_materializes_only_heading_edge() -> None:
     finally:
         obs.unregister()
 
-    nodes = store.load_map(entrance_id="entrance").nodes.values()
+    nodes = repo.load_map(entrance_id="entrance").nodes.values()
     lookahead = {n.expansion_id for n in nodes if n.expansion_id >= 2}
     assert lookahead == {2}, (
         f"lookahead_breadth=1 must materialise exactly the single heading "
@@ -212,26 +208,26 @@ async def test_lookahead_breadth_one_materializes_only_heading_edge() -> None:
     )
 
 
-async def test_default_lookahead_breadth_is_one() -> None:
+async def test_default_lookahead_breadth_is_one(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     """``register_lookahead_worker`` default ``lookahead_breadth`` is 1
     (spec §12 knob default). The handle records it; the selection along
     the heading uses it."""
-    from sidequest.dungeon.persistence import DungeonStore
-
-    conn = _mem_conn()
-    store = DungeonStore(conn)
-    store.ensure_schema()
-    palette = await _seed_expansion_one(store)
-
     from sidequest.dungeon.lookahead_worker import register_lookahead_worker
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _real_cookbook_bundle,
         _reflecting_sdk_client,
     )
 
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    palette = await _seed_expansion_one(repo)
+
     handle = register_lookahead_worker(
-        persistence=store,
+        persistence=repo,
         bundle=_real_cookbook_bundle(),
         palette=palette,
         pack_tropes=_attach_pack("cave_in"),
@@ -318,7 +314,10 @@ def _yielding_concurrency_probe_client(probe: dict[str, int]) -> Any:
     return _ProbeSdk()
 
 
-async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially() -> None:
+async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     """Raising ``lookahead_breadth`` materialises the near-frontier SET
     along the heading: a region rooting multiple unexpanded frontier
     edges with breadth=N commits N new expansions (the nearest N by
@@ -334,24 +333,23 @@ async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially
     parallel-per-edge regression would overlap the suspending curates
     (peak >= 2) and collide the expansion_ids (PersistError)."""
     from sidequest.dungeon.lookahead_worker import register_lookahead_worker
-    from sidequest.dungeon.persistence import DungeonStore, FrontierEdge
+    from sidequest.dungeon.persistence import FrontierEdge
     from sidequest.game.session import WorldStatePatch
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _real_cookbook_bundle,
     )
 
-    conn = _mem_conn()
-    store = DungeonStore(conn)
-    store.ensure_schema()
-    palette = await _seed_expansion_one(store)
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    palette = await _seed_expansion_one(repo)
 
-    frontier = store.load_frontier()
+    frontier = repo.load_frontier()
     target = frontier[0].from_region_id
 
     # Real Task-6-shaped extra unexpanded frontier edges rooted at the
     # SAME region (a region the next expansion can push outward from
-    # along several headings) — persisted via the real store, not mocked.
+    # along several headings) — persisted via the real repo, not mocked.
     extra = [
         FrontierEdge(
             frontier_edge_id=f"{target}_extra_{i}",
@@ -362,14 +360,14 @@ async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially
         for i in range(2)
     ]
     for fe in extra:
-        store.put_frontier(fe)
+        repo.put_frontier(fe)
 
-    rooted = [fe for fe in store.load_frontier() if fe.from_region_id == target]
+    rooted = [fe for fe in repo.load_frontier() if fe.from_region_id == target]
     assert len(rooted) >= 3, "test precondition: >=3 rooted edges"
 
     probe: dict[str, int] = {"live": 0, "max": 0}
     obs = register_lookahead_worker(
-        persistence=store,
+        persistence=repo,
         bundle=_real_cookbook_bundle(),
         palette=palette,
         pack_tropes=_attach_pack("cave_in"),
@@ -384,7 +382,7 @@ async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially
     finally:
         obs.unregister()
 
-    nodes = store.load_map(entrance_id="entrance").nodes.values()
+    nodes = repo.load_map(entrance_id="entrance").nodes.values()
     lookahead = sorted({n.expansion_id for n in nodes if n.expansion_id >= 2})
     assert lookahead == [2, 3, 4], (
         f"lookahead_breadth=3 must materialise the 3 nearest rooted edges "
@@ -409,7 +407,10 @@ async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially
 # ---------------------------------------------------------------------------
 
 
-async def test_worker_failure_loud_on_span_and_does_not_abort_transition() -> None:
+async def test_worker_failure_loud_on_span_and_does_not_abort_transition(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     """Force ``materialize()`` to raise via a RETAINED hard curate
     failure — ADR-106 Amendment A (story 50-26) carve-out (ii): a parsed
     curated row missing ``cr`` still raises ``CurationError`` (degrading
@@ -431,24 +432,22 @@ async def test_worker_failure_loud_on_span_and_does_not_abort_transition() -> No
     failure — core-gameplay fragility)."""
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon.lookahead_worker import register_lookahead_worker
-    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.game.session import WorldStatePatch
     from sidequest.telemetry.spans import SPAN_ROUTES
     from sidequest.telemetry.spans.dungeon_materialize import (
         SPAN_FRONTIER_LOOKAHEAD,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _missing_cr_sdk_client,
         _real_cookbook_bundle,
     )
 
-    conn = _mem_conn()
-    store = DungeonStore(conn)
-    store.ensure_schema()
-    palette = await _seed_expansion_one(store)
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    palette = await _seed_expansion_one(repo)
 
-    frontier = store.load_frontier()
+    frontier = repo.load_frontier()
     target = frontier[0].from_region_id
 
     # A fake SDK client returning a parseable verdict whose kept rows
@@ -463,7 +462,7 @@ async def test_worker_failure_loud_on_span_and_does_not_abort_transition() -> No
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
 
     handle = register_lookahead_worker(
-        persistence=store,
+        persistence=repo,
         bundle=_real_cookbook_bundle(),
         palette=palette,
         pack_tropes=_attach_pack("cave_in"),
@@ -490,7 +489,7 @@ async def test_worker_failure_loud_on_span_and_does_not_abort_transition() -> No
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
 
     # No expansion 2 committed (the worker genuinely failed).
-    nodes = store.load_map(entrance_id="entrance").nodes.values()
+    nodes = repo.load_map(entrance_id="entrance").nodes.values()
     assert all(n.expansion_id < 2 for n in nodes), (
         "an expansion was committed despite the forced curation failure"
     )
@@ -514,7 +513,10 @@ async def test_worker_failure_loud_on_span_and_does_not_abort_transition() -> No
     )
 
 
-async def test_no_frontier_along_heading_is_observable_not_silent() -> None:
+async def test_no_frontier_along_heading_is_observable_not_silent(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     """A region transition into a region with NO rooted unexpanded
     frontier edge is the genuine no-op case (not every transition
     approaches the frontier). It must be OBSERVABLE — a
@@ -522,22 +524,20 @@ async def test_no_frontier_along_heading_is_observable_not_silent() -> None:
     so the GM panel tells "nothing to do" from "look-ahead broken" (No
     Silent Fallbacks)."""
     import sidequest.telemetry.spans as _spans_module
-    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.game.session import WorldStatePatch
     from sidequest.telemetry.spans.dungeon_materialize import (
         SPAN_FRONTIER_LOOKAHEAD,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
-    conn = _mem_conn()
-    store = DungeonStore(conn)
-    store.ensure_schema()
-    palette = await _seed_expansion_one(store)
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    palette = await _seed_expansion_one(repo)
 
     exporter, _provider, real_tracer = _otel_in_memory()
     original_tracer_fn = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
 
-    obs = _register(store, palette)
+    obs = _register(repo, palette)
     try:
         snap = _fresh_snapshot("entrance")
         # "entrance" roots NO unexpanded frontier edge (Task 6 derives
@@ -559,7 +559,7 @@ async def test_no_frontier_along_heading_is_observable_not_silent() -> None:
         "must tell 'nothing to do' from 'look-ahead broken')"
     )
     # And nothing was materialised (genuine no-op).
-    nodes = store.load_map(entrance_id="entrance").nodes.values()
+    nodes = repo.load_map(entrance_id="entrance").nodes.values()
     assert all(n.expansion_id < 2 for n in nodes)
 
 
@@ -572,12 +572,12 @@ async def test_no_frontier_along_heading_is_observable_not_silent() -> None:
 
 
 class _ExplodingFrontierStore:
-    """A real-shaped DungeonStore wrapper whose ``load_frontier()`` raises
-    the EXACT real exception ``persistence.py:337`` raises on a
+    """A real-shaped DungeonRepository wrapper whose ``load_frontier()``
+    raises the EXACT real exception ``persistence.py:337`` raises on a
     ``sqlite3.Error`` (``DatabaseError``). Everything else delegates to a
-    real ``DungeonStore`` on a real connection — the ONLY divergence is
-    the realistic load-failure injection (NOT a mock of the dungeon
-    layer; it is the genuine corrupt/locked-save error path)."""
+    real ``PgDungeonRepository`` on a real connection — the ONLY
+    divergence is the realistic load-failure injection (NOT a mock of
+    the dungeon layer; it is the genuine corrupt/locked-save error path)."""
 
     def __init__(self, real: Any) -> None:
         self._real = real
@@ -591,7 +591,10 @@ class _ExplodingFrontierStore:
         return getattr(self._real, name)
 
 
-async def test_sync_observer_body_failure_does_not_abort_region_crossing() -> None:
+async def test_sync_observer_body_failure_does_not_abort_region_crossing(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     """CRITICAL #1 — the central-constraint keystone, empirically decisive.
 
     ``persistence.load_frontier()`` runs SYNCHRONOUSLY inside the
@@ -615,29 +618,27 @@ async def test_sync_observer_body_failure_does_not_abort_region_crossing() -> No
     crossing) and PASS with it (loud-on-span, no re-raise)."""
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon.lookahead_worker import register_lookahead_worker
-    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.game.session import GameSnapshot, WorldStatePatch
     from sidequest.telemetry.spans import SPAN_ROUTES
     from sidequest.telemetry.spans.dungeon_materialize import (
         SPAN_FRONTIER_LOOKAHEAD,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _real_cookbook_bundle,
         _reflecting_sdk_client,
     )
 
-    conn = _mem_conn()
-    real_store = DungeonStore(conn)
-    real_store.ensure_schema()
-    palette = await _seed_expansion_one(real_store)
+    _pool, real_repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    palette = await _seed_expansion_one(real_repo)
 
     # A real exp001.r* region that DOES root a frontier edge — so the
     # only reason the worker can't proceed is the injected load_frontier
     # DatabaseError (not a no-frontier no-op).
-    target = real_store.load_frontier()[0].from_region_id
+    target = real_repo.load_frontier()[0].from_region_id
 
-    exploding = _ExplodingFrontierStore(real_store)
+    exploding = _ExplodingFrontierStore(real_repo)
 
     exporter, _provider, real_tracer = _otel_in_memory()
     original_tracer_fn = _spans_module.tracer
@@ -691,5 +692,5 @@ async def test_sync_observer_body_failure_does_not_abort_region_crossing() -> No
         "SPAN_ROUTES (the Task-2 lesson: set-but-not-routed is the defect)"
     )
     # Nothing was materialised (the prefetch genuinely failed).
-    nodes = real_store.load_map(entrance_id="entrance").nodes.values()
+    nodes = real_repo.load_map(entrance_id="entrance").nodes.values()
     assert all(n.expansion_id < 2 for n in nodes)

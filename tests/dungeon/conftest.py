@@ -178,3 +178,37 @@ def restore_otel_provider_state(state: dict[str, Any]) -> None:
     once = state["once"]
     if once is not None and state["once_done"] is not None:
         once._done = state["once_done"]
+
+
+def build_pg_dungeon_repo(monkeypatch: Any, migrated_db: str) -> tuple[Any, Any, int]:
+    """Build a ``(pool, PgDungeonRepository, session_id)`` triple for one
+    isolated test session.
+
+    ``migrated_db`` is the psycopg-native conninfo URL from the
+    session-scoped ``migrated_db`` fixture (may carry the
+    ``postgresql+psycopg://`` prefix).  ``monkeypatch`` is the per-test
+    ``pytest.MonkeyPatch`` so the env-var override is cleaned up
+    automatically at the end of each test.
+
+    The slug is uuid-namespaced — REQUIRED because ``migrated_db`` is
+    session-scoped and the pool COMMITS (no rollback between tests), so
+    fixed slugs bleed across xdist workers.
+    """
+    from sidequest.game import db_pool
+    from sidequest.game.pg import sessions
+    from sidequest.game.pg.dungeon import PgDungeonRepository
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    pool = db_pool.get_pool()
+    slug = f"dungeon_d6_{uuid.uuid4().hex[:12]}"
+    sid = sessions.ensure_session(
+        pool,
+        slug=slug,
+        mode="solo",
+        genre_slug="caverns",
+        world_slug="beneath_sunden",
+    )
+    repo = PgDungeonRepository(pool, session_id=sid)
+    return pool, repo, sid

@@ -8,7 +8,7 @@ reachable from production code paths."
 
 This file is that test. It drives the REAL five-stage materializer
 coordinator (design → fill → curate → attach → commit) against a real
-DungeonStore on a real connection, then asserts that
+PgDungeonRepository on a migrated Postgres database, then asserts that
 ``dungeon_map.mask`` is populated for the materialised regions — proving
 the fill stage's ``RegionMask`` (Story 52-2) is actually threaded into
 ``commit_expansion(..., masks=...)`` by ``_stage_commit``.
@@ -23,17 +23,14 @@ breaks loudly (it should — the fixture seam is load-bearing).
 from __future__ import annotations
 
 import json
-import sqlite3
+from typing import Any
 
 
-def _mem_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions() -> None:
-    """End-to-end: drive ``materialize()`` against a real DungeonStore;
+async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
+    """End-to-end: drive ``materialize()`` against a real PgDungeonRepository;
     after the pipeline completes, every region the FILL stage produced a
     ``RegionMask`` for must have a non-NULL ``dungeon_map.mask`` row.
 
@@ -49,7 +46,7 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions() ->
     closes."""
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon.materializer import materialize
-    from sidequest.dungeon.persistence import DungeonStore
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
     # Re-use the Plan 7 fixture stack — these are the live helpers that
     # already drive the rest of TestStageCommit's real-coordinator tests
@@ -67,13 +64,11 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions() ->
         _seed_graph_themed,
     )
 
+    _pool, repo, sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+
     theme_id = "mask_wiring_crypt"
     palette = _commit_palette(theme_id)
     graph = _seed_graph_themed(theme_id)
-
-    conn = _mem_conn()
-    store = DungeonStore(conn)
-    store.ensure_schema()
 
     bundle = _real_cookbook_bundle()
     request = MaterializationRequest_build(campaign_seed=7, expansion_id=1, spawn_depth_score=0.0)
@@ -87,7 +82,7 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions() ->
             graph=graph,
             bundle=bundle,
             palette=palette,
-            persistence=store,
+            dungeon_repository=repo,
             snapshot=_fresh_snapshot(),
             pack_tropes=_attach_pack("cave_in"),
             claude_client=_reflecting_sdk_client(),
@@ -95,23 +90,26 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions() ->
     finally:
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
 
-    # Pull the persisted rows + mask columns directly from sqlite. The
-    # entrance (expansion_id=0) has no fill grid (Seed=Expansion-0
+    # Pull the persisted rows + mask columns directly from Postgres.
+    # The entrance (expansion_id=0) has no fill grid (Seed=Expansion-0
     # contract) and therefore no mask — it MUST be NULL there. Every
     # row with expansion_id >= 1 came from _stage_fill and MUST have a
     # non-NULL BLOB.
-    rows = conn.execute(
-        "SELECT region_id, expansion_id, mask FROM dungeon_map ORDER BY region_id"
-    ).fetchall()
+    with _pool.connection() as pgconn:
+        rows = pgconn.execute(
+            "SELECT region_id, expansion_id, mask FROM dungeon_map "
+            "WHERE session_id = %s ORDER BY region_id",
+            (sid,),
+        ).fetchall()
     assert rows, "no rows persisted — materialize() did not commit anything"
 
-    seed_rows = [r for r in rows if r["expansion_id"] == 0]
-    gen_rows = [r for r in rows if r["expansion_id"] >= 1]
+    seed_rows = [r for r in rows if r[1] == 0]
+    gen_rows = [r for r in rows if r[1] >= 1]
 
     # The entrance: NULL mask is the correct answer (no fill grid).
     for r in seed_rows:
-        assert r["mask"] is None, (
-            f"seed row {r['region_id']!r} has a non-NULL mask BLOB "
+        assert r[2] is None, (
+            f"seed row {r[0]!r} has a non-NULL mask BLOB "
             "(expansion_id=0 has no fill grid; masks must NOT be invented)"
         )
 
@@ -119,24 +117,30 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions() ->
     # is the materializer.py:57 wiring gap reopening.
     assert gen_rows, "no generated-expansion rows persisted"
     for r in gen_rows:
-        assert r["mask"] is not None, (
-            f"generated region {r['region_id']!r} has a NULL mask BLOB — "
+        assert r[2] is not None, (
+            f"generated region {r[0]!r} has a NULL mask BLOB — "
             "_stage_commit did NOT thread fill_result masks into "
             "commit_expansion(..., masks=...). This is the exact "
             "materializer.py:57 gap Story 52-3 closes."
         )
         # The BLOB must be valid JSON — the on-disk encoding contract.
-        decoded = json.loads(r["mask"].decode("utf-8"))
+        blob = r[2]
+        if isinstance(blob, memoryview):
+            blob = bytes(blob)
+        decoded = json.loads(blob.decode("utf-8"))
         assert isinstance(decoded, dict), (
-            f"mask BLOB for {r['region_id']!r} is not a JSON object: {decoded!r}"
+            f"mask BLOB for {r[0]!r} is not a JSON object: {decoded!r}"
         )
 
 
-async def test_materialize_then_reload_returns_masks_for_generated_regions() -> None:
+async def test_materialize_then_reload_returns_masks_for_generated_regions(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     """End-to-end resume contract (AC3 at the integration layer):
-    drive the materialize pipeline → ``conn.commit()`` → call
-    ``store.load_masks()`` on the same store; the result must contain
-    an entry for every generated region (and only those).
+    drive the materialize pipeline → call ``repo.load_masks()`` on the
+    same repo; the result must contain an entry for every generated region
+    (and only those).
 
     This is the player-facing "reload on resume" promise — a saved
     procedural dungeon must come back with its masks intact, not as a
@@ -144,7 +148,7 @@ async def test_materialize_then_reload_returns_masks_for_generated_regions() -> 
     grids."""
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon.materializer import materialize
-    from sidequest.dungeon.persistence import DungeonStore
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import (
         MaterializationRequest_build,
         _attach_pack,
@@ -156,13 +160,11 @@ async def test_materialize_then_reload_returns_masks_for_generated_regions() -> 
         _seed_graph_themed,
     )
 
+    _pool, repo, sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+
     theme_id = "mask_reload_crypt"
     palette = _commit_palette(theme_id)
     graph = _seed_graph_themed(theme_id)
-
-    conn = _mem_conn()
-    store = DungeonStore(conn)
-    store.ensure_schema()
 
     request = MaterializationRequest_build(campaign_seed=42, expansion_id=1, spawn_depth_score=0.0)
     _exporter, _provider, real_tracer = _otel_in_memory()
@@ -174,7 +176,7 @@ async def test_materialize_then_reload_returns_masks_for_generated_regions() -> 
             graph=graph,
             bundle=_real_cookbook_bundle(),
             palette=palette,
-            persistence=store,
+            dungeon_repository=repo,
             snapshot=_fresh_snapshot(),
             pack_tropes=_attach_pack("cave_in"),
             claude_client=_reflecting_sdk_client(),
@@ -185,15 +187,15 @@ async def test_materialize_then_reload_returns_masks_for_generated_regions() -> 
     # Generated region ids — pulled from the persisted rows so the
     # assertion is in terms of the actual save, not a guess at the
     # generator's output.
-    gen_region_ids = {
-        r["region_id"]
-        for r in conn.execute(
-            "SELECT region_id FROM dungeon_map WHERE expansion_id >= 1"
+    with _pool.connection() as pgconn:
+        gen_rows = pgconn.execute(
+            "SELECT region_id FROM dungeon_map WHERE session_id = %s AND expansion_id >= 1",
+            (sid,),
         ).fetchall()
-    }
+    gen_region_ids = {r[0] for r in gen_rows}
     assert gen_region_ids, "no generated regions persisted"
 
-    loaded_masks = store.load_masks()
+    loaded_masks = repo.load_masks()
     assert set(loaded_masks) == gen_region_ids, (
         f"load_masks() key set drift: got {set(loaded_masks)!r}, expected {gen_region_ids!r}"
     )

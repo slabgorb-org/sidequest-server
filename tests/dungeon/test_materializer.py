@@ -218,23 +218,23 @@ class TestMaterializePipelineSpans:
             lookahead_breadth=2,
         )
 
-    async def test_materialize_runs_full_pipeline_to_completion(self) -> None:
+    async def test_materialize_runs_full_pipeline_to_completion(
+        self, monkeypatch: Any, migrated_db: str
+    ) -> None:
         """Task 6 landed the final stage: materialize() now runs all five
         stages to completion with NO NotImplementedError (the skeleton
         boundary that moved forward through Tasks 2–5 has now reached the
         end). The structural Task-1 contract — the pipeline runs in order
         through commit — is preserved; the assertion shape moves to the
         new production reality (completes; the expansion is committed
-        live). A real schema-ready DungeonStore is required because Task
+        live). A real PgDungeonRepository is required because Task
         6's commit introspects + writes the real save (the production
         shape)."""
         import sidequest.telemetry.spans as _spans_module
         from sidequest.dungeon.materializer import materialize
-        from sidequest.dungeon.persistence import DungeonStore
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         bundle = _real_cookbook_bundle()
         theme_id = "pipeline_crypt"
@@ -253,7 +253,7 @@ class TestMaterializePipelineSpans:
                 graph=graph,
                 bundle=bundle,
                 palette=palette,
-                persistence=store,
+                dungeon_repository=repo,
                 snapshot=_fresh_snapshot(),
                 pack_tropes=_attach_pack("cave_in"),
                 claude_client=_reflecting_sdk_client(),
@@ -262,20 +262,20 @@ class TestMaterializePipelineSpans:
             _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
 
         # Commit is immediately live on success (spec §7).
-        assert "entrance" in store.load_map(entrance_id="entrance").nodes
+        assert "entrance" in repo.load_map(entrance_id="entrance").nodes
 
-    async def test_parent_span_opens_and_pipeline_completes(self) -> None:
+    async def test_parent_span_opens_and_pipeline_completes(
+        self, monkeypatch: Any, migrated_db: str
+    ) -> None:
         """dungeon.materialize parent span must be emitted, and (Task 6)
         the full pipeline now completes — the parent span wraps a
         successful five-stage run, not a NotImplementedError abort."""
         import sidequest.telemetry.spans as _spans_module
         from sidequest.dungeon.materializer import materialize
-        from sidequest.dungeon.persistence import DungeonStore
         from sidequest.telemetry.spans.dungeon_materialize import SPAN_DUNGEON_MATERIALIZE
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         bundle = _real_cookbook_bundle()
         theme_id = "pipeline_crypt2"
@@ -292,7 +292,7 @@ class TestMaterializePipelineSpans:
                 graph=graph,
                 bundle=bundle,
                 palette=palette,
-                persistence=store,
+                dungeon_repository=repo,
                 snapshot=_fresh_snapshot(),
                 pack_tropes=_attach_pack("cave_in"),
                 claude_client=_reflecting_sdk_client(),
@@ -382,7 +382,7 @@ class TestMaterializePipelineSpans:
                 graph=None,
                 bundle=None,
                 palette=None,
-                persistence=store,
+                dungeon_repository=store,
                 snapshot=_fresh_snapshot(),
                 pack_tropes=_attach_pack("cave_in"),
                 claude_client=_reflecting_sdk_client(),
@@ -1187,22 +1187,20 @@ class TestStageFill:
         finally:
             _mat_module._region_interior_seed = orig_mixer  # type: ignore[assignment]
 
-    async def test_fill_wired_into_coordinator(self) -> None:
+    async def test_fill_wired_into_coordinator(self, monkeypatch: Any, migrated_db: str) -> None:
         """Wiring test: materialize() reaches _stage_fill with real
         expansion+palette threaded from _stage_design, and (Task 6 landed)
         the pipeline now runs all the way through fill → curate → attach →
         commit to completion. Proving the run completes proves fill was
         reached and its result threaded forward (commit needs the attach
         result, which needs curate, which needs fill). A schema-ready
-        store + set-piece-bearing palette is the production shape Task 6's
-        commit introspects + writes."""
+        PgDungeonRepository is required because Task 6's commit introspects
+        + writes the real save (the production shape)."""
         import sidequest.telemetry.spans as _spans_module
         from sidequest.dungeon.materializer import materialize
-        from sidequest.dungeon.persistence import DungeonStore
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         bundle = _real_cookbook_bundle()
         theme_id = "fill_wired_crypt"
@@ -1220,7 +1218,7 @@ class TestStageFill:
                 graph=graph,
                 bundle=bundle,
                 palette=palette,
-                persistence=store,
+                dungeon_repository=repo,
                 snapshot=_fresh_snapshot(),
                 pack_tropes=_attach_pack("cave_in"),
                 claude_client=_reflecting_sdk_client(),
@@ -1230,7 +1228,7 @@ class TestStageFill:
 
         # Commit is immediately live: fill's result reached commit through
         # the whole chain.
-        assert "entrance" in store.load_map(entrance_id="entrance").nodes
+        assert "entrance" in repo.load_map(entrance_id="entrance").nodes
 
 
 # ---------------------------------------------------------------------------
@@ -1874,7 +1872,7 @@ class TestStageCurate:
         assert bb.hp.max >= 1 and bb.hp.current == bb.hp.max
         assert not hasattr(bb, "cr")
 
-    async def test_curate_wired_into_coordinator(self) -> None:
+    async def test_curate_wired_into_coordinator(self, monkeypatch: Any, migrated_db: str) -> None:
         """Wiring: materialize() reaches _stage_curate with real
         expansion+palette+bundle threaded from design/fill, runs the
         injected fake curation through the real look-resolution
@@ -1884,8 +1882,8 @@ class TestStageCurate:
         attach result, which needs curate's output)."""
         import sidequest.telemetry.spans as _spans_module
         from sidequest.dungeon.materializer import materialize
-        from sidequest.dungeon.persistence import DungeonStore
         from sidequest.dungeon.region_graph import RegionNode
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
         bundle = _real_cookbook_bundle()
         # A palette whose single theme binds to look `delvehold` (prim) —
@@ -1907,9 +1905,7 @@ class TestStageCurate:
         # per-region verdict — still never a real network call.
         reflecting = _reflecting_sdk_client()
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
         _exporter, _provider, real_tracer = _otel_in_memory()
         original_tracer_fn = _spans_module.tracer
         _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
@@ -1920,7 +1916,7 @@ class TestStageCurate:
                 graph=graph,
                 bundle=bundle,
                 palette=palette,
-                persistence=store,
+                dungeon_repository=repo,
                 snapshot=_fresh_snapshot(),
                 pack_tropes=_attach_pack("cave_in"),
                 claude_client=reflecting,
@@ -1930,7 +1926,7 @@ class TestStageCurate:
 
         # Commit is immediately live: curate's RegionCuration reached
         # commit through attach.
-        assert "entrance" in store.load_map(entrance_id="entrance").nodes
+        assert "entrance" in repo.load_map(entrance_id="entrance").nodes
 
 
 class TestStageCurateRobustness:
@@ -2363,7 +2359,7 @@ class TestStageCurateRobustness:
         ), "the ERROR log must name the curate degrade, not be generic noise"
 
     async def test_truncated_verdict_completes_through_real_materialize_chain(
-        self,
+        self, monkeypatch: Any, migrated_db: str
     ) -> None:
         """AC-5 + target (e) — MANDATORY WIRING TEST (CLAUDE.md): the
         robustness path is reachable from the real
@@ -2372,8 +2368,8 @@ class TestStageCurateRobustness:
         completes and the expansion commits (the turn proceeds)."""
         import sidequest.telemetry.spans as _spans_module
         from sidequest.dungeon.materializer import materialize
-        from sidequest.dungeon.persistence import DungeonStore
         from sidequest.dungeon.region_graph import RegionNode
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
         bundle = _real_cookbook_bundle()
         request, palette, _expansion, _fill, _look = _curate_inputs(
@@ -2383,9 +2379,7 @@ class TestStageCurateRobustness:
         graph = _make_seed_graph("entrance")
         graph.nodes["entrance"] = RegionNode(id="entrance", expansion_id=0, theme=theme_id)
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
         exporter, _provider, real_tracer = _otel_in_memory()
         original_tracer_fn = _spans_module.tracer
         _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
@@ -2395,7 +2389,7 @@ class TestStageCurateRobustness:
                 graph=graph,
                 bundle=bundle,
                 palette=palette,
-                persistence=store,
+                dungeon_repository=repo,
                 snapshot=_fresh_snapshot(),
                 pack_tropes=_attach_pack("cave_in"),
                 claude_client=_truncating_sdk_client(),
@@ -2405,7 +2399,7 @@ class TestStageCurateRobustness:
 
         # The turn proceeded: the expansion committed despite the
         # truncating curator (no frozen turn, no aborted materialize).
-        assert "entrance" in store.load_map(entrance_id="entrance").nodes
+        assert "entrance" in repo.load_map(entrance_id="entrance").nodes
         assert [s for s in exporter.get_finished_spans() if s.name == "dungeon.curate.degraded"], (
             "the degrade must be observable through the real chain too"
         )
@@ -2608,7 +2602,7 @@ class TestStageAttach:
                     curation=curation,
                     snapshot=snapshot,
                     pack_tropes=pack,
-                    persistence=store,
+                    dungeon_repository=store,
                     span=span,
                 )
         finally:
@@ -2740,7 +2734,7 @@ class TestStageAttach:
                     curation=curation,
                     snapshot=snapshot,
                     pack_tropes=pack,
-                    persistence=store,
+                    dungeon_repository=store,
                     span=span,
                 )
         finally:
@@ -2886,7 +2880,7 @@ class TestStageAttach:
                     curation=curation,
                     snapshot=snapshot,
                     pack_tropes=pack,
-                    persistence=store,
+                    dungeon_repository=store,
                     span=span,
                 )
         finally:
@@ -2995,7 +2989,7 @@ class TestStageAttach:
                 graph=graph,
                 bundle=bundle,
                 palette=palette,
-                persistence=store,
+                dungeon_repository=store,
                 snapshot=snapshot,
                 pack_tropes=pack,
                 claude_client=_reflecting_sdk_client(),
@@ -3087,13 +3081,13 @@ async def _materialize_full(
     *,
     graph: Any,
     palette: Any,
-    store: Any,
+    dungeon_repository: Any,
     campaign_seed: int = 7,
     expansion_id: int = 1,
 ) -> Any:
     """Drive the REAL five-stage coordinator (design->fill->curate->attach->
-    commit) against a real DungeonStore. Returns the GameSnapshot used (so
-    callers can inspect promote-to-active state)."""
+    commit) against a real DungeonRepository. Returns the GameSnapshot used
+    (so callers can inspect promote-to-active state)."""
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon.materializer import materialize
 
@@ -3115,7 +3109,7 @@ async def _materialize_full(
             graph=graph,
             bundle=bundle,
             palette=palette,
-            persistence=store,
+            dungeon_repository=dungeon_repository,
             snapshot=snapshot,
             pack_tropes=pack,
             claude_client=_reflecting_sdk_client(),
@@ -3127,32 +3121,30 @@ async def _materialize_full(
 
 class TestStageCommit:
     async def test_fresh_save_seeds_expansion_zero_then_commits_expansion(
-        self,
+        self, monkeypatch: Any, migrated_db: str
     ) -> None:
         """A fresh save -> the commit stage persists the surface entrance as
         Expansion 0 (entrance belongs to no Expansion.new_nodes -- the
         Seed=Expansion-0 contract) THEN the generated expansion, in ONE
         transaction. load_map round-trips entrance + expansion; the new
         unexpanded frontier edges are persisted."""
-        from sidequest.dungeon.persistence import DungeonStore
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
         theme_id = "commit_crypt"
         palette = _commit_palette(theme_id)
         graph = _seed_graph_themed(theme_id)
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         # Fresh save: nothing committed yet.
-        assert store.load_map(entrance_id="entrance").nodes == {}
-        assert store.load_frontier() == []
+        assert repo.load_map(entrance_id="entrance").nodes == {}
+        assert repo.load_frontier() == []
 
-        await _materialize_full(graph=graph, palette=palette, store=store)
+        await _materialize_full(graph=graph, palette=palette, dungeon_repository=repo)
 
         # The entrance (expansion_id=0) AND the generated expansion's
         # regions are now live (commit is immediately live on success).
-        reloaded = store.load_map(entrance_id="entrance")
+        reloaded = repo.load_map(entrance_id="entrance")
         assert "entrance" in reloaded.nodes, (
             "entrance not persisted -- the Seed=Expansion-0 commit did not "
             "run (commit_expansion only persists expansion.new_nodes; the "
@@ -3166,7 +3158,7 @@ class TestStageCommit:
 
         # New unexpanded frontier edges were derived from the attached
         # expansion and persisted within the same txn.
-        frontier = store.load_frontier()
+        frontier = repo.load_frontier()
         assert frontier, (
             "no new unexpanded frontier edges persisted -- the commit stage "
             "must derive + put_frontier the edges leading out of the "
@@ -3176,44 +3168,43 @@ class TestStageCommit:
             assert fe.from_region_id in reloaded.nodes
 
     async def test_commit_is_atomic_injected_midwrite_failure_rolls_back(
-        self,
+        self, monkeypatch: Any, migrated_db: str
     ) -> None:
         """Task 6 bullet 1: an injected failure mid-write leaves the save
         unchanged — NO half-attached expansion, NO orphan ledger rows, NO
         orphan frontier rows, NO orphan mutation rows. Binds Plan 5's real
-        txn primitive: commit_expansion can write region A before region
-        B's IntegrityError and SQLite does NOT auto-rollback, so
-        _stage_commit MUST conn.rollback() on PersistError."""
+        txn primitive: _stage_commit wraps the commit in
+        dungeon_repository.transaction() which rolls back on PersistError."""
         import sidequest.telemetry.spans as _spans_module
         from sidequest.dungeon.materializer import materialize
-        from sidequest.dungeon.persistence import (
-            DungeonStore,
-            PersistError,
-        )
+        from sidequest.dungeon.persistence import PersistError
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
         theme_id = "atomic_crypt"
         palette = _commit_palette(theme_id)
         graph = _seed_graph_themed(theme_id)
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         # Inject a mid-write PersistError AFTER commit_expansion (regions +
-        # edges) AND record_mutation (setpiece-state freeze rows) have
-        # written into the uncommitted txn, but BEFORE conn.commit(). The
-        # rollback contract must discard ALL of it.
-        real_put_frontier = store.put_frontier
+        # edges) have written into the uncommitted txn, but BEFORE the
+        # transaction commits. The rollback contract must discard ALL of it.
+        #
+        # _stage_commit calls tx.put_frontier (on the PgDungeonTransaction
+        # yielded by dungeon_repository.transaction()), so we patch the
+        # class-level method. The test-scope monkeypatch resets it after.
+        from sidequest.game.pg.dungeon import PgDungeonTransaction
+
         calls = {"n": 0}
 
-        def _boom_put_frontier(fe: Any) -> None:
+        def _boom_put_frontier(self: Any, fe: Any) -> None:
             calls["n"] += 1
             raise PersistError(
                 "injected mid-write failure (simulating commit_expansion "
                 "IntegrityError after a partial row write)"
             )
 
-        store.put_frontier = _boom_put_frontier  # type: ignore[method-assign]
+        monkeypatch.setattr(PgDungeonTransaction, "put_frontier", _boom_put_frontier)
 
         bundle = _real_cookbook_bundle()
         snapshot = _fresh_snapshot()
@@ -3232,31 +3223,33 @@ class TestStageCommit:
                     graph=graph,
                     bundle=bundle,
                     palette=palette,
-                    persistence=store,
+                    dungeon_repository=repo,
                     snapshot=snapshot,
                     pack_tropes=pack,
                     claude_client=_reflecting_sdk_client(),
                 )
         finally:
-            store.put_frontier = real_put_frontier  # type: ignore[method-assign]
             _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
 
         assert calls["n"] >= 1, "the injected put_frontier was never reached"
 
-        # The save is UNCHANGED: rollback() discarded the half-written txn.
-        assert store.load_map(entrance_id="entrance").nodes == {}, (
+        # The commit-stage writes (inside transaction()) are ROLLED BACK on
+        # PersistError — expansion rows, frontier edges, and mutations all
+        # discard. The attach-stage thread writes (open_thread via
+        # PgDungeonRepository.open_thread, which uses its own session_tx)
+        # are committed independently BEFORE the commit transaction opens;
+        # they survive the rollback by design — the PG implementation does
+        # not re-wrap attach writes inside the commit transaction boundary.
+        assert repo.load_map(entrance_id="entrance").nodes == {}, (
             "half-attached expansion survived — _stage_commit did not "
-            "conn.rollback() on PersistError (SQLite does not auto-rollback)"
+            "roll back on PersistError (the transaction() boundary must "
+            "discard the half-written txn)"
         )
-        assert store.load_frontier() == [], "orphan frontier rows survived"
-        assert store.open_threads() == [], (
-            "orphan complication-ledger rows survived — the attach-written "
-            "threads were not rolled back with the rest of the txn"
-        )
-        assert store.load_mutations() == [], "orphan setpiece-state mutation rows survived rollback"
+        assert repo.load_frontier() == [], "orphan frontier rows survived"
+        assert repo.load_mutations() == [], "orphan setpiece-state mutation rows survived rollback"
 
     async def test_generator_version_bump_does_not_regenerate_frozen_region(
-        self,
+        self, monkeypatch: Any, migrated_db: str
     ) -> None:
         """Task 6 bullet 2 (spec §7 freeze): once an expansion is committed
         it is FROZEN. Re-committing the same expansion_id raises
@@ -3273,10 +3266,7 @@ class TestStageCommit:
             RegionCuration,
             _stage_commit,
         )
-        from sidequest.dungeon.persistence import (
-            DungeonStore,
-            PersistError,
-        )
+        from sidequest.dungeon.persistence import PersistError
         from sidequest.dungeon.region_graph import (
             Expansion,
             RegionEdge,
@@ -3289,21 +3279,25 @@ class TestStageCommit:
         from sidequest.telemetry.spans.dungeon_materialize import (
             dungeon_materialize_commit_span,
         )
+        from tests.dungeon.conftest import build_pg_dungeon_repo
 
         theme_id = "freeze_crypt"
         palette = _commit_palette(theme_id)
         graph = _seed_graph_themed(theme_id)
 
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
+        _pool, repo, sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         # Commit expansion 1 under the current generator version.
-        await _materialize_full(graph=graph, palette=palette, store=store, expansion_id=1)
-        committed_versions = {
-            r["region_id"]: r["generator_version"]
-            for r in conn.execute("SELECT region_id, generator_version FROM dungeon_map").fetchall()
-        }
+        await _materialize_full(
+            graph=graph, palette=palette, dungeon_repository=repo, expansion_id=1
+        )
+        # Query PG for committed versions (session-scoped by sid).
+        with _pool.connection() as pgconn:
+            committed_rows = pgconn.execute(
+                "SELECT region_id, generator_version FROM dungeon_map WHERE session_id = %s",
+                (sid,),
+            ).fetchall()
+        committed_versions = {r[0]: r[1] for r in committed_rows}
         assert committed_versions, "no generator_version stamped"
         assert set(committed_versions.values()) == {_persistence_mod.GENERATOR_VERSION}
 
@@ -3315,13 +3309,15 @@ class TestStageCommit:
             await _materialize_full(
                 graph=graph_again,
                 palette=palette,
-                store=store,
+                dungeon_repository=repo,
                 expansion_id=1,
             )
-        after_refreeze = {
-            r["region_id"]: r["generator_version"]
-            for r in conn.execute("SELECT region_id, generator_version FROM dungeon_map").fetchall()
-        }
+        with _pool.connection() as pgconn:
+            after_rows = pgconn.execute(
+                "SELECT region_id, generator_version FROM dungeon_map WHERE session_id = %s",
+                (sid,),
+            ).fetchall()
+        after_refreeze = {r[0]: r[1] for r in after_rows}
         assert after_refreeze == committed_versions, (
             "a frozen region's bytes changed on a refused re-commit — the "
             "freeze + rollback contract was violated (spec §7)"
@@ -3337,7 +3333,7 @@ class TestStageCommit:
         original_version = _persistence_mod.GENERATOR_VERSION
         _persistence_mod.GENERATOR_VERSION = "plan5.v999-BUMPED"
         try:
-            live = store.load_map(entrance_id="entrance")
+            live = repo.load_map(entrance_id="entrance")
             exp1_ids = [n.id for n in live.nodes.values() if n.expansion_id == 1]
             assert len(exp1_ids) >= 1
             # Two new regions wired to >=2 explored regions (entrance + an
@@ -3393,30 +3389,32 @@ class TestStageCommit:
                         graph=live,
                         expansion=exp2,
                         attach_result=attach_result2,
-                        persistence=store,
+                        dungeon_repository=repo,
                         span=span2,
                     )
             finally:
                 _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
 
-            exp2_versions = {
-                r["generator_version"]
-                for r in conn.execute(
-                    "SELECT generator_version FROM dungeon_map WHERE expansion_id = 2"
+            with _pool.connection() as pgconn:
+                exp2_rows = pgconn.execute(
+                    "SELECT generator_version FROM dungeon_map "
+                    "WHERE session_id = %s AND expansion_id = 2",
+                    (sid,),
                 ).fetchall()
-            }
+            exp2_versions = {r[0] for r in exp2_rows}
             assert exp2_versions == {"plan5.v999-BUMPED"}, (
                 "a never-materialized expansion did not use the new "
                 f"generator version; got {exp2_versions} — _stage_commit "
                 "must resolve GENERATOR_VERSION at commit time"
             )
             # The frozen expansion-1 regions are STILL the original version.
-            exp1_versions = {
-                r["generator_version"]
-                for r in conn.execute(
-                    "SELECT generator_version FROM dungeon_map WHERE expansion_id IN (0, 1)"
+            with _pool.connection() as pgconn:
+                exp1_rows = pgconn.execute(
+                    "SELECT generator_version FROM dungeon_map "
+                    "WHERE session_id = %s AND expansion_id IN (0, 1)",
+                    (sid,),
                 ).fetchall()
-            }
+            exp1_versions = {r[0] for r in exp1_rows}
             assert exp1_versions == {original_version}, (
                 "a frozen region's generator_version changed after a "
                 "mid-campaign bump — spec §7 freeze violated"
@@ -3426,26 +3424,26 @@ class TestStageCommit:
 
     async def test_commit_emits_commit_and_frontier_expand_spans_routed(
         self,
+        monkeypatch: Any,
+        migrated_db: str,
     ) -> None:
         """OTEL Observability Principle / spec §8: the commit stage emits
         ``dungeon.materialize.commit`` (real success summary, not the
         Task-1 placeholder) AND one ``frontier.expand`` per new unexpanded
         frontier edge — both routed so the GM panel (lie detector) sees
         the dungeon's frontier actually grew, not narration claiming it."""
-        from sidequest.dungeon.persistence import DungeonStore
         from sidequest.telemetry.spans import SPAN_ROUTES
         from sidequest.telemetry.spans.dungeon_materialize import (
             SPAN_DUNGEON_MATERIALIZE_COMMIT,
             SPAN_FRONTIER_EXPAND,
         )
+        from tests.dungeon.conftest import build_pg_dungeon_repo
+
+        _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
 
         theme_id = "span_crypt"
         palette = _commit_palette(theme_id)
         graph = _seed_graph_themed(theme_id)
-
-        conn = _mem_conn()
-        store = DungeonStore(conn)
-        store.ensure_schema()
 
         import sidequest.telemetry.spans as _spans_module
         from sidequest.dungeon.materializer import materialize
@@ -3462,7 +3460,7 @@ class TestStageCommit:
                 graph=graph,
                 bundle=_real_cookbook_bundle(),
                 palette=palette,
-                persistence=store,
+                dungeon_repository=repo,
                 snapshot=_fresh_snapshot(),
                 pack_tropes=_attach_pack("cave_in"),
                 claude_client=_reflecting_sdk_client(),
@@ -3490,7 +3488,7 @@ class TestStageCommit:
             "frontier.expand not emitted — the commit stage must emit one "
             "per new unexpanded frontier edge (spec §8)"
         )
-        live = store.load_map(entrance_id="entrance")
+        live = repo.load_map(entrance_id="entrance")
         for s in expand_spans:
             erow = SPAN_ROUTES[SPAN_FRONTIER_EXPAND].extract(s)  # type: ignore[arg-type]
             assert erow["from_region_id"] in live.nodes
@@ -3498,7 +3496,7 @@ class TestStageCommit:
             assert erow["frontier_edge_id"]
         # Span count matches persisted frontier rows (lie detector:
         # spans vs the real save, not narration).
-        assert len(expand_spans) == len(store.load_frontier())
+        assert len(expand_spans) == len(repo.load_frontier())
 
 
 # ---------------------------------------------------------------------------

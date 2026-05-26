@@ -22,6 +22,8 @@ captures the kwargs handed to ``build_llm_client``.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from sidequest.dungeon import frontier_hook
@@ -38,6 +40,7 @@ def _restore_frontier_observers():
 
 async def test_attach_dungeon_calls_build_llm_client_with_purpose_tool(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
 ) -> None:
     """``attach_dungeon_to_session`` must call
     ``build_llm_client(purpose="tool")`` — not the bare default which
@@ -57,16 +60,12 @@ async def test_attach_dungeon_calls_build_llm_client_with_purpose_tool(
     bootstrap path and asserts at least one carries ``purpose="tool"``.
     """
     from sidequest.dungeon import session_integration
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import _reflecting_sdk_client
-
-    # Import test fixtures from the existing session_integration test
-    # module. Lives in the same package so this is a direct sibling
-    # import, no path mangling required.
     from tests.dungeon.test_session_integration import (
         _beneath_sunden_world_dir,
         _real_pack,
         _snapshot,
-        _sqlite_store,
     )
 
     captured_kwargs: list[dict[str, object]] = []
@@ -79,8 +78,12 @@ async def test_attach_dungeon_calls_build_llm_client_with_purpose_tool(
 
     monkeypatch.setattr(session_integration, "build_llm_client", _spy)
 
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"purpose_tool_{uuid.uuid4().hex[:12]}"
+
     handle = await session_integration.attach_dungeon_to_session(
-        store=_sqlite_store(),
+        dungeon_repository=repo,
+        game_slug=game_slug,
         snapshot=_snapshot(),
         genre_pack=_real_pack(),
         genre_slug="caverns_and_claudes",

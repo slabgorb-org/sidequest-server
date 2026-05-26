@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -59,11 +60,35 @@ def _real_pack() -> Any:
     return GenreLoader(DEFAULT_GENRE_PACK_SEARCH_PATHS).load("caverns_and_claudes")
 
 
-async def test_non_beneath_sunden_is_a_clean_noop() -> None:
+def _build_pg_repo(monkeypatch: Any, migrated_db: str) -> tuple[Any, Any, int, str]:
+    """Build (pool, PgDungeonRepository, session_id, game_slug) for one isolated test.
+
+    Returns a unique game_slug that can be passed as ``game_slug=`` to
+    ``attach_dungeon_to_session``.
+    """
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    pool, repo, sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    # The game_slug must match the session slug used in build_pg_dungeon_repo
+    # (it's used as the save-key dedup by attach_dungeon_to_session).
+    # We derive a consistent one from the session_id.
+    game_slug = f"dungeon_d6_{sid}_{uuid.uuid4().hex[:8]}"
+    return pool, repo, sid, game_slug
+
+
+async def test_non_beneath_sunden_is_a_clean_noop(
+    monkeypatch: Any,
+    migrated_db: str,
+) -> None:
     from sidequest.dungeon.session_integration import attach_dungeon_to_session
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"noop_{uuid.uuid4().hex[:12]}"
 
     handle = await attach_dungeon_to_session(
-        store=_sqlite_store(),
+        dungeon_repository=repo,
+        game_slug=game_slug,
         snapshot=_snapshot(),
         genre_pack=object(),
         genre_slug="space_opera",
@@ -81,19 +106,22 @@ async def test_detach_is_null_safe() -> None:
 
 
 async def test_attach_seeds_and_registers_then_detach_unregisters(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: Any,
+    migrated_db: str,
 ) -> None:
     from sidequest.dungeon import session_integration
-    from sidequest.dungeon.persistence import DungeonStore
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
     monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
 
-    store = _sqlite_store()
-    snap = _snapshot()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"attach_{uuid.uuid4().hex[:12]}"
+
     handle = await session_integration.attach_dungeon_to_session(
-        store=store,
-        snapshot=snap,
+        dungeon_repository=repo,
+        game_slug=game_slug,
+        snapshot=_snapshot(),
         genre_pack=_real_pack(),
         genre_slug="caverns_and_claudes",
         world_slug="beneath_sunden",
@@ -102,9 +130,8 @@ async def test_attach_seeds_and_registers_then_detach_unregisters(
     assert handle is not None
     assert frontier_hook.registered_observer_count() == 1
 
-    ds = DungeonStore(store.connection())
-    assert ds.get_campaign_seed() is not None
-    nodes = ds.load_map(entrance_id="entrance").nodes
+    assert repo.get_campaign_seed() is not None
+    nodes = repo.load_map(entrance_id="entrance").nodes
     assert "entrance" in nodes and nodes["entrance"].expansion_id == 0
     assert any(n.expansion_id == 1 for n in nodes.values())
 
@@ -113,16 +140,20 @@ async def test_attach_seeds_and_registers_then_detach_unregisters(
 
 
 async def test_attach_is_idempotent_reuses_persisted_seed(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: Any,
+    migrated_db: str,
 ) -> None:
     from sidequest.dungeon import session_integration
-    from sidequest.dungeon.persistence import DungeonStore
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
     monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
-    store = _sqlite_store()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"idempotent_{uuid.uuid4().hex[:12]}"
+
     kw = dict(
-        store=store,
+        dungeon_repository=repo,
+        game_slug=game_slug,
         snapshot=_snapshot(),
         genre_pack=_real_pack(),
         genre_slug="caverns_and_claudes",
@@ -131,20 +162,21 @@ async def test_attach_is_idempotent_reuses_persisted_seed(
     )
     h1 = await session_integration.attach_dungeon_to_session(**kw)
     await session_integration.detach_dungeon_from_session(h1)
-    seed1 = DungeonStore(store.connection()).get_campaign_seed()
-    map1 = sorted(DungeonStore(store.connection()).load_map(entrance_id="entrance").nodes)
+    seed1 = repo.get_campaign_seed()
+    map1 = sorted(repo.load_map(entrance_id="entrance").nodes)
 
     h2 = await session_integration.attach_dungeon_to_session(**dict(kw, snapshot=_snapshot()))
     await session_integration.detach_dungeon_from_session(h2)
-    seed2 = DungeonStore(store.connection()).get_campaign_seed()
-    map2 = sorted(DungeonStore(store.connection()).load_map(entrance_id="entrance").nodes)
+    seed2 = repo.get_campaign_seed()
+    map2 = sorted(repo.load_map(entrance_id="entrance").nodes)
 
     assert seed1 == seed2, "reopen must reuse the frozen campaign_seed"
     assert map1 == map2, "reopen must NOT re-seed (idempotent bootstrap)"
 
 
 async def test_concurrent_attach_same_save_is_idempotent_then_reattaches_after_detach(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: Any,
+    migrated_db: str,
 ) -> None:
     """§14.D: a second attach for an already-attached save is IDEMPOTENT
     — it returns the EXISTING handle and adds NO second observer (no
@@ -154,12 +186,16 @@ async def test_concurrent_attach_same_save_is_idempotent_then_reattaches_after_d
     2026-05-17). After detach, a fresh attach for that save succeeds
     (sequential reopen is unaffected)."""
     from sidequest.dungeon import session_integration
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
     monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
-    store = _sqlite_store()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"concurrent_{uuid.uuid4().hex[:12]}"
+
     kw = dict(
-        store=store,
+        dungeon_repository=repo,
+        game_slug=game_slug,
         snapshot=_snapshot(),
         genre_pack=_real_pack(),
         genre_slug="caverns_and_claudes",

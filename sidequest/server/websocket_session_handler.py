@@ -1946,6 +1946,28 @@ class WebSocketSessionHandler:
     ) -> list[object]:
         choice_str = payload.choice if payload.choice is not None else "1"
 
+        # AwaitingFollowup has no choice list — the entire input (numeric or
+        # prose) is the answer to the scene's hook_prompt and routes to
+        # answer_followup, NOT apply_choice/apply_freeform (both InProgress-only;
+        # they raise WrongPhaseError). Playtest 2026-05-26 [road_warrior/
+        # the_circuit]: an ambiguous free-text names answer pushed the builder
+        # into AwaitingFollowup and the UI re-sent freeform, hard-blocking
+        # chargen with WrongPhaseError(expected=InProgress, got=AwaitingFollowup).
+        if builder.is_awaiting_followup():
+            span.add_event(
+                "character_creation.followup",
+                {
+                    "phase": "followup",
+                    "choice_raw": choice_str,
+                    "player_id": player_id,
+                },
+            )
+            try:
+                builder.answer_followup(choice_str)
+            except BuilderError as exc:
+                return [_error_msg(f"Invalid followup answer: {exc!r}")]
+            return self._next_message(builder, sd, player_id)
+
         resolved_index: int | None
         try:
             # 1-based numeric index (Rust: saturating_sub(1))

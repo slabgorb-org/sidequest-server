@@ -240,7 +240,7 @@ def _tool_ctx(store: SqliteStore, *, perspective_pc: str = "Alice") -> ToolConte
         session_id="s",
         perspective_pc=perspective_pc,
         turn_number=1,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -979,7 +979,7 @@ async def test_tool_otel_carries_encounter_anchored_count() -> None:
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        store=store,
+        repository=store,
         otel_span=_CapturingSpan(),  # type: ignore[arg-type]
         perception_filter=NarratorPerceptionFilter(),
     )

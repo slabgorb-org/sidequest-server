@@ -18,7 +18,8 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 import sidequest.telemetry.watcher_hub as _hub
-from sidequest.game.persistence import GameMode, SqliteStore
+from sidequest.game.persistence import GameMode
+from sidequest.game.repository import SaveRepository
 from sidequest.game.session import GameSnapshot
 from sidequest.orbital.loader import (
     OrbitalContent,
@@ -165,10 +166,10 @@ class SessionRoom:
     # socket_id -> asyncio.Queue for per-socket outbound message fan-out (MP-02 Task 4)
     _outbound_queues: dict[str, asyncio.Queue[Any]] = field(default_factory=dict)
     # Canonical world state (ADR-037 Python port). The room owns the
-    # GameSnapshot and SqliteStore for its slug; every WS session bound
+    # GameSnapshot and SaveRepository for its slug; every WS session bound
     # to the room reads/writes the same in-memory snapshot reference.
     _snapshot: GameSnapshot | None = field(default=None, repr=False)
-    _store: SqliteStore | None = field(default=None, repr=False)
+    _store: SaveRepository | None = field(default=None, repr=False)
     _session: Session | None = field(default=None, init=False, repr=False)
     # Canonical narrator orchestrator (ADR-067 — single persistent narrator
     # session per slug). Each WS session bound to this room uses the
@@ -207,7 +208,7 @@ class SessionRoom:
 
     # ------------------------------------------------------------------
     # Canonical world state (ADR-037 Python port). The room owns the
-    # GameSnapshot and SqliteStore; every WS session bound to this slug
+    # GameSnapshot and SaveRepository; every WS session bound to this slug
     # reads and writes the same in-memory snapshot reference.
     # ------------------------------------------------------------------
 
@@ -215,7 +216,7 @@ class SessionRoom:
         self,
         *,
         snapshot: GameSnapshot,
-        store: SqliteStore,
+        store: SaveRepository,
         world_dir: Path | None = None,
     ) -> None:
         """Bind canonical snapshot + store to the room. Idempotent.
@@ -260,8 +261,8 @@ class SessionRoom:
         return self._snapshot
 
     @property
-    def store(self) -> SqliteStore | None:
-        """Canonical SqliteStore for the slug, or None before first bind."""
+    def store(self) -> SaveRepository | None:
+        """Canonical SaveRepository for the slug, or None before first bind."""
         return self._store
 
     @property
@@ -732,9 +733,7 @@ class SessionRoom:
         open), so `playing_player_count()` alone would keep counting it.
         """
         with self._lock:
-            playing = sum(
-                1 for seat in self._seated.values() if seat.state == LobbyState.PLAYING
-            )
+            playing = sum(1 for seat in self._seated.values() if seat.state == LobbyState.PLAYING)
             raw = playing - len(self._crash_released)
         # Review finding [SEC] (2026-05-26): surface an underflow rather than
         # let recheck_barrier's `<= 0` guard silently freeze the interaction.

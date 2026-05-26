@@ -81,7 +81,7 @@ class ApplyStatusArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def apply_status(args: ApplyStatusArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -105,7 +105,7 @@ async def apply_status(args: ApplyStatusArgs, ctx: ToolContext) -> ToolResult:
         created_in_encounter=None,
     )
     core.statuses.append(status)
-    ctx.store.save(snapshot)
+    ctx.repository.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.status.target", args.target)
     ctx.otel_span.set_attribute("tool.status.text", args.text)

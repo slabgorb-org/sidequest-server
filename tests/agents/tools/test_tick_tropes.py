@@ -103,7 +103,7 @@ def _make_ctx(
         session_id=session_id,
         perspective_pc="Alice",
         turn_number=turn_number,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         genre_pack=genre_pack,

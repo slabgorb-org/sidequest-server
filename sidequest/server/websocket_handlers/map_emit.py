@@ -137,8 +137,7 @@ def _maybe_build_runtime_cavern_payload(
             return None
         output_root = Path(output_dir_env)
 
-        save_path = getattr(sd.store, "_path", None)
-        save_id = save_path.stem if isinstance(save_path, Path) else "in_memory"
+        save_id = getattr(sd, "game_slug", "in_memory")
 
         relative = f"artifacts/dungeon/{save_id}/regions/{room_id}.cavern.png"
         output_path = output_root / relative

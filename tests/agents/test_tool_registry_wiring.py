@@ -119,7 +119,7 @@ async def test_registry_round_trip_via_sdk_client(
         session_id="s",
         perspective_pc="alex",
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=NoopPerceptionFilter(),
     )
@@ -169,7 +169,7 @@ async def test_dispatch_injects_span_into_handler_context(otel_capture) -> None:
         session_id="s",
         perspective_pc="alex",
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=caller_span,
         perception_filter=NoopPerceptionFilter(),
     )
@@ -217,7 +217,7 @@ def test_tool_context_lore_store_defaults_to_none() -> None:
         session_id="s",
         perspective_pc="alex",
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=NoopPerceptionFilter(),
     )
@@ -234,7 +234,7 @@ def test_tool_context_accepts_lore_store_kwarg() -> None:
         session_id="s",
         perspective_pc="alex",
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=NoopPerceptionFilter(),
         lore_store=store,

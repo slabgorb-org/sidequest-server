@@ -439,7 +439,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 if self._room is not None:
                     self._room.save()
                 else:
-                    self._session_data.store.save(self._session_data.snapshot)
+                    self._session_data.repository.save(self._session_data.snapshot)
                 logger.info(
                     "session.disconnect_save genre=%s world=%s player=%s "
                     "char_count=%d seat_count=%d",
@@ -522,7 +522,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 # Legacy non-slug path owns + closes its per-session store here.
                 if self._room is None:
                     with contextlib.suppress(Exception):
-                        self._session_data.store.close()
+                        self._session_data.repository.close()
 
     # ------------------------------------------------------------------
     # PLAYER_SEAT dispatch (MP-02 Task 5)
@@ -951,7 +951,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 # attributes the counts to the chapter id.
                                 seed_result = seed_lore_from_arc_promotion(
                                     snapshot,
-                                    sd.store,
+                                    sd.repository,
                                     sd.lore_store,
                                     [chapter],
                                 )
@@ -1091,12 +1091,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 with timings.phase("persistence"):
                     try:
                         # ADR-037: room owns the canonical snapshot, so room.save()
-                        # suffices. Falls back to sd.store.save on the legacy
+                        # suffices. Falls back to sd.repository.save on the legacy
                         # non-slug path.
                         if self._room is not None:
                             self._room.save()
                         else:
-                            sd.store.save(snapshot)
+                            sd.repository.save(snapshot)
                         # Story 45-22: log the player's turn before the narrator
                         # response so the narrative_log shows both sources
                         # (pre-fix every entry was author='narrator'). Skipped on
@@ -1114,7 +1114,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 tags=[],
                                 speaker=acting_name,
                             )
-                            sd.store.append_narrative(player_entry)
+                            sd.repository.append_narrative(player_entry)
                         narrative_entry = NarrativeEntry(
                             timestamp=0,
                             round=snapshot.turn_manager.interaction,
@@ -1122,7 +1122,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             content=result.narration,
                             tags=[],
                         )
-                        sd.store.append_narrative(narrative_entry)
+                        sd.repository.append_narrative(narrative_entry)
                         logger.info(
                             "session.persisted turn=%d player=%s char_count=%d seat_count=%d",
                             snapshot.turn_manager.interaction,
@@ -1139,7 +1139,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 # MAX(round_number) from the durable narrative_log (ground truth);
                 # the snapshot's in-memory mirror can drift from it.
                 try:
-                    max_narrative_round = int(sd.store.max_narrative_round())
+                    max_narrative_round = int(sd.repository.max_narrative_round())
                 except Exception as exc:  # noqa: BLE001 — telemetry must never crash a turn
                     logger.warning(
                         "round_invariant.max_lookup_failed error=%s",

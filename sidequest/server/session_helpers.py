@@ -590,17 +590,16 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
             )
             return None
 
-        from sidequest.dungeon.persistence import DatabaseError, DungeonStore
         from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
         from sidequest.dungeon.themes import load_theme_palette
+        from sidequest.game.persistence import DatabaseError
         from sidequest.genre.loader import (
             DEFAULT_GENRE_PACK_SEARCH_PATHS,
             GenreLoader,
         )
 
-        store = DungeonStore(sd.store.connection())
         try:
-            graph = store.load_map(entrance_id=ENTRANCE_ID)
+            graph = sd.dungeon_repository.load_map(entrance_id=ENTRANCE_ID)
         except DatabaseError as exc:
             span.set_attribute("outcome", "no_dungeon")
             span.set_attribute("reason", f"no_dungeon_schema: {exc}")
@@ -1150,7 +1149,7 @@ def _build_turn_context(
         # tools read through ToolContext.
         world_id=sd.world_slug,
         session_id=sd.game_slug,
-        store=sd.store,
+        store=sd.repository,
         # Story 59-1: the SDK ToolContext stamps this so begin_confrontation
         # can validate the requested confrontation type against the genre. The
         # tool signals; narration_apply creates the encounter on the canonical
@@ -1204,7 +1203,7 @@ def _build_turn_context(
         # SQLite is the same ground-truth source Story 45-11's round
         # invariant lie-detector relies on; aligning here closes the same
         # snapshot/SQLite divergence class.
-        recent_narrative_log=sd.store.recent_narrative(RECENT_NARRATIVE_WINDOW_K),
+        recent_narrative_log=sd.repository.recent_narrative(RECENT_NARRATIVE_WINDOW_K),
         # Story 50-4: thread the live snapshot so build_narrator_prompt can
         # render + clear pending_time_skip_summary (one-shot lifecycle).
         snapshot=snapshot,

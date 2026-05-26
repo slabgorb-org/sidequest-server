@@ -42,7 +42,7 @@ def _make_ctx() -> ToolContext:
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        store=_store(),
+        repository=_store(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )

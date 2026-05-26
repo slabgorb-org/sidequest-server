@@ -26,7 +26,6 @@ from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 from sidequest.game.session import GameSnapshot
-from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.game.world_grounding_bootstrap import load_world_grounding
 from sidequest.genre.loader import GenreLoader
 from sidequest.protocol.messages import (
@@ -269,13 +268,14 @@ class ConnectHandler:
             store.initialize()
             from sidequest.telemetry.watcher_hub import bind_event_store as _bind_event_store
 
-            row = get_game(store, slug)
-            if row is None:
+            # Bootstrap: read the SQLite row to get genre/world/mode for PG construction.
+            _sqlite_row = get_game(store, slug)
+            if _sqlite_row is None:
                 return [_error_msg(f"unknown game slug: {slug}")]
 
-            # ADR-115 D1: construct Postgres repositories for the live session.
-            # The SqliteStore above is kept for room.bind_world + forensic/TG-E reads
-            # (D2 will migrate room.bind_world; D3-D7 migrate the remaining consumers).
+            # ADR-115 D2: construct Postgres repositories for the live session,
+            # then switch to PG row for all downstream consumers. SqliteStore is
+            # kept for D3-D7 consumers (raw _conn reads, scrapbook_coverage, etc.).
             from sidequest.game import db_pool as _db_pool
             from sidequest.server.session_state import _build_pg_repos_for_slug
 
@@ -283,16 +283,21 @@ class ConnectHandler:
             _pg_repository, _pg_dungeon_repository, _pg_telemetry_sink = _build_pg_repos_for_slug(
                 _pg_pool,
                 slug=slug,
-                mode=str(row.mode),  # GameMode(StrEnum) is its value; no silent fallback
-                genre_slug=row.genre_slug,
-                world_slug=row.world_slug,
+                mode=str(_sqlite_row.mode),  # GameMode(StrEnum) is its value; no silent fallback
+                genre_slug=_sqlite_row.genre_slug,
+                world_slug=_sqlite_row.world_slug,
             )
-            # D1: bind the Postgres save repository to the watcher hub for encounter
-            # event persistence.  watcher_hub._maybe_persist_encounter_row and
-            # _persist_turn_telemetry still reach ._conn on the bound object — those
-            # raw reach-throughs are D5's to remove.  Passing the repository here
-            # is the minimal D1 seam: it replaces bind_event_store(store) and the
-            # hub stores the repository for D5 to wire properly.
+            # D2: use PG get_game for the authoritative row downstream.
+            # PgSaveRepository.get_game returns GameRow(slug, mode:str, genre_slug,
+            # world_slug, claude_session_id, created_at) — all fields the downstream
+            # code reads. GameMode(row.mode) is idempotent on a str (StrEnum).
+            row = _pg_repository.get_game(slug=slug)
+            if row is None:
+                raise RuntimeError(
+                    f"PG get_game returned None after ensure_session for slug={slug!r} — "
+                    "this should be impossible; check PG connectivity and sessions table."
+                )
+            # D2: bind the Postgres save repository to the watcher hub.
             _bind_event_store(_pg_repository)
             if not player_id:
                 player_id = str(uuid.uuid4())
@@ -476,8 +481,9 @@ class ConnectHandler:
                 ]
 
             # Restore saved snapshot, or start fresh (Bug 2 fix: resume semantics).
+            # ADR-115 D2: load from PG repository (replaces store.load()).
             try:
-                saved = store.load()
+                saved = _pg_repository.load()
             except SaveSchemaIncompatibleError as exc:
                 # Schema-incompatible save (e.g. legacy single-metric encounter
                 # under dual-dial migration). Don't let pydantic's
@@ -634,7 +640,7 @@ class ConnectHandler:
                 # room BEFORE the rename-save below. Idempotent — if a peer
                 # got here first, our load is discarded and we observe the
                 # already-bound snapshot.
-                room.bind_world(snapshot=snapshot, store=store, world_dir=world_dir)
+                room.bind_world(snapshot=snapshot, store=_pg_repository, world_dir=world_dir)
                 # All subsequent reads must come from the canonical room
                 # binding (which may differ from our local ``snapshot`` if
                 # we lost the bind race).
@@ -669,10 +675,10 @@ class ConnectHandler:
                     world_slug=row.world_slug,
                     location="Unknown",
                 )
-                store.init_session(row.genre_slug, row.world_slug)
+                _pg_repository.init_session()
                 # ADR-037 Python port: bind the fresh snapshot to the room
                 # so the second-connect handler observes the same object.
-                room.bind_world(snapshot=snapshot, store=store, world_dir=world_dir)
+                room.bind_world(snapshot=snapshot, store=_pg_repository, world_dir=world_dir)
                 snapshot = room.snapshot  # type: ignore[assignment]
                 has_character = False
                 logger.info(
@@ -872,7 +878,8 @@ class ConnectHandler:
             )
 
             session._session_data.lookahead_handle = await attach_dungeon_to_session(
-                store=room.store,
+                dungeon_repository=_pg_dungeon_repository,
+                game_slug=slug,
                 snapshot=room.snapshot,
                 genre_pack=genre_pack,
                 genre_slug=row.genre_slug,
@@ -927,9 +934,9 @@ class ConnectHandler:
                 )
 
             # MP-03 Task 3 + Task-17 + Task-22 ProjectionFilter Rules integration.
-            repo = SqliteSaveRepository(store)
-            session._event_log = EventLog(repo)
-            session._projection_cache = ProjectionCache(repo)
+            # ADR-115 D2: use PgSaveRepository directly (satisfies Slice-1a surface).
+            session._event_log = EventLog(_pg_repository)
+            session._projection_cache = ProjectionCache(_pg_repository)
             projection_rules = genre_pack.projection_rules
             if projection_rules is not None:
                 session._projection_filter = ComposedFilter(

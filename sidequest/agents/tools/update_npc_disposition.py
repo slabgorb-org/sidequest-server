@@ -97,7 +97,7 @@ class UpdateNpcDispositionArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def update_npc_disposition(args: UpdateNpcDispositionArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -117,7 +117,7 @@ async def update_npc_disposition(args: UpdateNpcDispositionArgs, ctx: ToolContex
     after_value = npc.disposition.value
     after_attitude = npc.disposition.attitude().value
 
-    ctx.store.save(snapshot)
+    ctx.repository.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.disposition.npc_id", args.npc_id)
     ctx.otel_span.set_attribute("tool.disposition.axis", args.axis)

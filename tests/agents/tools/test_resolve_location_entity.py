@@ -35,12 +35,38 @@ from sidequest.agents.tools.resolve_location_entity import (
     ResolveLocationEntityArgs,
     resolve_location_entity,
 )
-from sidequest.game.persistence import SqliteStore
 from sidequest.protocol.models import LocationEntity, LocationEntityBinding
+
+# Path is only needed for the tmp_path fixture type annotations; keep it.
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _make_mock_repository() -> MagicMock:
+    """Return a MagicMock repository with the PG SaveRepository interface for
+    location promotions.  ``list_location_promotions`` is backed by a real
+    list so tests can assert on written rows without coupling to SqliteStore.
+    """
+    _rows: list[Any] = []
+
+    repo = MagicMock()
+
+    def _list(*, region_id: str) -> list[Any]:
+        return [r for r in _rows if r.region_id == region_id]
+
+    def _upsert(row: Any) -> None:
+        # Replace existing row with same (region_id, entity_id) or append.
+        for i, existing in enumerate(_rows):
+            if existing.region_id == row.region_id and existing.entity_id == row.entity_id:
+                _rows[i] = row
+                return
+        _rows.append(row)
+
+    repo.list_location_promotions.side_effect = _list
+    repo.upsert_location_promotion.side_effect = _upsert
+    return repo
 
 
 def _authored() -> list[LocationEntity]:
@@ -62,10 +88,10 @@ def _build_ctx(
     entities: list[LocationEntity] | None = None,
     world_id: str = "glenross",
 ) -> ToolContext:
-    """Build a real ToolContext with a real SqliteStore and a stubbed
-    GenrePack whose ``worlds[world_id].cartography.regions[region_id]`` has
-    the supplied entities."""
-    store = SqliteStore(tmp_path / "save.db")
+    """Build a real ToolContext with a mock SaveRepository (PG interface) and
+    a stubbed GenrePack whose ``worlds[world_id].cartography.regions[region_id]``
+    has the supplied entities."""
+    repo = _make_mock_repository()
 
     region = MagicMock()
     region.entities = entities if entities is not None else _authored()
@@ -81,7 +107,7 @@ def _build_ctx(
         session_id="test-session",
         perspective_pc=None,
         turn_number=3,
-        store=store,
+        repository=repo,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         genre_pack=genre_pack,
@@ -189,7 +215,7 @@ async def test_proactive_miss_returns_not_found(tmp_path: Path) -> None:
     assert "the dragon" in result.message
     # And no row was minted.
     assert (
-        ctx.store.list_location_promotions(save_id="default", region_id="the_glenross_arms") == []
+        ctx.repository.list_location_promotions(region_id="the_glenross_arms") == []
     )
 
 
@@ -214,7 +240,7 @@ async def test_player_initiated_miss_mints(tmp_path: Path) -> None:
     assert payload["entity"]["tier"] == "yes_and"
     assert payload["entity"]["provenance"] == "yes_and_minted"
     # And the row hit the store.
-    rows = ctx.store.list_location_promotions(save_id="default", region_id="the_glenross_arms")
+    rows = ctx.repository.list_location_promotions(region_id="the_glenross_arms")
     assert len(rows) == 1
     assert rows[0].label == "the antique sextant"
 
@@ -238,7 +264,7 @@ async def test_flavor_only_mechanical_engagement_promotes(tmp_path: Path) -> Non
     assert payload["mode_outcome"] == "promoted"
     assert payload["entity"]["tier"] == "yes_and"
     assert payload["entity"]["provenance"] == "yes_and_promoted"
-    rows = ctx.store.list_location_promotions(save_id="default", region_id="the_glenross_arms")
+    rows = ctx.repository.list_location_promotions(region_id="the_glenross_arms")
     assert len(rows) == 1
     assert rows[0].entity_id == "cobwebs"
     assert rows[0].provenance == "yes_and_promoted"
@@ -264,7 +290,7 @@ async def test_unknown_region_returns_not_found(tmp_path: Path) -> None:
     assert result.status is ToolResultStatus.NOT_FOUND
     # Critically, no promotions written for the bogus region.
     assert (
-        ctx.store.list_location_promotions(save_id="default", region_id="nonexistent_region") == []
+        ctx.repository.list_location_promotions(region_id="nonexistent_region") == []
     )
 
 
@@ -273,13 +299,12 @@ async def test_missing_genre_pack_returns_not_found(tmp_path: Path) -> None:
     than try to operate on an empty manifest. (Production wires ctx.genre_pack
     at session handler construction — a None here is a wiring bug, not a
     runtime branch.)"""
-    store = SqliteStore(tmp_path / "save.db")
     ctx = ToolContext(
         world_id="glenross",
         session_id="s",
         perspective_pc=None,
         turn_number=1,
-        store=store,
+        repository=_make_mock_repository(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         genre_pack=None,

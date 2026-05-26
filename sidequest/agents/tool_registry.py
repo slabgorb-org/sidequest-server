@@ -93,19 +93,19 @@ class ToolContext:
     session_id: str
     perspective_pc: str | None
     turn_number: int
-    store: Any  # SqliteStore — kept Any to avoid Phase B coupling
+    repository: Any  # SaveRepository — kept Any to avoid Phase B coupling
     otel_span: Span
     perception_filter: PerceptionFilter
     # Phase C Task 13 amendment: narrator-private LoreStore reference for
     # the query_lore tool. LoreStore lives on SessionHandler, not on the
-    # SqliteStore save layer, so it cannot be reached via ``store``. Phase E
+    # save repository, so it cannot be reached via ``repository``. Phase E
     # wires this at the production call site; Phase C tools tolerate ``None``
     # (query_lore returns an empty result with an OTEL marker).
     lore_store: LoreStore | None = None
     # Phase C Task 14 amendment: MonsterManual reference for the
     # lookup_monster tool. The MonsterManual is per-genre/world and lives on
     # SessionHandler (loaded via ``MonsterManual.load(genre, world)``), not on
-    # the SqliteStore save layer — same shape as the lore_store amendment
+    # the save repository — same shape as the lore_store amendment
     # above. Phase E wires this at the production call site; Phase C tools
     # tolerate ``None`` (lookup_monster returns ``found=False`` with an OTEL
     # marker).

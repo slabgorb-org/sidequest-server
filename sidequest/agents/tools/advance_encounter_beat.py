@@ -83,7 +83,7 @@ class AdvanceEncounterBeatArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def advance_encounter_beat(args: AdvanceEncounterBeatArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -102,7 +102,7 @@ async def advance_encounter_beat(args: AdvanceEncounterBeatArgs, ctx: ToolContex
         encounter.beat = beat_from + 1
     beat_to = encounter.beat
 
-    ctx.store.save(snapshot)
+    ctx.repository.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.encounter.beat_from", beat_from)
     ctx.otel_span.set_attribute("tool.encounter.beat_to", beat_to)

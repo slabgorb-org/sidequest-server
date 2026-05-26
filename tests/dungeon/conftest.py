@@ -43,13 +43,88 @@ guard. This mirrors the established private-API helper at
 here (a sibling package-local helper) rather than cross-imported — the
 underscore-prefixed test-module helper is intentionally module-private
 and must not be reached across test modules.
+
+ADR-115 D6 Postgres fixtures
+------------------------------
+``migrated_db`` provides an ephemeral Postgres database for tests that
+need a real ``PgDungeonRepository``.  Mirrors the pattern in
+``tests/persistence/conftest.py``; kept local to avoid cross-package
+fixture visibility concerns.  ``SIDEQUEST_TEST_DATABASE_URL`` must be set
+(``just pg-up``) or the PG tests skip loudly.
+
+``pg_dungeon_repo`` builds a ``(pool, PgDungeonRepository)`` pair for a
+fresh uuid-namespaced session; each test gets an independent slug so
+xdist workers do not collide.
 """
 
 from __future__ import annotations
 
+import os
+import uuid
+from collections.abc import Iterator
 from typing import Any
 
+import psycopg
+import pytest
+from alembic import command
+from alembic.config import Config
 from opentelemetry import trace
+
+_ADMIN_ENV = "SIDEQUEST_TEST_DATABASE_URL"
+
+
+def _admin_conninfo() -> str:
+    url = os.environ.get(_ADMIN_ENV)
+    if not url:
+        pytest.skip(
+            f"{_ADMIN_ENV} unset — start local Postgres with `just pg-up` and export "
+            f"{_ADMIN_ENV}=postgresql://$USER@localhost:5432/sidequest_test, or run in CI."
+        )
+    return url
+
+
+def _swap_dbname(conninfo: str, dbname: str) -> str:
+    head, _, _tail = conninfo.partition("?")
+    base, _slash, _olddb = head.rpartition("/")
+    rebuilt = f"{base}/{dbname}"
+    if _tail:
+        rebuilt = f"{rebuilt}?{_tail}"
+    return rebuilt
+
+
+@pytest.fixture(scope="session")
+def migrated_db(worker_id: str) -> Iterator[str]:
+    """A freshly-migrated throwaway Postgres database; conninfo URL yielded.
+
+    ``worker_id`` is injected by pytest-xdist ("gw0", "gw1", ... or "master"
+    when serial); it namespaces the db so parallel workers do not collide.
+    """
+    admin = _admin_conninfo()
+    db_name = f"sq_dtest_{worker_id}_{uuid.uuid4().hex[:8]}"
+
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{db_name}"')
+
+    target = _swap_dbname(admin, db_name)
+    try:
+        cfg = Config("alembic.ini")
+        cfg.set_main_option("script_location", "alembic")
+        cfg.set_main_option(
+            "sqlalchemy.url",
+            target
+            if target.startswith("postgresql+psycopg://")
+            else target.replace("postgresql://", "postgresql+psycopg://", 1),
+        )
+        command.upgrade(cfg, "head")
+        yield target
+    finally:
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+            conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
 
 
 def capture_otel_provider_state() -> dict[str, Any]:

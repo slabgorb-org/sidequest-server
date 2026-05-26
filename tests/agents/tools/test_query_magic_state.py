@@ -108,7 +108,7 @@ def _make_ctx(
         session_id="s",
         perspective_pc=perspective_pc,
         turn_number=3,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -165,7 +165,7 @@ async def test_no_magic_state_records_otel_flag() -> None:
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        store=store,
+        repository=store,
         otel_span=span,
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -297,7 +297,7 @@ async def test_other_pc_query_hides_mana_remaining_in_otel() -> None:
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        store=store,
+        repository=store,
         otel_span=span,
         perception_filter=NarratorPerceptionFilter(),
     )

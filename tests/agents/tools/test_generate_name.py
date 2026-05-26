@@ -47,7 +47,7 @@ def _make_ctx(
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        store=store if store is not None else _store(),
+        repository=store if store is not None else _store(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         name_generators=name_generators,

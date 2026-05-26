@@ -174,7 +174,7 @@ def _tool_ctx(store: SqliteStore, *, perspective_pc: str = "Alice") -> ToolConte
         session_id="s",
         perspective_pc=perspective_pc,
         turn_number=1,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )

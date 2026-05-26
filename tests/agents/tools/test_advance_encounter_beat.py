@@ -99,7 +99,7 @@ def _make_ctx(store: SqliteStore, *, session_id: str = "s") -> ToolContext:
         session_id=session_id,
         perspective_pc="Alice",
         turn_number=1,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )

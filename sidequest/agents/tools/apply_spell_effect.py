@@ -109,7 +109,7 @@ class ApplySpellEffectArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def apply_spell_effect(args: ApplySpellEffectArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -162,7 +162,7 @@ async def apply_spell_effect(args: ApplySpellEffectArgs, ctx: ToolContext) -> To
             mana_decremented = True
             mana_remaining_after = bar.value
 
-    ctx.store.save(snapshot)
+    ctx.repository.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.spell.id", args.spell_id)
     ctx.otel_span.set_attribute("tool.spell.caster", args.caster)

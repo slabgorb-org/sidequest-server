@@ -92,7 +92,7 @@ def _make_ctx(store: SqliteStore, *, session_id: str = "s", turn: int = 7) -> To
         session_id=session_id,
         perspective_pc="Alice",
         turn_number=turn,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )

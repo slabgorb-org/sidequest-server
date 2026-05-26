@@ -35,8 +35,6 @@ from sidequest.game.persistence import (
     GameMode,
     SqliteStore,
     db_path_for_slug,
-    get_game,
-    upsert_game,
 )
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, load_genre_pack_cached
 from sidequest.server.asset_urls import resolve_asset_url
@@ -242,12 +240,8 @@ def create_rest_router() -> APIRouter:
                     cart_yaml_path = world_entry / "cartography.yaml"
                     if cart_yaml_path.exists():
                         try:
-                            craw = yaml.safe_load(
-                                cart_yaml_path.read_text(encoding="utf-8")
-                            )
-                            navigation_mode = str(
-                                (craw or {}).get("navigation_mode", "region")
-                            )
+                            craw = yaml.safe_load(cart_yaml_path.read_text(encoding="utf-8"))
+                            navigation_mode = str((craw or {}).get("navigation_mode", "region"))
                         except Exception as exc:
                             logger.warning(
                                 "list_genres: cartography.yaml parse failed for "
@@ -431,7 +425,9 @@ def create_rest_router() -> APIRouter:
                         "character_name": resolved_name,
                         "character_class": getattr(char, "archetype", "") or "",
                         "character_hp": int(resolved_hp) if resolved_hp is not None else 0,
-                        "character_max_hp": int(resolved_max_hp) if resolved_max_hp is not None else 0,
+                        "character_max_hp": int(resolved_max_hp)
+                        if resolved_max_hp is not None
+                        else 0,
                         "character_level": int(resolved_level or 1),
                         "character_xp": int(getattr(char, "xp", 0) or 0),
                         "region_id": snap.current_region or "",
@@ -563,9 +559,13 @@ def create_rest_router() -> APIRouter:
             mp_game_created_span,
         )
 
-        save_dir: Path = request.app.state.save_dir
         today_fn = getattr(request.app.state, "today_fn", _date_cls.today)
         base_slug = generate_slug(world_slug=req.world_slug, today=today_fn(), mode=req.mode)
+
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+
+        _pg_pool = _db_pool.get_pool()
 
         # ----- force_new: disambiguate before touching the store ---------
         # When the lobby insists this is a fresh journey, a same-day same-mode
@@ -587,52 +587,35 @@ def create_rest_router() -> APIRouter:
         attempts = 1
         mp_join_existing = False
         if req.force_new:
-            probe_db = db_path_for_slug(save_dir, slug)
-            if probe_db.exists():
-                probe_store = SqliteStore(probe_db)
-                probe_store.initialize()
-                existing_row = get_game(probe_store, slug)
-                if existing_row is not None:
-                    is_mp_request = req.mode == GameMode.MULTIPLAYER
-                    is_mp_existing = existing_row.mode == GameMode.MULTIPLAYER
-                    if is_mp_request and is_mp_existing:
-                        # MP-join short-circuit. Fall through to the
-                        # existing-row branch below; the join span fires
-                        # there once the row is opened on the canonical
-                        # ``store`` handle (avoids span-on-probe drift).
-                        mp_join_existing = True
-                    else:
-                        while True:
-                            attempts += 1
-                            candidate = f"{base_slug}-{attempts}"
-                            cand_db = db_path_for_slug(save_dir, candidate)
-                            if not cand_db.exists():
-                                slug = candidate
-                                break
-                            cand_store = SqliteStore(cand_db)
-                            cand_store.initialize()
-                            if get_game(cand_store, candidate) is None:
-                                slug = candidate
-                                break
-                        with lobby_force_new_disambiguated_span(
-                            requested_slug=base_slug,
-                            final_slug=slug,
-                            attempts=attempts,
-                            player_name=req.player_name or "",
-                            mode=str(req.mode.value)
-                            if hasattr(req.mode, "value")
-                            else str(req.mode),
-                            genre_slug=req.genre_slug,
-                            world_slug=req.world_slug,
-                        ):
-                            pass
+            existing_row = _pg_sessions.get_game(_pg_pool, slug=slug)
+            if existing_row is not None:
+                is_mp_request = req.mode == GameMode.MULTIPLAYER
+                is_mp_existing = existing_row.mode == GameMode.MULTIPLAYER
+                if is_mp_request and is_mp_existing:
+                    # MP-join short-circuit. Fall through to the
+                    # existing-row branch below; the join span fires
+                    # there once the row is opened on the canonical
+                    # pg repository (avoids span-on-probe drift).
+                    mp_join_existing = True
+                else:
+                    while True:
+                        attempts += 1
+                        candidate = f"{base_slug}-{attempts}"
+                        if _pg_sessions.get_game(_pg_pool, slug=candidate) is None:
+                            slug = candidate
+                            break
+                    with lobby_force_new_disambiguated_span(
+                        requested_slug=base_slug,
+                        final_slug=slug,
+                        attempts=attempts,
+                        player_name=req.player_name or "",
+                        mode=str(req.mode.value) if hasattr(req.mode, "value") else str(req.mode),
+                        genre_slug=req.genre_slug,
+                        world_slug=req.world_slug,
+                    ):
+                        pass
 
-        db = db_path_for_slug(save_dir, slug)
-        db.parent.mkdir(parents=True, exist_ok=True)
-        store = SqliteStore(db)
-        store.initialize()
-
-        existing = get_game(store, slug)
+        existing = _pg_sessions.get_game(_pg_pool, slug=slug)
         if existing is not None:
             # Existing row "wins" — emit span with the frozen metadata so GM
             # panel sees which mode/genre/world are actually in effect, not
@@ -642,9 +625,9 @@ def create_rest_router() -> APIRouter:
             if mp_join_existing:
                 with lobby_session_join_existing_span(
                     slug=slug,
-                    mode=str(existing.mode.value)
-                    if hasattr(existing.mode, "value")
-                    else str(existing.mode),
+                    mode=str(existing.mode)
+                    if not hasattr(existing.mode, "value")
+                    else str(existing.mode.value),
                     genre_slug=existing.genre_slug,
                     world_slug=existing.world_slug,
                     player_name=req.player_name or "",
@@ -653,9 +636,9 @@ def create_rest_router() -> APIRouter:
                     pass
             with mp_game_created_span(
                 slug=slug,
-                mode=str(existing.mode.value)
-                if hasattr(existing.mode, "value")
-                else str(existing.mode),
+                mode=str(existing.mode)
+                if not hasattr(existing.mode, "value")
+                else str(existing.mode.value),
                 genre_slug=existing.genre_slug,
                 world_slug=existing.world_slug,
                 resumed=True,
@@ -679,10 +662,10 @@ def create_rest_router() -> APIRouter:
             player_name=req.player_name or "",
             force_new=req.force_new,
         ):
-            upsert_game(
-                store,
+            _pg_sessions.ensure_session(
+                _pg_pool,
                 slug=slug,
-                mode=req.mode,
+                mode=str(req.mode.value) if hasattr(req.mode, "value") else str(req.mode),
                 genre_slug=req.genre_slug,
                 world_slug=req.world_slug,
             )
@@ -718,13 +701,10 @@ def create_rest_router() -> APIRouter:
 
         Raises 404 if no game with that slug exists.
         """
-        save_dir: Path = request.app.state.save_dir
-        db = db_path_for_slug(save_dir, slug)
-        if not db.exists():
-            raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
-        store = SqliteStore(db)
-        store.initialize()
-        row = get_game(store, slug)
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+
+        row = _pg_sessions.get_game(_db_pool.get_pool(), slug=slug)
         if row is None:
             raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
         return GameResponse(
@@ -742,13 +722,12 @@ def create_rest_router() -> APIRouter:
         404: slug not found. 409: world has no dungeons (not_a_hub_world).
         200: WorldSave JSON + available_dungeons [{slug, sin, wounded}, ...].
         """
-        save_dir: Path = request.app.state.save_dir
-        db = db_path_for_slug(save_dir, slug)
-        if not db.exists():
-            raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
-        store = SqliteStore(db)
-        store.initialize()
-        row = get_game(store, slug)
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+        from sidequest.game.pg.save_repository import PgSaveRepository
+
+        _pg_pool = _db_pool.get_pool()
+        row = _pg_sessions.get_game(_pg_pool, slug=slug)
         if row is None:
             raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
 
@@ -778,7 +757,15 @@ def create_rest_router() -> APIRouter:
                 },
             )
 
-        world_save = store.load_world_save()
+        # ADR-115 D2: load WorldSave from PG repository.
+        repository = PgSaveRepository.for_slug(
+            _pg_pool,
+            slug=slug,
+            mode=row.mode,
+            genre_slug=row.genre_slug,
+            world_slug=row.world_slug,
+        )
+        world_save = repository.load_world_save()
         available_dungeons = [
             {
                 "slug": dungeon_slug,

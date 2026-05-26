@@ -1,0 +1,57 @@
+"""NativeRulesetModule — the current SideQuest dial/confrontation turn, behind the seam.
+
+This is ADR-033's confrontation engine, relocated. It is the resolution model for packs
+that bind `ruleset: native` (and, later, the Fate family). It is NOT a fallback for other
+modules — it is one module among several, selected explicitly by the pack.
+"""
+
+from __future__ import annotations
+
+from sidequest.game.beat_kinds import apply_beat as _engine_apply_beat
+from sidequest.game.ruleset.base import RulesetModule
+from sidequest.genre.models.rules import BeatDef, ConfrontationDef
+from sidequest.server.dispatch.confrontation import find_confrontation_def
+from sidequest.server.dispatch.damage_roll import resolve_damage_spec_from_beat_and_actor
+
+
+def _stat_score(stats: dict[str, int], stat_check: str) -> int | None:
+    """Look up a stat score, mirroring dice._stat_modifier's case-insensitive fallback."""
+    score = stats.get(stat_check)
+    if score is None:
+        for k, v in stats.items():
+            if k.upper() == stat_check.upper():
+                return v
+        return None
+    return score
+
+
+class NativeRulesetModule(RulesetModule):
+    slug = "native"
+
+    def find_confrontation(
+        self, confrontations: list[ConfrontationDef], encounter_type: str
+    ) -> ConfrontationDef | None:
+        return find_confrontation_def(confrontations, encounter_type)
+
+    def stat_modifier(self, stats: dict[str, int], stat_check: str) -> int:
+        score = _stat_score(stats, stat_check)
+        if score is None:
+            return 0
+        return (score - 10) // 2
+
+    def compute_dc(self, beat: BeatDef) -> int:
+        return max(10, min(30, 10 + abs(beat.base) * 2))
+
+    def apply_beat(self, *, encounter, actor, beat, outcome, turn, edge_resolver, damage_resolver):
+        return _engine_apply_beat(
+            encounter,
+            actor,
+            beat,
+            outcome,
+            turn=turn,
+            edge_resolver=edge_resolver,
+            damage_resolver=damage_resolver,
+        )
+
+    def resolve_damage(self, *, beat, actor_core, pack):
+        return resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor_core, pack=pack)

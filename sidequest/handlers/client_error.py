@@ -83,7 +83,7 @@ class ClientErrorHandler:
 
         # Drop the crashed player from this interaction's barrier denominator.
         room.mark_crash_released(crashed_id)
-        effective = room.playing_player_count() - room.crash_released_count()
+        effective = room.effective_barrier_count()
         _watcher_publish(
             "mp.player_crash_released",
             {

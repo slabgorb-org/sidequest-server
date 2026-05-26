@@ -182,6 +182,102 @@ async def test_crash_signal_releases_barrier_and_dispatches_remaining(
 
 
 @pytest.mark.asyncio
+async def test_crash_release_in_three_player_room_then_remaining_submit_fires(
+    session_handler_factory,
+) -> None:
+    """Spec-check regression (Architect 2026-05-26). The 3+ player case the
+    2-player tests miss: a crash that does NOT immediately complete the barrier
+    must still lower the denominator the NEXT normal submitter is measured
+    against.
+
+    Scenario: 3 PLAYING peers. p1 submits (barrier waits). p2's GameBoard
+    crashes — only 1 of 3 has submitted, so the crash alone does not fire the
+    barrier (1 < effective 2). Then p3 submits normally. The barrier must now
+    fire on {p1, p3} because p2 was crash-released, leaving an effective
+    denominator of 2.
+
+    RED before the fix: the normal submit path read playing_player_count()
+    (= 3, the crashed p2 still PLAYING), so p3's submission saw 2 < 3 and the
+    table orphaned. The fix routes both paths through
+    effective_barrier_count().
+
+    Each player needs its own handler instance bound to its session_data —
+    ``_handle_player_action`` submits as the handler's OWN player, not
+    ``msg.player_id`` (mirrors test_mp_cinematic_dispatch.py).
+    """
+    from sidequest.server.session_room import LobbyState  # type: ignore[attr-defined]
+
+    seats = [("p1", "Gladstone"), ("p2", "Zanzibar"), ("p3", "Mauve")]
+    handler1, _sd1, room = session_handler_factory(
+        slug="crash-three-player",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=seats,
+        active_player=("p1", "Gladstone"),
+    )
+    _handler2, _sd2, _ = session_handler_factory(
+        slug="crash-three-player",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=seats,
+        active_player=("p2", "Zanzibar"),
+        existing_room=room,
+    )
+    handler3, _sd3, _ = session_handler_factory(
+        slug="crash-three-player",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=seats,
+        active_player=("p3", "Mauve"),
+        existing_room=room,
+    )
+    for pid in ("p1", "p2", "p3"):
+        room._seated[pid].state = LobbyState.PLAYING  # noqa: SLF001
+
+    captured: list[str] = []
+
+    async def fake_execute(sd, action, turn_context):
+        captured.append(action)
+        return []
+
+    handler1._execute_narration_turn = fake_execute  # type: ignore[method-assign]
+    handler3._execute_narration_turn = fake_execute  # type: ignore[method-assign]
+
+    # p1 submits — 1 of 3, barrier waits.
+    r1 = await handler1._handle_player_action(
+        PlayerActionMessage(
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I take point")),
+            player_id="p1",
+        )
+    )
+    assert r1 == [] and captured == [], "Precondition: p1 alone does not fire a 3-player barrier"
+
+    # p2 crashes (via its own handler) — 1 submitted, effective drops to 2;
+    # still not enough → no fire.
+    await _handler2.handle_message(_build_crash_message("p2"))
+    assert captured == [], (
+        "A crash that leaves more than one awaited submitter must NOT fire the "
+        "barrier on its own (only p1 had submitted; p3 still owes)."
+    )
+
+    # p3 submits — {p1, p3} now satisfies the crash-reduced denominator (2).
+    await handler3._handle_player_action(
+        PlayerActionMessage(
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I cover the rear")),
+            player_id="p3",
+        )
+    )
+
+    assert len(captured) == 1, (
+        "After p2 was crash-released, p3's submission must fire the barrier on "
+        "{p1, p3}. If the narrator was not called, the normal submit path is "
+        "still measuring against playing_player_count() (3) instead of "
+        "effective_barrier_count() (2) — the 3+ player orphan bug."
+    )
+    assert "I take point" in captured[0] and "I cover the rear" in captured[0], (
+        "The dispatched turn must combine both surviving submitters' actions."
+    )
+    assert "Zanzibar" not in captured[0], "The crashed player contributes nothing."
+
+
+@pytest.mark.asyncio
 async def test_crash_release_emits_otel_spans(session_handler_factory) -> None:
     """The crash-release dispatch must emit ``mp.player_crash_released`` (the
     new lie-detector span) AND the existing ``mp.barrier_fired``. Per the OTEL

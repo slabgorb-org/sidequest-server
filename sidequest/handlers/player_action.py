@@ -495,7 +495,11 @@ class PlayerActionHandler:
             # sees the lobby_participant_count vs active_turn_count
             # divergence — abandoned seats are NOT counted as participants
             # because they're reclaimable orphans, not active lobby members).
-            playing_count = session._room.playing_player_count()
+            # Story 67-1: the denominator also drops players crash-released
+            # this interaction, so a client that crashed earlier this turn
+            # does not keep the barrier waiting on a submission that will
+            # never come (effective_barrier_count = PLAYING − crash-released).
+            playing_count = session._room.effective_barrier_count()
             lobby_participant_count = session._room.non_abandoned_player_count()
             snapshot.turn_manager.set_player_count(playing_count)
             snapshot.turn_manager.submit_input(sd.player_id)

@@ -723,6 +723,25 @@ class SessionRoom:
         with self._lock:
             return len(self._crash_released)
 
+    def effective_barrier_count(self) -> int:
+        """The submit-and-wait barrier denominator: PLAYING peers minus those
+        crash-released this interaction (Story 67-1).
+
+        This is the ONE source of truth for "how many submissions does the
+        barrier need". Both the normal submission path (`player_action.py`)
+        and the crash-release path (`client_error.py`) read it, so a crash
+        that does not *immediately* satisfy the barrier still lowers the
+        denominator the NEXT normal submitter is measured against — otherwise
+        a crash in a 3+ player room only worked when it happened to be the
+        last awaited slot. A crashed client stays `PLAYING` (its socket is
+        open), so `playing_player_count()` alone would keep counting it.
+        """
+        with self._lock:
+            playing = sum(
+                1 for seat in self._seated.values() if seat.state == LobbyState.PLAYING
+            )
+            return playing - len(self._crash_released)
+
     def first_pending_at_monotonic(self) -> float | None:
         """Read the timestamp stamped when the buffer transitioned from empty.
 

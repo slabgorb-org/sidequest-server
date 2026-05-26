@@ -45,5 +45,5 @@ def alembic_url() -> str:
     if url.startswith(_PSYCOPG_SCHEME):
         return url
     if url.startswith(_PLAIN_SCHEME):
-        return _PSYCOPG_SCHEME + url[len(_PLAIN_SCHEME):]
+        return _PSYCOPG_SCHEME + url[len(_PLAIN_SCHEME) :]
     return url

@@ -15,8 +15,9 @@ from collections.abc import Iterator
 
 import psycopg
 import pytest
-from alembic import command
 from alembic.config import Config
+
+from alembic import command
 
 _ADMIN_ENV = "SIDEQUEST_TEST_DATABASE_URL"
 
@@ -62,7 +63,8 @@ def migrated_db(worker_id: str) -> Iterator[str]:
         # Alembic uses the +psycopg SQLAlchemy form of the target URL.
         cfg.set_main_option(
             "sqlalchemy.url",
-            target if target.startswith("postgresql+psycopg://")
+            target
+            if target.startswith("postgresql+psycopg://")
             else target.replace("postgresql://", "postgresql+psycopg://", 1),
         )
         command.upgrade(cfg, "head")

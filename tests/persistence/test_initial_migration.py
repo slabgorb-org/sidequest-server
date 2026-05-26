@@ -47,7 +47,7 @@ def test_all_tables_exist(pg_conn: psycopg.Connection) -> None:
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
     ).fetchall()
     present = {r[0] for r in rows}
-    assert ALL_TABLES <= present, f"missing tables: {ALL_TABLES - present}"
+    assert present >= ALL_TABLES, f"missing tables: {ALL_TABLES - present}"
 
 
 def test_sessions_has_surrogate_and_natural_key(pg_conn: psycopg.Connection) -> None:
@@ -68,9 +68,7 @@ def test_sessions_has_surrogate_and_natural_key(pg_conn: psycopg.Connection) -> 
 
 
 @pytest.mark.parametrize("table", sorted(PER_SESSION_TABLES))
-def test_every_per_session_table_has_session_id_fk(
-    pg_conn: psycopg.Connection, table: str
-) -> None:
+def test_every_per_session_table_has_session_id_fk(pg_conn: psycopg.Connection, table: str) -> None:
     cols = _columns(pg_conn, table)
     assert cols.get("session_id") == "bigint", f"{table} missing session_id bigint"
     fk = pg_conn.execute(

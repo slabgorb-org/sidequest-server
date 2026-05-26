@@ -80,3 +80,21 @@ def test_write_projection_conflict_is_idempotent():
     cached = repo.read_projection_since(player_id="p1", since_seq=0)
     assert len(cached) == 1
     assert cached[0].include is False
+
+
+from sidequest.game.event_log import EventLog  # noqa: E402
+
+
+def test_event_log_delegates_to_repository():
+    repo = SqliteSaveRepository(SqliteStore.open_in_memory())
+    log = EventLog(repo)
+    row = log.append(kind="NARRATION", payload_json="{}")
+    assert row.seq == 1
+    assert log.latest_seq() == 1
+    assert [r.kind for r in log.read_since(since_seq=0)] == ["NARRATION"]
+
+
+def test_event_log_no_longer_exposes_in_transaction():
+    repo = SqliteSaveRepository(SqliteStore.open_in_memory())
+    log = EventLog(repo)
+    assert not hasattr(log, "append_in_transaction")

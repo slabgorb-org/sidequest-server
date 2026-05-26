@@ -637,9 +637,6 @@ def session_handler_factory(tmp_path):
             genre_pack=pack,
             orchestrator=orch,
         )
-        # Keep a back-reference to the raw store so tests that need
-        # direct SQLite access (e.g. test_event_log_wiring) can reach it.
-        sd.store = store
         handler = WebSocketSessionHandler(save_dir=tmp_path)
         handler._session_data = sd
         # Task E.2 wiring: every turn flowing through this handler will hit
@@ -659,12 +656,14 @@ def session_handler_factory(tmp_path):
             handler._state = _State.Playing
 
             if existing_room is not None:
-                # Share the existing room — reuse its snapshot + store so the
-                # TurnManager barrier state is shared across handlers.
+                # Share the existing room — reuse its snapshot + repository so
+                # the TurnManager barrier state is shared across handlers.
+                # Post-D2 SessionRoom.store is a SaveRepository, not a raw
+                # SqliteStore — pass it straight through as repository=.
                 room = existing_room
                 snap = room.snapshot
-                store = room.store
-                # Rebuild _SessionData against the shared snapshot/store.
+                shared_repository = room.store
+                # Rebuild _SessionData against the shared snapshot/repository.
                 if active_player is not None:
                     active_pid, active_name = active_player
                 else:
@@ -675,12 +674,14 @@ def session_handler_factory(tmp_path):
                     player_name=active_name,
                     player_id=active_pid,
                     snapshot=snap,
-                    store=store,
+                    repository=shared_repository,
+                    dungeon_repository=MagicMock(),
+                    telemetry_sink=MagicMock(),
                     genre_pack=sd.genre_pack,
                     orchestrator=sd.orchestrator,
                 )
-                sd.store.save = MagicMock()
-                sd.store.append_narrative = MagicMock()
+                sd.repository.save = MagicMock()
+                sd.repository.append_narrative = MagicMock()
                 sd._room = room
                 handler._session_data = sd
                 handler._room = room
@@ -709,8 +710,11 @@ def session_handler_factory(tmp_path):
                     existing_names.add(character_slot)
 
             room = SessionRoom(slug=slug, mode=mode)
-            # Bind a snapshot + store so the room is fully initialised.
-            room.bind_world(snapshot=snap, store=store)
+            # Bind a snapshot + repository so the room is fully initialised.
+            # bind_world expects a SaveRepository (post-D2); the primary
+            # construction above already wrapped this SQLite store in one,
+            # so reuse the same repository instance the session_data holds.
+            room.bind_world(snapshot=snap, store=sd.repository)
             # Connect and seat every player. The fixture's intent is a
             # post-chargen "in-game" room, so each peer is promoted to
             # PLAYING — this is what existing barrier tests assume and
@@ -728,9 +732,11 @@ def session_handler_factory(tmp_path):
             sd._room = room
             # Silence broadcast so tests don't need a real WebSocket.
             room.broadcast = MagicMock()  # type: ignore[method-assign]
-            # Silence store side-effects.
-            sd.store.save = MagicMock()
-            sd.store.append_narrative = MagicMock()
+            # Silence repository side-effects. Production calls
+            # sd.repository.save / append_narrative (post-D1); these patches
+            # also fill the two methods SqliteSaveRepository does not define.
+            sd.repository.save = MagicMock()
+            sd.repository.append_narrative = MagicMock()
             return handler, sd, room
 
         # Legacy return: (sd, handler).

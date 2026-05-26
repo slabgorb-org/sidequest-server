@@ -109,11 +109,13 @@ def _build_sd_with_grounding() -> _SessionData:
         player_name="Alice",
         player_id="player:alice",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
-    sd.store.recent_narrative.return_value = []
+    sd.repository.recent_narrative.return_value = []
     sd.game_slug = "2026-05-21-tea_and_murder_glenross-1"
     # The three load-bearing fields under test (24-10 ACs 4 + 5):
     sd.weather_state = _weather_state()

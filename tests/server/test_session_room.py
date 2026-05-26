@@ -281,7 +281,9 @@ async def test_cleanup_does_not_close_room_owned_store(tmp_path):
         player_name="Rux",
         player_id="player-1",
         snapshot=snap,
-        store=store,  # same store reference the room holds
+        repository=store,  # same store reference the room holds
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(run_narration_turn=AsyncMock()),
     )
@@ -319,7 +321,9 @@ async def test_cleanup_closes_per_session_store_when_no_room(tmp_path):
         player_name="Rux",
         player_id="player-1",
         snapshot=_fresh_snapshot(),
-        store=store,
+        repository=store,
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(run_narration_turn=AsyncMock()),
     )

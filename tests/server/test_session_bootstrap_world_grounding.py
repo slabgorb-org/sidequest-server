@@ -308,7 +308,7 @@ async def test_get_world_grounding_returns_grounded_payload_through_dispatch(
         session_id=tc.session_id or "test",
         perspective_pc=tc.character_name,
         turn_number=tc.turn_number,
-        repository=sd.store,
+        repository=sd.repository,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         weather_state=tc.weather_state,

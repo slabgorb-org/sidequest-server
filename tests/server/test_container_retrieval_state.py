@@ -347,6 +347,7 @@ def _build_minimal_sd(snap: GameSnapshot, pack):
     from unittest.mock import MagicMock
 
     from sidequest.game.persistence import SqliteStore
+    from sidequest.game.sqlite_repository import SqliteSaveRepository
     from sidequest.server.session_handler import _SessionData
 
     return _SessionData(
@@ -355,7 +356,9 @@ def _build_minimal_sd(snap: GameSnapshot, pack):
         player_name="Rux",
         player_id="player:rux",
         snapshot=snap,
-        store=SqliteStore.open_in_memory(),
+        repository=SqliteSaveRepository(SqliteStore.open_in_memory()),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )

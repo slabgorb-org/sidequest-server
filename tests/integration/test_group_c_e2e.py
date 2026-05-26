@@ -71,7 +71,9 @@ def _session(genre_slug: str, world_slug: str, character: Character) -> _Session
         player_name="Alice",
         player_id="player:alice",
         snapshot=_snapshot(genre_slug, world_slug, character),
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=load_genre_pack(CONTENT_GENRE_PACKS / genre_slug),
         orchestrator=MagicMock(),
     )
@@ -160,7 +162,9 @@ async def test_adventurer_fallback_name_flows_through_turn_context():
             turn_manager=TurnManager(interaction=1),
             characters=[_character("Adventurer", edge_current=10)],
         ),
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=load_genre_pack(CONTENT_GENRE_PACKS / "caverns_and_claudes"),
         orchestrator=MagicMock(),
     )

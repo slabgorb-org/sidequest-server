@@ -115,7 +115,9 @@ def _make_session_data(player_id: str = "p-1") -> _SessionData:
         player_name="Rux",
         player_id=player_id,
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
         # R2 migration Task 20: production slug-connect always populates
@@ -167,7 +169,9 @@ def _make_session_data_with_pc(
         player_name=player_name,
         player_id=player_id,
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
         # R2 migration Task 20: see _make_session_data.

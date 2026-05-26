@@ -31,6 +31,7 @@ import asyncio
 import contextlib
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import sidequest.agents.llm_factory as _llm_factory
 import sidequest.telemetry.setup as _telemetry_setup
@@ -38,6 +39,7 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.persistence import GameMode, SqliteStore
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
 from sidequest.handlers.player_action import PlayerActionHandler
@@ -203,7 +205,9 @@ class MpRoomHarness:
                 player_name=name,
                 player_id=pid,
                 snapshot=self._snap,
-                store=self._store,
+                repository=SqliteSaveRepository(self._store),
+                dungeon_repository=MagicMock(),
+                telemetry_sink=MagicMock(),
                 genre_pack=genre_pack,
                 orchestrator=object(),  # never called on aside/barrier paths
                 _room=self._room,

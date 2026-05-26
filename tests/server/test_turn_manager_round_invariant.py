@@ -89,7 +89,9 @@ def _max_narrative_round_via_sql(sd) -> int:
     is that ``snapshot.turn_manager.round`` matches the SQL ground truth,
     not whatever the helper happens to return.
     """
-    row = sd.store._conn.execute("SELECT MAX(round_number) FROM narrative_log").fetchone()
+    row = sd.repository.store._conn.execute(
+        "SELECT MAX(round_number) FROM narrative_log"
+    ).fetchone()
     return int(row[0]) if row and row[0] is not None else 0
 
 
@@ -412,7 +414,7 @@ async def test_loaded_save_with_preexisting_divergence_captures_violation(
     from sidequest.game.session import NarrativeEntry
 
     for r in range(1, 73):
-        sd.store.append_narrative(
+        sd.repository.store.append_narrative(
             NarrativeEntry(
                 timestamp=0,
                 round=r,

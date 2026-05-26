@@ -37,7 +37,9 @@ def test_build_turn_context_populates_lethality_policy_from_pack():
         player_name="TestHero",
         player_id="player:TestHero",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
@@ -64,7 +66,9 @@ def test_build_turn_context_populates_empty_cores_when_no_pcs_or_npcs():
         player_name="TestHero",
         player_id="player:TestHero",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )

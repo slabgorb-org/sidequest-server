@@ -67,7 +67,9 @@ def _make_session_data() -> _SessionData:
         player_name="Rux",
         player_id="player-felix",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
     )
@@ -353,7 +355,9 @@ async def test_unresponsive_pipeline_stamps_scrapbook_payload_render_status(
         player_name="Rux",
         player_id="player-1",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
     )

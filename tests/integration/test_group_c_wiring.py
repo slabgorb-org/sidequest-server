@@ -62,7 +62,9 @@ async def test_arbiter_is_invoked_on_real_prompt_build_path():
             turn_manager=TurnManager(interaction=1),
             characters=[character],
         ),
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=load_genre_pack(CONTENT_GENRE_PACKS / "caverns_and_claudes"),
         orchestrator=MagicMock(),
     )

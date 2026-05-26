@@ -139,7 +139,9 @@ def _projection_payload(snap: GameSnapshot, *, player_name: str = "Alice") -> di
         player_name=player_name,
         player_id=f"player:{player_name.lower()}",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )

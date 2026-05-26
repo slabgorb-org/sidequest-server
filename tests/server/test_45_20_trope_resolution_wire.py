@@ -33,7 +33,7 @@ Two boundary seams are exercised:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -369,7 +369,7 @@ class TestSaveReloadDurability:
 
         # Use a real on-disk store so we can close + re-open it.
         store_path = str(tmp_path / "save.db")
-        sd.store = SqliteStore.open(store_path)
+        sd.repository = SqliteStore.open(store_path)
         sd.snapshot.world_slug = "test_world"
 
         sd.orchestrator.run_narration_turn = _flipping_orchestrator(sd, "extraction_panic")
@@ -385,8 +385,8 @@ class TestSaveReloadDurability:
         )
 
         # Persist explicitly — the dispatch already saves once via
-        # sd.store.save(snapshot), but we save again to be defensive.
-        sd.store.save(sd.snapshot)
+        # sd.repository.save(snapshot), but we save again to be defensive.
+        sd.repository.save(sd.snapshot)
 
         # Reload via a fresh store handle on the same DB.
         reloaded_store = SqliteStore.open(store_path)
@@ -428,7 +428,7 @@ class TestSaveReloadDurability:
         sd, handler = session_fixture
         _seed_active_trope(sd, "extraction_panic", "progressing")
         store_path = str(tmp_path / "save.db")
-        sd.store = SqliteStore.open(store_path)
+        sd.repository = SqliteStore.open(store_path)
         sd.snapshot.world_slug = "test_world"
 
         # Turn 1: resolution.
@@ -439,7 +439,7 @@ class TestSaveReloadDurability:
         active_stakes_after_turn_1 = sd.snapshot.active_stakes
 
         # Persist + reload into a fresh _SessionData/handler.
-        sd.store.save(sd.snapshot)
+        sd.repository.save(sd.snapshot)
         reloaded_store = SqliteStore.open(store_path)
         saved = reloaded_store.load()
         assert saved is not None
@@ -450,7 +450,9 @@ class TestSaveReloadDurability:
             player_name=sd.player_name,
             player_id=sd.player_id,
             snapshot=reloaded_snap,
-            store=reloaded_store,
+            repository=reloaded_store,
+            dungeon_repository=MagicMock(),
+            telemetry_sink=MagicMock(),
             genre_pack=sd.genre_pack,
             orchestrator=sd.orchestrator,
         )

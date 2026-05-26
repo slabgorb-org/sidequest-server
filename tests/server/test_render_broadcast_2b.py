@@ -134,7 +134,9 @@ def _make_session_data(*, player_id: str, world_slug: str = "grimvault") -> _Ses
         player_name="Zanzibar",
         player_id=player_id,
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
         # R2 migration Task 20: production slug-connect always populates

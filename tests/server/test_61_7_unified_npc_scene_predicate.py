@@ -201,7 +201,9 @@ def _projection_npc_names(snap: GameSnapshot, *, player_name: str = "Alice") -> 
         player_name=player_name,
         player_id=f"player:{player_name.lower()}",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )

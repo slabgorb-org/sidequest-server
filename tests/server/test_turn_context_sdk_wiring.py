@@ -96,11 +96,13 @@ def _build_sd(*, with_monster_manual: bool = True) -> _SessionData:
         player_name="Alice",
         player_id="player:alice",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
-    sd.store.recent_narrative.return_value = []
+    sd.repository.recent_narrative.return_value = []
     sd.game_slug = "2026-05-14-caverns_mawdeep-28"
     sd.lore_store = _seeded_lore_store()
     if with_monster_manual:
@@ -129,7 +131,9 @@ def test_build_turn_context_populates_world_session_store_lore() -> None:
     assert ctx.session_id == "2026-05-14-caverns_mawdeep-28", (
         f"session_id not plumbed from sd.game_slug; got {ctx.session_id!r}"
     )
-    assert ctx.store is sd.store, "store reference not plumbed from sd.store"
+    assert ctx.repository is sd.repository, (
+        "repository reference not plumbed from sd.repository"
+    )
     assert ctx.lore_store is sd.lore_store, (
         "lore_store reference not plumbed from sd.lore_store — query_lore "
         "would see no world lore (hit_count=0) and the narrator confabulates"

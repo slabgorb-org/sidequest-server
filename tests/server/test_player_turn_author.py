@@ -71,7 +71,7 @@ class TestNarrativeEntryAuthorValidator:
 
 
 def _captured_narrative_entries(sd) -> list[NarrativeEntry]:
-    """Pull every NarrativeEntry passed to ``sd.store.append_narrative``.
+    """Pull every NarrativeEntry passed to ``sd.repository.append_narrative``.
 
     The conftest ``session_fixture`` mocks the store, so reads via
     ``recent_narrative`` would return nothing. The MagicMock retains
@@ -79,7 +79,7 @@ def _captured_narrative_entries(sd) -> list[NarrativeEntry]:
     """
     return [
         call.args[0]
-        for call in sd.store.append_narrative.call_args_list
+        for call in sd.repository.append_narrative.call_args_list
         if call.args and isinstance(call.args[0], NarrativeEntry)
     ]
 

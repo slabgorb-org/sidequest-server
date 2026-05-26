@@ -43,6 +43,7 @@ from sidequest.game.persistence import (
 )
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol.messages import (
     ChapterMarkerMessage,
     NarrationEndMessage,
@@ -102,9 +103,10 @@ async def test_shared_world_frames_reach_every_socket_including_dispatcher(
     sd.game_slug = _SLUG
 
     store = _seed_game_row(tmp_path)
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     # 4-socket multiplayer room. Linus is the dispatch winner (last
     # submitter); Charlie/Snoopy/Lucy are peers. Each socket has its own
@@ -205,9 +207,10 @@ async def test_solo_room_dispatcher_still_receives_shared_world_frames(
     sd.game_slug = _SLUG + "-solo"
 
     store = _seed_game_row(tmp_path)
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     registry = RoomRegistry()
     room = registry.get_or_create(slug=sd.game_slug, mode=GameMode.SOLO)

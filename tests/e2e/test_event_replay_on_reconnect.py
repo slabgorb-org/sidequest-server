@@ -21,6 +21,7 @@ from sidequest.game.persistence import (
     db_path_for_slug,
     upsert_game,
 )
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS
 from sidequest.server.app import create_app
 
@@ -49,7 +50,7 @@ def _seed_with_events(tmp_path: Path, slug: str) -> None:
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
-    log = EventLog(store)
+    log = EventLog(SqliteSaveRepository(store))
     for i in range(3):
         log.append(kind="NARRATION", payload_json=f'{{"text":"beat {i + 1}","seq":0}}')
     store.close()

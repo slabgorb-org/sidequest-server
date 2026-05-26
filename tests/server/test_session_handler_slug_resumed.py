@@ -689,6 +689,7 @@ def _seed_resumable_game_with_narrations(tmp_path: Path, slug: str, narrations: 
     reconnecting client.
     """
     from sidequest.game.event_log import EventLog
+    from sidequest.game.sqlite_repository import SqliteSaveRepository
     from sidequest.protocol.messages import NarrationPayload
 
     db = db_path_for_slug(tmp_path, slug)
@@ -723,7 +724,7 @@ def _seed_resumable_game_with_narrations(tmp_path: Path, slug: str, narrations: 
     store.init_session(_GENRE, _WORLD)
     store.save(snap)
 
-    event_log = EventLog(store)
+    event_log = EventLog(SqliteSaveRepository(store))
     for prose in narrations:
         payload = NarrationPayload(text=prose, seq=0)
         event_log.append(

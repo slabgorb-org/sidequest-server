@@ -279,9 +279,9 @@ def apply_turn_writes_for_test(
 
     Exercises the same core (`_project_frames`) as the production turn driver.
     The test fake ``event_log`` accepts a single positional MessageEnvelope on
-    ``append``; production uses ``append_in_transaction(kind=..., payload_json=...)``
-    inside a DB transaction — both converge on `_project_frames` for the
-    per-peer decision loop.
+    ``append``; production uses ``repo.transaction()`` + ``tx.append_event(kind=...,
+    payload_json=...)`` inside a DB transaction — both converge on
+    `_project_frames` for the per-peer decision loop.
 
     Canonical save receives the raw envelope exactly once. Each peer frame is
     emitted only when ``FilterDecision.include`` is True.

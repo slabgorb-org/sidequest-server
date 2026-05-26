@@ -11,12 +11,14 @@ from sidequest.game.projection.cache_fill import lazy_fill
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.view import SessionGameStateView
 from sidequest.game.projection_filter import FilterDecision
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 
 
 def test_lazy_fill_populates_cache_for_new_player(tmp_path: Path) -> None:
     store = SqliteStore(tmp_path / "s.db")
-    log = EventLog(store)
-    cache = ProjectionCache(store)
+    repo = SqliteSaveRepository(store)
+    log = EventLog(repo)
+    cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()
     view = SessionGameStateView(
         gm_player_id="gm",
@@ -41,8 +43,9 @@ def test_lazy_fill_populates_cache_for_new_player(tmp_path: Path) -> None:
 
 def test_lazy_fill_skips_already_cached_events(tmp_path: Path) -> None:
     store = SqliteStore(tmp_path / "s.db")
-    log = EventLog(store)
-    cache = ProjectionCache(store)
+    repo = SqliteSaveRepository(store)
+    log = EventLog(repo)
+    cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()
     view = SessionGameStateView(
         gm_player_id="gm",

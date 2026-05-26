@@ -11,12 +11,14 @@ from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.projection.view import SessionGameStateView
 from sidequest.game.projection_filter import FilterDecision
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 
 
 def test_reconnect_replays_cached_payloads(tmp_path: Path) -> None:
     store = SqliteStore(tmp_path / "s.db")
-    log = EventLog(store)
-    cache = ProjectionCache(store)
+    repo = SqliteSaveRepository(store)
+    log = EventLog(repo)
+    cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()
     view = SessionGameStateView(
         gm_player_id="gm",

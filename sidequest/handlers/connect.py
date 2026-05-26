@@ -26,6 +26,7 @@ from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.game.world_grounding_bootstrap import load_world_grounding
 from sidequest.genre.loader import GenreLoader
 from sidequest.protocol.messages import (
@@ -902,8 +903,9 @@ class ConnectHandler:
                 )
 
             # MP-03 Task 3 + Task-17 + Task-22 ProjectionFilter Rules integration.
-            session._event_log = EventLog(store)
-            session._projection_cache = ProjectionCache(store)
+            repo = SqliteSaveRepository(store)
+            session._event_log = EventLog(repo)
+            session._projection_cache = ProjectionCache(repo)
             projection_rules = genre_pack.projection_rules
             if projection_rules is not None:
                 session._projection_filter = ComposedFilter(
@@ -1424,9 +1426,7 @@ class ConnectHandler:
                 # shows the pack's region list on connect/resume. Room-graph
                 # worlds (beneath_sunden etc.) use DUNGEON_MAP instead.
                 cart_map_msg = _build_cartography_map_message(
-                    session._session_data.genre_pack
-                    if session._session_data is not None
-                    else None,
+                    session._session_data.genre_pack if session._session_data is not None else None,
                     row.world_slug,
                     resume_loc,
                     player_id=player_id,

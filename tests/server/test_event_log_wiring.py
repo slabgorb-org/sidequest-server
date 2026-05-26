@@ -23,6 +23,7 @@ from sidequest.game.persistence import (
     upsert_game,
 )
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol import GameMessage
 from sidequest.protocol.enums import MessageType
 from sidequest.server.session_handler import WebSocketSessionHandler
@@ -141,7 +142,7 @@ async def test_narration_carries_seq_and_event_log_has_row(tmp_path: Path) -> No
     store = SqliteStore(db)
     store.initialize()
     try:
-        rows = EventLog(store).read_since(since_seq=0)
+        rows = EventLog(SqliteSaveRepository(store)).read_since(since_seq=0)
         narration_rows = [r for r in rows if r.kind == "NARRATION"]
         assert narration_rows, f"expected at least one NARRATION row in EventLog; got {rows}"
     finally:

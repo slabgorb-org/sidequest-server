@@ -455,6 +455,7 @@ async def test_narration_apply_emits_momentum_broadcast_span(
     )
     from sidequest.game.projection.cache import ProjectionCache
     from sidequest.game.projection.composed import ComposedFilter
+    from sidequest.game.sqlite_repository import SqliteSaveRepository
     from sidequest.server.session_handler import (
         _build_turn_context,
         _State,
@@ -489,9 +490,10 @@ async def test_narration_apply_emits_momentum_broadcast_span(
     # sees now_live=True and emits the CONFRONTATION + momentum_broadcast span.
     _install_active_encounter(sd)
 
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     # Two-socket room — the actor plus a peer. We don't inspect the
     # peer queue here (that's AC5's regression test), but the projection

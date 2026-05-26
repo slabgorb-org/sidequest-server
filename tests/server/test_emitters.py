@@ -10,6 +10,8 @@ Phase 1 of session_handler decomposition. These tests verify:
 
 from __future__ import annotations
 
+from sidequest.game.sqlite_repository import SqliteSaveRepository
+
 
 def test_emitters_module_exposes_required_functions() -> None:
     """Wiring guard — the required emitter functions must be importable
@@ -62,7 +64,7 @@ def test_persist_scrapbook_entry_inserts_row(session_handler_factory) -> None:
     sd, handler = session_handler_factory()
     # The factory does not seed an EventLog by default (legacy path);
     # attach one so the function has a store to write to.
-    handler._event_log = EventLog(sd.store)
+    handler._event_log = EventLog(SqliteSaveRepository(sd.store))
 
     payload = ScrapbookEntryPayload(
         turn_id=42,
@@ -113,7 +115,7 @@ def test_update_scrapbook_image_url_backfills_most_recent_row(tmp_path) -> None:
         pass
 
     handler = _Handler()
-    handler._event_log = EventLog(store)
+    handler._event_log = EventLog(SqliteSaveRepository(store))
 
     payload = ScrapbookEntryPayload(
         turn_id=7,

@@ -9,7 +9,7 @@ NOT a fallback — selected explicitly by `ruleset: swn`.
 from __future__ import annotations
 
 from sidequest.game.ruleset.base import RulesetModule
-from sidequest.game.ruleset.resolution import AttackRollParams
+from sidequest.game.ruleset.resolution import AttackRollParams, CheckRollParams
 
 
 def swn_attribute_modifier(score: int) -> int:
@@ -41,6 +41,13 @@ def _stat(stats: dict[str, int], key: str) -> int:
 
 class SwnRulesetModule(RulesetModule):
     slug = "swn"
+
+    # SWN save categories → the two attributes whose better modifier applies (SRD p.46).
+    _SAVE_ATTRS = {
+        "physical": ("STRENGTH", "CONSTITUTION"),
+        "evasion": ("DEXTERITY", "INTELLIGENCE"),
+        "mental": ("WISDOM", "CHARISMA"),
+    }
 
     def find_confrontation(self, confrontations, encounter_type):
         from sidequest.server.dispatch.confrontation import find_confrontation_def
@@ -76,6 +83,25 @@ class SwnRulesetModule(RulesetModule):
             turn=turn,
             edge_resolver=edge_resolver,
             damage_resolver=damage_resolver,
+        )
+
+    def check_params(self, *, stats, attribute, skill_level, difficulty_key, label, cfg) -> CheckRollParams:
+        attr_mod = self.stat_modifier(stats, attribute)
+        return CheckRollParams(
+            sides=6, count=2,
+            modifier=attr_mod + int(skill_level),
+            difficulty=int(cfg.difficulties[difficulty_key]),
+            label=label,
+        )
+
+    def save_params(self, *, stats, save, level, label, cfg) -> CheckRollParams:
+        attrs = self._SAVE_ATTRS[save]
+        best_mod = max(self.stat_modifier(stats, a) for a in attrs)
+        return CheckRollParams(
+            sides=20, count=1,
+            modifier=best_mod,                               # added to the d20 roll
+            difficulty=int(cfg.save_base) - (int(level) - 1),  # target; SRD p.46: 15 at level 1, -1/level
+            label=label,
         )
 
     def resolve_damage(self, *, beat, actor_core, pack):

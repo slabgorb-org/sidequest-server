@@ -56,3 +56,9 @@ class RulesetModule(ABC):
     ) -> "AttackRollParams":
         """Modifier + target number for one attack. native: stat mod vs beat DC.
         SWN: attack_bonus + skill + attr-mod vs target AC."""
+
+    def check_params(self, *, stats, attribute, skill_level, difficulty_key, label, cfg):
+        raise NotImplementedError(f"{self.slug} ruleset has no non-beat skill-check resolution")
+
+    def save_params(self, *, stats, save, level, label, cfg):
+        raise NotImplementedError(f"{self.slug} ruleset has no saving-throw resolution")

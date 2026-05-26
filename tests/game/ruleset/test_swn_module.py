@@ -202,3 +202,33 @@ def test_swn_attack_resolves_vs_ac_through_dispatch():
     assert outcome.outcome is RollOutcome.Success
     assert outcome.result.difficulty == 13  # the target's AC was the target number
     assert outcome.result.total == 15
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — check_params (2d6 skill check) + save_params (d20 save, best-of-two attr)
+# ---------------------------------------------------------------------------
+
+
+def test_swn_skill_check_params_2d6():
+    from sidequest.genre.models.rules import SwnConfig
+    cfg = SwnConfig()
+    # 2d6 + DEX mod (+1) + skill level (2) vs "tricky"(10)
+    p = _S.check_params(stats={"DEXTERITY": 14}, attribute="DEXTERITY", skill_level=2,
+                        difficulty_key="tricky", label="Notice", cfg=cfg)
+    assert (p.sides, p.count) == (6, 2)
+    assert p.modifier == 1 + 2
+    assert p.difficulty == 10
+    assert p.label == "Notice"
+
+
+def test_swn_save_params_d20_best_of_two_attrs():
+    from sidequest.genre.models.rules import SwnConfig
+    cfg = SwnConfig()
+    # Mental save = better of WIS/CHA mod, added to the d20 roll.
+    # WIS 14 (+1), CHA 8 (0) -> best = +1. Target = save_base(15) - (level(3)-1) = 13.
+    p = _S.save_params(stats={"WISDOM": 14, "CHARISMA": 8}, save="mental", level=3,
+                       label="Mental save", cfg=cfg)
+    assert (p.sides, p.count) == (20, 1)
+    assert p.modifier == 1          # best of WIS/CHA mods, ADDED to the roll
+    assert p.difficulty == 13       # save_base(15) - (level(3) - 1) = 13  [SRD p.46: starts at 15, -1/level]
+    assert p.label == "Mental save"

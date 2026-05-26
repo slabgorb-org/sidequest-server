@@ -239,11 +239,13 @@ class TestModuleSurface:
         assert "return" in hints, (
             "Public boundary function missing return annotation (python.md #3)."
         )
-        # Parameters: at minimum store + snapshot. Names checked here so a
+        # Parameters: at minimum repository + snapshot. Names checked here so a
         # rename forces a coordinated update to the wire site in connect.py.
+        # ADR-115 D3: param renamed from ``store`` to ``repository`` to accept
+        # the typed SaveRepository surface (PgSaveRepository or SqliteStore).
         params = {k for k in hints if k != "return"}
-        assert {"store", "snapshot"}.issubset(params), (
-            f"Helper must accept (store, snapshot, ...). Got params {params}."
+        assert {"repository", "snapshot"}.issubset(params), (
+            f"Helper must accept (repository, snapshot, ...). Got params {params}."
         )
 
 
@@ -264,7 +266,7 @@ class TestNoGapPaths:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=0, scrapbook_rounds=0)
-        report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        report = detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         assert report.max_round == 0
         assert report.covered_count == 0
@@ -283,7 +285,7 @@ class TestNoGapPaths:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=5, scrapbook_rounds=5)
-        report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        report = detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         assert report.max_round == 5
         assert report.covered_count == 5
@@ -310,7 +312,7 @@ class TestOrinRegression:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        report = detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         assert report.max_round == 29
         assert report.covered_count == 10
@@ -329,7 +331,7 @@ class TestOrinRegression:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         evaluated = _spans_named(otel_capture, "scrapbook.coverage_evaluated")
         assert len(evaluated) == 1, (
@@ -352,7 +354,7 @@ class TestOrinRegression:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         gap_spans = _spans_named(otel_capture, "scrapbook.coverage_gap_detected")
         assert len(gap_spans) == 1, (
@@ -397,7 +399,7 @@ class TestOrinRegression:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         gap_publishes = [c for c in watcher_capture if c["field"] == "scrapbook_coverage_gap"]
         assert len(gap_publishes) == 1, (
@@ -451,7 +453,7 @@ class TestNoOpSilence:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=5, scrapbook_rounds=5)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         gap_spans = _spans_named(otel_capture, "scrapbook.coverage_gap_detected")
         assert gap_spans == [], (
@@ -466,7 +468,7 @@ class TestNoOpSilence:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=5, scrapbook_rounds=5)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         gap_publishes = [c for c in watcher_capture if c["field"] == "scrapbook_coverage_gap"]
         assert gap_publishes == [], (
@@ -483,7 +485,7 @@ class TestNoOpSilence:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=0, scrapbook_rounds=0)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         evaluated = _spans_named(otel_capture, "scrapbook.coverage_evaluated")
         assert len(evaluated) == 1, (
@@ -524,7 +526,7 @@ class TestReadOnlyInvariant:
 
         store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
         before = _row_count(store, "narrative_log")
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
         after = _row_count(store, "narrative_log")
 
         assert before == after == 29, (
@@ -538,7 +540,7 @@ class TestReadOnlyInvariant:
 
         store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
         before = _row_count(store, "scrapbook_entries")
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
         after = _row_count(store, "scrapbook_entries")
 
         assert before == after == 10, (
@@ -555,8 +557,8 @@ class TestReadOnlyInvariant:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
         store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        r1 = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
-        r2 = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        r1 = detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
+        r2 = detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         assert r1 == r2, "Same input must yield the same report."
         # 2 evaluated spans, 2 gap-detected spans, 2 watcher events
@@ -787,7 +789,7 @@ class TestGapPatternEdgeCases:
                     )
 
             try:
-                report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+                report = detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
             finally:
                 store.close()
 
@@ -832,7 +834,7 @@ class TestGapPatternEdgeCases:
                     ),
                 )
 
-        report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        report = detect_scrapbook_coverage_gaps(repository=store, snapshot=stub_snapshot)
 
         assert report.max_round == 5
         assert report.covered_count == 5, (

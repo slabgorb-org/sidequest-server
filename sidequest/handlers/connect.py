@@ -274,8 +274,9 @@ class ConnectHandler:
                 return [_error_msg(f"unknown game slug: {slug}")]
 
             # ADR-115 D2: construct Postgres repositories for the live session,
-            # then switch to PG row for all downstream consumers. SqliteStore is
-            # kept for D3-D7 consumers (raw _conn reads, scrapbook_coverage, etc.).
+            # then switch to PG row for all downstream consumers.  D3 lifted
+            # the three scrapbook/_conn reads onto typed methods; D4-D7 consumers
+            # remain.
             from sidequest.game import db_pool as _db_pool
             from sidequest.server.session_state import _build_pg_repos_for_slug
 
@@ -665,7 +666,7 @@ class ConnectHandler:
                 # only when the scrapbook coverage diverges from the
                 # narrative log. See sidequest/game/scrapbook_coverage.py.
                 detect_scrapbook_coverage_gaps(
-                    store=store,
+                    repository=_pg_repository,
                     snapshot=snapshot,
                     slug=slug,
                 )
@@ -1133,18 +1134,14 @@ class ConnectHandler:
             # Build a turn_id -> image_url map here so the replay loop
             # can JOIN it into rebuilt SCRAPBOOK_ENTRY payloads — one
             # query per reconnect, not one per row.
+            # ADR-115 D3: lifted from raw store._conn.execute onto the typed
+            # scrapbook_image_url_map() method (PgSaveRepository delegates to
+            # PgScrapbookStore; SqliteStore exposes an identical typed wrapper).
             _scrapbook_image_urls: dict[int, str] = {}
-            if session._event_log is not None:
-                try:
-                    rows = session._event_log.store._conn.execute(
-                        "SELECT turn_id, image_url FROM scrapbook_entries "
-                        "WHERE image_url IS NOT NULL"
-                    ).fetchall()
-                    for _turn_id, _url in rows:
-                        if isinstance(_turn_id, int) and isinstance(_url, str) and _url:
-                            _scrapbook_image_urls[_turn_id] = _url
-                except Exception as exc:  # noqa: BLE001 — replay must not crash on a metadata read
-                    logger.warning("scrapbook.image_url_replay_lookup_failed error=%s", exc)
+            try:
+                _scrapbook_image_urls = _pg_repository.scrapbook_image_url_map()
+            except Exception as exc:  # noqa: BLE001 — replay must not crash on a metadata read
+                logger.warning("scrapbook.image_url_replay_lookup_failed error=%s", exc)
             if session._projection_cache is not None:
                 cached_rows = session._projection_cache.read_since(
                     player_id=session._current_player_id,

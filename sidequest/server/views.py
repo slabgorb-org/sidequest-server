@@ -324,6 +324,12 @@ def backfill_last_narration_block(
     raised the cap from 1 narration → ``limit`` so a player who refreshes
     after several turns lands with a coherent scrollback, not just the
     most recent line.
+
+    ADR-115 D3: the four raw ``store._conn.execute(...)`` reads have been
+    replaced by a single ``repository.read_narration_backfill(...)`` call
+    (see ``sidequest.game.pg.narrative.PgNarrativeStore``).  The assembly
+    step — ``_build_message_for_kind`` per ``BackfillRow`` — remains here
+    because the adapter is protocol-layer-agnostic.
     """
     from sidequest.server.session_handler import _build_message_for_kind
 
@@ -331,71 +337,16 @@ def backfill_last_narration_block(
         return []
     if limit <= 0:
         return []
-    store = handler._event_log.store
 
-    # Find the seq of the oldest narration we want in the window — the
-    # Nth-most-recent. Fewer than ``limit`` narrations is fine; we just
-    # take what's there.
-    with store._conn:
-        narration_seq_rows = store._conn.execute(
-            "SELECT seq FROM events WHERE kind = 'NARRATION' ORDER BY seq DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    if not narration_seq_rows:
-        return []
-    oldest_narration_seq = int(narration_seq_rows[-1][0])
-
-    # Capture the chapter marker that precedes the oldest narration in
-    # our window (without crossing an even-earlier narration), so the
-    # first emitted block has its header attached. Subsequent chapters
-    # interleaved between narrations are picked up by the range read
-    # below.
-    with store._conn:
-        chapter_row = store._conn.execute(
-            "SELECT seq FROM events "
-            "WHERE kind = 'CHAPTER_MARKER' AND seq < ? "
-            "  AND seq > COALESCE("
-            "    (SELECT MAX(seq) FROM events "
-            "     WHERE kind = 'NARRATION' AND seq < ?),"
-            "    0"
-            "  ) "
-            "ORDER BY seq DESC LIMIT 1",
-            (oldest_narration_seq, oldest_narration_seq),
-        ).fetchone()
-
-    lower_bound = oldest_narration_seq
-    if chapter_row is not None:
-        lower_bound = int(chapter_row[0])
-
-    with store._conn:
-        rows = store._conn.execute(
-            "SELECT seq, kind FROM events "
-            "WHERE kind IN ('NARRATION', 'CHAPTER_MARKER') AND seq >= ? "
-            "ORDER BY seq ASC",
-            (lower_bound,),
-        ).fetchall()
-
-    def _cached_payload(seq: int) -> str | None:
-        with store._conn:
-            row = store._conn.execute(
-                "SELECT include, payload_json FROM projection_cache "
-                "WHERE player_id = ? AND event_seq = ?",
-                (player_id, seq),
-            ).fetchone()
-        if row is None or not bool(row[0]) or row[1] is None:
-            return None
-        return str(row[1])
+    repository = handler._event_log.repository
+    backfill_rows = repository.read_narration_backfill(player_id=player_id, limit=limit)
 
     messages: list[object] = []
-    for seq_raw, kind in rows:
-        seq_i = int(seq_raw)
-        cached = _cached_payload(seq_i)
-        if cached is None:
-            continue
+    for row in backfill_rows:
         built = _build_message_for_kind(
-            kind=str(kind),
-            payload_json=cached,
-            seq=seq_i,
+            kind=row.kind,
+            payload_json=row.payload_json,
+            seq=row.seq,
         )
         if built is None:
             continue

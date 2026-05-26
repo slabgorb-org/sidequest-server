@@ -764,20 +764,21 @@ def session_fixture():
     )
     snap.character_locations["TestHero"] = "Main Hall"
     snap.player_seats["player:TestHero"] = "TestHero"
+    _mock_repo = MagicMock()
+    _mock_repo.save = MagicMock()
+    _mock_repo.append_narrative = MagicMock()
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
         world_slug="sunken_keep",
         player_name="TestHero",
         player_id="player:TestHero",
         snapshot=snap,
-        store=MagicMock(),
+        repository=_mock_repo,
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
     )
-    # Silence the persist side-effect so _execute_narration_turn doesn't fail
-    # on sd.store.save / sd.store.append_narrative.
-    sd.store.save = MagicMock()
-    sd.store.append_narrative = MagicMock()
     # Task E.2 wiring: ``_apply_narration_result_to_snapshot`` (called by
     # ``_execute_narration_turn``) now requires ``room=sd._room``. The
     # production slug-connect path always populates ``sd._room``; tests

@@ -1,11 +1,8 @@
 """Per-connection WebSocket session handler.
 
-Extracted from ``session_handler.py``: the ``WebSocketSessionHandler`` class
-lives here so the lifecycle/dispatch surface can evolve without churning the
-helpers (``_State``, ``_SessionData``, ``_KIND_TO_MESSAGE_CLS``, etc.) that
-remain re-exported from ``session_handler``. Tracer name is preserved
-(``sidequest.server.session_handler``) so OTEL consumers do not see a
-span-source rename.
+Extracted from ``session_handler.py``; helpers (``_State``, ``_SessionData``,
+etc.) remain re-exported from there. Tracer name is preserved
+(``sidequest.server.session_handler``) so OTEL span sources do not rename.
 """
 
 from __future__ import annotations
@@ -122,29 +119,19 @@ from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
 
-# Preserve the original tracer name so OTEL span sources do not rename when
-# this class moved out of session_handler.py. Phase-3 plan principle.
+# Preserve the original tracer name so OTEL span sources do not rename.
 tracer = trace.get_tracer("sidequest.server.session_handler")
 
 
 # --- Extracted handler helpers (moved to websocket_handlers/) -------------
-# These module-level free functions moved out of this 6.8k-line file into
-# sibling modules under ``websocket_handlers/``. They are re-imported here so
-# the ``WebSocketSessionHandler`` methods that call them resolve the names in
-# this module's namespace, and so external importers
-# (e.g. ``session_handler``) keep working unchanged. Only the names actually
-# referenced from this module are re-imported; helpers used solely by their
-# sibling group (e.g. ``_build_dungeon_map_payload``) stay private to it.
-# The audio-dispatch methods moved to a mixin; the class inherits them so
-# ``self._audio_skip`` / ``self._maybe_dispatch_audio`` and external callers
-# resolve unchanged via the MRO.
+# Free functions/mixins moved to sibling modules under ``websocket_handlers/``,
+# re-imported here so methods + external importers resolve the names unchanged.
 from sidequest.server.websocket_handlers.audio_mixin import (  # noqa: E402
     AudioDispatchMixin,
 )
 
-# The chargen worker methods moved to a mixin; the class inherits them so the
-# ``session._chargen_*`` calls in handlers/character_creation.py and the
-# class-access test calls resolve unchanged via the MRO.
+# Chargen worker methods live in a mixin; inherited so session._chargen_* calls
+# resolve via the MRO.
 from sidequest.server.websocket_handlers.chargen_mixin import (  # noqa: E402
     CharGenMixin,
 )
@@ -160,7 +147,6 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     """Per-connection session: state machine + dispatch.
 
     Created fresh per WebSocket connection by the /ws endpoint factory.
-    Not shared across connections (Phase 1 is single-player).
     """
 
     def __init__(
@@ -188,29 +174,23 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         self._validator: Validator | None = validator
         self._state = _State.AwaitingConnect
         self._session_data: _SessionData | None = None
-        # Room context fields — populated by attach_room_context() during the
-        # WebSocket lifecycle (ws_endpoint). Absent here means the handler is
-        # being driven outside that lifecycle (e.g. unit tests that exercise
-        # non-slug-connect code paths). The slug-connect branch rejects this
-        # loudly rather than silently skipping room wiring.
+        # Room context — populated by attach_room_context() during the
+        # ws_endpoint lifecycle. Absent means driven outside it (unit tests);
+        # the slug-connect branch rejects that loudly (no silent room-wiring skip).
         self._room_registry: RoomRegistry | None = None
         self._socket_id: str | None = None
         self._out_queue: asyncio.Queue[object] | None = None
         self._room: SessionRoom | None = None
-        # EventLog + projection filter are bound in the slug-connect branch.
-        # The legacy genre/world connect path leaves them None; _emit_event
-        # falls back to a plain message without seq in that case. This is a
-        # real production code path (not a test-only skip), documented below.
+        # Bound in the slug-connect branch. The legacy genre/world connect path
+        # leaves them None; _emit_event then falls back to a plain message
+        # without seq (a real production path, not a test-only skip).
         self._event_log: EventLog | None = None
         self._projection_filter: ProjectionFilter | None = None
         self._projection_cache: ProjectionCache | None = None
-        # Story 61-followup-C: ws_endpoint reads this after cleanup() returns
-        # to decide whether to fire room.close_store(). The cleanup save block
-        # swallows save exceptions to keep the WebSocket lifecycle stable,
-        # which would otherwise hide a final-snapshot loss from the teardown
-        # gate. Setting this here exposes the swallowed failure to
-        # ws_endpoint so it can skip close_store and preserve the canonical
-        # store handle for a later retry.
+        # Story 61-followup-C: ws_endpoint reads this after cleanup() to decide
+        # whether to fire room.close_store(). The cleanup save block swallows
+        # exceptions; exposing the failure here lets ws_endpoint skip
+        # close_store and preserve the canonical store for a retry.
         self.last_save_failure: Exception | None = None
 
     # ------------------------------------------------------------------
@@ -224,14 +204,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         socket_id: str,
         out_queue: asyncio.Queue[object],
     ) -> None:
-        """Attach the process-wide RoomRegistry, socket_id, and per-socket outbound queue.
+        """Attach the RoomRegistry, socket_id, and per-socket outbound queue.
 
-        Called by ws_endpoint immediately after accept(). _room is assigned in
-        the slug-connect branch when a room is joined. out_queue is the
-        asyncio.Queue that the writer task in ws_endpoint drains.
-
-        All three fields are required. The slug-connect branch fails loudly if
-        this method was not called — there is no silent test-only path.
+        Called by ws_endpoint after accept(). out_queue is the asyncio.Queue
+        the writer task drains. All three are required; the slug-connect branch
+        fails loudly if this was not called.
         """
         self._room_registry = registry
         self._socket_id = socket_id
@@ -250,16 +227,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     ) -> object:
         """Persist + fan-out an event. Delegates to ``emitters.emit_event``.
 
-        Phase 1 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-
-        ``author_player_id`` (ADR-105 Track A): when set, the emit is a
-        shared merged-MP turn whose driving handler is the last-submitter,
-        NOT the sole author. The emitter is then projected like any
-        recipient instead of receiving the solo Invariant-3 raw bypass.
-        ``None`` (solo / legacy) preserves the byte-identical raw-bypass
-        delegate call — keeps the documented emitter-skip + lazy_fill
-        invariant intact.
+        ``author_player_id`` (ADR-105 Track A): when set, this is a shared
+        merged-MP turn whose driver is merely the last-submitter, so the
+        emitter is projected like any recipient. ``None`` (solo/legacy)
+        preserves the raw-bypass + lazy_fill invariant.
         """
         from sidequest.server import emitters
 
@@ -270,27 +241,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     def _dispatch_pending_magic_frames(self, snapshot: GameSnapshot) -> None:
         """Phase 5 (Story 47-3): drain pending magic-confrontation queues.
 
-        ``apply_magic_working`` and ``_resolve_magic_confrontation_if_applicable``
-        populate ``snapshot.pending_magic_auto_fires`` (CONFRONTATION
-        starts) and ``snapshot.pending_magic_confrontation_outcome``
-        (the resolved branch + mandatory_outputs). Both are dispatched
-        here as outbound WebSocket frames; both fields are reset
-        afterwards so the next turn starts clean.
-
-        Frames are emitted via ``self._emit_event(...)`` rather than a
-        direct broadcast so they participate in the EventLog (durable
-        replay) and any per-recipient projection. Errors during
-        dispatch propagate — a broken outbound queue is loud per
-        CLAUDE.md.
+        Dispatches ``pending_magic_auto_fires`` (CONFRONTATION starts) and
+        ``pending_magic_confrontation_outcome`` as outbound frames, resetting
+        both. Emitted via ``_emit_event`` so they hit the EventLog + projection;
+        dispatch errors propagate (broken queue is loud per CLAUDE.md).
         """
-        # CONFRONTATION starts (one per auto-fire). The payload shape
-        # already matches ``ConfrontationPayload``; emit_event will
-        # dispatch it. Pop-as-you-go (round 2 fix) so a malformed
-        # entry's ValidationError doesn't strand previously-emitted or
-        # subsequent entries in the queue forever — pre-fix the
-        # post-loop ``= []`` was the only drain path, so a raise on
-        # entry N left entries 0..end stuck and re-fired the valid
-        # entries 0..N-1 every dispatch tick.
+        # Pop-as-you-go so a malformed entry's ValidationError doesn't strand
+        # the rest of the queue or re-fire valid entries each dispatch tick.
         if snapshot.pending_magic_auto_fires:
             from sidequest.protocol.messages import ConfrontationPayload
 
@@ -300,10 +257,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 try:
                     payload = ConfrontationPayload(**raw)
                 except Exception:
-                    # Surface the malformed entry to the GM panel + log
-                    # loud, then continue draining the queue. The bad
-                    # entry is dropped (already popped) — fail loud, do
-                    # not silently re-emit the next tick.
+                    # Fail loud: surface the malformed entry to the GM panel +
+                    # log, drop it (already popped), keep draining.
                     logger.error(
                         "magic.dispatch_payload_invalid kind=CONFRONTATION raw=%r",
                         raw,
@@ -322,10 +277,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     continue
                 self._emit_event("CONFRONTATION", payload)
 
-        # CONFRONTATION_OUTCOME (the reveal panel — Decision #9 calls
-        # this "explicit panel callout at outcome time, ALWAYS shown").
-        # Field is reset BEFORE emit so a ValidationError doesn't leave
-        # the bad payload stranded for the next dispatch tick.
+        # CONFRONTATION_OUTCOME (reveal panel, always shown). Reset BEFORE emit
+        # so a ValidationError doesn't strand the payload for the next tick.
         if snapshot.pending_magic_confrontation_outcome is not None:
             from sidequest.protocol.messages import ConfrontationOutcomePayload
 
@@ -366,18 +319,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     ) -> None:
         """Persist + emit a scrapbook entry. Delegates to ``emitters.emit_scrapbook_entry``.
 
-        Phase 1 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-
-        ``render_status`` carries the unified Story 45-30 + Story 45-31
-        discriminator: ``"rendered"`` (happy path), ``"skipped_policy"``
-        (45-30 — trigger policy returned NONE_POLICY), ``"failed"``
-        (daemon errored synchronously), ``"unavailable"`` (45-31 — daemon
-        mirror reports UNRESPONSIVE; the dispatcher will skip the
-        round-trip and the UI shows the placeholder badge live, no
-        replay JOIN). Daemon-unavailable wins over policy decisions —
-        when there's no render coming either way, the user-facing reason
-        is "the daemon is down."
+        ``render_status`` (Story 45-30 + 45-31): ``"rendered"``,
+        ``"skipped_policy"`` (trigger policy NONE_POLICY), ``"failed"`` (daemon
+        errored), ``"unavailable"`` (daemon UNRESPONSIVE). Daemon-unavailable
+        wins over policy — no render is coming either way.
         """
         from sidequest.server import emitters
 
@@ -390,11 +335,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         )
 
     def _persist_scrapbook_entry(self, payload: ScrapbookEntryPayload) -> None:
-        """Insert a scrapbook row. Delegates to ``emitters.persist_scrapbook_entry``.
-
-        Phase 1 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-        """
+        """Insert a scrapbook row. Delegates to ``emitters.persist_scrapbook_entry``."""
         from sidequest.server import emitters
 
         emitters.persist_scrapbook_entry(self, payload)
@@ -409,14 +350,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         return self._session_data
 
     async def handle_message(self, msg: GameMessage) -> list[object]:
-        """Dispatch an inbound message; return list of outbound protocol message objects.
+        """Dispatch an inbound message; return outbound protocol message objects.
 
-        Looks the message type up in the per-class ``_MESSAGE_HANDLERS`` registry
-        (built once at first dispatch) and forwards to the corresponding
-        first-class handler under :mod:`sidequest.handlers`. The thin
-        ``_handle_X`` methods on this class remain as a test-friendly
-        public API so test suites can drive a single message type without
-        going through the WebSocket protocol layer.
+        Looks up the message type in the ``_MESSAGE_HANDLERS`` registry and
+        forwards to the corresponding handler under :mod:`sidequest.handlers`.
+        The thin ``_handle_X`` methods remain as a test-friendly public API.
         """
         msg_type: str = msg.type  # type: ignore[attr-defined]
 
@@ -432,14 +370,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
 
     @classmethod
     def _message_handler_for(cls, msg_type: str) -> MessageHandler | None:
-        """Lazy-built registry of message-type → first-class handler singleton.
+        """Lazy-built registry of message-type → handler singleton.
 
-        Built on first call to avoid importing the handler modules at
-        ``WebSocketSessionHandler`` class-definition time, which would
-        eagerly drag in their transitive imports (and create a circular
-        reference, since the handler modules import this class for
-        type-checking). The registry is cached on the class so subsequent
-        dispatches are a single dict lookup.
+        Built on first call to avoid class-definition-time imports of the
+        handler modules (which would create a circular reference, since they
+        import this class). Cached on the class.
         """
         registry = getattr(cls, "_MESSAGE_HANDLERS", None)
         if registry is None:
@@ -472,14 +407,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     async def cleanup(self) -> None:
         """Called on disconnect — persist current state if in Playing."""
         if self._session_data is not None:
-            # Cancel any in-flight embed worker first so it cannot write
-            # to an orphaned in-memory lore_store after store.close().
-            # CancelledError is a BaseException in Python 3.8+, so it
-            # escapes every `except Exception` in the worker; we await
-            # and swallow it here so disconnect never raises to the
-            # WebSocket layer. Non-cancel exceptions (a real worker bug
-            # that happened to surface during cancellation) are logged
-            # at warning with exc_info — cleanup still proceeds.
+            # Cancel any in-flight embed worker first so it cannot write to an
+            # orphaned lore_store after store.close(). Await + swallow
+            # CancelledError so disconnect never raises; log real worker bugs.
             embed_task = self._session_data.embed_task
             if embed_task is not None and not embed_task.done():
                 embed_task.cancel()
@@ -494,24 +424,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         exc,
                         exc_info=True,
                     )
-            # Beneath Sünden Plan 7 (§8): drain the live dungeon look-ahead
-            # worker before the final save so the observer is gone before
-            # state is persisted. Null-safe by construction — lookahead_handle
-            # is None for non-beneath_sunden sessions and for sessions that
-            # disconnected before attach. Mirrors embed_task.cancel(): it
-            # unregisters/drains only and must NOT close the store — the room
-            # owns the store lifecycle. Function-local import avoids any
-            # import cycle through the dungeon package.
+            # Beneath Sünden Plan 7 (§8): drain the dungeon look-ahead worker
+            # before the final save. Null-safe (None off beneath_sunden); drains
+            # only, must NOT close the store (the room owns it). Local import
+            # avoids a dungeon-package import cycle.
             from sidequest.dungeon.session_integration import (
                 detach_dungeon_from_session,
             )
 
             await detach_dungeon_from_session(self._session_data.lookahead_handle)
             try:
-                # ADR-037 Python port: room owns the canonical snapshot,
-                # so a plain room.save() persists it once for every
-                # session that disconnects. Legacy non-slug path falls
-                # back to the per-session store.
+                # ADR-037: room owns the canonical snapshot, so room.save()
+                # persists it once. Legacy non-slug path uses the per-session store.
                 if self._room is not None:
                     self._room.save()
                 else:
@@ -527,17 +451,14 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 )
             except Exception as exc:
                 logger.error("session.disconnect_save_failed error=%s", exc)
-                # Story 61-followup-C: expose the swallowed save failure to
-                # ws_endpoint so its teardown gate can skip close_store().
-                # Closing the canonical store after a lost final save would
-                # compound the data loss into a permanent state regression.
+                # Story 61-followup-C: expose the swallowed save failure so
+                # ws_endpoint's teardown gate can skip close_store() — closing
+                # the canonical store after a lost save would make the loss permanent.
                 self.last_save_failure = exc
 
-            # Story 45-31: post-session render diagnostic. Writes a
-            # JSON snapshot of the render worker's lifetime so the
-            # next Felix-style 13-minute silence can be diagnosed
-            # without reproducing the crash. Best-effort — diagnostic
-            # write must never raise back to the WebSocket layer.
+            # Story 45-31: post-session render diagnostic — JSON snapshot of the
+            # render worker's lifetime for later diagnosis. Best-effort; must
+            # never raise back to the WebSocket layer.
             try:
                 from datetime import UTC
                 from datetime import datetime as _dt
@@ -551,8 +472,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 if self._room is not None:
                     room_slug_for_diag = getattr(self._room, "slug", None)
                 if not room_slug_for_diag:
-                    # Legacy/no-slug path — namespace by genre+player so
-                    # the diagnostic file remains greppable.
+                    # Legacy/no-slug path — namespace by genre+player.
                     room_slug_for_diag = (
                         (
                             f"{self._session_data.genre_slug or 'unknown'}-"
@@ -595,19 +515,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             except Exception as _diag_exc:  # noqa: BLE001 — diagnostic must never crash teardown
                 logger.warning("render.session_diagnostic_failed err=%s", _diag_exc)
             finally:
-                # ADR-037 Python port: when the session is bound to a room,
-                # the room owns the SqliteStore lifecycle — every WS session
-                # bound to the slug shares the same store reference, so
-                # closing it from one session's cleanup() leaves
-                # ``room.save()`` operating on a closed connection from any
-                # other session's perspective and produces
-                # ``session.disconnect_save_failed error=Cannot operate on
-                # a closed database`` (playtest 2026-04-25 [BUG-LOW]). The
-                # room's store is closed via ``room.close_store()`` at room
-                # teardown — not from per-session cleanup.
-                #
-                # Legacy non-slug path (no room) still closes its
-                # per-session store here — it is owned by the session.
+                # ADR-037: a room-bound session shares the room's SqliteStore,
+                # so closing it from one session's cleanup() breaks every other
+                # session's room.save() (playtest 2026-04-25: "Cannot operate on
+                # a closed database"). The room closes its store at teardown.
+                # Legacy non-slug path owns + closes its per-session store here.
                 if self._room is None:
                     with contextlib.suppress(Exception):
                         self._session_data.store.close()
@@ -623,7 +535,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         return await HANDLER.handle(self, msg)
 
     # ------------------------------------------------------------------
-    # DICE_THROW dispatch (story 34 port — restored for 2026-04-24 playtest)
+    # DICE_THROW dispatch
     # ------------------------------------------------------------------
 
     async def _handle_dice_throw(self, msg: GameMessage) -> list[object]:
@@ -698,32 +610,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         persistence, NARRATION + NARRATION_END message build.
 
         Shared by :meth:`_handle_player_action` and
-        :meth:`_run_opening_turn_narration` (Story 2.3 Slice H). The
-        caller owns TurnContext construction so each entrypoint can
-        set per-turn fields (opening_directive on turn 0, pending
-        trope beats on subsequent turns) without leaking responsibility.
+        :meth:`_run_opening_turn_narration`; the caller owns TurnContext so each
+        entrypoint sets its own per-turn fields.
 
-        ``is_opening_turn`` (Story 45-5 / ADR-051): the chargen-confirmation
-        narration sets the scene at round=1 / interaction=1 rather than
-        completing a player-narrator exchange. Skipping
-        ``record_interaction()`` for this turn keeps both counters at
-        their fresh ``materialize_from_genre_pack`` defaults so post-
-        chargen state is exactly ``(round=1, interaction=1)``. The
-        narrative_log row this turn writes uses the pre-bump
-        ``interaction=1``, so the 45-11 ``round_invariant`` (round ==
-        MAX(narrative_log.round_number)) still holds. The first
-        PLAYER_ACTION turn is the first real exchange and advances both
-        counters in lockstep.
+        ``is_opening_turn`` (Story 45-5 / ADR-051): the opening scene-set skips
+        ``record_interaction()`` so post-chargen state stays at exactly
+        ``(round=1, interaction=1)`` and the 45-11 round_invariant still holds.
+        The first PLAYER_ACTION turn advances both counters in lockstep.
         """
         snapshot = sd.snapshot
         snapshot_before_hash = _hash_snapshot(snapshot)
-        # Reuse a pre-built PhaseTimings from the calling handler when
-        # one is attached — handler-entry construction lets pre-narrator
-        # phases (lore_retrieval, mp_barrier_wait, turn_context_build)
-        # land in the same `phase_durations_ms` dict the dashboard reads.
-        # When the caller didn't attach one (test fixtures, legacy paths),
-        # fall back to constructing here so the existing in-turn phases
-        # still record.
+        # Reuse the caller's PhaseTimings when attached so pre-narrator phases
+        # land in the same dict the dashboard reads; otherwise construct here.
         if isinstance(turn_context.phase_timings, PhaseTimings) and (
             turn_context.phase_timings is not PhaseTimings.NULL
         ):
@@ -733,19 +631,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             turn_context.phase_timings = timings
         submitted = False
         result = None  # populated by run_narration_turn; None on degraded paths
-        # Story 45-20: capture trope-status baseline BEFORE any apply step
-        # mutates statuses. The handshake fires post-record_interaction and
-        # diffs this baseline against the live snapshot to detect any trope
-        # whose status flipped to "resolved" — chapter promotion (today),
-        # narrator extraction or engine tick (future). Capturing late
-        # would mask the diff.
+        # Story 45-20: capture trope-status baseline BEFORE any apply step so
+        # the post-record_interaction handshake can diff it to detect tropes
+        # that flipped to "resolved" this turn. Capturing late would mask the diff.
         trope_status_baseline: dict[str, str] = {t.id: t.status for t in snapshot.active_tropes}
         # Capture the watcher→OTLP synthetic-span counter at turn start so the
-        # finally-block can log the per-turn delta. With this in the server
-        # log a `grep turn.bridge_diagnostic /tmp/sidequest-server.log` reveals
-        # whether the bridge minted any spans for this turn — Jaeger-empty
-        # turns now have a hard, grep-able truth-value rather than a "did the
-        # bridge fire?" guessing game (playtest 2026-04-30 #Jaeger-bridge).
+        # finally-block can log the per-turn delta — gives Jaeger-empty turns a
+        # grep-able truth-value for "did the bridge fire?" (playtest 2026-04-30).
         from sidequest.telemetry.watcher_hub import synthetic_spans_count  # noqa: PLC0415
 
         bridge_minted_at_start = synthetic_spans_count()
@@ -758,15 +650,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 world=sd.world_slug,
                 action_len=len(action),
             ):
-                # Monster Manual injection (ADR-059, port of Rust
-                # dispatch/mod.rs:643-681). Materialize Manual NPCs and
-                # encounter creatures into snapshot.npcs BEFORE the
-                # narrator runs so the gaslighting doctrine path
-                # delivers them as world truth — never as appended
-                # "available list" text.  TurnContext was already built
-                # in the handler from the pre-injection snapshot, so
-                # refresh its ``npcs`` reference from the post-patch
-                # snapshot before dispatch.
+                # Monster Manual injection (ADR-059). Materialize Manual NPCs +
+                # encounter creatures into snapshot.npcs BEFORE the narrator runs
+                # so the gaslighting doctrine delivers them as world truth, not
+                # appended "available list" text. Refresh TurnContext.npcs after.
                 from sidequest.server.dispatch import monster_manual_inject
 
                 manual = monster_manual_inject.ensure_loaded(sd)
@@ -782,12 +669,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         current_location=mm_location,
                         in_combat=bool(turn_context.in_combat),
                     )
-                    # Honest plain-text signal (CLAUDE.md OTEL principle).
-                    # monster_manual.injected is an OTEL-only span; a GM
-                    # reading server.log otherwise has zero proof the
-                    # Manual materialized vs. the narrator improvising
-                    # creatures (Pattern 5). Logs the actual patch count,
-                    # not a presence boolean.
+                    # Plain-text proof (CLAUDE.md OTEL principle): log the actual
+                    # patch count so a GM reading server.log can tell the Manual
+                    # materialized vs. the narrator improvising creatures.
                     logger.info(
                         "monster_manual.injected genre=%s world=%s "
                         "player_id=%s turn=%s in_combat=%s patches=%d",
@@ -799,25 +683,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         mm_injected,
                     )
                     turn_context.npcs = list(snapshot.npcs)
-                    # _build_turn_context (session_helpers.py) snapshots
-                    # monster_manual off sd.monster_manual at the *caller*,
-                    # which runs BEFORE ensure_loaded() above lazily
-                    # populates it. Without this refresh the orchestrator
-                    # gets context.monster_manual=None on every session's
-                    # turn 1 and every MP turn where the acting player's
-                    # per-player _SessionData has not yet narrated —
-                    # lookup_monster goes dead and the context_wired OTEL
-                    # flag logs a false negative (playtest 2026-05-17).
+                    # _build_turn_context snapshots monster_manual at the caller,
+                    # BEFORE ensure_loaded() above populates it; refresh here or
+                    # the orchestrator gets None and lookup_monster goes dead
+                    # (playtest 2026-05-17).
                     turn_context.monster_manual = sd.monster_manual
 
-                # Story 22-3: bootstrap the seed-trope deck for a fresh
-                # session before the narrator builds its prompt. Idempotent —
-                # no-op once any seed has been drawn (either lives on
-                # snapshot.active_seeds or has ghosted). Uses the room
-                # slug (preferred, slug-connect path) or sd.game_slug,
-                # falling back to a deterministic id assembled from the
-                # session's bound identifiers so non-slug-connect paths
-                # still get a stable, reproducible draw.
+                # Story 22-3: bootstrap the seed-trope deck for a fresh session.
+                # Idempotent. Session id from room slug / sd.game_slug, falling
+                # back to a deterministic id for non-slug-connect paths.
                 from sidequest.game.seed_tick import ensure_initial_draw  # noqa: PLC0415
 
                 if self._room is not None:
@@ -832,25 +706,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     session_id=seed_session_id,
                     now_turn=snapshot.turn_manager.interaction,
                 )
-                # Refresh TurnContext from the post-bootstrap snapshot
-                # so build_narrator_prompt sees the freshly drawn seeds.
-                # Mirrors the monster_manual.injected refresh pattern at
-                # ``turn_context.npcs = list(snapshot.npcs)`` above.
+                # Refresh TurnContext from the post-bootstrap snapshot so
+                # build_narrator_prompt sees the freshly drawn seeds.
                 turn_context.snapshot = snapshot
 
-                # Intent Router pre-narrator pass (Story 59-4, ADR-113). The
-                # router classifies the player's action and the dispatch bank
-                # engages mechanical engines on the canonical snapshot BEFORE
-                # the narrator runs — so the narrator narrates already-real
-                # state instead of self-reporting engagement via the (retired)
-                # ``begin_confrontation`` sidecar tool. ``IntentRouterFailure``
-                # (after the router's bounded retry) propagates out of this
-                # block and is handled by the existing turn-failure path —
-                # NO silent narrator-only fallback (memory rule
-                # feedback_no_fallbacks_hard). The factory call is module-
-                # level (``intent_router_pass.build_intent_router_for_session``)
-                # so tests monkeypatch it to a stub — tests MUST NOT spawn
-                # a real Claude client.
+                # Intent Router pre-narrator pass (Story 59-4, ADR-113): the
+                # router classifies the action and the dispatch bank engages
+                # engines on the canonical snapshot BEFORE the narrator runs, so
+                # the narrator narrates already-real state. IntentRouterFailure
+                # (after bounded retry) propagates to the turn-failure path — NO
+                # silent narrator-only fallback. The factory call is module-level
+                # so tests can monkeypatch it (must not spawn a real Claude client).
                 _acting_player_name = snapshot.player_seats.get(sd.player_id, "") or sd.player_id
                 _additional_player_names = [
                     name
@@ -858,23 +724,16 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     if pid != sd.player_id and name and name != _acting_player_name
                 ]
                 _intent_router = intent_router_pass.build_intent_router_for_session()
-                # Opt-in degraded path for live-playtest unblock: when
-                # ``SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL`` is set, an
-                # ``IntentRouterFailure`` after the bounded retry is logged
-                # LOUDLY (WARNING + structured log fields) and the turn
-                # continues with ``dispatch_package=None``. The narrator
-                # already handles None (see orchestrator.py:1599 et al.) —
-                # this is yesterday's pre-ADR-113 behavior, not a silent
-                # fallback. Default (env unset) preserves the ADR-113
-                # fail-loud contract.
+                # Opt-in degraded path: when SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL
+                # is set, an IntentRouterFailure is logged LOUDLY and the turn
+                # continues with dispatch_package=None (pre-ADR-113 behavior, an
+                # operator opt-in, NOT a silent fallback). Default preserves the
+                # ADR-113 fail-loud contract.
                 try:
-                    # Movement subsystem (§0 context threading): the
-                    # dungeon graph store + palette + worker handle live on
-                    # the lookahead handle (wired by attach_dungeon_to_session
-                    # for beneath_sunden; None for every other world). Derive
-                    # them so run_movement_dispatch can resolve against the
-                    # real graph. None on non-procedural worlds → the handler
-                    # fails loud with no_dungeon_store (no silent fallback).
+                    # Movement subsystem context: the dungeon graph store +
+                    # palette + worker handle live on the lookahead handle (set
+                    # for beneath_sunden, None elsewhere). None on non-procedural
+                    # worlds → handler fails loud with no_dungeon_store.
                     _lookahead_handle = getattr(sd, "lookahead_handle", None)
                     _dungeon_store = (
                         _lookahead_handle.persistence if _lookahead_handle is not None else None
@@ -912,10 +771,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     else:
                         raise
                 turn_context.dispatch_package = _dispatch_package
-                # The dispatch bank may have mutated snapshot.npcs (e.g. NPC
-                # edge published on confrontation initiation). Refresh
-                # turn_context.npcs the same way the monster_manual.injected
-                # path does, so build_narrator_prompt sees post-dispatch state.
+                # The dispatch bank may have mutated snapshot.npcs; refresh so
+                # build_narrator_prompt sees post-dispatch state.
                 turn_context.npcs = list(snapshot.npcs)
 
                 with orchestrator_process_action_span(action_len=len(action)):
@@ -931,32 +788,23 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     result.agent_duration_ms,
                 )
 
-                # Capture encounter state BEFORE applying the narration result so we
-                # can detect transitions (live→resolved) after the dispatch below and
-                # emit the corresponding state_transition / resolve events.
+                # Capture encounter state BEFORE applying the narration result
+                # so the dispatch below can detect live→resolved transitions.
                 prior_encounter = snapshot.encounter
                 prior_live = prior_encounter is not None and not prior_encounter.resolved
                 prior_type = prior_encounter.encounter_type if prior_encounter else None
 
-                # Playtest 2026-05-20 — capture current_region BEFORE the
-                # narration patch applies so the region-mode
-                # LOCATION_DESCRIPTION emit branch can detect a true
-                # change (e.g. ropefoot → the_dropmouth on
-                # beneath_sunden surface). Character-level
-                # ``result.location`` is room-graph territory; region
-                # moves arrive via the ``current_region`` patch.
+                # Playtest 2026-05-20: capture current_region pre-apply so the
+                # region-mode LOCATION_DESCRIPTION branch can detect a true
+                # change (region moves arrive via the current_region patch, not
+                # the character-level result.location).
                 prior_current_region = snapshot.current_region
 
                 # Unified dispatch — passes the pack so encounter instantiation /
                 # beat application / resolution happen in one place (emits the
-                # Story-3.4 OTEL spans the GM panel reads).
-                #
-                # ADR-074 dice integration — read the most recent dice outcome
-                # stashed by the DICE_THROW handler (if any) and classify it as
-                # success/failure for the beat application. Uses getattr so this
-                # stays forward-compatible with the in-flight ``pending_roll_outcome``
-                # field on ``_SessionData`` that OQ-2 is landing in parallel —
-                # when the field is absent the call is a no-op.
+                # Story-3.4 OTEL spans). ADR-074: read the dice outcome stashed
+                # by the DICE_THROW handler and classify success/failure for
+                # beat application; getattr so an absent field is a no-op.
                 with timings.phase("state_apply"):
                     dice_outcome = getattr(sd, "pending_roll_outcome", None)
                     dice_failed: bool | None = None
@@ -975,19 +823,14 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         None,
                     )
                     if sd._room is None:
-                        # Slug-connect branch always sets _room; this is
-                        # a programming-error path. Surface as a hard error.
+                        # Slug-connect always sets _room — programming error.
                         raise RuntimeError(
                             "_apply_narration_result_to_snapshot: sd._room "
                             "is None — slug-connect wiring missing"
                         )
-                    # Story 45-30: capture pre-apply state so the render
-                    # trigger policy classifier can detect SCENE_CHANGE
-                    # (location differs from prior turn) and ENCOUNTER_RESOLVED
-                    # (encounter transitioned from unresolved to resolved this
-                    # turn). Wave 2B (story 45-48): the comparison is now
-                    # per-character — capture the acting PC's current
-                    # location, not the removed party-level field.
+                    # Story 45-30: capture pre-apply state so the render-trigger
+                    # classifier can detect SCENE_CHANGE and ENCOUNTER_RESOLVED.
+                    # Wave 2B (45-48): per-character — the acting PC's location.
                     _acting_for_render_trigger = _resolve_acting_character_name(sd, sd._room)
                     snapshot_location_before_apply = snapshot.party_location(
                         perspective=_acting_for_render_trigger
@@ -995,9 +838,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     encounter_unresolved_before = (
                         snapshot.encounter is not None and not snapshot.encounter.resolved
                     )
-                    # Spec 2026-05-20 step 7 — pull apply kwargs into a dict
-                    # so both the first apply and the reprompt-loop re-apply
-                    # share the same kwargs without duplication.
+                    # Spec 2026-05-20 step 7 — shared apply kwargs for the first
+                    # apply and the reprompt-loop re-apply.
                     _apply_kwargs = dict(
                         room=sd._room,
                         pack=sd.genre_pack,
@@ -1015,14 +857,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         **_apply_kwargs,
                     )
 
-                    # Story 59-3 / ADR-113 — Intent Router lie-detector.
-                    # Compare what the router dispatched against what the
-                    # engines actually engaged on the post-turn snapshot;
-                    # emit one OTEL span per mismatch so the GM panel
-                    # surfaces "convincing prose with zero mechanical
-                    # backing" turns. No-op while
-                    # turn_context.dispatch_package is None (the live SDK
-                    # path between 59-3 ship and 59-4 ship).
+                    # Story 59-3 / ADR-113 — Intent Router lie-detector: compare
+                    # what the router dispatched vs. what the engines engaged,
+                    # emit one OTEL span per mismatch so the GM panel catches
+                    # "convincing prose, zero mechanical backing". No-op while
+                    # dispatch_package is None.
                     run_dispatch_engagement_watcher(
                         package=turn_context.dispatch_package,
                         snapshot=snapshot,
@@ -1031,14 +870,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     encounter_resolved_this_turn = encounter_unresolved_before and (
                         snapshot.encounter is None or snapshot.encounter.resolved
                     )
-                    # Monster Manual lifecycle post-apply (ADR-059, port of
-                    # Rust dispatch/mod.rs:1671-1695). Dormant-on-scene-change
-                    # runs FIRST so a location change clears Active anchors
-                    # before this turn's narration is scanned for new
-                    # activations — otherwise the post-change party_location
-                    # would re-activate NPCs that should have aged out with
-                    # the scene.  Save() runs last so the mutated lifecycle
-                    # is persisted before the broader snapshot persist.
+                    # Monster Manual lifecycle post-apply (ADR-059): mark dormant
+                    # on scene-change FIRST so a location change clears Active
+                    # anchors before scanning this turn's narration for new
+                    # activations; save() last to persist the lifecycle.
                     if sd.monster_manual is not None:
                         post_apply_location = snapshot.party_location(
                             perspective=_acting_for_render_trigger
@@ -1055,14 +890,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             post_apply_location or "",
                         )
                         sd.monster_manual.save()
-                    # Phase 5 (Story 47-3): drain magic-confrontation
-                    # outbound queues. ``narration_apply.apply_magic_working``
-                    # populates ``pending_magic_auto_fires`` (one CONFRONTATION
-                    # payload per auto-fire); ``_resolve_magic_confrontation_if_applicable``
-                    # populates ``pending_magic_confrontation_outcome``. Both
-                    # are dispatched as outbound WebSocket frames here so the
-                    # UI overlay mounts and the reveal panel surfaces in
-                    # production gameplay (not just in test harnesses).
+                    # Phase 5 (Story 47-3): drain magic-confrontation outbound
+                    # queues here so the UI overlay + reveal panel surface in
+                    # production gameplay, not just test harnesses.
                     self._dispatch_pending_magic_frames(snapshot)
                     # Consume the pending outcome — one turn per roll.
                     if dice_outcome is not None and hasattr(sd, "pending_roll_outcome"):
@@ -1073,23 +903,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         sd.pending_opposed_player_d20 = None
                     if hasattr(sd, "pending_opposed_player_beat_id"):
                         sd.pending_opposed_player_beat_id = None
-                    # Story 45-5 / ADR-051: chargen is round 0; gameplay
-                    # starts at round 1. The opening narration is the
-                    # round-1 scene-set, not a player-narrator exchange,
-                    # so it does not bump either counter. The first
-                    # PLAYER_ACTION turn is the first real exchange.
+                    # Story 45-5 / ADR-051: the opening narration is the round-1
+                    # scene-set and bumps no counter; the first PLAYER_ACTION
+                    # turn is the first real exchange.
                     if not is_opening_turn:
-                        # Capture the round *before* incrementing so the
-                        # taunt-expiry OTEL span labels it correctly as
-                        # "the round that just ended" (Task 6).
+                        # Capture round before incrementing so the taunt-expiry
+                        # span labels "the round that just ended" (Task 6).
                         _prior_round = snapshot.turn_manager.round
                         snapshot.turn_manager.record_interaction()
 
-                        # Story 2026-05-10 — taunt decay tick (Task 6).
-                        # Runs on every round-advance so the 1-round taunt
-                        # duration is enforced mechanically, not left to
-                        # narrator improvisation. Only fires when an encounter
-                        # is active and unresolved — no-op outside combat.
+                        # Story 2026-05-10 — taunt decay tick (Task 6): enforce
+                        # the 1-round taunt duration mechanically on every
+                        # round-advance. No-op outside an active encounter.
                         if snapshot.encounter is not None and not snapshot.encounter.resolved:
                             from sidequest.game.taunt_tick import (  # noqa: PLC0415
                                 tick_taunt_round_advance,
@@ -1100,24 +925,16 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 prior_round=_prior_round,
                             )
 
-                    # Story 45-19: arc-recompute tick. Closes Felix's
-                    # Playtest 3 bug where world_history froze at turn 30.
-                    # The predicate is consulted with the post-bump
-                    # interaction so cadence boundaries align with the
-                    # interaction count the GM panel surfaces. Empty
-                    # cached_history_chapters (pack with no history.yaml,
-                    # or parse-failed chargen fallback) is a graceful
-                    # no-op inside ``recompute_arc_history`` — the tick
-                    # span still fires so the panel sees the empty case.
+                    # Story 45-19: arc-recompute tick (closes the world_history
+                    # freeze bug). Consulted with the post-bump interaction so
+                    # cadence boundaries align with the GM panel. Empty
+                    # cached_history_chapters is a graceful no-op; the tick span
+                    # still fires.
                     #
-                    # Story 45-23: when the recompute reports newly-
-                    # promoted chapters, seed each chapter's narrative
-                    # log + lore strings into the durable narrative_log
-                    # and the RAG-retrievable lore store. Closes Felix's
-                    # writeback gap (71 turns, narrative_log + lore_store
-                    # empty of arc-sourced content). Per-chapter
-                    # ``arc_embedding_seed`` span carries the seeded
-                    # counts so the GM panel can chart Lane B throughput.
+                    # Story 45-23: seed each newly-promoted chapter's narrative
+                    # log + lore into the durable narrative_log + RAG lore store
+                    # (closes the arc-content writeback gap). Per-chapter
+                    # arc_embedding_seed span carries the seeded counts.
                     if should_recompute_arc(snapshot.turn_manager.interaction):
                         added_chapters = recompute_arc_history(snapshot, sd.cached_history_chapters)
                         if added_chapters:
@@ -1130,11 +947,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             )
 
                             for chapter in added_chapters:
-                                # One seed-call per promoted chapter so
-                                # the OTEL span attributes can attribute
-                                # the counts to the specific chapter id
-                                # — the GM panel filters by chapter to
-                                # diagnose which content got seeded.
+                                # One seed-call per chapter so the OTEL span
+                                # attributes the counts to the chapter id.
                                 seed_result = seed_lore_from_arc_promotion(
                                     snapshot,
                                     sd.store,
@@ -1160,15 +974,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 ):
                                     pass
 
-                    # Story 45-27: trope progression tick. Advances passive
-                    # progression, fires staggered beats, gates new
-                    # activations through cap + cooldown. Wired here so
-                    # ``now_turn`` (interaction) is the post-bump value
-                    # and so any engine-driven resolution flows into the
-                    # 45-20 handshake's diff below — the handshake's
-                    # baseline was captured at the top of this method
-                    # before any apply step, so a fresh resolved status
-                    # set by the tick is visible to the diff.
+                    # Story 45-27: trope progression tick (advances passive
+                    # progression, fires staggered beats, gates activations).
+                    # Wired here so now_turn is post-bump and any engine-driven
+                    # resolution is visible to the 45-20 handshake diff below.
                     from sidequest.game.trope_tick import tick_tropes  # noqa: PLC0415
 
                     tick_tropes(
@@ -1178,10 +987,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         days_advanced=result.days_advanced,  # Story 50-4 — Pass A2 time skip
                     )
 
-                    # Story 22-3: seed trope engine — migrate any active seed
-                    # whose lifespan_turns elapsed into a [Faded] ghost. Wired
-                    # next to tick_tropes (same lifecycle beat) so both share
-                    # the post-bump interaction value as ``now_turn``.
+                    # Story 22-3: seed trope engine — ghost any active seed whose
+                    # lifespan_turns elapsed. Same post-bump now_turn as tick_tropes.
                     from sidequest.game.seed_tick import tick_seeds  # noqa: PLC0415
 
                     tick_seeds(
@@ -1190,13 +997,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         now_turn=snapshot.turn_manager.interaction,
                     )
 
-                    # Story 22-5: engagement-triggered seed injection.
-                    # When the dispatch package contains subsystem
-                    # dispatches (player engaged mechanically or socially)
-                    # and the snapshot has fewer than 2 active seeds, draw
-                    # a fresh seed from the remaining deck. Reuses the
-                    # same session_id as the initial draw for deck
-                    # reproducibility.
+                    # Story 22-5: engagement-triggered seed injection. Draw a
+                    # fresh seed when the player engaged a subsystem and fewer
+                    # than 2 seeds are active. Same session_id for reproducibility.
                     if (
                         _dispatch_package is not None
                         and any(pd.dispatch for pd in _dispatch_package.per_player)
@@ -1213,17 +1016,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             now_turn=snapshot.turn_manager.interaction,
                         )
 
-                    # Story 45-20: trope-resolution handshake. Diffs the
-                    # baseline captured at the top of this method against
-                    # the post-recompute snapshot to detect any trope that
-                    # flipped to "resolved" this turn (chapter-promotion
-                    # path today; engine/narrator-extraction future).
-                    # Writes the durable record (quest_log entry +
-                    # active_stakes marker) and emits the handshake span
-                    # so the GM panel sees the path engaged. Idempotent
-                    # re-detect (already-resolved last turn) emits a span
-                    # with active_stakes_appended=False but does not
-                    # rewrite — the lie-detector signal Sebastien needs.
+                    # Story 45-20: trope-resolution handshake. Diffs the baseline
+                    # against the post-recompute snapshot to detect tropes that
+                    # flipped to "resolved" this turn; writes the durable record
+                    # (quest_log + active_stakes) and emits the handshake span.
+                    # Idempotent re-detect emits active_stakes_appended=False.
                     _handshake_resolved_tropes(
                         snapshot,
                         trope_status_baseline,
@@ -1231,30 +1028,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         source="chapter_promotion",
                     )
 
-                    # Plan 6 Task 5 — complication-ledger resolution
-                    # subscription. Consumes the same resolved-trope diff
-                    # the 45-20 handshake already computed above (reuse-
-                    # first, Decision M). Calls
-                    # resolve_complications_for_resolved_tropes which calls
-                    # store.resolve_thread() (Plan 5's span emitter) for
-                    # each open trope-thread whose ref_id matches a
-                    # just-resolved trope. Quest-thread resolution is
-                    # Plan 7's (Decision O).
-                    #
-                    # DECISION N (honest deferral, no runtime noise):
-                    # No-op is correct iff no dungeon was materialized. Only
-                    # Plan 7 both materializes set-pieces (creating ledger
-                    # threads via attach_set_piece) AND wires
-                    # sd.dungeon_store — the two land together, so
-                    # store-absent ⟺ no open dungeon threads exist.
-                    # Resolution wiring activates the moment Plan 7 sets
-                    # sd.dungeon_store. The loud seam is the mandatory
-                    # wiring test's structural tripwire
-                    # (test_setpiece_attach_wiring.py), NOT a per-turn log:
-                    # the trope engine is global, so a per-turn warning
-                    # would fire on ~100% of pre-Plan-7 turns and be pure
-                    # ignorable noise. No warning, no log here — the no-op
-                    # is provably correct.
+                    # Plan 6 Task 5 — complication-ledger resolution. Consumes
+                    # the same resolved-trope diff the 45-20 handshake computed
+                    # and calls resolve_complications_for_resolved_tropes →
+                    # store.resolve_thread() for each matching open trope-thread.
+                    # No-op until Plan 7 wires sd.dungeon_store (store-absent ⟺
+                    # no open dungeon threads); the wiring tripwire is
+                    # test_setpiece_attach_wiring.py, not a per-turn log.
                     _dungeon_store = getattr(sd, "dungeon_store", None)
                     if _dungeon_store is not None:
                         from sidequest.dungeon.setpiece_attach import (  # noqa: PLC0415
@@ -1310,22 +1090,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
 
                 with timings.phase("persistence"):
                     try:
-                        # ADR-037 Python port: room owns the canonical snapshot, so a
-                        # plain room.save() is sufficient — there is no per-session
-                        # divergence to merge. Falls back to sd.store.save when the
-                        # legacy non-slug path didn't bind a room.
+                        # ADR-037: room owns the canonical snapshot, so room.save()
+                        # suffices. Falls back to sd.store.save on the legacy
+                        # non-slug path.
                         if self._room is not None:
                             self._room.save()
                         else:
                             sd.store.save(snapshot)
                         # Story 45-22: log the player's turn before the narrator
-                        # response so the narrative_log shows both sources.
-                        # Felix's Playtest 3 had 71 entries all author='narrator'
-                        # because the player append site was missing — Sebastien
-                        # could not distinguish player input from narrator
-                        # inference on the GM panel. Skipped on the opening
-                        # turn (no real player input — chargen-confirmation
-                        # seeds the action programmatically).
+                        # response so the narrative_log shows both sources
+                        # (pre-fix every entry was author='narrator'). Skipped on
+                        # the opening turn (no real player input).
                         if not is_opening_turn:
                             acting_name = _resolve_acting_character_name(
                                 sd,
@@ -1359,14 +1134,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         logger.error("session.persist_failed error=%s", exc)
 
                 # Story 45-11 — turn_manager.round invariant lie-detector.
-                # Felix's Playtest 3 ended round=65 / max(narrative_log)=72
-                # with nothing watching the divergence. Emit on EVERY tick
-                # (whether or not the invariant holds) so the GM panel can
-                # tell "engaged + clean" apart from "not engaged at all".
-                # Read MAX(round_number) from the durable narrative_log,
-                # not whatever in-memory mirror the snapshot carries —
-                # the SQL value is the ground truth Felix's save proved
-                # the snapshot can drift from.
+                # Emit on EVERY tick (invariant holding or not) so the GM panel
+                # can tell "engaged + clean" from "not engaged". Read
+                # MAX(round_number) from the durable narrative_log (ground truth);
+                # the snapshot's in-memory mirror can drift from it.
                 try:
                     max_narrative_round = int(sd.store.max_narrative_round())
                 except Exception as exc:  # noqa: BLE001 — telemetry must never crash a turn
@@ -1380,16 +1151,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     interaction=snapshot.turn_manager.interaction,
                     max_narrative_round=max_narrative_round,
                 ):
-                    # Span attributes are set by the helper; the body is
-                    # intentionally empty — this is a point-in-time emit,
-                    # not a wrapping span around downstream work.
+                    # Point-in-time emit; the helper sets the attributes.
                     pass
 
-                # Story 37-33: embed newly-seeded / pending lore fragments in the
-                # background so the *next* turn's RAG retrieval can find them.
-                # Spawns a fire-and-forget task — the narration turn returns to
-                # the player immediately; embeds populate during the human's
-                # reading time.
+                # Story 37-33: embed pending lore fragments in the background so
+                # the next turn's RAG retrieval finds them. Fire-and-forget — the
+                # turn returns immediately; embeds populate during reading time.
                 self._dispatch_embed_worker(sd)
 
                 narration_text = result.narration or "(The world holds its breath...)"
@@ -1399,12 +1166,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     narration_nbs = NonBlankString("The world holds its breath...")
 
                 # Forward extracted footnotes into the NarrationPayload so the UI
-                # Knowledge journal fills. Narrator produces them every turn
-                # (see `game_patch.extracted footnotes=N` in the server log) and
-                # the UI's useStateMirror was already wired to consume them — the
-                # session handler was the only missing link. Coerce raw dicts
-                # from the extraction into typed Footnote models, skipping any
-                # that fail validation rather than crashing the turn.
+                # Knowledge journal fills (the session handler was the missing
+                # link; useStateMirror already consumed them). Coerce raw dicts
+                # to typed Footnotes, dropping any that fail validation.
                 forwarded_footnotes: list[Footnote] = []
                 fact_ids_minted_this_turn = 0
                 for fn in result.footnotes or []:
@@ -1419,23 +1183,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             fn,
                         )
                         continue
-                    # ADR-100 Seam C: every Footnote that reaches the UI MUST
-                    # carry a stable fact_id. The narrator prompt asks for one,
-                    # but narrators don't always comply (especially for new
-                    # facts where the prompt is permissive). Without this
-                    # defensive mint, the UI's strict drop policy
-                    # (useStateMirror.ts:198, "footnote missing fact_id;
-                    # skipping") silently swallows load-bearing world facts —
-                    # the exact consistency leak ADR-100 exists to close
-                    # (sq-playtest 2026-05-15: 6 dropped facts in one turn).
-                    #
-                    # Mint a deterministic hash-based id so a re-narration of
-                    # the same fact in a later turn collides on the client's
-                    # seenFactIds dedupe rather than re-entering the journal
-                    # with a fresh UUID. Narrator-supplied fact_ids are
-                    # preserved untouched — scenario clue_intake matches them
-                    # against ClueNode.id (genre-authored), so replacing them
-                    # would break Seam A.
+                    # ADR-100 Seam C: every Footnote reaching the UI MUST carry a
+                    # stable fact_id, but narrators don't always supply one and
+                    # the UI silently drops fact_id-less footnotes (sq-playtest
+                    # 2026-05-15: 6 dropped in one turn). Mint a deterministic
+                    # hash-based id so a later re-narration dedupes on the
+                    # client's seenFactIds. Narrator-supplied fact_ids are left
+                    # untouched — scenario clue_intake matches them to ClueNode.id.
                     if footnote.fact_id is None:
                         cat_str = (
                             footnote.category.value
@@ -1480,12 +1234,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     },
                     component="footnotes",
                 )
-                # Story 50-5 / ADR-100 seams A + B: feed extracted footnotes
-                # to the scenario clue graph. Footnotes whose fact_id matches
-                # a ClueNode advance the scenario (SPAN_SCENARIO_ADVANCE) and
-                # mint a Discovered KnownFact on the acting player's
-                # character. No-op when no scenario is bound or when no
-                # fact_id matches.
+                # Story 50-5 / ADR-100 seams A + B: feed footnotes to the
+                # scenario clue graph. Matching fact_ids advance the scenario
+                # and mint a Discovered KnownFact. No-op when no scenario/match.
                 from sidequest.server.dispatch.scenario_clue_intake import (  # noqa: PLC0415
                     consume_clue_footnotes,
                 )
@@ -1495,28 +1246,19 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     forwarded_footnotes,
                     active_character_name=snapshot.player_seats.get(sd.player_id, sd.player_name),
                 )
-                # Story 50-8 / ADR-053 AC-5: the AccusationEvaluator dispatch
-                # sibling. Imported here so the GM panel and tests can verify
-                # the narration-response path can reach the evaluator on demand.
-                # Per-turn invocation is deferred until a player-action
-                # accusation trigger lands (NarrationPayload sidecar / footnote
-                # subtype TBD); the import makes the dispatch module a live
-                # consumer of the production code path rather than dead code.
+                # Story 50-8 / ADR-053 AC-5: AccusationEvaluator dispatch
+                # sibling. Imported so the evaluator is reachable on demand;
+                # per-turn invocation is deferred until an accusation trigger
+                # lands. The import keeps the module a live consumer, not dead code.
                 from sidequest.server.dispatch.scenario_accusation import (  # noqa: F401, PLC0415
                     consume_accusation_request,
                 )
 
-                # Story 49-8: visibility classifier produces the v2
-                # sidecar that drives per-recipient routing AND 2nd-person
-                # POV swap downstream in emitters.emit_event. Pure
-                # post-narration work — no narrator subprocess calls.
-                #
-                # The classifier prefers result.action_rewrite.named when
-                # the narrator emitted it (ADR-039), falling back to a
-                # first-sentence scan of the prose. Returns atmospheric
-                # (anchor_pc=None, pov_strategy="atmospheric") when no PC
-                # name surfaces — that path broadcasts the canonical
-                # prose unchanged.
+                # Story 49-8: visibility classifier produces the v2 sidecar that
+                # drives per-recipient routing + 2nd-person POV swap in
+                # emitters.emit_event. Prefers result.action_rewrite.named
+                # (ADR-039), else a first-sentence scan; returns atmospheric
+                # (broadcasts canonical prose unchanged) when no PC name surfaces.
                 from sidequest.server.visibility_classifier import (  # noqa: PLC0415
                     classify_narration_visibility,
                 )
@@ -1545,10 +1287,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         player_id_to_character=_player_id_to_character,
                     )
                 except ValueError:
-                    # Empty narration — the classifier fails loud; we
-                    # mirror the older behavior of emitting the canonical
-                    # prose unchanged so a degraded turn still surfaces
-                    # to the UI rather than crashing the hot path.
+                    # Empty narration — classifier fails loud; emit the canonical
+                    # prose unchanged so a degraded turn still surfaces to the UI.
                     _visibility_sidecar = None
 
                 narration_payload = NarrationPayload(
@@ -1557,19 +1297,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     footnotes=forwarded_footnotes,
                     visibility_sidecar=_visibility_sidecar,
                 )
-                # MP-03 Task 3: route through EventLog + ProjectionFilter before send.
-                #
-                # ADR-105 Track A: a shared merged-MP narration (>1
-                # connected player) has no sole author — the driving
-                # handler is merely the last submitter. Thread its stable
-                # _session_data.player_id as author_player_id so the
-                # driver is projected/POV-swapped like every recipient
-                # (one projection.filter.decide + perception_rewrite +
-                # second_person_swap per DISTINCT player) rather than
-                # receiving the solo Invariant-3 raw bypass — the
-                # confirmed firewall+POV breach. Solo (<=1 connected)
-                # passes None and keeps the raw-bypass + lazy_fill
-                # invariant byte-identical.
+                # MP-03 Task 3: route through EventLog + ProjectionFilter.
+                # ADR-105 Track A: a merged-MP narration (>1 connected) has no
+                # sole author, so thread the driver's player_id as
+                # author_player_id to get it projected/POV-swapped like any
+                # recipient (not the solo raw bypass — a firewall+POV breach).
+                # Solo (<=1) passes None and keeps the raw-bypass invariant.
                 _mp_author = (
                     self._session_data.player_id
                     if self._session_data is not None and len(_connected_player_ids) > 1
@@ -1580,17 +1313,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         "NARRATION", narration_payload, author_player_id=_mp_author
                     )
 
-                    # ADR-105 B3: emit each narrator-partitioned private
-                    # prose segment as its own NARRATION_SEGMENT, routed
-                    # by _visibility.visible_to to the single owning PC
-                    # (GM implicit via the GM CoreInvariant). The shared
-                    # NARRATION text above is public-safe by the amended
-                    # output contract; these carry the withheld
-                    # perception. The visibility-gated CoreInvariant (B1)
-                    # structurally firewalls non-recipients;
-                    # author_player_id (Track A) gives the owning PC a
-                    # real per-recipient projection pass. Default is zero
-                    # segments — fully-public turns add nothing here.
+                    # ADR-105 B3: emit each private prose segment as its own
+                    # NARRATION_SEGMENT, routed by visible_to to the owning PC.
+                    # The CoreInvariant (B1) firewalls non-recipients;
+                    # author_player_id (Track A) gives the owner a real
+                    # per-recipient projection pass. Zero segments on public turns.
                     _private_segments = getattr(result, "private_prose_segments", []) or []
                     if _private_segments:
                         _seat_to_player = {
@@ -1607,12 +1334,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             _seg_anchor = (_seg.get("anchor_pc") or "").strip() or None
                             _owner_pid = _seat_to_player.get(_seg_anchor) if _seg_anchor else None
                             if _owner_pid is None:
-                                # Fail loud, never leak: an unresolvable
-                                # owner means we cannot safely route this
-                                # private prose. Dropping loses the prose
-                                # but routing-to-all would be the exact
-                                # breach ADR-105 closes. Surface it for
-                                # the GM panel rather than swallow it.
+                                # Fail loud, never leak: an unresolvable owner
+                                # means we can't safely route this prose. Drop it
+                                # (routing-to-all would be the ADR-105 breach)
+                                # and surface it for the GM panel.
                                 logger.warning(
                                     "narration.segment_unroutable "
                                     "anchor_pc=%r seated=%r — DROPPED (no leak)",
@@ -1633,34 +1358,22 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                     severity="warning",
                                 )
                                 continue
-                            # author_player_id=_owner_pid makes the owner
-                            # the emitter: every OTHER connected player is
-                            # a peer recipient and the visibility-gated
-                            # CoreInvariant (B1) excludes them at fan-out
-                            # (no queue frame); the owner's frame is
-                            # projected + perception-rewritten + (B4)
-                            # POV-swapped and RETURNED. emit_event's peer
-                            # fan-out never delivers to the emitter, so the
-                            # owner's own segment must be pushed to the
-                            # owner's CURRENT socket explicitly (the
-                            # owner is not necessarily the turn driver —
-                            # the segment's owner is whichever PC the
-                            # narrator anchored the private prose to).
+                            # author_player_id=_owner_pid makes the owner the
+                            # emitter: peers are excluded at fan-out by the
+                            # CoreInvariant (B1); the owner's frame is projected,
+                            # POV-swapped (B4), and returned. Since emit_event
+                            # never delivers to the emitter, the owner's own
+                            # segment is pushed to the owner's current socket below.
                             _seg_msg = self._emit_event(
                                 "NARRATION_SEGMENT",
                                 NarrationSegmentPayload(
                                     text=_seg_text,
                                     anchor_pc=_seg_anchor,
                                     turn_id=_seg_turn_id,
-                                    # ADR-105 B4: per-segment POV. Each
-                                    # segment is single-PC by construction,
-                                    # so carrying anchor_pc + pc_anchored
-                                    # in _visibility lets the existing
-                                    # _apply_pov_swap (Track A having fixed
-                                    # per-recipient binding) rewrite it to
-                                    # 2nd-person for the owner. No
-                                    # multi-antecedent blob: the swap
-                                    # operates on one PC's private prose.
+                                    # ADR-105 B4: per-segment POV. Each segment
+                                    # is single-PC, so anchor_pc + pc_anchored
+                                    # let _apply_pov_swap rewrite it to 2nd-person
+                                    # for the owner.
                                     visibility_sidecar={
                                         "visible_to": [_owner_pid],
                                         "fidelity": {},
@@ -1670,14 +1383,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 ),
                                 author_player_id=_owner_pid,
                             )
-                            # Deliver the owner's projected+swapped frame
-                            # to the owner's live socket. Lookup at
-                            # delivery time so a reconnected owner's NEW
-                            # socket queue gets it (mirrors the
-                            # CONFRONTATION dispatcher-socket fix). On the
-                            # EventLog regardless (replay / GM lie-detector
-                            # / reconnect lazy_fill) — a missing live
-                            # socket is not a leak, just a deferred read.
+                            # Deliver the owner's projected+swapped frame to the
+                            # owner's live socket; lookup at delivery time so a
+                            # reconnected owner's new socket gets it. On the
+                            # EventLog regardless — a missing socket is a deferred
+                            # read, not a leak.
                             _seg_room = self._room
                             if _seg_msg is not None and _seg_room is not None:
                                 _seg_sock_fn = getattr(_seg_room, "socket_for_player", None)
@@ -1700,16 +1410,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 component="projection",
                             )
 
-                # Pingpong 2026-04-26 [S3-REGRESSION]: emit a SCRAPBOOK_ENTRY for
-                # every narration turn so the UI gallery has metadata to merge with
-                # the IMAGE that lands later from the daemon. Pure reuse — no new
-                # LLM calls. Fields come from the orchestrator result and the
-                # snapshot the narrator just stamped.
+                # Pingpong 2026-04-26 [S3-REGRESSION]: emit a SCRAPBOOK_ENTRY every
+                # narration turn so the UI gallery has metadata to merge with the
+                # later IMAGE. Fields come from the result + stamped snapshot.
                 with timings.phase("dispatch_post"):
-                    # Story 45-31 first: consult the daemon-state mirror so
-                    # the dispatcher below can skip its round-trip when the
-                    # daemon is UNRESPONSIVE. ``sd.render_unavailable_pending``
-                    # is the shared flag the dispatcher reads.
+                    # Story 45-31: consult the daemon-state mirror so the
+                    # dispatcher below can skip its round-trip when the daemon is
+                    # UNRESPONSIVE (sd.render_unavailable_pending is the flag).
                     from sidequest.daemon_client.state_mirror import (
                         get_mirror as _get_mirror,
                     )
@@ -1719,11 +1426,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         _hb_mirror.last_heartbeat_ts() is not None and _hb_mirror.is_unresponsive()
                     )
 
-                    # Story 45-30: classify the render trigger reason once
-                    # so the same value lands in both the SCRAPBOOK_ENTRY
-                    # render_status discriminator and the dispatcher below.
-                    # ``classify_trigger`` is pure so the two call sites
-                    # converge without coordination.
+                    # Story 45-30: classify the render trigger once so the same
+                    # value lands in both the SCRAPBOOK_ENTRY render_status and
+                    # the dispatcher below (classify_trigger is pure).
                     from sidequest.server.render_trigger import (
                         RenderTriggerReason,
                         classify_trigger,
@@ -1735,10 +1440,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         encounter_resolved_this_turn=encounter_resolved_this_turn,
                     )
 
-                    # Unified render_status (Story 45-30 + 45-31) — daemon-
-                    # unavailable wins over policy decisions because no
-                    # render is coming either way; the user-facing reason
-                    # is "the daemon is down." Then policy decides
+                    # Unified render_status (45-30 + 45-31): daemon-unavailable
+                    # wins over policy (no render either way), then policy decides
                     # skipped_policy vs rendered.
                     if sd.render_unavailable_pending:
                         _render_status = "unavailable"
@@ -1761,13 +1464,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             exc,
                         )
 
-                    # Group G Task 6: route prompt-redacted dispatches as SECRET_NOTE
-                    # events. Task 5's ``redact_dispatch_package`` stripped these from the
-                    # narrator prompt and parked them on ``result.secret_routes``; here we
-                    # reify each one as its own event so the same ProjectionFilter /
-                    # visibility_tag rule (Task 3) delivers it only to the recipients in
-                    # its ``_visibility.visible_to``. Only SubsystemDispatch entries route;
-                    # see ``build_secret_note_events`` for the skip rules.
+                    # Group G Task 6: reify prompt-redacted dispatches (parked on
+                    # result.secret_routes) as SECRET_NOTE events so the
+                    # ProjectionFilter delivers each only to its visible_to
+                    # recipients. See build_secret_note_events for skip rules.
                     if result.secret_routes:
                         for _envelope in build_secret_note_events(
                             result.secret_routes,
@@ -1787,23 +1487,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 ),
                             )
 
-                    # Story 3.4 Task 11: emit CONFRONTATION when encounter state transitions.
-                    # OTEL visibility: add event to current span so the GM panel (Sebastien-
-                    # tier mechanical visibility) can see the dispatch decision end-to-end.
-                    # Pingpong 2026-04-26 S2-BUG: confrontations were PRIVATE to the
-                    # acting player — peers froze on the prior shared beat (no NPC
-                    # card, no narration, no buttons). Root cause: the message was
-                    # built directly via ``ConfrontationMessage(...)`` and only
-                    # appended to the actor's ``outbound`` list, never broadcast.
-                    # Fix: route through ``self._emit_event("CONFRONTATION", ...)``
-                    # so the canonical EventLog + ProjectionFilter fan-out path
-                    # delivers the same per-player frame to every connected peer
-                    # (mirrors how NARRATION is emitted at the line above). The
-                    # kind is already registered in ``_KIND_TO_MESSAGE_CLS``.
-                    # Independent of the multi-target parse-failure (#5): the
-                    # missing broadcast here is the sole cause of peer freeze.
-                    # (Producer-side parse failures now raise IntentRouterFailure
-                    # per ADR-113 rather than degrading the DispatchPackage.)
+                    # Story 3.4 Task 11: emit CONFRONTATION on encounter state
+                    # transition, with a span event for the GM panel.
+                    # Pingpong 2026-04-26 S2-BUG: confrontations were private to the
+                    # actor (peers froze) because the message was only appended to
+                    # the actor's outbound, never broadcast. Fix: route through
+                    # _emit_event so EventLog + ProjectionFilter fan it out per-peer.
                     confrontation_msg: object | None = None
                     confrontation_payload: ConfrontationPayload | None = None
                     confrontation_event_attrs: dict[str, object] | None = None
@@ -1817,24 +1506,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             sd.genre_pack.rules.confrontations if sd.genre_pack.rules else [],
                             now_encounter.encounter_type,
                         )
-                        # No silent fallback: an active encounter whose type is not in the
-                        # pack is a pack-data bug. Task 10 raises in the same case during
-                        # beat-apply; the dispatch path matches.
+                        # No silent fallback: an active encounter type missing
+                        # from the pack is a pack-data bug — raise (matches beat-apply).
                         if cdef is None:
                             raise ValueError(
                                 f"active encounter type {now_encounter.encounter_type!r} "
                                 f"not in pack confrontations (genre={sd.genre_slug!r})"
                             )
-                        # Canonical (full-union) payload — persisted to
-                        # EventLog via ``_emit_event`` below for replay
-                        # parity, and also delivered to legacy stub-room
-                        # test fixtures that lack the full SessionRoom
-                        # API. ``recipient_pc=None`` is explicit: this
-                        # call deliberately does NOT project per-PC —
-                        # the per-recipient overlay loop below
-                        # overwrites each connected socket's
-                        # Confrontation tab with class-filtered beats
-                        # (Story 49-7).
+                        # Canonical full-union payload — persisted to EventLog
+                        # below for replay parity (and delivered to stub-room test
+                        # fixtures). recipient_pc=None: not projected per-PC; the
+                        # overlay loop below class-filters per socket (Story 49-7).
                         payload_dict = build_confrontation_payload(
                             encounter=now_encounter,
                             cdef=cdef,
@@ -1865,18 +1547,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         }
 
                     if confrontation_payload is not None:
-                        # Story 45-3: lie-detector for the post-narration
-                        # CONFRONTATION emit. The narrator just opened or
-                        # advanced an encounter; the dial is about to move
-                        # on screen. Sebastien (mechanical-first player)
-                        # needs a span confirming the engine emitted
-                        # post-mutation momentum here, not just that the
-                        # narrator's prose happened to mention combat.
-                        # Only fires on the live branch (active emit
-                        # carrying real metric values) — the clear-payload
-                        # branch broadcasts active=false with empty
-                        # metrics, so there is no post-mutation momentum
-                        # to audit.
+                        # Story 45-3: lie-detector span for the post-narration
+                        # CONFRONTATION emit — confirms the engine emitted real
+                        # post-mutation momentum, not just prose mentioning combat.
+                        # Live branch only (the clear branch has no metrics to audit).
                         if now_live and now_encounter is not None:
                             with encounter_momentum_broadcast_span(
                                 encounter_type=now_encounter.encounter_type,
@@ -1895,35 +1569,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 confrontation_payload,
                             )
 
-                        # Story 49-7: per-PC beat projection overlay. The
-                        # canonical ``_emit_event`` call above persists the
-                        # full-union payload to EventLog (replay-safe) and
-                        # fans it to peers via the ProjectionFilter — but
-                        # every recipient sees the same 16-button beat list
-                        # regardless of class (the 2026-05-12 caverns_sunden
-                        # playtest bug: Fighter saw Backstab/Cast Spell/Turn
-                        # Undead). We follow the canonical emit with a per-
-                        # recipient direct-queue overlay that delivers a
-                        # class-filtered CONFRONTATION to each connected
-                        # socket. UI renders whichever arrives last for a
-                        # given encounter — filtered wins. EventLog retains
-                        # the canonical row for audit; reconnect rebuilds
-                        # via the slug-resume bootstrap which is itself per-
-                        # PC filtered (handlers/connect.py:1110).
-                        # Track whether the per-PC overlay loop below
-                        # successfully queued a filtered CONFRONTATION to
-                        # the dispatcher's socket. The canonical
-                        # dispatcher push at the "Pingpong 2026-04-30
-                        # follow-on" block below (around line 3360) must
-                        # skip the dispatcher when the overlay already
-                        # covered them — otherwise the unfiltered canonical
-                        # lands AFTER the filtered overlay in the
-                        # dispatcher's queue and the UI's last-message-wins
-                        # render reverts the dispatcher's Confrontation tab
-                        # to the full 16-button union (pingpong 2026-05-12
-                        # 17:48: position-#3 PC always broke because
-                        # sd.player_id rotates to the last-narrated PC in
-                        # merged-dispatch order).
+                        # Story 49-7: per-PC beat projection overlay. The canonical
+                        # emit above is full-union (every recipient saw the same
+                        # 16-button list regardless of class — caverns_sunden
+                        # 2026-05-12 bug). Follow it with a per-recipient
+                        # direct-queue overlay delivering a class-filtered
+                        # CONFRONTATION; the UI renders whichever arrives last, so
+                        # filtered wins. EventLog keeps the canonical row for audit.
+                        # _dispatcher_overlay_delivered tracks whether the overlay
+                        # covered the dispatcher's socket; the canonical push below
+                        # must then skip it, or the unfiltered frame lands last and
+                        # reverts the tab to the full union (pingpong 2026-05-12 17:48).
                         _dispatcher_overlay_delivered = False
                         if now_live and now_encounter is not None and self._room is not None:
                             from sidequest.server.dispatch.confrontation import (
@@ -1973,20 +1629,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             "confrontation.dispatched",
                             confrontation_event_attrs,
                         )
-                        # OTEL lie-detector hook (per CLAUDE.md OTEL principle): the
-                        # GM panel needs evidence the broadcast actually reached
-                        # peers — not just that the actor saw a confrontation card.
-                        # Without this, a regression to the pre-fix behavior (frame
-                        # appended only to actor's outbound) is invisible to the
-                        # watcher dashboard.
+                        # OTEL lie-detector (CLAUDE.md OTEL principle): evidence the
+                        # broadcast reached peers, not just the actor — without it a
+                        # regression to actor-only delivery is invisible.
                         peer_player_ids: list[str] = []
                         room_slug: str = ""
                         if self._room is not None:
-                            # Some unit-test fixtures (e.g. _StubRoom in
-                            # test_dice_throw_wiring) provide a minimal Room shim
-                            # that lacks ``connected_player_ids`` / ``slug``. The
-                            # OTEL hook is best-effort logging — never crash the
-                            # turn for missing observability metadata.
+                            # Some test fixtures use a minimal Room shim lacking
+                            # connected_player_ids / slug. The OTEL hook is
+                            # best-effort — never crash the turn for it.
                             import contextlib  # noqa: PLC0415 — local import keeps hot path lean
 
                             with contextlib.suppress(AttributeError):
@@ -2017,21 +1668,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             component="confrontation",
                         )
 
-                        # sq-playtest 2026-05-12 lie-detector: classify the
-                        # post-narration confrontation state by comparing
-                        # narration prose kill-claims against the engine's
-                        # encounter state. The repro was the Chalk Moth
-                        # "kill turn" — narrator's prose said the moth
-                        # died ("the legs go slack", "Silence."), but no
-                        # engine resolution fired (rolls failing, dial
-                        # stuck 0/7) so the right-rail Confrontation
-                        # panel stayed open and the next turn's narration
-                        # un-killed the moth. Without this watcher event
-                        # the GM panel could only see ``state_transition
-                        # field=encounter op=resolved`` firing or not —
-                        # which is the engine side. This event surfaces
-                        # the NARRATOR side so Sebastien can see when
-                        # prose outruns the dial.
+                        # sq-playtest 2026-05-12 lie-detector: compare narration
+                        # kill-claims against the engine's encounter state (Chalk
+                        # Moth "kill turn": prose killed the moth but no resolution
+                        # fired). Surfaces the NARRATOR side so the GM panel can
+                        # see when prose outruns the dial.
                         from sidequest.server.confrontation_lifecycle_detector import (
                             build_lifecycle_snapshot,
                         )
@@ -2053,50 +1694,21 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         )
 
                 with timings.phase("broadcast"):
-                    # MP merged-dispatch: shared-world frames need to reach
-                    # every connected socket in the room. NARRATION rides the
-                    # _emit_event/EventLog path (durable, replayed on
-                    # reconnect). The four shared-world envelopes built below
-                    # — NARRATION_END / CHAPTER_MARKER / PARTY_STATUS /
-                    # AUDIO_CUE — are NOT durable: they're built once at
-                    # turn-end and never persisted. Two pingpong cycles on
-                    # 2026-04-30 caught both halves of the broadcast bug:
-                    #   (1) commit 4b90250 — peers missed all four because
-                    #       they were only appended to ``outbound`` (which
-                    #       ships to the dispatcher socket alone). Fix added
-                    #       a peer-broadcast helper.
-                    #   (2) follow-on bug — the dispatcher's *own* socket
-                    #       missed the four envelopes whenever the dispatcher
-                    #       reconnected mid-narration (browser refresh during
-                    #       the 30-60s Claude await). The peer-broadcast
-                    #       excluded the dispatcher's pre-await socket_id;
-                    #       outbound.append delivered to the now-cancelled
-                    #       writer task on the old socket; the new socket
-                    #       got nothing because the envelopes aren't in
-                    #       EventLog to replay. Last-submitter froze every
-                    #       turn (Reproduced 3× in pingpong).
-                    #
-                    # Fix: emit shared-world frames via a single broadcast to
-                    # every CURRENT socket in the room (exclude_socket_id=
-                    # None). Picks up reconnected sockets that registered
-                    # before the broadcast fires; the original socket either
-                    # detached (clean) or is still attached (gets the frame
-                    # like everyone else). Replaces both outbound.append and
-                    # the peer-only broadcast — single delivery path, no
-                    # double-send risk.
-                    #
-                    # Legacy non-slug path (self._room is None — only legacy
-                    # genre/world connect tests reach this) still falls back
-                    # to outbound.append so test fixtures without a room
-                    # registry continue to work.
+                    # MP merged-dispatch: the four shared-world envelopes
+                    # (NARRATION_END / CHAPTER_MARKER / PARTY_STATUS / AUDIO_CUE)
+                    # are NOT durable (unlike NARRATION on the EventLog path).
+                    # Pingpong 2026-04-30 caught both halves of a delivery bug:
+                    # peers missed them (outbound went to the dispatcher socket
+                    # alone), and the dispatcher's own reconnected socket missed
+                    # them on a mid-await refresh. Fix: broadcast to every CURRENT
+                    # socket (exclude_socket_id=None) — single delivery path, picks
+                    # up reconnected sockets, no double-send. Legacy non-slug path
+                    # (self._room is None) falls back to outbound.append.
                     _has_room = self._room is not None
 
-                    # OTEL lie-detector: emit one watcher event per shared-
-                    # world frame that records every recipient socket_id
-                    # plus the resolved player_id. The GM panel can verify
-                    # all 4 sockets received NARRATION_END after the merged
-                    # dispatch — the only way to catch silent regressions
-                    # of this exact bug going forward.
+                    # OTEL lie-detector: one watcher event per shared-world frame
+                    # recording recipient socket_ids + player_ids, so the GM panel
+                    # can verify every socket received it (catches regressions).
                     def _emit_shared_world_frame(msg: object, frame_kind: str) -> None:
                         if not _has_room:
                             outbound.append(msg)
@@ -2104,15 +1716,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         room = self._room
                         assert room is not None  # noqa: S101 — narrowed by _has_room
                         room.broadcast(msg, exclude_socket_id=None)
-                        # OTEL lie-detector: emit one watcher event per
-                        # shared-world frame keyed by recipient player_ids
-                        # so the GM panel can verify the dispatcher AND every
-                        # peer received the frame after the merged dispatch
-                        # — the only way to catch silent regressions of the
-                        # last-submitter-stuck bug going forward. Wrapped in
-                        # try/except: the broadcast above is the load-bearing
-                        # call; OTEL must never crash a turn (and in tests a
-                        # stub Room may not expose `connected_player_ids`).
+                        # OTEL lie-detector keyed by recipient player_ids (catches
+                        # the last-submitter-stuck regression). Wrapped: the
+                        # broadcast above is load-bearing, OTEL must never crash a turn.
                         try:
                             recipients_method = getattr(room, "connected_player_ids", None)
                             recipient_player_ids = (
@@ -2139,38 +1745,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
 
                     outbound: list[object] = [narration_msg]
                     if confrontation_msg is not None:
-                        # Pingpong 2026-04-30 follow-on (sibling of f0b40c7):
-                        # CONFRONTATION goes through ``_emit_event`` for
-                        # EventLog persistence + projection-filter peer
-                        # fan-out. The dispatcher's copy was previously
-                        # added to ``outbound`` (closure-captured,
-                        # delivered to the dispatcher's PRE-await socket
-                        # queue). When the dispatcher's WS cycles during
-                        # the 30-60s Claude await — browser refresh /
-                        # network blip — the pre-await writer task is
-                        # already cancelled; ``outbound.append`` lands on
-                        # a dead queue and the encounter dial never
-                        # activates on the dispatcher's tab. Reconnect
-                        # replay can backfill via EventLog + lazy_fill,
-                        # but the race is wide (CONFRONTATION fires AFTER
-                        # the dispatcher's reconnect handler has finished
-                        # its own replay), so the dispatcher freezes on
-                        # the prior turn even though the EventLog has the
-                        # row. Fix matches f0b40c7's shape: deliver to
-                        # the dispatcher's CURRENT socket via
-                        # room.queue_for_socket(socket_for_player(...))
-                        # — the lookup runs at delivery time, so a
-                        # reconnected dispatcher's NEW socket queue gets
-                        # the frame. Peer delivery is unchanged
-                        # (``_emit_event`` peer fan-out already covered
-                        # them) — no double-delivery hazard. Falls back
-                        # to ``outbound.append`` when the room is None
-                        # (legacy non-slug test fixtures).
-                        # Stub rooms in older test fixtures (_StubRoom in
-                        # dice-throw wiring tests) may not expose the
-                        # full SessionRoom API — fall back to outbound
-                        # so those tests continue to exercise the
-                        # actor-receives-via-return-value contract.
+                        # Pingpong 2026-04-30 follow-on: CONFRONTATION rides
+                        # _emit_event for peer fan-out, but the dispatcher's copy
+                        # used to go to outbound (the pre-await socket). On a
+                        # mid-await reconnect that queue is dead, so the dial never
+                        # activates on the dispatcher's tab. Fix: deliver to the
+                        # dispatcher's CURRENT socket via queue_for_socket(
+                        # socket_for_player(...)) — looked up at delivery time.
+                        # Peers unchanged. Falls back to outbound when room is None
+                        # or a stub room lacks the socket helpers.
                         socket_for_player = (
                             getattr(
                                 self._room,
@@ -2198,40 +1781,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 if dispatcher_socket is not None
                                 else None
                             )
-                            # Pingpong 2026-05-12 17:48 (trailing-PC regression
-                            # of 49-7): only push the unfiltered canonical to
-                            # the dispatcher when the per-PC overlay above did
-                            # NOT already queue a filtered frame for them. The
-                            # overlay covers the dispatcher whenever
-                            # ``sd.player_id`` is connected AND seated to a PC
-                            # the genre pack can resolve a class for. When that
-                            # holds (the typical MP playtest case — every PC is
-                            # seated), the overlay's class-filtered frame
-                            # already sits in the dispatcher's queue; pushing
-                            # the unfiltered canonical here lands AFTER it and
-                            # the UI's last-message-wins render snaps back to
-                            # the full 16-button union. When the overlay
-                            # skipped the dispatcher (no PC seat / no class
-                            # resolution / clear branch / stub-room test
-                            # fixture without socket helpers), the canonical
-                            # remains the dispatcher's sole delivery path.
+                            # Pingpong 2026-05-12 17:48 (trailing-PC regression of
+                            # 49-7): push the unfiltered canonical to the
+                            # dispatcher only when the per-PC overlay didn't already
+                            # queue a filtered frame — otherwise the canonical lands
+                            # last and the UI snaps back to the full 16-button union.
                             if dispatcher_queue is not None and not _dispatcher_overlay_delivered:
                                 dispatcher_queue.put_nowait(confrontation_msg)
                             # OTEL lie-detector: per-recipient confrontation
-                            # delivery for the GM panel. Mirrors the
-                            # ``shared_world_frame_broadcast`` watcher used by
-                            # NARRATION_END / CHAPTER_MARKER / PARTY_STATUS /
-                            # AUDIO_CUE so Sebastien's panel can spot a silent
-                            # regression of this exact bug — frame_kind names
-                            # the variant so confrontation events filter
-                            # cleanly out of the broader frame stream.
-                            # ``dispatcher_delivery_path`` distinguishes
-                            # ``per_pc_overlay`` (the seated-PC branch the
-                            # 17:48 fix protects) from ``canonical_push``
-                            # (the legacy fallback for unseated dispatchers
-                            # / stub-room test fixtures) so a future
-                            # regression of either branch is visible from
-                            # the dashboard alone.
+                            # delivery, mirroring the shared_world_frame_broadcast
+                            # watcher. dispatcher_delivery_path distinguishes
+                            # per_pc_overlay (the 17:48-protected branch) from
+                            # canonical_push so a regression of either is visible.
                             try:
                                 slug_attr = getattr(room, "slug", "")
                                 connected = (
@@ -2263,23 +1824,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                     exc,
                                 )
                         else:
-                            # Legacy / stub-room fallback: append to
-                            # outbound so test fixtures without a real
-                            # SessionRoom API still see CONFRONTATION
-                            # in the function return value (the
-                            # contract pre-pingpong-2026-04-30).
+                            # Legacy / stub-room fallback: append to outbound so
+                            # test fixtures see CONFRONTATION in the return value.
                             outbound.append(confrontation_msg)
-                    # CHAPTER_MARKER — the UI's ``useRunningHeader`` hook derives the
-                    # running-header chapter title from this frame. When the narrator
-                    # emits a location in game_patch, the new location is already on
-                    # ``snapshot.character_locations[acting_character]`` (applied in
-                    # ``_apply_narration_result_to_snapshot``). Emit one frame per
-                    # location change so the header updates in lock-step with
-                    # narration. Without this the header stays blank since the UI
-                    # never saw the server's ``state.location_update`` log line.
-                    # Pingpong 2026-04-24 — "Location not rendered in the header on
-                    # resume" — fix is symmetric (slug-resume bootstrap also emits
-                    # CHAPTER_MARKER; see the slug-connect block).
+                    # CHAPTER_MARKER — drives the UI's useRunningHeader title. Emit
+                    # one frame per location change so the header tracks narration
+                    # (Pingpong 2026-04-24 "location not rendered on resume"; the
+                    # slug-resume bootstrap emits the symmetric frame).
                     if result.location:
                         chapter_marker_msg = ChapterMarkerMessage(
                             payload=ChapterMarkerPayload(
@@ -2293,10 +1844,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             player_id=sd.player_id,
                         )
                         _emit_shared_world_frame(chapter_marker_msg, "CHAPTER_MARKER")
-                        # ADR-096 Task 20b: emit TACTICAL_GRID when the world
-                        # uses room_graph navigation and the new location has
-                        # a room YAML file on disk. This closes the wiring
-                        # gap: load_room_payload is now reachable from gameplay.
+                        # ADR-096 Task 20b: emit TACTICAL_GRID for room_graph
+                        # worlds whose new location has a room YAML on disk.
                         _maybe_emit_tactical_grid(
                             self,
                             sd=sd,
@@ -2304,10 +1853,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             actor=_acting_for_render_trigger,
                             emit_fn=_emit_shared_world_frame,
                         )
-                        # Story 54-2 / ADR-109: emit LOCATION_DESCRIPTION on
-                        # the same room-change branch. Carries the typed
-                        # entity manifest + base prose so the UI Location
-                        # tab stays in sync with the party's current room.
+                        # Story 54-2 / ADR-109: emit LOCATION_DESCRIPTION on the
+                        # same room-change branch — typed entity manifest + base
+                        # prose to keep the UI Location tab in sync.
                         _maybe_emit_location_description(
                             self,
                             sd=sd,
@@ -2315,16 +1863,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             actor=_acting_for_render_trigger,
                             emit_fn=_emit_shared_world_frame,
                         )
-                    # Playtest 2026-05-20 — per-turn LOCATION_DESCRIPTION
-                    # on region change for region-mode worlds. The
-                    # ``if result.location`` branch above is character-
-                    # level (room_graph territory). For region-mode
-                    # (beneath_sunden surface, glenross, ...) the region
-                    # patch is the only signal — emit when it changed
-                    # this turn so the Location tab tracks ropefoot →
-                    # the_dropmouth. Idempotent for non-region worlds
-                    # (skipped on the world.cartography.navigation_mode
-                    # check) and for unchanged regions.
+                    # Playtest 2026-05-20 — per-turn LOCATION_DESCRIPTION on region
+                    # change for region-mode worlds (the result.location branch
+                    # above is room_graph-level). The region patch is the only
+                    # signal here. No-op for non-region worlds + unchanged regions.
                     _world_for_region_emit = sd.genre_pack.worlds.get(sd.world_slug)
                     _is_region_mode_world = (
                         _world_for_region_emit is not None
@@ -2332,16 +1874,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         == NavigationMode.region
                     )
                     if _is_region_mode_world:
-                        # Lie-detector (symmetric to room_graph's
-                        # ``narrator.location_drift_repaired``): on EVERY
-                        # region-mode turn, record whether the narrator
-                        # declared/changed ``current_region``. "Prose moved
-                        # the party but current_region did not" is the
-                        # frozen-Location-panel failure mode (playtest
-                        # 2026-05-21) — the GM panel must see it directly, not
-                        # infer it from a stale panel. Fires every turn so a
-                        # future regression (narrator stops emitting
-                        # current_region) is visible, not silent.
+                        # Lie-detector: on EVERY region-mode turn record whether
+                        # the narrator declared/changed current_region. "Prose
+                        # moved the party but current_region didn't" is the
+                        # frozen-Location-panel failure (playtest 2026-05-21);
+                        # firing every turn keeps a regression visible.
                         _region_changed = bool(
                             snapshot.current_region
                             and snapshot.current_region != prior_current_region
@@ -2367,13 +1904,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 emit_fn=_emit_shared_world_frame,
                                 room_id_override=snapshot.current_region,
                             )
-                    # Beneath Sünden BETTER fix (seam 3): project the live
-                    # region graph to the UI Map tab every turn (NOT gated
-                    # on result.location — region moves arrive via the
-                    # current_region patch, not always a location change;
-                    # unconditional per-turn also covers turn 1 + resume,
-                    # curing "No map data yet"). Idempotent; clean no-op
-                    # for every non-beneath_sunden world.
+                    # Beneath Sünden seam 3: project the live region graph to the
+                    # UI Map tab every turn (NOT gated on result.location — covers
+                    # turn 1 + resume, curing "No map data yet"). No-op off
+                    # beneath_sunden.
                     _maybe_emit_dungeon_map(
                         self,
                         sd=sd,
@@ -2393,12 +1927,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         )
                         if _cart_map is not None:
                             _emit_shared_world_frame(_cart_map, "MAP_UPDATE")
-                    # Story 54-7 / ADR-109: encounter overlay transitions.
-                    # Activate when a fresh encounter goes live this turn
-                    # carrying a location_overlay; deactivate when the prior
-                    # encounter resolved this turn and was carrying one.
-                    # Decoupled from room change — a bar fight can ignite
-                    # in the room the party already stands in.
+                    # Story 54-7 / ADR-109: encounter overlay transitions —
+                    # activate when a fresh encounter with a location_overlay goes
+                    # live, deactivate when one resolves. Decoupled from room change.
                     if now_live and not prior_live and now_encounter is not None:
                         _maybe_emit_location_overlay_changed(
                             self,
@@ -2420,21 +1951,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             emit_fn=_emit_shared_world_frame,
                             prior_overlay=prior_encounter.location_overlay,
                         )
-                    # Story 45-1 — sealed-letter shared-world handshake.
-                    # Build the canonical delta from the post-resolution
-                    # snapshot and ride it on NARRATION_END so peers see
-                    # ground-truth location/encounter/party formation
-                    # (playtest 3 fix: stops narrator fabricating
-                    # "collapsed corridor" between Orin and Blutka).
+                    # Story 45-1 — sealed-letter shared-world handshake: ride the
+                    # canonical post-resolution delta on NARRATION_END so peers see
+                    # ground-truth location/encounter/party (stops the narrator
+                    # fabricating geography between PCs).
                     handshake_delta = build_shared_world_delta(
                         snapshot,
                         room=self._room,
                     )
-                    # Magic Phase 4: ride the post-resolution magic_state on the
-                    # NARRATION_END handshake. Sent every turn (not gated on the
-                    # internal StateDelta.magic flag) — the UI is stateless on
-                    # this payload and an unchanged dict is cheap; gating would
-                    # silently desync the ledger after a reconnect.
+                    # Magic Phase 4: ride post-resolution magic_state on the
+                    # NARRATION_END handshake every turn (gating would silently
+                    # desync the ledger after a reconnect).
                     magic_state_dict = (
                         snapshot.magic_state.model_dump(mode="json")
                         if snapshot.magic_state is not None
@@ -2452,11 +1979,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     )
                     _emit_shared_world_frame(narration_end_msg, "NARRATION_END")
 
-                    # MP turn-ownership clear (ADR-036 sealed-letter pacing). Pair with
-                    # the TURN_STATUS{active} broadcast at action receipt — peers' banner
-                    # tone="peer" stays stuck without this clear. exclude_socket_id=None
-                    # so every socket (including the actor) gets the resolved signal;
-                    # the UI clears activePlayerName on status="resolved".
+                    # MP turn-ownership clear (ADR-036): pairs with the
+                    # TURN_STATUS{active} broadcast at action receipt — peers' banner
+                    # stays stuck without it. Broadcast to every socket; the UI
+                    # clears activePlayerName on status="resolved".
                     if self._room is not None and sd.player_name:
                         try:
                             acting_name = _resolve_acting_character_name(sd, self._room)
@@ -2465,12 +1991,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                     player_name=NonBlankString(acting_name),
                                     status="resolved",
                                     # Explicit empty roster — the UI clears
-                                    # turnStatusEntries on resolved; sending
-                                    # `[]` keeps the wire canonical and
-                                    # prevents the App.tsx per-player path
-                                    # from re-pushing a stale "pending"
-                                    # entry between the clear and the next
-                                    # round's broadcasts.
+                                    # turnStatusEntries on resolved; `[]` prevents
+                                    # App.tsx re-pushing a stale "pending" entry.
                                     entries=[],
                                 ),
                                 player_id=sd.player_id or "",
@@ -2498,41 +2020,30 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 exc,
                             )
 
-                    # Refresh PARTY_STATUS so `current_location` and any HP/inventory
-                    # mutations landed by the narration apply propagate to the client
-                    # header / CharacterSheet. Previously PARTY_STATUS
-                    # was emitted exactly once at chargen-end (before the opening
-                    # turn), which froze the location at its pre-opening value
-                    # (typically empty). Playtest 2026-04-22.
+                    # Refresh PARTY_STATUS so current_location + any HP/inventory
+                    # mutations propagate to the client header / CharacterSheet
+                    # (pre-fix it fired once at chargen-end and froze the location;
+                    # playtest 2026-04-22).
                     if snapshot.characters:
                         try:
-                            # MP: resolve "self" by sd.player_id, not snapshot.characters[0].
-                            # The turn-end refresh fires per-socket; if the requesting
-                            # socket isn't characters[0] (any non-first-committed
-                            # player in MP), passing characters[0] mis-tags that PC's
-                            # data with the requesting socket's player_id and the UI
-                            # renders the wrong PC as "(YOU)" — playtest 2026-04-25
-                            # "Tab 2 sees Laverne (YOU)".
+                            # MP: resolve "self" by sd.player_id, not
+                            # characters[0] — passing characters[0] mis-tags the
+                            # wrong PC as "(YOU)" for any non-first player
+                            # (playtest 2026-04-25 "Tab 2 sees Laverne (YOU)").
                             self_char = (
                                 views.resolve_self_character(self, sd) or snapshot.characters[0]
                             )
                             party_status = views.build_session_start_party_status(
                                 self, sd, self_char, sd.player_id
                             )
-                            # MP merged-dispatch: every connected socket needs the
-                            # post-narration party refresh (location/HP/inventory).
-                            # The dispatcher-built payload is safe to broadcast as-is —
-                            # each peer's UI resolves "(YOU)" via the seat_map-tagged
-                            # player_id of the member whose ``name`` matches its
-                            # connectedPlayerName, not via the dispatcher's player_id
-                            # field. Pre-fix-2 (peer-only broadcast), peers got it
-                            # but the dispatcher's reconnected socket missed it
-                            # (pingpong 2026-04-30 follow-on); single broadcast
-                            # path fixes both halves.
+                            # MP merged-dispatch: broadcast the party refresh to
+                            # every socket. Safe as-is — each peer's UI resolves
+                            # "(YOU)" via the seat_map-tagged player_id, not the
+                            # dispatcher's. Single broadcast covers both peers and
+                            # the dispatcher's reconnected socket (pingpong 2026-04-30).
                             _emit_shared_world_frame(party_status, "PARTY_STATUS")
-                            # Wave 2B (story 45-48): the log/event location is
-                            # the actor's own current scene — there is no
-                            # party-frame ``snapshot.location`` anymore.
+                            # Wave 2B (45-48): log the actor's own scene — there's
+                            # no party-frame snapshot.location anymore.
                             _ps_log_loc = (
                                 snapshot.party_location(perspective=self_char.core.name) or ""
                             )
@@ -2557,13 +2068,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         except Exception as exc:  # noqa: BLE001 — party refresh must never crash a turn
                             logger.warning("state.party_status_refresh_failed error=%s", exc)
 
-                # Visual-scene render dispatch. Fire-and-forget: the RENDER_QUEUED
-                # message ships with the NARRATION payload; the async render task
-                # posts an IMAGE message onto the per-connection outbound queue
-                # when the daemon replies. Short-circuits without any socket work
-                # when: render flag off, no visual scene, daemon socket missing,
-                # or outbound queue unavailable (test configurations that don't
-                # attach room context).
+                # Visual-scene render dispatch. Fire-and-forget: RENDER_QUEUED
+                # ships now; the async task posts IMAGE when the daemon replies.
+                # Short-circuits on render flag off / no scene / no daemon / no queue.
                 render_queued = self._maybe_dispatch_render(
                     sd,
                     result,
@@ -2574,20 +2081,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 if render_queued is not None:
                     outbound.append(render_queued)
 
-                # Audio DJ dispatch. Synchronous: AUDIO_CUE (or nothing) ships
-                # with this turn's outbound frames. No placeholder + later message
-                # dance — the DJ is a local filesystem lookup. MP: same cue plays
-                # for every player at the table — broadcast to peers so the music
-                # bed transitions in lock-step with the shared narration.
+                # Audio DJ dispatch. Synchronous (local filesystem lookup):
+                # AUDIO_CUE ships with this turn's frames. Broadcast so the music
+                # bed transitions in lock-step for every player.
                 audio_cue = self._maybe_dispatch_audio(sd, result)
                 if audio_cue is not None:
                     _emit_shared_world_frame(audio_cue, "AUDIO_CUE")
 
-                # turn_complete is now emitted by the validator (per ADR-089 §6.7).
-                # The TurnRecord assembled below is the single source of truth.
+                # turn_complete is emitted by the validator (ADR-089 §6.7); the
+                # TurnRecord below is the single source of truth.
 
                 # --- TurnRecord assembly + validator submit ---
-                # Wrapped in try/except: the validator must NEVER crash the hot path.
+                # The validator must NEVER crash the hot path.
                 if self._validator is not None:
                     try:
                         _patch_summaries: list[PatchSummary] = []
@@ -2658,15 +2163,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("turn_record.assemble_failed: %s", exc)
 
-                # Per-turn `game_state_snapshot` for the dashboard State tab
-                # (playtest 2026-04-30 #1C). Pre-fix this event was published
-                # only at session connect / chargen confirmation — after the
-                # initial fire the State tab read "Waiting for
-                # GameStateSnapshot event..." forever. Per ADR-031 the watcher
-                # is supposed to tick every turn so the GM panel can verify
-                # state advancement; this publish closes that gap. Wrapped in
-                # try/except so a serialization issue cannot crash the hot
-                # turn path.
+                # Per-turn game_state_snapshot for the dashboard State tab
+                # (playtest 2026-04-30 #1C). Pre-fix it fired only at connect, so
+                # the State tab waited forever. ADR-031 wants a per-turn tick.
                 try:
                     _watcher_publish(
                         "game_state_snapshot",
@@ -2677,19 +2176,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             "player_name": sd.player_name,
                             "player_id": sd.player_id,
                             "turn_number": snapshot.turn_manager.interaction,
-                            # Full snapshot dump so the dashboard's State
-                            # panel can render characters / NPCs / inventory
-                            # / known facts / regions etc. Pre-fix the
-                            # event payload was a thin summary
-                            # (counts only) and the State panel could
-                            # not draw any of its rich UI even when the
-                            # event did fire at connect.
+                            # Full snapshot dump so the State panel can render its
+                            # rich UI (pre-fix the payload was counts-only).
                             "snapshot": snapshot.model_dump(mode="json"),
-                            # Back-compat summary fields the connect-time
-                            # publishes have always exposed. Wave 2B (story
-                            # 45-48): use the per-actor location for the
-                            # dashboard's "current_location" — the dashboard
-                            # is per-player.
+                            # Back-compat summary fields. Wave 2B (45-48):
+                            # per-actor location (the dashboard is per-player).
                             "current_location": (
                                 snapshot.party_location(
                                     perspective=snapshot.player_seats.get(sd.player_id, "")
@@ -2721,16 +2212,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             with contextlib.suppress(Exception):  # finally must never re-raise
                 timings.mark_done()
 
-            # Per-turn watcher→OTLP bridge diagnostic + flush. Two birds:
-            # (1) prove the bridge fired during this turn — a non-zero
-            # ``minted`` value is hard evidence that publish_event saw the
-            # ``SIDEQUEST_WATCHER_AS_SPANS`` flag and minted synthetic spans,
-            # closing the "is the bridge live during gameplay?" question that
-            # the resume-only Jaeger output kept open. (2) force a tracer
-            # flush so the BatchSpanProcessor (default 2 s schedule) doesn't
-            # hide turn-level spans from a live Jaeger viewer for the next
-            # batch window. Both actions are wrapped in suppress() because
-            # diagnostics must NEVER fail a turn.
+            # Per-turn watcher→OTLP bridge diagnostic + flush: (1) a non-zero
+            # ``minted`` proves the bridge fired this turn; (2) force a tracer
+            # flush so the BatchSpanProcessor doesn't hide turn-level spans.
+            # Suppressed — diagnostics must NEVER fail a turn.
             with contextlib.suppress(Exception):
                 minted = synthetic_spans_count() - bridge_minted_at_start
                 logger.info(
@@ -2743,10 +2228,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 )
             with contextlib.suppress(Exception):
                 provider = trace.get_tracer_provider()
-                # ``force_flush`` is on the SDK ``TracerProvider``; the proxy
-                # provider used in tests / pre-init paths doesn't have it. A
-                # hasattr check avoids importing the SDK class here just to
-                # isinstance-check it.
+                # force_flush is on the SDK TracerProvider but not the proxy
+                # provider used in tests; hasattr avoids importing the SDK class.
                 flush = getattr(provider, "force_flush", None)
                 if callable(flush):
                     flush(timeout_millis=200)
@@ -2792,37 +2275,16 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     ) -> list[object]:
         """Fire the opening narration turn at the end of chargen.
 
-        Consumes ``sd.opening_seed`` + ``sd.opening_directive`` exactly
-        once. The seed becomes the first "action" string; the directive
-        is injected into the narrator's Early zone for this turn only.
-        Both fields are zeroed on the session after the turn runs so
-        the next PLAYER_ACTION turn sees a fresh context.
-
-        When no opening hook was resolved at connect time (pack has no
-        openings) the Rust dispatcher substitutes a generic
-        "I look around and take in my surroundings." Match that — the
-        narrator still fires so the player lands in the world rather
-        than at a blank UI.
-
-        Rust parity: connect.rs:2270-2529.
+        Consumes ``sd.opening_seed`` + ``sd.opening_directive`` once (seed →
+        first action, directive → narrator Early zone), then zeroes both. When
+        no opening hook was resolved, substitutes a generic "I look around…" so
+        the narrator still fires.
         """
-        # Consume-time MP-joiner suppression (playtest 2026-04-26
-        # [S2-BUG] coyote_star regression). The connect-time guard in
-        # ``_handle_connect`` only fires when the joiner connects AFTER
-        # the host has completed chargen — checking
-        # ``len(snapshot.characters) > 0`` at connect-time. In the more
-        # common race scenario (both players in lobby together, both
-        # walking chargen at the same time) the joiner's ``sd.opening_
-        # seed/directive`` get populated at connect because the snapshot
-        # was empty, and only the timing of chargen-completion decides
-        # who's first vs. second. This guard catches the second
-        # committer at consume-time: by the time we get here, the joiner's
-        # PC is already in ``sd.snapshot.characters`` (appended in the
-        # second-commit branch around line 2725), so the test is "more
-        # than just me" → at least one peer character is present →
-        # suppress the cold-open and fall back to the generic continuation
-        # action so the persistent narrator (ADR-067) treats this as
-        # scene continuation, not a fresh in-medias-res open.
+        # Consume-time MP-joiner suppression (playtest 2026-04-26 coyote_star
+        # regression). The connect-time guard misses the both-in-lobby race; by
+        # the time we get here the joiner's PC is in snapshot.characters, so
+        # >1 character means suppress the cold-open and fall back to the generic
+        # continuation action (ADR-067 scene continuation, not a fresh open).
         if sd.opening_seed is not None and len(sd.snapshot.characters) > 1:
             _watcher_publish(
                 "mp_joiner_opening_suppressed_at_consume",
@@ -2859,59 +2321,26 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             sd.opening_seed = None
             sd.opening_directive = None
 
-        # Playtest 2026-04-29 BUG-LOW: when MP joiner-orientation fires (the
-        # suppression branch above just zeroed the seed), the previous
-        # fallback "I look around and take in my surroundings." gave the
-        # narrator a generic, unattributed action — and the resulting
-        # narration treated the host PC as if THEY had performed it
-        # ("Laverne is in the pilot's couch, hands flat on her thighs..."),
-        # because the narrator had no anchor for whose POV the orientation
-        # belonged to. Naming the joining PC explicitly fixes the POV
-        # attribution; the SOUL.md Agency strengthening (sibling fix in
-        # this playtest cycle) keeps the narrator from inventing dialogue
-        # for either PC. We resolve the joining PC's character name from
-        # the snapshot — it was just appended in the second-commit branch,
-        # so the joiner is the LAST entry in ``snapshot.characters``.
+        # Playtest 2026-04-29: on MP joiner-orientation the old generic fallback
+        # gave the narrator an unattributed action and it narrated the host PC's
+        # POV instead. Naming the joining PC fixes the attribution.
         joiner_orientation = sd.opening_seed is None and len(sd.snapshot.characters) > 1
         if joiner_orientation:
-            # Per-arrival entry beat (Keith's path #1, sq-playtest 2026-05-12):
-            # every PC gets per-PC POV anchored on the just-joined PC. The
-            # previous ``len(snapshot.characters) >= 3`` omniscient
-            # party-orientation branch (commit ``e23ef6a`` 2026-05-01) was
-            # added to handle a 4-PC simultaneous-commit scenario where the
-            # opener anchored on whoever happened to be ``characters[-1]``.
-            # Under sequential commits — the actual production flow — each
-            # chargen-complete is a discrete event with a well-defined
-            # just-joining PC: ``player_seats[sd.player_id]``. The omniscient
-            # framing then suppressed per-PC POV for every PC from the 3rd
-            # onward (sq-playtest 2026-05-12 Carl/Donut/Katia: Katia got
-            # ``atmospheric, names no PC`` because she was the 3rd commit).
-            #
-            # Resolve joiner_char_name from the seat-map first (authoritative
-            # for the connecting session's PC) and fall back to
-            # ``characters[-1]`` for legacy paths that don't bind player_id.
+            # Per-arrival entry beat (sq-playtest 2026-05-12): anchor POV on the
+            # just-joined PC. The prior >=3 omniscient branch suppressed per-PC
+            # POV for the 3rd+ commit (Carl/Donut/Katia bug). Resolve the joiner
+            # from the seat-map, falling back to characters[-1] for legacy paths.
             joiner_char_name = sd.snapshot.player_seats.get(sd.player_id or "", "") or (
                 sd.snapshot.characters[-1].core.name
                 if sd.snapshot.characters
                 else (sd.player_name or "the new arrival")
             )
-            # Playtest 2026-05-02 [BUG-LOW]: joiner-orientation drifted
-            # off the established scene (host on the Kestrel cockpit;
-            # joiner improvised at Vaskov Centrum East Freight Stair).
-            # The chargen confirmation epilogue promises "the crew is
-            # the crew" — both PCs aboard the same chassis at session
-            # start — and the canned MP opening (mp_galley_jumprest)
-            # anchors the host aboard the Kestrel. Anchor the joiner
-            # explicitly to the location the host's prior turn already
-            # established so the narrator does not invent a new place
-            # for the second PC. Falls back to "the same scene the
-            # other player(s) are in" when no seated PC has a known
-            # location yet (degenerate path, but defensible).
-            #
-            # Wave 2B (story 45-48): pick the location from any
-            # already-seated non-joiner PC's per-character entry.
-            # ``party_location()`` would return None here because the
-            # just-chargen'd joiner doesn't have an entry yet.
+            # Playtest 2026-05-02: joiner-orientation drifted off the
+            # established scene. Anchor the joiner to the host's already-
+            # established location so the narrator doesn't invent a new place;
+            # fall back to "the same scene the others are in" when no seated PC
+            # has a known location. Wave 2B (45-48): read the location from any
+            # already-seated non-joiner PC (party_location() is None pre-entry).
             host_location = ""
             for _seated_char in sd.snapshot.player_seats.values():
                 if _seated_char and _seated_char != joiner_char_name:
@@ -2924,11 +2353,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 if host_location
                 else "into the same scene the other player(s) are already in"
             )
-            # For 3+ PCs, name the other already-seated PCs explicitly so
-            # the narrator has the full table in view when it describes
-            # the arrival ("Carl is already here..."-style). This is the
-            # 3-PC repro's correct shape — Donut's beat referenced Carl
-            # by name, and Katia's beat should reference Carl and Donut.
+            # For 3+ PCs, name the other seated PCs so the narrator has the full
+            # table in view when describing the arrival.
             other_pcs = [
                 n for n in sd.snapshot.player_seats.values() if n and n != joiner_char_name
             ]
@@ -2947,12 +2373,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 "already present."
             )
             source_tier = "mp_joiner_orientation"
-            # OTEL: surface the anchor decision so the GM panel can
-            # verify the joiner's prompt actually carried the host's
-            # location (CLAUDE.md OTEL principle — Sebastien's
-            # lie-detector). Mirror the watcher_publish payload as a
-            # span.add_event so OTLP exporters (Jaeger / in-memory
-            # test exporter) see it without needing
+            # OTEL: surface the anchor decision (CLAUDE.md OTEL principle) so the
+            # GM panel can verify the joiner's prompt carried the host's location.
+            # Mirrored as span.add_event so OTLP exporters see it without
             # SIDEQUEST_WATCHER_AS_SPANS=1.
             anchor_kind = "host_location" if host_location else "fallback_same_scene"
             _watcher_publish(
@@ -2984,22 +2407,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             action = sd.opening_seed or "I look around and take in my surroundings."
             source_tier = "world_or_genre_hook" if sd.opening_seed else "fallback"
 
-        # Cold-open delivery (playtest 2026-04-25 [P2]). The opening seed
-        # is in-medias-res prose the world author wrote for the player to
-        # READ — not narrator prompt-context. Previously it was passed only
-        # as `action='...'` and the narrator silently consumed it: long
-        # hooks got truncated (player saw "the iron door grinds inward" but
-        # never the kidnapping setup), short hooks survived expansion by
-        # accident. The contract was broken either way.
-        #
-        # Fix: emit the seed directly to the player as a NARRATION message
-        # BEFORE running the narrator. The narrator's first turn still
-        # receives the seed as `action` and continues from where the hook
-        # ends — so what the player sees is hook + continuation as a
-        # single coherent opening beat, instead of the hook being a ghost
-        # in the prompt. Suppressed when the pack has no opening hook
-        # (the fallback "I look around…" is the player's implicit action,
-        # not authored cold-open prose).
+        # Cold-open delivery (playtest 2026-04-25 [P2]). The opening seed is
+        # authored prose for the player to READ, not narrator prompt-context;
+        # passing it only as `action` truncated long hooks. Fix: emit the seed as
+        # a NARRATION message BEFORE the narrator runs (which still receives it as
+        # `action` and continues from there) so the player sees hook + continuation
+        # as one beat. Suppressed when the pack has no opening hook.
         cold_open_messages: list[object] = []
         if sd.opening_seed:
             cold_open_messages.append(
@@ -3047,20 +2460,16 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         )
         messages = cold_open_messages + list(narrator_messages)
 
-        # Canned-openings Phase 4 (Task 19): emit opening.played span at
-        # consumption so the GM panel can verify the canned opening
-        # actually reached the narrator's first turn rather than being
-        # silently dropped. Only fires when a directive was actually
-        # rendered (skips MP-joiner / no-opening / fallback paths).
+        # Canned-openings Phase 4 (Task 19): emit opening.played at consumption
+        # so the GM panel can verify the opening reached the narrator's first
+        # turn. Only fires when a directive was rendered.
         if sd.opening_directive is not None:
             record_opening_played(
                 opening_id=getattr(sd, "_resolved_opening_id", None) or "<unknown>",
                 turn_id=sd.snapshot.turn_manager.interaction,
             )
 
-        # Consume once — Rust uses `opening_directive.take()`; subsequent
-        # turns must run directive-free. Same for the seed: it's a
-        # one-shot bootstrap action, not a recurring input.
+        # Consume once — subsequent turns run directive- and seed-free.
         sd.opening_seed = None
         sd.opening_directive = None
 
@@ -3079,33 +2488,19 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         snapshot_location_before: str | None = None,
         acting_character_name: str | None = None,
     ) -> RenderQueuedMessage | None:
-        """Fire a render request at the media daemon if the trigger policy
-        classifies this turn as eligible (Story 45-30).
+        """Fire a render request if the trigger policy rates this turn eligible
+        (Story 45-30).
 
-        Returns a ``RenderQueuedMessage`` to append to the turn's outbound
-        frames, or ``None`` when nothing was dispatched (policy chose
-        none_policy, feature flag off, daemon offline, or no outbound queue).
-
-        The actual daemon round-trip runs on a background task; the IMAGE
-        reply lands on ``self._out_queue`` whenever the render completes.
-        Failures are swallowed with OTEL spans + watcher events so that no
-        render error ever crashes a turn.
+        Returns a ``RenderQueuedMessage`` to append to outbound frames, or
+        ``None`` when nothing dispatched (none_policy, flag off, daemon offline,
+        no queue). The daemon round-trip runs on a background task; failures are
+        swallowed with OTEL/watcher events so no render error crashes a turn.
 
         Args:
-            encounter_resolved_this_turn: ``True`` when an active encounter
-                transitioned to ``resolved`` on this turn. Threaded from
-                the ``narration_apply`` seam — the caller compares pre- and
-                post-apply state to derive this signal. Default ``False``
-                lets test fixtures and the throttled-by-other-gates code
-                path call without rewiring.
-            snapshot_location_before: The acting PC's location BEFORE
-                ``_apply_narration_result_to_snapshot`` mutated it (Wave
-                2B uses ``snapshot.party_location(perspective=acting)``).
-                The production caller captures this; tests that call
-                directly may omit it (defaults to the party consensus
-                accessor, which is correct when the test never applies
-                narration). The classifier needs the pre-apply value to
-                detect SCENE_CHANGE.
+            encounter_resolved_this_turn: ``True`` when an encounter resolved
+                this turn (threaded from the narration_apply seam).
+            snapshot_location_before: the acting PC's location pre-apply, which
+                the classifier needs to detect SCENE_CHANGE.
         """
         from sidequest.agents.orchestrator import NarrationTurnResult
         from sidequest.server.render_trigger import (
@@ -3120,12 +2515,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         had_visual_scene = visual is not None
         subject_present = had_visual_scene and bool(getattr(visual, "subject", "").strip())
 
-        # Policy gate (Story 45-30) — classify the trigger reason from the
-        # structured signals already on NarrationTurnResult plus the
-        # out-of-band ``encounter_resolved_this_turn`` boolean. The
-        # narrator's ``visual_scene`` block is NOT a signal; pre-story
-        # behaviour gated on it and let banter turns render while named-
-        # NPC introductions did not.
+        # Policy gate (Story 45-30) — classify from the structured signals on
+        # NarrationTurnResult + encounter_resolved_this_turn. The visual_scene
+        # block is NOT a signal (pre-story it let banter render but skipped
+        # named-NPC introductions).
         location_before = (
             snapshot_location_before
             if snapshot_location_before is not None
@@ -3139,16 +2532,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
 
         turn_number = sd.snapshot.turn_manager.interaction
 
-        # NONE_POLICY: emit both render.trigger (with eligible=False,
-        # queued=False) AND the focused render.policy_skip event. Per
-        # CLAUDE.md OTEL Observability Principle, silence is the bug —
-        # the GM panel needs the negative confirmation that the policy
-        # ran on this turn. Pattern matches the existing render
-        # throttle_decision watcher events: event_type=state_transition,
-        # field=render, op=<route key>. The SPAN_ROUTES entry for
-        # render.trigger is a static registry check (asserts the route
-        # is declared); the actual emission happens here so it works
-        # without an OTEL span being opened.
+        # NONE_POLICY: emit render.trigger (eligible=False) AND render.policy_skip
+        # so the GM panel gets negative confirmation the policy ran (CLAUDE.md
+        # OTEL principle — silence is the bug).
         if reason is RenderTriggerReason.NONE_POLICY:
             _watcher_publish(
                 "state_transition",
@@ -3173,17 +2559,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     "reason": reason.value,
                     "turn_number": turn_number,
                     "player_id": sd.player_id,
-                    # Distinguishes "narrator didn't even try" from
-                    # "narrator emitted a subject but no policy match".
+                    # "narrator didn't try" vs "emitted a subject, no policy match".
                     "narrator_emitted_subject": subject_present,
                 },
                 component="render",
             )
             return None
 
-        # Eligible — emit the trigger event before any downstream gate so
-        # the GM panel sees the policy decision even when the feature
-        # flag / daemon / queue refuses below.
+        # Eligible — emit the trigger event before any downstream gate so the GM
+        # panel sees the policy decision even when a gate refuses below.
         _watcher_publish(
             "state_transition",
             {
@@ -3191,10 +2575,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 "op": "trigger",
                 "reason": reason.value,
                 "eligible": True,
-                # ``queued`` reflects whether dispatch will actually proceed.
-                # We set True optimistically here; if a downstream gate
-                # refuses synchronously, that path emits its own watcher
-                # event and we don't retroactively edit this one.
+                # Optimistic True; a downstream synchronous refusal emits its
+                # own watcher event rather than editing this one.
                 "queued": True,
                 "turn_number": turn_number,
                 "player_id": sd.player_id,
@@ -3204,11 +2586,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             component="render",
         )
 
-        # Eligible turns still need a visual_scene to actually compose a
-        # prompt — the policy says "the narrative weight earned a render"
-        # but the prompt-building code requires a subject string. When
-        # the narrator didn't emit one (narrative weight present but
-        # subject missing), we cannot dispatch — log loudly and return.
+        # Eligible turns still need a visual_scene subject to compose a prompt.
+        # When the narrator emitted none, we cannot dispatch — log loudly.
         if not subject_present:
             logger.warning(
                 "render.eligible_no_subject reason=%s turn=%d — "
@@ -3232,15 +2611,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             )
             return None
         client = DaemonClient()
-        # Story 45-31: the turn pipeline already consulted the
-        # daemon-state mirror immediately before the scrapbook emit
-        # and stamped ``sd.render_unavailable_pending`` accordingly.
-        # The SCRAPBOOK_ENTRY for this turn already carries
-        # ``render_status="unavailable"`` (live broadcast + DB row in
-        # one shot — no duplicate row, no separate replay JOIN).
-        # All this branch needs to do is: emit the watcher event so
-        # the GM panel sees the substitution, increment counters, and
-        # return None to skip the daemon round-trip.
+        # Story 45-31: render_unavailable_pending was already stamped before the
+        # scrapbook emit (which carries render_status="unavailable"). Here just
+        # emit the watcher event, bump counters, and skip the round-trip.
         if sd.render_unavailable_pending:
             from sidequest.daemon_client.state_mirror import get_mirror as _get_mirror
 
@@ -3284,15 +2657,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             )
             return None
         if self._out_queue is None:
-            # Test configurations that don't attach room context can't
-            # receive async IMAGE frames. Skip loudly so we don't fire
-            # a render whose result has nowhere to land.
+            # No room context (test config) — nowhere for the IMAGE to land.
             logger.warning("render.skipped reason=no_outbound_queue")
             return None
 
-        # ADR-050 image pacing throttle. Consult BEFORE allocating a
-        # render_id or touching the daemon — suppressed renders should
-        # leave no trace beyond the OTEL decision event.
+        # ADR-050 image pacing throttle. Consult BEFORE allocating a render_id
+        # or touching the daemon — suppressed renders leave only the OTEL event.
         throttle_decision = sd.image_pacing_throttle.should_render()
         provisional_render_id = uuid.uuid4().hex[:12]
         if not throttle_decision.allowed:
@@ -3317,9 +2687,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 component="render",
             )
             return None
-        # Allowed — emit the allow decision so the GM panel can see both
-        # branches in the OTEL stream (lie-detector requirement per
-        # CLAUDE.md OTEL Observability Principle).
+        # Allowed — emit the allow decision so the GM panel sees both branches
+        # (CLAUDE.md OTEL lie-detector requirement).
         _watcher_publish(
             "state_transition",
             {
@@ -3337,18 +2706,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         render_id = provisional_render_id
         tier = (visual.tier or "scene_illustration").strip() or "scene_illustration"
 
-        # The location is free-form narrator prose (e.g. "The Kestrel —
-        # Galley, Mid-Coast", "Engine Bay"), not a `where:<slug>`
-        # PlaceCatalog ref. The daemon's PromptComposer `_resolve_location`
-        # accepts an empty location (transient setting, subject prose
-        # carries it) and rejects anything else with ValueError →
-        # COMPOSE_FAILED. Sanitize once, centrally, before the per-tier
-        # branches: only true `where:<slug>` refs survive. Free-form prose
-        # is dropped to "" with a loud watcher event so the GM panel can
-        # see the contract gap (per CLAUDE.md "no silent fallbacks" + OTEL
-        # observability principle). Wave 2B (story 45-48): the source is
-        # the acting PC's per-character location; party-frame consensus
-        # is the fallback when the caller didn't thread an actor.
+        # The location is free-form narrator prose, not a `where:<slug>`
+        # PlaceCatalog ref. The daemon's _resolve_location accepts "" but rejects
+        # anything non-ref with ValueError → COMPOSE_FAILED. Sanitize centrally:
+        # only true `where:<slug>` refs survive; free-form prose drops to "" with
+        # a loud watcher event (no silent fallback). Wave 2B (45-48): source is
+        # the acting PC's location, party consensus as fallback.
         raw_location = (
             sd.snapshot.party_location(perspective=acting_character_name)
             if acting_character_name
@@ -3372,19 +2735,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 severity="info",
             )
 
-        # R2 migration Task 20: propagate the session id into the daemon's
-        # render params so the artifact upload key
-        # ``artifacts/<world>/<session>/<kind>/<sha>.<ext>`` carries the
-        # real session segment. The daemon's zimage worker reads
-        # ``params["session_id"]`` and falls back to the literal
-        # ``"unknown"`` when missing — defeating per-session bucketing,
-        # save-aware sweeping, and operational forensics. The slug-connect
-        # path (the only production render-eligible path) always populates
-        # ``sd.game_slug``; ``sd._room.slug`` is the same value and used
-        # as the source of truth so we don't depend on an optional field.
-        # Per "No Silent Fallbacks" we refuse to dispatch with a missing
-        # session id rather than papering over it with a placeholder —
-        # the dispatch-eligible code path is always inside an active room.
+        # R2 migration Task 20: propagate the session id so the upload key
+        # ``artifacts/<world>/<session>/<kind>/<sha>.<ext>`` carries a real
+        # session segment (the daemon falls back to "unknown" when missing,
+        # defeating per-session bucketing). Per "No Silent Fallbacks", refuse to
+        # dispatch with a missing session id rather than use a placeholder.
         if self._room is not None:
             session_id = self._room.slug
         elif sd.game_slug is not None:
@@ -3404,35 +2759,22 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             "location": sanitized_location,
             "narration": result.narration,
             "genre": sd.genre_slug,
-            # Catalog-injected compose wiring (slice 1): the daemon scopes
-            # CharacterCatalog / PlaceCatalog / StyleCatalog by (genre, world).
-            # Without this field the daemon's compose conditional is dead and
-            # every render falls through to the prose-subject prompt path.
-            #
-            # Bug #2a (playtest 2026-04-26) reinforced the same constraint:
-            # the daemon's PromptComposer gate at
-            # sidequest-daemon/sidequest_daemon/media/daemon.py:453 short-
-            # circuits when ``params["world"]`` is absent, falling back to a
-            # raw subject+mood+tags prompt with no genre/world style. That
-            # silent fallback is why grimvault renders looked generic.
-            # Sending ``world`` engages the explicit-recipes pipeline so the
-            # world-scoped ``visual_style.yaml::positive_suffix`` actually
-            # lands in the ART_SENSIBILITY.WORLD slot.
+            # Catalog-injected compose (slice 1): the daemon scopes its catalogs
+            # by (genre, world). Without ``world`` the compose conditional is
+            # dead and every render falls through to the prose-subject path with
+            # no world style (Bug #2a, playtest 2026-04-26 — generic grimvault
+            # renders). Sending it engages the world-scoped visual_style suffix.
             "world": sd.world_slug,
             # R2 migration Task 20 — see preamble above.
             "session_id": session_id,
         }
-        # Portrait initials overlay (story 37-30 AC-4): the daemon's
-        # portrait composer needs the character's display name to draw
-        # the initials card. Other tiers ignore the field.
+        # Portrait initials overlay (story 37-30 AC-4): the portrait composer
+        # needs the display name for the initials card. Other tiers ignore it.
         if tier == "portrait":
             params["subject_name"] = sd.player_name
-            # Catalog-injected compose, slice 2: emit a structured `pc:<slug>`
-            # ref so the daemon's PromptComposer routes the portrait through
-            # the catalog instead of falling through to the prose-subject
-            # path. When the snapshot has a Character to project, we ship a
-            # descriptor blob alongside; the daemon's `_get_composer` calls
-            # `CharacterCatalog.add_pc` from it.
+            # Catalog-injected compose, slice 2: a `pc:<slug>` ref routes the
+            # portrait through the catalog instead of the prose-subject path; ship
+            # a descriptor blob for the daemon's CharacterCatalog.add_pc.
             pc_slug = _slugify_player_name(sd.player_name)
             params["characters"] = [f"pc:{pc_slug}"]
             descriptor = _build_pc_descriptor(sd, pc_slug)
@@ -3440,27 +2782,22 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 params["pc_descriptor"] = descriptor
         elif tier == "scene_illustration":
             pc_slug = _slugify_player_name(sd.player_name)
-            # Match daemon's `build_cue_from_params` read key. The portrait
-            # branch above sets `characters`; this branch was previously
-            # setting `participants`, which the daemon never reads — so the
-            # PC ref never reached the composer's casting layer. The on-
-            # the-wire field is `characters` for both tiers; the daemon
-            # routes to portrait/illustration recipes by tier.
+            # `characters` is the field the daemon reads (it once read
+            # `participants` here, which the daemon ignored, so the PC ref never
+            # reached the composer). The daemon routes to recipes by tier.
             params["characters"] = [f"pc:{pc_slug}"]
             descriptor = _build_pc_descriptor(sd, pc_slug)
             if descriptor is not None:
                 params["pc_descriptor"] = descriptor
 
-        # Story 37-30 — record the (room_slug, player_id) mapping at
-        # dispatch so the completion handler can route the IMAGE through
-        # the live RoomRegistry queue instead of a closure-captured one
-        # that may have gone stale across a reconnect.
+        # Story 37-30 — record (room_slug, player_id) at dispatch so the
+        # completion handler routes the IMAGE via the live RoomRegistry queue,
+        # not a closure-captured one that may be stale after a reconnect.
         room_slug = self._room.slug if self._room is not None else None
         player_id = sd.player_id
-        # Playtest 2026-05-02: capture the dispatch-time turn_id so the
-        # render-completed handler can backfill the matching
-        # scrapbook_entries row's image_url (the live broadcast is
-        # ephemeral; replay-on-reload misses every IMAGE without this).
+        # Playtest 2026-05-02: capture the dispatch-time turn_id so completion
+        # can backfill the scrapbook row's image_url (the broadcast is ephemeral;
+        # replay-on-reload misses every IMAGE without this).
         dispatch_turn_id = int(sd.snapshot.turn_manager.interaction)
 
         logger.info(
@@ -3480,23 +2817,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 "turn_number": sd.snapshot.turn_manager.interaction,
                 "player_id": player_id,
                 "room_slug": room_slug or "",
-                # Bug #2a lie-detector: surface the genre/world routing the
-                # daemon will see. If ``world`` is empty here, the daemon's
-                # PromptComposer gate will short-circuit and the render will
-                # silently fall back to a styleless prompt.
+                # Bug #2a lie-detector: surface the genre/world the daemon sees.
+                # Empty ``world`` means the compose gate short-circuits to a
+                # styleless prompt.
                 "genre": sd.genre_slug,
                 "world": sd.world_slug,
             },
             component="render",
         )
 
-        # Story 45-31: backpressure check — orthogonal to ADR-050 throttle.
-        # The throttle gates time-since-last-dispatch; backpressure gates
-        # concurrent in-flight depth so a daemon already swamped with
-        # renders gets a loud warn (and counter increment) before the
-        # 4th render piles in. Default threshold = 3; warn-mode lets
-        # the request through, conservative-tunable reject-mode is left
-        # for a follow-up.
+        # Story 45-31: backpressure check (orthogonal to the ADR-050 throttle's
+        # time gate) — warns on concurrent in-flight depth before a swamped
+        # daemon piles on. Threshold 3; warn-mode lets the request through.
         sd.render_enqueue_count += 1
         in_flight_after = sd.render_in_flight + 1
         backpressure_threshold = 3
@@ -3523,14 +2855,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 component="render",
                 severity="warning",
             )
-        # Increment the in-flight counter; ``_run_render`` decrements
-        # it in the background task's finally block.
+        # _run_render decrements this in its finally block.
         sd.render_in_flight = in_flight_after
 
-        # Capture the legacy out_queue only as a fallback for the
-        # pre-room-context test/legacy path. When `_room` is set (the
-        # production slug-connect path) the completion handler looks the
-        # queue up via the registry instead.
+        # legacy_queue is the pre-room-context fallback; when _room is set the
+        # completion handler looks the queue up via the registry instead.
         legacy_queue = self._out_queue if room_slug is None else None
         asyncio.create_task(
             self._run_render(
@@ -3544,10 +2873,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 sd,
             )
         )
-        # ADR-050 — record the dispatch *after* the task is created so the
-        # cooldown only starts ticking on actually-dispatched renders.
-        # ``force_render`` callers intentionally skip this call to leave the
-        # cadence untouched; this code path is the organic dispatch only.
+        # ADR-050 — record the dispatch after the task is created so the cooldown
+        # only ticks on actually-dispatched renders (force_render skips this).
         sd.image_pacing_throttle.record_render()
 
         return RenderQueuedMessage(
@@ -3561,21 +2888,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     # ------------------------------------------------------------------
 
     async def _retrieve_lore_for_turn(self, sd: _SessionData, action: str) -> str | None:
-        """Pre-turn lore RAG retrieval. Delegates to ``lore_embed.retrieve_for_turn``.
-
-        Phase 3 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-        """
+        """Pre-turn lore RAG retrieval. Delegates to ``lore_embed.retrieve_for_turn``."""
         from sidequest.server.dispatch import lore_embed
 
         return await lore_embed.retrieve_for_turn(self, sd, action)
 
     def _dispatch_embed_worker(self, sd: _SessionData) -> None:
-        """Post-turn embed worker dispatch. Delegates to ``lore_embed.dispatch_worker``.
-
-        Phase 3 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-        """
+        """Post-turn embed worker dispatch. Delegates to ``lore_embed.dispatch_worker``."""
         from sidequest.server.dispatch import lore_embed
 
         lore_embed.dispatch_worker(self, sd)
@@ -3583,11 +2902,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     async def _run_embed_worker(
         self, sd: _SessionData, pending_count: int, turn_number: int
     ) -> None:
-        """Background embed worker. Delegates to ``lore_embed.run_worker``.
-
-        Phase 3 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-        """
+        """Background embed worker. Delegates to ``lore_embed.run_worker``."""
         from sidequest.server.dispatch import lore_embed
 
         await lore_embed.run_worker(self, sd, pending_count, turn_number)
@@ -3603,21 +2918,14 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         dispatch_turn_id: int,
         sd: _SessionData | None = None,
     ) -> None:
-        """Background render coroutine — waits for the daemon reply, then
-        enqueues an IMAGE message or logs a failure. Never raises; any
-        exception is caught and surfaced as an OTEL watcher event.
+        """Background render coroutine — waits for the daemon reply, enqueues an
+        IMAGE or logs a failure. Never raises (exceptions become OTEL events).
 
-        Routing (story 37-30): when ``room_slug`` is set, the IMAGE is
-        delivered to the *current* outbound queue looked up via the
-        RoomRegistry — so a reconnect mid-render still gets its image.
-        ``legacy_queue`` is the pre-room-context fallback for
-        constructions that haven't joined a room (used by older tests
-        and the deprecated genre/world connect path).
-
-        ``sd`` is optional for backwards compatibility with legacy
-        call sites; when provided, the in-flight render counter
-        (story 45-31) is decremented in the finally block so the
-        backpressure gate sees an accurate concurrent depth."""
+        Routing (story 37-30): with ``room_slug`` set, the IMAGE goes to the
+        current outbound queue via the RoomRegistry so a mid-render reconnect
+        still gets it; ``legacy_queue`` is the pre-room-context fallback. ``sd``
+        optional — when present, the in-flight counter (45-31) decrements in finally.
+        """
         try:
             await self._run_render_inner(
                 client,
@@ -3631,8 +2939,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             )
         finally:
             if sd is not None:
-                # Decrement is unconditional — a render that completed,
-                # failed, or raised all release the in-flight slot.
+                # Unconditional — completed, failed, or raised all release the slot.
                 sd.render_in_flight = max(0, sd.render_in_flight - 1)
 
     async def _run_render_inner(
@@ -3646,10 +2953,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         dispatch_turn_id: int,
         sd: _SessionData | None = None,
     ) -> None:
-        """Inner body of ``_run_render`` — does the actual daemon
-        round-trip and IMAGE-frame fan-out. Split from ``_run_render``
-        so the counter decrement (story 45-31) lives in a single
-        finally block instead of being repeated at every return site.
+        """Inner body of ``_run_render`` — the daemon round-trip + IMAGE fan-out.
+        Split out so the 45-31 counter decrement lives in one finally block.
         """
         try:
             reply = await client.render(params)
@@ -3706,20 +3011,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             return
 
         image_url = str(reply.get("image_url") or "")
-        # R2 migration (Task 11): when the daemon uploaded the artifact
-        # to R2 (Task 13+) the reply carries an ``r2_key`` field. Prefer
-        # that path through the asset_urls seam — it returns the CDN
-        # URL the UI should fetch. When ``r2_key`` is absent we're on
-        # the legacy local-tmpdir flow, which still needs the
-        # self-healing render mount described below.
-        #
-        # Self-healing render mount (S4-BUG, legacy path): if the
-        # daemon restarted mid-session its tmp dir changed;
-        # ensure_render_mount appends the new dir to the live
-        # StaticFiles mount so /renders/* keeps serving without a
-        # server restart. Falls back to the legacy env-based rewriter
-        # so single-root paths (and unit tests that don't wire app
-        # singleton) continue to work.
+        # R2 migration (Task 11): an ``r2_key`` in the reply means the artifact
+        # uploaded to R2 — resolve via the asset_urls seam (CDN URL). Absent →
+        # legacy local-tmpdir flow, which needs the self-healing render mount:
+        # ensure_render_mount appends a restarted daemon's new tmp dir to the
+        # live StaticFiles mount so /renders/* keeps serving (falls back to the
+        # env-based rewriter for single-root paths + tests).
         from sidequest.server.render_mounts import (
             ensure_render_mount,
             get_active_app,
@@ -3753,27 +3050,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             player_id=player_id,
         )
 
-        # Story 37-30 — resolve the live room at completion time, not at
-        # dispatch. When the room is known, look up the *current*
-        # SessionRoom via the RoomRegistry so reconnects mid-render still
-        # land on live sockets.
-        #
-        # Bug #2b (playtest 2026-04-26): IMAGE used to land on a single
-        # per-player queue (the originating actor's socket). Shared-world
-        # scene imagery (POI/encounter/location/illustration) should be
-        # shared across all connected players in the room — so peers see
-        # the same image event. Switch to ``room.broadcast(msg)`` so
-        # every attached outbound queue receives the IMAGE. The legacy
-        # single-queue path remains for non-room-context tests and the
-        # deprecated genre/world connect path.
+        # Story 37-30 — resolve the live room at completion time via the
+        # RoomRegistry so mid-render reconnects land on live sockets.
+        # Bug #2b (playtest 2026-04-26): IMAGE used to land on the actor's queue
+        # alone; shared-world scene imagery should reach every player, so
+        # broadcast to all queues. Legacy single-queue path remains for tests.
         recipients_count = 0
         broadcast_used = False
         if room_slug is not None:
             registry = self._room_registry
             room = registry.get(room_slug) if registry is not None else None
             if room is None:
-                # No live room — surface as session_not_found so the GM
-                # panel sees the drop instead of it being silent.
+                # No live room — surface as session_not_found, not a silent drop.
                 logger.warning(
                     "render.session_not_found render_id=%s room=%s player=%s reason=room_missing",
                     render_id,
@@ -3796,25 +3084,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     severity="warning",
                 )
                 return
-            # Broadcast to every connected socket in the room. We do NOT
-            # exclude the originating player — they need the IMAGE too,
-            # mirroring the SCRAPBOOK_ENTRY/_emit_event fan-out pattern.
-            #
-            # Pingpong 2026-04-30 "Scrapbook only on first-connected
-            # player": the OTEL `recipients_count` was being computed
-            # from `connected_player_ids()` (the `_connected` map size)
-            # but the broadcast itself iterates `_outbound_queues`. When
-            # those diverge — typically because a peer's WebSocket
-            # closed without their `detach_outbound` call running yet,
-            # leaving them in `_connected` but not in `_outbound_queues`
-            # — the broadcast log over-reports recipients while peers
-            # silently miss the IMAGE. Switched to using the broadcast
-            # return value (the list of (socket_id, player_id) pairs
-            # actually queued onto) so the GM panel sees ground truth
-            # instead of a synthesized count. Also surfaces per-recipient
-            # detail so the dashboard's "scrapbook.image_received" lie-
-            # detector has the receive-side player_id list to diff
-            # against.
+            # Broadcast to every socket (the originator included, mirroring the
+            # _emit_event fan-out). Pingpong 2026-04-30: recipients_count once came
+            # from connected_player_ids() while the broadcast iterates
+            # _outbound_queues; when those diverge the log over-reported. Now use
+            # the broadcast return value (actual (socket_id, player_id) pairs) so
+            # the GM panel sees ground truth.
             try:
                 delivered_recipients = room.broadcast(msg, exclude_socket_id=None)
             except Exception as exc:  # noqa: BLE001 — broadcast failure must surface
@@ -3839,10 +3114,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 )
                 return
             broadcast_used = True
-            # Lie-detector: ground-truth recipient count from the
-            # broadcast itself, plus the connect-map count for the
-            # divergence check. If these differ, the GM panel surfaces
-            # the gap directly instead of the prior over-report.
+            # Lie-detector: ground-truth count from the broadcast plus the
+            # connect-map count, so the GM panel surfaces any divergence.
             recipients_count = len(delivered_recipients)
             connected_count = len(room.connected_player_ids())
             recipient_socket_ids = [sid for sid, _pid in delivered_recipients]
@@ -3894,8 +3167,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 )
                 return
         else:
-            # Legacy / test path: no room context, fall back to the
-            # single per-connection queue captured at dispatch.
+            # Legacy / test path: no room context — use the single queue
+            # captured at dispatch.
             target_queue = legacy_queue
             if target_queue is None:
                 logger.warning(
@@ -3924,11 +3197,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 return
             recipients_count = 1
 
-        # Playtest 2026-05-02: persist the URL into the matching
-        # scrapbook_entries row so `slug_connect.replay` can JOIN it back
-        # into the SCRAPBOOK_ENTRY payload on reconnect. The IMAGE
-        # broadcast above is ephemeral; without this UPDATE every browser
-        # reload turns 1/3 of the scrapbook into placeholder cards.
+        # Playtest 2026-05-02: persist the URL into the scrapbook_entries row so
+        # replay can JOIN it back on reconnect (the IMAGE broadcast is ephemeral;
+        # without this every reload leaves placeholder cards).
         from sidequest.server.emitters import update_scrapbook_image_url
 
         scrapbook_updated = update_scrapbook_image_url(
@@ -3967,19 +3238,16 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 "elapsed_ms": elapsed,
                 "player_id": player_id,
                 "room_slug": room_slug or "",
-                # Bug #2b lie-detector: surface whether the IMAGE was
-                # delivered as a shared-world broadcast or via the
-                # legacy single-queue path, plus the recipient count.
-                # Without this, "image only reached one player" was an
-                # invisible regression (playtest 2026-04-26).
+                # Bug #2b lie-detector: surface broadcast vs. legacy single-queue
+                # path + recipient count ("image only reached one player" was an
+                # invisible regression, playtest 2026-04-26).
                 "broadcast": broadcast_used,
                 "recipients": recipients_count,
             },
             component="render",
         )
-        # Story 45-31: stamp the per-session diagnostic counters with
-        # the most-recent successful render so the post-session
-        # snapshot can quote the last image the player actually saw.
+        # Story 45-31: stamp the diagnostic counters with the latest successful
+        # render so the post-session snapshot can quote the last image shown.
         if sd is not None:
             from datetime import UTC
             from datetime import datetime as _dt

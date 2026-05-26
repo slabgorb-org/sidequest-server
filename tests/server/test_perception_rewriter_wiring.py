@@ -33,6 +33,7 @@ from sidequest.game.persistence import (
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.server import views
 from sidequest.server.session_handler import (
     WebSocketSessionHandler,
@@ -130,9 +131,10 @@ def test_emit_event_calls_rewriter_per_recipient(
     # Minimal event log + projection filter (no genre rules — filter is
     # effectively pass-through so include=True for both recipients).
     store = _seed_game_row(tmp_path)
-    event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    event_log = EventLog(repo)
     projection_filter = ComposedFilter.with_no_genre_rules()
-    projection_cache = ProjectionCache(store)
+    projection_cache = ProjectionCache(repo)
     handler._event_log = event_log
     handler._projection_filter = projection_filter
     handler._projection_cache = projection_cache
@@ -242,9 +244,10 @@ def test_emit_event_strips_visual_spans_for_blinded_viewer(
     """
     handler = _make_handler_with_character(tmp_path, statuses=[])
     store = _seed_game_row(tmp_path)
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     registry = RoomRegistry()
     room = registry.get_or_create(slug=_SLUG, mode=GameMode.MULTIPLAYER)
@@ -297,9 +300,10 @@ def test_emit_event_preserves_spans_for_unaffected_viewer(
     """Sister test: a non-blinded viewer in the same session gets all spans."""
     handler = _make_handler_with_character(tmp_path, statuses=[])
     store = _seed_game_row(tmp_path)
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     registry = RoomRegistry()
     room = registry.get_or_create(slug=_SLUG, mode=GameMode.MULTIPLAYER)

@@ -17,7 +17,7 @@ def _store(tmp_path) -> SqliteStore:
 
 def test_publish_inside_emit_style_block_rides_the_c2_txn(tmp_path):
     """Simulates emit_event's `with conn:` block: events INSERT first
-    (append_in_transaction), THEN a component='mechanical' publish. The
+    (tx.append_event via repo.transaction()), THEN a component='mechanical' publish. The
     census row must (a) attribute event_seq = the in-flight events row and
     (b) roll back with the turn."""
     store = _store(tmp_path)

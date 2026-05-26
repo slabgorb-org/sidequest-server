@@ -8,11 +8,12 @@ from pathlib import Path
 from sidequest.game.persistence import SqliteStore
 from sidequest.game.projection.cache import CachedDecision, ProjectionCache
 from sidequest.game.projection_filter import FilterDecision
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 
 
 def _cache(tmp_path: Path) -> tuple[ProjectionCache, SqliteStore]:
     store = SqliteStore(tmp_path / "test.db")
-    return ProjectionCache(store), store
+    return ProjectionCache(SqliteSaveRepository(store)), store
 
 
 def _insert_event(

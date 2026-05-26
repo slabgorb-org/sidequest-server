@@ -49,6 +49,7 @@ from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.rules import load_rules_from_yaml_str
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 from sidequest.server.session_room import RoomRegistry
 
@@ -135,12 +136,13 @@ def _make_handler_three_pcs(tmp_path: Path) -> WebSocketSessionHandler:
     handler._session_data.world_slug = _WORLD
 
     store = _seed_game_row(tmp_path)
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter(
         rules=load_rules_from_yaml_str(_RULES_YAML),
         pack_slug=_GENRE,
     )
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     registry = RoomRegistry()
     room = registry.get_or_create(slug=_SLUG, mode=GameMode.MULTIPLAYER)

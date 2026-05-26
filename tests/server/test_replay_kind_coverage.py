@@ -38,6 +38,7 @@ from sidequest.game.persistence import (
     db_path_for_slug,
     upsert_game,
 )
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol.messages import (
     SessionEventMessage,
     SessionEventPayload,
@@ -217,7 +218,7 @@ def seeded_game_with_encounter_journal(tmp_path: Path) -> Path:
     # Also append a real NARRATION through EventLog so the replay has at
     # least one client-bound message to surface — proves the crash didn't
     # truncate the rest of the journal.
-    log = EventLog(store)
+    log = EventLog(SqliteSaveRepository(store))
     log.append(
         kind="NARRATION",
         payload_json=json.dumps({"text": "Hello, traveler."}),

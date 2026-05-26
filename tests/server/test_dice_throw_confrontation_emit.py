@@ -540,13 +540,14 @@ async def test_post_narration_confrontation_emit_fans_out_with_event_log(
     )
     from sidequest.game.projection.cache import ProjectionCache
     from sidequest.game.projection.composed import ComposedFilter
+    from sidequest.game.sqlite_repository import SqliteSaveRepository
     from sidequest.server.session_handler import _State
     from sidequest.server.session_room import RoomRegistry
 
     slug = "ac5-post-narration-emit-test"
 
-    # Seed a game row so EventLog.append_in_transaction can resolve the
-    # game id without a separate fixture.
+    # Seed a game row so the events FK constraint is satisfied without a
+    # separate fixture.
     db = db_path_for_slug(tmp_path, slug)
     db.parent.mkdir(parents=True, exist_ok=True)
     store = SqliteStore(db)
@@ -569,9 +570,10 @@ async def test_post_narration_confrontation_emit_fans_out_with_event_log(
     sd.mode = GameMode.MULTIPLAYER
     sd.game_slug = slug
 
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     # Two-player room: actor plus a single peer. The peer's queue is
     # what we inspect — _emit_event excludes the emitter, so the

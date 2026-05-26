@@ -32,6 +32,7 @@ from sidequest.game.persistence import (
     upsert_game,
 )
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol import GameMessage
 from sidequest.protocol.enums import MessageType
 from sidequest.server.session_handler import WebSocketSessionHandler
@@ -172,7 +173,7 @@ async def test_scrapbook_entry_persists_and_journals(tmp_path: Path) -> None:
         assert scene_title and "altar" in scene_title.lower()
 
         # 2. SCRAPBOOK_ENTRY row in events journal.
-        events = EventLog(store).read_since(since_seq=0)
+        events = EventLog(SqliteSaveRepository(store)).read_since(since_seq=0)
         kinds = [e.kind for e in events]
         assert "SCRAPBOOK_ENTRY" in kinds, f"expected SCRAPBOOK_ENTRY in event journal; got {kinds}"
     finally:
@@ -367,7 +368,7 @@ async def test_scrapbook_render_status_skipped_policy_for_banter_turn(
 
         # And the journaled event carries the same field on its payload —
         # this is what reconnects replay to the gallery.
-        events = EventLog(store).read_since(since_seq=0)
+        events = EventLog(SqliteSaveRepository(store)).read_since(since_seq=0)
         scrapbook_events = [e for e in events if e.kind == "SCRAPBOOK_ENTRY"]
         assert scrapbook_events, (
             "SCRAPBOOK_ENTRY missing from event journal — gallery won't see this turn on reconnect"

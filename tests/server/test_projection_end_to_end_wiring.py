@@ -27,6 +27,7 @@ from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.projection.rules import load_rules_from_yaml_str
 from sidequest.game.projection.view import SessionGameStateView
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 
 
 def _setup_tracing() -> InMemorySpanExporter:
@@ -51,8 +52,9 @@ def _setup_tracing() -> InMemorySpanExporter:
 def test_end_to_end_single_truth_invariant(tmp_path: Path) -> None:
     exporter = _setup_tracing()
     store = SqliteStore(tmp_path / "e2e.db")
-    log = EventLog(store)
-    cache = ProjectionCache(store)
+    repo = SqliteSaveRepository(store)
+    log = EventLog(repo)
+    cache = ProjectionCache(repo)
 
     rules = load_rules_from_yaml_str(
         """
@@ -132,8 +134,9 @@ def test_emitter_reconnect_relies_on_lazy_fill(tmp_path: Path) -> None:
     """
     _setup_tracing()
     store = SqliteStore(tmp_path / "emitter.db")
-    log = EventLog(store)
-    cache = ProjectionCache(store)
+    repo = SqliteSaveRepository(store)
+    log = EventLog(repo)
+    cache = ProjectionCache(repo)
 
     rules = load_rules_from_yaml_str(
         """

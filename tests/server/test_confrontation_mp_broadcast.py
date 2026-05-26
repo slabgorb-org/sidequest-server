@@ -39,6 +39,7 @@ from sidequest.game.persistence import (
 )
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol.messages import ConfrontationMessage
 from sidequest.server.session_room import RoomRegistry
 
@@ -90,9 +91,10 @@ async def test_confrontation_broadcasts_to_all_four_peer_sockets(
     # is a pass-through filter — every recipient receives the same payload,
     # which is the correct shared-world behavior for confrontation frames.
     store = _seed_game_row(tmp_path)
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     # 4-socket multiplayer room. Paul is the actor; John/George/Ringo are
     # peers. Each socket gets its own asyncio.Queue — the production
@@ -219,9 +221,10 @@ async def test_confrontation_reaches_dispatcher_after_socket_cycle(
     sd.game_slug = _SLUG + "-cycle"
 
     store = _seed_game_row(tmp_path)
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     registry = RoomRegistry()
     room = registry.get_or_create(slug=sd.game_slug, mode=GameMode.MULTIPLAYER)
@@ -390,9 +393,10 @@ async def test_seated_dispatcher_receives_class_filtered_not_unfiltered_canonica
 
     # Real EventLog + ProjectionFilter so the production emit path runs.
     store = _seed_game_row(tmp_path)
-    handler._event_log = EventLog(store)
+    repo = SqliteSaveRepository(store)
+    handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(store)
+    handler._projection_cache = ProjectionCache(repo)
 
     # Seat 3 PCs with distinct classes so the per-PC overlay produces
     # different verb lists per recipient. The factory's default snapshot

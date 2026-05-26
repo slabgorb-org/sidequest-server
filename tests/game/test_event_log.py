@@ -4,6 +4,7 @@ import pytest
 
 from sidequest.game.event_log import EventLog
 from sidequest.game.persistence import SqliteStore, db_path_for_slug
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 
 
 @pytest.fixture
@@ -16,7 +17,7 @@ def store(tmp_path: Path) -> SqliteStore:
 
 
 def test_append_assigns_monotonic_seq(store):
-    log = EventLog(store)
+    log = EventLog(SqliteSaveRepository(store))
     r1 = log.append(kind="NARRATION", payload_json='{"text":"hello"}')
     r2 = log.append(kind="STATE_UPDATE", payload_json='{"hp":10}')
     assert r1.seq == 1
@@ -24,7 +25,7 @@ def test_append_assigns_monotonic_seq(store):
 
 
 def test_read_since_returns_only_newer(store):
-    log = EventLog(store)
+    log = EventLog(SqliteSaveRepository(store))
     for i in range(5):
         log.append(kind="NARRATION", payload_json=f'{{"i":{i}}}')
     rows = log.read_since(since_seq=2)
@@ -32,7 +33,7 @@ def test_read_since_returns_only_newer(store):
 
 
 def test_read_since_zero_returns_all(store):
-    log = EventLog(store)
+    log = EventLog(SqliteSaveRepository(store))
     log.append(kind="NARRATION", payload_json='{"i":1}')
     log.append(kind="NARRATION", payload_json='{"i":2}')
     rows = log.read_since(since_seq=0)
@@ -40,7 +41,7 @@ def test_read_since_zero_returns_all(store):
 
 
 def test_latest_seq(store):
-    log = EventLog(store)
+    log = EventLog(SqliteSaveRepository(store))
     assert log.latest_seq() == 0
     log.append(kind="NARRATION", payload_json="{}")
     log.append(kind="STATE_UPDATE", payload_json="{}")

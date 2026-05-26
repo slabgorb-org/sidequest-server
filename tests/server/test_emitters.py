@@ -10,8 +10,6 @@ Phase 1 of session_handler decomposition. These tests verify:
 
 from __future__ import annotations
 
-from sidequest.game.sqlite_repository import SqliteSaveRepository
-
 
 def test_emitters_module_exposes_required_functions() -> None:
     """Wiring guard — the required emitter functions must be importable
@@ -54,17 +52,24 @@ def test_persist_scrapbook_entry_delegate_calls_module_function(
     assert captured == [(handler, payload)]
 
 
-def test_persist_scrapbook_entry_inserts_row(session_handler_factory) -> None:
-    """Behavioral test — calling the function inserts a row into the
-    scrapbook_entries table that can be read back."""
+def test_persist_scrapbook_entry_inserts_row() -> None:
+    """Behavioral test — calling the function delegates to the repository's
+    append_scrapbook_entry method with the correct arguments."""
+    from unittest.mock import MagicMock
+
     from sidequest.game.event_log import EventLog
     from sidequest.protocol.messages import ScrapbookEntryNpcRef, ScrapbookEntryPayload
     from sidequest.server import emitters
 
-    sd, handler = session_handler_factory()
-    # The factory does not seed an EventLog by default (legacy path);
-    # attach one so the function has a store to write to.
-    handler._event_log = EventLog(SqliteSaveRepository(sd.store))
+    mock_repo = MagicMock()
+    mock_event_log = MagicMock(spec=EventLog)
+    mock_event_log.repository = mock_repo
+
+    class _Handler:
+        pass
+
+    handler = _Handler()
+    handler._event_log = mock_event_log
 
     payload = ScrapbookEntryPayload(
         turn_id=42,
@@ -81,76 +86,61 @@ def test_persist_scrapbook_entry_inserts_row(session_handler_factory) -> None:
 
     emitters.persist_scrapbook_entry(handler, payload)
 
-    rows = sd.store._conn.execute(
-        "SELECT turn_id, location, narrative_excerpt FROM scrapbook_entries"
-    ).fetchall()
-    assert len(rows) == 1
-    assert rows[0][0] == 42
-    assert rows[0][1] == "test_loc"
-    assert rows[0][2] == "The fighter pondered."
+    mock_repo.append_scrapbook_entry.assert_called_once_with(
+        turn_id=42,
+        scene_title="A pondering",
+        scene_type="character",
+        location="test_loc",
+        image_url=None,
+        narrative_excerpt="The fighter pondered.",
+        world_facts=["a fact"],
+        npcs_present=[{"name": "Goblin", "role": "opponent", "disposition": "hostile"}],
+        render_status="rendered",
+    )
 
 
-def test_update_scrapbook_image_url_backfills_most_recent_row(tmp_path) -> None:
-    """Playtest 2026-05-02: when render.completed fires, the new helper
-    must UPDATE the scrapbook_entries row for the matching turn_id from
-    image_url=NULL to the served URL. On reconnect/replay, this is the
-    only persisted record of which turn produced which image — the live
-    IMAGE broadcast is ephemeral and missed entirely on browser reload.
+def test_update_scrapbook_image_url_backfills_most_recent_row() -> None:
+    """Playtest 2026-05-02: when render.completed fires, update_scrapbook_image_url
+    must delegate to the repository's update_scrapbook_image_url method and
+    return the boolean the repository returns.
 
-    Uses a minimal stub instead of `session_handler_factory` because the
-    factory loads a real genre pack from `tests/fixtures/packs/` and that
-    fixture is missing the world-tier `openings.yaml` required since the
-    canned-openings story (pre-existing baseline failure unrelated to
-    this change). The helper only touches `handler._event_log.store`, so
-    a minimal duck-typed stub is sufficient.
+    The idempotency contract (NULL-only update, second call returns False) is
+    enforced by the repository implementation (PgScrapbookStore / SqliteSaveRepository).
+    This test verifies the emitter passes through the repository's return value
+    faithfully for both calls.
     """
+    from unittest.mock import MagicMock
+
     from sidequest.game.event_log import EventLog
-    from sidequest.game.persistence import SqliteStore
-    from sidequest.protocol.messages import ScrapbookEntryPayload
     from sidequest.server import emitters
 
-    store = SqliteStore(tmp_path / "test.db")
+    mock_repo = MagicMock()
+    mock_event_log = MagicMock(spec=EventLog)
+    mock_event_log.repository = mock_repo
 
     class _Handler:
         pass
 
     handler = _Handler()
-    handler._event_log = EventLog(SqliteSaveRepository(store))
+    handler._event_log = mock_event_log
 
-    payload = ScrapbookEntryPayload(
-        turn_id=7,
-        location="The Kestrel — Galley, Mid-Coast",
-        narrative_excerpt="The mug jitters once, exactly once.",
-        scene_title="A clan-blue omen",
-        scene_type="scene_illustration",
-        image_url=None,
-    )
-    emitters.persist_scrapbook_entry(handler, payload)
-
+    # First call: repository reports a row was updated.
+    mock_repo.update_scrapbook_image_url.return_value = True
     updated = emitters.update_scrapbook_image_url(
         handler, turn_id=7, image_url="/renders/zimage/render_abc.png"
     )
     assert updated is True
+    mock_repo.update_scrapbook_image_url.assert_called_once_with(
+        turn_id=7, image_url="/renders/zimage/render_abc.png"
+    )
 
-    rows = store._conn.execute(
-        "SELECT turn_id, image_url FROM scrapbook_entries WHERE turn_id = 7"
-    ).fetchall()
-    assert len(rows) == 1
-    assert rows[0][1] == "/renders/zimage/render_abc.png"
-
-    # Idempotency: a second backfill for the same turn must NOT clobber —
-    # we only update rows where image_url IS NULL, so the second call
-    # finds nothing matching and returns False.
+    # Second call: repository reports no NULL-image row found (idempotency).
+    mock_repo.update_scrapbook_image_url.reset_mock()
+    mock_repo.update_scrapbook_image_url.return_value = False
     updated_again = emitters.update_scrapbook_image_url(
         handler, turn_id=7, image_url="/renders/zimage/render_xyz.png"
     )
     assert updated_again is False
-    final_url = store._conn.execute(
-        "SELECT image_url FROM scrapbook_entries WHERE turn_id = 7"
-    ).fetchone()[0]
-    assert final_url == "/renders/zimage/render_abc.png", (
-        "second update must not overwrite — first render wins per turn"
-    )
 
 
 def test_update_scrapbook_image_url_legacy_path_no_event_log_is_noop() -> None:

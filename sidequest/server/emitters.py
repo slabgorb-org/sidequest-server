@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 from sidequest.agents.perception_rewriter import rewrite_for_recipient
 from sidequest.agents.pov_swap import swap_to_second_person
-from sidequest.game.persistence import SAVE_WRITE_LOCK
 
 if TYPE_CHECKING:
     from sidequest.game.projection.view import SessionGameStateView
@@ -35,36 +34,22 @@ def persist_scrapbook_entry(
     ``game/persistence.py``). The table allows multiple rows per turn —
     no UNIQUE on turn_id.
     """
-    import json as _json
-
     if handler._event_log is None:
         return  # Legacy non-slug path — no DB to write to
-    store = handler._event_log.store
-    npcs_json = _json.dumps(
-        [
+    handler._event_log.repository.append_scrapbook_entry(
+        turn_id=payload.turn_id,
+        scene_title=payload.scene_title,
+        scene_type=payload.scene_type,
+        location=payload.location,
+        image_url=payload.image_url,
+        narrative_excerpt=payload.narrative_excerpt,
+        world_facts=list(payload.world_facts),
+        npcs_present=[
             {"name": ref.name, "role": ref.role, "disposition": ref.disposition}
             for ref in payload.npcs_present
-        ]
+        ],
+        render_status=payload.render_status,
     )
-    facts_json = _json.dumps(list(payload.world_facts))
-    with SAVE_WRITE_LOCK, store._conn:
-        store._conn.execute(
-            "INSERT INTO scrapbook_entries "
-            "(turn_id, scene_title, scene_type, location, image_url, "
-            " narrative_excerpt, world_facts, npcs_present, render_status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                payload.turn_id,
-                payload.scene_title,
-                payload.scene_type,
-                payload.location,
-                payload.image_url,
-                payload.narrative_excerpt,
-                facts_json,
-                npcs_json,
-                payload.render_status,
-            ),
-        )
 
 
 def update_scrapbook_image_url(
@@ -96,26 +81,10 @@ def update_scrapbook_image_url(
         return False
     if not image_url:
         return False
-    store = handler._event_log.store
-    try:
-        with SAVE_WRITE_LOCK, store._conn:
-            cur = store._conn.execute(
-                "UPDATE scrapbook_entries SET image_url = ? "
-                "WHERE rowid = ("
-                "  SELECT rowid FROM scrapbook_entries "
-                "  WHERE turn_id = ? AND image_url IS NULL "
-                "  ORDER BY rowid DESC LIMIT 1"
-                ")",
-                (image_url, turn_id),
-            )
-            return cur.rowcount > 0
-    except Exception as exc:  # noqa: BLE001 — render path must not crash on a backfill miss
-        logger.warning(
-            "scrapbook.image_url_update_failed turn_id=%d error=%s",
-            turn_id,
-            exc,
-        )
-        return False
+    return handler._event_log.repository.update_scrapbook_image_url(
+        turn_id=turn_id,
+        image_url=image_url,
+    )
 
 
 def _pronouns_for_pc(snapshot: GameSnapshot, pc_name: str) -> str:

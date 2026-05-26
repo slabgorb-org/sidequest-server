@@ -581,6 +581,7 @@ def session_handler_factory(tmp_path):
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
+    from sidequest.game.sqlite_repository import SqliteSaveRepository
     from sidequest.genre.loader import GenreLoader
     from sidequest.server.session_handler import (
         WebSocketSessionHandler,
@@ -630,10 +631,15 @@ def session_handler_factory(tmp_path):
             player_name=active_name,
             player_id=active_pid,
             snapshot=snap,
-            store=store,
+            repository=SqliteSaveRepository(store),
+            dungeon_repository=MagicMock(),
+            telemetry_sink=MagicMock(),
             genre_pack=pack,
             orchestrator=orch,
         )
+        # Keep a back-reference to the raw store so tests that need
+        # direct SQLite access (e.g. test_event_log_wiring) can reach it.
+        sd.store = store
         handler = WebSocketSessionHandler(save_dir=tmp_path)
         handler._session_data = sd
         # Task E.2 wiring: every turn flowing through this handler will hit

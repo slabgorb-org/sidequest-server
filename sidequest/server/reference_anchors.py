@@ -111,3 +111,23 @@ def reference_url_for_location_entity(
     if entity_name not in known_location_names:
         return None
     return build_lore_url(pack, world, "location", entity_name)
+
+
+def reference_url_for_region(
+    *,
+    pack: str,
+    world: str,
+    region_id: str,
+    known_location_slugs: frozenset[str],
+) -> str | None:
+    """URL to the lore-page anchor for a region's header, or None.
+
+    Story 63-6. ``known_location_slugs`` is the set of slugify-normalised
+    location slugs that have a ``/reference/lore#location-<slug>`` anchor —
+    the world's ``history.yaml`` ``points_of_interest`` manifest (Story 63-8).
+    The region links only when its slug is in that set; otherwise None, so the
+    UI renders the header as plain text rather than a dead link (no guessed URL).
+    """
+    if slugify(region_id) not in known_location_slugs:
+        return None
+    return build_lore_url(pack, world, "location", region_id)

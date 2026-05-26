@@ -1051,12 +1051,50 @@ def _maybe_emit_location_description(
             )
         )
 
+    # Story 63-6: deep-link the region header into the /reference/lore wiki.
+    # POI slugs from the world's history.yaml are the authoritative set of
+    # regions that have a lore-page anchor (Story 63-8). Resolve to None when
+    # the region has no anchor — no guessed/broken URL. Every decision emits a
+    # reference-URL span so the GM panel sees location anchors fire (AC5 / OTEL).
+    from sidequest.server.reference_anchors import reference_url_for_region
+    from sidequest.server.reference_renderer import load_poi_image_slugs
+    from sidequest.telemetry.spans.reference import (
+        reference_url_attached_span,
+        reference_url_skipped_span,
+    )
+
+    poi_slugs = load_poi_image_slugs(world_dir)
+    reference_url = reference_url_for_region(
+        pack=sd.genre_slug,
+        world=sd.world_slug,
+        region_id=room_id,
+        known_location_slugs=poi_slugs,
+    )
+    if reference_url is not None:
+        with reference_url_attached_span(
+            kind="location",
+            pack=sd.genre_slug,
+            world=sd.world_slug,
+            keys=(room_id,),
+        ):
+            pass
+    else:
+        with reference_url_skipped_span(
+            kind="location",
+            pack=sd.genre_slug,
+            world=sd.world_slug,
+            keys=(room_id,),
+            reason="region_not_in_lore_poi_manifest",
+        ):
+            pass
+
     payload = LocationDescriptionPayload(
         region_id=room_id,
         prose=effective_prose,
         terrain=terrain,
         entities=entities,
         overlays=overlay_summaries,
+        reference_url=reference_url,
     )
     msg = LocationDescriptionMessage(
         payload=payload,

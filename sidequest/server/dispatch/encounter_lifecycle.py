@@ -6,7 +6,10 @@ Port of sidequest-api/crates/sidequest-server/src/dispatch/
 
 from __future__ import annotations
 
+from typing import cast
+
 from sidequest.game.encounter import (
+    ActorSide,
     EncounterActor,
     EncounterPhase,
     StructuredEncounter,
@@ -65,14 +68,14 @@ class SealedLetterArityError(ValueError):
     """
 
 
-def _validate_side(actor_name: str, declared: str) -> str:
+def _validate_side(actor_name: str, declared: str) -> ActorSide:
     """Validate that side is in {player, opponent, neutral}.
 
     Raises ValueError on invalid value, emitting encounter_invalid_side_span
     for OTEL observability.
     """
     if declared in _VALID_SIDES:
-        return declared
+        return cast(ActorSide, declared)
     from sidequest.telemetry.spans import encounter_invalid_side_span
 
     with encounter_invalid_side_span(

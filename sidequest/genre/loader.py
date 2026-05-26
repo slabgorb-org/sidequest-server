@@ -811,7 +811,9 @@ def _load_single_world(
     legends_dir = world_path / "legends"
     if legends_dir.is_dir():
         legends_files = sorted(legends_dir.glob("*.yaml"))
-        legends_files = [f for f in legends_files if f.name != "_meta.yaml" and f.name != ".gitkeep"]
+        legends_files = [
+            f for f in legends_files if f.name != "_meta.yaml" and f.name != ".gitkeep"
+        ]
         legends: list[Legend] = [Legend.model_validate(_load_yaml_raw(f)) for f in legends_files]
         meta_path = legends_dir / "_meta.yaml"
         legends_raw: Any = _load_yaml_raw(meta_path) if meta_path.exists() else None
@@ -1261,6 +1263,11 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         source_dir=path,
         client_theme_css=client_theme_css,
     )
+
+    # Fail loud at load if the pack names an unregistered ruleset (no silent default).
+    from sidequest.game.ruleset import get_ruleset_module  # local import avoids a load-time cycle
+
+    get_ruleset_module(pack.rules.ruleset)
 
     # Sprint 3 cold-subsystem audit: pack load was invisible to the GM
     # panel. A failed load raises GenreLoadError above (caught by callers,

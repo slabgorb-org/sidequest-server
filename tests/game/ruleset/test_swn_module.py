@@ -232,3 +232,16 @@ def test_swn_save_params_d20_best_of_two_attrs():
     assert p.modifier == 1          # best of WIS/CHA mods, ADDED to the roll
     assert p.difficulty == 13       # save_base(15) - (level(3) - 1) = 13  [SRD p.46: starts at 15, -1/level]
     assert p.label == "Mental save"
+
+
+# ---------------------------------------------------------------------------
+# Fix 3 — save_params explicit guard for unknown/None save category
+# ---------------------------------------------------------------------------
+
+
+def test_swn_save_params_bogus_save_raises():
+    """save_params must raise ValueError (not opaque KeyError) for unknown save."""
+    from sidequest.genre.models.rules import SwnConfig
+    cfg = SwnConfig()
+    with pytest.raises(ValueError, match="unknown save category"):
+        _S.save_params(stats={"STRENGTH": 10}, save="bogus", level=1, label="bad", cfg=cfg)

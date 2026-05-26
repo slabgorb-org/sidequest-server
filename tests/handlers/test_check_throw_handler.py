@@ -260,3 +260,63 @@ def test_check_throw_message_type_is_routable():
     assert parsed.type.value == "CHECK_THROW"
     out = parsed.model_dump_json()
     assert '"type":"CHECK_THROW"' in out
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 — CheckThrowHandler.handle surfaces dispatch_check errors as ErrorMessage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_throw_handler_returns_error_message_on_dispatch_failure(monkeypatch):
+    """When dispatch_check raises ValueError, CheckThrowHandler.handle must return
+    an ErrorMessage (not propagate the exception).
+
+    We monkeypatch handle_check_throw to raise so no session/snapshot setup is needed.
+    The test drives the async handle() on the PLAYING path and asserts the except
+    branch returns the project's standard _error_msg shape (ErrorMessage).
+    """
+    import sidequest.handlers.check_throw as ct_mod
+    from sidequest.handlers.check_throw import CheckThrowHandler
+    from sidequest.protocol.messages import ErrorMessage
+    from sidequest.server.session_handler import _State
+
+    # Monkeypatch handle_check_throw to raise ValueError
+    def _raise(*args, **kwargs):
+        raise ValueError("save_params: unknown save category 'bogus'")
+
+    monkeypatch.setattr(ct_mod, "handle_check_throw", _raise)
+
+    # Build a minimal session mock in Playing state so the handler reaches the
+    # dispatch call (past the state-guard and session_data guards).
+    session = MagicMock()
+    session._state = _State.Playing
+
+    # Minimal session_data — the handler only reads these fields before delegating
+    sd = MagicMock()
+    sd.player_id = "p1"
+    sd.genre_slug = "test_genre"
+    sd.world_slug = "test_world"
+    sd.snapshot = _snapshot_with_character(_character_with_stats("Rux", DEXTERITY=14))
+    sd.genre_pack = _swn_pack()
+    session._session_data = sd
+    session._room = None  # no room — keeps broadcast=None path
+
+    payload = CheckThrowPayload(
+        kind="skill_check",
+        attribute="DEXTERITY",
+        difficulty_key="tricky",
+        faces=[4, 5],
+    )
+    msg = CheckThrowMessage(payload=payload, player_id="p1")
+
+    handler = CheckThrowHandler()
+    result = await handler.handle(session, msg)
+
+    assert len(result) == 1, (
+        f"handle() must return exactly one message on dispatch failure; got {len(result)}: {result}"
+    )
+    assert isinstance(result[0], ErrorMessage), (
+        f"handle() must return ErrorMessage on ValueError from dispatch_check; "
+        f"got {type(result[0]).__name__}"
+    )

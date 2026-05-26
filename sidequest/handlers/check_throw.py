@@ -124,14 +124,18 @@ class CheckThrowHandler:
 
         session_id = f"{sd.genre_slug}:{sd.world_slug}:{sd.player_id}"
 
-        handle_check_throw(
-            payload,
-            snapshot=sd.snapshot,
-            pack=sd.genre_pack,
-            rolling_player_id=rolling_player_id,
-            session_id=session_id,
-            room_broadcast=room_broadcast,
-        )
+        try:
+            handle_check_throw(
+                payload,
+                snapshot=sd.snapshot,
+                pack=sd.genre_pack,
+                rolling_player_id=rolling_player_id,
+                session_id=session_id,
+                room_broadcast=room_broadcast,
+            )
+        except (ValueError, NotImplementedError) as exc:
+            logger.warning("check.dispatch_error error=%s", exc)
+            return [_error_msg(f"Check throw failed: {exc}")]
         return []
 
 

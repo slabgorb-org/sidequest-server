@@ -86,6 +86,11 @@ class SwnRulesetModule(RulesetModule):
         )
 
     def check_params(self, *, stats, attribute, skill_level, difficulty_key, label, cfg) -> CheckRollParams:
+        if attribute is None:
+            raise ValueError(
+                "check_params requires a non-None attribute; "
+                "CheckThrowPayload validator should have caught this upstream"
+            )
         attr_mod = self.stat_modifier(stats, attribute)
         return CheckRollParams(
             sides=6, count=2,
@@ -95,6 +100,10 @@ class SwnRulesetModule(RulesetModule):
         )
 
     def save_params(self, *, stats, save, level, label, cfg) -> CheckRollParams:
+        if save not in self._SAVE_ATTRS:
+            raise ValueError(
+                f"unknown save category {save!r}, expected one of {list(self._SAVE_ATTRS)}"
+            )
         attrs = self._SAVE_ATTRS[save]
         best_mod = max(self.stat_modifier(stats, a) for a in attrs)
         return CheckRollParams(

@@ -21,7 +21,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, RootModel
+from pydantic import Field, RootModel, model_validator
 
 from sidequest.protocol.base import ProtocolBase
 from sidequest.protocol.dice import (
@@ -1152,6 +1152,22 @@ class CheckThrowPayload(ProtocolBase):
     """Human-readable label surfaced in DiceRequest.context and OTEL span."""
     faces: list[int]
     """Physics-settled die face values from the client 3D overlay."""
+
+    @model_validator(mode="after")
+    def _require_kind_fields(self) -> CheckThrowPayload:
+        if self.kind == "skill_check":
+            if self.attribute is None or self.difficulty_key is None:
+                raise ValueError(
+                    "skill_check requires 'attribute' and 'difficulty_key'"
+                )
+        elif self.kind == "save":
+            if self.save is None:
+                raise ValueError("save requires 'save' category")
+        else:
+            raise ValueError(
+                f"CheckThrowPayload.kind must be 'skill_check' or 'save', got {self.kind!r}"
+            )
+        return self
 
 
 class CheckThrowMessage(ProtocolBase):

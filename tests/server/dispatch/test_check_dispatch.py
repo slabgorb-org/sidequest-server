@@ -47,11 +47,7 @@ def test_dispatch_skill_check_success():
 
 def test_dispatch_save_against_target():
     # Mental save: best of WIS(+1)/CHA(0)=+1 added to roll. Target=save_base15-(level3-1)=13.
-    # d20 face [12] + 1 = 13 >= 13 -> Tie (total == difficulty)
-    # Wait: the test description says "Success" but total==difficulty gives Tie per resolve_dice_with_faces.
-    # Let's use face [13] + 1 = 14 > 13 → Success; or check spec again.
-    # SwnConfig.save_base = 15; level=3: target = 15 - (3-1) = 13. face [12] + mod(1) = 13 == 13 → Tie
-    # The plan says "Success" but that's wrong per the engine. Use faces=[13] for total=14 > 13 → Success.
+    # face [13] + mod(1) = 14 > 13 → Success.
     outcome = dispatch_check(
         kind="save",
         attribute=None,

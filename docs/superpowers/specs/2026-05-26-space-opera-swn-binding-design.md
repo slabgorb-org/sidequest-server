@@ -22,7 +22,8 @@ it**, so it has never fired in real play. Binding `space_opera` exposes two obst
 
 2. **The stat-vocabulary mismatch.** SWN's attribute modifier and save-pair logic key on the six SWN
    attribute names (STRENGTH/DEXTERITY/CONSTITUTION/INTELLIGENCE/WISDOM/CHARISMA). space_opera ships
-   **five** flavor stats (Physique, Reflex, Intellect, Cunning, Resolve). The module's `_stat`
+   **six** flavor stats (Physique, Reflex, Intellect, Cunning, Resolve, Influence) — a clean 1:1
+   bijection to SWN's six attributes. The module's `_stat`
    helper silently falls back to a neutral 10 (→ modifier 0) for any unrecognized stat — so the
    attribute contribution to every attack, check, and save would be a dead 0. This silent fallback
    also violates the project's "no silent fallback" principle.
@@ -95,18 +96,18 @@ rules:
   swn:
     attribute_map:
       STRENGTH:     Physique
-      CONSTITUTION: Physique
+      CONSTITUTION: Resolve
       DEXTERITY:    Reflex
       INTELLIGENCE: Intellect
-      WISDOM:       Resolve
-      CHARISMA:     Cunning
+      WISDOM:       Cunning
+      CHARISMA:     Influence
 ```
 
 Save pairs then resolve through flavor-stats:
 
-- physical (STR+CON) → `max(Physique, Physique)` = Physique
+- physical (STR+CON) → `max(Physique, Resolve)`
 - evasion (DEX+INT) → `max(Reflex, Intellect)`
-- mental (WIS+CHA) → `max(Resolve, Cunning)`
+- mental (WIS+CHA) → `max(Cunning, Influence)`
 
 The module's `_stat` / `stat_modifier` / `_SAVE_ATTRS` consult `cfg.attribute_map` to resolve the
 flavor-stat before scoring. `attack_params` gains `cfg` (already threaded into `check_params` /
@@ -116,10 +117,13 @@ flavor-stat before scoring. `attack_params` gains `cfg` (already threaded into `
 
 ### server (`sidequest-server`)
 
-- **`genre/models/rules.py`** — add `attribute_map` to `SwnConfig`. Model-validator: when
-  `ruleset == "swn"`, require all six SWN attribute keys present **and** every mapped value to be a
-  member of the pack's declared stat list. Fail loud on missing key or unknown stat — **no silent
-  fallback, no auto-default map.**
+- **`genre/models/rules.py`** — add `attribute_map: dict[str, str]` to `SwnConfig`. Validation lives
+  on **`RulesConfig`** (a `mode="after"` validator), which carries `ruleset`, `swn`, **and**
+  `ability_score_names` (rules.py:648) — so when `ruleset == "swn"` it can check in one place: all six
+  SWN attribute keys present (STRENGTH/CONSTITUTION/DEXTERITY/INTELLIGENCE/WISDOM/CHARISMA), the map
+  non-empty, **and** every mapped value ∈ `ability_score_names`. Fail loud on missing key or unknown
+  stat — **no auto-default map, no silent fallback.** (The existing `_populate_swn_defaults` validator
+  on `RulesConfig` is the sibling to extend or sit beside.)
 - **`game/ruleset/swn.py`** — `_stat`, `stat_modifier`, and the `_SAVE_ATTRS` save logic resolve
   through `cfg.attribute_map`. Remove the neutral-10 silent fallback; an unmapped stat is a loud
   error (the validator should make it unreachable, but the module must not paper over it).

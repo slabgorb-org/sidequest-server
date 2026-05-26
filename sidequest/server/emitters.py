@@ -271,11 +271,10 @@ def emit_event(
         # mid-block, sqlite rolls back both the event row and any partial
         # cache rows — either the event is fully persisted with its
         # projection cache, or not at all.
-        store = event_log.store
-        conn = store._conn
+        repo = event_log.repository
         fanout: list[tuple[str, FilterDecision, dict]] = []
-        with SAVE_WRITE_LOCK, conn:
-            row = event_log.append_in_transaction(kind=kind, payload_json=payload_json, conn=conn)
+        with repo.transaction() as tx:
+            row = tx.append_event(kind=kind, payload_json=payload_json)
             seq = row.seq
 
             if kind == "NARRATION" and event_log is not None:
@@ -315,11 +314,10 @@ def emit_event(
 
                 def _cache_decision(pid: str, decision: FilterDecision) -> None:
                     if handler._projection_cache is not None:
-                        handler._projection_cache.write_in_transaction(
+                        tx.write_projection(
                             event_seq=seq,
                             player_id=pid,
                             decision=decision,
-                            conn=conn,
                         )
 
                 decisions = _project_frames(

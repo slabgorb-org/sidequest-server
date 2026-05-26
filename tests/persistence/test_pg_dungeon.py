@@ -300,6 +300,32 @@ def test_open_thread_and_get_thread_round_trips(monkeypatch, migrated_db):
         db_pool.close_pool()
 
 
+def test_open_thread_duplicate_id_raises_persist_error(monkeypatch, migrated_db):
+    """Re-opening the same thread_id hits the PK UniqueViolation → PersistError."""
+    from sidequest.game.persistence import PersistError
+
+    pool, sid = _seed_pool_and_session(monkeypatch, migrated_db)
+    try:
+        from sidequest.dungeon.persistence import ComplicationThread
+        from sidequest.game.pg.dungeon import PgDungeonRepository
+
+        repo = PgDungeonRepository(pool, session_id=sid)
+        tid = f"t_{uuid.uuid4().hex[:8]}"
+        thread = ComplicationThread(
+            thread_id=tid,
+            origin_region_id="entrance",
+            kind="trope",
+            status="open",
+            started_at_depth_score=5.0,
+            payload={},
+        )
+        repo.open_thread(thread)
+        with pytest.raises(PersistError):
+            repo.open_thread(thread)
+    finally:
+        db_pool.close_pool()
+
+
 def test_open_threads_lists_only_open(monkeypatch, migrated_db):
     pool, sid = _seed_pool_and_session(monkeypatch, migrated_db)
     try:
@@ -411,6 +437,7 @@ def test_transaction_commits_atomically(monkeypatch, migrated_db):
         from sidequest.dungeon.persistence import FrontierEdge
         from sidequest.dungeon.region_graph.model import Expansion
         from sidequest.game.pg.dungeon import PgDungeonRepository
+        from sidequest.game.repository import DungeonTransaction
 
         repo = PgDungeonRepository(pool, session_id=sid)
         g, exp = _build_graph()
@@ -424,6 +451,7 @@ def test_transaction_commits_atomically(monkeypatch, migrated_db):
         )
 
         with repo.transaction() as tx:
+            assert isinstance(tx, DungeonTransaction)
             seed_exp = Expansion(expansion_id=0, new_nodes=[entrance], new_edges=[])
             tx.commit_expansion(seed_exp, g)
             tx.commit_expansion(exp, g)
@@ -465,10 +493,11 @@ def test_transaction_rolls_back_on_persist_error(monkeypatch, migrated_db):
             tx.commit_expansion(seed_exp, g)
 
         # Now try a transaction that hits a freeze violation mid-way
-        with pytest.raises(PersistError), repo.transaction() as tx:
-            tx.put_frontier(fe)
-            tx.commit_expansion(exp, g)
-            tx.commit_expansion(exp, g)  # freeze violation — same expansion twice
+        with pytest.raises(PersistError):  # noqa: SIM117 — nested form is clearer here
+            with repo.transaction() as tx:
+                tx.put_frontier(fe)
+                tx.commit_expansion(exp, g)
+                tx.commit_expansion(exp, g)  # freeze violation — same expansion twice
 
         # The frontier write in the aborted transaction must NOT be visible
         frontier_after = repo.load_frontier()

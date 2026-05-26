@@ -8,9 +8,10 @@ Key dialect translations vs. SQLite DungeonStore
 - All queries are keyed by ``(session_id, …)`` — the SQLite store uses a
   single-tenant file with no session_id column.
 - ``dungeon_meta`` PK is ``session_id`` (BIGINT), not ``id=1``.
-- ``set_campaign_seed`` uses ``INSERT … ON CONFLICT … DO NOTHING`` + a
-  subsequent ``GET`` to detect a duplicate write, which maps cleanly to the
-  write-once contract (raises ``PersistError`` on second set).
+- ``set_campaign_seed`` enforces write-once by ``get_campaign_seed()`` first
+  (raising ``PersistError`` if already set), then a plain ``INSERT``; a
+  concurrent-writer race that slips past the get is caught as
+  ``psycopg.errors.UniqueViolation`` → ``PersistError``.
 - ``commit_expansion`` uses ``executemany`` for batch node/edge inserts.
   ``psycopg.errors.UniqueViolation`` / ``IntegrityError`` → ``PersistError``
   (freeze violation, same as today).
@@ -518,8 +519,8 @@ class PgDungeonRepository:
                         raise NotFoundError(
                             f"cannot resolve unknown complication thread {thread_id!r}"
                         )
-            except NotFoundError:
-                raise
+            # NotFoundError is a sidequest PersistError, not a psycopg.Error, so it
+            # propagates naturally past the psycopg.Error handler below.
             except psycopg.Error as exc:
                 raise DatabaseError(f"resolve_thread failed: {exc}") from exc
 

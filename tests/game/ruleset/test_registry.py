@@ -14,5 +14,5 @@ def test_native_is_singleton():
 
 def test_unknown_ruleset_fails_loud():
     with pytest.raises(UnknownRulesetError) as exc:
-        get_ruleset_module("swn")  # not registered until the SWN plan lands
-    assert "swn" in str(exc.value)
+        get_ruleset_module("no_such_ruleset")
+    assert "no_such_ruleset" in str(exc.value)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from sidequest.game.beat_kinds import apply_beat as _engine_apply_beat
 from sidequest.game.ruleset.base import RulesetModule
+from sidequest.game.ruleset.resolution import AttackRollParams
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
 
 # Layer-inversion note: find_confrontation_def and resolve_damage_spec_from_beat_and_actor
@@ -65,3 +66,11 @@ class NativeRulesetModule(RulesetModule):
 
     def resolve_damage(self, *, beat, actor_core, pack):
         return resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor_core, pack=pack)
+
+    def attack_params(self, *, beat, attacker_stats, attacker_core, target_core):
+        # native ignores attacker_core/target_core: its modifier is the stat mod and its
+        # target number is the beat DC. This reproduces the pre-generalization two-call path.
+        return AttackRollParams(
+            modifier=self.stat_modifier(attacker_stats, beat.stat_check),
+            target_number=self.compute_dc(beat),
+        )

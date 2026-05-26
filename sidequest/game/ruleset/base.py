@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from sidequest.game.ruleset.resolution import AttackRollParams
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
 
 
@@ -43,3 +44,21 @@ class RulesetModule(ABC):
     @abstractmethod
     def resolve_damage(self, *, beat, actor_core, pack):
         """Resolve the DamageSpec for a strike beat (weapon or override), or None."""
+
+    @abstractmethod
+    def attack_params(
+        self,
+        *,
+        beat: BeatDef,
+        attacker_stats: dict[str, int],
+        attacker_core: object | None,
+        target_core: object | None,
+    ) -> AttackRollParams:
+        """Modifier + target number for one attack. native: stat mod vs beat DC.
+        SWN: attack_bonus + skill + attr-mod vs target AC."""
+
+    def check_params(self, *, stats, attribute, skill_level, difficulty_key, label, cfg):
+        raise NotImplementedError(f"{self.slug} ruleset has no non-beat skill-check resolution")
+
+    def save_params(self, *, stats, save, level, label, cfg):
+        raise NotImplementedError(f"{self.slug} ruleset has no saving-throw resolution")

@@ -872,6 +872,20 @@ def encounter_edge_debit_span(
         yield s
 
 
+SPAN_ENCOUNTER_CHECK_RESOLVED = "encounter.check_resolved"
+SPAN_ROUTES[SPAN_ENCOUNTER_CHECK_RESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.check_resolved",
+        "kind": (span.attributes or {}).get("check.kind", ""),
+        "actor": (span.attributes or {}).get("check.actor", ""),
+        "label": (span.attributes or {}).get("check.label", ""),
+        "total": (span.attributes or {}).get("check.total", 0),
+        "difficulty": (span.attributes or {}).get("check.difficulty", 0),
+        "outcome": (span.attributes or {}).get("check.outcome", ""),
+    },
+)
 SPAN_ENCOUNTER_SAVING_THROW_RESOLVED = "encounter.saving_throw_resolved"
 SPAN_ROUTES[SPAN_ENCOUNTER_SAVING_THROW_RESOLVED] = SpanRoute(
     event_type="state_transition",
@@ -999,3 +1013,34 @@ def encounter_composure_break_span(
         },
     ) as s:
         yield s
+
+
+def check_resolved_span(
+    *,
+    kind: str,
+    actor: str,
+    label: str,
+    total: int,
+    difficulty: int,
+    outcome: str,
+    **attrs: Any,
+) -> None:
+    """Span for a non-beat SWN check/save — the GM-panel polygraph for free rolls.
+
+    ``kind``: ``"skill_check"`` | ``"save"``. ``actor`` is the character name.
+    ``outcome`` is the ``RollOutcome`` value string (e.g. ``"Success"``).
+    Plain function, not a contextmanager — emits and closes immediately.
+    """
+    with Span.open(
+        SPAN_ENCOUNTER_CHECK_RESOLVED,
+        {
+            "check.kind": kind,
+            "check.actor": actor,
+            "check.label": label,
+            "check.total": total,
+            "check.difficulty": difficulty,
+            "check.outcome": outcome,
+            **attrs,
+        },
+    ):
+        pass

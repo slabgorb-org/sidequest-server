@@ -161,6 +161,12 @@ class BeatDef(BaseModel):
     damage_channel: DamageChannel = DamageChannel.none
     damage_override: DamageSpec | None = None  # creature natural attack (no catalog weapon)
     mitigation_override: int | None = None  # brace beat with no armor item
+    # SWN attack parameters — only meaningful when the pack binds `ruleset: swn`.
+    # ``attack_bonus`` is the attacker's class/level attack-bonus progression value.
+    # ``combat_skill`` is the relevant Combat/* skill level (0 = untrained).
+    # Both default to 0 so native-module packs require no YAML changes.
+    attack_bonus: int = 0
+    combat_skill: int = 0
 
     @model_validator(mode="after")
     def _validate(self) -> BeatDef:
@@ -593,6 +599,39 @@ class LuckRules(BaseModel):
     recovery: LuckRecovery | None = None
 
 
+class SwnConfig(BaseModel):
+    """SWN universal constants (per-class/per-item numbers live in pack content).
+
+    All values sourced verbatim from Stars Without Number Revised Edition
+    Free Edition (Sine Nomine Publishing, 2017):
+
+    - unarmored_ac=10: ascending AC baseline for an unarmoured target (SRD p.51,
+      "Examples of Murder": "Yaddle, who has an AC of 10").
+    - save_base=15: "Your character's saving throw scores start at 15, and
+      decrease by one point each time you advance a level." (SRD p.46,
+      Saving Throws section).  The per-call formula is:
+          target = save_base - (level - 1) = 16 - level
+      modified by the best of two attribute modifiers (Physical: better of
+      Str/Con; Evasion: better of Dex/Int; Mental: better of Cha/Wis).
+    - difficulties: 2d6 skill-check difficulty ladder (SRD p.47, "Skill Check
+      Difficulties" table): easy=6, routine=8, tricky=10, hard=12, formidable=14.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    unarmored_ac: int = 10  # SRD p.51 — ascending AC for unarmoured target
+    save_base: int = 15  # SRD p.46 — level-1 saving throw target (decreases by 1/level)
+    difficulties: dict[str, int] = Field(
+        default_factory=lambda: {
+            "easy": 6,
+            "routine": 8,
+            "tricky": 10,
+            "hard": 12,
+            "formidable": 14,
+        }
+    )
+
+
 class RulesConfig(BaseModel):
     """Game rules configuration."""
 
@@ -651,6 +690,15 @@ class RulesConfig(BaseModel):
     reputation_factions: list[ReputationFaction] = Field(default_factory=list)
     reputation_effects: ReputationEffects | None = None
     luck_rules: LuckRules | None = None
+    # Present only when ruleset == "swn"; None for all other rulesets.
+    swn: SwnConfig | None = None
+
+    @model_validator(mode="after")
+    def _populate_swn_defaults(self) -> RulesConfig:
+        """Auto-populate swn block with SRD defaults when ruleset == "swn"."""
+        if self.ruleset == "swn" and self.swn is None:
+            object.__setattr__(self, "swn", SwnConfig())
+        return self
 
     @property
     def intent_verbs_by_type(self) -> dict[str, frozenset[str]]:

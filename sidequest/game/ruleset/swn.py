@@ -8,8 +8,11 @@ NOT a fallback — selected explicitly by `ruleset: swn`.
 """
 from __future__ import annotations
 
+import random
+
 from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.resolution import AttackRollParams, CheckRollParams
+from sidequest.protocol.models import InitiativeEntry
 
 
 def swn_attribute_modifier(score: int) -> int:
@@ -129,3 +132,25 @@ class SwnRulesetModule(RulesetModule):
         from sidequest.server.dispatch.damage_roll import resolve_damage_spec_from_beat_and_actor
 
         return resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor_core, pack=pack)
+
+    def roll_initiative(
+        self,
+        *,
+        actor_dex_scores: dict[str, int],
+        rng: random.Random,
+    ) -> list[InitiativeEntry] | None:
+        """SWN initiative: 1d8 + DEX modifier per actor, sorted descending.
+
+        Faithful SWN (SRD): rolled once at combat start; the seam persists the
+        result and reuses it each round. Tie-break: stable sort preserves the
+        caller's actor order (TODO: confirm SRD tie-break and pin to SwnConfig).
+        """
+        entries = [
+            InitiativeEntry(
+                token_id=name,
+                value=rng.randint(1, 8) + swn_attribute_modifier(score),
+            )
+            for name, score in actor_dex_scores.items()
+        ]
+        entries.sort(key=lambda e: e.value, reverse=True)
+        return entries

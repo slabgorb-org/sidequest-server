@@ -18,10 +18,14 @@ from sidequest.genre.models.inventory import DamageSpec
 # ability scores. ``hp`` seeds the opponent CreatureCore HP pool and
 # ``armor_class`` seeds the SWN ascending AC the attack rolls against
 # (hp_depletion combats). ``dexterity`` seeds the opponent's SWN
-# initiative (1d8 + DEX mod) for hp_depletion combats. They are popped
-# out before ability-score / modifier resolution so they never leak into
-# opposed_check lookups or the ADR-093 calibration ceiling.
-OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset({"hp", "armor_class", "dexterity"})
+# initiative (1d8 + DEX mod) for hp_depletion combats. ``armor`` is the
+# SWN flat damage-soak value for dogfight ship frames. ``pilot_skill``
+# and ``attack_bonus`` are dogfight ship-gunnery to-hit terms. All of
+# these are popped out before ability-score / modifier resolution so they
+# never leak into opposed_check lookups or the ADR-093 calibration ceiling.
+OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset(
+    {"hp", "armor_class", "dexterity", "armor", "pilot_skill", "attack_bonus"}
+)
 
 
 class MoraleTrigger(StrEnum):
@@ -415,15 +419,19 @@ class ConfrontationDef(BaseModel):
     # opposed_check — only valid when ``resolution_mode`` is something
     # other than ``opposed_check``.
     #
-    # RESERVED KEYS: ``hp`` and ``armor_class`` are NOT ability scores. When
-    # present they seed the opponent's runtime CreatureCore (HP pool +
-    # ascending SWN AC) for hp_depletion combats — see
-    # ``opponent_hp`` / ``opponent_armor_class`` and the seating seam in
+    # RESERVED KEYS: the keys in ``OPPONENT_RESERVED_STAT_KEYS`` (hp,
+    # armor_class, dexterity, armor, pilot_skill, attack_bonus) are NOT
+    # ability scores. When present they seed the opponent's runtime
+    # CreatureCore / SWN combat block (HP pool + ascending AC, initiative
+    # DEX, ship-frame soak + gunnery to-hit terms) — see ``opponent_hp`` /
+    # ``opponent_armor_class`` and the seating seam in
     # ``encounter_lifecycle._publish_combat_edge_to_npcs``. They are popped
     # out of the ability-score map by ``opponent_ability_scores()`` so they
     # never leak into modifier resolution. All other keys are raw ability
     # scores (3..20 D&D-style; modifier = floor((score-10)/2)).
     opponent_default_stats: dict[str, int] | None = None
+    opponent_weapon: str | None = None  # dogfight: opponent ace's weapon catalog id
+    player_weapon: str | None = None  # dogfight: PC frame's weapon catalog id
     geometry_modifiers: GeometryModifiers | None = None
     player_default_stats: dict[str, int] = Field(default_factory=dict)
     morale: MoraleDef | None = None

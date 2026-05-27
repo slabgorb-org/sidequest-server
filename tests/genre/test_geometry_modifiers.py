@@ -61,3 +61,24 @@ def test_confrontation_player_stat_accessors_empty():
     conf = _minimal_confrontation(player_default_stats={})
     assert conf.player_hp is None
     assert conf.player_armor_class is None
+
+
+def test_confrontation_weapon_fields_default_none():
+    cdef = _minimal_confrontation()
+    assert cdef.opponent_weapon is None
+    assert cdef.player_weapon is None
+
+
+def test_confrontation_weapon_fields_accept_ids():
+    cdef = _minimal_confrontation(opponent_weapon="opp_laser", player_weapon="pc_laser")
+    assert cdef.opponent_weapon == "opp_laser"
+    assert cdef.player_weapon == "pc_laser"
+
+
+def test_opponent_ability_scores_strips_dogfight_reserved_keys():
+    # armor / pilot_skill / attack_bonus are reserved — not ability scores.
+    cdef = _minimal_confrontation(
+        opponent_default_stats={"Physique": 12, "armor": 5, "pilot_skill": 1, "attack_bonus": 1}
+    )
+    scores = cdef.opponent_ability_scores()
+    assert scores == {"Physique": 12}

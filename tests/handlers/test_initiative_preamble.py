@@ -18,10 +18,12 @@ def _enc(initiative):
 
 
 def test_preamble_lists_order_and_states_the_rule():
-    enc = _enc([
-        InitiativeEntry(token_id="Rux", value=9),
-        InitiativeEntry(token_id="Raider", value=5),
-    ])
+    enc = _enc(
+        [
+            InitiativeEntry(token_id="Rux", value=9),
+            InitiativeEntry(token_id="Raider", value=5),
+        ]
+    )
     text = initiative_preamble(enc)
     assert text is not None
     assert "Rux" in text and "Raider" in text

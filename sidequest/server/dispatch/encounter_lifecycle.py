@@ -695,9 +695,7 @@ def instantiate_encounter_from_trigger(
         # matching Npc. Non-combat encounters leave ``core.edge`` at its
         # standing value so the validator's dead-NPC check stays correct.
         if cdef.category == "combat":
-            turn_no = (
-                snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
-            )
+            turn_no = snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
             if cdef.win_condition == WinCondition.hp_depletion:
                 # Task 9: no dial — seed opponent core.hp + core.armor_class
                 # from content opponent_default_stats. Creates a backing Npc

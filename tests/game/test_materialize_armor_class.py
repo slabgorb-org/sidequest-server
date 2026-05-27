@@ -225,9 +225,7 @@ def test_reserved_keys_excluded_from_ability_scores() -> None:
             "resolution_mode": "opposed_check",
             "win_condition": "hp_depletion",
             "opponent_default_stats": {"STR": 10, "DEX": 9},
-            "beats": [
-                {"id": "press", "label": "Press", "kind": "strike", "stat_check": "STR"}
-            ],
+            "beats": [{"id": "press", "label": "Press", "kind": "strike", "stat_check": "STR"}],
         }
     )
     assert plain.opponent_ability_scores() == {"STR": 10, "DEX": 9}

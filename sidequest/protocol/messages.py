@@ -1172,9 +1172,7 @@ class CheckThrowPayload(ProtocolBase):
     def _require_kind_fields(self) -> CheckThrowPayload:
         if self.kind == "skill_check":
             if self.attribute is None or self.difficulty_key is None:
-                raise ValueError(
-                    "skill_check requires 'attribute' and 'difficulty_key'"
-                )
+                raise ValueError("skill_check requires 'attribute' and 'difficulty_key'")
         elif self.kind == "save":
             if self.save is None:
                 raise ValueError("save requires 'save' category")

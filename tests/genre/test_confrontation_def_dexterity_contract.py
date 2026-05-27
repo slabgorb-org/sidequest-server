@@ -56,9 +56,11 @@ def test_valid_combat_confrontation_exposes_opponent_dexterity():
 
 
 def test_opponent_ability_scores_strips_dexterity():
-    cdef = ConfrontationDef(**_combat_kwargs(
-        opponent_default_stats={"hp": 7, "armor_class": 12, "dexterity": 13, "Physique": 11}
-    ))
+    cdef = ConfrontationDef(
+        **_combat_kwargs(
+            opponent_default_stats={"hp": 7, "armor_class": 12, "dexterity": 13, "Physique": 11}
+        )
+    )
     scores = cdef.opponent_ability_scores()
     assert "dexterity" not in scores and "hp" not in scores and "armor_class" not in scores
     assert scores == {"Physique": 11}

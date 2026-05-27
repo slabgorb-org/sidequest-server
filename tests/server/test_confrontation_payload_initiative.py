@@ -16,7 +16,9 @@ def _cdef() -> ConfrontationDef:
         category="combat",
         win_condition=WinCondition.hp_depletion,
         opponent_default_stats={"hp": 7, "armor_class": 12, "dexterity": 13},
-        beats=[{"id": "shoot", "label": "Shoot", "stat_check": "Physique", "base": 1, "kind": "strike"}],
+        beats=[
+            {"id": "shoot", "label": "Shoot", "stat_check": "Physique", "base": 1, "kind": "strike"}
+        ],
     )
 
 
@@ -56,7 +58,10 @@ def test_confrontation_payload_model_accepts_initiative_order():
     from sidequest.protocol.messages import ConfrontationPayload
 
     p = ConfrontationPayload(
-        type="firefight", label="Firefight", category="combat", genre_slug="space_opera",
+        type="firefight",
+        label="Firefight",
+        category="combat",
+        genre_slug="space_opera",
         initiative_order=[{"name": "Rux", "roll": 9}],
     )
     assert p.initiative_order == [{"name": "Rux", "roll": 9}]

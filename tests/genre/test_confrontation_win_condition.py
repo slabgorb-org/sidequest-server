@@ -13,15 +13,26 @@ OPP_STATS = {"hp": 12, "armor_class": 13, "dexterity": 12}
 
 
 def test_default_win_condition_is_dial_threshold():
-    c = ConfrontationDef(type="combat", label="Firefight", category="combat",
-                         player_metric=METRIC, opponent_metric=METRIC, beats=[BEAT])
+    c = ConfrontationDef(
+        type="combat",
+        label="Firefight",
+        category="combat",
+        player_metric=METRIC,
+        opponent_metric=METRIC,
+        beats=[BEAT],
+    )
     assert c.win_condition == WinCondition.dial_threshold
 
 
 def test_hp_depletion_allows_missing_metrics():
-    c = ConfrontationDef(type="combat", label="Firefight", category="combat",
-                         win_condition="hp_depletion",
-                         opponent_default_stats=OPP_STATS, beats=[BEAT])
+    c = ConfrontationDef(
+        type="combat",
+        label="Firefight",
+        category="combat",
+        win_condition="hp_depletion",
+        opponent_default_stats=OPP_STATS,
+        beats=[BEAT],
+    )
     assert c.win_condition == WinCondition.hp_depletion
     assert c.player_metric is None and c.opponent_metric is None
 
@@ -32,9 +43,15 @@ def test_dial_threshold_without_metrics_fails_loud():
 
 
 def test_hp_depletion_with_metrics_is_allowed():
-    c = ConfrontationDef(type="combat", label="Firefight", category="combat",
-                         win_condition="hp_depletion",
-                         opponent_default_stats=OPP_STATS,
-                         player_metric=METRIC, opponent_metric=METRIC, beats=[BEAT])
+    c = ConfrontationDef(
+        type="combat",
+        label="Firefight",
+        category="combat",
+        win_condition="hp_depletion",
+        opponent_default_stats=OPP_STATS,
+        player_metric=METRIC,
+        opponent_metric=METRIC,
+        beats=[BEAT],
+    )
     assert c.win_condition == WinCondition.hp_depletion
     assert c.player_metric is not None

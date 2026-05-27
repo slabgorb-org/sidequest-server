@@ -288,9 +288,7 @@ def test_initiative_rolled_and_persisted_on_instantiation(otel_capture):
     )
     assert len(enc.initiative) >= 2  # player + opponent both seated and ordered
     init_spans = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "encounter.initiative_rolled"
+        s for s in otel_capture.get_finished_spans() if s.name == "encounter.initiative_rolled"
     ]
     assert init_spans, "encounter.initiative_rolled span must fire on instantiation"
     assert init_spans[0].attributes["encounter_type"]

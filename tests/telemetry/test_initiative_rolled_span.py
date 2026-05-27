@@ -78,9 +78,7 @@ def test_initiative_rolled_span_carries_order(otel_capture):
         pass
 
     spans = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == SPAN_ENCOUNTER_INITIATIVE_ROLLED
+        s for s in otel_capture.get_finished_spans() if s.name == SPAN_ENCOUNTER_INITIATIVE_ROLLED
     ]
     assert len(spans) == 1
     span = spans[0]

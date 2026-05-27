@@ -34,6 +34,22 @@ SPAN_ROUTES[SPAN_ENCOUNTER_RESOLVED] = SpanRoute(
         "source": (span.attributes or {}).get("source", ""),
     },
 )
+# SWN P4 initiative spine: the engine rolls initiative and seats the turn
+# order at instantiation. This span is the GM-panel polygraph proving the
+# order is engine-rolled (not narrator improv). ``initiative_order`` is the
+# human-readable order string (e.g. ``"Rux(9), Raider(5)"``); ``source``
+# distinguishes the emission site (e.g. ``"instantiate"``).
+SPAN_ENCOUNTER_INITIATIVE_ROLLED = "encounter.initiative_rolled"
+SPAN_ROUTES[SPAN_ENCOUNTER_INITIATIVE_ROLLED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.initiative_rolled",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "initiative_order": (span.attributes or {}).get("initiative_order", ""),
+        "source": (span.attributes or {}).get("source", ""),
+    },
+)
 SPAN_ENCOUNTER_BEAT_APPLIED = "encounter.beat_applied"
 SPAN_ROUTES[SPAN_ENCOUNTER_BEAT_APPLIED] = SpanRoute(
     event_type="state_transition",
@@ -310,6 +326,33 @@ def encounter_resolved_span(
         span_attrs["outcome"] = outcome
     span_attrs.update(attrs)
     with Span.open(SPAN_ENCOUNTER_RESOLVED, span_attrs, tracer_override=_tracer) as span:
+        yield span
+
+
+@contextmanager
+def encounter_initiative_rolled_span(
+    *,
+    encounter_type: str,
+    initiative_order: str,
+    source: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """SWN P4 polygraph: the engine rolled initiative and seated the turn
+    order. ``initiative_order`` is the human-readable order string (e.g.
+    ``"Rux(9), Raider(5)"``); ``source`` names the emission site. Missing
+    span on a SWN encounter → initiative wasn't engine-rolled → the narrator
+    is improvising the order."""
+    with Span.open(
+        SPAN_ENCOUNTER_INITIATIVE_ROLLED,
+        {
+            "encounter_type": encounter_type,
+            "initiative_order": initiative_order,
+            "source": source,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
         yield span
 
 

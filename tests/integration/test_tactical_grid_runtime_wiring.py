@@ -122,9 +122,8 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
     from unittest.mock import MagicMock  # noqa: I001
 
     from sidequest.agents.orchestrator import Orchestrator
-    from sidequest.game.persistence import SqliteStore
+    from sidequest.game.repository import SaveRepository
     from sidequest.game.session import GameSnapshot
-    from sidequest.game.sqlite_repository import SqliteSaveRepository
     from sidequest.genre.loader import load_genre_pack
     from sidequest.protocol.messages import TacticalGridMessage
     from sidequest.server.session_handler import _SessionData
@@ -163,8 +162,6 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
     snap.discovered_rooms = [region_id]
 
     orchestrator = Orchestrator.__new__(Orchestrator)
-    store = SqliteStore.open_in_memory()
-    store.init_session("caverns_and_claudes", "beneath_sunden")
 
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
@@ -172,7 +169,7 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
         player_name="Rux",
         player_id="player-runtime-wiring",
         snapshot=snap,
-        repository=SqliteSaveRepository(store),
+        repository=MagicMock(spec=SaveRepository),
         dungeon_repository=MagicMock(),
         telemetry_sink=MagicMock(),
         genre_pack=pack,

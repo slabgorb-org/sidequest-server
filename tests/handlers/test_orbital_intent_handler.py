@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from sidequest.game.persistence import GameMode, SqliteStore
+from sidequest.game.persistence import GameMode
+from sidequest.game.repository import SaveRepository
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.enums import MessageType
 from sidequest.protocol.messages import (
@@ -36,7 +38,7 @@ def _attach(handler: WebSocketSessionHandler) -> None:
 
 def _bind_room_with_orbital(handler: WebSocketSessionHandler, tmp_path: Path) -> None:
     snapshot = GameSnapshot(party_body_id="turning_hub")
-    store = SqliteStore(tmp_path / "t.db")
+    store = MagicMock(spec=SaveRepository)
     room = SessionRoom(slug="orbital-test", mode=GameMode.SOLO)
     room.bind_world(
         snapshot=snapshot,
@@ -113,7 +115,7 @@ async def test_world_without_orbital_tier_returns_unavailable_error(tmp_path: Pa
 
     # Bind a room without orbital content (no world_dir provided).
     snapshot = GameSnapshot()
-    store = SqliteStore(tmp_path / "t.db")
+    store = MagicMock(spec=SaveRepository)
     room = SessionRoom(slug="no-orbital", mode=GameMode.SOLO)
     room.bind_world(snapshot=snapshot, store=store)
     handler._room = room

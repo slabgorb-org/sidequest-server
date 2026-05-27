@@ -18,12 +18,6 @@ def _restore_frontier_observers() -> Any:
         frontier_hook._OBSERVERS[:] = before
 
 
-def _sqlite_store() -> Any:
-    from sidequest.game.persistence import SqliteStore
-
-    return SqliteStore.open_in_memory()
-
-
 def _beneath_sunden_world_dir() -> Path:
     # tests/dungeon/<file> -> tests -> sidequest-server -> repo root;
     # sidequest-content is a SIBLING of sidequest-server (parents[3]),

@@ -133,7 +133,7 @@ class CheckThrowHandler:
                 session_id=session_id,
                 room_broadcast=room_broadcast,
             )
-        except (ValueError, NotImplementedError) as exc:
+        except (ValueError, NotImplementedError, KeyError) as exc:
             logger.warning("check.dispatch_error error=%s", exc)
             return [_error_msg(f"Check throw failed: {exc}")]
         return []

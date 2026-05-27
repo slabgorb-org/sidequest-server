@@ -17,10 +17,11 @@ from sidequest.genre.models.inventory import DamageSpec
 # Keys inside ``ConfrontationDef.opponent_default_stats`` that are NOT
 # ability scores. ``hp`` seeds the opponent CreatureCore HP pool and
 # ``armor_class`` seeds the SWN ascending AC the attack rolls against
-# (hp_depletion combats). They are popped out before ability-score /
-# modifier resolution so they never leak into opposed_check lookups or
-# the ADR-093 calibration ceiling.
-OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset({"hp", "armor_class"})
+# (hp_depletion combats). ``dexterity`` seeds the opponent's SWN
+# initiative (1d8 + DEX mod) for hp_depletion combats. They are popped
+# out before ability-score / modifier resolution so they never leak into
+# opposed_check lookups or the ADR-093 calibration ceiling.
+OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset({"hp", "armor_class", "dexterity"})
 
 
 class MoraleTrigger(StrEnum):
@@ -476,6 +477,21 @@ class ConfrontationDef(BaseModel):
                     f"opponent_default_stats.armor_class={ac!r}; AC must be >= 1 "
                     "(a 0/negative AC would auto-hit — fail loud instead)"
                 )
+            dex = ods.get("dexterity")
+            if dex is None:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' uses "
+                    "win_condition 'hp_depletion' but its opponent_default_stats is "
+                    f"missing reserved combat key (dexterity={dex!r}); author "
+                    "`dexterity` (SWN DEX score) so 1d8+DEX initiative can roll for "
+                    "the opponent (SWN P4 — no silent +0 fallback)"
+                )
+            if int(dex) < 3:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' has "
+                    f"opponent_default_stats.dexterity={dex!r}; must be >= 3 "
+                    "(SWN ability-score floor)"
+                )
         valid_categories = {"combat", "social", "pre_combat", "movement"}
         if self.category not in valid_categories:
             raise ValueError(
@@ -539,6 +555,14 @@ class ConfrontationDef(BaseModel):
         if not self.opponent_default_stats:
             return None
         raw = self.opponent_default_stats.get("armor_class")
+        return int(raw) if raw is not None else None
+
+    @property
+    def opponent_dexterity(self) -> int | None:
+        """Content-authored opponent DEX score (SWN P4 initiative), or ``None``."""
+        if not self.opponent_default_stats:
+            return None
+        raw = self.opponent_default_stats.get("dexterity")
         return int(raw) if raw is not None else None
 
 

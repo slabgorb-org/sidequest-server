@@ -6,10 +6,14 @@ Universal SWN constants come from RulesConfig.swn; per-class/per-item numbers
 (attack bonus progression, weapon dice, armor AC) come from pack content.
 NOT a fallback — selected explicitly by `ruleset: swn`.
 """
+
 from __future__ import annotations
+
+import random
 
 from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.resolution import AttackRollParams, CheckRollParams
+from sidequest.protocol.models import InitiativeEntry
 
 
 def swn_attribute_modifier(score: int) -> int:
@@ -65,7 +69,9 @@ class SwnRulesetModule(RulesetModule):
             "SWN resolves attacks vs target AC via attack_params; compute_dc is native-only."
         )
 
-    def attack_params(self, *, beat, attacker_stats, attacker_core, target_core) -> AttackRollParams:
+    def attack_params(
+        self, *, beat, attacker_stats, attacker_core, target_core
+    ) -> AttackRollParams:
         attr_mod = self.stat_modifier(attacker_stats, beat.stat_check)
         combat_skill = int(getattr(beat, "combat_skill", 0) or 0)
         attack_bonus = int(getattr(beat, "attack_bonus", 0) or 0)
@@ -88,7 +94,9 @@ class SwnRulesetModule(RulesetModule):
             damage_resolver=damage_resolver,
         )
 
-    def check_params(self, *, stats, attribute, skill_level, difficulty_key, label, cfg) -> CheckRollParams:
+    def check_params(
+        self, *, stats, attribute, skill_level, difficulty_key, label, cfg
+    ) -> CheckRollParams:
         if attribute is None:
             raise ValueError(
                 "check_params requires a non-None attribute; "
@@ -96,7 +104,8 @@ class SwnRulesetModule(RulesetModule):
             )
         attr_mod = self.stat_modifier(stats, attribute)
         return CheckRollParams(
-            sides=6, count=2,
+            sides=6,
+            count=2,
             modifier=attr_mod + int(skill_level),
             difficulty=int(cfg.difficulties[difficulty_key]),
             label=label,
@@ -119,9 +128,11 @@ class SwnRulesetModule(RulesetModule):
             flavor_attrs.append(flavor)
         best_mod = max(self.stat_modifier(stats, f) for f in flavor_attrs)
         return CheckRollParams(
-            sides=20, count=1,
+            sides=20,
+            count=1,
             modifier=best_mod,
-            difficulty=int(cfg.save_base) - (int(level) - 1),  # target; SRD p.46: 15 at level 1, -1/level
+            difficulty=int(cfg.save_base)
+            - (int(level) - 1),  # target; SRD p.46: 15 at level 1, -1/level
             label=label,
         )
 
@@ -129,3 +140,25 @@ class SwnRulesetModule(RulesetModule):
         from sidequest.server.dispatch.damage_roll import resolve_damage_spec_from_beat_and_actor
 
         return resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor_core, pack=pack)
+
+    def roll_initiative(
+        self,
+        *,
+        actor_dex_scores: dict[str, int],
+        rng: random.Random,
+    ) -> list[InitiativeEntry] | None:
+        """SWN initiative: 1d8 + DEX modifier per actor, sorted descending.
+
+        Faithful SWN (SRD): rolled once at combat start; the seam persists the
+        result and reuses it each round. Tie-break: stable sort preserves the
+        caller's actor order (TODO: confirm SRD tie-break and pin to SwnConfig).
+        """
+        entries = [
+            InitiativeEntry(
+                token_id=name,
+                value=rng.randint(1, 8) + swn_attribute_modifier(score),
+            )
+            for name, score in actor_dex_scores.items()
+        ]
+        entries.sort(key=lambda e: e.value, reverse=True)
+        return entries

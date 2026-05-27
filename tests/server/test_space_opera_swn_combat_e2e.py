@@ -100,6 +100,9 @@ def _player_character(name: str):
         char_class="Soldier",
         race="Coreworlder",
         backstory="Ex-Hegemonic infantry.",
+        # SWN P4: the player's DEX (Reflex flavor) must be resolvable at the
+        # instantiation seam so initiative can roll 1d8+DEX for the PC.
+        stats=dict(_STATS),
     )
 
 
@@ -261,6 +264,35 @@ def test_firefight_resolves_on_hp_depletion_vs_content_ac(otel_capture):
         f"HP-to-0 kill (lie-detector for the SWN combat resolution path); "
         f"got resolved-span sources={sources}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 1b — SWN P4 initiative rolled + persisted at the instantiation seam
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_initiative_rolled_and_persisted_on_instantiation(otel_capture):
+    """SWN P4: instantiating a combat hp_depletion confrontation rolls 1d8+DEX
+    for player + opponent, persists the order, and fires the polygraph span."""
+    _snap, enc, _pack = _seated_combat(
+        encounter_type="combat",
+        pc="Nova",
+        opponent="Corsair",
+        location="Docking Ring",
+    )
+    assert enc is not None
+    names = {e.token_id for e in enc.initiative}
+    assert "Nova" in names and "Corsair" in names, (
+        f"both player + opponent must be seated in the initiative order; got {names}"
+    )
+    assert len(enc.initiative) >= 2  # player + opponent both seated and ordered
+    init_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "encounter.initiative_rolled"
+    ]
+    assert init_spans, "encounter.initiative_rolled span must fire on instantiation"
+    assert init_spans[0].attributes["encounter_type"]
+    assert init_spans[0].attributes["initiative_order"]
 
 
 # ---------------------------------------------------------------------------

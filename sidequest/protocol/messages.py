@@ -796,6 +796,9 @@ class ConfrontationPayload(ProtocolBase):
     # NarrationPayload.seq / SecretNotePayload.seq. Default 0 keeps
     # legacy actor-only construction sites working.
     seq: int = 0
+    # SWN P4: 1d8+DEX resolution order, rolled once at instantiation. Plain list
+    # for the UI (no 3D dice overlay). None/empty for rulesets with no ordering.
+    initiative_order: list[dict[str, int | str]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1169,9 +1172,7 @@ class CheckThrowPayload(ProtocolBase):
     def _require_kind_fields(self) -> CheckThrowPayload:
         if self.kind == "skill_check":
             if self.attribute is None or self.difficulty_key is None:
-                raise ValueError(
-                    "skill_check requires 'attribute' and 'difficulty_key'"
-                )
+                raise ValueError("skill_check requires 'attribute' and 'difficulty_key'")
         elif self.kind == "save":
             if self.save is None:
                 raise ValueError("save requires 'save' category")

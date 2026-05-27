@@ -115,21 +115,17 @@ def _seed_combat_hp_depletion_to_npcs(
     and resolves at ``core.hp.current <= 0``) could never fire and the SWN
     attack would have no AC to roll against.
 
-    Fail loud (CLAUDE.md no-silent-fallback): a hp_depletion combat MUST
-    author both ``hp`` and ``armor_class`` in ``opponent_default_stats``.
+    Contract enforced at LOAD time (Task 1): the ``ConfrontationDef`` validator
+    requires ``hp`` / ``armor_class`` / ``dexterity`` under
+    ``opponent_default_stats`` for any combat hp_depletion confrontation that
+    loads, so ``opponent_hp`` / ``opponent_armor_class`` are guaranteed present
+    here — no runtime fail-loud needed at this seam.
     """
     from sidequest.game.creature_core import CreatureCore, Inventory, hp_pool_from_hp
     from sidequest.game.session import Npc
 
     hp = cdef.opponent_hp
     ac = cdef.opponent_armor_class
-    if hp is None or ac is None:
-        raise ValueError(
-            f"confrontation '{getattr(cdef, 'confrontation_type', '?')}' uses "
-            "win_condition=hp_depletion but its opponent_default_stats is "
-            f"missing the reserved combat keys (hp={hp!r}, armor_class={ac!r}); "
-            "author both `hp` and `armor_class` under opponent_default_stats"
-        )
 
     by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
@@ -173,6 +169,80 @@ def _seed_combat_hp_depletion_to_npcs(
             seed_source="opponent_default_stats",
         ):
             pass
+
+
+def _roll_and_persist_initiative(
+    *,
+    snapshot: GameSnapshot,
+    enc: StructuredEncounter,
+    actors: list[EncounterActor],
+    cdef,
+    pack: GenrePack,
+) -> None:
+    """SWN P4: roll 1d8+DEX once for player+opponent actors, persist on the
+    encounter, emit the polygraph span. No-op for rulesets with no ordering.
+
+    DEX is resolved at THIS seam because CreatureCore/Npc carry no ability
+    scores: PCs from Character.stats[attribute_map['DEXTERITY']], opponents
+    from the content `dexterity` reserved key (guaranteed present by the
+    ConfrontationDef load-time validator). Fail loud on a missing PC score.
+    """
+    import random
+
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.telemetry.spans.encounter import encounter_initiative_rolled_span
+
+    cfg = pack.rules.swn
+    if cfg is None:
+        return  # non-SWN ruleset: no ordering (native returns None anyway)
+
+    dex_key = cfg.attribute_map.get("DEXTERITY")
+    if dex_key is None:
+        raise ValueError(
+            "ruleset 'swn' but attribute_map has no DEXTERITY entry — "
+            "RulesConfig validator should have caught this"
+        )
+
+    char_by_name = {c.core.name: c for c in snapshot.characters}
+    actor_dex_scores: dict[str, int] = {}
+    for actor in actors:
+        if actor.side == "opponent":
+            dex = cdef.opponent_dexterity
+            if dex is None:
+                raise ValueError(
+                    f"opponent '{actor.name}' has no dexterity in "
+                    f"opponent_default_stats for '{cdef.confrontation_type}' — "
+                    "the load-time validator should have required it"
+                )
+            actor_dex_scores[actor.name] = int(dex)
+        elif actor.side == "player":
+            ch = char_by_name.get(actor.name)
+            if ch is None:
+                raise ValueError(
+                    f"player actor '{actor.name}' not found among snapshot.characters "
+                    "— cannot resolve DEX for initiative (no silent fallback)"
+                )
+            score = ch.stats.get(dex_key)
+            if score is None:
+                raise ValueError(
+                    f"player '{actor.name}' stat block has no '{dex_key}' "
+                    f"(DEXTERITY flavor) — cannot roll initiative (stats={sorted(ch.stats)})"
+                )
+            actor_dex_scores[actor.name] = int(score)
+        # neutral actors do not act -> excluded from initiative.
+
+    ruleset = get_ruleset_module(pack.rules.ruleset)
+    entries = ruleset.roll_initiative(actor_dex_scores=actor_dex_scores, rng=random.Random())
+    if not entries:
+        return
+    enc.initiative = entries
+    order_str = ", ".join(f"{e.token_id}({e.value})" for e in entries)
+    with encounter_initiative_rolled_span(
+        encounter_type=enc.encounter_type,
+        initiative_order=order_str,
+        source="instantiate",
+    ):
+        pass
 
 
 def _publish_combat_edge_to_npcs(
@@ -625,9 +695,7 @@ def instantiate_encounter_from_trigger(
         # matching Npc. Non-combat encounters leave ``core.edge`` at its
         # standing value so the validator's dead-NPC check stays correct.
         if cdef.category == "combat":
-            turn_no = (
-                snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
-            )
+            turn_no = snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
             if cdef.win_condition == WinCondition.hp_depletion:
                 # Task 9: no dial — seed opponent core.hp + core.armor_class
                 # from content opponent_default_stats. Creates a backing Npc
@@ -639,6 +707,13 @@ def instantiate_encounter_from_trigger(
                     cdef=cdef,
                     turn=turn_no,
                     source="encounter_handshake",
+                )
+                _roll_and_persist_initiative(
+                    snapshot=snapshot,
+                    enc=enc,
+                    actors=actors,
+                    cdef=cdef,
+                    pack=pack,
                 )
             else:
                 _publish_combat_edge_to_npcs(

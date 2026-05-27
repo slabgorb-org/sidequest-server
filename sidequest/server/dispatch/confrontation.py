@@ -228,6 +228,11 @@ def build_confrontation_payload(
         if opponent_hp is not None:
             payload["opponent_hp"] = opponent_hp
 
+    if encounter.initiative:
+        payload["initiative_order"] = [
+            {"name": e.token_id, "roll": e.value} for e in encounter.initiative
+        ]
+
     return payload
 
 

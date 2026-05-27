@@ -32,6 +32,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def initiative_preamble(encounter: object | None) -> str | None:
+    """SWN P4: the authoritative resolution-order line for the narrator turn.
+
+    Returns None when the encounter has no initiative (native rulesets, non-combat).
+    The 'reduced to 0 HP' clause keeps the prose correct before P5's tool walk
+    mechanically enforces dead_premise.
+    """
+    init = getattr(encounter, "initiative", None)
+    if not init:
+        return None
+    order = ", ".join(f"{e.token_id}({e.value})" for e in init)
+    return (
+        f"[INITIATIVE ORDER] Resolve the committed actions strictly in this "
+        f"1d8+DEX order: {order}. An actor reduced to 0 HP earlier in this "
+        f"order does not act."
+    )
+
+
 def _broadcast_cleared_to_party(
     room: object,
     party_members: list[dict[str, str]],
@@ -193,6 +211,9 @@ async def dispatch_fired_barrier(
     )
 
     combined_action = "\n".join(f"{p.character_name}: {p.action}" for _, p in pending)
+    _preamble = initiative_preamble(getattr(snapshot, "encounter", None))
+    if _preamble is not None:
+        combined_action = f"{_preamble}\n{combined_action}"
     # Tag the TurnContext so build_narrator_prompt renders a multi-PC
     # declaration block instead of attributing every line to the dispatch
     # winner.

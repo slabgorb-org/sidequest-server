@@ -30,9 +30,6 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol import GameMessage
@@ -132,17 +129,6 @@ def _seed_with_character(tmp_path: Path, slug: str) -> None:
     - Bob is connected but NOT seated, so playing_player_count() == 1 and
       the turn barrier fires on alice's single submission — no deadlock.
     """
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.MULTIPLAYER,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
     core = CreatureCore(
         name="Thorn",
         description="A wandering fighter",
@@ -163,10 +149,7 @@ def _seed_with_character(tmp_path: Path, slug: str) -> None:
     # (rather than falling through to the display_name matching branch which
     # would not find "alice" in {"Thorn"}).
     snap.player_seats["alice"] = "Thorn"
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
     _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
-    store.close()
 
 
 def _fake_narration_result_with_secret():
@@ -216,10 +199,10 @@ def _fake_narration_result_with_secret():
     )
 
 
-async def _drive_one_real_turn(tmp_path: Path) -> Path:
+async def _drive_one_real_turn(tmp_path: Path) -> None:
     """Shared harness: seed a MULTIPLAYER game, drive ONE real production turn
     through connect.py (alice connects, bob joins as unseated observer, alice
-    submits a PLAYER_ACTION), and return the save.db Path.
+    submits a PLAYER_ACTION). Telemetry lands in Postgres (ADR-115 F1).
 
     Extracted from the original test_a_real_turn_persists_turn_telemetry_rows
     body() so that both the wiring test and the cost-measurement test can
@@ -299,8 +282,6 @@ async def _drive_one_real_turn(tmp_path: Path) -> Path:
             }
         )
         await handler.handle_message(action)
-
-    return db_path_for_slug(tmp_path, _SLUG)
 
 
 def test_a_real_turn_persists_turn_telemetry_rows(tmp_path: Path) -> None:

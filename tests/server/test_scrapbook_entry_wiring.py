@@ -26,9 +26,6 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol import GameMessage
@@ -108,17 +105,6 @@ def _pg_scrapbook_rows(slug: str) -> list[tuple]:
 
 
 def _seed_with_character(tmp_path: Path, slug: str) -> None:
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
     core = CreatureCore(
         name="Thorn",
         description="A wandering fighter",
@@ -133,9 +119,6 @@ def _seed_with_character(tmp_path: Path, slug: str) -> None:
     )
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD)
     snap.characters = [char]
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
     # Mirror the snapshot (+ character) into PG so the slug-connect path sees
     # has_character=True and resumes into Playing for the PLAYER_ACTION below.
     _pg_repo_for_slug(slug).save(snap)

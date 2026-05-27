@@ -18,9 +18,6 @@ from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.event_log import EventLog
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol import GameMessage
@@ -85,17 +82,6 @@ def _seed_pg_for_slug(slug: str, snap: GameSnapshot) -> None:
 def _seed_with_character(tmp_path: Path, slug: str) -> None:
     """Seed a SOLO game row + a saved snapshot carrying one Character, so
     the slug-connect branch goes straight to Playing (skipping chargen)."""
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
     core = CreatureCore(
         name="Thorn",
         description="A wandering fighter",
@@ -110,9 +96,6 @@ def _seed_with_character(tmp_path: Path, slug: str) -> None:
     )
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD)
     snap.characters = [char]
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
     _seed_pg_for_slug(slug, snap)
 
 

@@ -44,9 +44,6 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol import GameMessage
@@ -166,24 +163,11 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
 
 
 def _seed_solo_save(save_dir: Path, genre_slug: str) -> None:
-    """Seed a SOLO game row + a saved snapshot carrying one Character so
-    the slug-connect branch goes straight to Playing (skipping chargen).
+    """Register a SOLO session in Postgres carrying one Character so the
+    slug-connect branch goes straight to Playing (skipping chargen).
 
-    Under D2 the connect path loads the authoritative snapshot from PG, so
-    the character must be mirrored into the (per-test isolated) PG database;
-    the SQLite save still carries the bootstrap game row the handshake reads
-    for genre/world/mode."""
-    db = db_path_for_slug(save_dir, _SLUG)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=_SLUG,
-        mode=GameMode.SOLO,
-        genre_slug=genre_slug,
-        world_slug=_WORLD,
-    )
+    ADR-115 F1: the connect path loads the authoritative snapshot + bootstrap
+    row from Postgres (the SQLite save layer was retired)."""
     core = CreatureCore(
         name="Thorn",
         description="A wandering investigator",
@@ -198,9 +182,6 @@ def _seed_solo_save(save_dir: Path, genre_slug: str) -> None:
     )
     snap = GameSnapshot(genre_slug=genre_slug, world_slug=_WORLD)
     snap.characters = [char]
-    store.init_session(genre_slug, _WORLD)
-    store.save(snap)
-    store.close()
 
     # ADR-115 D2: mirror the snapshot into the PG store the connect path
     # actually loads from so has_character=True → Playing (skips chargen).

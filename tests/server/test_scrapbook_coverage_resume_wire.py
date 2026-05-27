@@ -213,28 +213,12 @@ class TestSlugResumeEndToEnd:
         so the test can drive a real connect through it."""
         from sidequest.game.persistence import (
             GameMode,
-            SqliteStore,
-            db_path_for_slug,
-            upsert_game,
         )
         from sidequest.game.session import GameSnapshot, NarrativeEntry
 
         slug = "scrapbook-coverage-orin-fixture"
         genre = "test_genre"
         world = "flickering_reach"
-
-        db = db_path_for_slug(tmp_path, slug)
-        db.parent.mkdir(parents=True, exist_ok=True)
-        store = SqliteStore(db)
-        store.initialize()
-        upsert_game(
-            store,
-            slug=slug,
-            mode=GameMode.SOLO,
-            genre_slug=genre,
-            world_slug=world,
-        )
-        store.init_session(genre, world)
 
         # Snapshot with a character so chargen gate doesn't intercept.
         from sidequest.game.character import Character
@@ -254,24 +238,11 @@ class TestSlugResumeEndToEnd:
                 backstory="A wandering cleric.",
             )
         ]
-        # 29 narrative rounds — the bug-evidence shape.
-        for r in range(1, 30):
-            store.append_narrative(
-                NarrativeEntry(
-                    round=r,
-                    author="narrator",
-                    content=f"Round {r}.",
-                    tags=[],
-                )
-            )
-        store.save(snap)
-        store.close()
 
-        # ADR-115 D2: the connect handler's coverage detector reads narration
-        # + scrapbook rows from Postgres, not the SQLite save.db above (which
-        # only carries the bootstrap game row the handshake reads). Mirror the
-        # 29-narrative / 10-scrapbook Orin fixture into PG so the live resume
-        # sees the real coverage gap.
+        # ADR-115 F1: the connect handler's coverage detector reads narration
+        # + scrapbook rows from Postgres (the SQLite save layer was retired).
+        # Persist the 29-narrative / 10-scrapbook Orin fixture into PG so the
+        # live resume sees the real coverage gap.
         from sidequest.game import db_pool
         from sidequest.server.session_state import _build_pg_repos_for_slug
 

@@ -375,7 +375,7 @@ class LookaheadWorkerHandle:
                 graph=graph,
                 bundle=self.bundle,
                 palette=self.palette,
-                persistence=self.persistence,
+                dungeon_repository=self.persistence,
                 snapshot=snapshot,
                 pack_tropes=self.pack_tropes,
                 claude_client=self.claude_client,

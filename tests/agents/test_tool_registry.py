@@ -71,7 +71,7 @@ def test_tool_context_is_frozen() -> None:
         session_id="s",
         perspective_pc="alex",
         turn_number=42,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=MagicMock(),
     )
@@ -87,7 +87,7 @@ def test_tool_context_perspective_pc_optional() -> None:
         session_id="s",
         perspective_pc=None,
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=MagicMock(),
     )
@@ -131,7 +131,7 @@ def _make_ctx() -> ToolContext:
         session_id="s",
         perspective_pc="alex",
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=_NoopFilter(),
     )
@@ -312,7 +312,7 @@ async def test_registry_dispatch_invokes_perception_filter() -> None:
         session_id="s",
         perspective_pc="alex",
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=_Tracking(),
     )

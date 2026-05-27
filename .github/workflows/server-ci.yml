@@ -1,0 +1,38 @@
+name: server-ci
+
+on:
+  push:
+    branches: [develop, "feat/**"]
+  pull_request:
+    branches: [develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: sidequest
+          POSTGRES_PASSWORD: sidequest
+          POSTGRES_DB: sidequest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sidequest"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SIDEQUEST_TEST_DATABASE_URL: postgresql://sidequest:sidequest@localhost:5432/sidequest_test
+      SIDEQUEST_DATABASE_URL: postgresql://sidequest:sidequest@localhost:5432/sidequest_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies
+        run: uv sync --all-extras
+      - name: Lint
+        run: uv run ruff check .
+      - name: Test
+        run: uv run pytest -q

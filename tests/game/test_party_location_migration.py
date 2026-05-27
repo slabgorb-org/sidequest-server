@@ -22,6 +22,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+import pytest
+
 from sidequest.game.migrations import migrate_legacy_snapshot
 
 # ---------------------------------------------------------------------------
@@ -253,30 +255,49 @@ def test_s1_s2_s3_can_run_in_same_migration_call() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC8: round-trip via SqliteStore.load
+# AC8: round-trip via the save repository's load (ADR-115 F1: Postgres)
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_save_round_trips_through_sqlite_store(tmp_path) -> None:
-    """End-to-end: write a legacy snapshot dict to SQLite, load it via
-    ``SqliteStore.load``, and verify ``character_locations`` is populated
-    from the legacy ``location`` field. This is the wire-first integration
-    test the epic requires (Lane B integration check)."""
+@pytest.fixture
+def pg_repo(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """A real PgSaveRepository + pool on a per-worker throwaway PG db."""
+    import psycopg
+
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(), slug="party-location-migration", mode="solo",
+        genre_slug="g", world_slug="w",
+    )
+    try:
+        yield repo
+    finally:
+        db_pool.close_pool()
+
+
+def test_legacy_save_round_trips_through_repository(pg_repo) -> None:
+    """End-to-end: write a legacy snapshot blob into Postgres game_state, load
+    it via the repository, and verify ``character_locations`` is populated from
+    the legacy ``location`` field (ADR-115 F1: PgSnapshot.load runs
+    migrate_legacy_snapshot before validation)."""
     import json
+    from datetime import UTC, datetime
 
-    from sidequest.game.persistence import SqliteStore
-    from sidequest.game.session import GameSnapshot
+    from sidequest.game import db_pool
 
-    store = SqliteStore(tmp_path / "save.db")
-    store.init_session(genre_slug="g", world_slug="w")
-
-    # Save a canonical snapshot first to materialize the schema/row.
-    canonical = GameSnapshot(genre_slug="g", world_slug="w")
-    store.save(canonical)
-
-    # Now overwrite the row's snapshot blob with a legacy-shape JSON that
-    # uses ``location`` and seats one PC. The migration must promote the
-    # value on load.
     legacy_blob = json.dumps(
         {
             "genre_slug": "g",
@@ -285,13 +306,17 @@ def test_legacy_save_round_trips_through_sqlite_store(tmp_path) -> None:
             "player_seats": {"p:1": "Shirley"},
         }
     )
-    with store._conn:  # type: ignore[attr-defined]
-        store._conn.execute(  # type: ignore[attr-defined]
-            "UPDATE game_state SET snapshot_json = ? WHERE id = 1",
-            (legacy_blob,),
+    with db_pool.get_pool().connection() as conn, conn.transaction():
+        conn.execute(
+            """
+            INSERT INTO game_state (session_id, snapshot_json, saved_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (session_id) DO UPDATE SET snapshot_json = excluded.snapshot_json
+            """,
+            (pg_repo.session_id, legacy_blob, datetime.now(tz=UTC).isoformat()),
         )
 
-    loaded = store.load()
+    loaded = pg_repo.load()
     assert loaded is not None
     snap = loaded.snapshot
     assert snap.character_locations == {"Shirley": "Galley"}

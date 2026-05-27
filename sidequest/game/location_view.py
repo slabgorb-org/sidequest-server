@@ -14,16 +14,12 @@ vanish when the encounter resolves.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
 
 from sidequest.game.location_resolver import _build_effective_manifest
 from sidequest.protocol.models import (
     EncounterLocationOverlay,
     LocationEntity,
 )
-
-if TYPE_CHECKING:
-    from sidequest.game.persistence import SqliteStore
 
 
 def active_overlays_for(snapshot: object, *, region_id: str) -> list[EncounterLocationOverlay]:
@@ -49,8 +45,7 @@ def get_location_manifest(
     region_id: str,
     authored: Iterable[LocationEntity],
     snapshot: object,
-    store: SqliteStore,
-    save_id: str = "default",
+    store: object,
 ) -> list[LocationEntity]:
     """Effective manifest for ``region_id``: authored + overlays + promotions.
 
@@ -58,7 +53,7 @@ def get_location_manifest(
     resolver agree on what's "in the room" at any moment.
     """
     overlays = active_overlays_for(snapshot, region_id=region_id)
-    promotions = store.list_location_promotions(save_id=save_id, region_id=region_id)
+    promotions = store.list_location_promotions(region_id=region_id)  # type: ignore[union-attr]
     merged = _build_effective_manifest(authored=authored, promotions=promotions, overlays=overlays)
     return [entity for entity, _ in merged]
 

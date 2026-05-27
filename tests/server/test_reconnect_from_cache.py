@@ -2,21 +2,50 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import pytest
 
 from sidequest.game.event_log import EventLog
-from sidequest.game.persistence import SqliteStore
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.projection.view import SessionGameStateView
 from sidequest.game.projection_filter import FilterDecision
-from sidequest.game.sqlite_repository import SqliteSaveRepository
 
 
-def test_reconnect_replays_cached_payloads(tmp_path: Path) -> None:
-    store = SqliteStore(tmp_path / "s.db")
-    repo = SqliteSaveRepository(store)
+@pytest.fixture
+def pg_repo(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """A real PgSaveRepository on a per-worker throwaway PG db (ADR-115 F1)."""
+    import psycopg
+
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug="reconnect-cache",
+        mode="solo",
+        genre_slug="test_genre",
+        world_slug="test_world",
+    )
+    try:
+        yield repo
+    finally:
+        db_pool.close_pool()
+
+
+def test_reconnect_replays_cached_payloads(pg_repo) -> None:
+    repo = pg_repo
     log = EventLog(repo)
     cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()

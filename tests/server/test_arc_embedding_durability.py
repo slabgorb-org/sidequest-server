@@ -1,22 +1,35 @@
 """Story 45-23 — save/reload durability test for arc-promotion writes.
 
 Per context-story-45-23.md AC6: drive a tier-promotion turn, persist
-the snapshot via ``sd.store.save(...)``, reload, and assert the arc-
-promotion narrative entries are still present on the reloaded
-snapshot's ``narrative_log``.
+the snapshot + narrative rows, reload, and assert the arc-promotion
+narrative entries are still present on the reloaded snapshot's
+``narrative_log`` and in the durable narrative_log store.
 
 Felix's bug was a missing call site so nothing reached durable storage
 in the first place. This test guarantees that once the call site
-exists, the in-snapshot arc rows survive the JSON round-trip — the
-``narrative_log`` field on ``GameSnapshot`` already serializes its
-entries (45-22 hardened the schema with required ``author`` and the
-``entry_type`` field), so this is mostly a wiring assertion: the
-helper appended to ``snapshot.narrative_log`` (not just to the
-SqliteStore log table) so the saved snapshot carries the rows.
+exists, the in-snapshot arc rows survive the round-trip — the
+``narrative_log`` field on ``GameSnapshot`` serializes its entries
+(45-22 hardened the schema with required ``author`` and the
+``entry_type`` field), and ``seed_lore_from_arc_promotion`` also calls
+``repository.append_narrative`` so the durable narrative store carries
+the rows for GM-panel replay.
 
-The ``lore_store`` durability is governed by the existing
-ADR-048 LoreStore persistence (separate concern); this test scopes
-to the in-snapshot ``narrative_log`` durability that 45-23 introduces.
+ADR-115 D2 note: the authoritative narrative_log + snapshot now persist
+to **Postgres** via ``db_pool.get_pool()``, not a SQLite save.db. The
+``session_handler_factory`` builds a legacy single-player ``_SessionData``
+over an in-memory SqliteSaveRepository, so this test rebinds both the
+session repository (target of ``seed_lore_from_arc_promotion``'s
+``append_narrative``) and the room store (target of the persistence
+phase's ``room.save()``) to one shared ``PgSaveRepository`` keyed on a
+fixed slug. Durability is then read back from that same PG repository —
+``load()`` for the snapshot round-trip, ``recent_narrative()`` for the
+durable narrative store — rather than reopening a SQLite file (which is
+empty under D2). The arc-promotion content/tags/round shape the
+assertions check is unchanged; only the read/write target moves to PG.
+
+The ``lore_store`` durability is governed by the existing ADR-048
+LoreStore persistence (separate concern); this test scopes to the
+in-snapshot ``narrative_log`` durability that 45-23 introduces.
 """
 
 from __future__ import annotations
@@ -30,8 +43,45 @@ from sidequest.game.history_chapter import (
     ChapterNarrativeEntry,
     HistoryChapter,
 )
+from sidequest.game.persistence import GameMode
 from sidequest.game.world_materialization import ARC_RECOMPUTE_INTERVAL
 from tests.server.conftest import _build_turn_context_for_test
+
+_GENRE = "caverns_and_claudes"
+_WORLD = "sunken_keep"
+# Fixed slug — collision-safe across parallel runs because _pg_isolation
+# binds the process pool to a per-worker throwaway db that is TRUNCATEd
+# (RESTART IDENTITY CASCADE) before each test, so this slug's session is
+# the only one in the db when the durability reads run.
+_SLUG = "arc-embedding-durability-fixture"
+
+
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    ADR-115 D2: the snapshot + narrative_log persist to Postgres via
+    db_pool.get_pool(). Seed (the rebound PgSaveRepository) and the
+    durability reads must share one isolated database. Copied shape from
+    test_turn_telemetry_wiring.py::_pg_isolation (HEAD).
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
 
 
 def _content_chapters() -> list[HistoryChapter]:
@@ -60,16 +110,58 @@ def _content_chapters() -> list[HistoryChapter]:
     ]
 
 
+def _bind_pg_repository(sd) -> "object":
+    """Rebind ``sd.repository`` AND the room store to one shared PG repo.
+
+    Both production write paths exercised by this turn must land in the
+    same Postgres session so a single ``load()`` / ``recent_narrative()``
+    read sees them:
+
+    - ``seed_lore_from_arc_promotion`` writes through ``sd.repository``
+      (``append_narrative`` for the durable narrative store).
+    - the persistence phase's ``room.save()`` persists the snapshot (with
+      its in-memory ``narrative_log`` entries) through the room store.
+
+    ``PgSaveRepository.for_slug`` is idempotent on the slug, so pointing
+    both at one ``for_slug`` instance keeps them on a single session_id.
+    Returns the bound repository for the durability reads.
+    """
+    from sidequest.game import db_pool
+    from sidequest.game.pg.save_repository import PgSaveRepository
+
+    repo = PgSaveRepository.for_slug(
+        db_pool.get_pool(),
+        slug=_SLUG,
+        mode=str(GameMode.SOLO),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    sd.repository = repo
+    # Room owns the canonical snapshot; the persistence phase calls
+    # ``room.save()`` (sd._room is set on the legacy single-player factory
+    # path), so the room store must be the same PG repo for the snapshot
+    # round-trip to carry the arc entries. The room is already bound, so
+    # poke the private store slot directly (bind_world is one-shot).
+    assert sd._room is not None, (
+        "factory must set sd._room on the legacy single-player path — the "
+        "persistence phase calls room.save() and the snapshot round-trip "
+        "depends on it persisting through the shared PG repo."
+    )
+    sd._room._store = repo
+    return repo
+
+
 @pytest.mark.asyncio
 async def test_arc_promotion_entries_survive_save_and_reload(
     session_handler_factory,
 ) -> None:
-    """End-to-end durability — drive a Fresh→Early transition, save the
-    snapshot via the real SqliteStore, reload, and assert the arc-
+    """End-to-end durability — drive a Fresh→Early transition, persist the
+    snapshot to Postgres (ADR-115 D2), reload, and assert the arc-
     promotion entries are still on the snapshot's narrative_log.
     """
 
-    sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    sd, handler = session_handler_factory(genre=_GENRE)
+    repo = _bind_pg_repository(sd)
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="Calm settles.",
@@ -85,14 +177,14 @@ async def test_arc_promotion_entries_survive_save_and_reload(
     turn_context = _build_turn_context_for_test(sd)
     await handler._execute_narration_turn(sd, "I push deeper.", turn_context)
 
-    # The dispatch loop already persisted via ``sd.store.save`` inside
-    # the persistence phase (websocket_session_handler.py:1624). Loading
-    # back exercises the JSON round-trip without a second save call —
-    # the assertion is on the persisted shape, not a re-save.
-    saved = sd.store.load()
+    # The dispatch loop already persisted via ``room.save()`` inside the
+    # persistence phase (websocket_session_handler.py). Loading back from
+    # the same PG session exercises the snapshot round-trip without a
+    # second save call — the assertion is on the persisted shape.
+    saved = repo.load()
     assert saved is not None, (
-        "SqliteStore returned no saved session — the dispatch path's "
-        "save() did not commit, so the durability assertion below "
+        "PgSaveRepository returned no saved session — the dispatch path's "
+        "room.save() did not commit, so the durability assertion below "
         "cannot run."
     )
     reloaded = saved.snapshot
@@ -115,15 +207,17 @@ async def test_arc_promotion_entries_survive_save_and_reload(
 async def test_arc_promotion_entries_present_in_durable_narrative_log_table(
     session_handler_factory,
 ) -> None:
-    """Belt-and-braces: ``sd.store.append_narrative`` writes rows to
-    the SQLite ``narrative_log`` table independent of the snapshot
-    JSON. Felix's narrator-state-summary path does not query that
-    table directly, but Sebastien's GM panel does (via
-    ``recent_narrative``) — so the persistence call must land rows
-    that the panel can replay.
+    """Belt-and-braces: ``repository.append_narrative`` writes rows to the
+    durable narrative store independent of the snapshot JSON. Felix's
+    narrator-state-summary path does not query that store directly, but
+    Sebastien's GM panel does (via ``recent_narrative``) — so the
+    persistence call must land rows that the panel can replay. Under
+    ADR-115 D2 the durable store is the Postgres narrative_log table, read
+    back via the same PG repository the turn wrote through.
     """
 
-    sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    sd, handler = session_handler_factory(genre=_GENRE)
+    repo = _bind_pg_repository(sd)
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="Calm settles.",
@@ -142,12 +236,12 @@ async def test_arc_promotion_entries_present_in_durable_narrative_log_table(
     # Pull a generous slice — the per-turn narration appends a few
     # entries (player + narrator) on top of the arc-promotion rows;
     # 20 is a comfortable upper bound.
-    rows = sd.store.recent_narrative(limit=20)
+    rows = repo.recent_narrative(limit=20)
     arc_rows = [r for r in rows if "keep stirs" in r.content or "descend" in r.content]
     assert len(arc_rows) == 2, (
-        "Durable narrative_log SQL table is missing arc-promotion "
-        "rows — the helper did not call ``sd.store.append_narrative`` "
-        "for the seeded entries. Without this call the GM panel's "
+        "Durable narrative_log store is missing arc-promotion rows — the "
+        "helper did not call ``repository.append_narrative`` for the "
+        "seeded entries. Without this call the GM panel's "
         "recent_narrative() replay drops the chapter content. "
         f"Got rows: {[r.content for r in rows]!r}"
     )

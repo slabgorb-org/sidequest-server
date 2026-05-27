@@ -137,8 +137,7 @@ def _maybe_build_runtime_cavern_payload(
             return None
         output_root = Path(output_dir_env)
 
-        save_path = getattr(sd.store, "_path", None)
-        save_id = save_path.stem if isinstance(save_path, Path) else "in_memory"
+        save_id = getattr(sd, "game_slug", "in_memory")
 
         relative = f"artifacts/dungeon/{save_id}/regions/{room_id}.cavern.png"
         output_path = output_root / relative
@@ -720,7 +719,6 @@ def _load_dungeon_map_context(
 
     Lazy imports: ``sidequest.dungeon`` depends on game models (the
     frontier-hook lazy-import precedent)."""
-    from sidequest.dungeon.persistence import DatabaseError, DungeonStore
     from sidequest.dungeon.region_projection import applies_to
     from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
     from sidequest.dungeon.themes import load_theme_palette
@@ -733,18 +731,7 @@ def _load_dungeon_map_context(
         return None  # the per-turn dungeon.region_projection span already
         # records the other-world no-op; a second event here is noise.
 
-    store = DungeonStore(sd.store.connection())
-    try:
-        graph = store.load_map(entrance_id=ENTRANCE_ID)
-    except DatabaseError as exc:
-        _watcher_publish(
-            "dungeon.map_skipped",
-            {"world": sd.world_slug, "reason": f"no_schema: {exc}"},
-            component="dungeon",
-            severity="warning",
-        )
-        logger.warning("dungeon.map_skipped no schema: %s", exc)
-        return None
+    graph = sd.dungeon_repository.load_map(entrance_id=ENTRANCE_ID)
     if not graph.nodes:
         _watcher_publish(
             "dungeon.map_skipped",

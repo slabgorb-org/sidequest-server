@@ -1,10 +1,9 @@
 import json
-import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from sidequest.game.persistence import SqliteStore
 from sidequest.server.app import create_app
 
 
@@ -17,49 +16,86 @@ def _client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
-def _seed(saves: Path, slug: str):
-    db = saves / "games" / slug / "save.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore.open(str(db))
-    c = store.connection()
-    c.execute(
-        "INSERT OR REPLACE INTO session_meta "
-        "(id, genre_slug, world_slug, created_at, last_played, schema_version) "
-        "VALUES (1, 'caverns_and_claudes', 'test', "
-        "'2026-05-18T00:00:00+00:00', '2026-05-18T00:05:00+00:00', 1)"
+@pytest.fixture
+def pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    ADR-115 D2: the forensics REST endpoints (/api/debug/saves, .../timeline,
+    .../turn/N, .../snapshot) now read the authoritative forensic tables from
+    Postgres via db_pool.get_pool() + PgForensicReader — NOT the SQLite
+    save_dir db. Seed and read must share one isolated database, so this
+    fixture truncates and binds the per-worker migrated db to the pool.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _seed_pg(slug: str) -> int:
+    """Seed one round of forensic data into Postgres via the A2-C1 stores —
+    the authoritative read path under ADR-115 D2.
+
+    Mirrors the legacy SQLite _seed: a session row + one narrative entry +
+    one NARRATION event carrying the ``fn-cave`` footnote the turn-bundle
+    derived panel folds. Returns the session_id.
+
+    Narrative is appended FIRST (production order: persistence phase writes
+    narrative_log before the broadcast/emit phase), so narrative_log holds
+    the lowest created_at for the round — the boundary build_timeline relies
+    on (see tests/persistence/test_pg_forensic.py module docstring).
+    """
+    from sidequest.game import db_pool
+    from sidequest.game.pg import sessions
+    from sidequest.game.pg.events import PgEventStore
+    from sidequest.game.pg.narrative import PgNarrativeStore
+    from sidequest.game.session import NarrativeEntry
+
+    pool = db_pool.get_pool()
+    sid = sessions.ensure_session(
+        pool, slug=slug, mode="solo", genre_slug="caverns_and_claudes", world_slug="test"
     )
-    c.execute(
-        "INSERT INTO narrative_log (round_number, author, content, tags, created_at) "
-        "VALUES (1, 'narrator', 'You enter.', '[]', '2026-05-18 00:01:00')"
+    narr_store = PgNarrativeStore(pool, session_id=sid)
+    ev_store = PgEventStore(pool, session_id=sid)
+
+    narr_store.append_narrative(
+        NarrativeEntry(timestamp=0, round=1, author="narrator", content="You enter.", tags=[])
     )
-    c.execute(
-        "INSERT INTO events (kind, payload_json, created_at) VALUES "
-        "('NARRATION', ?, '2026-05-18T00:01:01.000000+00:00')",
-        (
-            json.dumps(
-                {
-                    "text": "You enter.",
-                    "footnotes": [
-                        {
-                            "fact_id": "fn-cave",
-                            "summary": "The cave mouth opens into darkness.",
-                            "category": "Place",
-                            "is_new": True,
-                        }
-                    ],
-                    "_visibility": {"visible_to": "all"},
-                }
-            ),
+    ev_store.append_event(
+        kind="NARRATION",
+        payload_json=json.dumps(
+            {
+                "text": "You enter.",
+                "footnotes": [
+                    {
+                        "fact_id": "fn-cave",
+                        "summary": "The cave mouth opens into darkness.",
+                        "category": "Place",
+                        "is_new": True,
+                    }
+                ],
+                "_visibility": {"visible_to": "all"},
+            }
         ),
     )
-    c.commit()
-    store.close()
+    return sid
 
 
-def test_list_saves_endpoint(tmp_path):
-    saves = tmp_path / "saves"
-    saves.mkdir(parents=True, exist_ok=True)
-    _seed(saves, "caverns_and_claudes_test")
+def test_list_saves_endpoint(tmp_path, pg_isolation):
+    _seed_pg("caverns_and_claudes_test")
     client = _client(tmp_path)
     resp = client.get("/api/debug/saves")
     assert resp.status_code == 200
@@ -68,20 +104,16 @@ def test_list_saves_endpoint(tmp_path):
     assert body[0]["genre"] == "caverns_and_claudes"
 
 
-def test_timeline_endpoint(tmp_path):
-    saves = tmp_path / "saves"
-    saves.mkdir(parents=True, exist_ok=True)
-    _seed(saves, "caverns_and_claudes_test")
+def test_timeline_endpoint(tmp_path, pg_isolation):
+    _seed_pg("caverns_and_claudes_test")
     client = _client(tmp_path)
     resp = client.get("/api/debug/save/caverns_and_claudes_test/timeline")
     assert resp.status_code == 200
     assert resp.json()[0]["round"] == 1
 
 
-def test_turn_bundle_endpoint(tmp_path):
-    saves = tmp_path / "saves"
-    saves.mkdir(parents=True, exist_ok=True)
-    _seed(saves, "caverns_and_claudes_test")
+def test_turn_bundle_endpoint(tmp_path, pg_isolation):
+    _seed_pg("caverns_and_claudes_test")
     client = _client(tmp_path)
     resp = client.get("/api/debug/save/caverns_and_claudes_test/turn/1")
     assert resp.status_code == 200
@@ -164,32 +196,32 @@ def test_forensics_route_is_wired_and_serves_html(tmp_path):
     assert "no mechanical change" in resp.text  # static
 
 
-def test_snapshot_endpoint_returns_persisted_state(tmp_path):
-    saves = tmp_path / "saves"
-    db = saves / "games" / "snap_ok" / "save.db"
-    db.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(db))
-    con.executescript(
-        "PRAGMA journal_mode=DELETE;"
-        "CREATE TABLE session_meta (id INTEGER PRIMARY KEY CHECK (id=1),"
-        " genre_slug TEXT NOT NULL, world_slug TEXT NOT NULL,"
-        " created_at TEXT NOT NULL, last_played TEXT NOT NULL,"
-        " schema_version INTEGER NOT NULL DEFAULT 1);"
-        "INSERT INTO session_meta VALUES (1,'g','w','t','t',1);"
-        "CREATE TABLE game_state (id INTEGER PRIMARY KEY CHECK (id=1),"
-        " snapshot_json TEXT NOT NULL, saved_at TEXT NOT NULL);"
-        "INSERT INTO game_state VALUES (1,'{\"location\": \"Cave\"}','t');"
+def test_snapshot_endpoint_returns_persisted_state(tmp_path, pg_isolation):
+    """ADR-115 D2: /snapshot now reads game_state.snapshot_json from Postgres
+    via PgForensicReader.snapshot_json (a raw verbatim decode), NOT the SQLite
+    save_dir db. The old SQLite-file read-only/unmodified assertions are gone
+    because there is no longer a per-save SQLite file in the read path. We seed
+    game_state directly (the endpoint returns the stored dict verbatim, never
+    round-tripping through the domain model) and assert the raw passthrough.
+    """
+    from sidequest.game import db_pool
+    from sidequest.game.pg import sessions
+
+    pool = db_pool.get_pool()
+    sid = sessions.ensure_session(
+        pool, slug="snap_ok", mode="solo", genre_slug="g", world_slug="w"
     )
-    con.commit()
-    con.close()
-    bytes_before = db.read_bytes()
-    mtime_before = db.stat().st_mtime_ns
+    with pool.connection() as conn, conn.transaction():
+        conn.execute(
+            "INSERT INTO game_state (session_id, snapshot_json, saved_at) "
+            "VALUES (%s, %s, %s)",
+            (sid, json.dumps({"location": "Cave"}), "2026-05-18T00:00:00+00:00"),
+        )
+
     client = _client(tmp_path)
     resp = client.get("/api/debug/save/snap_ok/snapshot")
     assert resp.status_code == 200
-    assert resp.json() == {"location": "Cave"}  # persisted snapshot returned
-    assert db.read_bytes() == bytes_before  # READ-ONLY: not rewritten
-    assert db.stat().st_mtime_ns == mtime_before
+    assert resp.json() == {"location": "Cave"}  # persisted snapshot returned verbatim
 
 
 def test_snapshot_endpoint_unknown_slug_is_empty_not_500(tmp_path):

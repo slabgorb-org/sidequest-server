@@ -1270,7 +1270,7 @@ class CharGenMixin:
             if self._room is not None:
                 self._room.save()
             else:
-                sd.store.save(sd.snapshot)
+                sd.repository.save(sd.snapshot)
             span.add_event(
                 "session.persisted_at_chargen_complete",
                 {

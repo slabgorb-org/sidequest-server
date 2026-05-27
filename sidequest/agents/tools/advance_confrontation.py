@@ -115,7 +115,7 @@ class AdvanceConfrontationArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -132,7 +132,7 @@ async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext
     metric.current = value_before + args.delta
     value_after = metric.current
 
-    ctx.store.save(snapshot)
+    ctx.repository.save(snapshot)
 
     crossed_threshold = (value_before < metric.threshold) and (value_after >= metric.threshold)
 

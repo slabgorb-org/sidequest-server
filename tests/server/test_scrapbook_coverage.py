@@ -18,26 +18,55 @@ read-only — no backfill, no mutations. Two spans:
 Plus a watcher event ``scrapbook_coverage_gap`` so the GM panel surfaces
 the gap visibly.
 
-These tests fail until:
-1. ``sidequest/game/scrapbook_coverage.py`` exists with
-   ``detect_scrapbook_coverage_gaps`` and ``ScrapbookCoverageReport``.
-2. ``sidequest/telemetry/spans/scrapbook.py`` registers
-   ``SPAN_SCRAPBOOK_COVERAGE_EVALUATED`` and
-   ``SPAN_SCRAPBOOK_COVERAGE_GAP_DETECTED`` in ``SPAN_ROUTES``.
+ADR-115 D3 note
+---------------
+``detect_scrapbook_coverage_gaps`` now reads through a ``SaveRepository``
+(``PgSaveRepository`` in production) via two typed methods —
+``max_narrative_round()`` and ``scrapbook_turn_ids(max_turn=...)``. The
+SQL behind those methods is covered by ``tests/persistence/test_pg_scrapbook.py``
+(A6). These tests therefore exercise the gap-detection *logic* against a
+faithful in-memory fake repository, NOT the SQL. This keeps the unit
+tests engine-agnostic and survives the F1 SqliteStore shrink.
 """
 
 from __future__ import annotations
 
-import json as _json
-import tempfile
 from dataclasses import fields, is_dataclass
 from typing import Any, get_type_hints
 
 import pytest
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Fake repository — faithful stand-in for the two SaveRepository methods the
+# detector calls. Models the rows the detector would read from a real save:
+#   - max_narrative_round()  → MAX(round_number) from narrative_log
+#   - scrapbook_turn_ids(max_turn=N) → distinct scrapbook turn_ids in [1, N]
+# The ``scrapbook_turn_ids`` filter (turn_id >= 1 AND turn_id <= max_turn) is
+# applied here so the out-of-range exclusion is exercised the same way the
+# real PgScrapbookStore SQL does (A6).
 # ---------------------------------------------------------------------------
+
+
+class _FakeRepository:
+    """In-memory SaveRepository stub for the two methods the detector uses.
+
+    :param narrative_rounds: the highest narrative round_number present
+        (== ``MAX(round_number)``; 0 means a fresh save with no rounds).
+    :param scrapbook_turn_ids: every turn_id that has at least one
+        scrapbook entry — including out-of-range noise (turn_id <= 0 or
+        > narrative_rounds) so the detector's range filter is tested.
+    """
+
+    def __init__(self, *, narrative_rounds: int, scrapbook_turn_ids: set[int]) -> None:
+        self._narrative_rounds = narrative_rounds
+        self._scrapbook_turn_ids = set(scrapbook_turn_ids)
+
+    def max_narrative_round(self) -> int:
+        return self._narrative_rounds
+
+    def scrapbook_turn_ids(self, *, max_turn: int) -> set[int]:
+        # Mirror the PgScrapbookStore predicate: turn_id >= 1 AND <= max_turn.
+        return {t for t in self._scrapbook_turn_ids if 1 <= t <= max_turn}
 
 
 @pytest.fixture
@@ -65,98 +94,8 @@ def watcher_capture(monkeypatch):
     return captured
 
 
-@pytest.fixture
-def populated_store(tmp_path):
-    """Build a real on-disk SqliteStore with knobs for narrative + scrapbook
-    coverage. The fixture returns a callable so each test can dial its own
-    coverage shape.
-
-    Closing the store between tests is the caller's responsibility.
-    """
-    from sidequest.game.persistence import SqliteStore
-    from sidequest.protocol.messages import ScrapbookEntryPayload
-
-    created: list[SqliteStore] = []
-
-    def _make(*, narrative_rounds: int, scrapbook_rounds: int) -> SqliteStore:
-        if scrapbook_rounds > narrative_rounds:
-            raise ValueError(
-                "Test fixture invariant: scrapbook_rounds cannot exceed "
-                "narrative_rounds (scrapbook indexes into narrative_log)."
-            )
-        db_path = tmp_path / f"cov-{narrative_rounds}-{scrapbook_rounds}.db"
-        store = SqliteStore.open(str(db_path))
-        store.init_session("test_genre", "test_world")
-
-        # Append narrative rounds 1..narrative_rounds. Each round carries
-        # one entry — that's the round_number the scrapbook joins against.
-        from sidequest.game.session import NarrativeEntry
-
-        for r in range(1, narrative_rounds + 1):
-            store.append_narrative(
-                NarrativeEntry(
-                    round=r,
-                    author="narrator",
-                    content=f"Round {r} narration text.",
-                    tags=[],
-                )
-            )
-
-        # Insert scrapbook rows for rounds 1..scrapbook_rounds. The scrapbook
-        # row's ``turn_id`` mirrors the round number for fixture simplicity —
-        # production uses ``max_narrative_round()`` to bound the range and
-        # queries ``scrapbook_entries.turn_id`` directly (no join), per the
-        # post-45-11 lockstep invariant (ADR-051).
-        for r in range(1, scrapbook_rounds + 1):
-            payload = ScrapbookEntryPayload(
-                turn_id=r,
-                scene_title=f"Scene {r}",
-                scene_type="exploration",
-                location=f"Location {r}",
-                image_url=None,
-                narrative_excerpt=f"Round {r} excerpt.",
-                world_facts=[],
-                npcs_present=[],
-            )
-            with store._conn:
-                store._conn.execute(
-                    "INSERT INTO scrapbook_entries "
-                    "(turn_id, scene_title, scene_type, location, image_url, "
-                    " narrative_excerpt, world_facts, npcs_present) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        payload.turn_id,
-                        payload.scene_title,
-                        payload.scene_type,
-                        payload.location,
-                        payload.image_url,
-                        payload.narrative_excerpt,
-                        _json.dumps(list(payload.world_facts)),
-                        _json.dumps(
-                            [
-                                {"name": ref.name, "role": ref.role, "disposition": ref.disposition}
-                                for ref in payload.npcs_present
-                            ]
-                        ),
-                    ),
-                )
-
-        created.append(store)
-        return store
-
-    yield _make
-
-    import contextlib
-
-    for s in created:
-        # Fixture cleanup must never raise — close() failures on already-
-        # closed handles are benign here.
-        with contextlib.suppress(Exception):
-            s.close()
-
-
 # Minimal snapshot fixture — the detector's signature accepts
-# (store, snapshot, **ctx) but only reads ``genre_slug`` / ``world_slug``
+# (repository, snapshot, **ctx) but only reads ``genre_slug`` / ``world_slug``
 # off the snapshot for span attribution. This keeps tests independent of
 # GameSnapshot's full surface.
 @pytest.fixture
@@ -239,11 +178,13 @@ class TestModuleSurface:
         assert "return" in hints, (
             "Public boundary function missing return annotation (python.md #3)."
         )
-        # Parameters: at minimum store + snapshot. Names checked here so a
+        # Parameters: at minimum repository + snapshot. Names checked here so a
         # rename forces a coordinated update to the wire site in connect.py.
+        # ADR-115 D3: param renamed from ``store`` to ``repository`` to accept
+        # the typed SaveRepository surface (PgSaveRepository).
         params = {k for k in hints if k != "return"}
-        assert {"store", "snapshot"}.issubset(params), (
-            f"Helper must accept (store, snapshot, ...). Got params {params}."
+        assert {"repository", "snapshot"}.issubset(params), (
+            f"Helper must accept (repository, snapshot, ...). Got params {params}."
         )
 
 
@@ -256,15 +197,15 @@ class TestNoGapPaths:
     """AC1 (full coverage) and AC3 (fresh save, empty narrative)."""
 
     def test_empty_store_reports_zero_max_round(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         """AC3: fresh save (no rounds, no entries) → max_round=0, gap_count=0,
         coverage_ratio=1.0 (defined, not NaN — context: 'better than NaN for
         downstream dashboarding')."""
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=0, scrapbook_rounds=0)
-        report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        repo = _FakeRepository(narrative_rounds=0, scrapbook_turn_ids=set())
+        report = detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
 
         assert report.max_round == 0
         assert report.covered_count == 0
@@ -276,14 +217,14 @@ class TestNoGapPaths:
         )
 
     def test_full_coverage_reports_zero_gaps(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         """AC1: 5 narrative rounds, 5 scrapbook rounds → gap_count=0,
         ratio=1.0, no gap span, no watcher event."""
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=5, scrapbook_rounds=5)
-        report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        repo = _FakeRepository(narrative_rounds=5, scrapbook_turn_ids={1, 2, 3, 4, 5})
+        report = detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
 
         assert report.max_round == 5
         assert report.covered_count == 5
@@ -304,13 +245,21 @@ class TestOrinRegression:
     drives the detector into existence.
     """
 
+    def _orin_repo(self) -> _FakeRepository:
+        # 29 narrative rounds, scrapbook covers rounds 1-10.
+        return _FakeRepository(
+            narrative_rounds=29,
+            scrapbook_turn_ids=set(range(1, 11)),
+        )
+
     def test_orin_fixture_yields_19_round_gap(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        report = detect_scrapbook_coverage_gaps(
+            repository=self._orin_repo(), snapshot=stub_snapshot
+        )
 
         assert report.max_round == 29
         assert report.covered_count == 10
@@ -322,14 +271,13 @@ class TestOrinRegression:
         assert report.coverage_ratio == pytest.approx(10 / 29, rel=1e-3)
 
     def test_orin_fixture_emits_evaluated_span(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         """``scrapbook.coverage_evaluated`` must fire on the gap path with
         all attributes populated (gap_count=19, ratio≈0.345)."""
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=self._orin_repo(), snapshot=stub_snapshot)
 
         evaluated = _spans_named(otel_capture, "scrapbook.coverage_evaluated")
         assert len(evaluated) == 1, (
@@ -345,14 +293,13 @@ class TestOrinRegression:
         assert float(attrs.get("coverage_ratio") or 0) == pytest.approx(10 / 29, rel=1e-3)
 
     def test_orin_fixture_emits_gap_detected_span_with_gap_rounds(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         """``scrapbook.coverage_gap_detected`` must fire with the full
         ``gap_rounds`` list as a span attribute."""
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=self._orin_repo(), snapshot=stub_snapshot)
 
         gap_spans = _spans_named(otel_capture, "scrapbook.coverage_gap_detected")
         assert len(gap_spans) == 1, (
@@ -390,14 +337,13 @@ class TestOrinRegression:
             )
 
     def test_orin_fixture_publishes_watcher_event(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         """Gap path must publish ``scrapbook_coverage_gap`` watcher event
         with ``severity='warning'`` so the GM panel surfaces it visibly."""
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        detect_scrapbook_coverage_gaps(repository=self._orin_repo(), snapshot=stub_snapshot)
 
         gap_publishes = [c for c in watcher_capture if c["field"] == "scrapbook_coverage_gap"]
         assert len(gap_publishes) == 1, (
@@ -446,12 +392,12 @@ class TestNoOpSilence:
     """The negative cases that catch a half-fixed helper. AC1 mandates these."""
 
     def test_full_coverage_does_not_emit_gap_span(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=5, scrapbook_rounds=5)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        repo = _FakeRepository(narrative_rounds=5, scrapbook_turn_ids={1, 2, 3, 4, 5})
+        detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
 
         gap_spans = _spans_named(otel_capture, "scrapbook.coverage_gap_detected")
         assert gap_spans == [], (
@@ -461,12 +407,12 @@ class TestNoOpSilence:
         )
 
     def test_full_coverage_does_not_publish_watcher_event(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=5, scrapbook_rounds=5)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        repo = _FakeRepository(narrative_rounds=5, scrapbook_turn_ids={1, 2, 3, 4, 5})
+        detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
 
         gap_publishes = [c for c in watcher_capture if c["field"] == "scrapbook_coverage_gap"]
         assert gap_publishes == [], (
@@ -475,15 +421,15 @@ class TestNoOpSilence:
         )
 
     def test_empty_store_emits_evaluated_span_with_max_round_zero(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         """AC3 explicit: even on a fresh save the evaluated span MUST fire so
         Sebastien gets negative-confirmation that scrapbook coverage was
         checked. This is the no-op path that a half-fix typically skips."""
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=0, scrapbook_rounds=0)
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        repo = _FakeRepository(narrative_rounds=0, scrapbook_turn_ids=set())
+        detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
 
         evaluated = _spans_named(otel_capture, "scrapbook.coverage_evaluated")
         assert len(evaluated) == 1, (
@@ -510,53 +456,28 @@ class TestNoOpSilence:
 
 
 # ---------------------------------------------------------------------------
-# AC5 — read-only invariant
+# Read-only / idempotent invariant (AC5) — logic-level
 # ---------------------------------------------------------------------------
 
 
-class TestReadOnlyInvariant:
-    """AC5: detector must not mutate any DB state. Idempotent across resumes."""
-
-    def test_helper_does_not_change_narrative_log_count(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
-    ) -> None:
-        from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
-
-        store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        before = _row_count(store, "narrative_log")
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
-        after = _row_count(store, "narrative_log")
-
-        assert before == after == 29, (
-            f"Detector mutated narrative_log: {before} → {after}. AC5 requires read-only behavior."
-        )
-
-    def test_helper_does_not_change_scrapbook_count(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
-    ) -> None:
-        from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
-
-        store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        before = _row_count(store, "scrapbook_entries")
-        detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
-        after = _row_count(store, "scrapbook_entries")
-
-        assert before == after == 10, (
-            f"Detector mutated scrapbook_entries: {before} → {after}. AC5 "
-            f"explicitly rejects backfill — warn-only is the chosen path."
-        )
+class TestIdempotentInvariant:
+    """AC5: the detector is read-only and idempotent. The SQL-level
+    no-mutation guarantee is covered by the PgScrapbookStore tests
+    (tests/persistence/test_pg_scrapbook.py, A6); here we pin that repeated
+    invocation yields an identical report and identical span/watcher
+    fan-out shape."""
 
     def test_helper_idempotent_on_repeated_invocation(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
-        """AC5 explicit: same store, same snapshot, called twice → identical
-        report and identical span/watcher fan-out shape (each call: one
-        evaluated span, one gap span, one watcher event)."""
+        """AC5 explicit: same repository, same snapshot, called twice →
+        identical report and identical span/watcher fan-out shape (each
+        call: one evaluated span, one gap span, one watcher event)."""
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        store = populated_store(narrative_rounds=29, scrapbook_rounds=10)
-        r1 = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
-        r2 = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        repo = _FakeRepository(narrative_rounds=29, scrapbook_turn_ids=set(range(1, 11)))
+        r1 = detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
+        r2 = detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
 
         assert r1 == r2, "Same input must yield the same report."
         # 2 evaluated spans, 2 gap-detected spans, 2 watcher events
@@ -733,63 +654,17 @@ class TestSpanRouting:
 class TestGapPatternEdgeCases:
     """Edge-case shapes that contiguous-range tests don't exercise."""
 
-    def test_non_contiguous_gap_pattern(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
-    ) -> None:
+    def test_non_contiguous_gap_pattern(self, stub_snapshot, otel_capture, watcher_capture) -> None:
         """Rounds 1-5 and 8-10 covered → gap_rounds == [6, 7]. The Orin
         regression is a single contiguous tail-gap, but real-world saves
         could have any pattern — pin the set-difference math against a
         non-contiguous shape so an off-by-one in ``expected - covered``
         surfaces here."""
-        from sidequest.game.persistence import SqliteStore
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
-        from sidequest.game.session import NarrativeEntry
-        from sidequest.protocol.messages import ScrapbookEntryPayload
 
-        # Hand-built fixture — populated_store only supports contiguous
-        # 1..N scrapbook coverage.
-        with tempfile.TemporaryDirectory() as td:
-            db_path = f"{td}/non-contig.db"
-            store = SqliteStore.open(db_path)
-            store.init_session("test_genre", "test_world")
-            for r in range(1, 11):
-                store.append_narrative(
-                    NarrativeEntry(round=r, author="narrator", content=f"R{r}", tags=[])
-                )
-            covered_rounds = list(range(1, 6)) + list(range(8, 11))
-            with store._conn:
-                for r in covered_rounds:
-                    payload = ScrapbookEntryPayload(
-                        turn_id=r,
-                        scene_title=f"Scene {r}",
-                        scene_type="exploration",
-                        location=f"Location {r}",
-                        image_url=None,
-                        narrative_excerpt=f"R{r}",
-                        world_facts=[],
-                        npcs_present=[],
-                    )
-                    store._conn.execute(
-                        "INSERT INTO scrapbook_entries "
-                        "(turn_id, scene_title, scene_type, location, image_url, "
-                        " narrative_excerpt, world_facts, npcs_present) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            payload.turn_id,
-                            payload.scene_title,
-                            payload.scene_type,
-                            payload.location,
-                            payload.image_url,
-                            payload.narrative_excerpt,
-                            _json.dumps([]),
-                            _json.dumps([]),
-                        ),
-                    )
-
-            try:
-                report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
-            finally:
-                store.close()
+        covered_rounds = set(range(1, 6)) | set(range(8, 11))
+        repo = _FakeRepository(narrative_rounds=10, scrapbook_turn_ids=covered_rounds)
+        report = detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
 
         assert report.max_round == 10
         assert report.covered_count == 8
@@ -801,44 +676,27 @@ class TestGapPatternEdgeCases:
         )
 
     def test_out_of_range_scrapbook_rows_excluded(
-        self, populated_store, stub_snapshot, otel_capture, watcher_capture
+        self, stub_snapshot, otel_capture, watcher_capture
     ) -> None:
         """Rows with ``turn_id <= 0`` or ``turn_id > max_round`` are noise
-        (test-fixture artifacts, pre-lockstep stragglers). The detector's
-        WHERE clause must filter them out so they never inflate
-        ``covered_count`` or pollute ``gap_rounds``."""
+        (test-fixture artifacts, pre-lockstep stragglers). The repository's
+        ``scrapbook_turn_ids(max_turn=...)`` filter must drop them so they
+        never inflate ``covered_count`` or pollute ``gap_rounds``."""
         from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 
-        # 5 narrative rounds, 5 valid scrapbook rows (1..5 — full coverage).
-        store = populated_store(narrative_rounds=5, scrapbook_rounds=5)
-        # Inject noise rows: turn_id=0 (pre-lockstep) and turn_id=10 (past
-        # max_round).
-        with store._conn:
-            for noise_turn_id in (0, 10):
-                store._conn.execute(
-                    "INSERT INTO scrapbook_entries "
-                    "(turn_id, scene_title, scene_type, location, image_url, "
-                    " narrative_excerpt, world_facts, npcs_present) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        noise_turn_id,
-                        "Noise",
-                        "exploration",
-                        "Nowhere",
-                        None,
-                        "out-of-range",
-                        _json.dumps([]),
-                        _json.dumps([]),
-                    ),
-                )
-
-        report = detect_scrapbook_coverage_gaps(store=store, snapshot=stub_snapshot)
+        # 5 narrative rounds, 5 valid scrapbook rows (1..5) plus noise rows
+        # turn_id=0 (pre-lockstep) and turn_id=10 (past max_round).
+        repo = _FakeRepository(
+            narrative_rounds=5,
+            scrapbook_turn_ids={0, 1, 2, 3, 4, 5, 10},
+        )
+        report = detect_scrapbook_coverage_gaps(repository=repo, snapshot=stub_snapshot)
 
         assert report.max_round == 5
         assert report.covered_count == 5, (
             "Out-of-range rows (turn_id=0, turn_id=max_round+5) must NOT "
-            "inflate covered_count. The WHERE filter is the lie-detector "
-            "for fixture-leak regressions."
+            "inflate covered_count. The repository's range filter is the "
+            "lie-detector for fixture-leak regressions."
         )
         assert report.gap_count == 0
         assert tuple(report.gap_rounds) == ()
@@ -863,21 +721,3 @@ class _FakeSpan:
 def _spans_named(exporter, name: str) -> list:
     """Return the list of finished spans whose name matches exactly."""
     return [s for s in exporter.get_finished_spans() if s.name == name]
-
-
-_ROW_COUNT_TABLE_WHITELIST = frozenset({"narrative_log", "scrapbook_entries"})
-
-
-def _row_count(store, table: str) -> int:
-    """Read row count of a table directly through the store's connection.
-
-    Accepts only the two tables this test module probes — the f-string
-    interpolation is non-exploitable from test inputs but the whitelist
-    pins the surface so a future caller cannot pass an attacker-controlled
-    name into the query (python.md rule #11).
-    """
-    assert table in _ROW_COUNT_TABLE_WHITELIST, (
-        f"_row_count only accepts {sorted(_ROW_COUNT_TABLE_WHITELIST)}; got {table!r}"
-    )
-    row = store._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-    return int(row[0]) if row else 0

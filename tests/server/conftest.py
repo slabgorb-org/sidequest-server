@@ -61,32 +61,27 @@ def seed_slug_for_test(
     The legacy ``(genre, world, player_name)``-tuple connect path was
     deleted; tests that previously sent ``payload.genre`` /
     ``payload.world`` must now send ``payload.game_slug``. This helper
-    creates the on-disk save directory and ``games`` row so the slug
-    resolves on connect.
+    registers the Postgres ``sessions`` row so the slug resolves on connect.
+
+    ADR-115 F1: connect reads the bootstrap row from Postgres (the legacy
+    SQLite ``games`` table was retired). Callers must have a ``_pg_isolation``
+    fixture active so the process pool points at an isolated PG database.
 
     Returns the slug to thread into the connect envelope.
     """
-    from sidequest.game.persistence import (
-        GameMode,
-        SqliteStore,
-        db_path_for_slug,
-        upsert_game,
-    )
+    from sidequest.game import db_pool
+    from sidequest.game.persistence import GameMode
+    from sidequest.server.session_state import _build_pg_repos_for_slug
 
     resolved_mode = mode if mode is not None else GameMode.SOLO
 
-    db = db_path_for_slug(save_dir, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
         slug=slug,
-        mode=resolved_mode,
+        mode=str(resolved_mode),
         genre_slug=genre,
         world_slug=world,
     )
-    store.close()
     return slug
 
 
@@ -225,27 +220,26 @@ _install_genre_loader_cache_patch()
 
 @pytest.fixture(autouse=True)
 def _watcher_hub_event_store_isolation():
-    """Autouse guard: clear the watcher_hub ``_event_store`` binding
-    between tests.
+    """Autouse guard: clear the watcher_hub ``_telemetry_sink`` binding
+    between tests (ADR-115 D5 renamed ``_event_store`` → ``_telemetry_sink``).
 
     Several tests reach the slug-connect handler path, which calls
-    ``bind_event_store(store)`` on a SqliteStore that lives only for the
+    ``bind_event_store(sink)`` on a TelemetrySink that lives only for the
     duration of that test. Without this fixture, the binding survives —
-    the store gets closed by session teardown (or by the test going out
-    of scope), but the global pointer in ``sidequest.telemetry.watcher_hub``
-    still references the dead handle. The next test that publishes a
-    persistable encounter event hits ``sqlite3.ProgrammingError: Cannot
-    operate on a closed database`` (full-suite flake — passes in
-    isolation, fails when ``test_stale_slot_reinit_wire.py`` runs first).
+    the sink's pool gets closed by session teardown (or by the test going
+    out of scope), but the global pointer in
+    ``sidequest.telemetry.watcher_hub`` still references the dead handle.
+    The next test that publishes a persistable event would then hit a
+    closed-pool error (full-suite flake — passes in isolation).
 
     This fixture restores the pre-test binding state on teardown so each
     test starts with whatever binding it sets up itself (typically None).
     """
     from sidequest.telemetry import watcher_hub
 
-    prior = watcher_hub._event_store
+    prior = watcher_hub._telemetry_sink
     yield
-    watcher_hub._event_store = prior
+    watcher_hub._telemetry_sink = prior
 
 
 @pytest.fixture(autouse=True)
@@ -579,7 +573,7 @@ def session_handler_factory(tmp_path):
     from sidequest.agents.orchestrator import Orchestrator
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
-    from sidequest.game.persistence import SqliteStore
+    from sidequest.game.repository import SaveRepository
     from sidequest.game.session import GameSnapshot
     from sidequest.genre.loader import GenreLoader
     from sidequest.server.session_handler import (
@@ -615,7 +609,11 @@ def session_handler_factory(tmp_path):
             backstory="A wandering fighter",
         )
         snap.characters.append(char)
-        store = SqliteStore.open_in_memory()
+        # ADR-115 F1: the factory's repository is a MagicMock(spec=SaveRepository).
+        # Consumers of this factory either mock save/append_narrative (MP path
+        # below) or never read persisted state back; the one test that does
+        # round-trip narrative builds a real PgSaveRepository itself.
+        repository = MagicMock(spec=SaveRepository)
         orch = MagicMock(spec=Orchestrator)
 
         # Determine player identity — defaults to legacy single-player "Rux".
@@ -630,7 +628,9 @@ def session_handler_factory(tmp_path):
             player_name=active_name,
             player_id=active_pid,
             snapshot=snap,
-            store=store,
+            repository=repository,
+            dungeon_repository=MagicMock(),
+            telemetry_sink=MagicMock(),
             genre_pack=pack,
             orchestrator=orch,
         )
@@ -653,12 +653,14 @@ def session_handler_factory(tmp_path):
             handler._state = _State.Playing
 
             if existing_room is not None:
-                # Share the existing room — reuse its snapshot + store so the
-                # TurnManager barrier state is shared across handlers.
+                # Share the existing room — reuse its snapshot + repository so
+                # the TurnManager barrier state is shared across handlers.
+                # SessionRoom.store is a SaveRepository (a MagicMock from
+                # room_for) — pass it straight through as repository=.
                 room = existing_room
                 snap = room.snapshot
-                store = room.store
-                # Rebuild _SessionData against the shared snapshot/store.
+                shared_repository = room.store
+                # Rebuild _SessionData against the shared snapshot/repository.
                 if active_player is not None:
                     active_pid, active_name = active_player
                 else:
@@ -669,12 +671,14 @@ def session_handler_factory(tmp_path):
                     player_name=active_name,
                     player_id=active_pid,
                     snapshot=snap,
-                    store=store,
+                    repository=shared_repository,
+                    dungeon_repository=MagicMock(),
+                    telemetry_sink=MagicMock(),
                     genre_pack=sd.genre_pack,
                     orchestrator=sd.orchestrator,
                 )
-                sd.store.save = MagicMock()
-                sd.store.append_narrative = MagicMock()
+                sd.repository.save = MagicMock()
+                sd.repository.append_narrative = MagicMock()
                 sd._room = room
                 handler._session_data = sd
                 handler._room = room
@@ -703,8 +707,11 @@ def session_handler_factory(tmp_path):
                     existing_names.add(character_slot)
 
             room = SessionRoom(slug=slug, mode=mode)
-            # Bind a snapshot + store so the room is fully initialised.
-            room.bind_world(snapshot=snap, store=store)
+            # Bind a snapshot + repository so the room is fully initialised.
+            # bind_world expects a SaveRepository (post-D2); the primary
+            # construction above already wrapped this SQLite store in one,
+            # so reuse the same repository instance the session_data holds.
+            room.bind_world(snapshot=snap, store=sd.repository)
             # Connect and seat every player. The fixture's intent is a
             # post-chargen "in-game" room, so each peer is promoted to
             # PLAYING — this is what existing barrier tests assume and
@@ -722,9 +729,11 @@ def session_handler_factory(tmp_path):
             sd._room = room
             # Silence broadcast so tests don't need a real WebSocket.
             room.broadcast = MagicMock()  # type: ignore[method-assign]
-            # Silence store side-effects.
-            sd.store.save = MagicMock()
-            sd.store.append_narrative = MagicMock()
+            # Silence repository side-effects. Production calls
+            # sd.repository.save / append_narrative (post-D1); these patches
+            # also fill the two methods SqliteSaveRepository does not define.
+            sd.repository.save = MagicMock()
+            sd.repository.append_narrative = MagicMock()
             return handler, sd, room
 
         # Legacy return: (sd, handler).
@@ -764,20 +773,21 @@ def session_fixture():
     )
     snap.character_locations["TestHero"] = "Main Hall"
     snap.player_seats["player:TestHero"] = "TestHero"
+    _mock_repo = MagicMock()
+    _mock_repo.save = MagicMock()
+    _mock_repo.append_narrative = MagicMock()
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
         world_slug="sunken_keep",
         player_name="TestHero",
         player_id="player:TestHero",
         snapshot=snap,
-        store=MagicMock(),
+        repository=_mock_repo,
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
     )
-    # Silence the persist side-effect so _execute_narration_turn doesn't fail
-    # on sd.store.save / sd.store.append_narrative.
-    sd.store.save = MagicMock()
-    sd.store.append_narrative = MagicMock()
     # Task E.2 wiring: ``_apply_narration_result_to_snapshot`` (called by
     # ``_execute_narration_turn``) now requires ``room=sd._room``. The
     # production slug-connect path always populates ``sd._room``; tests
@@ -984,11 +994,16 @@ def character_named_sam():
 
 
 @pytest.fixture
-def store_bound_to_hub(synthetic_two_dial_pack):
-    """Open an in-memory SqliteStore, bind it to the watcher hub, yield
-    (store, snapshot, pack).  Unbinds on teardown so other tests see no
-    leftover binding.
+def store_bound_to_hub(synthetic_two_dial_pack, migrated_db, monkeypatch):
+    """Bind a Postgres TelemetrySink to the watcher hub, yield
+    (event_store, snapshot, pack). ADR-115 F1: encounter rows persist to PG
+    via the bound sink's ``append_encounter_event``; the yielded
+    ``PgSaveRepository`` reads the timeline back. Unbinds + closes the pool on
+    teardown so other tests see no leftover binding.
     """
+    import psycopg
+
+    from sidequest.game import db_pool
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.game.encounter import (
@@ -996,13 +1011,31 @@ def store_bound_to_hub(synthetic_two_dial_pack):
         EncounterMetric,
         StructuredEncounter,
     )
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
+    from sidequest.server.session_state import _build_pg_repos_for_slug
     from sidequest.telemetry.watcher_hub import bind_event_store
 
-    store = SqliteStore.open_in_memory()
-    bind_event_store(store)
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+
+    repo, _dungeon, sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug="store-bound-to-hub",
+        mode="solo",
+        genre_slug="test_pack",
+        world_slug="test_world",
+    )
+    bind_event_store(sink)
 
     snap = GameSnapshot(
         genre_slug="test_pack",
@@ -1034,9 +1067,10 @@ def store_bound_to_hub(synthetic_two_dial_pack):
     )
 
     try:
-        yield store, snap, synthetic_two_dial_pack
+        yield repo, snap, synthetic_two_dial_pack
     finally:
         bind_event_store(None)
+        db_pool.close_pool()
 
 
 @pytest.fixture

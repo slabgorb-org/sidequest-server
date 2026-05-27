@@ -6,7 +6,7 @@ Phase 1 exports:
 - StateDelta (game-layer), StateSnapshot, snapshot, compute_delta
 - TurnManager, TurnPhase
 - CommandHandler, CommandResult, BUILTIN_COMMANDS
-- SqliteStore, SavedSession, SessionMeta, PersistError
+- SavedSession, SessionMeta, PersistError
 - Resource pools (ADR-033): ResourcePool, ResourceThreshold,
   ResourcePatch, ResourcePatchOp, ResourcePatchResult, ResourcePatchError,
   UnknownResource, NotVoluntary, detect_crossings, mint_threshold_lore
@@ -74,7 +74,6 @@ from sidequest.game.persistence import (
     SavedSession,
     SerializationError,
     SessionMeta,
-    SqliteStore,
 )
 from sidequest.game.resource_pool import (
     NotVoluntary,
@@ -174,7 +173,6 @@ __all__ = [
     "SavedSession",
     "SerializationError",
     "SessionMeta",
-    "SqliteStore",
     # resource_pool (ADR-033)
     "NotVoluntary",
     "ResourcePatch",

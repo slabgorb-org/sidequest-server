@@ -40,7 +40,6 @@ from sidequest.game.belief_state import (
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.disposition import Disposition
-from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 
@@ -104,16 +103,14 @@ def _build_snapshot(
     )
 
 
-def _store_with(snapshot: GameSnapshot) -> SqliteStore:
-    store = SqliteStore.open_in_memory()
-    store.initialize()
-    store.init_session(genre_slug=snapshot.genre_slug, world_slug=snapshot.world_slug)
-    store.save(snapshot)
-    return store
+def _store_with(snapshot: GameSnapshot):
+    from tests.agents.tools.conftest import pg_store_with
+
+    return pg_store_with(snapshot)
 
 
 def _make_ctx(
-    store: SqliteStore,
+    store,
     *,
     perspective_pc: str | None = "Alice",
     session_id: str = "s",
@@ -126,7 +123,7 @@ def _make_ctx(
         session_id=session_id,
         perspective_pc=perspective_pc,
         turn_number=turn,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -355,8 +352,9 @@ async def test_suspicion_with_told_by_source_is_included() -> None:
 
 
 async def test_no_active_session_returns_fatal_error() -> None:
-    store = SqliteStore.open_in_memory()
-    store.initialize()
+    from tests.agents.tools.conftest import pg_empty_store
+
+    store = pg_empty_store()
     ctx = _make_ctx(store, perspective_pc=None)
 
     r = await _call({}, ctx)

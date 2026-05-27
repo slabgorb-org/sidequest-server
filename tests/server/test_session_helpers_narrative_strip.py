@@ -14,7 +14,7 @@ This story:
      data does not ride twice — once high-attention, once decayed. (AC #3
      — covered here.)
   3. Populates ``TurnContext.recent_narrative_log`` from the durable
-     SQLite narrative_log via ``sd.store.recent_narrative(K)``.
+     SQLite narrative_log via ``sd.repository.recent_narrative(K)``.
 
   *(Originally this AC sourced from ``snapshot.narrative_log``. Per
   sq-playtest 2026-05-15: that mirror is only ever populated by
@@ -94,7 +94,9 @@ def _build_sd(snapshot: GameSnapshot, *, player_name: str = "Alice") -> _Session
         player_name=player_name,
         player_id=f"player:{player_name.lower()}",
         snapshot=snapshot,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
@@ -193,7 +195,7 @@ def test_recent_narrative_log_populated_on_turn_context_from_store():
     # Live store API: ``recent_narrative(limit)`` returns the most recent
     # ``limit`` entries oldest-first. Mirror the slice the SQLite query
     # would have produced over the durable log.
-    sd.store.recent_narrative.return_value = list(log[-2:])
+    sd.repository.recent_narrative.return_value = list(log[-2:])
 
     ctx = _build_turn_context(sd, room=sd._room)
 
@@ -217,7 +219,7 @@ def test_recent_narrative_log_populated_on_turn_context_from_store():
     # reverting to ``snapshot.narrative_log[-K:]`` (which would pass the
     # content assertion above when the store happens to be empty — the
     # original 2026-05-15 bug repro).
-    sd.store.recent_narrative.assert_called_once_with(2)
+    sd.repository.recent_narrative.assert_called_once_with(2)
 
 
 def test_recent_narrative_log_empty_on_fresh_session():
@@ -227,7 +229,7 @@ def test_recent_narrative_log_empty_on_fresh_session():
     snap = _make_snapshot_with_log([])
     sd = _build_sd(snap)
     sd._room = room_for(snap, slug="mawdeep")
-    sd.store.recent_narrative.return_value = []
+    sd.repository.recent_narrative.return_value = []
 
     ctx = _build_turn_context(sd, room=sd._room)
     assert list(ctx.recent_narrative_log) == []

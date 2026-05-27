@@ -36,7 +36,9 @@ def test_full_encounter_round_trip_records_timeline_and_sets_signal(
     store_bound_to_hub,
     encounter_dispatch_helper,
 ):
-    store, snap, pack = store_bound_to_hub
+    # ADR-115 F1: store_bound_to_hub binds a Postgres TelemetrySink to the hub
+    # and yields the PgSaveRepository that reads the timeline back.
+    ev_store, snap, pack = store_bound_to_hub
 
     # store_bound_to_hub pre-builds a StructuredEncounter without going through
     # instantiate_encounter_from_trigger, so ENCOUNTER_STARTED would not fire.
@@ -61,13 +63,10 @@ def test_full_encounter_round_trip_records_timeline_and_sets_signal(
     assert snap.pending_resolution_signal is not None
     assert snap.pending_resolution_signal.outcome == "opponent_victory"
 
-    # --- Events table ---
-    rows = list(
-        store._conn.execute(
-            "SELECT kind FROM events WHERE kind LIKE 'ENCOUNTER_%' ORDER BY seq"
-        ).fetchall()
-    )
-    kinds = [r[0] for r in rows]
+    # --- Events table (ADR-115 F1: encounter timeline persists to Postgres
+    # via the bound PgTelemetrySink) ---
+    rows = ev_store.read_events_since(since_seq=0)
+    kinds = [r.kind for r in rows if r.kind.startswith("ENCOUNTER_")]
 
     assert "ENCOUNTER_STARTED" in kinds, f"ENCOUNTER_STARTED missing; got {kinds!r}"
     assert "ENCOUNTER_BEAT_APPLIED" in kinds, f"ENCOUNTER_BEAT_APPLIED missing; got {kinds!r}"

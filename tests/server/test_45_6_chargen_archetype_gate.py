@@ -75,6 +75,42 @@ from tests.server.conftest import (
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Point the process-global pool at a per-worker throwaway PG database.
+
+    Under ADR-115 D2 the slug-connect path resolves the authoritative game
+    row and snapshot from Postgres via ``db_pool.get_pool()`` (resolving
+    SIDEQUEST_DATABASE_URL). The chargen tests seed only the SQLite bootstrap
+    row, so on a clean PG database connect sees has_character=False and enters
+    the chargen branch — the path these gate assertions exercise. Without
+    isolation the shared ``sidequest_test`` db accumulates fixed-slug rows
+    from prior runs, so connect resumes a stale snapshot already carrying
+    characters and the pre-confirmation / blocked-does-not-persist
+    assertions trip on leaked rows.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    # migrated_db is session-scoped (shared per xdist worker), so TRUNCATE
+    # the per-test state — otherwise a fixed-slug row from a sibling test
+    # bleeds into this one's connect.
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 @pytest.fixture
 def save_dir(tmp_path: Path) -> Path:
     """Per-test save directory so persist assertions are isolated."""

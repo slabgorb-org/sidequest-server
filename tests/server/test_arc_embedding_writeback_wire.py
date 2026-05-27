@@ -12,7 +12,7 @@ asserts that the seeding pipeline:
    carrying ``embedding_pending=True`` so the existing per-turn
    ``_dispatch_embed_worker`` picks them up.
 3. Persists each appended ``NarrativeEntry`` via
-   ``sd.store.append_narrative`` so the durable narrative_log table
+   ``sd.repository.append_narrative`` so the durable narrative_log table
    carries the arc rows across save/reload (AC6).
 4. Emits the three lie-detector spans on the GM panel (
    ``arc_embedding_seed`` / ``narrative_log_writeback`` /
@@ -187,7 +187,7 @@ class TestNarrativeLogWritebackFromDispatch:
     async def test_promotion_persists_arc_entries_via_store(
         self, session_fixture, otel_capture
     ) -> None:
-        """Durable write — sd.store.append_narrative MUST be called for
+        """Durable write — sd.repository.append_narrative MUST be called for
         each arc entry. Felix's bug was a silent absence of this call;
         the test asserts the call count > 0 with the arc-typed payload.
         """
@@ -206,12 +206,12 @@ class TestNarrativeLogWritebackFromDispatch:
         turn_context = _build_turn_context_for_test(sd)
         await handler._execute_narration_turn(sd, "I push deeper.", turn_context)
 
-        # session_fixture mocks sd.store.append_narrative. The per-turn
+        # session_fixture mocks sd.repository.append_narrative. The per-turn
         # narration handler also calls it (player + narrator entry); the
         # arc seeding adds 2 more (one per ChapterNarrativeEntry on the
         # Early chapter). Total >= 4 with at least 2 carrying
         # entry_type=arc_promotion.
-        all_calls = [c.args[0] for c in sd.store.append_narrative.call_args_list]
+        all_calls = [c.args[0] for c in sd.repository.append_narrative.call_args_list]
         arc_persisted = [
             entry for entry in all_calls if getattr(entry, "entry_type", None) == "arc_promotion"
         ]

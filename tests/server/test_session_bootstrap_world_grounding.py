@@ -44,9 +44,6 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol import GameMessage
@@ -132,20 +129,45 @@ def malformed_weather_pack(tmp_path: Path) -> tuple[Path, str]:
 _SLUG = "world-grounding-bootstrap-fixture"
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Point the process-global pool at a per-worker throwaway PG database.
+
+    Under ADR-115 D2 the slug-connect path resolves the authoritative game
+    row and snapshot from Postgres via ``db_pool.get_pool()`` (resolving
+    SIDEQUEST_DATABASE_URL), reading the SQLite save_dir db only for the
+    bootstrap genre/world/mode. The shared ``sidequest_test`` db otherwise
+    accumulates rows across tests — a fixed-slug connect then loads a prior
+    test's genre_slug / characters. Bind the pool to the migrated throwaway
+    db so each test seeds and connects against one isolated database.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    # migrated_db is session-scoped (shared per xdist worker); TRUNCATE the
+    # per-test state so a sibling test's fixed-slug row can't be resumed here.
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 def _seed_solo_save(save_dir: Path, genre_slug: str) -> None:
-    """Seed a SOLO game row + a saved snapshot carrying one Character so
-    the slug-connect branch goes straight to Playing (skipping chargen)."""
-    db = db_path_for_slug(save_dir, _SLUG)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=_SLUG,
-        mode=GameMode.SOLO,
-        genre_slug=genre_slug,
-        world_slug=_WORLD,
-    )
+    """Register a SOLO session in Postgres carrying one Character so the
+    slug-connect branch goes straight to Playing (skipping chargen).
+
+    ADR-115 F1: the connect path loads the authoritative snapshot + bootstrap
+    row from Postgres (the SQLite save layer was retired)."""
     core = CreatureCore(
         name="Thorn",
         description="A wandering investigator",
@@ -160,9 +182,20 @@ def _seed_solo_save(save_dir: Path, genre_slug: str) -> None:
     )
     snap = GameSnapshot(genre_slug=genre_slug, world_slug=_WORLD)
     snap.characters = [char]
-    store.init_session(genre_slug, _WORLD)
-    store.save(snap)
-    store.close()
+
+    # ADR-115 D2: mirror the snapshot into the PG store the connect path
+    # actually loads from so has_character=True → Playing (skips chargen).
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=_SLUG,
+        mode=str(GameMode.SOLO),
+        genre_slug=genre_slug,
+        world_slug=_WORLD,
+    )
+    repo.save(snap)
 
 
 def _build_handler(
@@ -308,7 +341,7 @@ async def test_get_world_grounding_returns_grounded_payload_through_dispatch(
         session_id=tc.session_id or "test",
         perspective_pc=tc.character_name,
         turn_number=tc.turn_number,
-        store=sd.store,
+        repository=sd.repository,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         weather_state=tc.weather_state,

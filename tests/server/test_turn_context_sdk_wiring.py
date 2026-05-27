@@ -96,11 +96,13 @@ def _build_sd(*, with_monster_manual: bool = True) -> _SessionData:
         player_name="Alice",
         player_id="player:alice",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
-    sd.store.recent_narrative.return_value = []
+    sd.repository.recent_narrative.return_value = []
     sd.game_slug = "2026-05-14-caverns_mawdeep-28"
     sd.lore_store = _seeded_lore_store()
     if with_monster_manual:
@@ -129,7 +131,9 @@ def test_build_turn_context_populates_world_session_store_lore() -> None:
     assert ctx.session_id == "2026-05-14-caverns_mawdeep-28", (
         f"session_id not plumbed from sd.game_slug; got {ctx.session_id!r}"
     )
-    assert ctx.store is sd.store, "store reference not plumbed from sd.store"
+    assert ctx.repository is sd.repository, (
+        "repository reference not plumbed from sd.repository"
+    )
     assert ctx.lore_store is sd.lore_store, (
         "lore_store reference not plumbed from sd.lore_store — query_lore "
         "would see no world lore (hit_count=0) and the narrator confabulates"
@@ -308,7 +312,7 @@ async def test_sdk_path_builds_toolcontext_with_real_ids_and_lore_store(
         world_id="mawdeep",
         session_id="2026-05-14-caverns_mawdeep-28",
         turn_number=7,
-        store=store,
+        repository=store,
         lore_store=lore,
         monster_manual=manual,
     )
@@ -318,7 +322,7 @@ async def test_sdk_path_builds_toolcontext_with_real_ids_and_lore_store(
     assert tool_ctx.world_id == "mawdeep"
     assert tool_ctx.session_id == "2026-05-14-caverns_mawdeep-28"
     assert tool_ctx.turn_number == 7
-    assert tool_ctx.store is store
+    assert tool_ctx.repository is store
     assert tool_ctx.lore_store is lore, (
         "ToolContext.lore_store is not the wired LoreStore — query_lore "
         "would return hit_count=0 and the narrator confabulates canon"
@@ -340,7 +344,7 @@ async def test_sdk_path_no_context_missing_ids_warning_when_ids_present(
         world_id="mawdeep",
         session_id="2026-05-14-caverns_mawdeep-28",
         turn_number=7,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=_seeded_lore_store(),
     )
     with caplog.at_level(logging.WARNING):
@@ -388,7 +392,7 @@ async def test_sdk_path_context_missing_lore_store_fires_when_ids_present_but_lo
         world_id="mawdeep",
         session_id="2026-05-23-caverns_mawdeep-1",
         turn_number=3,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=None,
     )
     with caplog.at_level(logging.WARNING):
@@ -421,7 +425,7 @@ async def test_sdk_path_context_missing_lore_store_silent_when_fully_wired(
         world_id="mawdeep",
         session_id="2026-05-23-caverns_mawdeep-1",
         turn_number=3,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=_seeded_lore_store(),
     )
     with caplog.at_level(logging.WARNING):
@@ -501,7 +505,7 @@ async def test_sdk_path_lore_store_warning_publishes_watcher_event(
             world_id="mawdeep",
             session_id="2026-05-23-caverns_mawdeep-1",
             turn_number=3,
-            store=MagicMock(),
+            repository=MagicMock(),
             lore_store=None,
         )
         await _run_sdk_and_capture_ctx(monkeypatch, ctx)

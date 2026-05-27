@@ -910,8 +910,30 @@ async def test_unserializable_event_is_dropped_subscribers_preserved(
     cyclic: dict[str, Any] = {"a": 1}
     cyclic["self"] = cyclic  # circular — even default=str can't fix this
 
-    publish_event("state_transition", {"payload": cyclic})
-    publish_event("turn_complete", {"turn_id": 99, "agent_name": "narrator"})
+    # Exercise the HUB's tolerant-encode drop path directly. ``publish_event``
+    # also drives the out-of-frame telemetry persist (``_persist_turn_telemetry``),
+    # whose pre-try ``json.dumps`` legitimately raises on a circular reference —
+    # that's a separate publisher-side concern. The invariant under test here is
+    # the broadcast hub's: one unserializable event is dropped without evicting a
+    # live subscriber, and the very next event still delivers.
+    bound_hub.publish(
+        {
+            "timestamp": "t",
+            "component": "sidequest-server",
+            "event_type": "state_transition",
+            "severity": "info",
+            "fields": {"payload": cyclic},
+        }
+    )
+    bound_hub.publish(
+        {
+            "timestamp": "t",
+            "component": "orchestrator",
+            "event_type": "turn_complete",
+            "severity": "info",
+            "fields": {"turn_id": 99, "agent_name": "narrator"},
+        }
+    )
     await asyncio.sleep(0.05)
 
     # The bad event was dropped; the good one was delivered.

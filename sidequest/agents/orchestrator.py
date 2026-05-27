@@ -595,9 +595,9 @@ class TurnContext:
     # (the slug-based session id, e.g. "2026-05-14-caverns_sunden-28").
     world_id: str | None = None
     session_id: str | None = None
-    # SqliteStore — kept ``Any`` to avoid a circular import (mirrors
-    # ``ToolContext.store``'s "kept Any to avoid coupling" rationale).
-    store: Any = None
+    # SaveRepository — kept ``Any`` to avoid a circular import (mirrors
+    # ``ToolContext.repository``'s "kept Any to avoid coupling" rationale).
+    repository: Any = None
     # Active GenrePack — kept ``Any`` (same circular-import rationale as
     # ``confrontation_def``/``encounter`` above). Story 59-1: the SDK
     # ToolContext stamps this so ``begin_confrontation`` can VALIDATE the
@@ -983,10 +983,41 @@ _WORD = re.compile(r"[a-z0-9]+")
 # verbatim-modulo-POV duplicate still scores as a duplicate.
 _OVERLAP_STOP = frozenset(
     {
-        "you", "your", "yours", "yourself", "he", "his", "him", "himself",
-        "she", "her", "hers", "herself", "they", "their", "them", "i", "me",
-        "my", "mine", "myself", "the", "a", "an", "of", "to", "is", "it",
-        "its", "and", "as", "at", "in", "on", "no", "not",
+        "you",
+        "your",
+        "yours",
+        "yourself",
+        "he",
+        "his",
+        "him",
+        "himself",
+        "she",
+        "her",
+        "hers",
+        "herself",
+        "they",
+        "their",
+        "them",
+        "i",
+        "me",
+        "my",
+        "mine",
+        "myself",
+        "the",
+        "a",
+        "an",
+        "of",
+        "to",
+        "is",
+        "it",
+        "its",
+        "and",
+        "as",
+        "at",
+        "in",
+        "on",
+        "no",
+        "not",
     }
 )
 
@@ -1044,9 +1075,7 @@ def _scrub_public_prose(
 
     # Pass 2 — near-duplicate of a private segment copied into PART 1.
     if private_segments:
-        seg_token_sets = [
-            _overlap_tokens(str(s.get("text", ""))) for s in private_segments
-        ]
+        seg_token_sets = [_overlap_tokens(str(s.get("text", ""))) for s in private_segments]
         seg_token_sets = [ts for ts in seg_token_sets if ts]
         if seg_token_sets:
             sentences = _SENT_SPLIT.split(work)
@@ -1079,9 +1108,7 @@ def _scrub_public_prose(
     report["chars_removed"] = original_len - len(scrubbed)
 
     fired = (
-        report["labelled_blocks_removed"]
-        or report["dup_sentences_removed"]
-        or report["degraded"]
+        report["labelled_blocks_removed"] or report["dup_sentences_removed"] or report["degraded"]
     )
     if fired:
         try:
@@ -1167,14 +1194,10 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
     _private_segments: list[dict[str, Any]] = [
         {
             "text": str(seg["text"]).strip(),
-            "anchor_pc": (str(seg["anchor_pc"]).strip() or None)
-            if seg.get("anchor_pc")
-            else None,
+            "anchor_pc": (str(seg["anchor_pc"]).strip() or None) if seg.get("anchor_pc") else None,
         }
         for seg in patch.get("private_segments", [])
-        if isinstance(seg, dict)
-        and isinstance(seg.get("text"), str)
-        and seg["text"].strip()
+        if isinstance(seg, dict) and isinstance(seg.get("text"), str) and seg["text"].strip()
     ]
 
     # ADR-105 B3 ENFORCEMENT: scrub the public blob of any private content
@@ -1230,7 +1253,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
 # Task E1.5-B — SDK-path tool-owned / presentation partition.
 #
 # On the SDK narration path the 26 WRITE tools mutate AND persist
-# (``ctx.store.save``) game state during the tool-dispatch loop. The
+# (``ctx.repository.save``) game state during the tool-dispatch loop. The
 # narrator ALSO emits a sidecar ``game_patch`` block (the prompt still
 # injects ``narrator_output_only``). Feeding that sidecar through the
 # normal assembler would make ``narration_apply`` re-apply every
@@ -3446,7 +3469,7 @@ class Orchestrator:
         Distinct from :meth:`_assemble_turn_result` (the ClaudeClient
         sync/streaming assembler, which stays byte-for-byte unchanged for
         its callers). On the SDK path the 26 WRITE tools already mutated AND
-        persisted (``ctx.store.save``) game state during the tool-dispatch
+        persisted (``ctx.repository.save``) game state during the tool-dispatch
         loop, so re-applying the narrator's sidecar would double-apply.
 
         The split:
@@ -3788,7 +3811,7 @@ class Orchestrator:
                     session_id=session_id,
                     perspective_pc=context.character_name,
                     turn_number=context.turn_number,
-                    store=context.store,
+                    repository=context.repository,
                     otel_span=span,
                     perception_filter=perception_filter,
                     # Phase E wiring — THE fix for query_lore hit_count=0.
@@ -3944,7 +3967,7 @@ class Orchestrator:
             _pub_prompt("prompt_assembled", _prompt_payload, component="prompt_builder")
 
             # Task E1.5-B — hybrid split. The WRITE tools already mutated +
-            # persisted (``ctx.store.save``) every tool-owned state category
+            # persisted (``ctx.repository.save``) every tool-owned state category
             # during the dispatch loop above. ``_assemble_turn_result_sdk``
             # builds the NarrationTurnResult so the tool-owned fields are
             # ZEROED (narration_apply must not re-apply them) while

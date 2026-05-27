@@ -12,22 +12,52 @@ Asserts the single-truth invariant in executable form:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
+import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.game.event_log import EventLog
-from sidequest.game.persistence import SqliteStore
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.cache_fill import lazy_fill
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.projection.rules import load_rules_from_yaml_str
 from sidequest.game.projection.view import SessionGameStateView
-from sidequest.game.sqlite_repository import SqliteSaveRepository
+
+
+@pytest.fixture
+def pg_repo(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """A real PgSaveRepository on a per-worker throwaway PG db (ADR-115 F1)."""
+    import psycopg
+
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug="projection-e2e",
+        mode="solo",
+        genre_slug="test_genre",
+        world_slug="test_world",
+    )
+    try:
+        yield repo
+    finally:
+        db_pool.close_pool()
 
 
 def _setup_tracing() -> InMemorySpanExporter:
@@ -49,10 +79,9 @@ def _setup_tracing() -> InMemorySpanExporter:
     return exporter
 
 
-def test_end_to_end_single_truth_invariant(tmp_path: Path) -> None:
+def test_end_to_end_single_truth_invariant(pg_repo) -> None:
     exporter = _setup_tracing()
-    store = SqliteStore(tmp_path / "e2e.db")
-    repo = SqliteSaveRepository(store)
+    repo = pg_repo
     log = EventLog(repo)
     cache = ProjectionCache(repo)
 
@@ -85,9 +114,8 @@ rules:
             decision = filt.project(envelope=env, view=view, player_id=pid)
             cache.write(event_seq=row.seq, player_id=pid, decision=decision)
 
-    # 1. projection_cache has N_players × N_events rows.
-    with store._conn:
-        cache_rows = store._conn.execute("SELECT COUNT(*) FROM projection_cache").fetchone()[0]
+    # 1. projection_cache has N_players × N_events rows (read back per player).
+    cache_rows = sum(len(cache.read_since(player_id=pid, since_seq=0)) for pid in players)
     assert cache_rows == 3 * 3
 
     # 2. projection.filter.decide span count equals cache-row count.
@@ -109,14 +137,11 @@ rules:
     assert [r.payload_json for r in replay] == [r.payload_json for r in alice_rows]
 
     # 5. GM canonical: events table has true text, unaffected by any rule.
-    with store._conn:
-        canonical_rows = store._conn.execute(
-            "SELECT payload_json FROM events ORDER BY seq ASC"
-        ).fetchall()
-    assert [json.loads(r[0])["text"] for r in canonical_rows] == ["one", "two", "three"]
+    canonical_rows = repo.read_events_since(since_seq=0)
+    assert [json.loads(r.payload_json)["text"] for r in canonical_rows] == ["one", "two", "three"]
 
 
-def test_emitter_reconnect_relies_on_lazy_fill(tmp_path: Path) -> None:
+def test_emitter_reconnect_relies_on_lazy_fill(pg_repo) -> None:
     """Emitters skip their own fan-out — reconnect must lazy-fill their gap.
 
     Live fan-out in ``_emit_event`` skips the emitter (they see the raw
@@ -133,8 +158,7 @@ def test_emitter_reconnect_relies_on_lazy_fill(tmp_path: Path) -> None:
     at live-fan-out time, so neither failure mode would show up there.
     """
     _setup_tracing()
-    store = SqliteStore(tmp_path / "emitter.db")
-    repo = SqliteSaveRepository(store)
+    repo = pg_repo
     log = EventLog(repo)
     cache = ProjectionCache(repo)
 

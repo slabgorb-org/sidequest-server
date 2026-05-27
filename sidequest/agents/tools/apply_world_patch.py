@@ -149,7 +149,7 @@ def _path_kind(path: str) -> str:
     category=ToolCategory.WRITE,
 )
 async def apply_world_patch(args: ApplyWorldPatchArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -202,7 +202,7 @@ async def apply_world_patch(args: ApplyWorldPatchArgs, ctx: ToolContext) -> Tool
             recoverable=False,
         )
     snapshot.apply_world_patch(patch)
-    ctx.store.save(snapshot)
+    ctx.repository.save(snapshot)
 
     return ToolResult.ok(
         {

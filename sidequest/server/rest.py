@@ -23,20 +23,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from sidequest.game.forensic_query import (
-    _safe_json,
-    build_timeline,
-    build_turn_bundle,
-    list_saves,
-    open_save_readonly,
-)
 from sidequest.game.game_slug import generate_slug
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    get_game,
-    upsert_game,
 )
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, load_genre_pack_cached
 from sidequest.server.asset_urls import resolve_asset_url
@@ -242,12 +231,8 @@ def create_rest_router() -> APIRouter:
                     cart_yaml_path = world_entry / "cartography.yaml"
                     if cart_yaml_path.exists():
                         try:
-                            craw = yaml.safe_load(
-                                cart_yaml_path.read_text(encoding="utf-8")
-                            )
-                            navigation_mode = str(
-                                (craw or {}).get("navigation_mode", "region")
-                            )
+                            craw = yaml.safe_load(cart_yaml_path.read_text(encoding="utf-8"))
+                            navigation_mode = str((craw or {}).get("navigation_mode", "region"))
                         except Exception as exc:
                             logger.warning(
                                 "list_genres: cartography.yaml parse failed for "
@@ -310,46 +295,56 @@ def create_rest_router() -> APIRouter:
         (still as a list, to keep the wire shape stable). Missing slug →
         empty list, not a 404 — the dashboard treats this endpoint as
         lossy/best-effort.
+
+        ADR-115 D7: sessions and snapshots are read from Postgres via
+        ``PgForensicReader.list_saves()`` (slug enumeration) +
+        ``PgSaveRepository.load()`` (snapshot). No SQLite save.db walk, no
+        silent fallback — a missing/unknown slug yields the lossy-empty list.
         """
-        save_dir: Path = request.app.state.save_dir
-        games_root = save_dir / "games"
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+        from sidequest.game.pg.forensic import PgForensicReader
+        from sidequest.game.pg.save_repository import PgSaveRepository
+
+        pool = _db_pool.get_pool()
+        reader = PgForensicReader(pool)
+
         views: list[dict[str, Any]] = []
-        if not games_root.exists():
-            return views
-        # Enumerate candidate slug dirs, optionally filtered to a single
+        # Enumerate candidate slugs, optionally filtered to a single
         # session_key so the dashboard can target the active session
         # directly (playtest 2026-04-24 — the State tab defaulted to
         # index 0 which was the oldest save, not the active one).
+        # list_saves already returns newest-first by last_activity_ts.
         if session_key is not None:
-            candidates = [games_root / session_key]
+            save_rows = [r for r in reader.list_saves() if r["slug"] == session_key]
         else:
-            candidates = sorted(games_root.iterdir())
-        for slug_dir in candidates:
-            if not slug_dir.is_dir():
-                continue
-            db_file = slug_dir / "save.db"
-            if not db_file.is_file():
-                continue
+            save_rows = reader.list_saves()
+        for save_row in save_rows:
+            slug = save_row["slug"]
+            # Per-slug resilience (restored in D7 review): one bad save — a
+            # session row with a mode value GameMode() rejects, or a snapshot
+            # that load() can't deserialize — must not 500 the entire State
+            # tab. Log loudly (No-Silent-Fallbacks: this is observable, not a
+            # quiet alternative path) and skip just that slug.
             try:
-                store = SqliteStore.open(str(db_file))
+                game = _pg_sessions.get_game(pool, slug=slug)
+                if game is None:
+                    continue
+                repository = PgSaveRepository.for_slug(
+                    pool,
+                    slug=slug,
+                    mode=GameMode(game.mode),
+                    genre_slug=game.genre_slug,
+                    world_slug=game.world_slug,
+                )
+                saved = repository.load()
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "debug_state.store_open_failed slug=%s error=%s",
-                    slug_dir.name,
+                    "debug_state.session_load_failed slug=%s error=%s",
+                    slug,
                     exc,
                 )
                 continue
-            try:
-                saved = store.load()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "debug_state.snapshot_load_failed slug=%s error=%s",
-                    slug_dir.name,
-                    exc,
-                )
-                store.close()
-                continue
-            store.close()
             if saved is None:
                 continue
             snap = saved.snapshot
@@ -431,7 +426,9 @@ def create_rest_router() -> APIRouter:
                         "character_name": resolved_name,
                         "character_class": getattr(char, "archetype", "") or "",
                         "character_hp": int(resolved_hp) if resolved_hp is not None else 0,
-                        "character_max_hp": int(resolved_max_hp) if resolved_max_hp is not None else 0,
+                        "character_max_hp": int(resolved_max_hp)
+                        if resolved_max_hp is not None
+                        else 0,
                         "character_level": int(resolved_level or 1),
                         "character_xp": int(getattr(char, "xp", 0) or 0),
                         "region_id": snap.current_region or "",
@@ -442,13 +439,10 @@ def create_rest_router() -> APIRouter:
                         },
                     }
                 )
-            try:
-                last_activity_ts = int(db_file.stat().st_mtime * 1000)
-            except OSError:
-                last_activity_ts = 0
+            last_activity_ts = int(save_row.get("last_activity_ts") or 0)
             views.append(
                 {
-                    "session_key": slug_dir.name,
+                    "session_key": slug,
                     "genre_slug": snap.genre_slug or "",
                     "world_slug": snap.world_slug or "",
                     "current_location": snap.party_location() or "",
@@ -475,71 +469,81 @@ def create_rest_router() -> APIRouter:
 
     @router.get("/api/debug/saves")
     async def debug_saves(request: Request) -> list[dict[str, Any]]:
-        """List local saves for the forensics page. Read-only, lossy."""
-        return list_saves(request.app.state.save_dir)
+        """List saves for the forensics page. Read-only, lossy.
+
+        ADR-115 D7: reads from ``PgForensicReader.list_saves()`` (all sessions
+        with telemetry counts) instead of the SQLite save-file walk.
+        """
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg.forensic import PgForensicReader
+
+        return PgForensicReader(_db_pool.get_pool()).list_saves()
 
     @router.get("/api/debug/save/{slug}/timeline")
     async def debug_save_timeline(request: Request, slug: str) -> list[dict[str, Any]]:
-        """Round-keyed timeline for one save. [] if absent/broken — never 500."""
-        conn = open_save_readonly(request.app.state.save_dir, slug)
-        if conn is None:
+        """Round-keyed timeline for one save. [] if absent — never 500.
+
+        ADR-115 D7: resolves slug→session_id then reads from
+        ``PgForensicReader.build_timeline``. Unknown slug (resolve returns
+        None) → [] (lossy-empty, the intended best-effort contract — NOT a
+        silent SQLite fallback).
+        """
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+        from sidequest.game.pg.forensic import PgForensicReader
+
+        pool = _db_pool.get_pool()
+        session_id = _pg_sessions.resolve_session_id(pool, slug=slug)
+        if session_id is None:
             return []
-        try:
-            return build_timeline(conn)
-        except Exception:  # noqa: BLE001 — never 500 a forensics read
-            logger.warning("forensic.timeline_failed slug=%s", slug, exc_info=True)
-            return []
-        finally:
-            conn.close()
+        return PgForensicReader(pool).build_timeline(session_id)
 
     @router.get("/api/debug/save/{slug}/turn/{round_number}")
     async def debug_save_turn(request: Request, slug: str, round_number: int) -> dict[str, Any]:
-        """Drill-down bundle for one round. Empty bundle if absent/broken."""
-        empty = {
-            "round": round_number,
-            "narrative": [],
-            "events": [],
-            "derived": {},
-            "projection": [],
-            "scrapbook": [],
-            "unparseable_seqs": [],
-            "telemetry": {"rows": [], "by_component": {}, "total": 0, "unparseable_seqs": []},
-            "mechanical": {"state": "absent", "pcs": [], "trope": None, "unparseable_seqs": []},
-        }
-        conn = open_save_readonly(request.app.state.save_dir, slug)
-        if conn is None:
-            return empty
-        try:
-            return build_turn_bundle(conn, round_number)
-        except Exception:  # noqa: BLE001 — never 500 a forensics read
-            logger.warning(
-                "forensic.turn_failed slug=%s round=%s",
-                slug,
-                round_number,
-                exc_info=True,
-            )
-            return empty
-        finally:
-            conn.close()
+        """Drill-down bundle for one round. Empty bundle if absent.
+
+        ADR-115 D7: resolves slug→session_id then reads from
+        ``PgForensicReader.build_turn_bundle``. Unknown slug → empty-but-shaped
+        bundle (lossy-empty), never 500.
+        """
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+        from sidequest.game.pg.forensic import PgForensicReader
+
+        pool = _db_pool.get_pool()
+        session_id = _pg_sessions.resolve_session_id(pool, slug=slug)
+        if session_id is None:
+            return {
+                "round": round_number,
+                "narrative": [],
+                "events": [],
+                "derived": {},
+                "projection": [],
+                "scrapbook": [],
+                "unparseable_seqs": [],
+                "telemetry": {"rows": [], "by_component": {}, "total": 0, "unparseable_seqs": []},
+                "mechanical": {"state": "absent", "pcs": [], "trope": None, "unparseable_seqs": []},
+            }
+        return PgForensicReader(pool).build_turn_bundle(session_id, round_number)
 
     @router.get("/api/debug/save/{slug}/snapshot")
     async def debug_save_snapshot(request: Request, slug: str) -> dict[str, Any]:
         """Read-only persisted snapshot for the forensics 'final stored
-        snapshot' panel. {} if absent/broken — never 500, never writes."""
-        conn = open_save_readonly(request.app.state.save_dir, slug)
-        if conn is None:
+        snapshot' panel. {} if absent — never 500, never writes.
+
+        ADR-115 D7: resolves slug→session_id then reads the raw
+        ``game_state.snapshot_json`` via ``PgForensicReader.snapshot_json``.
+        Unknown slug → {} (lossy-empty).
+        """
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+        from sidequest.game.pg.forensic import PgForensicReader
+
+        pool = _db_pool.get_pool()
+        session_id = _pg_sessions.resolve_session_id(pool, slug=slug)
+        if session_id is None:
             return {}
-        try:
-            row = conn.execute("SELECT snapshot_json FROM game_state WHERE id = 1").fetchone()
-            if row is None or row[0] is None:
-                return {}
-            parsed = _safe_json(row[0])
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:  # noqa: BLE001 — never 500 a forensics read
-            logger.warning("forensic.snapshot_failed slug=%s", slug, exc_info=True)
-            return {}
-        finally:
-            conn.close()
+        return PgForensicReader(pool).snapshot_json(session_id)
 
     @router.post("/api/games", status_code=201)
     async def create_or_resume_game(req: CreateGameRequest, request: Request) -> Any:
@@ -563,9 +567,13 @@ def create_rest_router() -> APIRouter:
             mp_game_created_span,
         )
 
-        save_dir: Path = request.app.state.save_dir
         today_fn = getattr(request.app.state, "today_fn", _date_cls.today)
         base_slug = generate_slug(world_slug=req.world_slug, today=today_fn(), mode=req.mode)
+
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+
+        _pg_pool = _db_pool.get_pool()
 
         # ----- force_new: disambiguate before touching the store ---------
         # When the lobby insists this is a fresh journey, a same-day same-mode
@@ -587,52 +595,35 @@ def create_rest_router() -> APIRouter:
         attempts = 1
         mp_join_existing = False
         if req.force_new:
-            probe_db = db_path_for_slug(save_dir, slug)
-            if probe_db.exists():
-                probe_store = SqliteStore(probe_db)
-                probe_store.initialize()
-                existing_row = get_game(probe_store, slug)
-                if existing_row is not None:
-                    is_mp_request = req.mode == GameMode.MULTIPLAYER
-                    is_mp_existing = existing_row.mode == GameMode.MULTIPLAYER
-                    if is_mp_request and is_mp_existing:
-                        # MP-join short-circuit. Fall through to the
-                        # existing-row branch below; the join span fires
-                        # there once the row is opened on the canonical
-                        # ``store`` handle (avoids span-on-probe drift).
-                        mp_join_existing = True
-                    else:
-                        while True:
-                            attempts += 1
-                            candidate = f"{base_slug}-{attempts}"
-                            cand_db = db_path_for_slug(save_dir, candidate)
-                            if not cand_db.exists():
-                                slug = candidate
-                                break
-                            cand_store = SqliteStore(cand_db)
-                            cand_store.initialize()
-                            if get_game(cand_store, candidate) is None:
-                                slug = candidate
-                                break
-                        with lobby_force_new_disambiguated_span(
-                            requested_slug=base_slug,
-                            final_slug=slug,
-                            attempts=attempts,
-                            player_name=req.player_name or "",
-                            mode=str(req.mode.value)
-                            if hasattr(req.mode, "value")
-                            else str(req.mode),
-                            genre_slug=req.genre_slug,
-                            world_slug=req.world_slug,
-                        ):
-                            pass
+            existing_row = _pg_sessions.get_game(_pg_pool, slug=slug)
+            if existing_row is not None:
+                is_mp_request = req.mode == GameMode.MULTIPLAYER
+                is_mp_existing = existing_row.mode == GameMode.MULTIPLAYER
+                if is_mp_request and is_mp_existing:
+                    # MP-join short-circuit. Fall through to the
+                    # existing-row branch below; the join span fires
+                    # there once the row is opened on the canonical
+                    # pg repository (avoids span-on-probe drift).
+                    mp_join_existing = True
+                else:
+                    while True:
+                        attempts += 1
+                        candidate = f"{base_slug}-{attempts}"
+                        if _pg_sessions.get_game(_pg_pool, slug=candidate) is None:
+                            slug = candidate
+                            break
+                    with lobby_force_new_disambiguated_span(
+                        requested_slug=base_slug,
+                        final_slug=slug,
+                        attempts=attempts,
+                        player_name=req.player_name or "",
+                        mode=str(req.mode.value) if hasattr(req.mode, "value") else str(req.mode),
+                        genre_slug=req.genre_slug,
+                        world_slug=req.world_slug,
+                    ):
+                        pass
 
-        db = db_path_for_slug(save_dir, slug)
-        db.parent.mkdir(parents=True, exist_ok=True)
-        store = SqliteStore(db)
-        store.initialize()
-
-        existing = get_game(store, slug)
+        existing = _pg_sessions.get_game(_pg_pool, slug=slug)
         if existing is not None:
             # Existing row "wins" — emit span with the frozen metadata so GM
             # panel sees which mode/genre/world are actually in effect, not
@@ -642,9 +633,9 @@ def create_rest_router() -> APIRouter:
             if mp_join_existing:
                 with lobby_session_join_existing_span(
                     slug=slug,
-                    mode=str(existing.mode.value)
-                    if hasattr(existing.mode, "value")
-                    else str(existing.mode),
+                    mode=str(existing.mode)
+                    if not hasattr(existing.mode, "value")
+                    else str(existing.mode.value),
                     genre_slug=existing.genre_slug,
                     world_slug=existing.world_slug,
                     player_name=req.player_name or "",
@@ -653,9 +644,9 @@ def create_rest_router() -> APIRouter:
                     pass
             with mp_game_created_span(
                 slug=slug,
-                mode=str(existing.mode.value)
-                if hasattr(existing.mode, "value")
-                else str(existing.mode),
+                mode=str(existing.mode)
+                if not hasattr(existing.mode, "value")
+                else str(existing.mode.value),
                 genre_slug=existing.genre_slug,
                 world_slug=existing.world_slug,
                 resumed=True,
@@ -679,10 +670,10 @@ def create_rest_router() -> APIRouter:
             player_name=req.player_name or "",
             force_new=req.force_new,
         ):
-            upsert_game(
-                store,
+            _pg_sessions.ensure_session(
+                _pg_pool,
                 slug=slug,
-                mode=req.mode,
+                mode=str(req.mode.value) if hasattr(req.mode, "value") else str(req.mode),
                 genre_slug=req.genre_slug,
                 world_slug=req.world_slug,
             )
@@ -699,18 +690,21 @@ def create_rest_router() -> APIRouter:
     async def get_encounter_events(slug: str, request: Request):
         """Return ordered ENCOUNTER_* event rows for the given session.
 
-        Reads from the SQLite events table populated by the watcher hub
-        (Task 20). Used by the GM panel timeline view (Task 22).
+        ADR-115 D7: reads from the Postgres events table via
+        ``PgForensicReader.encounter_events`` (was the SQLite events table).
+        Used by the GM panel timeline view (Task 22). Unknown slug → 404
+        (this endpoint's documented missing-session contract, distinct from
+        the lossy-empty forensic reads).
         """
-        save_dir: Path = request.app.state.save_dir
-        db = db_path_for_slug(save_dir, slug)
-        if not db.exists():
-            raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
-        store = SqliteStore(db)
-        store.initialize()
-        from sidequest.game.persistence import query_encounter_events
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+        from sidequest.game.pg.forensic import PgForensicReader
 
-        return query_encounter_events(store)
+        pool = _db_pool.get_pool()
+        session_id = _pg_sessions.resolve_session_id(pool, slug=slug)
+        if session_id is None:
+            raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
+        return PgForensicReader(pool).encounter_events(session_id)
 
     @router.get("/api/games/{slug}")
     async def get_game_endpoint(slug: str, request: Request) -> GameResponse:
@@ -718,13 +712,10 @@ def create_rest_router() -> APIRouter:
 
         Raises 404 if no game with that slug exists.
         """
-        save_dir: Path = request.app.state.save_dir
-        db = db_path_for_slug(save_dir, slug)
-        if not db.exists():
-            raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
-        store = SqliteStore(db)
-        store.initialize()
-        row = get_game(store, slug)
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+
+        row = _pg_sessions.get_game(_db_pool.get_pool(), slug=slug)
         if row is None:
             raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
         return GameResponse(
@@ -742,13 +733,12 @@ def create_rest_router() -> APIRouter:
         404: slug not found. 409: world has no dungeons (not_a_hub_world).
         200: WorldSave JSON + available_dungeons [{slug, sin, wounded}, ...].
         """
-        save_dir: Path = request.app.state.save_dir
-        db = db_path_for_slug(save_dir, slug)
-        if not db.exists():
-            raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
-        store = SqliteStore(db)
-        store.initialize()
-        row = get_game(store, slug)
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+        from sidequest.game.pg.save_repository import PgSaveRepository
+
+        _pg_pool = _db_pool.get_pool()
+        row = _pg_sessions.get_game(_pg_pool, slug=slug)
         if row is None:
             raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
 
@@ -778,7 +768,15 @@ def create_rest_router() -> APIRouter:
                 },
             )
 
-        world_save = store.load_world_save()
+        # ADR-115 D2: load WorldSave from PG repository.
+        repository = PgSaveRepository.for_slug(
+            _pg_pool,
+            slug=slug,
+            mode=row.mode,
+            genre_slug=row.genre_slug,
+            world_slug=row.world_slug,
+        )
+        world_save = repository.load_world_save()
         available_dungeons = [
             {
                 "slug": dungeon_slug,

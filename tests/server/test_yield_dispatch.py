@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 
 from sidequest.game.creature_core import HpPool
@@ -6,16 +8,40 @@ from sidequest.game.encounter import (
     EncounterMetric,
     StructuredEncounter,
 )
-from sidequest.game.persistence import GameMode, SqliteStore
+from sidequest.game.persistence import GameMode
+from sidequest.game.repository import SaveRepository
 from sidequest.game.status import Status, StatusSeverity
 from sidequest.server.dispatch.yield_action import handle_yield
 from sidequest.server.session_room import SessionRoom
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test
+    (ADR-115 F1: the watcher-events test persists/reads ENCOUNTER rows via PG)."""
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 def _room_for(snap, tmp_path):
     """Bind the snapshot to a fresh SessionRoom for handle_yield wiring."""
     room = SessionRoom(slug="test_world", mode=GameMode.SOLO)
-    room.bind_world(snapshot=snap, store=SqliteStore(tmp_path / "yield-test.db"))
+    room.bind_world(snapshot=snap, store=MagicMock(spec=SaveRepository))
     return room
 
 
@@ -174,30 +200,36 @@ def test_yield_emits_watcher_events_with_resolved_last(
 ):
     """Watcher events fire in row order: yield_received → yield_resolved → resolved.
     The kinds[-1] == ENCOUNTER_RESOLVED invariant must hold for solo yield."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
     from sidequest.telemetry.watcher_hub import bind_event_store
 
     snap, _ = snapshot_with_pack
     snap.encounter = _enc()
     snap.characters.append(character_named_sam)
 
-    store = SqliteStore.open_in_memory()
-    bind_event_store(store)
+    # ADR-115 F1: encounter rows persist to Postgres via the bound
+    # PgTelemetrySink; read them back through the repository.
+    repo, _dungeon, sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug="yield-watcher-events",
+        mode="solo",
+        genre_slug="test_pack",
+        world_slug="test_world",
+    )
+    bind_event_store(sink)
     try:
         room = _room_for(snap, tmp_path)
         handle_yield(snap, room=room, player_id="p1", player_name="Sam")
-        rows = list(
-            store._conn.execute(
-                "SELECT kind FROM events WHERE kind LIKE 'ENCOUNTER_%' ORDER BY seq"
-            ).fetchall()
-        )
-        kinds = [r[0] for r in rows]
+        kinds = [
+            r.kind for r in repo.read_events_since(since_seq=0) if r.kind.startswith("ENCOUNTER_")
+        ]
         assert "ENCOUNTER_YIELD" in kinds, f"missing ENCOUNTER_YIELD; got {kinds}"
         assert kinds[-1] == "ENCOUNTER_RESOLVED", (
             f"last row must be ENCOUNTER_RESOLVED; got {kinds}"
         )
     finally:
         bind_event_store(None)
-        store.close()
 
 
 def test_yield_solo_pc_with_companion_resolves_encounter_immediately(

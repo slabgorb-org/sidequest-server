@@ -27,6 +27,37 @@ from sidequest.server.rest import create_rest_router
 from sidequest.telemetry.setup import init_tracer
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG database.
+
+    POST /api/games (create_or_resume_game) consults PG to decide create (201)
+    vs resume (200). Without isolation the deterministic test slug collides with
+    PG state accumulated by earlier runs/tests on the shared db, so a first
+    create wrongly reports a resume. The migrated db gives each test a clean PG.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    # migrated_db is session-scoped (one db per xdist worker); truncate between
+    # tests so the deterministic create/resume slugs don't collide across the
+    # file (a prior test's created game would make a fresh create report resume).
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
     app = FastAPI()

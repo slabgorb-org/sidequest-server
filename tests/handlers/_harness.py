@@ -7,7 +7,7 @@ objects from scratch and drives the **real**
 ``PlayerActionHandler.handle()``:
 
 * real ``SessionRoom`` (MULTIPLAYER) + real ``GameSnapshot`` + real
-  ``TurnManager`` + real ``SqliteStore`` + real loaded genre pack;
+  ``TurnManager`` + a real PgSaveRepository + real loaded genre pack;
 * the **aside** path runs 100% real (combat-strip, ``AsideResolver``,
   ``aside.resolve`` span, ``room.broadcast``) — it is the feature under
   test and nothing about it is mocked;
@@ -31,12 +31,13 @@ import asyncio
 import contextlib
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import sidequest.agents.llm_factory as _llm_factory
 import sidequest.telemetry.setup as _telemetry_setup
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
-from sidequest.game.persistence import GameMode, SqliteStore
+from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -183,7 +184,22 @@ class MpRoomHarness:
 
         GameSnapshot.apply_world_patch = _counting_patch  # type: ignore[method-assign]
 
-        self._store = SqliteStore.open_in_memory()
+        # ADR-115 F1: real PgSaveRepository so the introspection helpers
+        # (``scrapbook_count`` etc.) read persisted state back. The owning
+        # test module supplies a ``_pg_isolation`` fixture binding the pool to
+        # a throwaway PG db.
+        from sidequest.game import db_pool
+        from sidequest.server.session_state import _build_pg_repos_for_slug
+
+        self._store, _dungeon, _sink = _build_pg_repos_for_slug(
+            db_pool.get_pool(),
+            slug=f"{_WORLD}-mp",
+            mode=str(GameMode.MULTIPLAYER),
+            genre_slug=_GENRE,
+            world_slug=_WORLD,
+        )
+        self._store.init_session()
+        self._store.save(self._snap)
         self._room = SessionRoom(slug=f"{_WORLD}-mp", mode=GameMode.MULTIPLAYER)
         self._room.bind_world(snapshot=self._snap, store=self._store)
 
@@ -203,7 +219,9 @@ class MpRoomHarness:
                 player_name=name,
                 player_id=pid,
                 snapshot=self._snap,
-                store=self._store,
+                repository=self._store,
+                dungeon_repository=MagicMock(),
+                telemetry_sink=MagicMock(),
                 genre_pack=genre_pack,
                 orchestrator=object(),  # never called on aside/barrier paths
                 _room=self._room,
@@ -238,8 +256,10 @@ class MpRoomHarness:
         return len(self._snap.narrative_log)
 
     def scrapbook_count(self) -> int:
-        cur = self._store._conn.execute("SELECT count(*) FROM scrapbook_entries")
-        return int(cur.fetchone()[0])
+        # Count persisted scrapbook entries through the typed repository
+        # surface (ADR-115 F1). turn_ids are unique per entry, so the set
+        # size is the row count.
+        return len(self._store.scrapbook_turn_ids(max_turn=10_000_000))
 
     def turn_round(self) -> int:
         return self._snap.turn_manager.round

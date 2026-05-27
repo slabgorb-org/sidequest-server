@@ -24,7 +24,6 @@ from sidequest.dungeon.lookahead_worker import (
     register_lookahead_worker,
 )
 from sidequest.dungeon.materializer import materialize
-from sidequest.dungeon.persistence import DungeonStore
 from sidequest.dungeon.seed_bootstrap import (
     ENTRANCE_ID,
     build_entrance_seed_graph,
@@ -33,6 +32,7 @@ from sidequest.dungeon.seed_bootstrap import (
 )
 from sidequest.dungeon.themes import load_theme_palette
 from sidequest.game.cookbook.loader import load_cookbook
+from sidequest.game.repository import DungeonRepository
 from sidequest.telemetry.spans import dungeon_attach_span
 
 __all__ = [
@@ -57,22 +57,18 @@ _SEED_BITS = 63
 _ATTACHED_SAVES: dict[str, LookaheadWorkerHandle] = {}
 
 
-def _save_key(conn: Any) -> str:
-    """Stable per-save identity. Real saves: the sqlite main DB file path
-    (two WS sessions on one save file open distinct connections to the
-    SAME path -> same key -> guard fires). In-memory stores have no file
-    -> fall back to the connection object's id (each in-memory store is a
-    distinct connection, never sharing a file -> no false collision).
+def _save_key(game_slug: str) -> str:
+    """Stable per-save identity keyed by the game slug (ADR-115 D6).
+
+    With one shared Postgres database for all sessions, the old SQLite
+    approach (file path from PRAGMA database_list) no longer produces a
+    unique per-save key. The session slug is globally unique per save and
+    is the canonical save identity used throughout the server. Two WS
+    sessions on the same save share the same slug → same key → guard
+    fires (idempotent re-attach, no double-register). MP drop-in / player
+    reconnects also share the slug → correct idempotent behaviour.
     """
-    try:
-        row = conn.execute("PRAGMA database_list").fetchone()
-    except Exception as exc:  # pragma: no cover - sqlite always supports this
-        raise RuntimeError(
-            f"could not resolve save identity for the dungeon attach guard: {exc}"
-        ) from exc
-    # PRAGMA database_list row: (seq, name, file). file is '' for :memory:.
-    db_file = row[2] if row is not None and len(row) >= 3 else ""
-    return db_file if db_file else f"mem:{id(conn)}"
+    return game_slug
 
 
 def _theme_pack_root(world_dir: Path) -> Path:
@@ -86,7 +82,8 @@ def _theme_pack_root(world_dir: Path) -> Path:
 
 async def attach_dungeon_to_session(
     *,
-    store: Any,
+    dungeon_repository: DungeonRepository,
+    game_slug: str,
     snapshot: Any,
     genre_pack: Any,
     genre_slug: str,
@@ -113,8 +110,7 @@ async def attach_dungeon_to_session(
             )
             return None
 
-        conn = store.connection()
-        save_key = _save_key(conn)
+        save_key = _save_key(game_slug)
         if save_key in _ATTACHED_SAVES:
             # IDEMPOTENT re-attach (was a hard RuntimeError — it crashed
             # the connect for every MP join/reconnect). The deterministic
@@ -144,11 +140,9 @@ async def attach_dungeon_to_session(
             )
             _span.set_attribute(
                 "regions",
-                len(DungeonStore(conn).load_map(entrance_id=ENTRANCE_ID).nodes),
+                len(dungeon_repository.load_map(entrance_id=ENTRANCE_ID).nodes),
             )
             return existing
-        persistence = DungeonStore(conn)
-        persistence.ensure_schema()  # outside any txn (executescript implicit COMMIT)
 
         bundle = load_cookbook(world_dir)
         palette = load_theme_palette(_theme_pack_root(world_dir))
@@ -157,13 +151,14 @@ async def attach_dungeon_to_session(
         # Save-is-truth: reuse a frozen seed; only generate+persist on a
         # genuinely fresh save (a prior failed bootstrap left the seed but
         # no map → reuse it so the retry is deterministic).
-        campaign_seed = persistence.get_campaign_seed()
+        # ADR-115 D6: set_campaign_seed manages its own transaction in the
+        # PgDungeonRepository — no manual conn.commit() needed.
+        campaign_seed = dungeon_repository.get_campaign_seed()
         if campaign_seed is None:
             campaign_seed = secrets.randbits(_SEED_BITS)
-            persistence.set_campaign_seed(campaign_seed)
-            conn.commit()
+            dungeon_repository.set_campaign_seed(campaign_seed)
 
-        already_seeded = bool(persistence.load_map(entrance_id="entrance").nodes)
+        already_seeded = bool(dungeon_repository.load_map(entrance_id="entrance").nodes)
         if not already_seeded:
             entrance_theme = select_entrance_theme_id(palette)
             seed_graph = build_entrance_seed_graph(entrance_theme)
@@ -185,7 +180,7 @@ async def attach_dungeon_to_session(
                 graph=seed_graph,
                 bundle=bundle,
                 palette=palette,
-                persistence=persistence,
+                dungeon_repository=dungeon_repository,
                 snapshot=snapshot,
                 pack_tropes=genre_pack,
                 claude_client=claude_client,
@@ -195,7 +190,7 @@ async def attach_dungeon_to_session(
             _span.set_attribute("outcome", "already_seeded")
         _span.set_attribute(
             "regions",
-            len(persistence.load_map(entrance_id=ENTRANCE_ID).nodes),
+            len(dungeon_repository.load_map(entrance_id=ENTRANCE_ID).nodes),
         )
 
         # Bind the session's region position to the REAL materialized
@@ -219,7 +214,7 @@ async def attach_dungeon_to_session(
             _span.set_attribute("bound_current_region", ENTRANCE_ID)
 
         handle = register_lookahead_worker(
-            persistence=persistence,
+            persistence=dungeon_repository,
             bundle=bundle,
             palette=palette,
             pack_tropes=genre_pack,

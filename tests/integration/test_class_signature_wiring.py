@@ -116,7 +116,9 @@ def _make_session_data(pack, character) -> _SessionData:
         player_name="Wiring Player",
         player_id="player:wiring",
         snapshot=snapshot,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )

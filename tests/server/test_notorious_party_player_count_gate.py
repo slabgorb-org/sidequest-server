@@ -161,7 +161,9 @@ def sd_factory():
             player_name=acting_player,
             player_id=f"p-{acting_player.lower().replace(' ', '_')}",
             snapshot=snap,
-            store=MagicMock(),
+            repository=MagicMock(),
+            dungeon_repository=MagicMock(),
+            telemetry_sink=MagicMock(),
             genre_pack=pack,
             orchestrator=MagicMock(),
         )

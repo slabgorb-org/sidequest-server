@@ -110,7 +110,9 @@ def test_maybe_emit_tactical_grid_cavern_room() -> None:
     if not _packs_available():
         pytest.skip("caverns_and_claudes content pack not present")
 
-    from sidequest.game.persistence import SqliteStore
+    from unittest.mock import MagicMock as _MagicMock
+
+    from sidequest.game.repository import SaveRepository as _SaveRepository
     from sidequest.game.session import GameSnapshot
     from sidequest.genre.loader import load_genre_pack
     from sidequest.protocol.messages import TacticalGridMessage
@@ -130,9 +132,8 @@ def test_maybe_emit_tactical_grid_cavern_room() -> None:
 
     orchestrator = Orchestrator.__new__(Orchestrator)  # don't __init__ — no claude needed
 
-    # Mock SqliteStore that does nothing
-    store = SqliteStore.open_in_memory()
-    store.init_session("caverns_and_claudes", "caverns_sunden")
+    # Mock save repository that does nothing
+    store = _MagicMock(spec=_SaveRepository)
 
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
@@ -178,8 +179,10 @@ def test_maybe_emit_tactical_grid_settlement_room() -> None:
     if not _packs_available():
         pytest.skip("caverns_and_claudes content pack not present")
 
+    from unittest.mock import MagicMock as _MagicMock
+
     from sidequest.agents.orchestrator import Orchestrator
-    from sidequest.game.persistence import SqliteStore
+    from sidequest.game.repository import SaveRepository as _SaveRepository
     from sidequest.game.session import GameSnapshot
     from sidequest.genre.loader import load_genre_pack
     from sidequest.protocol.messages import TacticalGridMessage
@@ -195,8 +198,7 @@ def test_maybe_emit_tactical_grid_settlement_room() -> None:
     snap.discovered_rooms = ["masquerade"]
 
     orchestrator = Orchestrator.__new__(Orchestrator)
-    store = SqliteStore.open_in_memory()
-    store.init_session("caverns_and_claudes", "caverns_sunden")
+    store = _MagicMock(spec=_SaveRepository)
 
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
@@ -239,8 +241,10 @@ def test_maybe_emit_tactical_grid_missing_room_is_silent() -> None:
     if not _packs_available():
         pytest.skip("caverns_and_claudes content pack not present")
 
+    from unittest.mock import MagicMock as _MagicMock
+
     from sidequest.agents.orchestrator import Orchestrator
-    from sidequest.game.persistence import SqliteStore
+    from sidequest.game.repository import SaveRepository as _SaveRepository
     from sidequest.game.session import GameSnapshot
     from sidequest.genre.loader import load_genre_pack
     from sidequest.server.session_handler import _SessionData
@@ -254,8 +258,7 @@ def test_maybe_emit_tactical_grid_missing_room_is_silent() -> None:
     snap.character_locations["Rux"] = "nonexistent_room_xyz"
 
     orchestrator = Orchestrator.__new__(Orchestrator)
-    store = SqliteStore.open_in_memory()
-    store.init_session("caverns_and_claudes", "caverns_sunden")
+    store = _MagicMock(spec=_SaveRepository)
 
     sd = _SessionData(
         genre_slug="caverns_and_claudes",

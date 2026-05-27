@@ -98,7 +98,7 @@ class QueryEncounterArgs(BaseModel):
     category=ToolCategory.READ,
 )
 async def query_encounter(args: QueryEncounterArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
     snapshot = session.snapshot

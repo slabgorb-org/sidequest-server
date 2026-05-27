@@ -37,11 +37,15 @@ def _cdef(win_condition: WinCondition) -> ConfrontationDef:
             opponent_metric=MetricDef(name="threat", threshold=10),
             beats=[_beat()],
         )
+    # Combat hp_depletion now requires opponent_default_stats with the
+    # reserved hp/armor_class keys at load time (Task 9). These tests are
+    # about the payload contract, not opponent stats — supply a valid block.
     return ConfrontationDef(
         type="combat",
         label="Combat",
         category="combat",
         win_condition=win_condition,
+        opponent_default_stats={"hp": 12, "armor_class": 13},
         beats=[_beat()],
     )
 

@@ -136,7 +136,8 @@ def _seed_combat_hp_depletion_to_npcs(
         if actor.side != "opponent":
             continue
         npc = by_name.get(actor.name)
-        if npc is None:
+        created = npc is None
+        if created:
             # Item 3 wiring: no backing Npc.core for this opponent. Create
             # one seeded with the content stats so find_creature_core can
             # reach it and hp_depletion can resolve. The flavor fields are
@@ -153,14 +154,23 @@ def _seed_combat_hp_depletion_to_npcs(
             npc = Npc(core=core)
             snapshot.npcs.append(npc)
         else:
+            # Overwrite branch: reset the existing opponent's pool to FULL at
+            # combat START. This is a start-of-fight assumption — a re-entry
+            # would heal the opponent, but the ADR-116 no-reopen flow (an
+            # encounter resolves and is not re-instantiated) prevents that.
             npc.core.hp = hp_pool_from_hp(hp)
             npc.core.armor_class = ac
+        # OTEL doctrine: distinguish the CREATE branch (a narrator-improv /
+        # router-named opponent materialized fresh — the GM panel must see
+        # this as an NPC-materialization event) from the OVERWRITE branch.
         with npc_edge_published_span(
             npc_name=actor.name,
             current=npc.core.hp.current,
             max=npc.core.hp.max,
             source=source,
             turn_number=turn,
+            created=created,
+            seed_source="opponent_default_stats",
         ):
             pass
 

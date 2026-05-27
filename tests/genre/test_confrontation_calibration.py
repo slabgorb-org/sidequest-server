@@ -49,6 +49,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from sidequest.genre.models.rules import OPPONENT_RESERVED_STAT_KEYS
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GENRE_PACKS_DIR = REPO_ROOT / "sidequest-content" / "genre_packs"
 
@@ -127,7 +129,7 @@ def test_opponent_default_stats_no_parity_12_remains(pack_name: str):
                 continue
             # hp / armor_class are reserved CreatureCore-seed keys, not
             # ability scores — exempt from the ADR-093 stat ceiling.
-            if stat_name in ("hp", "armor_class"):
+            if stat_name in OPPONENT_RESERVED_STAT_KEYS:
                 continue
             if value == PRE_CALIBRATION_PARITY_STAT or value > CALIBRATED_OPPONENT_STAT_CEILING:
                 offending.append((ctype, stat_name, value))

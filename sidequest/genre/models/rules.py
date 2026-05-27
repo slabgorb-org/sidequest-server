@@ -445,6 +445,37 @@ class ConfrontationDef(BaseModel):
                 f"confrontation '{self.confrontation_type}' uses win_condition "
                 "'dial_threshold' but is missing player_metric/opponent_metric"
             )
+        # Task 9: a COMBAT hp_depletion confrontation resolves vs the
+        # opponent's content-authored AC and depletes its content HP — both
+        # reserved keys MUST be present at LOAD time so a content author
+        # (e.g. Jade authoring space_opera) discovers a missing stat block
+        # before a player ever triggers the encounter, not mid-seating.
+        # Gated on category=="combat": non-combat hp_depletion confrontations
+        # (e.g. a social attrition contest) do not seed an opponent
+        # CreatureCore and carry no reserved keys — leave them valid.
+        if self.category == "combat" and self.win_condition == WinCondition.hp_depletion:
+            ods = self.opponent_default_stats or {}
+            hp = ods.get("hp")
+            ac = ods.get("armor_class")
+            if hp is None or ac is None:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' uses "
+                    "win_condition 'hp_depletion' but its opponent_default_stats "
+                    f"is missing reserved combat keys (hp={hp!r}, armor_class={ac!r}); "
+                    "author both `hp` and `armor_class` under opponent_default_stats"
+                )
+            if int(hp) < 1:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' has "
+                    f"opponent_default_stats.hp={hp!r}; HP must be >= 1 "
+                    "(a 0/negative pool would be silently clamped — fail loud instead)"
+                )
+            if int(ac) < 1:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' has "
+                    f"opponent_default_stats.armor_class={ac!r}; AC must be >= 1 "
+                    "(a 0/negative AC would auto-hit — fail loud instead)"
+                )
         valid_categories = {"combat", "social", "pre_combat", "movement"}
         if self.category not in valid_categories:
             raise ValueError(

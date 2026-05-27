@@ -60,6 +60,38 @@ def _seed_mp_save(tmp_path: Path, slug: str, genre: str, world: str) -> None:
     store.close()
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Point the process-global pool at a per-worker throwaway PG database.
+
+    Under ADR-115 D2 the slug-connect path resolves the authoritative game
+    row and snapshot from Postgres via ``db_pool.get_pool()``. This test seeds
+    an empty MP save (no character) so connect sees has_character=False and
+    enters Creating — the precondition for walking chargen to the
+    seat→PLAYING transition. A clean per-test PG database guarantees connect
+    doesn't resume a leaked snapshot from a prior fixed-slug run.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    # migrated_db is session-scoped (shared per xdist worker); TRUNCATE the
+    # per-test state so a sibling test's fixed-slug row can't be resumed here.
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 @pytest.mark.asyncio
 async def test_chargen_confirmation_transitions_seat_to_playing(
     tmp_path: Path,

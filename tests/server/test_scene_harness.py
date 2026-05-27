@@ -2,8 +2,9 @@
 
 Wire-level + watcher-level integration tests for the scene-harness HTTP
 endpoint specified in ADR-092. The endpoint hydrates a fixture YAML into
-a GameSnapshot, persists via SqliteStore, and returns the minted slug —
-all gated behind ``DEV_SCENES=1`` so production builds carry zero surface.
+a GameSnapshot, persists to Postgres (ADR-115 F1), and returns the minted
+slug — all gated behind ``DEV_SCENES=1`` so production builds carry zero
+surface.
 
 Contract under test (ADR-092 §Decision):
 
@@ -11,9 +12,8 @@ Contract under test (ADR-092 §Decision):
    set when ``create_app()`` runs. With the env var unset, the route does
    not appear in ``app.routes`` and a POST to it returns 404 (FastAPI's
    default for an unmatched path).
-2. On success, returns ``{"slug": "<game_slug>"}`` and the save file is
-   present at ``db_path_for_slug(save_dir, slug)`` with the hydrated
-   snapshot in ``game_state``.
+2. On success, returns ``{"slug": "<game_slug>"}`` and the hydrated
+   snapshot is loadable from Postgres by the minted slug.
 3. Missing fixture → 404 with the missing path in the JSON body.
 4. Hydration error → 422 with field-level detail.
 5. OTEL: emits ``scene_harness.intent.load``, ``.hydrate.ok``, ``.persist.ok``
@@ -29,13 +29,59 @@ exist yet (ADR-092 implementation-status: partial; ADR-087 P0).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+if TYPE_CHECKING:
+    from sidequest.game.persistence import SavedSession
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CANONICAL_FIXTURES_DIR = REPO_ROOT / "scenarios" / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    ADR-115 F1: the scene harness persists the hydrated snapshot to Postgres
+    (the legacy SQLite save.db write was retired), and these wire tests read
+    it back from PG via the minted slug.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _load_pg_snapshot(slug: str) -> SavedSession | None:
+    """Load the saved session for ``slug`` from Postgres — the store the
+    scene-harness route persists to under ADR-115 F1."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode="solo",
+        genre_slug="",
+        world_slug="",
+    )
+    return repo.load()
 
 
 # ── Fixtures: capture watcher events ────────────────────────────────────────
@@ -133,15 +179,15 @@ def test_scene_post_response_body_has_slug_field(
     )
 
 
-def test_scene_post_persists_save_file_at_slug_path(
+def test_scene_post_persists_save_to_pg(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """ADR-092 §Decision point 2: persist via the existing SqliteStore.
+    """ADR-092 §Decision point 2 (ADR-115 F1): persist via Postgres.
 
-    After a successful POST, the save file MUST exist at
-    ``db_path_for_slug(save_dir, slug)`` — the same path the slug-keyed
-    connect handler (dispatch_connect) will look at."""
+    After a successful POST, the saved snapshot MUST be loadable from PG by
+    the minted slug — the same store the slug-keyed connect handler
+    (dispatch_connect) reads on resume."""
     app = _build_dev_scenes_app(monkeypatch, save_dir=tmp_path)
     client = TestClient(app)
 
@@ -149,12 +195,9 @@ def test_scene_post_persists_save_file_at_slug_path(
     assert r.status_code == 200
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import db_path_for_slug
-
-    expected = db_path_for_slug(tmp_path, slug)
-    assert expected.exists(), (
-        f"save file missing at expected slug path {expected!s}; "
-        f"scene-harness must persist via SqliteStore so dispatch_connect can find it"
+    saved = _load_pg_snapshot(slug)
+    assert saved is not None, (
+        "scene-harness must persist the snapshot to Postgres so dispatch_connect can find it"
     )
 
 
@@ -175,11 +218,7 @@ def test_scene_post_persisted_snapshot_carries_fixture_genre_and_world(
     assert r.status_code == 200
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(tmp_path, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None, "save file exists but SqliteStore.load returned None"
 
     # ``SavedSession.snapshot`` is the hydrated GameSnapshot.
@@ -203,11 +242,7 @@ def test_scene_post_persisted_snapshot_carries_fixture_character(
     r = client.post("/dev/scene/combat_brawl_wasteland")
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(tmp_path, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None
     snapshot = saved.snapshot
 
@@ -457,11 +492,7 @@ def test_dev_scene_route_persists_four_pc_party_snapshot(
     )
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(save_dir, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None, (
         "save file exists but SqliteStore.load returned None — "
         "the route either didn't persist or wrote to the wrong path"
@@ -637,11 +668,7 @@ def test_dev_scene_route_persists_scenario_state_end_to_end(
     )
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(save_dir, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None, (
         "save file exists but SqliteStore.load returned None — persistence failed after hydration"
     )
@@ -714,11 +741,8 @@ def test_dev_scene_route_persists_encounter_end_to_end(
     slug = r.json()["slug"]
 
     from sidequest.game.encounter import StructuredEncounter
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
 
-    store = SqliteStore(db_path_for_slug(save_dir, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None, (
         "save file exists but SqliteStore.load returned None — persistence failed after hydration"
     )
@@ -875,11 +899,7 @@ def test_scene_post_persists_magic_state_and_abilities_round_trip(
     )
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(save_dir, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None, "save file exists but SqliteStore.load returned None"
     snapshot = saved.snapshot
 

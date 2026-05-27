@@ -18,8 +18,8 @@ from sidequest.game.builder import CharacterBuilder
 from sidequest.game.event_log import EventLog
 from sidequest.game.lore_seeding import seed_world_lore
 from sidequest.game.persistence import (
+    GameMode,
     SaveSchemaIncompatibleError,
-    SqliteStore,
 )
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
@@ -254,44 +254,35 @@ class ConnectHandler:
         # Slug-keyed connect is the only supported path (Story 45-26).
         # Falsy game_slug returns a typed error below.
         if getattr(payload, "game_slug", None):
-            from sidequest.game.persistence import (
-                GameMode,
-                db_path_for_slug,
-                get_game,
-            )
-
             slug = payload.game_slug
-            db = db_path_for_slug(session._save_dir, slug)
-            if not db.exists():
-                return [_error_msg(f"unknown game slug: {slug}")]
-            store = SqliteStore(db)
-            store.initialize()
+
+            # ADR-115 F1: Postgres is the sole save backend. The bootstrap row
+            # (genre/world/mode) is read from PG ``sessions``; the legacy
+            # SQLite save.db read was retired here. A pre-existing SQLite-only
+            # save that has not been imported to PG (ADR-115 TG-F F3) will not
+            # resume — connect returns "unknown game slug" until it is imported.
+            # New games are PG-only already.
+            from sidequest.game import db_pool as _db_pool
+            from sidequest.game.pg import sessions as _pg_sessions
+            from sidequest.server.session_state import _build_pg_repos_for_slug
             from sidequest.telemetry.watcher_hub import bind_event_store as _bind_event_store
 
-            # Bootstrap: read the SQLite row to get genre/world/mode for PG construction.
-            _sqlite_row = get_game(store, slug)
-            if _sqlite_row is None:
+            _pg_pool = _db_pool.get_pool()
+            _bootstrap_row = _pg_sessions.get_game(_pg_pool, slug=slug)
+            if _bootstrap_row is None:
                 return [_error_msg(f"unknown game slug: {slug}")]
 
-            # ADR-115 D2: construct Postgres repositories for the live session,
-            # then switch to PG row for all downstream consumers.  D3 lifted
-            # the three scrapbook/_conn reads onto typed methods; D4-D7 consumers
-            # remain.
-            from sidequest.game import db_pool as _db_pool
-            from sidequest.server.session_state import _build_pg_repos_for_slug
-
-            _pg_pool = _db_pool.get_pool()
+            # Construct the Postgres repositories for the live session. The
+            # ``ensure_session`` inside ``for_slug`` is idempotent on the
+            # already-resolved ``session_slug`` — no new row is created here.
             _pg_repository, _pg_dungeon_repository, _pg_telemetry_sink = _build_pg_repos_for_slug(
                 _pg_pool,
                 slug=slug,
-                mode=str(_sqlite_row.mode),  # GameMode(StrEnum) is its value; no silent fallback
-                genre_slug=_sqlite_row.genre_slug,
-                world_slug=_sqlite_row.world_slug,
+                mode=_bootstrap_row.mode,  # GameRow.mode is the StrEnum value as str
+                genre_slug=_bootstrap_row.genre_slug,
+                world_slug=_bootstrap_row.world_slug,
             )
-            # D2: use PG get_game for the authoritative row downstream.
-            # PgSaveRepository.get_game returns GameRow(slug, mode:str, genre_slug,
-            # world_slug, claude_session_id, created_at) — all fields the downstream
-            # code reads. GameMode(row.mode) is idempotent on a str (StrEnum).
+            # Authoritative row for all downstream consumers.
             row = _pg_repository.get_game(slug=slug)
             if row is None:
                 raise RuntimeError(
@@ -802,8 +793,8 @@ class ConnectHandler:
                 # room binding so all sessions share the same in-memory object.
                 snapshot=room.snapshot,
                 # ADR-115 D1: carry the three Postgres repositories on the session.
-                # room.store (SqliteStore) is kept alive on the room for D2-D7
-                # consumers; _SessionData no longer holds a SqliteStore reference.
+                # room.store is the PgSaveRepository (ADR-115 F1 retired the
+                # legacy SQLite save layer); _SessionData carries the same triple.
                 repository=_pg_repository,
                 dungeon_repository=_pg_dungeon_repository,
                 telemetry_sink=_pg_telemetry_sink,

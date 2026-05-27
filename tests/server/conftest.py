@@ -61,32 +61,27 @@ def seed_slug_for_test(
     The legacy ``(genre, world, player_name)``-tuple connect path was
     deleted; tests that previously sent ``payload.genre`` /
     ``payload.world`` must now send ``payload.game_slug``. This helper
-    creates the on-disk save directory and ``games`` row so the slug
-    resolves on connect.
+    registers the Postgres ``sessions`` row so the slug resolves on connect.
+
+    ADR-115 F1: connect reads the bootstrap row from Postgres (the legacy
+    SQLite ``games`` table was retired). Callers must have a ``_pg_isolation``
+    fixture active so the process pool points at an isolated PG database.
 
     Returns the slug to thread into the connect envelope.
     """
-    from sidequest.game.persistence import (
-        GameMode,
-        SqliteStore,
-        db_path_for_slug,
-        upsert_game,
-    )
+    from sidequest.game import db_pool
+    from sidequest.game.persistence import GameMode
+    from sidequest.server.session_state import _build_pg_repos_for_slug
 
     resolved_mode = mode if mode is not None else GameMode.SOLO
 
-    db = db_path_for_slug(save_dir, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
         slug=slug,
-        mode=resolved_mode,
+        mode=str(resolved_mode),
         genre_slug=genre,
         world_slug=world,
     )
-    store.close()
     return slug
 
 

@@ -44,6 +44,34 @@ from tests.server.conftest import (
 CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    ADR-115 F1: chargen connect resolves the bootstrap row from Postgres and
+    confirmation persists the snapshot there. ``seed_slug_for_test`` registers
+    the session in this isolated db; TRUNCATE per test prevents fixed-slug
+    bleed across sibling tests.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 @pytest.fixture
 def handler(tmp_path: Path) -> WebSocketSessionHandler:
     if not (CONTENT_ROOT / "caverns_and_claudes").is_dir():

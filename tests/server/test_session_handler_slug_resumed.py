@@ -24,9 +24,6 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.enums import MessageType
@@ -71,11 +68,10 @@ def _seed_pg_for_slug(
     mode: GameMode = GameMode.SOLO,
     narrations: tuple[str, ...] = (),
 ) -> None:
-    """Mirror a seeded snapshot (+ optional prior NARRATION events) into PG.
+    """Seed a snapshot (+ optional prior NARRATION events) into PG (ADR-115 F1).
 
-    The SQLite save_dir store still carries the bootstrap game row (genre/world/
-    mode) the connect handshake reads; this seeds the PG side the resume path
-    actually loads from.
+    ``_build_pg_repos_for_slug`` also registers the session row the connect
+    handshake reads — Postgres is the sole save backend.
     """
     from sidequest.game import db_pool
     from sidequest.game.event_log import EventLog
@@ -113,32 +109,20 @@ def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
 
 
 def _seed_fresh_game(tmp_path: Path, slug: str) -> None:
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
+    """Register a fresh SOLO session in Postgres (no snapshot → chargen)."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
         slug=slug,
-        mode=GameMode.SOLO,
+        mode=str(GameMode.SOLO),
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
-    store.close()
 
 
 def _seed_resumable_game(tmp_path: Path, slug: str) -> None:
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
     core = CreatureCore(
         name="Rux",
         description="A stoic fighter",
@@ -154,9 +138,6 @@ def _seed_resumable_game(tmp_path: Path, slug: str) -> None:
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD)
     snap.characters = [char]
     snap.character_locations["Rux"] = "Entrance"
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
     _seed_pg_for_slug(slug, snap)
 
 
@@ -373,12 +354,10 @@ async def test_slug_connect_chargen_complete_character_name_is_display_name(
         pytest.skip(f"{genre} content not found")
 
     slug = "2026-04-23-chargen-name-e2e"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.SOLO, genre_slug=genre, world_slug=world)
-    store.close()
+    from sidequest.game import db_pool as _db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug as _bld
+
+    _bld(_db_pool.get_pool(), slug=slug, mode=str(GameMode.SOLO), genre_slug=genre, world_slug=world)
 
     # Use a mock Claude client so the post-confirmation opening narration
     # doesn't try to shell out.
@@ -489,12 +468,10 @@ async def test_slug_chargen_complete_party_status_has_stats(
         pytest.skip(f"{genre} content not found")
 
     slug = "2026-04-23-party-status-stats"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.SOLO, genre_slug=genre, world_slug=world)
-    store.close()
+    from sidequest.game import db_pool as _db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug as _bld
+
+    _bld(_db_pool.get_pool(), slug=slug, mode=str(GameMode.SOLO), genre_slug=genre, world_slug=world)
 
     from tests.server.conftest import (
         mock_claude_client_factory as _mock_claude_client_factory,
@@ -600,17 +577,6 @@ def _seed_resumable_game_with_uuid_name(tmp_path: Path, slug: str, player_id: st
     Mirrors pre-fix chargen state: CharacterBuilder committed the character
     before the with_lobby_name() rename landed, so core.name == player_id.
     """
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
     core = CreatureCore(
         name=player_id,  # the bug: UUID leaked into the display name
         description="A pre-fix save",
@@ -626,9 +592,6 @@ def _seed_resumable_game_with_uuid_name(tmp_path: Path, slug: str, player_id: st
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD)
     snap.characters = [char]
     snap.character_locations["Rux"] = "Entrance"
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
     _seed_pg_for_slug(slug, snap)
 
 
@@ -749,17 +712,6 @@ def _seed_resumable_game_with_narrations(tmp_path: Path, slug: str, narrations: 
     replay_msgs actually carries historical narration back to the
     reconnecting client.
     """
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
     core = CreatureCore(
         name="Rux",
         description="A stoic fighter",
@@ -778,9 +730,6 @@ def _seed_resumable_game_with_narrations(tmp_path: Path, slug: str, narrations: 
         location="Entrance",
     )
     snap.characters = [char]
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
     _seed_pg_for_slug(slug, snap, narrations=tuple(narrations))
 
 
@@ -884,17 +833,6 @@ async def test_slug_resume_without_saved_location_skips_chapter_marker(
 
     slug = "2026-04-24-chapter-marker-skip"
     # Seed a resumable game but with empty location.
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
     core = CreatureCore(
         name="Rux",
         description="A stoic fighter",
@@ -913,9 +851,7 @@ async def test_slug_resume_without_saved_location_skips_chapter_marker(
         location="",  # no location
     )
     snap.characters = [char]
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(slug, snap)
 
     handler = _make_handler(tmp_path)
     msg = SessionEventMessage(

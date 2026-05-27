@@ -29,9 +29,6 @@ import pytest
 
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.protocol import GameMessage
 from sidequest.protocol.messages import (
@@ -45,19 +42,17 @@ CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genr
 
 
 def _seed_mp_save(tmp_path: Path, slug: str, genre: str, world: str) -> None:
-    """Mirror tests/server/test_seat_claim.py:_seed — empty MP save row."""
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
+    """Register an empty MP session in Postgres (ADR-115 F1 — connect reads PG)."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
         slug=slug,
-        mode=GameMode.MULTIPLAYER,
+        mode=str(GameMode.MULTIPLAYER),
         genre_slug=genre,
         world_slug=world,
     )
-    store.close()
 
 
 @pytest.fixture(autouse=True)

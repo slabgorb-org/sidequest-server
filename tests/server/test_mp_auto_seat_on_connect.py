@@ -48,7 +48,7 @@ import pytest
 
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
-from sidequest.game.persistence import GameMode, SqliteStore, db_path_for_slug, upsert_game
+from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.messages import (
     SessionEventMessage,
@@ -153,17 +153,6 @@ def _seed_mp_game_with_characters(
     plus a player_seats entry — matching the post-chargen save
     shape that the connect handler reads to set ``has_character``.
     """
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.MULTIPLAYER,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Far Landing")
     chars: list[Character] = []
     for player_id, char_name in seats:
@@ -183,29 +172,24 @@ def _seed_mp_game_with_characters(
         )
         snap.player_seats[player_id] = char_name
     snap.characters = chars
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
     _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
-    store.close()
     return tmp_path
 
 
 def _seed_mp_game_no_characters(tmp_path: Path, slug: str) -> Path:
-    """Seed an MP save with no characters yet — the new-MP-player
-    fixture used to confirm explicit PLAYER_SEAT is preserved.
+    """Register an empty MP session in Postgres — the new-MP-player fixture
+    used to confirm explicit PLAYER_SEAT is preserved (ADR-115 F1).
     """
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
         slug=slug,
-        mode=GameMode.MULTIPLAYER,
+        mode=str(GameMode.MULTIPLAYER),
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
-    store.close()
     return tmp_path
 
 

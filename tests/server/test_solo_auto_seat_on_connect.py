@@ -42,7 +42,7 @@ import pytest
 
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
-from sidequest.game.persistence import GameMode, SqliteStore, db_path_for_slug, upsert_game
+from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.messages import (
     SessionEventMessage,
@@ -102,6 +102,20 @@ def _seed_pg_for_slug(
     repo.save(snap)
 
 
+def _ensure_pg_session(slug: str, *, mode: GameMode) -> None:
+    """Register the PG session row without a snapshot (ADR-115 F1)."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(mode),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+
+
 def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
     handler = WebSocketSessionHandler(
         save_dir=save_dir,
@@ -116,17 +130,11 @@ def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
 
 
 def _seed_solo_game(tmp_path: Path, slug: str, *, with_character: bool) -> Path:
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
+    """Register a SOLO session in Postgres (ADR-115 F1 — connect reads PG).
+
+    ``with_character=False`` registers the session row only (no snapshot →
+    chargen); ``with_character=True`` also persists a snapshot carrying one PC.
+    """
     if with_character:
         core = CreatureCore(
             name="Parsley",
@@ -143,26 +151,15 @@ def _seed_solo_game(tmp_path: Path, slug: str, *, with_character: bool) -> Path:
         snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Far Landing")
         snap.characters = [char]
         snap.player_seats["parsley-pid"] = "Parsley"
-        store.init_session(_GENRE, _WORLD)
-        store.save(snap)
         _seed_pg_for_slug(slug, snap, mode=GameMode.SOLO)
-    store.close()
+    else:
+        _ensure_pg_session(slug, mode=GameMode.SOLO)
     return tmp_path
 
 
 def _seed_mp_game(tmp_path: Path, slug: str) -> Path:
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.MULTIPLAYER,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
-    store.close()
+    """Register an empty MP session in Postgres (no snapshot → chargen)."""
+    _ensure_pg_session(slug, mode=GameMode.MULTIPLAYER)
     return tmp_path
 
 

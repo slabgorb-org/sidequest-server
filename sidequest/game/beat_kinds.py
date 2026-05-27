@@ -826,11 +826,14 @@ def apply_beat(
     # gated OFF for this win condition so an inert dial can never falsely
     # resolve the fight. Emits ``encounter.resolved`` with ``source="hp_depletion"``
     # so the GM panel can tell an HP kill from a dial victory.
-    hp_depletion = getattr(enc, "win_condition", "dial_threshold") == "hp_depletion"
+    hp_depletion = enc.win_condition == "hp_depletion"
 
     if hp_depletion and not resolved and edge_resolver is not None:
 
-        def _side_down(side: str) -> bool:
+        def _any_actor_down(side: str) -> bool:
+            # Resolves on ANY actor on the side reaching 0 HP. Correct for the
+            # current 1v1 personal / 1v1 ship scope; a future 1-vs-many fight
+            # needs "seated opponent down" or "all down" semantics.
             for a in enc.actors:
                 if a.side != side:
                     continue
@@ -839,11 +842,11 @@ def apply_beat(
                     return True
             return False
 
-        if _side_down("opponent"):
+        if _any_actor_down("opponent"):
             enc.resolved = True
             enc.outcome = "player_victory"
             resolved = True
-        elif _side_down("player"):
+        elif _any_actor_down("player"):
             enc.resolved = True
             enc.outcome = "opponent_victory"
             resolved = True
@@ -877,6 +880,8 @@ def apply_beat(
         enc.outcome = "opponent_victory"
         enc.structured_phase = EncounterPhase.Resolution
         resolved = True
+    # Ungated by hp_depletion ON PURPOSE: a resolution / surrender beat ends
+    # either kind of confrontation (dial-threshold or HP-depletion).
     elif not resolved and (deltas.resolution or getattr(beat, "resolution", False)):
         enc.resolved = True
         enc.outcome = f"resolution_beat:{beat.id}"

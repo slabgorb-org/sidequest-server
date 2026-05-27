@@ -68,6 +68,21 @@ def test_hp_depletion_resolves_player_victory_when_opponent_drops():
     assert result.resolved is True
 
 
+def test_hp_depletion_resolves_opponent_victory_when_player_drops():
+    enc = _enc("hp_depletion")
+    apply_beat(
+        enc,
+        enc.actors[0],
+        _StrikeBeat(),
+        RollOutcome.Success,
+        turn=1,
+        edge_resolver=_cores(pirate_hp=10, hero_hp=0),
+        damage_resolver=lambda: 0,
+    )
+    assert enc.resolved is True
+    assert enc.outcome == "opponent_victory"
+
+
 def test_hp_depletion_does_not_resolve_while_both_alive():
     enc = _enc("hp_depletion")
     apply_beat(

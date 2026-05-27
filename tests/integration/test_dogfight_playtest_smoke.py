@@ -88,13 +88,26 @@ def test_three_turn_dogfight_resolves_through_production_path(
     )
     enc = snap.encounter
     assert enc is not None
-    # Production instantiation does NOT pre-seed per_actor_state from
-    # descriptor_schema — it starts empty and the first cell's view delta
-    # populates it. Pin the contract here so future drift is loud.
-    assert all(a.per_actor_state == {} for a in enc.actors), (
-        f"per_actor_state should start empty post-instantiation; got "
-        f"{[(a.role, a.per_actor_state) for a in enc.actors]}"
-    )
+    # Production instantiation seeds frame-HP into per_actor_state at
+    # instantiation time (frame_hp / frame_hp_max only — geometry and
+    # gun_solution keys are added by the first cell resolution, not here).
+    # Pin the exact post-instantiation key set so future drift is loud.
+    for _actor in enc.actors:
+        assert set(_actor.per_actor_state.keys()) == {"frame_hp", "frame_hp_max"}, (
+            f"actor {_actor.role!r} per_actor_state should contain exactly "
+            f"{{frame_hp, frame_hp_max}} post-instantiation; "
+            f"got {set(_actor.per_actor_state.keys())!r}"
+        )
+        assert _actor.per_actor_state["frame_hp"] == _actor.per_actor_state["frame_hp_max"], (
+            f"actor {_actor.role!r} frame_hp should equal frame_hp_max at "
+            f"instantiation (full health); got "
+            f"frame_hp={_actor.per_actor_state['frame_hp']!r}, "
+            f"frame_hp_max={_actor.per_actor_state['frame_hp_max']!r}"
+        )
+        assert isinstance(_actor.per_actor_state["frame_hp"], int) and _actor.per_actor_state["frame_hp"] > 0, (
+            f"actor {_actor.role!r} frame_hp must be a positive int; "
+            f"got {_actor.per_actor_state['frame_hp']!r}"
+        )
     assert enc.narrator_hints == [], (
         f"narrator_hints should start empty; got {enc.narrator_hints!r}"
     )

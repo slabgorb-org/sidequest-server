@@ -760,7 +760,8 @@ class ConfrontationPayload(ProtocolBase):
     """Payload for CONFRONTATION — drives the ConfrontationOverlay UI.
 
     Shape mirrors sidequest-ui/src/components/ConfrontationOverlay.tsx
-    ``ConfrontationData`` (L42-58). ``active=False`` signals the overlay
+    ``ConfrontationData`` (L42-58, + win_condition/player_hp/opponent_hp
+    pending UI mirror). ``active=False`` signals the overlay
     to unmount. Story 3.4.
 
     Task 12 (2026-04-25): dual-dial migration — ``metric`` replaced by

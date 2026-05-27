@@ -107,7 +107,8 @@ def build_confrontation_payload(
 ) -> dict[str, Any]:
     """Assemble the CONFRONTATION payload the UI overlay consumes.
 
-    Shape fixed by sidequest-ui/src/components/ConfrontationOverlay.tsx:42-58.
+    Shape fixed by sidequest-ui/src/components/ConfrontationOverlay.tsx:42-58
+    (+ win_condition/player_hp/opponent_hp pending UI mirror).
     Encounter mood_override beats the confrontation-def default mood.
 
     Story 49-7: when ``recipient_pc=(class_def, spell_slots, prepared_spells)``
@@ -210,8 +211,11 @@ def build_confrontation_payload(
     if encounter.win_condition == "hp_depletion" and core_resolver is not None:
 
         def _primary_hp(side: str) -> dict[str, int] | None:
+            # Skip withdrawn/yielded actors: a player who has yielded but is
+            # still first-seated on their side is not the primary combatant,
+            # so surfacing their HP would mislabel the dial.
             for a in encounter.actors:
-                if a.side == side:
+                if a.side == side and not a.withdrawn:
                     core = core_resolver(a.name)
                     if core is not None:
                         return {"current": core.hp.current, "max": core.hp.max}

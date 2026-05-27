@@ -406,6 +406,29 @@ class AnthropicSdkClient:
                     cost,
                 )
 
+                # Story 61-followup-B — Promote the per-call usage line above
+                # to a watcher event so the GM panel has a continuous,
+                # plottable per-call cost baseline (the log line is invisible
+                # to the watcher transport). severity=info: this is the steady
+                # baseline the 61-4 warn alarm and the followup-D session
+                # ceiling compare against, not an alarm itself. Fires per SDK
+                # call / tool-loop iteration, mirroring the 60-7 cache event's
+                # component+shape. cumulative session totals remain
+                # followup-D's job (session.cost_running_total).
+                _watcher_publish_event(
+                    "narrator.sdk.usage",
+                    {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "cost_usd": cost,
+                        "model": response.model,
+                        "cache_read_tokens": cache_read,
+                        "cache_write_tokens": cache_write,
+                    },
+                    component="narrator.sdk",
+                    severity="info",
+                )
+
                 # Story 60-7 — Lie-detector for the iter=1 cache_control
                 # regression class. A healthy iter writes to exactly one
                 # cache tier (the explicit 1h marker fires; nothing else

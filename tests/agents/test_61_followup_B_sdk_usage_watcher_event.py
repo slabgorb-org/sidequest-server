@@ -142,7 +142,9 @@ def _tool_use_resp(
     model: str = "claude-sonnet-4-6",
 ) -> _Resp:
     return _Resp(
-        content=[_ToolUseContent(type="tool_use", id=tool_id, name="roll_dice", input={"sides": 20})],
+        content=[
+            _ToolUseContent(type="tool_use", id=tool_id, name="roll_dice", input={"sides": 20})
+        ],
         stop_reason="tool_use",
         usage=_Usage(
             input_tokens=input_tokens,
@@ -291,8 +293,7 @@ async def test_sdk_usage_event_payload_carries_all_six_fields(
 
     for key in REQUIRED_FIELDS:
         assert key in fields, (
-            f"narrator.sdk.usage payload must carry '{key}'. "
-            f"Got fields: {sorted(fields)}"
+            f"narrator.sdk.usage payload must carry '{key}'. Got fields: {sorted(fields)}"
         )
 
     assert "cost" not in fields, (
@@ -317,8 +318,7 @@ async def test_sdk_usage_event_payload_carries_all_six_fields(
         f"cost_usd must be a float for trend plotting, got {type(fields['cost_usd'])}"
     )
     assert fields["cost_usd"] == pytest.approx(expected_cost), (
-        f"cost_usd must equal compute_cost_usd(...)={expected_cost}; "
-        f"got {fields['cost_usd']}"
+        f"cost_usd must equal compute_cost_usd(...)={expected_cost}; got {fields['cost_usd']}"
     )
 
 
@@ -340,7 +340,9 @@ async def test_sdk_usage_event_includes_zero_cache_fields(
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     client = _build_client(
-        _Sdk(responses=[_text_resp(input_tokens=300, output_tokens=20, cache_read=0, cache_write=0)])
+        _Sdk(
+            responses=[_text_resp(input_tokens=300, output_tokens=20, cache_read=0, cache_write=0)]
+        )
     )
     await client.complete_with_tools(
         system_blocks=_system_blocks(),
@@ -462,7 +464,11 @@ async def test_llm_request_span_carries_cost_fields_for_filtering(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     model = "claude-sonnet-4-6"
     client = _build_client(
-        _Sdk(responses=[_text_resp(input_tokens=12_000, output_tokens=500, cache_read=80, model=model)])
+        _Sdk(
+            responses=[
+                _text_resp(input_tokens=12_000, output_tokens=500, cache_read=80, model=model)
+            ]
+        )
     )
     await client.complete_with_tools(
         system_blocks=_system_blocks(),

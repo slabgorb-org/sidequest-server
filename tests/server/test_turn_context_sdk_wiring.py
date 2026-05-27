@@ -322,7 +322,7 @@ async def test_sdk_path_builds_toolcontext_with_real_ids_and_lore_store(
     assert tool_ctx.world_id == "mawdeep"
     assert tool_ctx.session_id == "2026-05-14-caverns_mawdeep-28"
     assert tool_ctx.turn_number == 7
-    assert tool_ctx.store is store
+    assert tool_ctx.repository is store
     assert tool_ctx.lore_store is lore, (
         "ToolContext.lore_store is not the wired LoreStore — query_lore "
         "would return hit_count=0 and the narrator confabulates canon"

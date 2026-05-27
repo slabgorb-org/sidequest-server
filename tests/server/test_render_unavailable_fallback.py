@@ -239,42 +239,46 @@ async def test_unresponsive_daemon_emits_render_unavailable_event(
         await daemon.stop()
 
 
-def test_render_status_persists_to_database_end_to_end(tmp_path: Path) -> None:
+def test_render_status_persists_to_database_end_to_end(
+    migrated_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC4 wire-first end-to-end: a scrapbook payload built with
     ``render_status="unavailable"`` MUST round-trip into the
     ``scrapbook_entries`` table and SELECT back as ``"unavailable"``.
 
-    This is the test gap the reviewer flagged: the previous spy-based
-    test only verified the *payload* carried the field, not that the
-    SQL persisted the column. With ``render_status TEXT`` now in the
-    schema and the INSERT statement extended, the value must reach
-    storage."""
-    from sidequest.game.persistence import SqliteStore
+    Scrapbook persistence moved to Postgres (ADR-115); persist_scrapbook_entry
+    writes through ``handler._event_log.repository.append_scrapbook_entry`` and
+    the row lands in the PG ``scrapbook_entries`` table."""
+    import psycopg
+
+    from sidequest.game import db_pool
+    from sidequest.game.persistence import GameMode
     from sidequest.protocol.messages import ScrapbookEntryPayload
     from sidequest.server.emitters import persist_scrapbook_entry
+    from sidequest.server.session_state import _build_pg_repos_for_slug
 
-    # Real on-disk SQLite to exercise the schema + ALTER TABLE migration
-    # path. ``open_in_memory`` would also work; on-disk gives us
-    # confidence the migration is idempotent across reopens.
-    db_path = tmp_path / "test.db"
-    store = SqliteStore.open(str(db_path))
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
     try:
-        # Reopen once to exercise the migration's "column already exists"
-        # branch — this proves _apply_migrations is idempotent.
-        store2 = SqliteStore.open(str(db_path))
-        store2._conn.close()  # noqa: SLF001
+        repository, _dungeon, _sink = _build_pg_repos_for_slug(
+            db_pool.get_pool(),
+            slug="2026-05-14-render-status",
+            mode=str(GameMode.SOLO),
+            genre_slug="caverns_and_claudes",
+            world_slug="grimvault",
+        )
 
-        # Stub handler shape: persist_scrapbook_entry only needs
-        # handler._event_log.store. Build the minimum.
+        # persist_scrapbook_entry only needs handler._event_log.repository.
         class _StubEventLog:
-            def __init__(self, store):  # noqa: ANN001
-                self.store = store
+            def __init__(self, repository):  # noqa: ANN001
+                self.repository = repository
 
         class _StubHandler:
-            def __init__(self, store):  # noqa: ANN001
-                self._event_log = _StubEventLog(store)
+            def __init__(self, repository):  # noqa: ANN001
+                self._event_log = _StubEventLog(repository)
 
-        handler = _StubHandler(store)
+        handler = _StubHandler(repository)
 
         payload = ScrapbookEntryPayload(
             turn_id=42,
@@ -286,19 +290,21 @@ def test_render_status_persists_to_database_end_to_end(tmp_path: Path) -> None:
         )
         persist_scrapbook_entry(handler, payload)
 
-        # Read back from SQL — this proves the value reached storage.
-        row = store._conn.execute(  # noqa: SLF001
-            "SELECT render_status, narrative_excerpt FROM scrapbook_entries WHERE turn_id = ?",
-            (42,),
-        ).fetchone()
+        # Read back from PG — this proves the value reached storage.
+        with psycopg.connect(plain) as conn:
+            row = conn.execute(
+                "SELECT render_status, narrative_excerpt FROM scrapbook_entries "
+                "WHERE session_id = %s AND turn_id = %s",
+                (repository.session_id, 42),
+            ).fetchone()
         assert row is not None, "scrapbook_entries row not persisted"
         assert row[0] == "unavailable", (
-            f"render_status did not round-trip through SQL — got {row[0]!r}, "
+            f"render_status did not round-trip through PG — got {row[0]!r}, "
             f"expected 'unavailable'. Schema or INSERT statement missing the column."
         )
         assert row[1] == "The crack yawns open."
     finally:
-        store._conn.close()  # noqa: SLF001
+        db_pool.close_pool()
 
 
 @pytest.mark.asyncio

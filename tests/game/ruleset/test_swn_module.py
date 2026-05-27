@@ -240,13 +240,17 @@ def test_swn_skill_check_params_2d6():
 
 def test_swn_save_params_d20_best_of_two_attrs():
     from sidequest.genre.models.rules import SwnConfig
-    cfg = SwnConfig()
-    # Mental save = better of WIS/CHA mod, added to the d20 roll.
-    # WIS 14 (+1), CHA 8 (0) -> best = +1. Target = save_base(15) - (level(3)-1) = 13.
-    p = _S.save_params(stats={"WISDOM": 14, "CHARISMA": 8}, save="mental", level=3,
+    # save_params now resolves through attribute_map — supply a full map and flavor-keyed stats.
+    cfg = SwnConfig(attribute_map={
+        "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
+        "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
+    })
+    # Mental save = better of WISDOM<-Cunning / CHARISMA<-Influence.
+    # Cunning 14 (+1), Influence 8 (0) -> best = +1. Target = save_base(15) - (level(3)-1) = 13.
+    p = _S.save_params(stats={"Cunning": 14, "Influence": 8}, save="mental", level=3,
                        label="Mental save", cfg=cfg)
     assert (p.sides, p.count) == (20, 1)
-    assert p.modifier == 1          # best of WIS/CHA mods, ADDED to the roll
+    assert p.modifier == 1          # best of WIS/CHA mods (via map), ADDED to the roll
     assert p.difficulty == 13       # save_base(15) - (level(3) - 1) = 13  [SRD p.46: starts at 15, -1/level]
     assert p.label == "Mental save"
 

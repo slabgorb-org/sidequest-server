@@ -6,10 +6,16 @@ from sidequest.protocol.dice import RollOutcome
 from sidequest.genre.models.rules import RulesConfig, SwnConfig
 
 
+_ATTR_MAP = {
+    "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
+    "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
+}
+
+
 def _swn_pack():
     rules = MagicMock(spec=RulesConfig)
     rules.ruleset = "swn"
-    rules.swn = SwnConfig()
+    rules.swn = SwnConfig(attribute_map=_ATTR_MAP)
     pack = MagicMock()
     pack.rules = rules
     return pack
@@ -46,8 +52,8 @@ def test_dispatch_skill_check_success():
 
 
 def test_dispatch_save_against_target():
-    # Mental save: best of WIS(+1)/CHA(0)=+1 added to roll. Target=save_base15-(level3-1)=13.
-    # face [13] + mod(1) = 14 > 13 → Success.
+    # Mental save: WISDOM->Cunning(+1) / CHARISMA->Influence(0); best=+1 added to roll.
+    # Target=save_base15-(level3-1)=13. face [13] + mod(1) = 14 > 13 → Success.
     outcome = dispatch_check(
         kind="save",
         attribute=None,
@@ -56,7 +62,7 @@ def test_dispatch_save_against_target():
         difficulty_key=None,
         level=3,
         label="Mental save",
-        character_stats={"WISDOM": 14, "CHARISMA": 8},
+        character_stats={"Cunning": 14, "Influence": 8},
         faces=[13],
         pack=_swn_pack(),
         rolling_player_id="p1",
@@ -69,7 +75,7 @@ def test_dispatch_save_against_target():
 
 
 def test_dispatch_save_tie():
-    # Mental save: WIS=14 → +1, CHA=8 → 0; best = +1. Target=13 at level 3.
+    # Mental save: WISDOM->Cunning(14→+1), CHARISMA->Influence(8→0); best = +1. Target=13 at level 3.
     # face [12] + 1 = 13 == 13 → Tie
     outcome = dispatch_check(
         kind="save",
@@ -79,7 +85,7 @@ def test_dispatch_save_tie():
         difficulty_key=None,
         level=3,
         label="Mental save",
-        character_stats={"WISDOM": 14, "CHARISMA": 8},
+        character_stats={"Cunning": 14, "Influence": 8},
         faces=[12],
         pack=_swn_pack(),
         rolling_player_id="p1",
@@ -128,7 +134,7 @@ def test_check_emits_otel_span(monkeypatch):
         difficulty_key=None,
         level=3,
         label="Mental save",
-        character_stats={"WISDOM": 14, "CHARISMA": 8},
+        character_stats={"Cunning": 14, "Influence": 8},
         faces=[13],
         pack=_swn_pack(),
         rolling_player_id="p1",

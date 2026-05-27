@@ -29,14 +29,17 @@ def swn_attribute_modifier(score: int) -> int:
 
 
 def _stat(stats: dict[str, int], key: str) -> int:
-    """Look up a stat score with case-insensitive fallback; returns 10 (neutral) if absent."""
+    """Look up a stat score by exact or case-insensitive key. Fail loud if absent (no neutral-10)."""
     v = stats.get(key)
     if v is not None:
         return v
     for k, val in stats.items():
         if k.upper() == key.upper():
             return val
-    return 10
+    raise KeyError(
+        f"stat {key!r} not in stat block {sorted(stats)} — content/attribute_map bug "
+        "(SWN module no longer falls back to a neutral 10)"
+    )
 
 
 class SwnRulesetModule(RulesetModule):
@@ -104,11 +107,20 @@ class SwnRulesetModule(RulesetModule):
             raise ValueError(
                 f"unknown save category {save!r}, expected one of {list(self._SAVE_ATTRS)}"
             )
-        attrs = self._SAVE_ATTRS[save]
-        best_mod = max(self.stat_modifier(stats, a) for a in attrs)
+        amap = cfg.attribute_map
+        flavor_attrs = []
+        for swn_attr in self._SAVE_ATTRS[save]:
+            flavor = amap.get(swn_attr)
+            if flavor is None:
+                raise KeyError(
+                    f"attribute_map missing {swn_attr!r} for save {save!r} "
+                    "(RulesConfig validator should have caught this)"
+                )
+            flavor_attrs.append(flavor)
+        best_mod = max(self.stat_modifier(stats, f) for f in flavor_attrs)
         return CheckRollParams(
             sides=20, count=1,
-            modifier=best_mod,                               # added to the d20 roll
+            modifier=best_mod,
             difficulty=int(cfg.save_base) - (int(level) - 1),  # target; SRD p.46: 15 at level 1, -1/level
             label=label,
         )

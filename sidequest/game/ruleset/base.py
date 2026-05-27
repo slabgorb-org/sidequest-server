@@ -7,10 +7,12 @@ module plan needs them (YAGNI).
 
 from __future__ import annotations
 
+import random
 from abc import ABC, abstractmethod
 
 from sidequest.game.ruleset.resolution import AttackRollParams
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
+from sidequest.protocol.models import InitiativeEntry
 
 
 class UnknownRulesetError(ValueError):
@@ -62,3 +64,18 @@ class RulesetModule(ABC):
 
     def save_params(self, *, stats, save, level, label, cfg):
         raise NotImplementedError(f"{self.slug} ruleset has no saving-throw resolution")
+
+    def roll_initiative(
+        self,
+        *,
+        actor_dex_scores: dict[str, int],
+        rng: random.Random,
+    ) -> list[InitiativeEntry] | None:
+        """Resolution order (descending) for a confrontation, or None for no ordering.
+
+        Default: None (no turn ordering). SWN overrides with 1d8 + DEX mod.
+        `actor_dex_scores` maps actor name -> raw DEX score; the dispatch seam
+        resolves it (PC from Character.stats, opponent from the dexterity
+        reserved key) because CreatureCore carries no ability scores.
+        """
+        return None

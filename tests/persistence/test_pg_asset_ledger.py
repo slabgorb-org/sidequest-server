@@ -70,7 +70,14 @@ def test_asset_ledger_table_exists_after_migration(migrated_db: str) -> None:
                 "WHERE table_name = 'asset_ledger'"
             ).fetchall()
         }
-    assert {"r2_key", "asset_type", "entity_ref", "created_turn", "session_id", "created_at"} <= cols
+    assert {
+        "r2_key",
+        "asset_type",
+        "entity_ref",
+        "created_turn",
+        "session_id",
+        "created_at",
+    } <= cols
     # md5/size_bytes were dropped (hash is in the key) — they must NOT exist.
     assert "md5" not in cols, "md5 column was dropped per Content-hash reconciliation"
     assert "size_bytes" not in cols, "size_bytes column was dropped — no resume consumer"
@@ -109,14 +116,13 @@ def test_r2_key_is_primary_key(migrated_db: str) -> None:
 def test_dangling_session_id_rejected(migrated_db: str) -> None:
     """A row referencing a non-existent session_id violates the FK."""
     plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain) as conn:
-        with pytest.raises(psycopg.errors.ForeignKeyViolation):
-            conn.execute(
-                "INSERT INTO asset_ledger "
-                "(r2_key, asset_type, entity_ref, created_turn, session_id, created_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s)",
-                ("artifacts/w/1/portrait/x.png", "portrait", "e", 1, 999_999_999, "t"),
-            )
+    with psycopg.connect(plain) as conn, pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute(
+            "INSERT INTO asset_ledger "
+            "(r2_key, asset_type, entity_ref, created_turn, session_id, created_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s)",
+            ("artifacts/w/1/portrait/x.png", "portrait", "e", 1, 999_999_999, "t"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -125,25 +131,33 @@ def test_dangling_session_id_rejected(migrated_db: str) -> None:
 
 
 def test_append_then_list_returns_row(store) -> None:
-    store.append(**_ledger_kwargs())
+    key = "artifacts/flickering_reach/then/portrait/abc123.png"
+    store.append(**_ledger_kwargs(r2_key=key))
     rows = store.list_assets()
     assert len(rows) == 1
-    assert rows[0]["r2_key"] == "artifacts/flickering_reach/42/portrait/abc123.png"
+    assert rows[0]["r2_key"] == key
     assert rows[0]["asset_type"] == "portrait"
     assert rows[0]["entity_ref"] == "gruk_the_unwashed"
 
 
 def test_append_is_idempotent_on_r2_key(store) -> None:
     """Writing the same r2_key twice yields ONE row (upsert), not a duplicate."""
-    store.append(**_ledger_kwargs(created_turn=1))
-    store.append(**_ledger_kwargs(created_turn=5))  # same r2_key, later turn
+    # r2_key is the GLOBAL primary key; production keys embed the session in
+    # the path so they never collide across sessions. The test must likewise
+    # use a key unique to this test (the migrated DB is session-scoped and
+    # shared across tests).
+    key = "artifacts/flickering_reach/idem/portrait/abc123.png"
+    store.append(**_ledger_kwargs(r2_key=key, created_turn=1))
+    store.append(**_ledger_kwargs(r2_key=key, created_turn=5))  # same r2_key, later turn
     rows = store.list_assets()
     assert len(rows) == 1, "ON CONFLICT (r2_key) DO UPDATE must collapse to one row"
 
 
 def test_append_distinct_keys_kept_separate(store) -> None:
     store.append(**_ledger_kwargs(r2_key="artifacts/w/1/portrait/a.png"))
-    store.append(**_ledger_kwargs(r2_key="artifacts/w/1/illustration/b.png", asset_type="illustration"))
+    store.append(
+        **_ledger_kwargs(r2_key="artifacts/w/1/illustration/b.png", asset_type="illustration")
+    )
     rows = store.list_assets()
     assert {r["r2_key"] for r in rows} == {
         "artifacts/w/1/portrait/a.png",
@@ -173,7 +187,7 @@ def test_cross_session_isolation(monkeypatch, migrated_db: str) -> None:
         store_a = PgAssetLedgerStore(pool, session_id=sid_a)
         store_b = PgAssetLedgerStore(pool, session_id=sid_b)
 
-        store_a.append(**_ledger_kwargs(r2_key="artifacts/w/1/portrait/a.png"))
+        store_a.append(**_ledger_kwargs(r2_key="artifacts/w/iso/portrait/a.png"))
 
         assert store_b.list_assets() == []
         assert len(store_a.list_assets()) == 1
@@ -184,7 +198,7 @@ def test_cross_session_isolation(monkeypatch, migrated_db: str) -> None:
 def test_injection_safe_entity_ref_roundtrips_literally(store) -> None:
     """A SQL-ish entity_ref is stored verbatim (parameterized query, not f-string)."""
     nasty = "'); DROP TABLE asset_ledger; --"
-    store.append(**_ledger_kwargs(entity_ref=nasty))
+    store.append(**_ledger_kwargs(r2_key="artifacts/w/inj/portrait/a.png", entity_ref=nasty))
     rows = store.list_assets()
     assert rows[0]["entity_ref"] == nasty
     # Table still exists / is queryable after the "injection".

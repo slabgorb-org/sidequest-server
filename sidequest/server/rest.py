@@ -706,6 +706,24 @@ def create_rest_router() -> APIRouter:
             raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
         return PgForensicReader(pool).encounter_events(session_id)
 
+    @router.get("/api/sessions/{slug}/assets")
+    async def get_session_assets(slug: str, request: Request):
+        """Return the runtime asset ledger for a save (Story 65-2).
+
+        The UI fetches this on reconnect to rehydrate prior-turn imagery from
+        R2 without re-rendering. Unknown slug → 404 (loud), never a silent
+        empty list — a known session with no assets returns ``[]``.
+        """
+        from sidequest.game import db_pool as _db_pool
+        from sidequest.game.pg import sessions as _pg_sessions
+        from sidequest.game.pg.asset_ledger import PgAssetLedgerStore
+
+        pool = _db_pool.get_pool()
+        session_id = _pg_sessions.resolve_session_id(pool, slug=slug)
+        if session_id is None:
+            raise HTTPException(status_code=404, detail=f"no game with slug {slug}")
+        return PgAssetLedgerStore(pool, session_id=session_id).list_assets()
+
     @router.get("/api/games/{slug}")
     async def get_game_endpoint(slug: str, request: Request) -> GameResponse:
         """Return metadata for a game by slug.

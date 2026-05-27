@@ -78,6 +78,9 @@ class SaveRepository(Protocol):
     Postgres via PgSaveRepository (ADR-115).
     """
 
+    @property
+    def session_id(self) -> int: ...
+
     def transaction(self) -> AbstractContextManager[SaveTransaction]: ...
 
     # ------------------------------------------------------------------
@@ -163,6 +166,21 @@ class SaveRepository(Protocol):
     def scrapbook_turn_ids(self, *, max_turn: int) -> set[int]: ...
 
     def scrapbook_image_url_map(self) -> dict[int, str]: ...
+
+    # ------------------------------------------------------------------
+    # Asset ledger (Story 65-2)
+    # ------------------------------------------------------------------
+
+    def append_asset_ledger(
+        self,
+        *,
+        r2_key: str,
+        asset_type: str,
+        entity_ref: str,
+        created_turn: int,
+    ) -> None: ...
+
+    def list_asset_ledger(self) -> list[dict]: ...
 
     # ------------------------------------------------------------------
     # Session lifecycle

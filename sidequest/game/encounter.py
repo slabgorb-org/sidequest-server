@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from sidequest.game.encounter_tag import EncounterTag
 from sidequest.game.taunt import TauntState
-from sidequest.protocol.models import EncounterLocationOverlay
+from sidequest.protocol.models import EncounterLocationOverlay, InitiativeEntry
 
 
 class RigType(StrEnum):
@@ -159,6 +159,9 @@ class StructuredEncounter(BaseModel):
     structured_phase: EncounterPhase | None = None
     secondary_stats: SecondaryStats | None = None
     actors: list[EncounterActor] = Field(default_factory=list)
+    initiative: list[InitiativeEntry] = Field(default_factory=list)
+    """SWN P4: 1d8+DEX resolution order, rolled once at instantiation. Empty for
+    rulesets with no ordering (native) and non-combat encounters."""
     tags: list[EncounterTag] = Field(default_factory=list)
     outcome: str | None = None
     resolved: bool = False

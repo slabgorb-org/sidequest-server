@@ -796,6 +796,9 @@ class ConfrontationPayload(ProtocolBase):
     # NarrationPayload.seq / SecretNotePayload.seq. Default 0 keeps
     # legacy actor-only construction sites working.
     seq: int = 0
+    # SWN P4: 1d8+DEX resolution order, rolled once at instantiation. Plain list
+    # for the UI (no 3D dice overlay). None/empty for rulesets with no ordering.
+    initiative_order: list[dict[str, int | str]] | None = None
 
 
 # ---------------------------------------------------------------------------

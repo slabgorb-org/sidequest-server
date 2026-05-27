@@ -8,7 +8,7 @@ dispatch path against the authored pack, not a synthetic fixture.
 What is proven here (the payoff of Tasks 1-9):
 
   Test 1  Personal Firefight (``combat``) resolves on HP depletion:
-          - the attack rolls vs the AUTHORED opponent AC (13), not a beat DC;
+          - the attack rolls vs the AUTHORED opponent AC (12), not a beat DC;
           - a hit ablates the opponent's runtime CreatureCore hp.current;
           - bringing the opponent to 0 HP resolves ``player_victory`` and fires
             ``encounter.resolved`` with ``source="hp_depletion"`` (asserted via

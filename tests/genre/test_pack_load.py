@@ -54,9 +54,34 @@ def test_heavy_metal_pack_loads_with_dual_dial_schema():
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_space_opera_pack_loads_with_dual_dial_schema():
+    """space_opera is the SWN-bound pack (Task 8 of the space_opera→SWN binding):
+    its ``combat`` and ``ship_combat`` confrontations moved off opposed_check
+    dual-dial metrics to ``resolution_mode: beat_selection`` +
+    ``win_condition: hp_depletion`` — combat now resolves on HP reaching 0 and
+    legitimately carries NO player_metric/opponent_metric. The dual-dial
+    invariant therefore only applies to its remaining dial confrontations
+    (negotiation, chase, dogfight), which are ``win_condition: dial_threshold``
+    (the model default) and still carry metrics. Filter on win_condition so the
+    metricless hp_depletion confrontations are skipped rather than NPE-ing on
+    ``player_metric.threshold``. At least one dial confrontation must remain so
+    this assertion does not pass vacuously."""
     pack = load_pack("space_opera")
     assert pack.rules is not None
-    for cdef in pack.rules.confrontations:
+    dial_confrontations = [
+        cdef
+        for cdef in pack.rules.confrontations
+        if (
+            cdef.win_condition.value
+            if hasattr(cdef.win_condition, "value")
+            else cdef.win_condition
+        )
+        == "dial_threshold"
+    ]
+    assert dial_confrontations, (
+        "space_opera must retain at least one dial_threshold confrontation "
+        "(negotiation/chase/dogfight) for this dual-dial assertion to be meaningful"
+    )
+    for cdef in dial_confrontations:
         assert cdef.player_metric.threshold > 0
         assert cdef.opponent_metric.threshold > 0
         for beat in cdef.beats:

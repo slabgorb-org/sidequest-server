@@ -152,6 +152,7 @@ class YieldHandler:
                     genre_slug=sd.genre_slug,
                     recipient_pc=recipient_pc,
                     recipient_actor_name=recipient_actor,
+                    core_resolver=sd.snapshot.find_creature_core,
                 )
                 # Seat-aware count: NPC companions on the player side are
                 # excluded so the log line matches the actual yield gate

@@ -31,11 +31,17 @@ from sidequest.server.session_handler import WebSocketSessionHandler
 # ---------------------------------------------------------------------------
 
 
+_ATTR_MAP = {
+    "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
+    "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
+}
+
+
 def _swn_pack():
     """Minimal genre pack with SWN ruleset — mirrors test_check_dispatch.py."""
     rules = MagicMock(spec=RulesConfig)
     rules.ruleset = "swn"
-    rules.swn = SwnConfig()
+    rules.swn = SwnConfig(attribute_map=_ATTR_MAP)
     pack = MagicMock()
     pack.rules = rules
     return pack
@@ -157,8 +163,12 @@ def test_handle_check_throw_broadcasts_request_and_result():
 
 
 def test_handle_check_throw_save_path():
-    """CHECK_THROW (save) resolves correctly via dispatch_check.save_params."""
-    char = _character_with_stats("Rux", WISDOM=14, CHARISMA=8)
+    """CHECK_THROW (save) resolves correctly via dispatch_check.save_params.
+
+    Mental save resolves through attribute_map: WISDOM->Cunning, CHARISMA->Influence,
+    so the character's stat block is flavor-keyed.
+    """
+    char = _character_with_stats("Rux", Cunning=14, Influence=8)
     snap = _snapshot_with_character(char)
     pack = _swn_pack()
 
@@ -180,8 +190,8 @@ def test_handle_check_throw_save_path():
 
     assert isinstance(outcome, CheckThrowOutcome)
     assert isinstance(outcome.outcome, RollOutcome)
-    # WIS=14 → +1 mod; level defaults to 1 → save target = 15-(1-1)=15.
-    # face [13] + 1 = 14 < 15 → Fail.
+    # Cunning=14 → +1 mod (best of WIS<-Cunning / CHA<-Influence); level defaults to 1
+    # → save target = 15-(1-1)=15. face [13] + 1 = 14 < 15 → Fail.
     assert outcome.outcome is RollOutcome.Fail
 
 
@@ -320,3 +330,53 @@ async def test_check_throw_handler_returns_error_message_on_dispatch_failure(mon
         f"handle() must return ErrorMessage on ValueError from dispatch_check; "
         f"got {type(result[0]).__name__}"
     )
+
+
+@pytest.mark.asyncio
+async def test_check_throw_handler_returns_error_message_on_keyerror(monkeypatch):
+    """A save whose stat block is missing a mapped flavor stat makes _stat raise
+    KeyError (fail-loud, no neutral-10). The handler guard must catch KeyError and
+    return a clean ErrorMessage rather than letting it tear down the WS session.
+
+    This drives the REAL dispatch_check (not a monkeypatched raiser): the character
+    has no `Cunning`/`Influence` stat, so save_params -> stat_modifier -> _stat raises.
+    """
+    from sidequest.handlers.check_throw import CheckThrowHandler
+    from sidequest.protocol.messages import ErrorMessage
+    from sidequest.server.session_handler import _State
+
+    session = MagicMock()
+    session._state = _State.Playing
+
+    sd = MagicMock()
+    sd.player_id = "p1"
+    sd.genre_slug = "test_genre"
+    sd.world_slug = "test_world"
+    # Character stat block is empty of the mapped flavor stats (Cunning/Influence),
+    # so the mental save cannot resolve and _stat fails loud.
+    sd.snapshot = _snapshot_with_character(_character_with_stats("Rux"))
+    sd.genre_pack = _swn_pack()
+    session._session_data = sd
+    session._room = None
+
+    payload = CheckThrowPayload(
+        kind="save",
+        save="mental",
+        faces=[13],
+        label="Mental save",
+    )
+    msg = CheckThrowMessage(payload=payload, player_id="p1")
+
+    handler = CheckThrowHandler()
+    result = await handler.handle(session, msg)
+
+    assert len(result) == 1, (
+        f"handle() must return exactly one message on KeyError; got {len(result)}: {result}"
+    )
+    assert isinstance(result[0], ErrorMessage), (
+        f"handle() must return ErrorMessage on KeyError from dispatch_check; "
+        f"got {type(result[0]).__name__}"
+    )
+    # message is a NonBlankString wrapper; coerce to str. KeyError stringifies with
+    # quotes, but "Check throw failed: ..." stays a sensible user-facing message.
+    assert "Check throw failed" in str(result[0].payload.message.root)

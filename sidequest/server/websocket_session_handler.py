@@ -1524,6 +1524,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             cdef=cdef,
                             genre_slug=sd.genre_slug,
                             recipient_pc=None,
+                            core_resolver=sd.snapshot.find_creature_core,
                         )
                         confrontation_payload = ConfrontationPayload(**payload_dict)
                         confrontation_event_attrs = {
@@ -1612,6 +1613,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                         genre_slug=sd.genre_slug,
                                         recipient_pc=_recipient_pc,
                                         recipient_actor_name=_recipient_actor,
+                                        core_resolver=sd.snapshot.find_creature_core,
                                     )
                                     _per_pc_msg = ConfrontationMessage(
                                         payload=ConfrontationPayload(**_per_pc_dict),

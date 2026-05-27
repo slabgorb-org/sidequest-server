@@ -8,27 +8,31 @@ success criteria in a single strike-beat resolution:
   (dial layer) the encounter's momentum dial also advanced (narrative pacing layer
                runs alongside HP — both legible in one turn)
 
-Beat chosen: ``shoot`` from the ``combat`` (Firefight) ConfrontationDef.
-  - kind: strike
-  - damage_channel: strike  (added in Part A content canary)
+Beat chosen: ``shoot`` (kind=strike, damage_channel=strike) on a synthetic
+Firefight-shaped ConfrontationDef.
 Weapon: blaster_sidearm (damage: 1d6+0) from the REAL pack catalog.
 Stat: Physique (the shoot beat's stat_check).
 
-**Fixture note (documented as required by the task):**
-The space_opera ``combat`` (Firefight) confrontation uses
-``resolution_mode: opposed_check``, which defers beat application and the
-entire damage path to the narrator phase — damage never fires through
-``dispatch_dice_throw`` on the opposed branch.
+**Fixture note (space_opera→SWN binding, Task 8):**
+space_opera's ``combat`` (Firefight) confrontation moved off
+``resolution_mode: opposed_check`` to SWN ``beat_selection`` +
+``win_condition: hp_depletion`` (HP-to-0 combat, no dual-dial metrics). It can
+therefore no longer supply an opposed_check OR a dual-dial confrontation from
+the real pack. Both tests in this module consequently mint their confrontation
+shape SYNTHETICALLY via ``_make_synthetic_firefight_pack``:
 
-This test therefore uses a SYNTHETIC ConfrontationDef that mirrors the
-Firefight shape (shoot beat with damage_channel=strike, momentum dial,
-threshold=7) but omits ``resolution_mode: opposed_check`` (defaults to
-``beat_selection``) so the damage roll fires inline. The REAL blaster_sidearm
-weapon and its damage spec (1d6+0) are still pulled from the real pack catalog,
-so the Part A canary content is exercised for the weapon lookup path.
+  - Task 10 (simple-DC, ``dispatch_dice_throw``): synthetic cdef with the
+    default ``beat_selection`` mode so the damage roll fires inline.
+  - Task 11 (opposed-check, ``narration_apply``): synthetic cdef with
+    ``resolution_mode=opposed_check`` so ``_apply_narration_result_to_snapshot``
+    routes through ``_resolve_opposed_check_branch`` — the engine-level branch
+    still used by any pack that DOES declare opposed_check.
 
-The synthetic beat carries the same ``stat_check: Physique`` and
-``damage_channel: strike`` as the authored shoot beat.
+Only the REAL blaster_sidearm weapon + its damage spec (1d6+0) are pulled from
+the real pack catalog (the spec genuinely lives there), so the weapon-lookup
+content path is still exercised. The synthetic shoot beat carries the same
+``stat_check: Physique`` and ``damage_channel: strike`` as the
+historically-authored shoot beat.
 
 Skips gracefully when sidequest-content is not present.
 
@@ -162,22 +166,33 @@ def _make_firefight_encounter(attacker_name: str, target_name: str):
     )
 
 
-def _make_synthetic_firefight_pack(real_pack):
+def _make_synthetic_firefight_pack(real_pack, *, opposed_check: bool = False):
     """Build a synthetic GenrePack-shaped object that mirrors the space_opera
-    Firefight ConfrontationDef but with beat_selection resolution mode so
-    dispatch_dice_throw applies the beat inline (no deferral).
+    Firefight ConfrontationDef. The resolution_mode is caller-chosen:
+
+    - ``opposed_check=False`` (default): resolution_mode defaults to
+      ``beat_selection`` so ``dispatch_dice_throw`` applies the beat inline
+      (no deferral). Used by the Task 10 simple-DC acceptance test.
+    - ``opposed_check=True``: resolution_mode is ``opposed_check`` so
+      ``_apply_narration_result_to_snapshot`` routes through
+      ``_resolve_opposed_check_branch`` — the branch under test for Task 11.
 
     The real pack's inventory catalog is preserved so the blaster_sidearm
-    weapon lookup exercises the Part A canary content.
+    weapon lookup (damage: 1d6+0) exercises the Part A canary content. The
+    weapon damage spec genuinely lives in the real pack's item_catalog, so we
+    reuse only ``real_pack.inventory`` for that lookup — everything else
+    (confrontation shape, beat, metrics) is synthetic.
 
-    Rationale for synthetic fixture:
-    The authored space_opera ``combat`` confrontation uses
-    ``resolution_mode: opposed_check``, which defers beat application and the
-    damage path entirely to the narrator phase. ``dispatch_dice_throw``
-    never fires damage on the opposed branch. The synthetic fixture swaps
-    only the resolution_mode; all other beat attributes (stat_check=Physique,
-    damage_channel=strike, base=2, momentum dial/threshold) are identical
-    to the authored shoot beat.
+    Rationale for synthetic fixture (space_opera→SWN binding, Task 8):
+    The authored space_opera ``combat`` confrontation moved off
+    ``resolution_mode: opposed_check`` to ``beat_selection`` +
+    ``win_condition: hp_depletion`` (HP-to-0 SWN combat, no dual-dial
+    metrics). The real pack can therefore no longer supply an opposed_check
+    confrontation. Both tests now mint the confrontation shape they need
+    synthetically rather than coupling to the real pack's (now-changed)
+    combat resolution_mode. All beat attributes (stat_check=Physique,
+    damage_channel=strike, base=2, momentum dial/threshold=7) mirror the
+    historically-authored shoot beat.
     """
     from unittest.mock import MagicMock
 
@@ -185,10 +200,11 @@ def _make_synthetic_firefight_pack(real_pack):
         BeatDef,
         ConfrontationDef,
         MetricDef,
+        ResolutionMode,
         RulesConfig,
     )
 
-    # Mirror the authored shoot beat exactly, minus the opposed_check constraint.
+    # Player beat: the strike "shoot" beat (damage_channel=strike).
     shoot_beat = BeatDef.model_validate(
         {
             "id": "shoot",
@@ -201,15 +217,30 @@ def _make_synthetic_firefight_pack(real_pack):
             "narrator_hint": "Blaster bolts sear the corridor. Sparks off bulkheads.",
         }
     )
+    # Opponent beat: a non-strike beat so the opposed test can give the
+    # opponent a beat that does NOT deal HP damage, isolating the player path.
+    cover_beat = BeatDef.model_validate(
+        {
+            "id": "take_cover",
+            "label": "Take Cover",
+            "kind": "brace",
+            "base": 2,
+            "stat_check": "Physique",
+            "effect": "Brace against incoming fire",
+            "narrator_hint": "Duck behind the bulkhead.",
+        }
+    )
 
     cdef = ConfrontationDef(
         type="combat",
         label="Firefight",
         category="combat",
-        # Default resolution_mode=beat_selection — NO opposed_check deferral.
+        resolution_mode=(
+            ResolutionMode.opposed_check if opposed_check else ResolutionMode.beat_selection
+        ),
         player_metric=MetricDef(name="momentum", starting=0, threshold=7),
         opponent_metric=MetricDef(name="momentum", starting=0, threshold=7),
-        beats=[shoot_beat],
+        beats=[shoot_beat, cover_beat],
     )
 
     pack = MagicMock()
@@ -359,10 +390,23 @@ def test_opposed_check_shoot_beat_deals_hp_damage_in_narration_apply(otel_captur
     stack in a unit test would require mocking the Anthropic SDK; driving
     narration_apply directly is both faster and more focused on the wiring gap.
 
-    Uses the REAL space_opera pack to exercise the actual ``shoot`` beat
-    (damage_channel=strike) and ``blaster_sidearm`` catalog item (1d6+0).
-    Opponent d20 is monkeypatched to 3 (Fail tier) so only the player deals
-    HP damage — isolates the player-side path cleanly.
+    **Fixture strategy (space_opera→SWN binding, Task 8):**
+    The opposed-check resolution branch is engine-level and shared by every
+    pack whose confrontations declare ``resolution_mode: opposed_check`` — the
+    branch is selected by the cdef's resolution_mode, not by any space_opera
+    specifics. space_opera's OWN ``combat`` confrontation moved off opposed_check
+    to SWN ``beat_selection`` + ``win_condition: hp_depletion`` (Task 8), so it
+    can no longer supply an opposed_check confrontation. This test therefore
+    drives a SYNTHETIC opposed_check pack (``_make_synthetic_firefight_pack(...,
+    opposed_check=True)``) — mirroring how the Task 10 sibling already uses a
+    synthetic pack — instead of coupling to the real pack's (now-changed)
+    combat resolution_mode. The real pack's inventory catalog is still reused so
+    the ``blaster_sidearm`` weapon (1d6+0) damage lookup exercises real content.
+
+    The opponent's synthetic beat (``take_cover``, kind=brace, no
+    damage_channel) deals no HP damage, isolating the player-side path. The
+    opponent's server-side d20 is monkeypatched to 3 (Fail tier) for the same
+    isolation.
 
     Asserts (the three ADR-114 criteria on the opposed path):
     1. Target CreatureCore.hp.current decreased.
@@ -384,25 +428,16 @@ def test_opposed_check_shoot_beat_deals_hp_damage_in_narration_apply(otel_captur
     )
     from sidequest.game.session import GameSnapshot, Npc
     from sidequest.game.turn import TurnManager
-    from sidequest.genre.models.rules import ResolutionMode
     from sidequest.protocol.dice import RollOutcome
     from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
     from sidequest.telemetry.spans.state_patch import SPAN_STATE_PATCH_HP
 
-    # ── Part A content canary: verify the REAL pack has the shoot beat ────
-    real_combat_cdef = next(
-        (c for c in real_pack.rules.confrontations if c.confrontation_type == "combat"),
-        None,
-    )
-    assert real_combat_cdef is not None, "space_opera must have a 'combat' ConfrontationDef"
-    real_shoot_beat = next((b for b in real_combat_cdef.beats if b.id == "shoot"), None)
-    assert real_shoot_beat is not None, "space_opera combat must have a 'shoot' beat"
-    assert str(real_shoot_beat.damage_channel) == "strike", (
-        "shoot beat must carry damage_channel=strike (Part A content canary)"
-    )
-    assert real_combat_cdef.resolution_mode is ResolutionMode.opposed_check, (
-        "space_opera combat must use opposed_check resolution mode"
-    )
+    # Synthetic opposed_check pack: mirrors the Firefight shape with
+    # resolution_mode=opposed_check so _apply_narration_result_to_snapshot
+    # routes through _resolve_opposed_check_branch (the branch under test).
+    # blaster_sidearm catalog lookup still runs against the real inventory.
+    pack = _make_synthetic_firefight_pack(real_pack, opposed_check=True)
+    combat_cdef = pack.rules.confrontations[0]
 
     # ── Snapshot: attacker with blaster_sidearm, target with known HP ─────
     attacker_name = "Vex"
@@ -484,14 +519,15 @@ def test_opposed_check_shoot_beat_deals_hp_damage_in_narration_apply(otel_captur
 
     # Narrator emits the opponent's beat selection. The player's beat (shoot)
     # is stashed via pending_player_d20 / pending_player_beat_id.
-    # Opponent emits a non-strike beat so only the player deals HP damage.
+    # Opponent emits a non-strike beat (take_cover/brace) so only the player
+    # deals HP damage.
+    opponent_beat_id = _pick_non_strike_beat_id(combat_cdef)
     result = NarrationTurnResult(
         narration="Blasters light up the corridor.",
         beat_selections=[
-            # Opponent picks a non-strike beat so only the player deals HP damage.
             BeatSelection(
                 actor=target_name,
-                beat_id=_pick_non_strike_beat_id(real_combat_cdef),
+                beat_id=opponent_beat_id,
                 outcome=RollOutcome.Fail,
             ),
         ],
@@ -515,7 +551,7 @@ def test_opposed_check_shoot_beat_deals_hp_damage_in_narration_apply(otel_captur
         snap,
         result,
         player_name=attacker_name,
-        pack=real_pack,
+        pack=pack,
         opposed_player_d20=18,
         opposed_player_beat_id="shoot",
         opposed_player_actor=attacker_name,

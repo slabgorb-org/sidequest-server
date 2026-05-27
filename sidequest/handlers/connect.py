@@ -1477,6 +1477,7 @@ class ConnectHandler:
                                 genre_slug=row.genre_slug,
                                 recipient_pc=recipient_pc,
                                 recipient_actor_name=recipient_actor,
+                                core_resolver=snapshot.find_creature_core,
                             )
                             bootstrap_msgs.append(
                                 ConfrontationMessage(

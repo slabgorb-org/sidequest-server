@@ -14,6 +14,14 @@ from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.disposition import AttitudeThresholds
 from sidequest.genre.models.inventory import DamageSpec
 
+# Keys inside ``ConfrontationDef.opponent_default_stats`` that are NOT
+# ability scores. ``hp`` seeds the opponent CreatureCore HP pool and
+# ``armor_class`` seeds the SWN ascending AC the attack rolls against
+# (hp_depletion combats). They are popped out before ability-score /
+# modifier resolution so they never leak into opposed_check lookups or
+# the ADR-093 calibration ceiling.
+OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset({"hp", "armor_class"})
+
 
 class MoraleTrigger(StrEnum):
     """B/X morale check triggers. Per spec §2.2."""
@@ -280,6 +288,19 @@ class SavingThrowsTable(BaseModel):
         return getattr(self, category.value)
 
 
+class WinCondition(StrEnum):  # noqa: UP042 — matches project convention
+    """How a confrontation decides victory.
+
+    - ``dial_threshold``: a side's metric dial reaching ``threshold`` ends it (default; every
+      existing pack).
+    - ``hp_depletion``: a side's primary combatant reaching 0 HP ends it (SWN combat). Metrics
+      are dropped; resolution reads CreatureCore HP.
+    """
+
+    dial_threshold = "dial_threshold"
+    hp_depletion = "hp_depletion"
+
+
 class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (see protocol/enums.py)
     """How a confrontation resolves each turn.
 
@@ -369,8 +390,9 @@ class ConfrontationDef(BaseModel):
     label: str
     category: str
     resolution_mode: ResolutionMode = ResolutionMode.beat_selection
-    player_metric: MetricDef
-    opponent_metric: MetricDef
+    win_condition: WinCondition = WinCondition.dial_threshold
+    player_metric: MetricDef | None = None
+    opponent_metric: MetricDef | None = None
     beats: list[BeatDef] = Field(default_factory=list)
     secondary_stats: list[SecondaryStatDef] = Field(default_factory=list)
     escalates_to: str | None = None
@@ -385,6 +407,15 @@ class ConfrontationDef(BaseModel):
     # ``None`` means the pack has not migrated this confrontation to
     # opposed_check — only valid when ``resolution_mode`` is something
     # other than ``opposed_check``.
+    #
+    # RESERVED KEYS: ``hp`` and ``armor_class`` are NOT ability scores. When
+    # present they seed the opponent's runtime CreatureCore (HP pool +
+    # ascending SWN AC) for hp_depletion combats — see
+    # ``opponent_hp`` / ``opponent_armor_class`` and the seating seam in
+    # ``encounter_lifecycle._publish_combat_edge_to_npcs``. They are popped
+    # out of the ability-score map by ``opponent_ability_scores()`` so they
+    # never leak into modifier resolution. All other keys are raw ability
+    # scores (3..20 D&D-style; modifier = floor((score-10)/2)).
     opponent_default_stats: dict[str, int] | None = None
     morale: MoraleDef | None = None
     intent_verbs: list[str] | None = None
@@ -407,6 +438,44 @@ class ConfrontationDef(BaseModel):
     def _validate(self) -> ConfrontationDef:
         if not self.confrontation_type:
             raise ValueError("confrontation type must not be empty")
+        if self.win_condition == WinCondition.dial_threshold and (
+            self.player_metric is None or self.opponent_metric is None
+        ):
+            raise ValueError(
+                f"confrontation '{self.confrontation_type}' uses win_condition "
+                "'dial_threshold' but is missing player_metric/opponent_metric"
+            )
+        # Task 9: a COMBAT hp_depletion confrontation resolves vs the
+        # opponent's content-authored AC and depletes its content HP — both
+        # reserved keys MUST be present at LOAD time so a content author
+        # (e.g. Jade authoring space_opera) discovers a missing stat block
+        # before a player ever triggers the encounter, not mid-seating.
+        # Gated on category=="combat": non-combat hp_depletion confrontations
+        # (e.g. a social attrition contest) do not seed an opponent
+        # CreatureCore and carry no reserved keys — leave them valid.
+        if self.category == "combat" and self.win_condition == WinCondition.hp_depletion:
+            ods = self.opponent_default_stats or {}
+            hp = ods.get("hp")
+            ac = ods.get("armor_class")
+            if hp is None or ac is None:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' uses "
+                    "win_condition 'hp_depletion' but its opponent_default_stats "
+                    f"is missing reserved combat keys (hp={hp!r}, armor_class={ac!r}); "
+                    "author both `hp` and `armor_class` under opponent_default_stats"
+                )
+            if int(hp) < 1:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' has "
+                    f"opponent_default_stats.hp={hp!r}; HP must be >= 1 "
+                    "(a 0/negative pool would be silently clamped — fail loud instead)"
+                )
+            if int(ac) < 1:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' has "
+                    f"opponent_default_stats.armor_class={ac!r}; AC must be >= 1 "
+                    "(a 0/negative AC would auto-hit — fail loud instead)"
+                )
         valid_categories = {"combat", "social", "pre_combat", "movement"}
         if self.category not in valid_categories:
             raise ValueError(
@@ -439,6 +508,38 @@ class ConfrontationDef(BaseModel):
                 verbs.update(tokenize(v))
         object.__setattr__(self, "intent_verb_set", frozenset(verbs))
         return self
+
+    def opponent_ability_scores(self) -> dict[str, int] | None:
+        """``opponent_default_stats`` with reserved combat keys removed.
+
+        ``hp`` and ``armor_class`` are not ability scores; they seed the
+        opponent CreatureCore. This returns only the ability-score entries
+        so opposed_check modifier resolution never sees the reserved keys.
+        Returns ``None`` when the underlying map is unset.
+        """
+        if self.opponent_default_stats is None:
+            return None
+        return {
+            k: v
+            for k, v in self.opponent_default_stats.items()
+            if k not in OPPONENT_RESERVED_STAT_KEYS
+        }
+
+    @property
+    def opponent_hp(self) -> int | None:
+        """Content-authored opponent HP pool, or ``None`` if not authored."""
+        if not self.opponent_default_stats:
+            return None
+        raw = self.opponent_default_stats.get("hp")
+        return int(raw) if raw is not None else None
+
+    @property
+    def opponent_armor_class(self) -> int | None:
+        """Content-authored opponent ascending AC, or ``None`` if not set."""
+        if not self.opponent_default_stats:
+            return None
+        raw = self.opponent_default_stats.get("armor_class")
+        return int(raw) if raw is not None else None
 
 
 class CrossingDirection(StrEnum):
@@ -630,6 +731,10 @@ class SwnConfig(BaseModel):
             "formidable": 14,
         }
     )
+    # SWN attribute name -> this pack's flavor stat (ability_score_names entry).
+    # Required (non-empty, all six keys) when ruleset == "swn"; validated on RulesConfig
+    # where ability_score_names is reachable. No default map — fail loud if unauthored.
+    attribute_map: dict[str, str] = Field(default_factory=dict)
 
 
 class RulesConfig(BaseModel):
@@ -694,10 +799,29 @@ class RulesConfig(BaseModel):
     swn: SwnConfig | None = None
 
     @model_validator(mode="after")
-    def _populate_swn_defaults(self) -> RulesConfig:
-        """Auto-populate swn block with SRD defaults when ruleset == "swn"."""
-        if self.ruleset == "swn" and self.swn is None:
+    def _validate_swn(self) -> RulesConfig:
+        """Enforce a complete attribute_map when ruleset == 'swn'; raises ValueError if the swn block omits one."""
+        if self.ruleset != "swn":
+            return self
+        if self.swn is None:
             object.__setattr__(self, "swn", SwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        amap = self.swn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'swn' requires rules.swn.attribute_map (SWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"swn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for swn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"swn attribute_map[{swn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
         return self
 
     @property

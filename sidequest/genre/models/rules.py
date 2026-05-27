@@ -373,6 +373,21 @@ class InteractionTable(BaseModel):
         return self
 
 
+class GeometryModifiers(BaseModel):
+    """Maneuver-cell geometry -> ship-gunnery to-hit modifier (dogfight SWN layer).
+
+    Authored & tunable in content. ``aspect`` keys match the cell view's
+    ``target_aspect`` value (tail_on/quartering/crossing/head_on); ``range``
+    keys match ``target_range`` (gun/close/medium/far). The matched aspect and
+    range modifiers are summed and will feed the ship-gunnery to-hit modifier.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    aspect: dict[str, int] = Field(default_factory=dict)
+    range: dict[str, int] = Field(default_factory=dict)
+
+
 class ConfrontationDef(BaseModel):
     """A confrontation type declared by a genre pack in rules.yaml."""
 
@@ -409,6 +424,8 @@ class ConfrontationDef(BaseModel):
     # never leak into modifier resolution. All other keys are raw ability
     # scores (3..20 D&D-style; modifier = floor((score-10)/2)).
     opponent_default_stats: dict[str, int] | None = None
+    geometry_modifiers: GeometryModifiers | None = None
+    player_default_stats: dict[str, int] = Field(default_factory=dict)
     morale: MoraleDef | None = None
     intent_verbs: list[str] | None = None
     on_intent_mismatch: Literal["warn", "soft_suggest", "reprompt"] = "warn"
@@ -554,6 +571,22 @@ class ConfrontationDef(BaseModel):
         if not self.opponent_default_stats:
             return None
         raw = self.opponent_default_stats.get("dexterity")
+        return int(raw) if raw is not None else None
+
+    @property
+    def player_hp(self) -> int | None:
+        """Content-authored player-frame HP pool, or ``None`` if not authored."""
+        if not self.player_default_stats:
+            return None
+        raw = self.player_default_stats.get("hp")
+        return int(raw) if raw is not None else None
+
+    @property
+    def player_armor_class(self) -> int | None:
+        """Content-authored player-frame ascending AC, or ``None`` if not set."""
+        if not self.player_default_stats:
+            return None
+        raw = self.player_default_stats.get("armor_class")
         return int(raw) if raw is not None else None
 
 

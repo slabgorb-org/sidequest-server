@@ -160,6 +160,7 @@ from sidequest.genre.models.rules import (
     SaveCategory,
     SavingThrowsTable,
     SecondaryStatDef,
+    WinCondition,
 )
 from sidequest.genre.models.scenario import (
     Act,
@@ -363,6 +364,7 @@ __all__ = [
     "SaveCategory",
     "SavingThrowsTable",
     "SecondaryStatDef",
+    "WinCondition",
     # scenario
     "Act",
     "AssignmentMatrix",

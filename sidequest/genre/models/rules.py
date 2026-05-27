@@ -280,6 +280,19 @@ class SavingThrowsTable(BaseModel):
         return getattr(self, category.value)
 
 
+class WinCondition(StrEnum):  # noqa: UP042 — matches project convention
+    """How a confrontation decides victory.
+
+    - ``dial_threshold``: a side's metric dial reaching ``threshold`` ends it (default; every
+      existing pack).
+    - ``hp_depletion``: a side's primary combatant reaching 0 HP ends it (SWN combat). Metrics
+      are dropped; resolution reads CreatureCore HP.
+    """
+
+    dial_threshold = "dial_threshold"
+    hp_depletion = "hp_depletion"
+
+
 class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (see protocol/enums.py)
     """How a confrontation resolves each turn.
 
@@ -369,8 +382,9 @@ class ConfrontationDef(BaseModel):
     label: str
     category: str
     resolution_mode: ResolutionMode = ResolutionMode.beat_selection
-    player_metric: MetricDef
-    opponent_metric: MetricDef
+    win_condition: WinCondition = WinCondition.dial_threshold
+    player_metric: MetricDef | None = None
+    opponent_metric: MetricDef | None = None
     beats: list[BeatDef] = Field(default_factory=list)
     secondary_stats: list[SecondaryStatDef] = Field(default_factory=list)
     escalates_to: str | None = None
@@ -405,6 +419,13 @@ class ConfrontationDef(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> ConfrontationDef:
+        if self.win_condition == WinCondition.dial_threshold and (
+            self.player_metric is None or self.opponent_metric is None
+        ):
+            raise ValueError(
+                f"confrontation '{self.confrontation_type}' uses win_condition "
+                "'dial_threshold' but is missing player_metric/opponent_metric"
+            )
         if not self.confrontation_type:
             raise ValueError("confrontation type must not be empty")
         valid_categories = {"combat", "social", "pre_combat", "movement"}

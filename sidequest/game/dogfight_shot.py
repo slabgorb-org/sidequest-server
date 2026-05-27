@@ -98,6 +98,23 @@ class GunSolution:
     geometry_modifier: int
 
 
+@dataclass(frozen=True)
+class PendingDogfightShot:
+    """Stashed on _SessionData when a dogfight turn yields a PLAYER gun solution.
+
+    The NPC shots are server-rolled at reveal and HELD here; the player's shot
+    awaits a client Rapier throw. On the player's DICE_THROW, all shots resolve
+    together against pre-shot frame HP. Read-only once stashed (parity with
+    ShotResult / DogfightShotResolution)."""
+
+    gun_solutions: list[GunSolution]  # ALL solutions this cell (player + npc)
+    held_npc_d20s: dict[str, int]  # {shooter_role: server-rolled d20}
+    player_shooter_role: str
+    player_modifier: int  # player ship_attack_params.modifier (for the DiceRequest)
+    player_target_number: int  # target AC (DiceRequest difficulty)
+    player_actor_name: str
+
+
 def resolve_geometry_modifier(per_actor_state: dict, geometry_modifiers: GeometryModifiers) -> int:
     """Sum the authored aspect + range modifiers for a shooter's current geometry.
 

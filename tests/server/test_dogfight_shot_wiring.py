@@ -144,24 +144,29 @@ def test_shot_resolution_wired_into_sealed_letter_dispatch(
     snap_with_pilot: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
 ) -> None:
-    """Keystone wiring test for Task 13.
+    """Keystone wiring test for Task 13/14.
 
     A mutual-gunline cell (loop vs kill_rotation) yields GunSolutions for both
-    pilots. We monkeypatch:
-      - ``_roll_d20_server_side`` → player always hits (20), NPC always misses (1)
-      - ``sidequest.game.dogfight_shot._roll_damage_dice`` → deterministic 4 dmg
+    pilots. Task 14 changes the player-shot path: the player's shot is DEFERRED
+    to a client Rapier throw; the NPC shot is server-rolled and held.
 
-    After the turn:
-      (a) Opponent's frame_hp == 8 - 4 == 4 (player's attack landed, NPC did not)
-          — note: dogfight cdef has armor=5, so applied = max(0, 4 - 5) = 0
-          Let's use damage=6 to ensure it penetrates (6 - 5 = 1 applied). But
-          we need to check what armor is authored. Let's check cdef at runtime
-          and just assert frame_hp < 8 (any damage landed).
-          Actually: armor=5, so we need raw ≥ 6 to penetrate. Monkeypatch to 6
-          so applied = 1. frame_hp drops from 8 to 7.
-      (b) ``dogfight.shot_attempted`` span fired (at least once).
-          ``dogfight.shot_damage`` span fired (at least once — the hit landed).
+    After the narration turn (pre-DICE_THROW):
+      (a) Frame HP must NOT have changed (deferred to DICE_THROW).
+      (b) ``applied_outcome.pending_dogfight_shot`` must be set with
+          player_shooter_role='red'.
+      (c) No ``dogfight.shot_attempted`` spans fired yet (deferred).
+
+    After simulating the resolve call (directly calling resolve_dogfight_shots
+    with player d20=20 auto-hit and held NPC d20s):
+      (d) Opponent frame HP drops.
+      (e) ``dogfight.shot_attempted`` and ``dogfight.shot_damage`` spans fire.
     """
+    from sidequest.game.dogfight_shot import (
+        PendingDogfightShot,
+        frame_hp_resolver,
+        resolve_dogfight_shots,
+    )
+
     snap, pack = snap_with_pilot
 
     # Turn 1: instantiate dogfight
@@ -186,20 +191,20 @@ def test_shot_resolution_wired_into_sealed_letter_dispatch(
 
     blue_hp_before = int(blue.per_actor_state[FRAME_HP_KEY])
 
-    # Turn 2: mutual-gunline maneuver pair — both pilots score gun solutions
-    # Player d20=20 (auto-hit), NPC d20=1 (auto-miss).
-    # Damage=6 so applied = 6 - armor(5) = 1 on the opponent.
+    # Turn 2: mutual-gunline maneuver pair — both pilots score gun solutions.
+    # Task 14: player shot deferred; NPC d20 server-rolled and held.
+    # Only the NPC calls _roll_d20_server_side now (return_value=1 = auto-miss).
     with (
         patch(
             "sidequest.server.narration_apply._roll_d20_server_side",
-            side_effect=_make_d20_patch(player_d20=20, npc_d20=1),
+            return_value=1,  # NPC d20=1 (auto-miss), held until DICE_THROW
         ),
         patch(
             "sidequest.game.dogfight_shot._roll_damage_dice",
             return_value=6,
         ),
     ):
-        _apply_narration_result_to_snapshot(
+        applied = _apply_narration_result_to_snapshot(
             snap,
             NarrationTurnResult(
                 narration="You pull the loop; the bandit counters with the kill-rotation.",
@@ -213,47 +218,64 @@ def test_shot_resolution_wired_into_sealed_letter_dispatch(
             room=room_for(snap),
         )
 
-    # (a) Opponent frame HP dropped — player's shot landed
+    # (a) Frame HP must NOT have changed (deferred to DICE_THROW).
+    blue_hp_mid = int(blue.per_actor_state[FRAME_HP_KEY])
+    assert blue_hp_mid == blue_hp_before, (
+        f"opponent frame_hp must NOT change before DICE_THROW (Task 14 deferred); got {blue_hp_mid}"
+    )
+
+    # (b) Pending stash must be set with player_shooter_role='red'.
+    assert applied.pending_dogfight_shot is not None, (
+        "applied_outcome.pending_dogfight_shot must be set (loop/kill_rotation = mutual gunline)"
+    )
+    assert isinstance(applied.pending_dogfight_shot, PendingDogfightShot)
+    assert applied.pending_dogfight_shot.player_shooter_role == "red", (
+        f"player_shooter_role must be 'red'; got {applied.pending_dogfight_shot.player_shooter_role!r}"
+    )
+
+    # (c) No shot spans yet (deferred).
+    span_names_pre = {s.name for s in otel_capture.get_finished_spans()}
+    assert "dogfight.shot_attempted" not in span_names_pre, (
+        f"dogfight.shot_attempted must NOT fire before DICE_THROW; got: {sorted(span_names_pre)}"
+    )
+
+    # (d+e) Simulate the DICE_THROW resolution directly: player d20=20 (auto-hit).
+    otel_capture.clear()
+    pending = applied.pending_dogfight_shot
+    with patch("sidequest.game.dogfight_shot._roll_damage_dice", return_value=6):
+        resolve_dogfight_shots(
+            encounter=enc,
+            gun_solutions=pending.gun_solutions,
+            d20_by_shooter={pending.player_shooter_role: 20, **pending.held_npc_d20s},
+            edge_resolver=frame_hp_resolver(enc),
+        )
+
+    # (d) Opponent frame HP dropped (player hit, NPC missed).
     blue_hp_after = int(blue.per_actor_state[FRAME_HP_KEY])
     assert blue_hp_after < blue_hp_before, (
-        f"opponent frame_hp should have dropped from {blue_hp_before} after a hit "
-        f"(d20=20 auto-hit, damage=6, armor=5 → applied=1); got {blue_hp_after}"
+        f"opponent frame_hp should drop after resolve (d20=20 auto-hit, "
+        f"damage=6, armor=5 → applied=1); got {blue_hp_after}"
     )
-
-    # Sanity: player frame HP must be 8 (NPC d20=1 auto-miss)
+    # Sanity: player frame HP unchanged (NPC d20=1 auto-miss).
     red_hp_after = int(red.per_actor_state[FRAME_HP_KEY])
     assert red_hp_after == 8, (
-        f"player frame_hp should remain 8 (NPC d20=1 auto-miss); got {red_hp_after}"
+        f"player frame_hp must remain 8 (NPC d20=1 auto-miss); got {red_hp_after}"
     )
 
-    # (b) OTEL spans fired
+    # (e) OTEL spans fired by resolve_dogfight_shots.
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert "dogfight.shot_attempted" in span_names, (
-        f"dogfight.shot_attempted span must fire when gun solutions exist; "
-        f"got spans: {sorted(set(span_names))}"
+        f"dogfight.shot_attempted span must fire after resolve; got: {sorted(set(span_names))}"
     )
-    # dogfight.shot_damage fires only on hits
     assert "dogfight.shot_damage" in span_names, (
-        f"dogfight.shot_damage span must fire when a shot lands (d20=20 auto-hit); "
-        f"got spans: {sorted(set(span_names))}"
+        f"dogfight.shot_damage span must fire after resolve (hit landed); "
+        f"got: {sorted(set(span_names))}"
     )
 
-    # Verify OTEL attributes on the shot_attempted span
-    shot_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "dogfight.shot_attempted"
-    ]
-    assert len(shot_spans) >= 1
-    # Both pilots have gun solutions on mutual-gunline — expect 2 shot_attempted spans
-    assert len(shot_spans) == 2, (
-        f"mutual gunline: expected 2 dogfight.shot_attempted spans (one per shooter), "
-        f"got {len(shot_spans)}"
-    )
-
-    # The damage span must reference the NPC (opponent) as target
+    # The damage span must reference the NPC (opponent) as target.
     damage_spans = [
         s for s in otel_capture.get_finished_spans() if s.name == "dogfight.shot_damage"
     ]
-    assert len(damage_spans) >= 1
     damage_targets = [(s.attributes or {}).get("target") for s in damage_spans]
     assert OPPONENT in damage_targets, (
         f"dogfight.shot_damage must name {OPPONENT!r} as target; got {damage_targets}"
@@ -270,7 +292,18 @@ def test_shot_resolution_sets_pending_resolution_signal_on_depletion(
 ) -> None:
     """When a shot depletes the opponent's frame HP, ``snapshot.pending_resolution_signal``
     is set — the narrator reads it next turn and closes the encounter.
+
+    Task 14: the player-shot path is deferred. This test drives the depletion
+    path by (a) running the narration turn (which stashes the pending shot) and
+    then (b) directly calling ``resolve_dogfight_shots`` with a kill-shot d20=20
+    to trigger depletion, mirroring the DICE_THROW consumption step.
     """
+    from sidequest.game.dogfight_shot import (
+        frame_hp_resolver,
+        resolve_dogfight_shots,
+    )
+    from sidequest.server.narration_apply import _build_resolution_signal
+
     snap, pack = snap_with_pilot
     snap.characters = [_make_pilot_character(PLAYER)]
 
@@ -289,21 +322,15 @@ def test_shot_resolution_sets_pending_resolution_signal_on_depletion(
     # Confirm no pending signal before the turn
     assert snap.pending_resolution_signal is None
 
-    # d20=20 (auto-hit), damage=20 → 20 - armor(5) = 15 applied → 8 - 15 = 0 (depleted)
+    # NPC d20=1 (auto-miss, held) so only the player's shot determines outcome.
     with (
-        patch(
-            "sidequest.server.narration_apply._roll_d20_server_side",
-            return_value=20,
-        ),
-        patch(
-            "sidequest.game.dogfight_shot._roll_damage_dice",
-            return_value=20,
-        ),
+        patch("sidequest.server.narration_apply._roll_d20_server_side", return_value=1),
+        patch("sidequest.game.dogfight_shot._roll_damage_dice", return_value=20),
     ):
-        _apply_narration_result_to_snapshot(
+        applied = _apply_narration_result_to_snapshot(
             snap,
             NarrationTurnResult(
-                narration="Kill shot.",
+                narration="Kill shot incoming.",
                 beat_selections=[
                     BeatSelection(actor=PLAYER, beat_id="loop"),
                     BeatSelection(actor=OPPONENT, beat_id="kill_rotation"),
@@ -314,12 +341,35 @@ def test_shot_resolution_sets_pending_resolution_signal_on_depletion(
             room=room_for(snap),
         )
 
+    # Task 14: player shot deferred — no depletion yet.
+    assert applied.pending_dogfight_shot is not None, (
+        "pending_dogfight_shot must be stashed for loop/kill_rotation mutual gunline"
+    )
+    assert snap.pending_resolution_signal is None, (
+        "pending_resolution_signal must NOT be set before DICE_THROW fires the shots"
+    )
+
+    # Simulate the DICE_THROW: player d20=20 → auto-hit, damage=20 → depleted.
+    pending = applied.pending_dogfight_shot
+    with patch("sidequest.game.dogfight_shot._roll_damage_dice", return_value=20):
+        shot_res = resolve_dogfight_shots(
+            encounter=enc,
+            gun_solutions=pending.gun_solutions,
+            d20_by_shooter={pending.player_shooter_role: 20, **pending.held_npc_d20s},
+            edge_resolver=frame_hp_resolver(enc),
+        )
+
+    # Mirror the DICE_THROW handler: set pending_resolution_signal if depletion.
+    if shot_res.depletion is not None:
+        snap.pending_resolution_signal = _build_resolution_signal(enc)
+
     blue = next(a for a in enc.actors if a.role == "blue")
     assert blue.per_actor_state[FRAME_HP_KEY] == 0, (
-        f"opponent must be at 0 HP after kill-shot; got {blue.per_actor_state[FRAME_HP_KEY]}"
+        f"opponent must be at 0 HP after kill-shot resolve; "
+        f"got {blue.per_actor_state[FRAME_HP_KEY]}"
     )
     assert snap.pending_resolution_signal is not None, (
-        "pending_resolution_signal must be set when frame HP is depleted"
+        "pending_resolution_signal must be set when frame HP is depleted via DICE_THROW"
     )
 
 

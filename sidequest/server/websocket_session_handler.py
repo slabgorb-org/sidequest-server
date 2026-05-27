@@ -905,6 +905,61 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         sd.pending_opposed_player_d20 = None
                     if hasattr(sd, "pending_opposed_player_beat_id"):
                         sd.pending_opposed_player_beat_id = None
+                    # Task 14 — dogfight player-throw stash. When the sealed-letter
+                    # branch yielded a PendingDogfightShot (player has a gun solution),
+                    # stash it on sd AND broadcast a DiceRequest so the client throws
+                    # the real Rapier d20. The stash survives until DICE_THROW reads
+                    # and clears it — do NOT clear it here on the narration-turn path.
+                    # (Contrast with opposed-check which is SET in dice_throw and READ
+                    # here; dogfight is the mirror: SET here, READ in dice_throw.)
+                    if applied_outcome.pending_dogfight_shot is not None:
+                        _pending_df = applied_outcome.pending_dogfight_shot
+                        sd.pending_dogfight_shot = _pending_df
+                        # Build and broadcast the DiceRequest for the player's shot.
+                        from uuid import uuid4  # noqa: PLC0415
+
+                        from sidequest.protocol.dice import (  # noqa: PLC0415
+                            DiceRequestPayload,
+                            DieSides,
+                            DieSpec,
+                        )
+                        from sidequest.protocol.messages import (  # noqa: PLC0415
+                            DiceRequestMessage,
+                        )
+                        from sidequest.protocol.types import Stat  # noqa: PLC0415
+
+                        _df_request_id = str(uuid4())
+                        _df_request = DiceRequestPayload(
+                            request_id=_df_request_id,
+                            rolling_player_id=sd.player_id,
+                            character_name=_pending_df.player_actor_name,
+                            dice=[DieSpec(sides=DieSides.D20, count=1)],
+                            modifier=_pending_df.player_modifier,
+                            # SWN dogfight to-hit = Pilot skill + attack bonus
+                            # (NOT a DEX ability check). The overlay stat badge
+                            # is player-facing; label it what actually rolls so
+                            # mechanics-first players read the right thing.
+                            stat=Stat("PILOT"),
+                            difficulty=_pending_df.player_target_number,
+                            context="dogfight_player_gun_solution",
+                        )
+                        if sd._room is not None:
+                            sd._room.broadcast(
+                                DiceRequestMessage(payload=_df_request, player_id="server"),
+                                exclude_socket_id=None,
+                            )
+                        _watcher_publish(
+                            "state_transition",
+                            {
+                                "field": "dogfight",
+                                "op": "player_dice_request_emitted",
+                                "player_shooter_role": _pending_df.player_shooter_role,
+                                "player_modifier": _pending_df.player_modifier,
+                                "player_target_number": _pending_df.player_target_number,
+                                "request_id": _df_request_id,
+                            },
+                            component="encounter",
+                        )
                     # Story 45-5 / ADR-051: the opening narration is the round-1
                     # scene-set and bumps no counter; the first PLAYER_ACTION
                     # turn is the first real exchange.
@@ -3041,9 +3096,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 # method should raise loudly via the except below.
                 key_parts = str(r2_key).split("/")
                 asset_type = key_parts[3] if len(key_parts) >= 5 else str(params.get("tier") or "")
-                entity_ref = str(
-                    params.get("subject_name") or params.get("subject") or "unknown"
-                )
+                entity_ref = str(params.get("subject_name") or params.get("subject") or "unknown")
                 try:
                     sd.repository.append_asset_ledger(
                         r2_key=str(r2_key),

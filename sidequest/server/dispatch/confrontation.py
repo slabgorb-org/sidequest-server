@@ -11,8 +11,10 @@ returns a CONFRONTATION_OUTCOME payload for the WebSocket dispatcher.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
+from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.character import ClassDef
@@ -101,6 +103,7 @@ def build_confrontation_payload(
     genre_slug: str,
     recipient_pc: RecipientPc | None = None,
     recipient_actor_name: str | None = None,
+    core_resolver: Callable[[str], CreatureCore | None] | None = None,
 ) -> dict[str, Any]:
     """Assemble the CONFRONTATION payload the UI overlay consumes.
 
@@ -178,7 +181,7 @@ def build_confrontation_payload(
     else:
         beats_for_payload = cdef.beats
 
-    return {
+    payload: dict[str, Any] = {
         "type": encounter.encounter_type,
         "label": cdef.label,
         "category": cdef.category,
@@ -195,6 +198,33 @@ def build_confrontation_payload(
         "mood": mood,
         "active": not encounter.resolved,
     }
+
+    # space_opera → SWN binding (Task 6): surface the resolution model and,
+    # under hp_depletion, the primary combatants' HP so the player-facing
+    # overlay can render the math (Sebastien/Jade legibility goal). The
+    # ``win_condition`` key is ADDITIVE (dial packs emit "dial_threshold");
+    # the hp keys are only added under hp_depletion when a name→CreatureCore
+    # resolver is threaded in — legacy/test call paths that omit it keep the
+    # pre-existing payload shape (no hp keys).
+    payload["win_condition"] = encounter.win_condition
+    if encounter.win_condition == "hp_depletion" and core_resolver is not None:
+
+        def _primary_hp(side: str) -> dict[str, int] | None:
+            for a in encounter.actors:
+                if a.side == side:
+                    core = core_resolver(a.name)
+                    if core is not None:
+                        return {"current": core.hp.current, "max": core.hp.max}
+            return None
+
+        player_hp = _primary_hp("player")
+        opponent_hp = _primary_hp("opponent")
+        if player_hp is not None:
+            payload["player_hp"] = player_hp
+        if opponent_hp is not None:
+            payload["opponent_hp"] = opponent_hp
+
+    return payload
 
 
 def resolve_magic_confrontation(

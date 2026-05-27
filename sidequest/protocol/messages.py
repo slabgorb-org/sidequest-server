@@ -778,6 +778,17 @@ class ConfrontationPayload(ProtocolBase):
     genre_slug: str
     mood: str | None = None
     active: bool = True
+    # space_opera → SWN binding (Task 6): surface the resolution model and,
+    # under hp_depletion, the primary combatants' HP so the player-facing
+    # overlay can render the math (Sebastien/Jade legibility goal). Dial
+    # packs emit ``win_condition="dial_threshold"`` and omit the hp fields,
+    # which keeps the pre-existing payload shape additive. ``player_hp`` /
+    # ``opponent_hp`` are ``{"current": int, "max": int}`` when present.
+    # NOTE: the sidequest-ui ``ConfrontationData`` mirror needs these fields
+    # added (named follow-up — UI HP track is out of scope for this task).
+    win_condition: str | None = None
+    player_hp: dict[str, int] | None = None
+    opponent_hp: dict[str, int] | None = None
     # Pingpong 2026-04-26 S2-BUG: required so ``_emit_event`` can fan out
     # CONFRONTATION frames to peer sockets (its recipient-rebuild path
     # injects the EventLog seq alongside the filtered payload). Mirrors

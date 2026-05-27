@@ -635,6 +635,7 @@ def dispatch_dice_throw(
                 cdef=cdef,
                 genre_slug=genre_slug,
                 recipient_pc=None,
+                core_resolver=snapshot.find_creature_core,
             )
             with encounter_momentum_broadcast_span(
                 encounter_type=encounter.encounter_type,
@@ -680,6 +681,7 @@ def dispatch_dice_throw(
                             genre_slug=genre_slug,
                             recipient_pc=recipient_pc,
                             recipient_actor_name=recipient_actor,
+                            core_resolver=snapshot.find_creature_core,
                         )
                         per_recipient_emit(
                             pid,

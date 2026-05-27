@@ -126,9 +126,7 @@ def test_retired_begin_confrontation_module_carries_deprecation_marker() -> None
     FAILS TODAY: the _retired/ directory does not exist.
     """
     try:
-        retired = importlib.import_module(
-            "sidequest.agents.tools._retired.begin_confrontation"
-        )
+        retired = importlib.import_module("sidequest.agents.tools._retired.begin_confrontation")
     except ImportError as exc:
         pytest.fail(
             "expected relocated module at "
@@ -138,8 +136,7 @@ def test_retired_begin_confrontation_module_carries_deprecation_marker() -> None
 
     doc = (retired.__doc__ or "").lower()
     assert "retired" in doc or "deprecated" in doc, (
-        "relocated module docstring must acknowledge retirement; got: "
-        f"{retired.__doc__!r}"
+        f"relocated module docstring must acknowledge retirement; got: {retired.__doc__!r}"
     )
     assert "subsystem" in doc or "intent_router" in doc or "dispatch" in doc, (
         "relocated module docstring must point at the live mechanism "

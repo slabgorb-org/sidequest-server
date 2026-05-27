@@ -573,9 +573,8 @@ def session_handler_factory(tmp_path):
     from sidequest.agents.orchestrator import Orchestrator
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
-    from sidequest.game.persistence import SqliteStore
+    from sidequest.game.repository import SaveRepository
     from sidequest.game.session import GameSnapshot
-    from sidequest.game.sqlite_repository import SqliteSaveRepository
     from sidequest.genre.loader import GenreLoader
     from sidequest.server.session_handler import (
         WebSocketSessionHandler,
@@ -610,7 +609,11 @@ def session_handler_factory(tmp_path):
             backstory="A wandering fighter",
         )
         snap.characters.append(char)
-        store = SqliteStore.open_in_memory()
+        # ADR-115 F1: the factory's repository is a MagicMock(spec=SaveRepository).
+        # Consumers of this factory either mock save/append_narrative (MP path
+        # below) or never read persisted state back; the one test that does
+        # round-trip narrative builds a real PgSaveRepository itself.
+        repository = MagicMock(spec=SaveRepository)
         orch = MagicMock(spec=Orchestrator)
 
         # Determine player identity — defaults to legacy single-player "Rux".
@@ -625,7 +628,7 @@ def session_handler_factory(tmp_path):
             player_name=active_name,
             player_id=active_pid,
             snapshot=snap,
-            repository=SqliteSaveRepository(store),
+            repository=repository,
             dungeon_repository=MagicMock(),
             telemetry_sink=MagicMock(),
             genre_pack=pack,
@@ -652,8 +655,8 @@ def session_handler_factory(tmp_path):
             if existing_room is not None:
                 # Share the existing room — reuse its snapshot + repository so
                 # the TurnManager barrier state is shared across handlers.
-                # Post-D2 SessionRoom.store is a SaveRepository, not a raw
-                # SqliteStore — pass it straight through as repository=.
+                # SessionRoom.store is a SaveRepository (a MagicMock from
+                # room_for) — pass it straight through as repository=.
                 room = existing_room
                 snap = room.snapshot
                 shared_repository = room.store
@@ -991,11 +994,16 @@ def character_named_sam():
 
 
 @pytest.fixture
-def store_bound_to_hub(synthetic_two_dial_pack):
-    """Open an in-memory SqliteStore, bind it to the watcher hub, yield
-    (store, snapshot, pack).  Unbinds on teardown so other tests see no
-    leftover binding.
+def store_bound_to_hub(synthetic_two_dial_pack, migrated_db, monkeypatch):
+    """Bind a Postgres TelemetrySink to the watcher hub, yield
+    (event_store, snapshot, pack). ADR-115 F1: encounter rows persist to PG
+    via the bound sink's ``append_encounter_event``; the yielded
+    ``PgSaveRepository`` reads the timeline back. Unbinds + closes the pool on
+    teardown so other tests see no leftover binding.
     """
+    import psycopg
+
+    from sidequest.game import db_pool
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.game.encounter import (
@@ -1003,13 +1011,31 @@ def store_bound_to_hub(synthetic_two_dial_pack):
         EncounterMetric,
         StructuredEncounter,
     )
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
+    from sidequest.server.session_state import _build_pg_repos_for_slug
     from sidequest.telemetry.watcher_hub import bind_event_store
 
-    store = SqliteStore.open_in_memory()
-    bind_event_store(store)
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+
+    repo, _dungeon, sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug="store-bound-to-hub",
+        mode="solo",
+        genre_slug="test_pack",
+        world_slug="test_world",
+    )
+    bind_event_store(sink)
 
     snap = GameSnapshot(
         genre_slug="test_pack",
@@ -1041,9 +1067,10 @@ def store_bound_to_hub(synthetic_two_dial_pack):
     )
 
     try:
-        yield store, snap, synthetic_two_dial_pack
+        yield repo, snap, synthetic_two_dial_pack
     finally:
         bind_event_store(None)
+        db_pool.close_pool()
 
 
 @pytest.fixture

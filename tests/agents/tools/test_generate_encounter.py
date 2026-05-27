@@ -25,17 +25,18 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import generate_encounter as _generate_encounter_module  # noqa: F401
-from sidequest.game.persistence import SqliteStore
 
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------
 
 
-def _store() -> SqliteStore:
-    s = SqliteStore.open_in_memory()
-    s.initialize()
-    return s
+def _store():
+    from unittest.mock import MagicMock
+
+    from sidequest.game.repository import SaveRepository
+
+    return MagicMock(spec=SaveRepository)
 
 
 def _make_ctx() -> ToolContext:

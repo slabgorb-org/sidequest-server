@@ -27,7 +27,6 @@ from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import (
     update_resource_pool as _update_resource_pool_module,  # noqa: F401
 )
-from sidequest.game.persistence import SqliteStore
 from sidequest.game.resource_pool import ResourcePool, ResourceThreshold
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
@@ -65,15 +64,13 @@ def _build_snapshot(
     )
 
 
-def _store_with(snapshot: GameSnapshot) -> SqliteStore:
-    store = SqliteStore.open_in_memory()
-    store.initialize()
-    store.init_session(genre_slug=snapshot.genre_slug, world_slug=snapshot.world_slug)
-    store.save(snapshot)
-    return store
+def _store_with(snapshot: GameSnapshot):
+    from tests.agents.tools.conftest import pg_store_with
+
+    return pg_store_with(snapshot)
 
 
-def _make_ctx(store: SqliteStore, *, session_id: str = "s", turn: int = 3) -> ToolContext:
+def _make_ctx(store, *, session_id: str = "s", turn: int = 3) -> ToolContext:
     from unittest.mock import MagicMock
 
     return ToolContext(
@@ -193,8 +190,9 @@ async def test_empty_pool_name_rejected_by_args_model() -> None:
 
 
 async def test_no_active_session_returns_fatal_error() -> None:
-    store = SqliteStore.open_in_memory()
-    store.initialize()
+    from tests.agents.tools.conftest import pg_empty_store
+
+    store = pg_empty_store()
     # No init_session/save — load() returns None.
     ctx = _make_ctx(store)
 

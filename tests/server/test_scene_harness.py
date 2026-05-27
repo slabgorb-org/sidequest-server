@@ -219,7 +219,7 @@ def test_scene_post_persisted_snapshot_carries_fixture_genre_and_world(
     slug = r.json()["slug"]
 
     saved = _load_pg_snapshot(slug)
-    assert saved is not None, "save file exists but SqliteStore.load returned None"
+    assert saved is not None, "snapshot present but PG load returned None"
 
     # ``SavedSession.snapshot`` is the hydrated GameSnapshot.
     snapshot = saved.snapshot
@@ -457,7 +457,7 @@ def test_dev_scene_route_persists_four_pc_party_snapshot(
     Production-path wiring (CLAUDE.md "Every Test Suite Needs a Wiring
     Test"): the hydrator change is reachable from real code paths —
     route registered by ``create_app()``, route calls ``hydrate_fixture``,
-    result persisted via ``SqliteStore``, ``slug-connect`` can subsequently
+    result persisted via Postgres, ``slug-connect`` can subsequently
     find N characters in the save.
 
     A unit-only suite would not catch a hydrator that returns the right
@@ -494,7 +494,7 @@ def test_dev_scene_route_persists_four_pc_party_snapshot(
 
     saved = _load_pg_snapshot(slug)
     assert saved is not None, (
-        "save file exists but SqliteStore.load returned None — "
+        "snapshot present but PG load returned None — "
         "the route either didn't persist or wrote to the wrong path"
     )
 
@@ -605,7 +605,7 @@ def test_dev_scene_route_persists_scenario_state_end_to_end(
     tmp_path: Path,
 ) -> None:
     """AC#16: POST /dev/scene/{name} with a mystery fixture → snapshot
-    persists with scenario_state populated → SqliteStore round-trip
+    persists with scenario_state populated → Postgres round-trip
     preserves clue_graph, discovered_clues, npc_roles, guilty_npc, tension.
 
     The integration probe that proves Wave 2 mystery fixtures will work:
@@ -670,13 +670,13 @@ def test_dev_scene_route_persists_scenario_state_end_to_end(
 
     saved = _load_pg_snapshot(slug)
     assert saved is not None, (
-        "save file exists but SqliteStore.load returned None — persistence failed after hydration"
+        "snapshot present but PG load returned None — persistence failed after hydration"
     )
     snapshot = saved.snapshot
 
     state = snapshot.scenario_state
     assert state is not None, (
-        "scenario_state must round-trip through SqliteStore for slug-connect "
+        "scenario_state must round-trip through Postgres for slug-connect "
         "to inherit the pre-populated state"
     )
     assert [n.id for n in state.clue_graph.nodes] == [
@@ -705,7 +705,7 @@ def test_dev_scene_route_persists_encounter_end_to_end(
     tmp_path: Path,
 ) -> None:
     """AC-6 (story 50-21): POST /dev/scene/{name} with an encounter fixture →
-    snapshot persists with encounter populated → SqliteStore round-trip
+    snapshot persists with encounter populated → Postgres round-trip
     preserves encounter_type and the per-metric threshold override.
 
     The integration probe that proves Wave 2 pre-armed combat fixtures
@@ -744,13 +744,13 @@ def test_dev_scene_route_persists_encounter_end_to_end(
 
     saved = _load_pg_snapshot(slug)
     assert saved is not None, (
-        "save file exists but SqliteStore.load returned None — persistence failed after hydration"
+        "snapshot present but PG load returned None — persistence failed after hydration"
     )
     snapshot = saved.snapshot
 
     enc = snapshot.encounter
     assert isinstance(enc, StructuredEncounter), (
-        "encounter must round-trip through SqliteStore for slug-connect to "
+        "encounter must round-trip through Postgres for slug-connect to "
         f"inherit the pre-armed combat state; got {type(enc).__name__}"
     )
     assert enc.encounter_type == "combat", (
@@ -823,10 +823,10 @@ def test_dev_scene_route_rejects_scenario_state_dag_violation_with_422(
 # ── Story 50-22: magic_state + character.abilities through the HTTP path ─────
 #
 # AC-6 (wiring): a synthetic fixture declaring BOTH new blocks must hydrate
-# via the real ``/dev/scene/{name}`` route, persist through SqliteStore, and
+# via the real ``/dev/scene/{name}`` route, persist through Postgres, and
 # load back with both fields intact. This is the CLAUDE.md-mandated
 # integration test — it proves the 50-22 hydration branch is reachable from
-# the production HTTP code path (router → hydrate_fixture → SqliteStore),
+# the production HTTP code path (router → hydrate_fixture → Postgres),
 # not merely unit-correct.
 
 _MAGIC_FIXTURE_50_22 = (
@@ -876,7 +876,7 @@ def test_scene_post_persists_magic_state_and_abilities_round_trip(
     """AC-6: the new blocks survive the full production round-trip.
 
     POST the synthetic fixture through ``/dev/scene/{name}``, then load the
-    saved DB with ``SqliteStore`` and assert ``snapshot.magic_state`` is a
+    saved snapshot from Postgres and assert ``snapshot.magic_state`` is a
     non-None MagicState with the declared config + control_tier AND
     ``snapshot.characters[0].abilities`` carries the declared ability.
 
@@ -900,11 +900,11 @@ def test_scene_post_persists_magic_state_and_abilities_round_trip(
     slug = r.json()["slug"]
 
     saved = _load_pg_snapshot(slug)
-    assert saved is not None, "save file exists but SqliteStore.load returned None"
+    assert saved is not None, "snapshot present but PG load returned None"
     snapshot = saved.snapshot
 
     assert snapshot.magic_state is not None, (
-        "magic_state must survive the SqliteStore round-trip, not be None"
+        "magic_state must survive the Postgres round-trip, not be None"
     )
     assert snapshot.magic_state.config.world_slug == "coyote_star"
     assert snapshot.magic_state.control_tier == {"practitioner": 2}, (

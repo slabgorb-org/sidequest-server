@@ -61,6 +61,51 @@ SPAN_NAME = "turn_manager.round_invariant"
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    ADR-115 F1: these tests drive the production narration write pipeline
+    (``append_narrative``) and read ``MAX(round_number)`` back, so they need a
+    real ``PgSaveRepository`` (see ``_with_pg_repository``).
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _with_pg_repository(sd):
+    """Swap the factory's MagicMock repository for a real PgSaveRepository so
+    the production ``append_narrative`` writes persist and ``max_narrative_
+    round`` reads the SQL ground truth back (ADR-115 F1)."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug="round-invariant",
+        mode="solo",
+        genre_slug=sd.genre_slug,
+        world_slug="grimvault",
+    )
+    sd.repository = repo
+    return repo
+
+
 @pytest.fixture
 def otel_capture():
     """Install an in-memory exporter on the live TracerProvider so the
@@ -83,16 +128,13 @@ def otel_capture():
 
 
 def _max_narrative_round_via_sql(sd) -> int:
-    """Read ``MAX(round_number)`` directly out of the narrative_log table.
+    """Read ``MAX(round_number)`` back from the persisted narrative log.
 
-    This bypasses any helper the production code adds — the test's contract
-    is that ``snapshot.turn_manager.round`` matches the SQL ground truth,
-    not whatever the helper happens to return.
+    The test's contract is that ``snapshot.turn_manager.round`` matches the
+    durable ground truth — read through the repository's typed
+    ``max_narrative_round`` (ADR-115 F1: PgSaveRepository over Postgres).
     """
-    row = sd.repository.store._conn.execute(
-        "SELECT MAX(round_number) FROM narrative_log"
-    ).fetchone()
-    return int(row[0]) if row and row[0] is not None else 0
+    return int(sd.repository.max_narrative_round())
 
 
 def _narration_result(text: str = "ok") -> NarrationTurnResult:
@@ -121,6 +163,7 @@ async def test_round_invariant_span_fires_once_per_narration_turn(
     (`context-story-45-11.md` §"OTEL spans").
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    _with_pg_repository(sd)
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=_narration_result(),
     )
@@ -168,6 +211,7 @@ async def test_round_invariant_gap_is_zero_across_10_turns(
     advances the counter in lockstep with each interaction.
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    _with_pg_repository(sd)
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=_narration_result(),
     )
@@ -217,6 +261,7 @@ async def test_round_invariant_span_captures_synthetic_divergence(
     no detector — it makes the lie-detector tell its own lies.
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    _with_pg_repository(sd)
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=_narration_result(),
     )
@@ -269,6 +314,7 @@ async def test_round_invariant_span_handles_empty_narrative_log(
     edge cases (empty log read paths exist on other code paths).
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    _with_pg_repository(sd)
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=_narration_result(),
     )
@@ -328,6 +374,7 @@ async def test_round_invariant_emits_typed_watcher_event(
     monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
 
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    _with_pg_repository(sd)
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="The torch flickers.",
@@ -402,6 +449,7 @@ async def test_loaded_save_with_preexisting_divergence_captures_violation(
     gap forward but never erases it; the OTEL span is the lie-detector.
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    _with_pg_repository(sd)
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=_narration_result(),
     )
@@ -414,7 +462,7 @@ async def test_loaded_save_with_preexisting_divergence_captures_violation(
     from sidequest.game.session import NarrativeEntry
 
     for r in range(1, 73):
-        sd.repository.store.append_narrative(
+        sd.repository.append_narrative(
             NarrativeEntry(
                 timestamp=0,
                 round=r,

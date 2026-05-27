@@ -34,11 +34,7 @@ import pytest
 from sidequest.game.event_log import EventLog
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
-from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol.messages import (
     SessionEventMessage,
     SessionEventPayload,
@@ -184,47 +180,64 @@ def test_build_message_for_kind_still_raises_on_truly_unknown_kind() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test
+    (ADR-115 F1: reconnect replays events from Postgres)."""
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 @pytest.fixture
 def seeded_game_with_encounter_journal(tmp_path: Path) -> Path:
-    """Build a save whose events table contains ENCOUNTER_STARTED rows —
-    the exact shape that crashed reconnect for the Session 2 save."""
-    db = db_path_for_slug(tmp_path, _SLUG)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
+    """Register a session in Postgres whose events table contains
+    ENCOUNTER_STARTED rows — the exact shape that crashed reconnect for the
+    Session 2 save (ADR-115 F1: events live in Postgres)."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
         slug=_SLUG,
-        mode=GameMode.MULTIPLAYER,
+        mode=str(GameMode.MULTIPLAYER),
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
 
-    # Inject ENCOUNTER_STARTED + ENCOUNTER_TAG_CREATED as the watcher_hub
-    # would. These don't go through EventLog.append because the watcher_hub
-    # writes them directly via SQL — match that behavior here.
-    store._conn.execute(
-        "INSERT INTO events (kind, payload_json, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-        ("ENCOUNTER_STARTED", json.dumps({"field": "encounter", "op": "started"})),
+    # Inject ENCOUNTER_STARTED + ENCOUNTER_TAG_CREATED through the repository's
+    # event append (the watcher_hub's encounter sink does the same in prod).
+    repo.append_event(
+        kind="ENCOUNTER_STARTED",
+        payload_json=json.dumps({"field": "encounter", "op": "started"}),
     )
-    store._conn.execute(
-        "INSERT INTO events (kind, payload_json, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-        (
-            "ENCOUNTER_TAG_CREATED",
-            json.dumps({"field": "encounter", "op": "tag_created"}),
-        ),
+    repo.append_event(
+        kind="ENCOUNTER_TAG_CREATED",
+        payload_json=json.dumps({"field": "encounter", "op": "tag_created"}),
     )
 
     # Also append a real NARRATION through EventLog so the replay has at
     # least one client-bound message to surface — proves the crash didn't
     # truncate the rest of the journal.
-    log = EventLog(SqliteSaveRepository(store))
+    log = EventLog(repo)
     log.append(
         kind="NARRATION",
         payload_json=json.dumps({"text": "Hello, traveler."}),
     )
-    store._conn.commit()
-    store.close()
     return tmp_path
 
 

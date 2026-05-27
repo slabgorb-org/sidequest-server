@@ -459,11 +459,31 @@ def instantiate_encounter_from_trigger(
         raise ValueError(f"unknown encounter_type {encounter_type!r} — not in pack confrontations")
 
     # Story 45-18: NPC fallback when narrator's npcs_present is empty.
-    # Sealed-letter encounters (commit-reveal duels) require exactly one
-    # opponent passed explicitly — the fallback would leak any bystander
-    # NPC at the location into the duel, so only the legacy path uses the
-    # fallback. The sealed-letter validator below still raises if
-    # npcs_present is wrong.
+    #
+    # Story 59-17: sealed-letter encounters (commit-reveal duels) now ALSO
+    # consult the location fallback. The production confrontation seam is
+    # router-driven (Story 59-4 / ADR-113) and the pre-narrator pass
+    # dispatches with a hardcoded ``npcs_present=[]``
+    # (``intent_router_pass.py`` line 167) — it has no explicit actor
+    # mentions to hand the subsystem. Before this story the fallback was
+    # skipped for sealed-letter, so a dogfight could NEVER instantiate via
+    # the live router even when the enemy pilot was right there in the scene
+    # (ADR-116: "a confrontation requires an Other" — the Other existed but
+    # was never seated). The arity validator below is the gate that makes
+    # this safe: exactly one location candidate ⇒ seat it as blue; zero or
+    # >1 ⇒ keep the loud ``SealedLetterArityError`` (no silent bystander
+    # leak, no phantom opponent).
+    #
+    # Considered and rejected (Story 59-17 Architect consult): narrowing the
+    # sealed-letter candidates by ``Disposition.attitude() == HOSTILE`` to
+    # pick the single adversary out of a crowd. A freshly narrator-declared
+    # dogfight opponent carries the DEFAULT (neutral) disposition — only
+    # bestiary-materialized creatures default hostile — so a disposition
+    # gate would reject the very opponent it is meant to seat. Hostility in
+    # a dogfight is contextual to the scene, not a stored score; the
+    # ``_is_adversarial`` CATEGORY check + arity validation is the correct
+    # discriminator. The >1-bystander case is handled conservatively (loud
+    # arity refusal); smarter single-adversary selection is a future story.
     #
     # Story 45-52: ``location_available`` discriminates "empty location"
     # from "no location at all" — both produce an empty fallback, but only
@@ -471,7 +491,7 @@ def instantiate_encounter_from_trigger(
     # ``encounter.no_opponent_available`` span below.
     location_available = True
     seating_source = "router_named"
-    if not npcs_present and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup:
+    if not npcs_present:
         seating_source = "location_fallback"
         npcs_present, location_available = _npc_fallback_at_location(
             snapshot,

@@ -18,7 +18,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sidequest.game.persistence import GameMode, SqliteStore
+from sidequest.game.persistence import GameMode
+from sidequest.game.repository import SaveRepository
 from sidequest.game.session import GameSnapshot
 from sidequest.handlers.action_reveal import ActionRevealHandler
 from sidequest.protocol.messages import (
@@ -34,8 +35,7 @@ def _make_bound_room(slug: str) -> SessionRoom:
     room = SessionRoom(slug=slug, mode=GameMode.MULTIPLAYER)
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="mawdeep")
     snap.turn_manager.round = 1
-    store = SqliteStore.open_in_memory()
-    room.bind_world(snapshot=snap, store=store)
+    room.bind_world(snapshot=snap, store=MagicMock(spec=SaveRepository))
     return room
 
 

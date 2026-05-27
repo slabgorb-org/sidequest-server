@@ -23,9 +23,6 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol import GameMessage
@@ -38,18 +35,34 @@ _SLUG = "bridge-diagnostic-fixture"
 _FIXTURE_PACKS = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test
+    (ADR-115 F1: connect resolves the bootstrap row + snapshot from Postgres)."""
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 def _seed_with_character(tmp_path: Path, slug: str) -> None:
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
+    """Register a SOLO session in Postgres carrying one Character (ADR-115 F1)."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
     core = CreatureCore(
         name="Thorn",
         description="A wandering fighter",
@@ -64,9 +77,14 @@ def _seed_with_character(tmp_path: Path, slug: str) -> None:
     )
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD)
     snap.characters = [char]
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(GameMode.SOLO),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    repo.save(snap)
 
 
 def _fake_narration_result():

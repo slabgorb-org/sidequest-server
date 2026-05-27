@@ -30,10 +30,44 @@ checks are sharp enough to catch the half-fix regression AC4 names.
 
 from __future__ import annotations
 
-import json as _json
 from pathlib import Path
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# ADR-115 D2: the slug-resume path loads the authoritative snapshot, narration,
+# and scrapbook rows from Postgres via ``db_pool.get_pool()`` — NOT the SQLite
+# save_dir store (which carries only the bootstrap game row). The end-to-end
+# wire test therefore (1) binds the process pool to a per-worker throwaway PG
+# database and (2) seeds the coverage fixture (29 narrative rounds, 10 scrapbook
+# rounds) into PG so the connect handler's coverage detector reads the real
+# 29/10 shape and fires both spans. Mirrors the ``_pg_isolation`` +
+# ``_seed_pg_for_slug`` pattern in test_turn_telemetry_wiring.py /
+# test_session_handler_slug_resumed.py.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test."""
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
 
 # ---------------------------------------------------------------------------
 # Static-source location of the two resume seams
@@ -231,26 +265,46 @@ class TestSlugResumeEndToEnd:
                 )
             )
         store.save(snap)
-        # 10 scrapbook rows for rounds 1-10.
-        with store._conn:
-            for r in range(1, 11):
-                store._conn.execute(
-                    "INSERT INTO scrapbook_entries "
-                    "(turn_id, scene_title, scene_type, location, image_url, "
-                    " narrative_excerpt, world_facts, npcs_present) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        r,
-                        f"Scene {r}",
-                        "exploration",
-                        f"Location {r}",
-                        None,
-                        f"Round {r} excerpt.",
-                        _json.dumps([]),
-                        _json.dumps([]),
-                    ),
-                )
         store.close()
+
+        # ADR-115 D2: the connect handler's coverage detector reads narration
+        # + scrapbook rows from Postgres, not the SQLite save.db above (which
+        # only carries the bootstrap game row the handshake reads). Mirror the
+        # 29-narrative / 10-scrapbook Orin fixture into PG so the live resume
+        # sees the real coverage gap.
+        from sidequest.game import db_pool
+        from sidequest.server.session_state import _build_pg_repos_for_slug
+
+        repo, _dungeon, _sink = _build_pg_repos_for_slug(
+            db_pool.get_pool(),
+            slug=slug,
+            mode=str(GameMode.SOLO),
+            genre_slug=genre,
+            world_slug=world,
+        )
+        repo.save(snap)
+        for r in range(1, 30):
+            repo.append_narrative(
+                NarrativeEntry(
+                    round=r,
+                    author="narrator",
+                    content=f"Round {r}.",
+                    tags=[],
+                )
+            )
+        # 10 scrapbook rows for rounds 1-10 → 19-round gap against 29 rounds.
+        for r in range(1, 11):
+            repo.append_scrapbook_entry(
+                turn_id=r,
+                scene_title=f"Scene {r}",
+                scene_type="exploration",
+                location=f"Location {r}",
+                image_url=None,
+                narrative_excerpt=f"Round {r} excerpt.",
+                world_facts=[],
+                npcs_present=[],
+                render_status="rendered",
+            )
         return {"slug": slug, "save_dir": tmp_path, "genre": genre, "world": world}
 
     @pytest.mark.asyncio

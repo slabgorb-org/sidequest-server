@@ -236,6 +236,26 @@ def create_app(
                 await task
             logger.info("daemon.heartbeat_listener_stopped")
 
+    # --- Postgres pool lifecycle (ADR-115 F2) ---
+    # Open and verify the process-global pool at boot so a dead/unreachable
+    # Postgres fails LOUD at startup rather than lazily on the first save
+    # mid-session (No Silent Fallbacks). Close + discard it on shutdown so the
+    # connections drain cleanly and a uvicorn --reload starts from a fresh pool.
+    @app.on_event("startup")
+    async def _open_db_pool() -> None:
+        from sidequest.game import db_pool
+
+        pool = db_pool.get_pool()
+        pool.wait(timeout=10.0)  # fail loud if Postgres is unreachable at boot
+        logger.info("db_pool.startup_wired name=%s", pool.name)
+
+    @app.on_event("shutdown")
+    async def _close_db_pool() -> None:
+        from sidequest.game import db_pool
+
+        db_pool.close_pool()
+        logger.info("db_pool.shutdown_wired")
+
     # --- /health ---
     @app.get("/health")
     async def health() -> dict[str, str]:

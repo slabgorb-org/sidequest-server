@@ -45,6 +45,60 @@ _WORLD = "grimvault"
 _CONTENT_SEARCH_PATH = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Point the process-global pool at a per-worker throwaway PG database.
+
+    The slug-connect path (ADR-115 D2) reads the authoritative snapshot +
+    narration from the PG repository via ``db_pool.get_pool()`` (resolves
+    SIDEQUEST_DATABASE_URL), not the SQLite save_dir store. Bind that pool to
+    the migrated throwaway db so the seed helpers and the connect handler share
+    one isolated database (mirrors tests/dungeon/conftest.build_pg_dungeon_repo).
+    """
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _seed_pg_for_slug(
+    slug: str,
+    snap: GameSnapshot,
+    *,
+    mode: GameMode = GameMode.SOLO,
+    narrations: tuple[str, ...] = (),
+) -> None:
+    """Mirror a seeded snapshot (+ optional prior NARRATION events) into PG.
+
+    The SQLite save_dir store still carries the bootstrap game row (genre/world/
+    mode) the connect handshake reads; this seeds the PG side the resume path
+    actually loads from.
+    """
+    from sidequest.game import db_pool
+    from sidequest.game.event_log import EventLog
+    from sidequest.protocol.messages import NarrationPayload
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(mode),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    repo.save(snap)
+    if narrations:
+        event_log = EventLog(repo)
+        for prose in narrations:
+            event_log.append(
+                kind="NARRATION",
+                payload_json=NarrationPayload(text=prose, seq=0).model_dump_json(exclude={"seq"}),
+            )
+
+
 def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
     handler = WebSocketSessionHandler(
         save_dir=save_dir,
@@ -103,6 +157,7 @@ def _seed_resumable_game(tmp_path: Path, slug: str) -> None:
     store.init_session(_GENRE, _WORLD)
     store.save(snap)
     store.close()
+    _seed_pg_for_slug(slug, snap)
 
 
 @pytest.mark.asyncio
@@ -574,6 +629,7 @@ def _seed_resumable_game_with_uuid_name(tmp_path: Path, slug: str, player_id: st
     store.init_session(_GENRE, _WORLD)
     store.save(snap)
     store.close()
+    _seed_pg_for_slug(slug, snap)
 
 
 @pytest.mark.asyncio
@@ -609,16 +665,21 @@ async def test_slug_resume_renames_uuid_character_to_display_name(
         f"display_name on resume; got {sd.snapshot.characters[0].core.name!r}"
     )
 
-    # Persisted — reopen the store from disk and confirm the rename stuck,
-    # so a subsequent reconnect doesn't re-detect the UUID and double-rename.
-    db = db_path_for_slug(tmp_path, slug)
-    reopened = SqliteStore(db)
-    try:
-        loaded = reopened.load()
-        assert loaded is not None
-        assert loaded.snapshot.characters[0].core.name == "Slabgorb"
-    finally:
-        reopened.close()
+    # Persisted — reload from PG (the authoritative store post-D2) and confirm
+    # the rename stuck, so a subsequent reconnect doesn't re-detect the UUID.
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    reopened_repo, _d, _s = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(GameMode.SOLO),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    loaded = reopened_repo.load()
+    assert loaded is not None
+    assert loaded.snapshot.characters[0].core.name == "Slabgorb"
 
 
 @pytest.mark.asyncio
@@ -688,10 +749,6 @@ def _seed_resumable_game_with_narrations(tmp_path: Path, slug: str, narrations: 
     replay_msgs actually carries historical narration back to the
     reconnecting client.
     """
-    from sidequest.game.event_log import EventLog
-    from sidequest.game.sqlite_repository import SqliteSaveRepository
-    from sidequest.protocol.messages import NarrationPayload
-
     db = db_path_for_slug(tmp_path, slug)
     db.parent.mkdir(parents=True, exist_ok=True)
     store = SqliteStore(db)
@@ -723,15 +780,8 @@ def _seed_resumable_game_with_narrations(tmp_path: Path, slug: str, narrations: 
     snap.characters = [char]
     store.init_session(_GENRE, _WORLD)
     store.save(snap)
-
-    event_log = EventLog(SqliteSaveRepository(store))
-    for prose in narrations:
-        payload = NarrationPayload(text=prose, seq=0)
-        event_log.append(
-            kind="NARRATION",
-            payload_json=payload.model_dump_json(exclude={"seq"}),
-        )
     store.close()
+    _seed_pg_for_slug(slug, snap, narrations=tuple(narrations))
 
 
 @pytest.mark.asyncio

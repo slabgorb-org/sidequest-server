@@ -19,7 +19,7 @@ From the orchestrator root: `just server`, `just server-test`, `just server-chec
 
 - **FastAPI** + **uvicorn** — HTTP, WebSocket, static file serving
 - **pydantic v2** — Typed protocol (`GameMessage` discriminated union) and genre pack models
-- **sqlite3** — Save persistence at `~/.sidequest/saves/`, one DB per genre/world session
+- **PostgreSQL** (`psycopg3` + `psycopg_pool`) — Save persistence in one logical database, sessions keyed by `session_slug` (ADR-115). Connection URL via `SIDEQUEST_DATABASE_URL`; schema managed by Alembic. Replaces the retired SQLite-per-session store (`SqliteStore`/`SAVE_WRITE_LOCK`/WAL tuning, all deleted)
 - **PyYAML** — Genre pack loader (read-only at runtime)
 - **OpenTelemetry** — Span emission for the GM dashboard (ADR-090; native OTEL via the tool registry per ADR-103 supersedes the legacy `claude -p` subprocess passthrough of ADR-058)
 - **websockets** — Watcher channel transport
@@ -95,10 +95,10 @@ See [`docs/architecture.md`](../docs/architecture.md) for the full system design
 
 ## Game state and saves
 
-- **Save format:** SQLite `.db` files at `~/.sidequest/saves/<genre>_<world>.db` (not in repo).
+- **Save format:** Rows in a single PostgreSQL database (ADR-115), one `sessions` row per genre/world session keyed by `session_slug`. Connect via `SIDEQUEST_DATABASE_URL`; tests use `SIDEQUEST_TEST_DATABASE_URL`. Provision locally with `just pg-up` (Homebrew `postgresql@18`). Legacy SQLite saves import via `python -m sidequest.game.importer` (`sidequest/game/importer.py`).
 - **Narrative log:** Append-only.
 - **KnownFacts:** Accumulate across turns with provenance.
-- DB calls run on a worker thread via `asyncio.to_thread`.
+- DB calls borrow a pooled connection; async handlers offload via `anyio.to_thread`.
 
 ## Testing
 

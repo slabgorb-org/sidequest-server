@@ -12,18 +12,112 @@ original methods on WebSocketSessionHandler.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sidequest.agents.perception_rewriter import rewrite_for_recipient
 from sidequest.agents.pov_swap import swap_to_second_person
 
 if TYPE_CHECKING:
     from sidequest.game.projection.view import SessionGameStateView
+    from sidequest.game.projection_filter import FilterDecision
     from sidequest.game.session import GameSnapshot
     from sidequest.protocol.messages import ScrapbookEntryPayload
     from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_recipient_dropped(kind: str, player_id: str, reason: str) -> None:
+    """Surface — loudly — a recipient that was INCLUDED in the fan-out set
+    but lost its outbound transport before the frame could be enqueued.
+
+    This is almost always a client that dropped mid-broadcast: the socket
+    was unregistered (``socket_for_player`` → ``None``) or its outbound queue
+    was detached (``queue_for_socket`` → ``None``, exactly what
+    ``room.detach_outbound`` leaves behind). The turn itself is NOT lost —
+    fan-out runs only after the committed C2 transaction, so the event +
+    projection cache are already durable and the recipient replays on
+    reconnect. But a SILENT ``continue`` here was the exact blind spot behind
+    the 2026-05-27 orphaned-turn playtest loop: the GM panel saw a clean turn
+    while a player received nothing. Emit a WARNING log + a watcher event so
+    the dashboard shows the delivery gap (No Silent Fallbacks + the OTEL
+    lie-detector mandate). Telemetry must never crash the rest of the fan-out.
+    """
+    logger.warning(
+        "emit_event.recipient_dropped kind=%s player_id=%s reason=%s",
+        kind,
+        player_id,
+        reason,
+    )
+    try:
+        from sidequest.server.session_handler import _watcher_publish
+
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "broadcast.recipient_dropped",
+                "kind": kind,
+                "recipient_player_id": player_id,
+                "reason": reason,
+            },
+            component="broadcast",
+            severity="warning",
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never crash a turn
+        logger.warning(
+            "emit_event.recipient_dropped watcher publish failed kind=%s", kind
+        )
+
+
+def _deliver_fanout(
+    room: Any,
+    fanout: list[tuple[str, FilterDecision, dict]],
+    *,
+    message_cls: Any,
+    payload_cls: Any,
+    kind: str,
+    seq: int,
+) -> None:
+    """Enqueue each included recipient's projected frame onto their outbound
+    queue. A recipient whose socket/queue has gone (mid-broadcast drop) is
+    surfaced via :func:`_emit_recipient_dropped` rather than skipped silently.
+
+    Extracted from :func:`emit_event` so the mid-broadcast drop window is
+    testable against a real ``SessionRoom`` with synthetic fan-out tuples — no
+    genre pack, no projection, no DB. ``emit_event`` is the sole production
+    caller.
+    """
+    for other_pid, decision, filtered_data in fanout:
+        if not decision.include:
+            continue
+        socket_id = room.socket_for_player(other_pid)
+        if socket_id is None:
+            _emit_recipient_dropped(kind, other_pid, "socket_gone")
+            continue
+        queue = room.queue_for_socket(socket_id)
+        if queue is None:
+            _emit_recipient_dropped(kind, other_pid, "queue_detached")
+            continue
+        try:
+            if payload_cls is not None:
+                # C3: rebuild the recipient payload from the filtered dict
+                # alone (plus seq). Do NOT use model_copy(update=...) —
+                # merging leaves fields absent from the filtered dict at their
+                # canonical values, which would leak any field a future rule
+                # drops entirely.
+                recipient_payload = payload_cls.model_validate({**filtered_data, "seq": seq})
+                recipient_msg = message_cls(payload=recipient_payload)
+            else:
+                recipient_msg = message_cls(payload={**filtered_data, "seq": seq})
+        except Exception:
+            # Never silently fail fan-out; log and skip this recipient.
+            logger.error(
+                "emit_event.fanout_failed kind=%s other_pid=%s",
+                kind,
+                other_pid,
+            )
+            continue
+        queue.put_nowait(recipient_msg)
 
 
 def persist_scrapbook_entry(
@@ -175,7 +269,6 @@ def emit_event(
     from pydantic import BaseModel
 
     from sidequest.game.projection.envelope import MessageEnvelope
-    from sidequest.game.projection_filter import FilterDecision
     from sidequest.server.session_handler import (
         _KIND_TO_MESSAGE_CLS,
         _project_frames,
@@ -446,38 +539,14 @@ def emit_event(
         # an event that never hit disk.
         if room is not None:
             payload_cls = type(payload_model) if isinstance(payload_model, BaseModel) else None
-            for other_pid, decision, filtered_data in fanout:
-                if not decision.include:
-                    continue
-                socket_id = room.socket_for_player(other_pid)
-                if socket_id is None:
-                    continue
-                queue = room.queue_for_socket(socket_id)
-                if queue is None:
-                    continue
-                try:
-                    if payload_cls is not None:
-                        # C3: rebuild the recipient payload from the
-                        # filtered dict alone (plus seq). Do NOT use
-                        # model_copy(update=...) — merging leaves fields
-                        # absent from the filtered dict at their canonical
-                        # values, which would leak any field a future rule
-                        # drops entirely.
-                        recipient_payload = payload_cls.model_validate(
-                            {**filtered_data, "seq": seq}
-                        )
-                        recipient_msg = message_cls(payload=recipient_payload)
-                    else:
-                        recipient_msg = message_cls(payload={**filtered_data, "seq": seq})
-                except Exception:
-                    # Never silently fail fan-out; log and skip this recipient.
-                    logger.error(
-                        "emit_event.fanout_failed kind=%s other_pid=%s",
-                        kind,
-                        other_pid,
-                    )
-                    continue
-                queue.put_nowait(recipient_msg)
+            _deliver_fanout(
+                room,
+                fanout,
+                message_cls=message_cls,
+                payload_cls=payload_cls,
+                kind=kind,
+                seq=seq,
+            )
     else:
         # Legacy path (non-slug connect): no EventLog, no seq
         out_to_self = message_cls(payload=payload_model)

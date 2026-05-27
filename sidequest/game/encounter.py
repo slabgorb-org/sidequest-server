@@ -150,8 +150,9 @@ class StructuredEncounter(BaseModel):
 
     encounter_type: str
     # "dial_threshold" (default) | "hp_depletion". Stamped from ConfrontationDef.win_condition
-    # at init (encounter_lifecycle). String-typed to avoid a game->genre.models import cycle.
-    win_condition: str = "dial_threshold"
+    # at init (encounter_lifecycle). String-literal (NOT the WinCondition enum) to avoid a
+    # game->genre.models import cycle; the Literal still rejects typos at validation time.
+    win_condition: Literal["dial_threshold", "hp_depletion"] = "dial_threshold"
     player_metric: EncounterMetric
     opponent_metric: EncounterMetric
     beat: int = 0

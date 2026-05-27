@@ -459,13 +459,21 @@ def instantiate_encounter_from_trigger(
         )
 
         # Synthesize inert metrics when a combat declares no dial (win_condition: hp_depletion).
-        # The dial-threshold branches in apply_beat are gated off for hp_depletion, so these
-        # placeholders never gate resolution — they only keep the ~9 live-metric readers safe.
+        # These placeholders are inert (threshold 1e6 is never reached); apply_beat's dial
+        # branches get an explicit win_condition gate in a later task. For now the absurdly
+        # high threshold keeps the ~9 live-metric readers safe without gating resolution.
         pm = cdef.player_metric
         om = cdef.opponent_metric
-        if pm is None or om is None:
+        if pm is None and om is None:
+            # hp_depletion: no dial authored — synthesize inert placeholders.
             pm = MetricDef(name="hp", starting=0, threshold=1_000_000)
             om = MetricDef(name="hp", starting=0, threshold=1_000_000)
+        elif pm is None or om is None:
+            raise ValueError(
+                f"confrontation '{encounter_type}' has exactly one of "
+                "player_metric/opponent_metric; provide both (dial_threshold) or "
+                "neither (hp_depletion) — no silent discard"
+            )
         enc = StructuredEncounter(
             encounter_type=encounter_type,
             win_condition=cdef.win_condition.value,

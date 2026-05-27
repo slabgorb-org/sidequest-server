@@ -21,7 +21,10 @@ from sidequest.server.session_helpers import (
     _error_msg,
     _resolve_acting_character_name,
 )
-from sidequest.server.turn_status_roster import build_turn_status_roster
+from sidequest.server.turn_status_roster import (
+    build_turn_status_roster,
+    project_all_submitted,
+)
 from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -565,17 +568,14 @@ class PlayerActionHandler:
                     # an explicit all-submitted projection when
                     # barrier_fired so the UI sees the round's terminal
                     # state on this final broadcast.
+                    submitted_roster = build_turn_status_roster(
+                        snapshot, session._room.playing_player_ids()
+                    )
                     if barrier_fired:
-                        submitted_roster = [
-                            entry.model_copy(update={"status": "submitted"})
-                            for entry in build_turn_status_roster(
-                                snapshot, session._room.playing_player_ids()
-                            )
-                        ]
-                    else:
-                        submitted_roster = build_turn_status_roster(
-                            snapshot, session._room.playing_player_ids()
-                        )
+                        # Barrier fired → _submitted was cleared on the phase
+                        # transition; project the round's terminal all-submitted
+                        # state (shared with the on-connect seal reconcile).
+                        submitted_roster = project_all_submitted(submitted_roster)
                     submitted_msg = TurnStatusMessage(
                         payload=TurnStatusPayload(
                             player_name=NonBlankString(acting_name),

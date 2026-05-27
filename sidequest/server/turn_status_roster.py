@@ -82,4 +82,18 @@ def build_seal_reconcile_roster(
     if snapshot.turn_manager.phase == TurnPhase.InputCollection:
         return base
     # Barrier already fired — project the round's terminal all-submitted state.
-    return [entry.model_copy(update={"status": "submitted"}) for entry in base]
+    return project_all_submitted(base)
+
+
+def project_all_submitted(roster: list[TurnStatusEntry]) -> list[TurnStatusEntry]:
+    """Return a copy of ``roster`` with every entry forced to ``submitted``.
+
+    The round's terminal projection: used when the barrier has fired and the
+    runtime ``_submitted`` set is no longer populated (turn.py clears it on the
+    phase transition), so a roster rebuilt from ``_submitted`` would read every
+    peer ``pending``. Shared by the on-submission barrier_fired broadcast
+    (``handlers/player_action.py``) and the on-connect seal reconcile
+    (:func:`build_seal_reconcile_roster`) so the two stay in lockstep — a
+    divergence here would flip a sealed table back to "Composing". Pure: copies
+    via ``model_copy``, never mutates the input entries."""
+    return [entry.model_copy(update={"status": "submitted"}) for entry in roster]

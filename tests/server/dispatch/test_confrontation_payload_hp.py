@@ -45,7 +45,7 @@ def _cdef(win_condition: WinCondition) -> ConfrontationDef:
         label="Combat",
         category="combat",
         win_condition=win_condition,
-        opponent_default_stats={"hp": 12, "armor_class": 13},
+        opponent_default_stats={"hp": 12, "armor_class": 13, "dexterity": 12},
         beats=[_beat()],
     )
 

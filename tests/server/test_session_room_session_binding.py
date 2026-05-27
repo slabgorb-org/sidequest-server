@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from sidequest.game.persistence import GameMode, SqliteStore
+from sidequest.game.persistence import GameMode
+from sidequest.game.repository import SaveRepository
 from sidequest.game.session import GameSnapshot
 from sidequest.server.session import Session
 from sidequest.server.session_room import SessionRoom
@@ -25,7 +27,7 @@ def test_session_property_raises_before_bind_world():
 def test_session_property_returns_session_after_bind_world(tmp_path: Path):
     room = _make_room()
     snap = GameSnapshot()
-    store = SqliteStore(tmp_path / "t.db")
+    store = MagicMock(spec=SaveRepository)
     room.bind_world(snapshot=snap, store=store)
     assert isinstance(room.session, Session)
     # Same snapshot reference — Session reads through.
@@ -40,7 +42,7 @@ def test_session_advance_via_room_persists_to_room_snapshot(tmp_path: Path):
 
     room = _make_room()
     snap = GameSnapshot()
-    store = SqliteStore(tmp_path / "t.db")
+    store = MagicMock(spec=SaveRepository)
     room.bind_world(snapshot=snap, store=store)
 
     room.session.advance_via_beat(StoryBeat(kind=StoryBeatKind.ENCOUNTER, trigger="test"))
@@ -53,7 +55,7 @@ def test_bind_world_is_idempotent_on_session(tmp_path: Path):
     """Second bind_world call (idempotent per existing semantics) does not rebuild Session."""
     room = _make_room()
     snap = GameSnapshot()
-    store = SqliteStore(tmp_path / "t.db")
+    store = MagicMock(spec=SaveRepository)
     room.bind_world(snapshot=snap, store=store)
     s1 = room.session
     # Second call is a no-op per existing bind_world idempotency contract.
@@ -67,7 +69,7 @@ def test_bind_world_loads_orbital_content_when_world_dir_has_orbits(tmp_path: Pa
     fixtures = Path(__file__).parent.parent / "orbital" / "fixtures" / "world_minimal"
     room = _make_room()
     snap = GameSnapshot()
-    store = SqliteStore(tmp_path / "t.db")
+    store = MagicMock(spec=SaveRepository)
     room.bind_world(snapshot=snap, store=store, world_dir=fixtures)
 
     content = room.session.orbital_content
@@ -81,7 +83,7 @@ def test_bind_world_no_orbital_tier_leaves_content_none(tmp_path: Path):
     empty_world.mkdir()
     room = _make_room()
     snap = GameSnapshot()
-    store = SqliteStore(tmp_path / "t.db")
+    store = MagicMock(spec=SaveRepository)
     room.bind_world(snapshot=snap, store=store, world_dir=empty_world)
 
     assert room.session.orbital_content is None
@@ -91,6 +93,6 @@ def test_bind_world_without_world_dir_back_compat(tmp_path: Path):
     """Existing call sites that don't pass world_dir still work — orbital_content=None."""
     room = _make_room()
     snap = GameSnapshot()
-    store = SqliteStore(tmp_path / "t.db")
+    store = MagicMock(spec=SaveRepository)
     room.bind_world(snapshot=snap, store=store)
     assert room.session.orbital_content is None

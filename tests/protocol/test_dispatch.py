@@ -172,14 +172,36 @@ def test_dispatch_package_parses_from_llm_style_json():
     assert pkg.turn_id == "turn-x"
 
 
-def test_cross_action_rejects_participants_not_in_witnesses():
-    """Validator: witnesses must include all participants (spec §5)."""
-    with pytest.raises(ValidationError):
-        CrossAction(
-            participants=["player:Alice", "player:Bob"],
-            witnesses=["player:Alice"],  # Bob is a participant but not a witness
-            dispatch=[],
-        )
+def test_cross_action_normalizes_participants_into_witnesses():
+    """Validator NORMALIZES (does not reject) when a participant is missing
+    from witnesses — every participant witnesses their own interaction.
+
+    Regression (playtest 2026-05-27, coyote_star turns 3/4/5): on a shared-
+    target MP turn the Intent Router emits participants=[acting_pc, npc] with
+    witnesses omitting the other PC. The old reject sank the whole
+    DispatchPackage → dispatch_package=None → mechanical spine dark while
+    narration read fine (Illusionism). Auto-union fixes it without breaching
+    the ADR-104/105 firewall (it only ADDS witnesses).
+    """
+    ca = CrossAction(
+        participants=["player:Alice", "player:Bob"],
+        witnesses=["player:Alice"],  # Bob omitted by the LLM producer
+        dispatch=[],
+    )
+    # Bob is unioned in; Alice not duplicated; participant order preserved.
+    assert ca.witnesses == ["player:Alice", "player:Bob"]
+    assert set(ca.witnesses) >= set(ca.participants)
+
+
+def test_cross_action_normalize_preserves_extra_witnesses():
+    """Non-participant witnesses (e.g. a bystander PC) survive the union."""
+    ca = CrossAction(
+        participants=["player:Alice", "npc:officer"],
+        witnesses=["player:Cass"],  # bystander only; both participants missing
+        dispatch=[],
+    )
+    assert ca.witnesses == ["player:Cass", "player:Alice", "npc:officer"]
+    assert set(ca.witnesses) >= set(ca.participants)
 
 
 def test_dispatch_package_rejects_duplicate_idempotency_keys_within_player():

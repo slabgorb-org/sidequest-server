@@ -169,9 +169,29 @@ class CrossAction(ProtocolBase):
 
     @model_validator(mode="after")
     def _witnesses_include_participants(self) -> CrossAction:
-        missing = set(self.participants) - set(self.witnesses)
+        """Normalize: every participant in a cross-player interaction also
+        witnesses it. Union missing participants into ``witnesses`` rather
+        than rejecting.
+
+        Previously this REJECTED when ``participants ⊄ witnesses``, which
+        sank the entire ``DispatchPackage`` on every shared-target MP turn
+        (playtest 2026-05-27, coyote_star turns 3/4/5: both PCs engage the
+        same NPC → the router emits ``participants=[acting_pc, npc]`` with
+        ``witnesses`` omitting the other PC → validation error → the Intent
+        Router retries, fails again, and degrades to ``dispatch_package=None``
+        — the whole mechanical spine goes dark while narration still reads
+        fine, the classic Illusionism the OTEL panel exists to catch).
+
+        Auto-unioning is semantically correct (you cannot hide an interaction
+        from someone who is in it) and cannot breach the ADR-104/105
+        perception firewall — it only ever ADDS a participant to the set of
+        those who perceive their own interaction, never removes a witness.
+        Participant order is preserved; ``witnesses`` already-present entries
+        are not duplicated.
+        """
+        missing = [p for p in self.participants if p not in self.witnesses]
         if missing:
-            raise ValueError(f"witnesses must include all participants; missing={sorted(missing)}")
+            self.witnesses = [*self.witnesses, *missing]
         return self
 
 

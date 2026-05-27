@@ -47,8 +47,10 @@ def test_render_scalar_multiline_uses_pre_wrap():
 
 def test_render_flat_dict_emits_section_per_key():
     html = render_node({"name": "Sleuth", "tier": "novice"})
+    # The id= anchor stays the raw slug; only the heading TEXT is humanized
+    # (playtest 2026-05-27: raw snake_case keys leaked as headings).
     assert '<section id="name">' in html
-    assert "<h2>name</h2>" in html
+    assert "<h2>Name</h2>" in html
     assert "<p>Sleuth</p>" in html
     assert '<section id="tier">' in html
 
@@ -62,9 +64,9 @@ def test_render_nested_dict_recurses_as_section():
     """
     html = render_node({"outer": {"inner": "value"}})
     assert '<section id="outer">' in html
-    assert "<h2>outer</h2>" in html
+    assert "<h2>Outer</h2>" in html
     assert '<section id="inner">' in html
-    assert "<h2>inner</h2>" in html
+    assert "<h2>Inner</h2>" in html
     assert "<p>value</p>" in html
 
 
@@ -119,18 +121,63 @@ def test_render_list_of_dicts_falls_through_id_title_then_index():
             {"value": "high"},
         ]
     )
+    # id= anchor stays the raw slug ("tier-1"); the heading humanizes the
+    # id-derived display ("Tier 1") so a raw id never shows as a heading.
     assert '<section id="tier-1">' in html
-    assert "<h3>tier-1</h3>" in html
+    assert "<h3>Tier 1</h3>" in html
     assert '<section id="tier-two">' in html
     assert "<h3>Tier Two</h3>" in html
     assert '<section id="item-3">' in html
     assert "<h3>Item 3</h3>" in html
 
 
+def test_snake_case_key_headings_are_humanized():
+    """Regression (playtest 2026-05-27, road_warrior/the_circuit + caverns):
+    the generic fallback dumped raw YAML keys as headings — the_maw,
+    genre_conventions, rolls_per_slot, law_enforcement, one_percenters — onto
+    player-facing Rules/Lore pages. They must render Title Case; the id=
+    anchor must stay the raw slug for stable links.
+    """
+    html = render_node(
+        {
+            "the_maw": "x",
+            "genre_conventions": "y",
+            "rolls_per_slot": "z",
+            "law_enforcement": "w",
+        }
+    )
+    assert "<h2>The Maw</h2>" in html
+    assert "<h2>Genre Conventions</h2>" in html
+    assert "<h2>Rolls Per Slot</h2>" in html
+    assert "<h2>Law Enforcement</h2>" in html
+    # Anchors unchanged (stable deep-links).
+    assert 'id="the-maw"' in html
+    assert 'id="genre-conventions"' in html
+    # No raw snake_case token survives in any heading.
+    assert "<h2>the_maw</h2>" not in html
+    assert "<h2>genre_conventions</h2>" not in html
+
+
+def test_humanize_label_leaves_authored_prose_untouched():
+    """Conservative guard: a heading that already has whitespace or any
+    uppercase is author-formatted and must NOT be mangled (no "Floor It" →
+    re-cased, no "Item 3" fallback altered, no acronym destroyed)."""
+    from sidequest.server.reference_renderer import _humanize_label
+
+    assert _humanize_label("Floor It") == "Floor It"  # already spaced
+    assert _humanize_label("Item 3") == "Item 3"  # index fallback
+    assert _humanize_label("McGuffin") == "McGuffin"  # proper noun w/ caps
+    assert _humanize_label("USB") == "USB"  # acronym preserved
+    assert _humanize_label("setting") == "Setting"  # bare lowercase word
+    assert _humanize_label("floor_it") == "Floor It"  # snake_case id
+    assert _humanize_label("tier-1") == "Tier 1"  # hyphen id
+    assert _humanize_label("") == ""  # empty unchanged
+
+
 def test_render_nested_dict_inside_list_recurses():
     html = render_node([{"name": "A", "stats": {"hp": 5, "atk": 2}}])
     assert "<h3>A</h3>" in html
-    assert "<h2>stats</h2>" in html
+    assert "<h2>Stats</h2>" in html
     assert "<p>5</p>" in html
     assert "<p>2</p>" in html
 
@@ -189,8 +236,9 @@ def test_render_list_item_name_priority_skips_falsy_intermediate():
     to the index fallback. Priority order: name -> id -> title -> index.
     """
     html = render_node([{"name": "", "id": "fallback-id", "value": "x"}])
+    # Anchor stays the raw slug; the id-derived heading humanizes.
     assert '<section id="fallback-id">' in html
-    assert "<h3>fallback-id</h3>" in html
+    assert "<h3>Fallback Id</h3>" in html
 
 
 def test_render_at_depth_cap_falls_back_to_pre():

@@ -322,6 +322,65 @@ async def test_scenario_clue_handler_prerequisite_not_satisfied_does_not_raise()
 
 
 # ---------------------------------------------------------------------------
+# Regression (playtest 2026-05-27, coyote_star turn 2): an off-enum
+# router-supplied category must NOT crash the dispatch. The router's
+# params.category is free-form (not schema-constrained like the
+# commit_known_fact tool), so the LLM emits arbitrary words ("Object",
+# "evidence"). Feeding that straight into Footnote(category=...) raised a
+# pydantic enum ValidationError, crashed the whole dispatch, and the clue
+# subsystem produced nothing while the narrator improvised the finding
+# (the Illusionism OTEL exists to catch). Clue discovery is keyed by
+# fact_id, not category — a bad category must never block it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_off_enum_category_does_not_crash_and_clue_still_discovers(caplog) -> None:
+    import logging as _logging
+
+    from sidequest.agents.subsystems import SubsystemOutput
+    from sidequest.agents.subsystems.scenario_clue import run_scenario_clue_dispatch
+
+    snap = _snapshot_with_scenario(clue_ids=["library_key"])
+    # "Object" is a plausible LLM choice and is NOT a FactCategory member.
+    dispatch = _scenario_clue_dispatch(fact_id="library_key", category="Object")
+
+    with caplog.at_level(_logging.WARNING):
+        out = await run_scenario_clue_dispatch(dispatch, snapshot=snap, player_name="Rux")
+
+    assert isinstance(out, SubsystemOutput)
+    assert snap.scenario_state is not None
+    assert "library_key" in snap.scenario_state.discovered_clues, (
+        "an off-enum category must not block fact_id-keyed clue discovery"
+    )
+    assert len(snap.characters[0].known_facts) == 1
+    # Fail LOUD: the coercion must surface, not swallow silently.
+    assert any(
+        "category_coerced" in r.getMessage() for r in caplog.records
+    ), "off-enum category coercion must emit a WARNING (no silent fallback)"
+
+
+@pytest.mark.asyncio
+async def test_case_insensitive_category_is_preserved_not_coerced(caplog) -> None:
+    """A valid category in the wrong case ("lore") must map to the real
+    enum member, NOT trip the loud-coerce path."""
+    import logging as _logging
+
+    from sidequest.agents.subsystems.scenario_clue import run_scenario_clue_dispatch
+
+    snap = _snapshot_with_scenario(clue_ids=["library_key"])
+    dispatch = _scenario_clue_dispatch(fact_id="library_key", category="lore")
+
+    with caplog.at_level(_logging.WARNING):
+        await run_scenario_clue_dispatch(dispatch, snapshot=snap, player_name="Rux")
+
+    assert "library_key" in snap.scenario_state.discovered_clues  # type: ignore[union-attr]
+    assert not any("category_coerced" in r.getMessage() for r in caplog.records), (
+        "a valid (case-insensitive) category must not be reported as coerced"
+    )
+
+
+# ---------------------------------------------------------------------------
 # AC2: Footnote path unchanged — regression guard (PASSES TODAY)
 # ---------------------------------------------------------------------------
 

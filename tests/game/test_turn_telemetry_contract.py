@@ -5,29 +5,70 @@ If any of these fail, the sink's transaction-mode + event_seq derivation
 is unsound and the rest of the plan must not proceed.
 """
 
+import uuid
+
+import pytest
+
+from sidequest.game import db_pool
 from sidequest.game.persistence import SqliteStore
+from sidequest.game.pg import sessions
+from sidequest.game.pg.telemetry import PgTelemetrySink
 from sidequest.telemetry import watcher_hub
-from sidequest.telemetry.watcher_hub import bind_event_store
+from sidequest.telemetry.watcher_hub import bind_event_store, publish_event
 
 
 def _store(tmp_path) -> SqliteStore:
     return SqliteStore.open(str(tmp_path / "save.db"))
 
 
-def test_bind_event_store_binds_the_same_conn_object(tmp_path):
-    """The process-global the sink reads (_event_store._conn) is the SAME
-    connection object the C2 turn transaction writes events/projection_cache
-    through. connect.py passes the SAME store local to both
-    bind_event_store(store) (handlers/connect.py ~:273) and EventLog(store)
-    (~:819), so the bound global and the EventLog share one connection."""
-    store = _store(tmp_path)
+@pytest.fixture
+def pg_sink(monkeypatch, migrated_db: str):
+    """A PgTelemetrySink over a freshly-migrated throwaway PG session — the
+    same kind of sink ``handlers/connect.py`` binds in production (D5)."""
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    pool = db_pool.get_pool()
+    slug = f"sq_contract_{uuid.uuid4().hex[:8]}"
+    sid = sessions.ensure_session(pool, slug=slug, mode="solo", genre_slug="g", world_slug="w")
+    yield PgTelemetrySink(pool, sid), pool, sid
+    db_pool.close_pool()
+
+
+def test_bind_event_store_binds_the_same_conn_object(pg_sink):
+    """The process-global the out-of-frame publish path reads
+    (``watcher_hub._telemetry_sink``) is the SAME TelemetrySink object passed
+    to ``bind_event_store`` — and a tx-less publish routes through it.
+
+    Post-ADR-115 D5: the in-frame census path no longer shares a connection via
+    a global; it threads the open turn ``tx`` EXPLICITLY (emitters.emit_event →
+    emit_mechanical_census). So the invariant the sink rests on is now binding
+    identity + the out-of-frame ``record`` route, not a shared ``_conn``.
+    ``handlers/connect.py`` (~:305) binds the PgTelemetrySink built for the
+    session."""
+    sink, pool, sid = pg_sink
     try:
-        bind_event_store(store)
-        assert watcher_hub._event_store is store
-        assert watcher_hub._event_store._conn is store._conn
+        bind_event_store(sink)
+        # Binding identity: the bound global IS the sink we passed.
+        assert watcher_hub._telemetry_sink is sink  # noqa: SLF001
+        # And a tx-less publish routes out-of-frame THROUGH that sink
+        # (event_seq NULL), proving the binding is the live write path.
+        publish_event(
+            "state_transition",
+            {"field": "intent", "round": 2},
+            component="intent",
+        )
+        with pool.connection() as conn:
+            row = conn.execute(
+                "SELECT event_seq, component FROM turn_telemetry "
+                "WHERE session_id = %s AND event_type = %s",
+                (sid, "state_transition"),
+            ).fetchone()
+        assert row is not None, "tx-less publish must persist through the bound sink"
+        assert row[0] is None  # out-of-frame -> NULL event_seq
+        assert row[1] == "intent"
     finally:
         bind_event_store(None)
-        store.close()
 
 
 def test_deferred_isolation_in_transaction_invariant(tmp_path):

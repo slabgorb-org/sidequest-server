@@ -22,3 +22,11 @@ def test_hp_depletion_allows_missing_metrics():
 def test_dial_threshold_without_metrics_fails_loud():
     with pytest.raises(ValidationError, match="player_metric"):
         ConfrontationDef(type="combat", label="Firefight", category="combat", beats=[BEAT])
+
+
+def test_hp_depletion_with_metrics_is_allowed():
+    c = ConfrontationDef(type="combat", label="Firefight", category="combat",
+                         win_condition="hp_depletion",
+                         player_metric=METRIC, opponent_metric=METRIC, beats=[BEAT])
+    assert c.win_condition == WinCondition.hp_depletion
+    assert c.player_metric is not None

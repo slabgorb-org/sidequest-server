@@ -419,6 +419,8 @@ class ConfrontationDef(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> ConfrontationDef:
+        if not self.confrontation_type:
+            raise ValueError("confrontation type must not be empty")
         if self.win_condition == WinCondition.dial_threshold and (
             self.player_metric is None or self.opponent_metric is None
         ):
@@ -426,8 +428,6 @@ class ConfrontationDef(BaseModel):
                 f"confrontation '{self.confrontation_type}' uses win_condition "
                 "'dial_threshold' but is missing player_metric/opponent_metric"
             )
-        if not self.confrontation_type:
-            raise ValueError("confrontation type must not be empty")
         valid_categories = {"combat", "social", "pre_combat", "movement"}
         if self.category not in valid_categories:
             raise ValueError(

@@ -355,8 +355,6 @@ class InteractionTable(BaseModel):
     starting_state: str
     maneuvers_consumed: list[str] = Field(default_factory=list)
     cells: list[InteractionCell] = Field(default_factory=list)
-    damage_increments: dict[str, int] | None = None
-    starting_hull: int | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> InteractionTable:
@@ -372,13 +370,6 @@ class InteractionTable(BaseModel):
                     f"duplicate interaction cell pair: ({cell.pair[0]}, {cell.pair[1]})"
                 )
             seen.add(key)
-        if self.damage_increments is not None:
-            for tier in ("graze", "clean", "devastating"):
-                val = self.damage_increments.get(tier)
-                if val is None:
-                    raise ValueError(f"damage_increments missing required severity tier: '{tier}'")
-                if val <= 0:
-                    raise ValueError(f"damage_increments '{tier}' must be positive, got {val}")
         return self
 
 

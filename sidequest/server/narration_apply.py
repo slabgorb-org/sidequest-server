@@ -21,6 +21,11 @@ if TYPE_CHECKING:
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
 
+from sidequest.game.dogfight_shot import (
+    build_dogfight_shot_inputs,
+    frame_hp_resolver,
+    resolve_dogfight_shots,
+)
 from sidequest.game.morale import (
     MoraleOutcome,
     OpponentSideState,
@@ -2612,10 +2617,48 @@ def _apply_narration_result_to_snapshot(
                         )
                     commits[actor.role] = sel.beat_id
 
+                if pack is None:
+                    raise ValueError(
+                        f"sealed-letter dogfight {enc.encounter_type!r} requires a pack "
+                        "(SWN binding + frame stats) but pack is None"
+                    )
+                pc_char = next((c for c in snapshot.characters if c.core.name == player_name), None)
+                if pc_char is None:
+                    raise ValueError(
+                        f"sealed-letter dogfight: PC {player_name!r} not found in "
+                        "snapshot.characters"
+                    )
+                # PC attributes come from the real sheet; pilot_skill / attack_bonus
+                # use the authored frame default (player_default_stats) for MVP —
+                # the character model does not yet carry an SWN Pilot skill. This is
+                # an authored default, not a silent fallback.
+                pc_pilot_skill = int((cdef.player_default_stats or {}).get("pilot_skill", 0))
+                pc_attack_bonus = int((cdef.player_default_stats or {}).get("attack_bonus", 0))
+
+                shot_inputs, geo_mods = build_dogfight_shot_inputs(
+                    ruleset_slug=pack.rules.ruleset,
+                    cdef=cdef,
+                    encounter=enc,
+                    pc_stats=pc_char.stats,
+                    pc_pilot_skill=pc_pilot_skill,
+                    pc_attack_bonus=pc_attack_bonus,
+                    weapon_lookup=lambda wid: next(
+                        (
+                            i
+                            for i in (pack.inventory.item_catalog if pack.inventory else [])
+                            if i.id == wid
+                        ),
+                        None,
+                    ),
+                )
+
                 sl_outcome = resolve_sealed_letter_lookup(
                     enc,
                     commits,
                     cdef.interaction_table,
+                    geometry_modifiers=geo_mods,
+                    shot_inputs=shot_inputs,
+                    swn_cfg=pack.rules.swn,
                 )
                 outcome.sealed_letter = sl_outcome
                 # Replace, do not append: only the most recent cell's hint
@@ -2629,6 +2672,21 @@ def _apply_narration_result_to_snapshot(
                     enc.narrator_hints = [sl_outcome.narration_hint]
                 else:
                     enc.narrator_hints = []
+
+                # First wiring slice: BOTH pilots roll server-side. Task 14 swaps
+                # the player's roll for a client Rapier throw (NPC stays server-side).
+                if sl_outcome.gun_solutions:
+                    d20_by_shooter = {
+                        gs.shooter_role: _roll_d20_server_side() for gs in sl_outcome.gun_solutions
+                    }
+                    shot_res = resolve_dogfight_shots(
+                        encounter=enc,
+                        gun_solutions=sl_outcome.gun_solutions,
+                        d20_by_shooter=d20_by_shooter,
+                        edge_resolver=frame_hp_resolver(enc),
+                    )
+                    if shot_res.depletion is not None:
+                        snapshot.pending_resolution_signal = _build_resolution_signal(enc)
                 # Status-change processing further down still runs because
                 # we only short-circuit the beat-selection block, not the
                 # whole snapshot mutation phase.

@@ -44,6 +44,8 @@ from sidequest.agents.orchestrator import (
     NarrationTurnResult,
     NpcMention,
 )
+from sidequest.game.character import Character
+from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import load_genre_pack
@@ -56,6 +58,24 @@ from sidequest.server.narration_apply import (
 )
 from tests._helpers.session_room import room_for
 from tests._helpers.trigger_encounter import trigger_encounter
+
+
+def _make_pilot(name: str) -> Character:
+    """Minimal space_opera PC with the SWN flavor attrs that ship_attack_params needs.
+
+    Both Reflex and Intellect are 10 (modifier=0) so the to-hit arithmetic is
+    deterministic. The character model does not yet carry an SWN Pilot skill, so
+    pilot_skill falls back to the authored cdef default (player_default_stats) —
+    this is an authored default, not a silent fallback.
+    """
+    return Character(
+        core=CreatureCore(name=name, description="Test pilot.", personality="Calm."),
+        backstory="A pilot.",
+        char_class="Pilot",
+        race="Human",
+        stats={"Reflex": 10, "Intellect": 10},
+    )
+
 
 # Real space_opera content carries the sealed_letter dogfight ConfrontationDef
 # and the loaded InteractionTable. The fixture pack at tests/fixtures/packs
@@ -268,6 +288,7 @@ def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
     and push the narration_hint onto the encounter.
     """
     snap, pack = space_opera_snap
+    snap.characters = [_make_pilot("Vega")]
 
     # Turn 1: instantiate the dogfight encounter
     trigger_encounter(
@@ -362,6 +383,7 @@ def test_dogfight_dispatch_does_not_invoke_apply_beat(
     the sealed-letter path does not move dual-track dials directly.
     """
     snap, pack = space_opera_snap
+    snap.characters = [_make_pilot("Pilot")]
 
     trigger_encounter(
         snap,
@@ -414,6 +436,7 @@ def test_per_actor_state_round_trip_after_dispatch(
     losing the cockpit descriptors. This is the save/load contract.
     """
     snap, pack = space_opera_snap
+    snap.characters = [_make_pilot("Lance")]
 
     trigger_encounter(
         snap,
@@ -611,6 +634,7 @@ def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
     silently degrades narration quality with each round.
     """
     snap, pack = space_opera_snap
+    snap.characters = [_make_pilot("Saber")]
 
     # Turn 1: instantiate the dogfight encounter
     trigger_encounter(
@@ -678,6 +702,7 @@ def test_unknown_maneuver_in_sealed_letter_raises(
     """A beat_id that is not in maneuvers_consumed must surface as a
     ValueError from the dispatch path (CLAUDE.md no-silent-fallback)."""
     snap, pack = space_opera_snap
+    snap.characters = [_make_pilot("Apex")]
 
     trigger_encounter(
         snap,

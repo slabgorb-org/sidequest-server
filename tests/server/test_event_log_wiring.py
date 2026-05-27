@@ -23,7 +23,6 @@ from sidequest.game.persistence import (
     upsert_game,
 )
 from sidequest.game.session import GameSnapshot
-from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol import GameMessage
 from sidequest.protocol.enums import MessageType
 from sidequest.server.session_handler import WebSocketSessionHandler
@@ -33,6 +32,54 @@ _GENRE = "test_genre"
 _WORLD = "flickering_reach"
 _SLUG = "event-log-wiring-fixture"
 _FIXTURE_PACKS = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
+
+
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    ADR-115 D2: the slug-connect path loads the authoritative snapshot from PG
+    via ``db_pool.get_pool()`` (so ``has_character`` is resolved against the PG
+    repo, not the SQLite save_dir), and the live turn's EventLog NARRATION row
+    lands in Postgres too. Seed and connect must share one isolated database.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _seed_pg_for_slug(slug: str, snap: GameSnapshot) -> None:
+    """Mirror a seeded snapshot into PG — the store the slug-resume path loads.
+
+    The SQLite save_dir store still carries the bootstrap game row
+    (genre/world/mode) the connect handshake reads; this seeds the PG side the
+    resume path actually loads the snapshot (and ``has_character``) from.
+    """
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(GameMode.SOLO),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    repo.save(snap)
 
 
 def _seed_with_character(tmp_path: Path, slug: str) -> None:
@@ -66,6 +113,7 @@ def _seed_with_character(tmp_path: Path, slug: str) -> None:
     store.init_session(_GENRE, _WORLD)
     store.save(snap)
     store.close()
+    _seed_pg_for_slug(slug, snap)
 
 
 def _fake_narration_result():
@@ -137,13 +185,20 @@ async def test_narration_carries_seq_and_event_log_has_row(tmp_path: Path) -> No
     assert seq is not None, f"NARRATION payload missing seq: {narrations[0].payload}"
     assert seq >= 1, f"expected seq >= 1, got {seq}"
 
-    # Verify EventLog persisted the row.
-    db = db_path_for_slug(tmp_path, _SLUG)
-    store = SqliteStore(db)
-    store.initialize()
-    try:
-        rows = EventLog(SqliteSaveRepository(store)).read_since(since_seq=0)
-        narration_rows = [r for r in rows if r.kind == "NARRATION"]
-        assert narration_rows, f"expected at least one NARRATION row in EventLog; got {rows}"
-    finally:
-        store.close()
+    # Verify EventLog persisted the row. ADR-115 D2: the live turn writes the
+    # NARRATION event through the PG-backed repository (db_pool.get_pool()), not
+    # the seeded SQLite save.db — so read the authoritative PG store the
+    # production path actually wrote to, via the same slug-bound repo.
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=_SLUG,
+        mode=str(GameMode.SOLO),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    rows = EventLog(repo).read_since(since_seq=0)
+    narration_rows = [r for r in rows if r.kind == "NARRATION"]
+    assert narration_rows, f"expected at least one NARRATION row in EventLog; got {rows}"

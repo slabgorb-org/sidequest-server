@@ -58,6 +58,39 @@ from tests.server.conftest import (
 CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    ADR-115 D2: chargen confirmation persists the authoritative snapshot
+    (incl. ``scenario_state``) to Postgres via ``db_pool.get_pool()``, and the
+    slug-connect path reloads from there — NOT the SQLite save_dir store. The
+    dispatch tests in this module share a fixed slug (``seed_slug_for_test``'s
+    default ``"test-slug"``), so without per-test isolation the
+    ``test_confirmation_binds_injected_scenario`` snapshot (with a bound
+    scenario_state) leaks into the shared ``sidequest_test`` db and the
+    no-scenarios test resumes it instead of a clean session. TRUNCATE per test
+    keeps each one reading only its own seed.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 # ---------------------------------------------------------------------------
 # Fixture builders
 # ---------------------------------------------------------------------------

@@ -553,9 +553,9 @@ def instantiate_encounter_from_trigger(
         )
 
         # Synthesize inert metrics when a combat declares no dial (win_condition: hp_depletion).
-        # These placeholders are inert (threshold 1e6 is never reached); apply_beat's dial
-        # branches get an explicit win_condition gate in a later task. For now the absurdly
-        # high threshold keeps the ~9 live-metric readers safe without gating resolution.
+        # apply_beat gates its dial-resolution branches on win_condition, so these placeholders
+        # never gate resolution; the absurdly high threshold (1e6, never reached) is just
+        # belt-and-suspenders that keeps the ~9 live-metric readers safe.
         pm = cdef.player_metric
         om = cdef.opponent_metric
         if pm is None and om is None:

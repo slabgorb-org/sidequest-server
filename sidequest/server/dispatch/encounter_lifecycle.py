@@ -18,7 +18,7 @@ from sidequest.game.lore_store import LoreStore
 from sidequest.game.resource_pool import ResourceThreshold
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
-from sidequest.genre.models.rules import ResolutionMode
+from sidequest.genre.models.rules import ResolutionMode, WinCondition
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
@@ -87,6 +87,84 @@ def _validate_side(actor_name: str, declared: str) -> ActorSide:
     raise ValueError(f"actor {actor_name!r} declared_side={declared!r} not in {_VALID_SIDES}")
 
 
+def _seed_combat_hp_depletion_to_npcs(
+    *,
+    snapshot: GameSnapshot,
+    actors: list[EncounterActor],
+    cdef,
+    turn: int,
+    source: str,
+) -> None:
+    """Seed opponent ``Npc.core`` HP + AC from content for hp_depletion combats.
+
+    Task 9 (space_opera → SWN binding): under ``win_condition: hp_depletion``
+    there is no dial — combat resolves when the opponent's ``core.hp.current``
+    reaches 0 and the SWN attack rolls against ``core.armor_class``. Both must
+    be content-authored on the per-confrontation ``opponent_default_stats``
+    block via the reserved ``hp`` / ``armor_class`` keys (see
+    ``ConfrontationDef.opponent_hp`` / ``opponent_armor_class``).
+
+    For each opponent-side ``EncounterActor`` we seed the backing
+    ``Npc.core.hp`` pool (via ``hp_pool_from_hp``) and ``core.armor_class``
+    from the content values. CRITICAL (item 3 / CLAUDE.md "no half-wiring"):
+    if no backing ``Npc`` exists for an opponent name (a router-named
+    opponent that was never materialized into ``snapshot.npcs``), we CREATE
+    one here so the opponent core is reachable via
+    ``snapshot.find_creature_core(name)`` — without it the hp_depletion
+    resolution path (``apply_beat`` reads the opponent via the edge_resolver
+    and resolves at ``core.hp.current <= 0``) could never fire and the SWN
+    attack would have no AC to roll against.
+
+    Fail loud (CLAUDE.md no-silent-fallback): a hp_depletion combat MUST
+    author both ``hp`` and ``armor_class`` in ``opponent_default_stats``.
+    """
+    from sidequest.game.creature_core import CreatureCore, Inventory, hp_pool_from_hp
+    from sidequest.game.session import Npc
+
+    hp = cdef.opponent_hp
+    ac = cdef.opponent_armor_class
+    if hp is None or ac is None:
+        raise ValueError(
+            f"confrontation '{getattr(cdef, 'confrontation_type', '?')}' uses "
+            "win_condition=hp_depletion but its opponent_default_stats is "
+            f"missing the reserved combat keys (hp={hp!r}, armor_class={ac!r}); "
+            "author both `hp` and `armor_class` under opponent_default_stats"
+        )
+
+    by_name = {npc.core.name: npc for npc in snapshot.npcs}
+    for actor in actors:
+        if actor.side != "opponent":
+            continue
+        npc = by_name.get(actor.name)
+        if npc is None:
+            # Item 3 wiring: no backing Npc.core for this opponent. Create
+            # one seeded with the content stats so find_creature_core can
+            # reach it and hp_depletion can resolve. The flavor fields are
+            # placeholders (the narrator owns prose); the mechanical surface
+            # (hp pool, AC) is the load-bearing part.
+            core = CreatureCore(
+                name=actor.name,
+                description="Combat opponent",
+                personality="Adversary",
+                inventory=Inventory(),
+                hp=hp_pool_from_hp(hp),
+                armor_class=ac,
+            )
+            npc = Npc(core=core)
+            snapshot.npcs.append(npc)
+        else:
+            npc.core.hp = hp_pool_from_hp(hp)
+            npc.core.armor_class = ac
+        with npc_edge_published_span(
+            npc_name=actor.name,
+            current=npc.core.hp.current,
+            max=npc.core.hp.max,
+            source=source,
+            turn_number=turn,
+        ):
+            pass
+
+
 def _publish_combat_edge_to_npcs(
     *,
     snapshot: GameSnapshot,
@@ -97,9 +175,10 @@ def _publish_combat_edge_to_npcs(
 ) -> None:
     """Story 45-21 / 45-52: publish dial-derived edge onto opponent ``Npc``s.
 
-    For each opponent-side ``EncounterActor`` whose ``name`` matches an
-    ``Npc`` in ``snapshot.npcs``, overwrite the npc's ``core.hp`` pool
-    using the opponent dial as the canonical pool size:
+    DIAL-THRESHOLD path only. For each opponent-side ``EncounterActor``
+    whose ``name`` matches an ``Npc`` in ``snapshot.npcs``, overwrite the
+    npc's ``core.hp`` pool using the opponent dial as the canonical pool
+    size:
 
         max     = opponent_metric.threshold
         current = max(1, threshold - current)
@@ -108,6 +187,11 @@ def _publish_combat_edge_to_npcs(
     the opponent loses (= defeated). Inverting it into a descending HP
     view gives narrator / GM panel a consistent "current > 0 = alive"
     read while keeping the dial as the single source of truth.
+
+    hp_depletion combats (no dial) are handled by
+    ``_seed_combat_hp_depletion_to_npcs`` instead — this function is the
+    legacy dial-derived path preserved for ``win_condition: dial_threshold``
+    packs (do not regress them).
 
     Renamed from ``_publish_combat_stats_to_registry`` in story 45-52 —
     the legacy ``npc_registry`` is gone; per ADR-114 (HP restored) and
@@ -531,13 +615,29 @@ def instantiate_encounter_from_trigger(
         # matching Npc. Non-combat encounters leave ``core.edge`` at its
         # standing value so the validator's dead-NPC check stays correct.
         if cdef.category == "combat":
-            _publish_combat_edge_to_npcs(
-                snapshot=snapshot,
-                actors=actors,
-                opponent_metric=enc.opponent_metric,
-                turn=snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0,
-                source="encounter_handshake",
+            turn_no = (
+                snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
             )
+            if cdef.win_condition == WinCondition.hp_depletion:
+                # Task 9: no dial — seed opponent core.hp + core.armor_class
+                # from content opponent_default_stats. Creates a backing Npc
+                # for any opponent lacking one so find_creature_core reaches
+                # it and the SWN attack/hp_depletion pipeline resolves.
+                _seed_combat_hp_depletion_to_npcs(
+                    snapshot=snapshot,
+                    actors=actors,
+                    cdef=cdef,
+                    turn=turn_no,
+                    source="encounter_handshake",
+                )
+            else:
+                _publish_combat_edge_to_npcs(
+                    snapshot=snapshot,
+                    actors=actors,
+                    opponent_metric=enc.opponent_metric,
+                    turn=turn_no,
+                    source="encounter_handshake",
+                )
         return enc
 
 

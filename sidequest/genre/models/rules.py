@@ -14,6 +14,14 @@ from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.disposition import AttitudeThresholds
 from sidequest.genre.models.inventory import DamageSpec
 
+# Keys inside ``ConfrontationDef.opponent_default_stats`` that are NOT
+# ability scores. ``hp`` seeds the opponent CreatureCore HP pool and
+# ``armor_class`` seeds the SWN ascending AC the attack rolls against
+# (hp_depletion combats). They are popped out before ability-score /
+# modifier resolution so they never leak into opposed_check lookups or
+# the ADR-093 calibration ceiling.
+OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset({"hp", "armor_class"})
+
 
 class MoraleTrigger(StrEnum):
     """B/X morale check triggers. Per spec §2.2."""
@@ -399,6 +407,15 @@ class ConfrontationDef(BaseModel):
     # ``None`` means the pack has not migrated this confrontation to
     # opposed_check — only valid when ``resolution_mode`` is something
     # other than ``opposed_check``.
+    #
+    # RESERVED KEYS: ``hp`` and ``armor_class`` are NOT ability scores. When
+    # present they seed the opponent's runtime CreatureCore (HP pool +
+    # ascending SWN AC) for hp_depletion combats — see
+    # ``opponent_hp`` / ``opponent_armor_class`` and the seating seam in
+    # ``encounter_lifecycle._publish_combat_edge_to_npcs``. They are popped
+    # out of the ability-score map by ``opponent_ability_scores()`` so they
+    # never leak into modifier resolution. All other keys are raw ability
+    # scores (3..20 D&D-style; modifier = floor((score-10)/2)).
     opponent_default_stats: dict[str, int] | None = None
     morale: MoraleDef | None = None
     intent_verbs: list[str] | None = None
@@ -460,6 +477,38 @@ class ConfrontationDef(BaseModel):
                 verbs.update(tokenize(v))
         object.__setattr__(self, "intent_verb_set", frozenset(verbs))
         return self
+
+    def opponent_ability_scores(self) -> dict[str, int] | None:
+        """``opponent_default_stats`` with reserved combat keys removed.
+
+        ``hp`` and ``armor_class`` are not ability scores; they seed the
+        opponent CreatureCore. This returns only the ability-score entries
+        so opposed_check modifier resolution never sees the reserved keys.
+        Returns ``None`` when the underlying map is unset.
+        """
+        if self.opponent_default_stats is None:
+            return None
+        return {
+            k: v
+            for k, v in self.opponent_default_stats.items()
+            if k not in OPPONENT_RESERVED_STAT_KEYS
+        }
+
+    @property
+    def opponent_hp(self) -> int | None:
+        """Content-authored opponent HP pool, or ``None`` if not authored."""
+        if not self.opponent_default_stats:
+            return None
+        raw = self.opponent_default_stats.get("hp")
+        return int(raw) if raw is not None else None
+
+    @property
+    def opponent_armor_class(self) -> int | None:
+        """Content-authored opponent ascending AC, or ``None`` if not set."""
+        if not self.opponent_default_stats:
+            return None
+        raw = self.opponent_default_stats.get("armor_class")
+        return int(raw) if raw is not None else None
 
 
 class CrossingDirection(StrEnum):

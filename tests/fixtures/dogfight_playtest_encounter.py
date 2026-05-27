@@ -38,6 +38,9 @@ from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import ConfrontationDef
 from sidequest.server.dispatch.confrontation import find_confrontation_def
+from sidequest.server.dispatch.encounter_lifecycle import (
+    instantiate_encounter_from_trigger,
+)
 from sidequest.server.dispatch.sealed_letter import SealedLetterOutcome
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 from tests._helpers.session_room import room_for
@@ -116,27 +119,31 @@ def make_dogfight_playtest_state(
     snap = GameSnapshot(genre=GENRE_SLUG)
     snap.genre_slug = GENRE_SLUG
 
-    # Drive instantiation through the production path so role tagging
-    # (red/blue per T3) and any other instantiation-time wiring fire.
-    _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration=(
-                f"{player_pilot_name} pushes the throttle as "
-                f"{opponent_pilot_name} screams in on the merge."
-            ),
-            confrontation=DOGFIGHT_TYPE,
-            npcs_present=[
-                NpcMention(
-                    name=opponent_pilot_name,
-                    role="hostile",
-                    side="opponent",
-                ),
-            ],
-        ),
-        player_name=player_pilot_name,
+    # Story 59-17: instantiate through the LIVE production primitive.
+    # Confrontation engagement is router-driven (Story 59-4 / ADR-113); the
+    # narrator-initiated instantiation block inside
+    # ``_apply_narration_result_to_snapshot`` was removed, so the old
+    # ``confrontation=DOGFIGHT_TYPE`` call no longer seats an encounter
+    # (that was the 59-17 repro: ``snap.encounter`` stayed None). Drive the
+    # same instantiation primitive the router dispatch calls
+    # (``run_confrontation_dispatch`` → ``instantiate_encounter_from_trigger``)
+    # so role tagging (red/blue per T3) and instantiation-time wiring fire.
+    # We pass the opponent explicitly (the rarer router-with-mentions path);
+    # the location-fallback path is covered by
+    # ``test_dogfight_instantiation_production_path.py``.
+    instantiate_encounter_from_trigger(
+        snapshot=snap,
         pack=pack,
-        room=room_for(snap),
+        encounter_type=DOGFIGHT_TYPE,
+        player_name=player_pilot_name,
+        npcs_present=[
+            NpcMention(
+                name=opponent_pilot_name,
+                role="hostile",
+                side="opponent",
+            ),
+        ],
+        genre_slug=GENRE_SLUG,
     )
 
     enc = snap.encounter

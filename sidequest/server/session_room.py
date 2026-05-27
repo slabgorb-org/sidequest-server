@@ -887,8 +887,45 @@ class SessionRoom:
                 for sid, q in self._outbound_queues.items()
                 if sid != exclude_socket_id
             ]
+            # Story 67-2: an intended recipient is a player in ``_connected``
+            # (minus the excluded socket). A connected player whose socket has
+            # NO outbound queue is a mid-broadcast drop — the transient churn
+            # state that silently stranded a sealed peer at "Composing" because
+            # the seal frame rode this path and vanished with no log, no event.
+            # Surface it LOUDLY (CLAUDE.md No Silent Fallbacks + OTEL
+            # lie-detector). Distinct from the event-sourced
+            # ``emitters._deliver_fanout`` path 67-1 already instrumented.
+            dropped = [
+                (pid, sid)
+                for pid, sid in self._connected.items()
+                if sid != exclude_socket_id and sid not in self._outbound_queues
+            ]
         for _sid, _pid, q in targets:
             q.put_nowait(msg)
+        if dropped:
+            msg_type = str(getattr(msg, "type", ""))
+            for pid, sid in dropped:
+                _log.warning(
+                    "broadcast.recipient_dropped slug=%s recipient_player_id=%s "
+                    "socket_id=%s type=%s reason=queue_missing",
+                    self.slug,
+                    pid,
+                    sid,
+                    msg_type,
+                )
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "broadcast.recipient_dropped",
+                        "recipient_player_id": pid,
+                        "socket_id": sid,
+                        "type": msg_type,
+                        "reason": "queue_missing",
+                        "slug": self.slug,
+                    },
+                    component="broadcast",
+                    severity="warning",
+                )
         return [(sid, pid) for sid, pid, _q in targets]
 
 

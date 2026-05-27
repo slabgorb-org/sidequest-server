@@ -15,13 +15,12 @@ B1 (this file):      DungeonRepository Protocol — dungeon persistence surface.
 C1 (this file):      TelemetrySink Protocol — out-of-frame telemetry + encounter
                      event writes (PgTelemetrySink implementation in pg/telemetry.py).
 
-Compatibility note
-------------------
-``SqliteSaveRepository`` satisfies only the original Slice-1a surface.  It
-is deleted in F1; the isinstance assertions in the existing test suite have
-been updated to use ``PgSaveRepository`` for the full-surface check.  The
-Slice-1a methods are still structurally satisfied by ``SqliteSaveRepository``
-so all non-isinstance tests continue to pass against it.
+Implementations
+---------------
+``PgSaveRepository`` (sidequest/game/pg/save_repository.py) is the sole
+production implementation. The legacy ``SqliteSaveRepository`` was deleted in
+ADR-115 TG-F (F1); tests use ``PgSaveRepository`` on an isolated database, or a
+``MagicMock(spec=SaveRepository)`` where nothing is read back.
 """
 
 from __future__ import annotations
@@ -76,7 +75,7 @@ class SaveTransaction(Protocol):
 class SaveRepository(Protocol):
     """Storage-engine-agnostic save store. Full typed surface (ADR-115 A7).
 
-    SQLite today (Slice-1a subset only); Postgres via PgSaveRepository.
+    Postgres via PgSaveRepository (ADR-115).
     """
 
     def transaction(self) -> AbstractContextManager[SaveTransaction]: ...

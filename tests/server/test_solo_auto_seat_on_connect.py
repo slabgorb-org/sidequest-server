@@ -56,6 +56,52 @@ _WORLD = "grimvault"
 _CONTENT_SEARCH_PATH = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    Slug-connect (ADR-115 D2) loads the authoritative snapshot from PG via
+    db_pool.get_pool(); seed and connect must share one isolated database.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _seed_pg_for_slug(
+    slug: str,
+    snap: GameSnapshot,
+    *,
+    mode: GameMode = GameMode.SOLO,
+) -> None:
+    """Mirror a seeded snapshot into PG — the store the slug-resume path loads."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(mode),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    repo.save(snap)
+
+
 def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
     handler = WebSocketSessionHandler(
         save_dir=save_dir,
@@ -99,6 +145,7 @@ def _seed_solo_game(tmp_path: Path, slug: str, *, with_character: bool) -> Path:
         snap.player_seats["parsley-pid"] = "Parsley"
         store.init_session(_GENRE, _WORLD)
         store.save(snap)
+        _seed_pg_for_slug(slug, snap, mode=GameMode.SOLO)
     store.close()
     return tmp_path
 

@@ -61,9 +61,7 @@ from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
-CONTENT_ROOT = (
-    Path(__file__).resolve().parents[3].parent / "sidequest-content" / "genre_packs"
-)
+CONTENT_ROOT = Path(__file__).resolve().parents[3].parent / "sidequest-content" / "genre_packs"
 
 pytestmark = pytest.mark.skipif(
     not CONTENT_ROOT.is_dir(),
@@ -106,6 +104,28 @@ def _seat_opponent(snap: GameSnapshot, *, name: str = "Vulture") -> None:
     opp.last_seen_location = LOCATION
     opp.npc_role_id = "hostile"
     snap.npcs.append(opp)
+
+
+def _seat_bystander(snap: GameSnapshot, *, name: str = "Deck Crew Chief") -> None:
+    """Put one neutral, non-adversarial bystander in the player's scene.
+
+    Same shape as ``_seat_opponent`` but marked ``npc_role_id="bystander"``
+    with the default (neutral) disposition — a deck-crew chief who merely
+    shares the hangar, not the duel target. The sealed-letter sourcing must
+    NOT conscript this NPC into a 1v1 dogfight (Story 45-33 / ADR-116, at the
+    live dispatch seam — the regression a Reviewer caught when 59-17's first
+    fix seated any single location NPC).
+    """
+    npc = Npc(
+        core=CreatureCore(
+            name=name,
+            description="A deck hand running pre-flight checks. Not a combatant.",
+            personality="harried, neutral",
+        )
+    )
+    npc.last_seen_location = LOCATION
+    npc.npc_role_id = "bystander"
+    snap.npcs.append(npc)
 
 
 def _dogfight_dispatch() -> SubsystemDispatch:
@@ -216,6 +236,43 @@ async def test_dogfight_dispatch_without_any_opponent_refuses_one_sided(
     assert out.data.get("error") is not None, (
         "expected an engagement-gap error in the dispatch output so the "
         "watcher/GM panel sees the refusal, not a silent no-op"
+    )
+
+
+async def test_dogfight_with_only_a_bystander_present_refuses(
+    space_opera_pack: GenrePack,
+) -> None:
+    """GUARD (Story 45-33 at the dispatch seam): a lone bystander is not the Other.
+
+    The first 59-17 fix relaxed the sealed-letter fallback so it seated ANY
+    single location NPC — which silently conscripted a neutral bystander into
+    the duel (count == 1 passes the arity check). ADR-116 requires "an Other,"
+    not "any warm body." With ``npcs_present=[]`` and only a neutral
+    ``npc_role_id="bystander"`` NPC at the location, the sealed-letter
+    sourcing must filter it out → zero candidates → loud arity refusal, no
+    encounter. (The module-level twin is
+    ``test_encounter_lifecycle.py::test_sealed_letter_empty_npcs_present_raises_without_consuming_fallback``;
+    this is its live-dispatch counterpart.)
+    """
+    snap = _snap_at_location()
+    _seat_bystander(snap, name="Deck Crew Chief")
+
+    out = await run_confrontation_dispatch(
+        _dogfight_dispatch(),
+        snapshot=snap,
+        pack=space_opera_pack,
+        player_name=PLAYER,
+        npcs_present=[],
+    )
+
+    assert snap.encounter is None, (
+        "a lone bystander must NOT be seated as the duel opponent — the "
+        "sealed-letter sourcing must require an adversary, not any "
+        "same-location NPC (Story 45-33 / ADR-116)"
+    )
+    assert out.data.get("error") == "sealed_letter_arity_rejected", (
+        "expected a loud sealed_letter_arity_rejected refusal (got 0 "
+        f"adversaries), not a silent bystander seat; got {out.data!r}"
     )
 
 

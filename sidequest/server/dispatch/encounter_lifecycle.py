@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import cast
 
+from sidequest.game.disposition import Attitude
 from sidequest.game.encounter import (
     ActorSide,
     EncounterActor,
@@ -328,9 +329,48 @@ def _publish_combat_edge_to_npcs(
 # tea_and_murder) so we don't regress a parley shape.
 _ADVERSARIAL_CATEGORIES = frozenset({"combat", "movement"})
 
+# Story 59-17: role tokens that mark a same-location NPC as a genuine
+# adversary for sealed-letter (1v1) candidate sourcing. ``npc_role_id`` is a
+# free-form string, so this is a conservative allowlist — combined with the
+# hostile-disposition signal in ``_npc_is_adversary`` it covers (a) explicitly
+# hostile-tagged NPCs and (b) bestiary-materialized creatures (disposition
+# default -20). Anything else (a deck-crew bystander, a merchant, an ally,
+# a None role with neutral disposition) is NOT a duel candidate.
+_ADVERSARIAL_ROLE_IDS = frozenset(
+    {"hostile", "enemy", "opponent", "adversary", "rival", "antagonist"}
+)
+
 
 def _is_adversarial(category: str) -> bool:
     return category in _ADVERSARIAL_CATEGORIES
+
+
+def _npc_is_adversary(npc) -> bool:
+    """Sealed-letter duel candidacy: does this same-location NPC read as the Other?
+
+    A sealed-letter encounter (commit-reveal duel) seats exactly one
+    opponent. When the router supplies no explicit ``npcs_present`` (Story
+    59-17), the opponent is sourced from ``snapshot.npcs`` at the player's
+    location — but a 1v1 duel must NOT conscript a bystander who merely
+    happens to share the room (Story 45-33; ADR-116 "an Other", not "any
+    warm body"). An NPC qualifies only if it reads as an adversary:
+
+    - ``disposition.attitude() == HOSTILE`` — the production signal for
+      bestiary-materialized creatures (disposition default -20), and for any
+      NPC the disposition engine has turned hostile through play; OR
+    - ``npc_role_id`` is an explicit adversarial token (``_ADVERSARIAL_ROLE_IDS``).
+
+    Neutral disposition + non-adversarial/None role ⇒ NOT an adversary. The
+    caller then sees zero candidates and the sealed-letter arity validator
+    raises loudly ("got 0 npcs_present") rather than silently seating the
+    bystander (CLAUDE.md No Silent Fallbacks). This is deliberately
+    conservative: when hostility is ambiguous, refuse the duel — never
+    substitute a wrong Other.
+    """
+    if npc.disposition.attitude() == Attitude.HOSTILE:
+        return True
+    role = (npc.npc_role_id or "").strip().lower()
+    return role in _ADVERSARIAL_ROLE_IDS
 
 
 def _npc_fallback_at_location(
@@ -338,6 +378,7 @@ def _npc_fallback_at_location(
     *,
     adversarial: bool,
     acting_character_name: str | None = None,
+    adversary_only: bool = False,
 ) -> tuple[list, bool]:
     """Synthesise NpcMention entries from snapshot.npcs at the player's location.
 
@@ -366,6 +407,13 @@ def _npc_fallback_at_location(
     ``npcs_present`` mention. ``snapshot.npcs`` carries both narrator-declared
     NPCs and bestiary mobs (``creature_id`` set); both are seatable here.
 
+    Story 59-17: ``adversary_only`` (sealed-letter 1v1 sourcing) additionally
+    filters candidates through ``_npc_is_adversary`` so a same-location
+    bystander is never promoted into a duel. The non-sealed path leaves this
+    False — a brawl/chase intentionally pulls in every location NPC as an
+    opponent (story 59-13's chase dial depends on it), so that contract is
+    byte-identical when ``adversary_only=False``.
+
     Returns ``(mentions, location_available)`` so the caller can decorate
     the empty-result span: ``location_available=False`` means the player
     had no resolved location (silent-failure detector — story 45-52,
@@ -384,6 +432,10 @@ def _npc_fallback_at_location(
     fallback: list = []
     for npc in snapshot.npcs:
         if npc.last_seen_location != location:
+            continue
+        # Story 59-17: sealed-letter sourcing seats only genuine adversaries —
+        # a neutral-disposition bystander sharing the room is not the Other.
+        if adversary_only and not _npc_is_adversary(npc):
             continue
         fallback.append(
             NpcMention(
@@ -469,21 +521,27 @@ def instantiate_encounter_from_trigger(
     # skipped for sealed-letter, so a dogfight could NEVER instantiate via
     # the live router even when the enemy pilot was right there in the scene
     # (ADR-116: "a confrontation requires an Other" — the Other existed but
-    # was never seated). The arity validator below is the gate that makes
-    # this safe: exactly one location candidate ⇒ seat it as blue; zero or
-    # >1 ⇒ keep the loud ``SealedLetterArityError`` (no silent bystander
-    # leak, no phantom opponent).
+    # was never seated).
     #
-    # Considered and rejected (Story 59-17 Architect consult): narrowing the
-    # sealed-letter candidates by ``Disposition.attitude() == HOSTILE`` to
-    # pick the single adversary out of a crowd. A freshly narrator-declared
-    # dogfight opponent carries the DEFAULT (neutral) disposition — only
-    # bestiary-materialized creatures default hostile — so a disposition
-    # gate would reject the very opponent it is meant to seat. Hostility in
-    # a dogfight is contextual to the scene, not a stored score; the
-    # ``_is_adversarial`` CATEGORY check + arity validation is the correct
-    # discriminator. The >1-bystander case is handled conservatively (loud
-    # arity refusal); smarter single-adversary selection is a future story.
+    # The leak this MUST avoid (Story 45-33): a 1v1 duel must not conscript a
+    # neutral bystander who merely shares the room — that would pass the
+    # arity check (count == 1) and silently seat the wrong Other. The arity
+    # validator alone is NOT sufficient: it catches 0 and >1, but a lone
+    # bystander (count == 1) sails through. So sealed-letter sourcing passes
+    # ``adversary_only=True``, which filters candidates through
+    # ``_npc_is_adversary`` (hostile disposition OR an adversarial role
+    # token). A lone bystander ⇒ 0 candidates ⇒ the arity validator raises
+    # loudly ("got 0 npcs_present"); a lone adversary ⇒ 1 ⇒ seated as blue.
+    #
+    # Rejected (Story 59-17 Architect consult): keying solely on
+    # ``Disposition.attitude() == HOSTILE``. A narrator-declared opponent can
+    # carry the DEFAULT (neutral) disposition, so disposition ALONE would
+    # reject a real opponent — hence the role-token OR-branch in
+    # ``_npc_is_adversary``. Category (``_is_adversarial``) is necessary but
+    # not sufficient: it is encounter-level and cannot tell a pilot from a
+    # bartender. The combined disposition-OR-role predicate is the
+    # discriminator both Story 45-33 (bystander ⇒ skip) and Story 59-17
+    # (hostile ⇒ seat) require.
     #
     # Story 45-52: ``location_available`` discriminates "empty location"
     # from "no location at all" — both produce an empty fallback, but only
@@ -497,6 +555,7 @@ def instantiate_encounter_from_trigger(
             snapshot,
             adversarial=_is_adversarial(cdef.category),
             acting_character_name=player_name,
+            adversary_only=cdef.resolution_mode == ResolutionMode.sealed_letter_lookup,
         )
 
     # Story 45-33 / ADR-116: adversarial empty+empty guard (CLAUDE.md "No

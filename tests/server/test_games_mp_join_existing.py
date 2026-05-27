@@ -45,6 +45,31 @@ from sidequest.server.rest import create_rest_router
 from sidequest.telemetry.setup import init_tracer
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG database and truncate
+    between tests. POST /api/games consults PG for create-vs-resume; the
+    deterministic slugs would otherwise collide across tests on the shared db.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
     app = FastAPI()
@@ -275,6 +300,18 @@ def test_mp_existing_solo_game_at_same_slug_does_not_join(
         store,
         slug=rogue_slug,
         mode=GameMode.SOLO,
+        genre_slug="mutant_wasteland",
+        world_slug="flickering_reach",
+    )
+    # Mirror the rogue game into PG — slug disambiguation (D2) checks the PG
+    # sessions table, not SQLite save_dir file existence.
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=rogue_slug,
+        mode=str(GameMode.SOLO),
         genre_slug="mutant_wasteland",
         world_slug="flickering_reach",
     )

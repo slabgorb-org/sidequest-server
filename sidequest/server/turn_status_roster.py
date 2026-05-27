@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from sidequest.game.session import GameSnapshot
+from sidequest.game.turn import TurnPhase
 from sidequest.protocol.messages import TurnStatusEntry
 from sidequest.protocol.types import NonBlankString
 
@@ -52,3 +53,33 @@ def build_turn_status_roster(
             )
         )
     return entries
+
+
+def build_seal_reconcile_roster(
+    snapshot: GameSnapshot,
+    playing_player_ids: Iterable[str],
+) -> list[TurnStatusEntry]:
+    """Roster reflecting the CURRENT seal truth for a (re)connecting peer.
+
+    Story 67-2: a dropped ACTION_REVEAL/TURN_STATUS frame can strand a peer at
+    "Composing". On (re)connect we re-derive seal state and send it so the
+    strand is self-healing. The wrinkle is phase-dependence:
+
+    - **InputCollection** (barrier still collecting): ``_submitted`` is the
+      authoritative set — defer to :func:`build_turn_status_roster`.
+    - **Past InputCollection** (barrier fired, turn resolving): ``submit_input``
+      / ``recheck_barrier`` (turn.py:96-98,119-122) CLEARED ``_submitted`` on
+      the phase transition. Reading it naively here would report every peer
+      ``pending`` and flip a sealed table back to "Composing" — the exact
+      regression ``player_action.py:560-574`` guards against on its terminal
+      broadcast. So we project all playing peers ``submitted`` (the round has
+      effectively closed), mirroring that terminal projection.
+
+    Read-only: never mutates ``_submitted`` or the phase (presence recovery
+    must not perturb the barrier it only reports).
+    """
+    base = build_turn_status_roster(snapshot, playing_player_ids)
+    if snapshot.turn_manager.phase == TurnPhase.InputCollection:
+        return base
+    # Barrier already fired — project the round's terminal all-submitted state.
+    return [entry.model_copy(update={"status": "submitted"}) for entry in base]

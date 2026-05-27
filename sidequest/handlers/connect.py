@@ -40,7 +40,10 @@ from sidequest.protocol.messages import (
     SeatConfirmedPayload,
     SessionEventMessage,
     SessionEventPayload,
+    TurnStatusMessage,
+    TurnStatusPayload,
 )
+from sidequest.protocol.types import NonBlankString
 from sidequest.server import views
 from sidequest.server.dispatch.char_creation_resolve import resolve_char_creation_scenes
 from sidequest.server.dispatch.culture_context import resolve_culture_reference
@@ -58,6 +61,7 @@ from sidequest.server.session_helpers import (
     _presence_msg,
     _resolve_location_display,
 )
+from sidequest.server.turn_status_roster import build_seal_reconcile_roster
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 if TYPE_CHECKING:
@@ -1453,6 +1457,61 @@ class ConnectHandler:
                 )
                 if cart_map_msg is not None:
                     bootstrap_msgs.append(cart_map_msg)
+                # Story 67-2: seal-presence reconcile. A dropped
+                # ACTION_REVEAL{submitted}/TURN_STATUS{submitted} frame can
+                # strand a reconnecting peer at "Adam Composing…" forever (the
+                # 2026-05-27 beneath_sunden ping-pong). Those frames ride the
+                # best-effort SessionRoom.broadcast path and are NOT event-
+                # sourced, so the replay loop above never backfills them. Re-
+                # derive the canonical seal roster from the shared snapshot and
+                # send it to THIS connecting socket only — idempotent recovery
+                # the UI already treats as authoritative (App.tsx batch-entries
+                # path + mergePeerRevealsWithSubmittedStatus). MP-only: solo has
+                # no peers to reconcile. Phase-aware: build_seal_reconcile_roster
+                # projects the terminal all-submitted state once the barrier has
+                # fired so a resolving round never regresses a sealed peer.
+                if GameMode(row.mode) == GameMode.MULTIPLAYER and room is not None:
+                    reconcile_roster = build_seal_reconcile_roster(
+                        snapshot, room.playing_player_ids()
+                    )
+                    if reconcile_roster:
+                        bootstrap_msgs.append(
+                            TurnStatusMessage(
+                                payload=TurnStatusPayload(
+                                    player_name=NonBlankString(display_name),
+                                    # Inert top-level status: the UI's batch-
+                                    # entries handler consumes ``entries`` and
+                                    # never branches on "pending", so this frame
+                                    # reconciles the roster without faking an
+                                    # active/resolving/resolved transition.
+                                    status="pending",
+                                    entries=reconcile_roster,
+                                ),
+                                player_id=player_id,
+                            )
+                        )
+                        _sealed_count = sum(1 for e in reconcile_roster if e.status == "submitted")
+                        _watcher_publish(
+                            "state_transition",
+                            {
+                                "field": "turn_status.reconciled_on_connect",
+                                "player_id": player_id,
+                                "slug": slug,
+                                "roster_size": len(reconcile_roster),
+                                "sealed_count": _sealed_count,
+                                "phase": str(snapshot.turn_manager.phase),
+                            },
+                            component="multiplayer",
+                        )
+                        logger.info(
+                            "turn_status.reconciled_on_connect player_id=%s slug=%s "
+                            "sealed=%d/%d phase=%s",
+                            player_id,
+                            slug,
+                            _sealed_count,
+                            len(reconcile_roster),
+                            snapshot.turn_manager.phase,
+                        )
                 # Confrontation re-emit on slug-resume (playtest 2026-05-02).
                 # Without this, reloading a tab mid-confrontation drops the
                 # right-pane "Confrontation" tab — the steady-state encounter

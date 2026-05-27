@@ -110,21 +110,19 @@ def _handler_with_queue(
     return handler, out_queue
 
 
-async def _connect(handler: WebSocketSessionHandler, player_id: str, name: str, slug: str) -> None:
-    await handler.handle_message(
+async def _connect(
+    handler: WebSocketSessionHandler, player_id: str, name: str, slug: str
+) -> list[object]:
+    """Connect and RETURN the outbound frames. ``handle_message`` returns the
+    connecting socket's bootstrap+replay frames directly (the real per-socket
+    delivery channel); they are NOT enqueued onto the broadcast out_queue."""
+    return await handler.handle_message(
         SessionEventMessage(
             type="SESSION_EVENT",
             player_id=player_id,
             payload=SessionEventPayload(event="connect", game_slug=slug, player_name=name),
         )
     )
-
-
-def _drain(queue: asyncio.Queue) -> list[object]:
-    out: list[object] = []
-    while not queue.empty():
-        out.append(queue.get_nowait())
-    return out
 
 
 def _turn_status_frames(messages: list[object]) -> list[object]:
@@ -170,11 +168,12 @@ async def test_reconnect_reconciles_sealed_peer_into_turn_status(tmp_path: Path)
     slug = "67-2-reconnect-reconcile"
     registry, _room = await _seat_both_and_seal_adam(tmp_path, slug)
 
-    # Eve's socket churned; she reconnects on a fresh socket + queue.
-    eve_h2, eve_q = _handler_with_queue(tmp_path, registry, "sock-eve-2")
-    await _connect(eve_h2, "eve-pid", "Eve", slug)
+    # Eve's socket churned; she reconnects on a fresh socket. The connect
+    # handler returns her bootstrap frames directly.
+    eve_h2, _eve_q = _handler_with_queue(tmp_path, registry, "sock-eve-2")
+    outbound = await _connect(eve_h2, "eve-pid", "Eve", slug)
 
-    frames = _turn_status_frames(_drain(eve_q))
+    frames = _turn_status_frames(outbound)
     assert frames, (
         "Eve's reconnect must send her at least one TURN_STATUS carrying the "
         "reconciled seal roster — without it a dropped seal frame strands her "

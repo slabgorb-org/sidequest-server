@@ -151,6 +151,30 @@ def render_node(
     return _render_scalar(node)
 
 
+def _humanize_label(raw: object) -> str:
+    """Humanize an identifier-shaped key/id for a player-facing heading.
+
+    The generic fallback printed raw YAML keys and item ids verbatim as
+    headings — ``the_maw``, ``genre_conventions``, ``rolls_per_slot``,
+    ``floor_it`` — leaking snake_case onto Rules/Lore pages (playtest
+    2026-05-27, the dominant road_warrior failure). This converts
+    identifier-shaped strings to Title Case ("The Maw", "Genre Conventions",
+    "Rolls Per Slot", "Floor It").
+
+    Conservative by design: a string that already contains whitespace OR any
+    uppercase letter is assumed author-formatted and returned UNCHANGED, so a
+    real heading like "Floor It", an acronym, or a proper noun is never
+    mangled (no "USB" → "Usb"). Only pure identifier tokens are transformed.
+    """
+    text = str(raw).strip()
+    if not text:
+        return text
+    if any(c.isspace() for c in text) or any(c.isupper() for c in text):
+        return text
+    parts = [p for p in re.split(r"[_\-]+", text) if p]
+    return " ".join(p.capitalize() for p in parts) or text
+
+
 def _render_scalar(value: object) -> str:
     if value is None:
         return "<p><em>(none)</em></p>"
@@ -236,7 +260,7 @@ def _render_dict(
                 pass
         # Dict keys always use flat slugs — only list-of-dict items are namespaced.
         parts.append(f'<section id="{slug}">')
-        parts.append(f"<h2>{escape(str(key))}</h2>")
+        parts.append(f"<h2>{escape(_humanize_label(key))}</h2>")
         # Forward kind so it reaches lists nested inside this dict's values.
         parts.append(render_node(value, depth + 1, kind=kind, ctx=child_ctx))
         parts.append("</section>")
@@ -313,7 +337,7 @@ def _render_list(
                 else None
             )
             parts.append(f'<section id="{slug}">')
-            parts.append(f"<h3>{escape(display)}</h3>")
+            parts.append(f"<h3>{escape(_humanize_label(display))}</h3>")
             # Nested dict keys are flat-slugged per the original design —
             # kind only namespaces direct list-of-dict items; do not forward.
             parts.append(render_node(item, depth + 1, ctx=child_ctx))

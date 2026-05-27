@@ -39,8 +39,9 @@ class DamageSpec(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    dice: str          # "NdM" — M must be a supported DieSides face count
+    dice: str  # "NdM" — M must be a supported DieSides face count
     bonus: int = 0
+    armor_piercing: int = Field(default=0, ge=0)  # AP: reduces target Armor before subtraction
 
     @field_validator("dice")
     @classmethod
@@ -73,8 +74,8 @@ class CatalogItem(BaseModel):
     lore: str = ""
     narrative_weight: Any = None  # accepts string or numeric
     resource_ticks: int | None = None
-    damage: DamageSpec | None = None    # weapons
-    mitigation: int | None = None       # armor: flat damage reduction (SWN soak)
+    damage: DamageSpec | None = None  # weapons
+    mitigation: int | None = None  # armor: flat damage reduction (SWN soak)
 
 
 class CarryMode(StrEnum):

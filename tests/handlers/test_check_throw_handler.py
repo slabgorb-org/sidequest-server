@@ -25,15 +25,18 @@ from sidequest.protocol.messages import CheckThrowMessage, CheckThrowPayload
 from sidequest.server.dispatch.check import CheckThrowOutcome
 from sidequest.server.session_handler import WebSocketSessionHandler
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 _ATTR_MAP = {
-    "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
-    "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
+    "STRENGTH": "Physique",
+    "CONSTITUTION": "Resolve",
+    "DEXTERITY": "Reflex",
+    "INTELLIGENCE": "Intellect",
+    "WISDOM": "Cunning",
+    "CHARISMA": "Influence",
 }
 
 

@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from sidequest.game.ruleset.resolution import AttackRollParams
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
 from sidequest.protocol.models import InitiativeEntry
+
+if TYPE_CHECKING:
+    from sidequest.game.beat_kinds import ApplyResult
+    from sidequest.genre.models.inventory import DamageSpec
 
 
 class UnknownRulesetError(ValueError):
@@ -40,11 +45,13 @@ class RulesetModule(ABC):
         """The difficulty class / target number this ruleset assigns a beat."""
 
     @abstractmethod
-    def apply_beat(self, *, encounter, actor, beat, outcome, turn, edge_resolver, damage_resolver):
+    def apply_beat(
+        self, *, encounter, actor, beat, outcome, turn, edge_resolver, damage_resolver
+    ) -> ApplyResult:
         """Apply a resolved beat's deltas to the encounter. Returns the engine ApplyResult."""
 
     @abstractmethod
-    def resolve_damage(self, *, beat, actor_core, pack):
+    def resolve_damage(self, *, beat, actor_core, pack) -> DamageSpec | None:
         """Resolve the DamageSpec for a strike beat (weapon or override), or None."""
 
     @abstractmethod

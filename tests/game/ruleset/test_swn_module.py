@@ -1,10 +1,41 @@
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from sidequest.game.creature_core import CreatureCore, HpPool
+from sidequest.game.encounter import (
+    EncounterActor,
+    EncounterMetric,
+    EncounterPhase,
+    StructuredEncounter,
+)
+from sidequest.game.ruleset import get_ruleset_module
+from sidequest.game.ruleset.swn import SwnRulesetModule, swn_attribute_modifier
+from sidequest.game.session import GameSnapshot
+from sidequest.genre.models.rules import (
+    BeatDef,
+    ConfrontationDef,
+    MetricDef,
+    RulesConfig,
+    SwnConfig,
+)
+from sidequest.protocol.dice import RollOutcome
+from sidequest.server.dispatch.dice import dispatch_dice_throw
+
+# Reuse dispatch fixtures (CORRECT PATH — no `dispatch` subdir):
+from tests.server.test_dice_dispatch import _make_snapshot, _throw
 
 
 def _core(*, name="Mara", ac=10, **kw):
     return CreatureCore(
-        name=name, description="d", personality="p",
-        hp=HpPool(current=8, max=8, base_max=8), armor_class=ac, **kw,
+        name=name,
+        description="d",
+        personality="p",
+        hp=HpPool(current=8, max=8, base_max=8),
+        armor_class=ac,
+        **kw,
     )
 
 
@@ -18,7 +49,6 @@ def test_creature_core_armor_class_settable():
 
 
 # SwnConfig tests (Task 5) — SRD-sourced constants verified from PDF pp. 46-47
-from sidequest.genre.models.rules import RulesConfig, SwnConfig
 
 
 def test_rules_swn_config_defaults():
@@ -33,8 +63,12 @@ def test_rules_swn_config_defaults():
     # (six SWN attributes -> declared flavor stats) and carries the SRD defaults.
     flavor = ["Physique", "Reflex", "Intellect", "Cunning", "Resolve", "Influence"]
     amap = {
-        "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
-        "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
+        "STRENGTH": "Physique",
+        "CONSTITUTION": "Resolve",
+        "DEXTERITY": "Reflex",
+        "INTELLIGENCE": "Intellect",
+        "WISDOM": "Cunning",
+        "CHARISMA": "Influence",
     }
     rules = RulesConfig(
         ruleset="swn",
@@ -52,9 +86,6 @@ def test_rules_swn_config_absent_for_native():
 
 
 # SwnRulesetModule tests (Task 6) — modifier curve + attack_params
-import pytest
-from sidequest.game.ruleset.swn import SwnRulesetModule, swn_attribute_modifier
-from sidequest.genre.models.rules import BeatDef
 
 _S = SwnRulesetModule()
 
@@ -95,37 +126,12 @@ def test_swn_attack_params_uses_target_ac_and_attack_bonus():
 # Task 7 — registry + end-to-end wiring (registering SwnRulesetModule)
 # ---------------------------------------------------------------------------
 
-from sidequest.game.ruleset import get_ruleset_module
-
 
 def test_swn_registered():
     assert get_ruleset_module("swn").slug == "swn"
 
 
 def test_swn_attack_resolves_vs_ac_through_dispatch():
-    from unittest.mock import MagicMock, patch
-
-    from sidequest.game.creature_core import CreatureCore, HpPool
-    from sidequest.game.encounter import (
-        EncounterActor,
-        EncounterMetric,
-        EncounterPhase,
-        StructuredEncounter,
-    )
-    from sidequest.game.session import GameSnapshot
-    from sidequest.genre.models.rules import (
-        BeatDef,
-        ConfrontationDef,
-        MetricDef,
-        RulesConfig,
-        SwnConfig,
-    )
-    from sidequest.protocol.dice import RollOutcome
-    from sidequest.server.dispatch.dice import dispatch_dice_throw
-
-    # Reuse dispatch fixtures (CORRECT PATH — no `dispatch` subdir):
-    from tests.server.test_dice_dispatch import _make_snapshot, _throw
-
     # Build an encounter with a player roller (Bob) AND an opponent target (Raider).
     # _opposite_side_first_actor(encounter, "player") returns the first actor
     # whose side == "opponent" — so we seat "Raider" on side="opponent".
@@ -227,11 +233,16 @@ def test_swn_attack_resolves_vs_ac_through_dispatch():
 
 
 def test_swn_skill_check_params_2d6():
-    from sidequest.genre.models.rules import SwnConfig
     cfg = SwnConfig()
     # 2d6 + DEX mod (+1) + skill level (2) vs "tricky"(10)
-    p = _S.check_params(stats={"DEXTERITY": 14}, attribute="DEXTERITY", skill_level=2,
-                        difficulty_key="tricky", label="Notice", cfg=cfg)
+    p = _S.check_params(
+        stats={"DEXTERITY": 14},
+        attribute="DEXTERITY",
+        skill_level=2,
+        difficulty_key="tricky",
+        label="Notice",
+        cfg=cfg,
+    )
     assert (p.sides, p.count) == (6, 2)
     assert p.modifier == 1 + 2
     assert p.difficulty == 10
@@ -239,19 +250,27 @@ def test_swn_skill_check_params_2d6():
 
 
 def test_swn_save_params_d20_best_of_two_attrs():
-    from sidequest.genre.models.rules import SwnConfig
     # save_params now resolves through attribute_map — supply a full map and flavor-keyed stats.
-    cfg = SwnConfig(attribute_map={
-        "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
-        "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
-    })
+    cfg = SwnConfig(
+        attribute_map={
+            "STRENGTH": "Physique",
+            "CONSTITUTION": "Resolve",
+            "DEXTERITY": "Reflex",
+            "INTELLIGENCE": "Intellect",
+            "WISDOM": "Cunning",
+            "CHARISMA": "Influence",
+        }
+    )
     # Mental save = better of WISDOM<-Cunning / CHARISMA<-Influence.
     # Cunning 14 (+1), Influence 8 (0) -> best = +1. Target = save_base(15) - (level(3)-1) = 13.
-    p = _S.save_params(stats={"Cunning": 14, "Influence": 8}, save="mental", level=3,
-                       label="Mental save", cfg=cfg)
+    p = _S.save_params(
+        stats={"Cunning": 14, "Influence": 8}, save="mental", level=3, label="Mental save", cfg=cfg
+    )
     assert (p.sides, p.count) == (20, 1)
-    assert p.modifier == 1          # best of WIS/CHA mods (via map), ADDED to the roll
-    assert p.difficulty == 13       # save_base(15) - (level(3) - 1) = 13  [SRD p.46: starts at 15, -1/level]
+    assert p.modifier == 1  # best of WIS/CHA mods (via map), ADDED to the roll
+    assert (
+        p.difficulty == 13
+    )  # save_base(15) - (level(3) - 1) = 13  [SRD p.46: starts at 15, -1/level]
     assert p.label == "Mental save"
 
 
@@ -262,7 +281,6 @@ def test_swn_save_params_d20_best_of_two_attrs():
 
 def test_swn_save_params_bogus_save_raises():
     """save_params must raise ValueError (not opaque KeyError) for unknown save."""
-    from sidequest.genre.models.rules import SwnConfig
     cfg = SwnConfig()
     with pytest.raises(ValueError, match="unknown save category"):
         _S.save_params(stats={"STRENGTH": 10}, save="bogus", level=1, label="bad", cfg=cfg)

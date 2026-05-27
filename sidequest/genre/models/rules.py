@@ -862,6 +862,8 @@ class RulesConfig(BaseModel):
         if self.swn is None:
             object.__setattr__(self, "swn", SwnConfig())
         required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        # self.swn cannot be None here — the branch above ensures it; assert for pyright.
+        assert self.swn is not None
         amap = self.swn.attribute_map
         if not amap:
             raise ValueError(

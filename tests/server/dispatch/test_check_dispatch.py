@@ -1,14 +1,18 @@
 """Tests for dispatch_check — non-beat SWN skill checks (2d6) and saves (d20)."""
+
 from unittest.mock import MagicMock
 
-from sidequest.server.dispatch.check import dispatch_check
-from sidequest.protocol.dice import RollOutcome
 from sidequest.genre.models.rules import RulesConfig, SwnConfig
-
+from sidequest.protocol.dice import RollOutcome
+from sidequest.server.dispatch.check import dispatch_check
 
 _ATTR_MAP = {
-    "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
-    "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
+    "STRENGTH": "Physique",
+    "CONSTITUTION": "Resolve",
+    "DEXTERITY": "Reflex",
+    "INTELLIGENCE": "Intellect",
+    "WISDOM": "Cunning",
+    "CHARISMA": "Influence",
 }
 
 

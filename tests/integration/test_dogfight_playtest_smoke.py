@@ -104,7 +104,10 @@ def test_three_turn_dogfight_resolves_through_production_path(
             f"frame_hp={_actor.per_actor_state['frame_hp']!r}, "
             f"frame_hp_max={_actor.per_actor_state['frame_hp_max']!r}"
         )
-        assert isinstance(_actor.per_actor_state["frame_hp"], int) and _actor.per_actor_state["frame_hp"] > 0, (
+        assert (
+            isinstance(_actor.per_actor_state["frame_hp"], int)
+            and _actor.per_actor_state["frame_hp"] > 0
+        ), (
             f"actor {_actor.role!r} frame_hp must be a positive int; "
             f"got {_actor.per_actor_state['frame_hp']!r}"
         )

@@ -30,7 +30,8 @@ _SYSTEM_PROMPT = """You are the GM answering a player's OUT-OF-CHARACTER aside \
 during a tabletop session. This is table-talk, not narration. The fiction is \
 FROZEN — nothing you say moves the world.
 
-ANSWER (1-3 plain sentences, second-person GM voice):
+ANSWER (outcome answered) — 1-3 plain sentences, second-person GM voice. \
+When you answer the question, set outcome to "answered":
 - Capability/perception the character would already know (size, encumbrance, \
 stated depth, what they can see/reach).
 - Rules/genre mechanics from the rulebook summary.

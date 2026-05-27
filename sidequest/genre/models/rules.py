@@ -630,6 +630,10 @@ class SwnConfig(BaseModel):
             "formidable": 14,
         }
     )
+    # SWN attribute name -> this pack's flavor stat (ability_score_names entry).
+    # Required (non-empty, all six keys) when ruleset == "swn"; validated on RulesConfig
+    # where ability_score_names is reachable. No default map — fail loud if unauthored.
+    attribute_map: dict[str, str] = Field(default_factory=dict)
 
 
 class RulesConfig(BaseModel):
@@ -694,10 +698,29 @@ class RulesConfig(BaseModel):
     swn: SwnConfig | None = None
 
     @model_validator(mode="after")
-    def _populate_swn_defaults(self) -> RulesConfig:
-        """Auto-populate swn block with SRD defaults when ruleset == "swn"."""
-        if self.ruleset == "swn" and self.swn is None:
+    def _validate_swn(self) -> RulesConfig:
+        """Populate swn SRD constants and enforce a complete attribute_map when bound."""
+        if self.ruleset != "swn":
+            return self
+        if self.swn is None:
             object.__setattr__(self, "swn", SwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        amap = self.swn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'swn' requires rules.swn.attribute_map (SWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"swn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for swn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"swn attribute_map[{swn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
         return self
 
     @property

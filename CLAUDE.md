@@ -203,10 +203,15 @@ For the full ADR index see `orc-quest/docs/adr/README.md`. Drift notes: `orc-que
 
 ## Save files
 
-SQLite databases at `~/.sidequest/saves/<genre>_<world>.db`, one per session.
-Not in the repo. See `orc-quest/.pennyfarthing/guides/save-management.md` for
-cleanup, inspection, and migration. Saves are durable by default — never reap
-save-referenced artifacts (portraits, audio) on a timer.
+Saves live in a single PostgreSQL database (ADR-115), one `sessions` row per
+genre/world session keyed by `session_slug` — not per-file SQLite, and not in
+the repo. Connect via `SIDEQUEST_DATABASE_URL` (`SIDEQUEST_TEST_DATABASE_URL`
+for tests); provision locally with `just pg-up`. The SQLite-per-session store
+(`SqliteStore`/`SAVE_WRITE_LOCK`/WAL tuning) is retired; SQLite survives only as
+a read-only import *source* via `python -m sidequest.game.importer`
+(`sidequest/game/importer.py`). See
+`orc-quest/.pennyfarthing/guides/save-management.md`. Saves are durable by
+default — never reap save-referenced artifacts (portraits, audio) on a timer.
 
 ## Spoiler Protection
 

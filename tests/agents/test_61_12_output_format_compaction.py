@@ -498,15 +498,23 @@ def test_critical_and_mandatory_banner_count_under_ceiling() -> None:
 # updates phrase strings in those test files where the rewrite changes
 # wording, but the rule's general concept must remain expressible here.
 REQUIRED_TOKENS: tuple[str, ...] = (
-    # test_50_2_confrontation_trigger_prompt — confrontation type enum
-    "ship_combat",
-    "dogfight",
-    "social_duel",
-    "trial",
-    "auction",
-    "scandal",
-    "negotiation",
-    "chase",
+    # NOTE (story 61-14, 2026-05-27): the 8 confrontation-type tokens
+    # (ship_combat, dogfight, social_duel, trial, auction, scandal,
+    # negotiation, chase) were REMOVED from this list. They were "load-bearing
+    # for test_50_2_confrontation_trigger_prompt" — but that test no longer
+    # exists, and the rule it pinned migrated off the narrator surface. Per
+    # ADR-113 the narrator no longer chooses confrontation type; the Intent
+    # Router does, reading the closed enum from game_state.confrontation_types
+    # (sourced from pack.rules.confrontations at runtime — story 59-10). Live
+    # measurement 2026-05-27: none of the 8 tokens appear in the assembled SDK
+    # narrator prompt (the only viable backend post-61-9); the legacy guardrail
+    # injection of CONFRONTATION_TRIGGER_CONSTRAINT is gated to the non-SDK
+    # backend (_maybe_register_legacy_guardrail). Coverage of the new home is
+    # preserved by tests/server/test_intent_router_confrontation_vocabulary.py
+    # (mechanism + OTEL span, against a synthetic fixture pack — the genre type
+    # names are CONTENT, correctly not hard-asserted in engine tests per
+    # feedback_tests_not_point_at_content). Design Deviation logged in the
+    # 61-14 session. Silent omission is forbidden — hence this banner.
     # test_narrator_prompt — sidecar fields + side enum + tiers
     "side",
     "player",

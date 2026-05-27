@@ -59,6 +59,19 @@ class RulesetModule(ABC):
         """Modifier + target number for one attack. native: stat mod vs beat DC.
         SWN: attack_bonus + skill + attr-mod vs target AC."""
 
+    def ship_attack_params(
+        self,
+        *,
+        attacker_stats: dict[str, int],
+        pilot_skill: int,
+        attack_bonus: int,
+        geometry_modifier: int,
+        target_ac: int,
+        cfg,
+    ) -> AttackRollParams:
+        """Modifier + target number for one ship-gunnery shot (dogfight SWN layer)."""
+        raise NotImplementedError(f"{self.slug} ruleset has no ship-gunnery resolution")
+
     def check_params(self, *, stats, attribute, skill_level, difficulty_key, label, cfg):
         raise NotImplementedError(f"{self.slug} ruleset has no non-beat skill-check resolution")
 

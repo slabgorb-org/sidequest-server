@@ -81,6 +81,28 @@ class SwnRulesetModule(RulesetModule):
             target_number=target_ac,
         )
 
+    def ship_attack_params(
+        self, *, attacker_stats, pilot_skill, attack_bonus, geometry_modifier, target_ac, cfg
+    ) -> AttackRollParams:
+        """SWN strike-craft gunnery: d20 + attack_bonus + pilot_skill +
+        better-of(INT,DEX) mod + geometry_modifier vs target fighter AC.
+        Pilot stands in for Shoot on a fighter-class ship (SRD ship combat)."""
+        amap = cfg.attribute_map
+        flavor_attrs = []
+        for swn_attr in ("DEXTERITY", "INTELLIGENCE"):
+            flavor = amap.get(swn_attr)
+            if flavor is None:
+                raise KeyError(
+                    f"attribute_map missing {swn_attr!r} for ship gunnery "
+                    "(RulesConfig validator should have caught this)"
+                )
+            flavor_attrs.append(flavor)
+        best_mod = max(self.stat_modifier(attacker_stats, f) for f in flavor_attrs)
+        return AttackRollParams(
+            modifier=int(attack_bonus) + int(pilot_skill) + best_mod + int(geometry_modifier),
+            target_number=int(target_ac),
+        )
+
     def apply_beat(self, *, encounter, actor, beat, outcome, turn, edge_resolver, damage_resolver):
         from sidequest.game.beat_kinds import apply_beat as _engine_apply_beat
 

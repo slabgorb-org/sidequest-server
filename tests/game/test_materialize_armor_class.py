@@ -22,6 +22,7 @@ from __future__ import annotations
 import pytest
 
 from sidequest.agents.orchestrator import NpcMention
+from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
@@ -61,6 +62,23 @@ def _snap() -> GameSnapshot:
         turn_manager=TurnManager(interaction=2),
     )
     snap.character_locations[_PC] = _LOCATION
+    # SWN P4 initiative spine resolves the PC's DEX from a real Character in
+    # snapshot.characters (space_opera maps DEXTERITY -> "Reflex"). Seat the PC
+    # so _roll_and_persist_initiative can roll 1d8+DEX without a silent fallback.
+    snap.characters.append(
+        Character(
+            core=CreatureCore(
+                name=_PC,
+                description="Station-side spacer.",
+                personality="Steady under fire.",
+                inventory=Inventory(),
+            ),
+            char_class="Soldier",
+            race="Coreworlder",
+            backstory="Ex-Hegemonic infantry.",
+            stats={"Reflex": 12},
+        )
+    )
     return snap
 
 
@@ -168,8 +186,10 @@ def test_ship_combat_seeds_hull_and_ship_ac() -> None:
 
 
 def test_reserved_keys_excluded_from_ability_scores() -> None:
-    """opponent_ability_scores() pops hp/armor_class; the property accessors
-    expose them. Ability-score-only packs (no reserved keys) are unchanged."""
+    """opponent_ability_scores() pops the reserved combat keys
+    (hp/armor_class/dexterity — dexterity is reserved per SWN P4 1d8+DEX
+    initiative); the property accessors expose them. Ability-score-only packs
+    (no reserved keys) are unchanged."""
     cdef = ConfrontationDef.model_validate(
         {
             "type": "combat",
@@ -181,15 +201,19 @@ def test_reserved_keys_excluded_from_ability_scores() -> None:
                 "Reflex": 8,
                 "hp": 12,
                 "armor_class": 13,
+                "dexterity": 12,
             },
             "beats": [
                 {"id": "strike", "label": "Strike", "kind": "strike", "stat_check": "Physique"}
             ],
         }
     )
+    # dexterity is a reserved key too -> stripped from the ability-score map.
     assert cdef.opponent_ability_scores() == {"Physique": 9, "Reflex": 8}
+    assert "dexterity" not in (cdef.opponent_ability_scores() or {})
     assert cdef.opponent_hp == 12
     assert cdef.opponent_armor_class == 13
+    assert cdef.opponent_dexterity == 12
 
     # Ability-score-only pack: no reserved keys, accessors return None,
     # the score map is returned untouched.

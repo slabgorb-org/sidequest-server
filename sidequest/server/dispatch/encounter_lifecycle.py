@@ -17,7 +17,7 @@ from sidequest.game.encounter import (
 )
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.resource_pool import ResourceThreshold
-from sidequest.game.session import GameSnapshot
+from sidequest.game.session import GameSnapshot, Npc
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import ResolutionMode, WinCondition
 from sidequest.server.dispatch.confrontation import find_confrontation_def
@@ -345,7 +345,7 @@ def _is_adversarial(category: str) -> bool:
     return category in _ADVERSARIAL_CATEGORIES
 
 
-def _npc_is_adversary(npc) -> bool:
+def _npc_is_adversary(npc: Npc) -> bool:
     """Sealed-letter duel candidacy: does this same-location NPC read as the Other?
 
     A sealed-letter encounter (commit-reveal duel) seats exactly one

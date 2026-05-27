@@ -21,9 +21,10 @@ with a non-NULL event_seq.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
@@ -47,6 +48,75 @@ _WORLD = "flickering_reach"
 # never a shared location (matches test_event_log_wiring.py's rationale).
 _SLUG = "turn-telemetry-wiring-fixture"
 _FIXTURE_PACKS = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
+
+
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    Slug-connect (ADR-115 D2) loads the authoritative snapshot from PG via
+    db_pool.get_pool(); seed and connect must share one isolated database.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _seed_pg_for_slug(
+    slug: str,
+    snap: GameSnapshot,
+    *,
+    mode: GameMode = GameMode.MULTIPLAYER,
+) -> None:
+    """Mirror a seeded snapshot into PG — the store the slug-resume path loads."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(mode),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    repo.save(snap)
+
+
+def _pg_telemetry_rows(slug: str, where: str = "", params: tuple = ()) -> int:
+    """COUNT(*) of turn_telemetry rows for ``slug``'s session in the live PG db.
+
+    The live turn (ADR-115 D2 slug-connect) binds a PgTelemetrySink and writes
+    turn_telemetry to Postgres — NOT the seeded SQLite save.db. These wiring
+    assertions therefore read PG, the authoritative store the production path
+    actually wrote to. Scoped to the session by joining on sessions.slug so
+    the per-worker isolated db (which is TRUNCATEd per test by _pg_isolation)
+    only ever holds this one turn's rows.
+    """
+    from sidequest.game import db_pool
+
+    sql = (
+        "SELECT COUNT(*) FROM turn_telemetry t "
+        "JOIN sessions s ON s.session_id = t.session_id "
+        "WHERE s.session_slug = %s"
+    )
+    if where:
+        sql += f" AND {where}"
+    with db_pool.get_pool().connection() as conn:
+        return conn.execute(sql, (slug, *params)).fetchone()[0]
 
 
 def _seed_with_character(tmp_path: Path, slug: str) -> None:
@@ -95,6 +165,7 @@ def _seed_with_character(tmp_path: Path, slug: str) -> None:
     snap.player_seats["alice"] = "Thorn"
     store.init_session(_GENRE, _WORLD)
     store.save(snap)
+    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
     store.close()
 
 
@@ -252,17 +323,13 @@ def test_a_real_turn_persists_turn_telemetry_rows(tmp_path: Path) -> None:
     # combined with the internal ``asyncio.run`` below, raises a
     # nested-event-loop RuntimeError. The sync wrapper is required so the
     # read-only sqlite assertions run after the loop has fully closed.
-    save_db = asyncio.run(_drive_one_real_turn(tmp_path))
-    conn = sqlite3.connect(f"file:{save_db}?mode=ro", uri=True)
-    try:
-        total = conn.execute("SELECT COUNT(*) FROM turn_telemetry").fetchone()[0]
-        assert total > 0, "no turn_telemetry rows: sink is not wired into the live turn"
-        attributed = conn.execute(
-            "SELECT COUNT(*) FROM turn_telemetry WHERE event_seq IS NOT NULL"
-        ).fetchone()[0]
-        assert attributed > 0, "no event_seq-attributed rows: C2 join path not exercised"
-    finally:
-        conn.close()
+    asyncio.run(_drive_one_real_turn(tmp_path))
+    # ADR-115 D2: the live turn binds a PgTelemetrySink, so turn_telemetry
+    # lands in Postgres (not the seeded SQLite save.db). Read the live PG store.
+    total = _pg_telemetry_rows(_SLUG)
+    assert total > 0, "no turn_telemetry rows: sink is not wired into the live turn"
+    attributed = _pg_telemetry_rows(_SLUG, "t.event_seq IS NOT NULL")
+    assert attributed > 0, "no event_seq-attributed rows: C2 join path not exercised"
 
 
 def test_turn_telemetry_insert_count_is_not_pathological(tmp_path: Path) -> None:
@@ -273,12 +340,8 @@ def test_turn_telemetry_insert_count_is_not_pathological(tmp_path: Path) -> None
     # INTENTIONAL execution model: sync def wrapping asyncio.run — see the
     # comment in test_a_real_turn_persists_turn_telemetry_rows for rationale.
     # Do NOT convert to async def / @pytest.mark.asyncio.
-    save_db = asyncio.run(_drive_one_real_turn(tmp_path))
-    conn = sqlite3.connect(f"file:{save_db}?mode=ro", uri=True)
-    try:
-        n = conn.execute("SELECT COUNT(*) FROM turn_telemetry").fetchone()[0]
-    finally:
-        conn.close()
+    asyncio.run(_drive_one_real_turn(tmp_path))
+    n = _pg_telemetry_rows(_SLUG)
     # One turn's watcher publishes. Generous ceiling: regression tripwire,
     # not a tight bound. If a real turn legitimately exceeds it, raise the
     # ceiling AND open a Phase-follow-on coalesce note — do not silently bump.
@@ -290,32 +353,19 @@ def test_a_real_turn_persists_mechanical_census_rows(tmp_path: Path) -> None:
     row per seated PC + one session trope_census row, attributed to the
     turn's event frame. Proves the emitter is wired into emit_event's
     NARRATION path, not just importable."""
-    save_db = asyncio.run(_drive_one_real_turn(tmp_path))  # existing harness
-    conn = sqlite3.connect(f"file:{save_db}?mode=ro", uri=True)
-    try:
-        census = conn.execute(
-            "SELECT COUNT(*) FROM turn_telemetry "
-            "WHERE component='mechanical' AND event_type='census'"
-        ).fetchone()[0]
-        tropes = conn.execute(
-            "SELECT COUNT(*) FROM turn_telemetry "
-            "WHERE component='mechanical' AND event_type='trope_census'"
-        ).fetchone()[0]
-        attributed = conn.execute(
-            "SELECT COUNT(*) FROM turn_telemetry "
-            "WHERE component='mechanical' AND event_seq IS NOT NULL"
-        ).fetchone()[0]
-        assert census >= 1, (
-            "no mechanical census rows: emit_mechanical_census is not "
-            "wired into emit_event's NARRATION path"
-        )
-        assert tropes >= 1, "no session trope_census row from a real turn"
-        assert attributed >= 1, (
-            "mechanical rows not event_seq-attributed: census did not ride "
-            "the C2 turn txn (R1 violated)"
-        )
-    finally:
-        conn.close()
+    asyncio.run(_drive_one_real_turn(tmp_path))  # existing harness
+    census = _pg_telemetry_rows(_SLUG, "t.component='mechanical' AND t.event_type='census'")
+    tropes = _pg_telemetry_rows(_SLUG, "t.component='mechanical' AND t.event_type='trope_census'")
+    attributed = _pg_telemetry_rows(_SLUG, "t.component='mechanical' AND t.event_seq IS NOT NULL")
+    assert census >= 1, (
+        "no mechanical census rows: emit_mechanical_census is not "
+        "wired into emit_event's NARRATION path"
+    )
+    assert tropes >= 1, "no session trope_census row from a real turn"
+    assert attributed >= 1, (
+        "mechanical rows not event_seq-attributed: census did not ride "
+        "the C2 turn txn (R1 violated)"
+    )
 
 
 def test_mechanical_census_row_count_per_turn_is_bounded(tmp_path: Path) -> None:
@@ -325,19 +375,9 @@ def test_mechanical_census_row_count_per_turn_is_bounded(tmp_path: Path) -> None
     # INTENTIONAL execution model: sync def wrapping asyncio.run — see the
     # comment in test_a_real_turn_persists_turn_telemetry_rows for rationale.
     # Do NOT convert to async def / @pytest.mark.asyncio.
-    save_db = asyncio.run(_drive_one_real_turn(tmp_path))
-    conn = sqlite3.connect(f"file:{save_db}?mode=ro", uri=True)
-    try:
-        census = conn.execute(
-            "SELECT COUNT(*) FROM turn_telemetry "
-            "WHERE component='mechanical' AND event_type='census'"
-        ).fetchone()[0]
-        tropes = conn.execute(
-            "SELECT COUNT(*) FROM turn_telemetry "
-            "WHERE component='mechanical' AND event_type='trope_census'"
-        ).fetchone()[0]
-    finally:
-        conn.close()
+    asyncio.run(_drive_one_real_turn(tmp_path))
+    census = _pg_telemetry_rows(_SLUG, "t.component='mechanical' AND t.event_type='census'")
+    tropes = _pg_telemetry_rows(_SLUG, "t.component='mechanical' AND t.event_type='trope_census'")
     # The Phase-1 harness seats a small MP party. Generous ceiling: this
     # is a regression tripwire, not a tight bound. Once-per-turn gate means
     # tropes == (number of NARRATION turns played by the harness == 1).

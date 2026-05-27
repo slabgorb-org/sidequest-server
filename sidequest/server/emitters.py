@@ -297,6 +297,8 @@ def emit_event(
                     connected_players=recipients,
                     view=view,
                     on_decision=_cache_decision,
+                    tx=tx,
+                    event_seq=seq,
                 )
                 # Story 49-8: per-recipient POV swap snapshot for the
                 # emitter path below. Captured here so the emitter and
@@ -346,7 +348,11 @@ def emit_event(
                 # shared blob is ADR-105 Track B, not this change.
                 if project_emitter and emitter_player_id is not None:
                     _e_decision = projection_filter.project(
-                        envelope=envelope, view=view, player_id=emitter_player_id
+                        envelope=envelope,
+                        view=view,
+                        player_id=emitter_player_id,
+                        tx=tx,
+                        event_seq=seq,
                     )
                     _cache_decision(emitter_player_id, _e_decision)
                     if _e_decision.include:

@@ -248,6 +248,8 @@ def _project_frames(
     connected_players: list[str],
     view: object = None,
     on_decision: Callable[[str, FilterDecision], None] | None = None,
+    tx: object = None,
+    event_seq: int | None = None,
 ) -> list[tuple[str, FilterDecision]]:
     """Run the projection filter once per connected player.
 
@@ -257,10 +259,24 @@ def _project_frames(
 
     The canonical EventLog append is the caller's responsibility; this helper
     is purely the filter fan-out step.
+
+    ``tx`` / ``event_seq`` are threaded down to the filter ONLY when this
+    fan-out runs inside emit_event's open turn transaction. They let the
+    visibility-gated invariant's ``invariant.secret_routed`` telemetry ride
+    the turn tx (same connection) rather than opening a competing pooled
+    connection that would self-deadlock on the per-session ``FOR UPDATE`` row
+    lock under Postgres (ADR-115). The test-facing helper and lazy-fill caller
+    omit them.
     """
     decisions: list[tuple[str, FilterDecision]] = []
     for pid in connected_players:
-        decision = projection_filter.project(envelope=envelope, view=view, player_id=pid)
+        decision = projection_filter.project(
+            envelope=envelope,
+            view=view,
+            player_id=pid,
+            tx=tx,  # type: ignore[arg-type]
+            event_seq=event_seq,
+        )
         if on_decision is not None:
             on_decision(pid, decision)
         decisions.append((pid, decision))

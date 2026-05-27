@@ -31,10 +31,14 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.projection.view import GameStateView
 from sidequest.game.projection_filter import FilterDecision
+
+if TYPE_CHECKING:
+    from sidequest.game.repository import SaveTransaction
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +116,8 @@ class CoreInvariantStage:
         envelope: MessageEnvelope,
         view: GameStateView,
         player_id: str,
+        tx: SaveTransaction | None = None,
+        event_seq: int | None = None,
     ) -> InvariantOutcome:
         # 1. GM sees canonical — always.
         if view.is_gm(player_id):
@@ -158,6 +164,8 @@ class CoreInvariantStage:
                 player_id=player_id,
                 included=included,
                 malformed=malformed,
+                tx=tx,
+                event_seq=event_seq,
             )
             return InvariantOutcome(
                 terminal=True,
@@ -208,6 +216,8 @@ def _publish_secret_routed(
     player_id: str,
     included: bool,
     malformed: bool,
+    tx: SaveTransaction | None = None,
+    event_seq: int | None = None,
 ) -> None:
     """Emit the ``invariant.secret_routed`` watcher event (ADR-105 B1).
 
@@ -218,6 +228,14 @@ def _publish_secret_routed(
     ``_visibility.visible_to`` and was failed closed — a loud signal of
     an upstream B2/B3 bug, never a silent passthrough. Telemetry must
     never crash a projection fan-out.
+
+    ``tx`` / ``event_seq`` are threaded down from emit_event's open turn
+    transaction (ADR-115). When set, the watcher publish rides THAT
+    transaction on the SAME connection — never opening a competing pooled
+    connection that would self-deadlock on the per-session ``FOR UPDATE``
+    row lock the turn already holds. When ``None`` (lazy-fill / out-of-frame
+    projection) the publish takes the bound sink's own short session_tx, which
+    is safe because no row lock is held.
     """
     try:
         from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -234,6 +252,8 @@ def _publish_secret_routed(
             },
             component="projection",
             severity="warning" if malformed else "info",
+            tx=tx,
+            event_seq=event_seq,
         )
     except Exception:  # noqa: BLE001 — telemetry must never crash a turn
         logger.warning(

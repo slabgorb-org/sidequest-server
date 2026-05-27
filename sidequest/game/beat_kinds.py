@@ -178,12 +178,12 @@ from sidequest.game.encounter import (  # noqa: E402
     StructuredEncounter,
 )
 from sidequest.game.encounter_tag import EncounterTag  # noqa: E402
+from sidequest.game.hp_depletion import check_hp_depletion  # noqa: E402
 from sidequest.telemetry.spans import (  # noqa: E402
     SPAN_ENCOUNTER_TAUNT_ACTIVATED,
     encounter_composure_break_span,
     encounter_edge_debit_span,
     encounter_metric_advance_span,
-    encounter_resolved_span,
     encounter_tag_backfire_span,
     encounter_tag_created_span,
     state_patch_hp_span,
@@ -829,44 +829,19 @@ def apply_beat(
     hp_depletion = enc.win_condition == "hp_depletion"
 
     if hp_depletion and not resolved and edge_resolver is not None:
-
-        def _any_actor_down(side: str) -> bool:
-            # Resolves on ANY actor on the side reaching 0 HP. Correct for the
-            # current 1v1 personal / 1v1 ship scope; a future 1-vs-many fight
-            # needs "seated opponent down" or "all down" semantics.
-            for a in enc.actors:
-                if a.side != side:
-                    continue
-                core = edge_resolver(a.name)
-                if core is not None and core.hp.current <= 0:
-                    return True
-            return False
-
-        if _any_actor_down("opponent"):
-            enc.resolved = True
-            enc.outcome = "player_victory"
+        result = check_hp_depletion(enc, edge_resolver, beat_id=getattr(beat, "id", "?"))
+        if result is not None:
             resolved = True
-        elif _any_actor_down("player"):
-            enc.resolved = True
-            enc.outcome = "opponent_victory"
-            resolved = True
-        if resolved:
-            enc.structured_phase = EncounterPhase.Resolution
-            down_side = "opponent" if enc.outcome == "player_victory" else "player"
-            with encounter_resolved_span(
-                encounter_type=enc.encounter_type,
-                outcome=enc.outcome,
-                source="hp_depletion",
-                down_side=down_side,
-                beat_id=getattr(beat, "id", "?"),
-            ):
-                pass
 
     # Player threshold first, then opponent — sealed-letter order via
     # ADR-036 already places player beats first in the iteration; this
     # second-level tie-break is "first crossing wins". Gated to dial-threshold
     # confrontations only; hp_depletion resolves on the HP branch above.
-    if not hp_depletion and not resolved and enc.player_metric.current >= enc.player_metric.threshold:
+    if (
+        not hp_depletion
+        and not resolved
+        and enc.player_metric.current >= enc.player_metric.threshold
+    ):
         enc.resolved = True
         enc.outcome = "player_victory"
         enc.structured_phase = EncounterPhase.Resolution

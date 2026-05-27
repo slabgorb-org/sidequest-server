@@ -8,7 +8,29 @@ caller, so every branch is unit-testable.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from sidequest.game.ruleset.resolution import AttackRollParams
+from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import GeometryModifiers
+
+
+@dataclass
+class GunSolution:
+    """A pilot who got a shot this cell + the SWN params to resolve it.
+
+    Pure data produced by the sealed-letter resolver; consumed by
+    resolve_dogfight_shots (next task). No dice rolled yet."""
+
+    shooter_role: str
+    shooter_name: str
+    target_role: str
+    target_name: str
+    attack: AttackRollParams
+    weapon: DamageSpec
+    weapon_name: str
+    target_armor: int
+    geometry_modifier: int
 
 
 def resolve_geometry_modifier(per_actor_state: dict, geometry_modifiers: GeometryModifiers) -> int:

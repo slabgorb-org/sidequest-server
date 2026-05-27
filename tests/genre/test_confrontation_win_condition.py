@@ -9,7 +9,7 @@ METRIC = {"name": "momentum", "starting": 0, "threshold": 7}
 # the reserved hp/armor_class keys at load time (Task 9). These tests are
 # about metric-optionality, not opponent stats — supply a valid stat block so
 # the validator passes; the metric assertions below are unchanged.
-OPP_STATS = {"hp": 12, "armor_class": 13}
+OPP_STATS = {"hp": 12, "armor_class": 13, "dexterity": 12}
 
 
 def test_default_win_condition_is_dial_threshold():

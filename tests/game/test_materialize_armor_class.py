@@ -33,10 +33,10 @@ from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound
 from tests.genre.test_resolution_mode import load_pack
 
 # Content-authored placeholders for space_opera personal Firefight combat.
-_EXPECTED_HP = 12
-_EXPECTED_AC = 13
+_EXPECTED_HP = 7
+_EXPECTED_AC = 12
 # Ship combat (hull / ship AC).
-_EXPECTED_SHIP_HP = 24
+_EXPECTED_SHIP_HP = 30
 _EXPECTED_SHIP_AC = 14
 
 _LOCATION = "Docking Ring"

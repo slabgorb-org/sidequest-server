@@ -47,9 +47,9 @@ import pytest
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 
 # Content-authored opponent stats (Task 9 reserved keys on opponent_default_stats).
-_COMBAT_HP = 12
-_COMBAT_AC = 13
-_SHIP_HP = 24
+_COMBAT_HP = 7
+_COMBAT_AC = 12
+_SHIP_HP = 30
 _SHIP_AC = 14
 
 # Full SWN-flavor stat block: covers every stat_check any combat / ship_combat

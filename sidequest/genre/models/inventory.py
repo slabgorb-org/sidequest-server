@@ -5,6 +5,7 @@ Port of sidequest-genre/src/models/inventory.rs.
 
 from __future__ import annotations
 
+import random
 import re
 from enum import StrEnum
 from typing import Any
@@ -55,6 +56,16 @@ class DamageSpec(BaseModel):
         if DieSides.from_wire(faces) is DieSides.Unknown:
             raise ValueError(f"damage dice {v!r} uses unsupported face count d{faces}")
         return v
+
+    def roll(self, rng: random.Random) -> int:
+        """Roll this damage to a concrete total (sum of N d<faces> + bonus).
+
+        Server-side dice for cases where the result isn't a client physics
+        throw (e.g. NPC/ship-gunnery damage). ``dice`` is validated NdM at
+        construction, so the parse here is safe."""
+        m = _DICE_RE.match(self.dice.strip())
+        count, faces = int(m["count"]), int(m["faces"])  # type: ignore[union-attr]
+        return sum(rng.randint(1, faces) for _ in range(count)) + self.bonus
 
 
 class CatalogItem(BaseModel):

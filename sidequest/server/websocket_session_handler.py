@@ -3035,7 +3035,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             # The content sha256 already lives inside r2_key, so nothing else
             # is needed from the reply. asset_type is the <kind> segment of
             # artifacts/<world>/<session>/<kind>/<sha>.<ext>.
-            if sd is not None and hasattr(sd.repository, "append_asset_ledger"):
+            if sd is not None:
+                # The SaveRepository Protocol guarantees append_asset_ledger; no
+                # hasattr guard (that would be a silent-skip fallback). A missing
+                # method should raise loudly via the except below.
                 key_parts = str(r2_key).split("/")
                 asset_type = key_parts[3] if len(key_parts) >= 5 else str(params.get("tier") or "")
                 entity_ref = str(

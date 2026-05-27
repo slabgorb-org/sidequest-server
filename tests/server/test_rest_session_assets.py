@@ -90,6 +90,10 @@ def test_get_assets_row_structure(pg_client) -> None:
         assert "asset_type" in row
         assert "entity_ref" in row
         assert "created_turn" in row
+        # The endpoint resolves each r2_key to a browser-loadable absolute URL
+        # (the raw key is not a fetchable source). Verify reuse-finding fix.
+        assert "url" in row
+        assert isinstance(row["url"], str) and row["url"].endswith(row["r2_key"])
 
 
 def test_get_assets_404_for_unknown_slug(pg_client) -> None:

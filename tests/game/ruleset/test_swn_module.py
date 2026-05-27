@@ -22,12 +22,29 @@ from sidequest.genre.models.rules import RulesConfig, SwnConfig
 
 
 def test_rules_swn_config_defaults():
-    rules = RulesConfig(ruleset="swn")
-    assert rules.swn is not None
-    assert rules.swn.unarmored_ac == 10
+    # SRD-sourced constants auto-populate on a bare SwnConfig().
+    swn = SwnConfig()
+    assert swn.unarmored_ac == 10
     # SRD p.46: "saving throw scores start at 15, decrease by one point each time
     # you advance a level" — save_base=15 is the level-1 target before attribute mod.
+    assert swn.save_base == 15
+
+    # Full RulesConfig round-trip: ruleset="swn" requires a complete attribute_map
+    # (six SWN attributes -> declared flavor stats) and carries the SRD defaults.
+    flavor = ["Physique", "Reflex", "Intellect", "Cunning", "Resolve", "Influence"]
+    amap = {
+        "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
+        "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
+    }
+    rules = RulesConfig(
+        ruleset="swn",
+        ability_score_names=flavor,
+        swn=SwnConfig(attribute_map=amap),
+    )
+    assert rules.swn is not None
+    assert rules.swn.unarmored_ac == 10
     assert rules.swn.save_base == 15
+    assert rules.swn.attribute_map["WISDOM"] == "Cunning"
 
 
 def test_rules_swn_config_absent_for_native():

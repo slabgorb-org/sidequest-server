@@ -699,7 +699,7 @@ class RulesConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_swn(self) -> RulesConfig:
-        """Populate swn SRD constants and enforce a complete attribute_map when bound."""
+        """Enforce a complete attribute_map when ruleset == 'swn'; raises ValueError if the swn block omits one."""
         if self.ruleset != "swn":
             return self
         if self.swn is None:

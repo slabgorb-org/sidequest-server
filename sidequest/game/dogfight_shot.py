@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from sidequest.game.creature_core import HpPool
 from sidequest.game.hp_depletion import HpDepletionResult, check_hp_depletion
 from sidequest.game.ruleset.resolution import AttackRollParams
 from sidequest.genre.models.inventory import DamageSpec
@@ -21,6 +22,62 @@ from sidequest.telemetry.spans.dogfight import (
     dogfight_shot_attempted_span,
     dogfight_shot_damage_span,
 )
+
+# ---------------------------------------------------------------------------
+# Fighter-frame HP (transient per-pilot state, stored in per_actor_state)
+# ---------------------------------------------------------------------------
+
+FRAME_HP_KEY = "frame_hp"
+FRAME_HP_MAX_KEY = "frame_hp_max"
+
+
+@dataclass
+class _FrameCore:
+    """Adapter exposing an EncounterActor's transient fighter-frame HP (stored as
+    ints in per_actor_state) with the .hp.current / .apply_hp_delta shape that
+    check_hp_depletion + resolve_dogfight_shots expect. Reads/writes the dict so
+    it's serialization-safe across the dice round-trip."""
+
+    name: str
+    _ps: dict[str, Any]
+
+    @property
+    def hp(self) -> HpPool:
+        # NOTE: .hp is a read-only snapshot (fresh HpPool each read). To mutate
+        # frame HP call apply_hp_delta() — writing to .hp.current does NOT persist.
+        cur = int(self._ps[FRAME_HP_KEY])
+        mx = int(self._ps[FRAME_HP_MAX_KEY])
+        return HpPool(current=cur, max=mx, base_max=mx)
+
+    def apply_hp_delta(self, delta: int) -> int:
+        mx = int(self._ps[FRAME_HP_MAX_KEY])
+        new = max(0, min(mx, int(self._ps[FRAME_HP_KEY]) + delta))
+        self._ps[FRAME_HP_KEY] = new
+        return new
+
+
+def seed_frame_hp(actor: Any, hp: int) -> None:
+    """Seed an actor's fighter-frame HP (current=max=hp) into per_actor_state."""
+    actor.per_actor_state[FRAME_HP_KEY] = int(hp)
+    actor.per_actor_state[FRAME_HP_MAX_KEY] = int(hp)
+
+
+def frame_hp_resolver(encounter: Any) -> Callable[[str], _FrameCore | None]:
+    """Return a name -> _FrameCore resolver over the encounter's actors' frame HP.
+
+    Returns None for an actor with no seeded frame HP (so check_hp_depletion skips
+    it). Use this as the edge_resolver for resolve_dogfight_shots + the dogfight's
+    check_hp_depletion call.
+    """
+    by_name = {a.name: a for a in encounter.actors}
+
+    def _resolve(name: str) -> _FrameCore | None:
+        actor = by_name.get(name)
+        if actor is None or FRAME_HP_KEY not in actor.per_actor_state:
+            return None
+        return _FrameCore(name=name, _ps=actor.per_actor_state)
+
+    return _resolve
 
 
 @dataclass

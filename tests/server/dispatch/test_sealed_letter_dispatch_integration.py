@@ -136,7 +136,10 @@ def test_dogfight_instantiation_assigns_red_blue_roles(
     """
     snap, pack = space_opera_snap
     trigger_encounter(
-        snap, pack, "dogfight", "Maverick",
+        snap,
+        pack,
+        "dogfight",
+        "Maverick",
         npcs_present=[
             NpcMention(name="Bandit Ace", role="hostile", side="opponent"),
         ],
@@ -196,7 +199,10 @@ def test_dogfight_instantiation_rejects_two_npcs(
     snap, pack = space_opera_snap
     with pytest.raises(SealedLetterArityError):
         trigger_encounter(
-            snap, pack, "dogfight", "Maverick",
+            snap,
+            pack,
+            "dogfight",
+            "Maverick",
             npcs_present=[
                 NpcMention(name="Bandit One", role="hostile", side="opponent"),
                 NpcMention(name="Bandit Two", role="hostile", side="opponent"),
@@ -265,15 +271,27 @@ def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
 
     # Turn 1: instantiate the dogfight encounter
     trigger_encounter(
-        snap, pack, "dogfight", "Vega",
+        snap,
+        pack,
+        "dogfight",
+        "Vega",
         npcs_present=[
             NpcMention(name="Iron Fang", role="ace", side="opponent"),
         ],
     )
     enc = snap.encounter
     assert enc is not None
-    assert enc.actors[0].per_actor_state == {}
-    assert enc.actors[1].per_actor_state == {}
+    # Task 12: frame HP is now seeded at instantiation — per_actor_state carries
+    # frame_hp/frame_hp_max; the turn resolver will add gun-geometry keys on top.
+    from sidequest.game.dogfight_shot import FRAME_HP_KEY, FRAME_HP_MAX_KEY
+
+    for actor in enc.actors:
+        assert FRAME_HP_KEY in actor.per_actor_state, (
+            f"actor {actor.name!r} missing frame_hp after instantiation"
+        )
+        assert FRAME_HP_MAX_KEY in actor.per_actor_state, (
+            f"actor {actor.name!r} missing frame_hp_max after instantiation"
+        )
     assert enc.narrator_hints == []
 
     # Clear the captured spans so the next turn's spans are isolated
@@ -346,7 +364,10 @@ def test_dogfight_dispatch_does_not_invoke_apply_beat(
     snap, pack = space_opera_snap
 
     trigger_encounter(
-        snap, pack, "dogfight", "Pilot",
+        snap,
+        pack,
+        "dogfight",
+        "Pilot",
         npcs_present=[
             NpcMention(name="Wraith", role="hostile", side="opponent"),
         ],
@@ -395,7 +416,10 @@ def test_per_actor_state_round_trip_after_dispatch(
     snap, pack = space_opera_snap
 
     trigger_encounter(
-        snap, pack, "dogfight", "Lance",
+        snap,
+        pack,
+        "dogfight",
+        "Lance",
         npcs_present=[
             NpcMention(name="Spectre", role="hostile", side="opponent"),
         ],
@@ -453,7 +477,10 @@ def test_legacy_beat_selection_path_still_works(
 
     # Turn 1: instantiate combat with a hostile NPC
     trigger_encounter(
-        snap, pack, "combat", "Rux",
+        snap,
+        pack,
+        "combat",
+        "Rux",
         npcs_present=[
             NpcMention(name="Goblin", role="hostile", side="opponent"),
         ],
@@ -528,7 +555,10 @@ def test_legacy_beat_path_returns_narration_apply_outcome(
 
     # Turn 1: instantiate combat with a hostile NPC.
     trigger_encounter(
-        snap, pack, "combat", "Rux",
+        snap,
+        pack,
+        "combat",
+        "Rux",
         npcs_present=[
             NpcMention(name="Goblin", role="hostile", side="opponent"),
         ],
@@ -584,7 +614,10 @@ def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
 
     # Turn 1: instantiate the dogfight encounter
     trigger_encounter(
-        snap, pack, "dogfight", "Saber",
+        snap,
+        pack,
+        "dogfight",
+        "Saber",
         npcs_present=[
             NpcMention(name="Reaper", role="ace", side="opponent"),
         ],
@@ -647,7 +680,10 @@ def test_unknown_maneuver_in_sealed_letter_raises(
     snap, pack = space_opera_snap
 
     trigger_encounter(
-        snap, pack, "dogfight", "Apex",
+        snap,
+        pack,
+        "dogfight",
+        "Apex",
         npcs_present=[
             NpcMention(name="Hydra", role="hostile", side="opponent"),
         ],

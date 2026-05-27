@@ -149,6 +149,9 @@ class StructuredEncounter(BaseModel):
     model_config = {"extra": "forbid"}
 
     encounter_type: str
+    # "dial_threshold" (default) | "hp_depletion". Stamped from ConfrontationDef.win_condition
+    # at init (encounter_lifecycle). String-typed to avoid a game->genre.models import cycle.
+    win_condition: str = "dial_threshold"
     player_metric: EncounterMetric
     opponent_metric: EncounterMetric
     beat: int = 0

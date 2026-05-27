@@ -283,6 +283,7 @@ def instantiate_encounter_from_trigger(
     ``snapshot.genre_slug``).
     """
     from sidequest.game.encounter import EncounterMetric
+    from sidequest.genre.models.rules import MetricDef
 
     current = snapshot.encounter
     if current is not None and not current.resolved:
@@ -457,10 +458,17 @@ def instantiate_encounter_from_trigger(
             ",".join(a.name for a in actors if a.side == "player"),
         )
 
+        # Synthesize inert metrics when a combat declares no dial (win_condition: hp_depletion).
+        # The dial-threshold branches in apply_beat are gated off for hp_depletion, so these
+        # placeholders never gate resolution — they only keep the ~9 live-metric readers safe.
         pm = cdef.player_metric
         om = cdef.opponent_metric
+        if pm is None or om is None:
+            pm = MetricDef(name="hp", starting=0, threshold=1_000_000)
+            om = MetricDef(name="hp", starting=0, threshold=1_000_000)
         enc = StructuredEncounter(
             encounter_type=encounter_type,
+            win_condition=cdef.win_condition.value,
             player_metric=EncounterMetric(
                 name=pm.name,
                 current=pm.starting,

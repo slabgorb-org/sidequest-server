@@ -189,3 +189,105 @@ def resolve_dogfight_shots(
 
     depletion = check_hp_depletion(encounter, edge_resolver)
     return DogfightShotResolution(shots=results, depletion=depletion)
+
+
+# ---------------------------------------------------------------------------
+# Shot-input assembly
+# ---------------------------------------------------------------------------
+
+
+def _resolve_weapon(
+    weapon_lookup: Callable[[str], Any | None], weapon_id: str | None, who: str
+) -> tuple[DamageSpec, str]:
+    """Resolve a weapon catalog id to its (DamageSpec, name). Fails loud on a
+    missing id or an item with no damage spec — no silent fallback."""
+    if not weapon_id:
+        raise ValueError(f"dogfight {who} frame missing weapon id (cdef.{who}_weapon)")
+    item = weapon_lookup(weapon_id)
+    if item is None or getattr(item, "damage", None) is None:
+        raise ValueError(f"dogfight {who} weapon id {weapon_id!r} not found / has no damage spec")
+    return item.damage, getattr(item, "name", weapon_id)
+
+
+def _require_stat(stats: dict[str, int], key: str, who: str) -> int:
+    """Read a load-bearing frame stat, failing loud when absent — no silent +0."""
+    if key not in stats:
+        raise ValueError(f"dogfight {who} frame missing required stat {key!r}")
+    return int(stats[key])
+
+
+def build_dogfight_shot_inputs(
+    *,
+    ruleset_slug: str,
+    cdef: Any,
+    encounter: Any,
+    pc_stats: dict[str, int],
+    pc_pilot_skill: int,
+    pc_attack_bonus: int,
+    weapon_lookup: Callable[[str], Any | None],
+) -> tuple[dict[str, Any], GeometryModifiers]:
+    """Assemble per-role SWN shot inputs + return (shot_inputs, geometry_modifiers).
+
+    Opponent ace numbers come from cdef.opponent_default_stats + cdef.opponent_weapon;
+    the PC frame from cdef.player_default_stats + cdef.player_weapon, with the PC's
+    Pilot skill / attributes overridden by the real character sheet (pc_* args).
+    Fails loud (ValueError) when: pack isn't SWN-bound, the dogfight def lacks
+    geometry_modifiers, has no opponent_default_stats, a weapon id can't resolve,
+    an actor is missing, or a required frame stat (armor_class / armor) is absent.
+    No silent fallback.
+
+    The opponent's pilot_skill/attack_bonus use .get(..., 0) because they are
+    optional gunnery bonuses defaulting to 0 — that is an authored default for an
+    unskilled ace, NOT a silent fallback masking a config error. The LOAD-BEARING
+    stats armor_class and armor are _require_stat()d and fail loud.
+
+    The opponent's ``attacker_stats`` is ``cdef.opponent_ability_scores()`` (the
+    reserved combat keys hp/armor_class/armor/dexterity/pilot_skill/attack_bonus
+    stripped), so only ability scores feed the to-hit — the intent is explicit at
+    the seam rather than relying on the downstream resolver to ignore the reserved
+    keys.
+    """
+    if ruleset_slug != "swn":
+        raise ValueError(
+            f"dogfight SWN resolution requires SWN binding; pack ruleset={ruleset_slug!r}"
+        )
+    if cdef.geometry_modifiers is None:
+        raise ValueError("dogfight ConfrontationDef missing geometry_modifiers block")
+    if cdef.opponent_default_stats is None:
+        raise ValueError("dogfight ConfrontationDef has no opponent_default_stats")
+
+    role_by_side = {a.side: a.role for a in encounter.actors}
+    opp_role = role_by_side.get("opponent")
+    pc_role = role_by_side.get("player")
+    if opp_role is None or pc_role is None:
+        raise ValueError(
+            f"dogfight encounter missing player or opponent actor; sides present: "
+            f"{sorted({a.side for a in encounter.actors})}"
+        )
+
+    opp: dict[str, int] = cdef.opponent_default_stats
+    pcf: dict[str, int] = cdef.player_default_stats or {}
+    opp_weapon, opp_weapon_name = _resolve_weapon(weapon_lookup, cdef.opponent_weapon, "opponent")
+    pc_weapon, pc_weapon_name = _resolve_weapon(weapon_lookup, cdef.player_weapon, "player")
+
+    shot_inputs: dict[str, Any] = {
+        opp_role: {
+            "attacker_stats": cdef.opponent_ability_scores(),
+            "pilot_skill": int(opp.get("pilot_skill", 0)),
+            "attack_bonus": int(opp.get("attack_bonus", 0)),
+            "target_ac": _require_stat(pcf, "armor_class", "player"),
+            "target_armor": _require_stat(pcf, "armor", "player"),
+            "weapon": opp_weapon,
+            "weapon_name": opp_weapon_name,
+        },
+        pc_role: {
+            "attacker_stats": pc_stats,
+            "pilot_skill": int(pc_pilot_skill),
+            "attack_bonus": int(pc_attack_bonus),
+            "target_ac": _require_stat(opp, "armor_class", "opponent"),
+            "target_armor": _require_stat(opp, "armor", "opponent"),
+            "weapon": pc_weapon,
+            "weapon_name": pc_weapon_name,
+        },
+    }
+    return shot_inputs, cdef.geometry_modifiers

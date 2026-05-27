@@ -21,6 +21,13 @@ if TYPE_CHECKING:
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
 
+from sidequest.game.dogfight_shot import (
+    GunSolution,
+    PendingDogfightShot,
+    build_dogfight_shot_inputs,
+    frame_hp_resolver,
+    resolve_dogfight_shots,
+)
 from sidequest.game.morale import (
     MoraleOutcome,
     OpponentSideState,
@@ -620,6 +627,7 @@ class NarrationApplyOutcome:
     sealed_letter: SealedLetterOutcome | None = None
     magic: MagicApplyResult | None = None
     classified_intent: str = "unspecified"
+    pending_dogfight_shot: PendingDogfightShot | None = None
 
 
 def apply_magic_working(*, snapshot: GameSnapshot, patch_field: dict) -> MagicApplyResult:
@@ -2612,10 +2620,48 @@ def _apply_narration_result_to_snapshot(
                         )
                     commits[actor.role] = sel.beat_id
 
+                if pack is None:
+                    raise ValueError(
+                        f"sealed-letter dogfight {enc.encounter_type!r} requires a pack "
+                        "(SWN binding + frame stats) but pack is None"
+                    )
+                pc_char = next((c for c in snapshot.characters if c.core.name == player_name), None)
+                if pc_char is None:
+                    raise ValueError(
+                        f"sealed-letter dogfight: PC {player_name!r} not found in "
+                        "snapshot.characters"
+                    )
+                # PC attributes come from the real sheet; pilot_skill / attack_bonus
+                # use the authored frame default (player_default_stats) for MVP —
+                # the character model does not yet carry an SWN Pilot skill. This is
+                # an authored default, not a silent fallback.
+                pc_pilot_skill = int((cdef.player_default_stats or {}).get("pilot_skill", 0))
+                pc_attack_bonus = int((cdef.player_default_stats or {}).get("attack_bonus", 0))
+
+                shot_inputs, geo_mods = build_dogfight_shot_inputs(
+                    ruleset_slug=pack.rules.ruleset,
+                    cdef=cdef,
+                    encounter=enc,
+                    pc_stats=pc_char.stats,
+                    pc_pilot_skill=pc_pilot_skill,
+                    pc_attack_bonus=pc_attack_bonus,
+                    weapon_lookup=lambda wid: next(
+                        (
+                            i
+                            for i in (pack.inventory.item_catalog if pack.inventory else [])
+                            if i.id == wid
+                        ),
+                        None,
+                    ),
+                )
+
                 sl_outcome = resolve_sealed_letter_lookup(
                     enc,
                     commits,
                     cdef.interaction_table,
+                    geometry_modifiers=geo_mods,
+                    shot_inputs=shot_inputs,
+                    swn_cfg=pack.rules.swn,
                 )
                 outcome.sealed_letter = sl_outcome
                 # Replace, do not append: only the most recent cell's hint
@@ -2629,6 +2675,15 @@ def _apply_narration_result_to_snapshot(
                     enc.narrator_hints = [sl_outcome.narration_hint]
                 else:
                     enc.narrator_hints = []
+
+                # Task 14: player shot deferred to Rapier throw; NPC shots held
+                # server-side until player's die returns so all shots resolve
+                # against pre-shot frame HP together. See _resolve_dogfight_shot_phase.
+                outcome.pending_dogfight_shot = _resolve_dogfight_shot_phase(
+                    snapshot=snapshot,
+                    enc=enc,
+                    sl_outcome=sl_outcome,
+                )
                 # Status-change processing further down still runs because
                 # we only short-circuit the beat-selection block, not the
                 # whole snapshot mutation phase.
@@ -3523,6 +3578,81 @@ def _roll_d20_server_side() -> int:
     import random
 
     return random.randint(1, 20)
+
+
+def _resolve_dogfight_shot_phase(
+    *,
+    snapshot: Any,
+    enc: Any,
+    sl_outcome: Any,
+) -> PendingDogfightShot | None:
+    """Resolve or stash dogfight shots from a sealed-letter cell outcome.
+
+    Called after ``resolve_sealed_letter_lookup`` when the cell yields gun
+    solutions. Splits the solutions into player vs NPC:
+
+    - NPC shots are server-rolled immediately and held.
+    - If the player has a gun solution, a ``PendingDogfightShot`` is returned
+      — the caller stashes it on ``_SessionData`` and emits a DiceRequest so
+      the client throws the real Rapier die.
+    - If only the NPC has a gun solution, it resolves inline (Task 13 path)
+      and returns None.
+    - If there are no gun solutions at all, returns None immediately.
+
+    Invariant: ALL gun solutions in the cell are stored in the returned
+    PendingDogfightShot so the DICE_THROW handler can resolve all shots
+    (player + NPC) against the same pre-shot frame HP in one pass.
+    """
+    if not sl_outcome.gun_solutions:
+        return None
+
+    # Determine the player actor's role from the encounter's actor side map.
+    pc_role: str | None = next(
+        (a.role for a in enc.actors if a.side == "player"),
+        None,
+    )
+    if pc_role is None:
+        # No player actor seated — unreachable in a real dogfight (the PC is
+        # always seated at instantiation). Fail soft: no player shot to defer.
+        return None
+
+    npc_solos: list[GunSolution] = [
+        gs for gs in sl_outcome.gun_solutions if gs.shooter_role != pc_role
+    ]
+    player_solos: list[GunSolution] = [
+        gs for gs in sl_outcome.gun_solutions if gs.shooter_role == pc_role
+    ]
+
+    # Server-roll and hold NPC d20s immediately — they're revealed together
+    # with the player's roll so all shots resolve against the same frame HP.
+    npc_d20s: dict[str, int] = {gs.shooter_role: _roll_d20_server_side() for gs in npc_solos}
+
+    if player_solos:
+        # Player has a gun solution — stash and wait for the Rapier throw.
+        pc_gs = player_solos[0]
+        pc_actor_name = next(
+            (a.name for a in enc.actors if a.role == pc_role),
+            pc_gs.shooter_name,
+        )
+        return PendingDogfightShot(
+            gun_solutions=list(sl_outcome.gun_solutions),
+            held_npc_d20s=npc_d20s,
+            player_shooter_role=pc_role,
+            player_modifier=pc_gs.attack.modifier,
+            player_target_number=pc_gs.attack.target_number,
+            player_actor_name=pc_actor_name,
+        )
+
+    # NPC-only: resolve inline (Task 13 path, no stash needed).
+    shot_res = resolve_dogfight_shots(
+        encounter=enc,
+        gun_solutions=npc_solos,
+        d20_by_shooter=npc_d20s,
+        edge_resolver=frame_hp_resolver(enc),
+    )
+    if shot_res.depletion is not None:
+        snapshot.pending_resolution_signal = _build_resolution_signal(enc)
+    return None
 
 
 def _opposed_dc(beat: Any) -> int:

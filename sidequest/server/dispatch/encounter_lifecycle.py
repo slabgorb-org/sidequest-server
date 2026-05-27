@@ -645,6 +645,28 @@ def instantiate_encounter_from_trigger(
                     side=opponent_side,
                 ),
             ]
+            # Seed transient fighter-frame HP into each pilot's per_actor_state
+            # so the frame-HP resolver can read it during shot resolution and
+            # depletion checks. Fail loud if the dogfight cdef lacks the HP
+            # values — no silent default (CLAUDE.md no-silent-fallbacks).
+            from sidequest.game.dogfight_shot import seed_frame_hp
+
+            pc_frame_hp = cdef.player_hp
+            opp_frame_hp = cdef.opponent_hp
+            if pc_frame_hp is None or opp_frame_hp is None:
+                raise ValueError(
+                    f"dogfight ConfrontationDef {cdef.confrontation_type!r} missing "
+                    f"fighter-frame HP "
+                    f"(player_default_stats.hp={pc_frame_hp!r}, "
+                    f"opponent_default_stats.hp={opp_frame_hp!r})"
+                )
+            for actor in actors:
+                # side == "player" -> PC frame; otherwise the opponent
+                # (ArityError above guarantees exactly one NPC).
+                seed_frame_hp(
+                    actor,
+                    pc_frame_hp if actor.side == "player" else opp_frame_hp,
+                )
         else:
             role = "combatant" if cdef.category == "combat" else "participant"
             actors = [

@@ -27,10 +27,17 @@ OTEL spans emitted (see ``sidequest.telemetry.spans``):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
+from sidequest.game.dogfight_shot import GunSolution, resolve_geometry_modifier
 from sidequest.game.encounter import EncounterActor, StructuredEncounter
-from sidequest.genre.models.rules import InteractionCell, InteractionTable
+from sidequest.genre.models.rules import (
+    GeometryModifiers,
+    InteractionCell,
+    InteractionTable,
+    SwnConfig,
+)
 from sidequest.telemetry.spans import (
     dogfight_cell_resolved_span,
     dogfight_confrontation_started_span,
@@ -67,8 +74,9 @@ class SealedLetterOutcome:
     """Result of a sealed-letter lookup resolution.
 
     Carries the matched cell name, the committed maneuvers, the cell's
-    narration hint, and whether the extend-and-return rule fired this
-    resolution.
+    narration hint, whether the extend-and-return rule fired, and any
+    gun solutions detected for this cell (populated only when SWN kwargs
+    are supplied to ``resolve_sealed_letter_lookup``).
     """
 
     cell_name: str
@@ -76,12 +84,17 @@ class SealedLetterOutcome:
     blue_maneuver: str
     narration_hint: str
     extend_and_return_triggered: bool = False
+    gun_solutions: list[GunSolution] = field(default_factory=list)
 
 
 def resolve_sealed_letter_lookup(
     encounter: StructuredEncounter,
     commits: dict[str, str],
     table: InteractionTable,
+    *,
+    geometry_modifiers: GeometryModifiers | None = None,
+    shot_inputs: dict[str, dict[str, Any]] | None = None,
+    swn_cfg: SwnConfig | None = None,
 ) -> SealedLetterOutcome:
     """Resolve a sealed-letter lookup turn.
 
@@ -91,6 +104,15 @@ def resolve_sealed_letter_lookup(
     ``per_actor_state``, optionally fires the extend-and-return rule,
     and emits OTEL spans bracketing the pipeline.
 
+    The optional SWN kwargs (``geometry_modifiers``, ``shot_inputs``,
+    ``swn_cfg``) are all-or-nothing: when all three are supplied, the
+    resolver also detects which actors scored a ``gun_solution`` this cell
+    and computes the SWN ship-gunnery params (``AttackRollParams`` + weapon
+    / armor inputs) needed for the subsequent dice roll. Results are
+    returned as ``GunSolution`` objects on ``SealedLetterOutcome.gun_solutions``.
+    When any of the three is omitted (backward-compat callers), gun solution
+    detection is skipped and ``gun_solutions`` is empty.
+
     Args:
         encounter: The active StructuredEncounter (mutated in place — actor
             ``per_actor_state`` is merged with the cell views).
@@ -98,15 +120,26 @@ def resolve_sealed_letter_lookup(
             "red" and "blue"; each value must be in
             ``table.maneuvers_consumed``.
         table: The InteractionTable to look up the (red, blue) pair in.
+        geometry_modifiers: Aspect/range modifier table for SWN gunnery.
+            Required when ``shot_inputs`` / ``swn_cfg`` are supplied.
+        shot_inputs: Per-role dict of SWN gunnery params. Each value must
+            carry ``attacker_stats``, ``pilot_skill``, ``attack_bonus``,
+            ``target_ac``, ``target_armor``, ``weapon`` (DamageSpec), and
+            ``weapon_name``. Must include an entry for every role that
+            scores a ``gun_solution`` — missing entries raise ValueError
+            (no silent skip per CLAUDE.md).
+        swn_cfg: RulesConfig-compatible object exposing ``attribute_map``
+            (SWN attr name → flavor stat name mapping).
 
     Returns:
-        SealedLetterOutcome carrying cell metadata and the
-        extend-and-return flag.
+        SealedLetterOutcome carrying cell metadata, the extend-and-return
+        flag, and (when SWN kwargs supplied) any gun solutions detected.
 
     Raises:
         ValueError: ``commits`` is missing the "red" or "blue" key, the
-            committed maneuver is not in ``table.maneuvers_consumed``, or
-            the encounter has no actor for one of the required roles.
+            committed maneuver is not in ``table.maneuvers_consumed``, the
+            encounter has no actor for one of the required roles, or a
+            shooter has a ``gun_solution`` but no ``shot_inputs`` entry.
         KeyError: No interaction cell matches the (red, blue) pair (no
             silent fallback per CLAUDE.md).
     """
@@ -195,6 +228,69 @@ def resolve_sealed_letter_lookup(
     # ---- Step 5: maybe extend-and-return ----
     extend_triggered = _maybe_apply_extend_and_return(encounter, cell)
 
+    # ---- Step 6: detect gun solutions + compute SWN gunnery params ----
+    # The three SWN kwargs are ALL-OR-NOTHING (use ``is not None`` — an empty
+    # shot_inputs dict is still "provided", so it must not be treated as absent):
+    #   - none provided  -> backward-compat path, gun_solutions stays empty.
+    #   - all provided   -> run detection.
+    #   - some-but-not-all -> loud ValueError (a partial wire is a config bug, not
+    #     a silent no-op — CLAUDE.md no-silent-fallbacks).
+    swn_kwargs = {
+        "geometry_modifiers": geometry_modifiers,
+        "shot_inputs": shot_inputs,
+        "swn_cfg": swn_cfg,
+    }
+    provided = {name for name, value in swn_kwargs.items() if value is not None}
+    gun_solutions: list[GunSolution] = []
+    if provided and provided != set(swn_kwargs):
+        missing = sorted(set(swn_kwargs) - provided)
+        raise ValueError(
+            "dogfight SWN resolution requires geometry_modifiers, shot_inputs, and "
+            f"swn_cfg together; missing: {missing}"
+        )
+    if provided:
+        # All three present (the partial case raised above). Narrow for the type
+        # checker — the dict values are still Optional in the annotation.
+        assert geometry_modifiers is not None
+        assert shot_inputs is not None
+        assert swn_cfg is not None
+        from sidequest.game.ruleset.swn import SwnRulesetModule
+
+        swn = SwnRulesetModule()
+        role_actor = {ROLE_RED: red_actor, ROLE_BLUE: blue_actor}
+        for shooter_role, shooter in role_actor.items():
+            if not bool(shooter.per_actor_state.get("gun_solution")):
+                continue
+            inp = shot_inputs.get(shooter_role)
+            if inp is None:
+                raise ValueError(
+                    f"actor role={shooter_role!r} has a gun_solution but no shot_inputs "
+                    "entry — dispatch must supply SWN params for every shooter (no silent skip)"
+                )
+            target_role = ROLE_BLUE if shooter_role == ROLE_RED else ROLE_RED
+            geo = resolve_geometry_modifier(shooter.per_actor_state, geometry_modifiers)
+            attack = swn.ship_attack_params(
+                attacker_stats=inp["attacker_stats"],
+                pilot_skill=inp["pilot_skill"],
+                attack_bonus=inp["attack_bonus"],
+                geometry_modifier=geo,
+                target_ac=inp["target_ac"],
+                cfg=swn_cfg,
+            )
+            gun_solutions.append(
+                GunSolution(
+                    shooter_role=shooter_role,
+                    shooter_name=shooter.name,
+                    target_role=target_role,
+                    target_name=role_actor[target_role].name,
+                    attack=attack,
+                    weapon=inp["weapon"],
+                    weapon_name=inp["weapon_name"],
+                    target_armor=int(inp["target_armor"]),
+                    geometry_modifier=geo,
+                )
+            )
+
     # ---- OTEL: cell_resolved ----
     with dogfight_cell_resolved_span(
         cell_name=cell.name,
@@ -211,6 +307,7 @@ def resolve_sealed_letter_lookup(
         blue_maneuver=blue_maneuver,
         narration_hint=cell.narration_hint,
         extend_and_return_triggered=extend_triggered,
+        gun_solutions=gun_solutions,
     )
 
 

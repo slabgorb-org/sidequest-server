@@ -393,6 +393,11 @@ def sealed_letter_pack():
         resolution_mode=ResolutionMode.sealed_letter_lookup,
         player_metric=MetricDef(name="energy", starting=0, threshold=30),
         opponent_metric=MetricDef(name="energy", starting=0, threshold=30),
+        # Task 12: sealed-letter instantiation seeds frame HP from these fields.
+        # The seeding guard requires both to be non-None for any
+        # sealed_letter_lookup cdef — fail-loud per CLAUDE.md.
+        player_default_stats={"hp": 8},
+        opponent_default_stats={"hp": 8},
         beats=[
             BeatDef.model_validate(
                 {

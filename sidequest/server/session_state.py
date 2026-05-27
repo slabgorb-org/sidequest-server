@@ -295,6 +295,14 @@ class _SessionData:
     # span, and applies both beats. Cleared by the consuming turn.
     pending_opposed_player_d20: int | None = None
     pending_opposed_player_beat_id: str | None = None
+    # Dogfight player-throw stash (Task 14). Set by
+    # ``_apply_narration_result_to_snapshot`` when a sealed-letter cell yields
+    # a player gun solution — the NPC's d20 is server-rolled and held here while
+    # the player's shot awaits a client Rapier throw. Read+cleared by
+    # ``DiceThrowHandler`` when the player's DICE_THROW arrives; all shots then
+    # resolve together against pre-shot frame HP. None between turns (not yet
+    # stashed or already consumed).
+    pending_dogfight_shot: Any | None = None
     # ADR-050 — image pacing throttle. Per-session, time-based cooldown that
     # suppresses render dispatches faster than human absorption speed.
     # Default 30s solo / 60s MP; created at chargen confirmation once the

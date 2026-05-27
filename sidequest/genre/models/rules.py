@@ -18,10 +18,14 @@ from sidequest.genre.models.inventory import DamageSpec
 # ability scores. ``hp`` seeds the opponent CreatureCore HP pool and
 # ``armor_class`` seeds the SWN ascending AC the attack rolls against
 # (hp_depletion combats). ``dexterity`` seeds the opponent's SWN
-# initiative (1d8 + DEX mod) for hp_depletion combats. They are popped
-# out before ability-score / modifier resolution so they never leak into
-# opposed_check lookups or the ADR-093 calibration ceiling.
-OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset({"hp", "armor_class", "dexterity"})
+# initiative (1d8 + DEX mod) for hp_depletion combats. ``armor`` is the
+# SWN flat damage-soak value for dogfight ship frames. ``pilot_skill``
+# and ``attack_bonus`` are dogfight ship-gunnery to-hit terms. All of
+# these are popped out before ability-score / modifier resolution so they
+# never leak into opposed_check lookups or the ADR-093 calibration ceiling.
+OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset(
+    {"hp", "armor_class", "dexterity", "armor", "pilot_skill", "attack_bonus"}
+)
 
 
 class MoraleTrigger(StrEnum):
@@ -355,8 +359,6 @@ class InteractionTable(BaseModel):
     starting_state: str
     maneuvers_consumed: list[str] = Field(default_factory=list)
     cells: list[InteractionCell] = Field(default_factory=list)
-    damage_increments: dict[str, int] | None = None
-    starting_hull: int | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> InteractionTable:
@@ -372,14 +374,22 @@ class InteractionTable(BaseModel):
                     f"duplicate interaction cell pair: ({cell.pair[0]}, {cell.pair[1]})"
                 )
             seen.add(key)
-        if self.damage_increments is not None:
-            for tier in ("graze", "clean", "devastating"):
-                val = self.damage_increments.get(tier)
-                if val is None:
-                    raise ValueError(f"damage_increments missing required severity tier: '{tier}'")
-                if val <= 0:
-                    raise ValueError(f"damage_increments '{tier}' must be positive, got {val}")
         return self
+
+
+class GeometryModifiers(BaseModel):
+    """Maneuver-cell geometry -> ship-gunnery to-hit modifier (dogfight SWN layer).
+
+    Authored & tunable in content. ``aspect`` keys match the cell view's
+    ``target_aspect`` value (tail_on/quartering/crossing/head_on); ``range``
+    keys match ``target_range`` (gun/close/medium/far). The matched aspect and
+    range modifiers are summed and will feed the ship-gunnery to-hit modifier.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    aspect: dict[str, int] = Field(default_factory=dict)
+    range: dict[str, int] = Field(default_factory=dict)
 
 
 class ConfrontationDef(BaseModel):
@@ -409,15 +419,21 @@ class ConfrontationDef(BaseModel):
     # opposed_check — only valid when ``resolution_mode`` is something
     # other than ``opposed_check``.
     #
-    # RESERVED KEYS: ``hp`` and ``armor_class`` are NOT ability scores. When
-    # present they seed the opponent's runtime CreatureCore (HP pool +
-    # ascending SWN AC) for hp_depletion combats — see
-    # ``opponent_hp`` / ``opponent_armor_class`` and the seating seam in
+    # RESERVED KEYS: the keys in ``OPPONENT_RESERVED_STAT_KEYS`` (hp,
+    # armor_class, dexterity, armor, pilot_skill, attack_bonus) are NOT
+    # ability scores. When present they seed the opponent's runtime
+    # CreatureCore / SWN combat block (HP pool + ascending AC, initiative
+    # DEX, ship-frame soak + gunnery to-hit terms) — see ``opponent_hp`` /
+    # ``opponent_armor_class`` and the seating seam in
     # ``encounter_lifecycle._publish_combat_edge_to_npcs``. They are popped
     # out of the ability-score map by ``opponent_ability_scores()`` so they
     # never leak into modifier resolution. All other keys are raw ability
     # scores (3..20 D&D-style; modifier = floor((score-10)/2)).
     opponent_default_stats: dict[str, int] | None = None
+    opponent_weapon: str | None = None  # dogfight: opponent ace's weapon catalog id
+    player_weapon: str | None = None  # dogfight: PC frame's weapon catalog id
+    geometry_modifiers: GeometryModifiers | None = None
+    player_default_stats: dict[str, int] = Field(default_factory=dict)
     morale: MoraleDef | None = None
     intent_verbs: list[str] | None = None
     on_intent_mismatch: Literal["warn", "soft_suggest", "reprompt"] = "warn"
@@ -563,6 +579,22 @@ class ConfrontationDef(BaseModel):
         if not self.opponent_default_stats:
             return None
         raw = self.opponent_default_stats.get("dexterity")
+        return int(raw) if raw is not None else None
+
+    @property
+    def player_hp(self) -> int | None:
+        """Content-authored player-frame HP pool, or ``None`` if not authored."""
+        if not self.player_default_stats:
+            return None
+        raw = self.player_default_stats.get("hp")
+        return int(raw) if raw is not None else None
+
+    @property
+    def player_armor_class(self) -> int | None:
+        """Content-authored player-frame ascending AC, or ``None`` if not set."""
+        if not self.player_default_stats:
+            return None
+        raw = self.player_default_stats.get("armor_class")
         return int(raw) if raw is not None else None
 
 
@@ -830,6 +862,8 @@ class RulesConfig(BaseModel):
         if self.swn is None:
             object.__setattr__(self, "swn", SwnConfig())
         required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        # self.swn cannot be None here — the branch above ensures it; assert for pyright.
+        assert self.swn is not None
         amap = self.swn.attribute_map
         if not amap:
             raise ValueError(

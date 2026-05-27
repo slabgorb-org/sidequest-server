@@ -1,10 +1,15 @@
 import pytest
+
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.genre.models.rules import SwnConfig
 
 MAP = {
-    "STRENGTH": "Physique", "CONSTITUTION": "Resolve", "DEXTERITY": "Reflex",
-    "INTELLIGENCE": "Intellect", "WISDOM": "Cunning", "CHARISMA": "Influence",
+    "STRENGTH": "Physique",
+    "CONSTITUTION": "Resolve",
+    "DEXTERITY": "Reflex",
+    "INTELLIGENCE": "Intellect",
+    "WISDOM": "Cunning",
+    "CHARISMA": "Influence",
 }
 CFG = SwnConfig(attribute_map=MAP)
 MOD = SwnRulesetModule()
@@ -39,8 +44,10 @@ def test_attack_params_still_uses_flavor_stat_without_map():
         stat_check = "Physique"
         attack_bonus = 2
         combat_skill = 1
+
     class Core:
         armor_class = 13
+
     a = MOD.attack_params(beat=Beat(), attacker_stats=STATS, attacker_core=None, target_core=Core())
     assert a.modifier == 2 + 1 + 1  # attack_bonus + combat_skill + Physique(14)->+1
     assert a.target_number == 13

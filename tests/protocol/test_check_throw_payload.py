@@ -18,7 +18,6 @@ from pydantic import ValidationError
 
 from sidequest.protocol.messages import CheckThrowPayload
 
-
 # ---------------------------------------------------------------------------
 # Fix 1 — skill_check cross-field validation
 # ---------------------------------------------------------------------------
@@ -29,7 +28,7 @@ def test_skill_check_missing_attribute_raises():
     with pytest.raises(ValidationError, match="skill_check requires"):
         CheckThrowPayload(
             kind="skill_check",
-            attribute=None,          # missing
+            attribute=None,  # missing
             difficulty_key="tricky",
             faces=[4, 5],
         )
@@ -41,7 +40,7 @@ def test_skill_check_missing_difficulty_key_raises():
         CheckThrowPayload(
             kind="skill_check",
             attribute="DEXTERITY",
-            difficulty_key=None,     # missing
+            difficulty_key=None,  # missing
             faces=[4, 5],
         )
 
@@ -56,7 +55,7 @@ def test_save_missing_save_category_raises():
     with pytest.raises(ValidationError, match="save requires"):
         CheckThrowPayload(
             kind="save",
-            save=None,               # missing
+            save=None,  # missing
             faces=[13],
         )
 

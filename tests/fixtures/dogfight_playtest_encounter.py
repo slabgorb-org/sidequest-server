@@ -33,6 +33,8 @@ from sidequest.agents.orchestrator import (
     NarrationTurnResult,
     NpcMention,
 )
+from sidequest.game.character import Character
+from sidequest.game.creature_core import CreatureCore
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
@@ -95,8 +97,8 @@ def make_dogfight_playtest_state(
     Side effects:
         - Loads space_opera genre pack from disk.
         - Drives one narration turn through the production dispatch path
-          to instantiate the encounter (this is what makes per_actor_state
-          start at ``{}`` — matching production behavior, not pre-seeded).
+          to instantiate the encounter; per_actor_state is seeded with
+          frame_hp/frame_hp_max at instantiation by production code.
     """
     root = pack_root if pack_root is not None else DEFAULT_CONTENT_ROOT
     pack_path = root / GENRE_SLUG
@@ -118,6 +120,27 @@ def make_dogfight_playtest_state(
 
     snap = GameSnapshot(genre=GENRE_SLUG)
     snap.genre_slug = GENRE_SLUG
+
+    # Seed the player character so the SWN shot-resolution path in
+    # narration_apply can look up pc_char.stats (Reflex/Intellect modifiers
+    # feed the to-hit arithmetic). Matches the _make_pilot pattern in
+    # test_sealed_letter_dispatch_integration.py: both attrs at 10
+    # (modifier=0) so arithmetic is deterministic. pilot_skill /
+    # attack_bonus fall back to authored player_default_stats — not a
+    # silent fallback, that's the authored MVP default.
+    snap.characters = [
+        Character(
+            core=CreatureCore(
+                name=player_pilot_name,
+                description="Playtest pilot.",
+                personality="Calm.",
+            ),
+            backstory="A pilot.",
+            char_class="Pilot",
+            race="Human",
+            stats={"Reflex": 10, "Intellect": 10},
+        )
+    ]
 
     # Story 59-17: instantiate through the LIVE production primitive.
     # Confrontation engagement is router-driven (Story 59-4 / ADR-113); the

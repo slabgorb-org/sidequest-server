@@ -3030,6 +3030,61 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         r2_key = reply.get("r2_key")
         if r2_key:
             served_url = resolve_artifact_url(str(r2_key)) or ""
+            # Story 65-2: link this runtime artifact to the save that produced
+            # it, so the UI can rehydrate it on resume without re-rendering.
+            # The content sha256 already lives inside r2_key, so nothing else
+            # is needed from the reply. asset_type is the <kind> segment of
+            # artifacts/<world>/<session>/<kind>/<sha>.<ext>.
+            if sd is not None:
+                # The SaveRepository Protocol guarantees append_asset_ledger; no
+                # hasattr guard (that would be a silent-skip fallback). A missing
+                # method should raise loudly via the except below.
+                key_parts = str(r2_key).split("/")
+                asset_type = key_parts[3] if len(key_parts) >= 5 else str(params.get("tier") or "")
+                entity_ref = str(
+                    params.get("subject_name") or params.get("subject") or "unknown"
+                )
+                try:
+                    sd.repository.append_asset_ledger(
+                        r2_key=str(r2_key),
+                        asset_type=asset_type,
+                        entity_ref=entity_ref,
+                        created_turn=dispatch_turn_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 — ledger failure must not lose the image
+                    logger.error(
+                        "asset_ledger.write_failed render_id=%s r2_key=%s error=%s",
+                        render_id,
+                        r2_key,
+                        exc,
+                    )
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "asset_ledger",
+                            "op": "write_failed",
+                            "r2_key": str(r2_key),
+                            "render_id": render_id,
+                            "error": type(exc).__name__,
+                        },
+                        component="render",
+                        severity="error",
+                    )
+                else:
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "asset_ledger",
+                            "op": "write",
+                            "r2_key": str(r2_key),
+                            "asset_type": asset_type,
+                            "entity_ref": entity_ref,
+                            "session_id": sd.repository.session_id,
+                            "turn": dispatch_turn_id,
+                        },
+                        component="render",
+                        severity="info",
+                    )
         else:
             active_app = get_active_app()
             healed: str | None = (

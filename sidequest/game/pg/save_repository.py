@@ -29,6 +29,7 @@ from sidequest.game.event_log import EventRow
 from sidequest.game.persistence import SavedSession
 from sidequest.game.pg import sessions
 from sidequest.game.pg._conn import session_tx
+from sidequest.game.pg.asset_ledger import PgAssetLedgerStore
 from sidequest.game.pg.events import PgEventStore, PgSaveTransaction
 from sidequest.game.pg.narrative import BackfillRow, PgNarrativeStore
 from sidequest.game.pg.promotions import PgLocationPromotionRow, PgPromotionStore
@@ -66,6 +67,7 @@ class PgSaveRepository:
         self._snapshot = PgSnapshotStore(pool, session_id=session_id)
         self._narrative = PgNarrativeStore(pool, session_id=session_id)
         self._scrapbook = PgScrapbookStore(pool, session_id=session_id)
+        self._asset_ledger = PgAssetLedgerStore(pool, session_id=session_id)
         self._promotions = PgPromotionStore(pool, session_id=session_id)
 
     @property
@@ -219,6 +221,28 @@ class PgSaveRepository:
 
     def update_scrapbook_image_url(self, *, turn_id: int, image_url: str) -> bool:
         return self._scrapbook.update_scrapbook_image_url(turn_id=turn_id, image_url=image_url)
+
+    # ------------------------------------------------------------------
+    # Asset ledger (Story 65-2) — runtime R2 artifacts per save
+    # ------------------------------------------------------------------
+
+    def append_asset_ledger(
+        self,
+        *,
+        r2_key: str,
+        asset_type: str,
+        entity_ref: str,
+        created_turn: int,
+    ) -> None:
+        self._asset_ledger.append(
+            r2_key=r2_key,
+            asset_type=asset_type,
+            entity_ref=entity_ref,
+            created_turn=created_turn,
+        )
+
+    def list_asset_ledger(self) -> list[dict]:
+        return self._asset_ledger.list_assets()
 
     def scrapbook_turn_ids(self, *, max_turn: int) -> set[int]:
         return self._scrapbook.scrapbook_turn_ids(max_turn=max_turn)

@@ -950,6 +950,18 @@ class RulesConfig(BaseModel):
                 )
         return self
 
+    def ruleset_config(self) -> SwnConfig | None:
+        """The config block for the bound ruleset, or None for engines that carry none.
+
+        Dispatch resolves the cfg this way instead of hardcoding `.swn`, so a
+        `cwn` pack receives its own block. `native` carries no config (None).
+        """
+        if self.ruleset == "swn":
+            return self.swn
+        if self.ruleset == "cwn":
+            return self.cwn
+        return None
+
     @property
     def intent_verbs_by_type(self) -> dict[str, frozenset[str]]:
         """Mapping of confrontation_type -> derived intent verb set.

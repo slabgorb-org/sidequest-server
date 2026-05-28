@@ -64,13 +64,45 @@ class TestVisualStyle:
         vs = VisualStyle.model_validate(
             {
                 "positive_suffix": "grim",
-                "negative_prompt": "bright",
                 "preferred_model": "flux",
                 "base_seed": 0,
                 "extra_field": "ignored",
             }
         )
         assert vs.positive_suffix == "grim"
+
+    def test_constructs_without_negative_prompt(self) -> None:
+        """Story 64-11: negative_prompt is no longer a declared field.
+
+        Z-Image ignores negatives at guidance_scale=0, and the daemon
+        overwrites any config-supplied negative with its own runtime
+        _BASE_NEGATIVES, so the authoring field is dead. Construction must
+        succeed without it, and it must not appear in declared model_fields.
+        """
+        vs = VisualStyle.model_validate(
+            {
+                "positive_suffix": "grim",
+                "preferred_model": "flux",
+                "base_seed": 0,
+            }
+        )
+        assert vs.positive_suffix == "grim"
+        assert "negative_prompt" not in VisualStyle.model_fields
+
+    def test_stray_negative_prompt_tolerated_as_extra(self) -> None:
+        """A leftover negative_prompt in YAML is tolerated as an extra
+        (extra='allow') and does NOT become a typed field."""
+        vs = VisualStyle.model_validate(
+            {
+                "positive_suffix": "grim",
+                "negative_prompt": "bright",
+                "preferred_model": "flux",
+                "base_seed": 0,
+            }
+        )
+        assert "negative_prompt" not in VisualStyle.model_fields
+        # Tolerated as an extra, preserved in __pydantic_extra__.
+        assert (vs.__pydantic_extra__ or {}).get("negative_prompt") == "bright"
 
 
 class TestVisualStyleLoraFieldsRemoved:

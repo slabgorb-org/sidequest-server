@@ -194,15 +194,17 @@ async def test_zones_carry_cache_boundary_flag(
 
     # Per-section accuracy: the zone-level flag is a rollup, but a section only
     # rides system_blocks[0] when its bucket is System (in STABLE_SECTION_NAMES)
-    # AND its zone is Primacy/Early. In a real turn, Primacy holds BOTH a
-    # System-bucket identity section and User-bucket guardrails — they must NOT
-    # share a `cached` verdict.
+    # AND its zone is Primacy/Early. Both narrator_identity and the
+    # narrator_constraints guardrail prose are System-bucket sections that sit in
+    # Primacy — Story 61-10 promoted narrator_constraints into STABLE_SECTION_NAMES
+    # (byte-static .md prose, no per-turn interpolation), so it now rides the same
+    # cached system_blocks[0] as narrator_identity.
     assert sections_by_name["narrator_identity"]["cached"] is True, (
         "narrator_identity is System-bucket in Primacy — it rides the cached block"
     )
-    assert sections_by_name["narrator_constraints"]["cached"] is False, (
-        "narrator_constraints is a User-bucket guardrail — it lands in the per-turn "
-        "user message, NOT the cached system_blocks[0], even though it sits in Primacy"
+    assert sections_by_name["narrator_constraints"]["cached"] is True, (
+        "narrator_constraints is System-bucket (STABLE_SECTION_NAMES, per Story 61-10) — "
+        "it rides the cached system_blocks[0], not the per-turn user message"
     )
 
 

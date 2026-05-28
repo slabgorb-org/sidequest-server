@@ -12,6 +12,7 @@ original methods on WebSocketSessionHandler.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from sidequest.agents.perception_rewriter import rewrite_for_recipient
@@ -64,9 +65,7 @@ def _emit_recipient_dropped(kind: str, player_id: str, reason: str) -> None:
             severity="warning",
         )
     except Exception:  # noqa: BLE001 — telemetry must never crash a turn
-        logger.warning(
-            "emit_event.recipient_dropped watcher publish failed kind=%s", kind
-        )
+        logger.warning("emit_event.recipient_dropped watcher publish failed kind=%s", kind)
 
 
 def _deliver_fanout(
@@ -244,6 +243,7 @@ def emit_event(
     payload_model: object,
     *,
     author_player_id: str | None = None,
+    per_recipient_payload: Callable[[str], object] | None = None,
 ) -> object:
     """Persist an event to the EventLog and fan-out to all connected players.
 
@@ -251,6 +251,18 @@ def emit_event(
     1. EventLog.append fires BEFORE any socket send.
     2. Fan-out consults ProjectionFilter per recipient.
     3. (solo only) The emitter receives the raw, unfiltered event.
+
+    ``per_recipient_payload`` (Story 59-16 — single filtered CONFRONTATION
+    delivery): when supplied, the projection/perception/POV machinery is
+    bypassed and the canonical ``payload_model`` is persisted to the
+    EventLog ONLY. A per-recipient frame — ``per_recipient_payload(pid)`` —
+    is delivered to EVERY connected socket INCLUDING the emitter (overrides
+    Invariant 3 for this emit: the emitter is no longer raw-bypassed). The
+    supplier returns ``None`` for a socket that must receive nothing — an
+    unseated/lobby socket, or a seated PC the supplier has already surfaced
+    as unresolved (it owns the fail-loud ERROR span). The canonical union is
+    therefore never sent to a client socket. This replaces the Story 49-7
+    union-broadcast + per-PC overlay race. Returns the emitter's own frame.
 
     ``author_player_id`` (ADR-105 Track A): in merged-MP dispatch the
     driving handler is whichever player submitted *last* — NOT the sole
@@ -332,6 +344,62 @@ def emit_event(
             )
         except Exception:  # noqa: BLE001 — telemetry must never crash a turn
             logger.warning("emit.author_resolved watcher publish failed kind=%s", kind)
+
+        # Story 59-16: single filtered delivery path. Persist the canonical
+        # (union) payload to the EventLog only, then deliver a per-recipient
+        # frame to every connected socket including the emitter. The union is
+        # never enqueued onto a client socket. A supplier returning None means
+        # "send nothing to this socket" (unseated, or a seated PC the supplier
+        # already surfaced as unresolved). Bypasses projection/perception/POV:
+        # CONFRONTATION is structured data whose per-PC class filtering is
+        # computed by the supplier in the encounter layer (ADR-105: the
+        # projection firewall has no class context).
+        if per_recipient_payload is not None and callable(
+            getattr(room, "connected_player_ids", None)
+        ):
+            repo = event_log.repository
+            with repo.transaction() as tx:
+                row = tx.append_event(kind=kind, payload_json=payload_json)
+                seq = row.seq
+
+            def _frame_for(pid: str) -> object | None:
+                recipient_payload = per_recipient_payload(pid)
+                if recipient_payload is None:
+                    return None
+                if isinstance(recipient_payload, BaseModel):
+                    recipient_payload = recipient_payload.model_copy(update={"seq": seq})
+                return message_cls(payload=recipient_payload)
+
+            emitter_msg: object | None = None
+            for pid in room.connected_player_ids():
+                msg = _frame_for(pid)
+                if pid == emitter_player_id:
+                    emitter_msg = msg
+                if msg is None:
+                    continue
+                socket_id = room.socket_for_player(pid)
+                if socket_id is None:
+                    _emit_recipient_dropped(kind, pid, "socket_gone")
+                    continue
+                queue = room.queue_for_socket(socket_id)
+                if queue is None:
+                    _emit_recipient_dropped(kind, pid, "queue_detached")
+                    continue
+                queue.put_nowait(msg)
+
+            # Return the emitter's own frame for caller back-compat. If the
+            # emitter was not connected (or the supplier returned None for
+            # them), build a frame from their supplied payload, falling back
+            # to the canonical only as the function's return value (never a
+            # socket delivery).
+            if emitter_msg is None:
+                fallback = per_recipient_payload(emitter_player_id) if emitter_player_id else None
+                if fallback is None:
+                    fallback = payload_model
+                if isinstance(fallback, BaseModel):
+                    fallback = fallback.model_copy(update={"seq": seq})
+                emitter_msg = message_cls(payload=fallback)
+            return emitter_msg
 
         # C2: event append + all cache writes share a single transaction.
         # Projections are computed inside the block so the cache row's
@@ -558,8 +626,18 @@ def emit_event(
                 seq=seq,
             )
     else:
-        # Legacy path (non-slug connect): no EventLog, no seq
-        out_to_self = message_cls(payload=payload_model)
+        # Legacy path (non-slug connect): no EventLog, no seq. Story 59-16:
+        # honor a per-recipient supplier for the emitter so stub-room / legacy
+        # callers still return a class-filtered frame (never the union) for
+        # their outbound list.
+        if per_recipient_payload is not None:
+            _legacy_emitter = handler._session_data.player_id if handler._session_data else None
+            _legacy_payload = per_recipient_payload(_legacy_emitter) if _legacy_emitter else None
+            out_to_self = message_cls(
+                payload=_legacy_payload if _legacy_payload is not None else payload_model
+            )
+        else:
+            out_to_self = message_cls(payload=payload_model)
 
     return out_to_self
 

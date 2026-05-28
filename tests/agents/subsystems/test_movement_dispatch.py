@@ -847,6 +847,9 @@ def test_surface_bound_pc_descends_onto_dungeon_graph(capture_spans):
     )
     resolved = _spans_named(capture_spans, "movement.resolved")
     assert len(resolved) == 1
+    # …via the surface→deep handoff specifically — proves the engine took the
+    # rebind path, not a coincidental in-graph resolve.
+    assert resolved[0].attributes["resolved_via"] == "surface_descent"
 
 
 def test_surface_descent_is_mechanically_backed_through_bank(capture_spans):

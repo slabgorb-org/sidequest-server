@@ -110,7 +110,7 @@ def test_preload_loads_crew_on_real_fresh_snapshot() -> None:
     crew = _crew()
     preload_authored_npcs(snap, crew)
 
-    loaded = {n.core.name: n.disposition for n in snap.npcs}
+    loaded = {n.core.name: n.disposition.value for n in snap.npcs}
     assert loaded == {
         "Wainu Moana-Teru": 60,
         "Hubo Dicia": 55,

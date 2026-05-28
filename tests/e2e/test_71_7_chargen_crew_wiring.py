@@ -70,7 +70,7 @@ def test_chargen_seam_loads_authored_crew_into_npcs() -> None:
     # Production order: materialize, then preload (chargen_mixin.py:740,786).
     preload_authored_npcs(materialized, world.authored_npcs)
 
-    loaded = {n.core.name: n.disposition for n in materialized.npcs}
+    loaded = {n.core.name: n.disposition.value for n in materialized.npcs}
     for name, disp in EXPECTED_DISPOSITIONS.items():
         assert name in loaded, (
             f"authored crew member {name!r} did not hydrate via the chargen seam; "

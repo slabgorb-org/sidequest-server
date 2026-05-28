@@ -174,7 +174,6 @@ class TestVisualStyleSchemaSurface:
         """
         expected = {
             "positive_suffix",
-            "negative_prompt",
             "preferred_model",
             "base_seed",
             "visual_tag_overrides",

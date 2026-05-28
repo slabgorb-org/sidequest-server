@@ -262,7 +262,6 @@ class VisualStyle(BaseModel):
     model_config = {"extra": "allow"}
 
     positive_suffix: str
-    negative_prompt: str
     preferred_model: str
     base_seed: int
     visual_tag_overrides: dict[str, str] = Field(default_factory=dict)

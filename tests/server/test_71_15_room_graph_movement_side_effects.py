@@ -62,7 +62,6 @@ corrected here:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from unittest.mock import AsyncMock
 
 import pytest
@@ -232,8 +231,7 @@ class TestTransitionTickSpan:
         # attribute key is implementer's choice; the id must appear).
         flat = " ".join(str(v) for v in attrs.values())
         assert _TROPE_ID in flat, (
-            f"transition-tick span must carry the advanced trope id "
-            f"{_TROPE_ID!r}; attrs={attrs}"
+            f"transition-tick span must carry the advanced trope id {_TROPE_ID!r}; attrs={attrs}"
         )
 
 
@@ -301,8 +299,7 @@ class TestIdempotentReEntry:
             f"depletion spans; saw {names & _TRANSITION_SPAN_NAMES}."
         )
         assert _torch(sd)["uses_remaining"] == 3, (
-            "Re-entry must not deplete the torch; "
-            f"uses_remaining={_torch(sd)['uses_remaining']}"
+            f"Re-entry must not deplete the torch; uses_remaining={_torch(sd)['uses_remaining']}"
         )
 
 
@@ -314,9 +311,7 @@ class TestIdempotentReEntry:
 
 class TestItemDepletion:
     @pytest.mark.asyncio
-    async def test_torch_decrements_once_on_transition(
-        self, session_handler_factory
-    ) -> None:
+    async def test_torch_decrements_once_on_transition(self, session_handler_factory) -> None:
         sd, handler = session_handler_factory(genre="caverns_and_claudes")
         _enter_room_graph_mode(sd)
         _place_actor(sd)
@@ -375,8 +370,7 @@ class TestItemDepletion:
             f"Torch must hit 0 uses; uses_remaining={torch['uses_remaining']}"
         )
         assert torch.get("exhausted") is True, (
-            "Torch at zero uses must be flagged exhausted (not silently "
-            f"deleted); item={torch}"
+            f"Torch at zero uses must be flagged exhausted (not silently deleted); item={torch}"
         )
 
 

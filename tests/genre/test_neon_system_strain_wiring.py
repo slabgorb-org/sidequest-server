@@ -139,3 +139,4 @@ def test_neon_chargen_seed_and_engine_otel() -> None:
     attrs2 = dict(spans2[1].attributes or {})
     assert spans2[1].name == "cwn.system_strain.delta"
     assert attrs2["applied"] is False
+    assert attrs2["new_total"] == character.core.system_strain.current  # refusal leaves total unchanged (== 2)

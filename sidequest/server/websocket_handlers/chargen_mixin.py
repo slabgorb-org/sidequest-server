@@ -1361,19 +1361,14 @@ class CharGenMixin:
                 and sd.mode == _GameMode.MULTIPLAYER
                 and self._socket_id is not None
             ):
-                # Story 71-13: deliver party_status to peers via direct
-                # queue puts rather than room.broadcast — eliminates the
-                # last room.broadcast call from _chargen_confirmation so
-                # the opening path is entirely on the emit_event pipeline.
-                # Equivalent to broadcast(exclude_socket_id=driver_socket)
-                # but without touching the broadcast codepath.
-                _driver_socket = self._socket_id
-                for _pid in self._room.connected_player_ids():
-                    _sock = self._room.socket_for_player(_pid)
-                    if _sock is not None and _sock != _driver_socket:
-                        _q = self._room.queue_for_socket(_sock)
-                        if _q is not None:
-                            _q.put_nowait(party_status_msg)
+                # Story 71-13: only the opening NARRATION moved to the
+                # emit_event pipeline. party_status is a separate concern and
+                # stays on room.broadcast, which carries the
+                # broadcast.recipient_dropped watcher/WARNING for players in
+                # _connected with no outbound queue (No Silent Fallbacks).
+                self._room.broadcast(
+                    party_status_msg, exclude_socket_id=self._socket_id
+                )
             span.add_event(
                 "session.start.character_snapshot_emitted",
                 {

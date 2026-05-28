@@ -197,12 +197,14 @@ async def _fire_opening(
 async def test_opening_does_not_use_room_broadcast(
     handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:
-    """AC1 (wiring) — RED: room.broadcast IS called now; must NOT be called after fix.
+    """AC1 (wiring) — the opening NARRATION must NOT use room.broadcast.
 
-    After 71-13, the opening must route through ``emit_event``, NOT
-    ``room.broadcast``.  Asserting ``not mock_broadcast.called`` fails today
-    (broadcast IS called at chargen_mixin:1593-1594) and passes once Dev
-    removes the broadcast block.
+    After 71-13, the opening narration must route through ``emit_event``, NOT
+    ``room.broadcast``.  Scope: this asserts only that no **NARRATION** message
+    is broadcast — party_status (a non-NARRATION message) legitimately stays on
+    ``room.broadcast`` to keep its ``broadcast.recipient_dropped`` telemetry
+    (Architect spec-check, Deviation 2 / No Silent Fallbacks). The earlier
+    ``assert not mock_broadcast.called`` over-reached and forbade ALL broadcast.
     """
     await _connect(handler)
     await _walk_to_confirmation(handler)
@@ -211,10 +213,15 @@ async def test_opening_does_not_use_room_broadcast(
     with patch.object(handler._room, "broadcast", wraps=handler._room.broadcast) as mock_broadcast:
         await _fire_opening(handler, monkeypatch)
 
-    assert not mock_broadcast.called, (
-        "Opening must NOT use room.broadcast after 71-13 — it must route through "
-        "emit_event(author_player_id=<driver>).  room.broadcast was called "
-        f"{mock_broadcast.call_count} time(s)."
+    narration_broadcast_calls = [
+        c
+        for c in mock_broadcast.call_args_list
+        if getattr(c.args[0], "type", None) == "NARRATION"
+    ]
+    assert narration_broadcast_calls == [], (
+        "Opening NARRATION must NOT use room.broadcast after 71-13 — it must route "
+        "through emit_event(author_player_id=<driver>). NARRATION was broadcast "
+        f"{len(narration_broadcast_calls)} time(s): {narration_broadcast_calls!r}"
     )
     # Silence unused-variable warning for q_peer (set up for room completeness).
     _ = q_peer

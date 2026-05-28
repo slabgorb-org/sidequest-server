@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from sidequest.genre.models.rules import CwnConfig, RulesConfig, TraumaConfig
 
 _FLAVOR = ["Brawn", "Reflex", "Body", "Tech", "Instinct", "Cool"]
@@ -30,3 +33,12 @@ def test_cwn_accepts_custom_trauma():
     )
     assert rules.cwn is not None
     assert rules.cwn.trauma.default_trauma_target == 7
+
+
+def test_invalid_major_injury_save_rejected():
+    with pytest.raises(ValidationError):
+        RulesConfig(
+            ruleset="cwn",
+            ability_score_names=_FLAVOR,
+            cwn=CwnConfig(attribute_map=_AMAP, trauma=TraumaConfig(major_injury_save="fortitude")),
+        )

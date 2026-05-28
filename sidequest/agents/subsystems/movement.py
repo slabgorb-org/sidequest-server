@@ -131,6 +131,77 @@ async def run_movement_dispatch(
         )
 
     graph = dungeon_store.load_map(entrance_id=_ENTRANCE_ID)
+
+    # --- §Q1 step 2b / Story 59-12: surface→deep handoff. ---
+    # THIS PC's region is non-empty but NOT a node of the procedural dungeon
+    # graph — it is the surface cartography region the PC was bound to by
+    # init_region_location (e.g. beneath_sunden's 'ropefoot' waiting-camp,
+    # cartography.starting_region). No prior seam rebinds the PC onto the graph
+    # on descent: the dungeon-attach entrance-bind only fires when
+    # current_region is blank, and the per-turn projection treats a surface
+    # region as the surface lane. So a descent crosses surface→deep at the
+    # dungeon's threshold — its ``entrance`` node. Bind THIS PC there via the
+    # Phase-1 per-PC patch path (which fires the frontier transition for the
+    # look-ahead worker) and resolve the crossing. A non-descent intent from
+    # the surface fails LOUD (No Silent Fallbacks) — there is no dungeon route
+    # to navigate until the PC has actually entered.
+    if from_region not in graph.nodes:
+        if direction != "deeper":
+            return _unresolved(
+                snapshot=snapshot,
+                player_name=player_name,
+                reason="surface_no_route",
+                from_region=from_region,
+                direction=direction,
+                exit_descriptor=exit_descriptor,
+                available=[],
+                surface=(
+                    f"{player_name} stands on the surface; the only way on "
+                    f"from here is down, into the dark below."
+                ),
+            )
+        entrance_id = graph.entrance_id
+        if entrance_id not in graph.nodes:
+            # Corrupt seed — the entrance threshold is absent. Fail loud; the
+            # PC does not move into a dungeon that has not formed.
+            return _unresolved(
+                snapshot=snapshot,
+                player_name=player_name,
+                reason="no_dungeon_entrance",
+                from_region=from_region,
+                direction=direction,
+                exit_descriptor=exit_descriptor,
+                available=[],
+                surface="The descent into the depths has not yet formed.",
+            )
+        snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: entrance_id}))
+        with movement_resolved_span(
+            pc_name=player_name,
+            from_region=from_region,
+            to_region=entrance_id,
+        ) as span:
+            span.set_attribute("intent.direction", direction)
+            span.set_attribute("intent.exit_descriptor", exit_descriptor)
+            span.set_attribute("resolved_via", "surface_descent")
+            span.set_attribute("candidate_exits", [entrance_id])
+            span.set_attribute("edge_kind", "surface_descent")
+            span.set_attribute("target_pre_materialized", True)
+            span.set_attribute("materialize_triggered", True)
+            span.set_attribute("party_split_after", snapshot.region_for() is None)
+        logger.debug(
+            "movement.resolved surface→deep pc=%s from=%s to=%s",
+            player_name,
+            from_region,
+            entrance_id,
+        )
+        return SubsystemOutput(
+            data={
+                "to_region": entrance_id,
+                "from_region": from_region,
+                "resolved_via": "surface_descent",
+            }
+        )
+
     proj = project_region(graph, from_region, palette)
 
     # --- §Q1 step 3: filter hidden exits unless the edge is discovered. ---

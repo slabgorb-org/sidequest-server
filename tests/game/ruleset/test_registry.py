@@ -16,3 +16,12 @@ def test_unknown_ruleset_fails_loud():
     with pytest.raises(UnknownRulesetError) as exc:
         get_ruleset_module("no_such_ruleset")
     assert "no_such_ruleset" in str(exc.value)
+
+
+def test_cwn_registered():
+    from sidequest.game.ruleset.cwn import CwnRulesetModule
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    module = get_ruleset_module("cwn")
+    assert isinstance(module, CwnRulesetModule)
+    assert module.slug == "cwn"

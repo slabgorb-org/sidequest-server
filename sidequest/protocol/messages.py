@@ -63,9 +63,12 @@ class PlayerActionPayload(ProtocolBase):
     aside: bool = False
     """True if this is an out-of-character aside."""
     round: int = Field(ge=0)
-    """Round (ADR-051) the action was submitted in. Required and non-negative:
-    a missing round fails loud rather than silently anchoring the peer-action
-    transcript to round 0 (Story 71-10, No Silent Fallbacks)."""
+    """Round (ADR-051) the action was submitted in. Required and non-negative —
+    a missing round fails loud (No Silent Fallbacks) rather than letting a client
+    silently default to round 0. Consumed UI-side: the client's own buildSegments
+    anchors the peer-action transcript by this round (Story 71-10). The server
+    validates the field but does not read it; outbound round stamps use the
+    authoritative ``turn_manager.round``."""
 
 
 # ---------------------------------------------------------------------------

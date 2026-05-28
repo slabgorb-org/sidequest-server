@@ -825,7 +825,10 @@ def test_game_message_player_id_property() -> None:
 def test_all_phase1_variants_parse_correctly() -> None:
     """Integration: all 12 Phase 1 variants must parse via GameMessage."""
     payloads = [
-        (MessageType.PLAYER_ACTION, {"payload": {"action": "go north", "aside": False, "round": 0}}),
+        (
+            MessageType.PLAYER_ACTION,
+            {"payload": {"action": "go north", "aside": False, "round": 0}},
+        ),
         (MessageType.NARRATION, {"payload": {"text": "You move forward."}}),
         (MessageType.NARRATION_END, {"payload": {}}),
         (MessageType.THINKING, {"payload": {}}),

@@ -133,6 +133,7 @@ def _dogfight_dispatch() -> SubsystemDispatch:
         subsystem="confrontation",
         params={"type": DOGFIGHT},
         idempotency_key="dogfight-engage-1",
+        confidence=1.0,
         visibility=VisibilityTag(visible_to="all"),
     )
 

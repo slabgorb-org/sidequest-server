@@ -25,6 +25,7 @@ def _redacted_dispatch(key: str, actor: str, payload: dict) -> SubsystemDispatch
         subsystem="lethal_strike",
         params=payload,
         idempotency_key=key,
+        confidence=1.0,
         visibility=VisibilityTag(
             visible_to=[actor],
             perception_fidelity={},
@@ -73,6 +74,7 @@ def test_visibility_sidecar_carries_fidelity_map():
         subsystem="lethal_strike",
         params={},
         idempotency_key="k1",
+        confidence=1.0,
         visibility=VisibilityTag(
             visible_to=["player:Alice"],
             perception_fidelity={"player:Alice": "audio_only"},

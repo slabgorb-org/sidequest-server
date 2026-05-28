@@ -136,6 +136,7 @@ def _magic_working_dispatch(
         subsystem="magic_working",
         params=_magic_working_params(actor=actor),
         idempotency_key=idempotency_key,
+        confidence=1.0,
         visibility=_open_viz(),
     )
 

@@ -980,6 +980,7 @@ async def test_run_narration_turn_emits_leak_audit_span_with_zero_leaks(
                         subsystem="lethal_strike",
                         params={"target": "Rickard"},
                         idempotency_key="k1",
+                        confidence=1.0,
                         visibility=_tag_redacted("player:Alice"),
                     ),
                 ],

@@ -23,6 +23,7 @@ def _redacted(actor: str, params: dict) -> SubsystemDispatch:
         subsystem="lethal_strike",
         params=params,
         idempotency_key="k1",
+        confidence=1.0,
         visibility=VisibilityTag(
             visible_to=[actor],
             perception_fidelity={},

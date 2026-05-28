@@ -53,6 +53,34 @@ logger = logging.getLogger(__name__)
 
 SubsystemCallable = Callable[..., Awaitable["SubsystemOutput"]]
 
+# ADR-113 confidence gate (Story 71-16). A dispatch engages its engine only
+# when its router confidence meets the per-subsystem threshold; a subsystem
+# with no pack-authored override uses this default. Packs tune per-subsystem
+# values in rules.yaml (RulesConfig.dispatch_confidence_thresholds).
+DEFAULT_DISPATCH_CONFIDENCE_THRESHOLD = 0.6
+
+
+def _threshold_for(subsystem: str, context: dict[str, Any]) -> float:
+    """Resolve the engagement threshold for ``subsystem``.
+
+    Reads the per-subsystem override from the genre pack's
+    ``RulesConfig.dispatch_confidence_thresholds`` (the pack flows into the
+    bank context via ``intent_router_pass``). Falls back to the documented
+    0.6 default when no pack/override is present — an explicit default per
+    ADR-113, not a silent guess at a malformed value (malformed thresholds
+    fail loud at pack load, in RulesConfig validation).
+    """
+    pack = context.get("pack")
+    rules = getattr(pack, "rules", None)
+    thresholds = getattr(rules, "dispatch_confidence_thresholds", None)
+    # The override source must be a real mapping (RulesConfig types this field
+    # as dict[str, float] with a dict default, so production always satisfies
+    # this). Anything else — no pack, or a non-RulesConfig stand-in — uses the
+    # documented default.
+    if isinstance(thresholds, dict):
+        return thresholds.get(subsystem, DEFAULT_DISPATCH_CONFIDENCE_THRESHOLD)
+    return DEFAULT_DISPATCH_CONFIDENCE_THRESHOLD
+
 
 def _filter_context_for_callable(fn: SubsystemCallable, context: dict[str, Any]) -> dict[str, Any]:
     """Return only the ``context`` keys that ``fn`` actually accepts.
@@ -237,6 +265,33 @@ async def run_dispatch_bank(
                 subsystem=d.subsystem,
                 idempotency_key=d.idempotency_key,
             ) as sub_span:
+                # ADR-113 confidence gate (Story 71-16): engage the engine only
+                # at/above the per-subsystem threshold. Below threshold the
+                # dispatch degrades to a narrator hint — the player's intent
+                # still reaches the narrator, but no engine fires on a weak
+                # inference. Every gate decision is recorded on this span so the
+                # GM panel (lie detector) can audit it.
+                threshold = _threshold_for(d.subsystem, context)
+                sub_span.set_attribute("confidence", float(d.confidence))
+                sub_span.set_attribute("threshold", float(threshold))
+                if d.confidence < threshold:
+                    hint = NarratorDirective(
+                        kind="must_narrate",
+                        payload=(
+                            f"The player's action suggested the {d.subsystem} "
+                            f"subsystem, but the intent router's confidence "
+                            f"({d.confidence:.2f}) was below the engagement "
+                            f"threshold ({threshold:.2f}). Narrate the attempt "
+                            f"naturally; do NOT treat the {d.subsystem} engine as "
+                            f"having fired."
+                        ),
+                        visibility=d.visibility,
+                    )
+                    result.directives.append(hint)
+                    sub_span.set_attribute("decision", "degraded_to_hint")
+                    sub_span.set_attribute("produced_directives", 1)
+                    continue
+                sub_span.set_attribute("decision", "engaged")
                 fn = _REGISTRY.get(d.subsystem)
                 if fn is None:
                     logger.warning(

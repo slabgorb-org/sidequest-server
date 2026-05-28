@@ -95,6 +95,7 @@ def _confrontation_package(*, enc_type: str = "negotiation") -> DispatchPackage:
                         subsystem="confrontation",
                         params={"type": enc_type},
                         idempotency_key="k-conf-1",
+                        confidence=1.0,
                         visibility=_open_viz(),
                     )
                 ],

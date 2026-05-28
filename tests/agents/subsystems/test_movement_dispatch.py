@@ -115,6 +115,7 @@ def _dispatch(
         subsystem="movement",
         params={"direction": direction, "exit_descriptor": exit_descriptor},
         idempotency_key=key,
+        confidence=1.0,
         visibility=VisibilityTag(visible_to="all"),
     )
 

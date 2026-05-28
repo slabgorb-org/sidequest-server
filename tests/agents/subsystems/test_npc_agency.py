@@ -33,6 +33,7 @@ async def test_npc_agency_returns_output_with_directive_and_data(minimal_npc_poo
         params={"npc_name": "Harlan", "situation": "player enters the inn"},
         depends_on=[],
         idempotency_key="idem:a",
+        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_npc_agency(dispatch, npc_pool=minimal_npc_pool)
@@ -54,6 +55,7 @@ async def test_npc_agency_unknown_npc_returns_no_directive_with_error_data(minim
         params={"npc_name": "NotAnNpc", "situation": "x"},
         depends_on=[],
         idempotency_key="idem:b",
+        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_npc_agency(dispatch, npc_pool=minimal_npc_pool)
@@ -81,6 +83,7 @@ async def test_npc_agency_skips_with_structured_data_when_npc_name_missing(
         params={"situation": "x"},
         depends_on=[],
         idempotency_key="idem:c",
+        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_npc_agency(dispatch, npc_pool=minimal_npc_pool)
@@ -107,6 +110,7 @@ async def test_npc_agency_handles_npc_with_null_role():
         params={"npc_name": "Stranger", "situation": "spotted"},
         depends_on=[],
         idempotency_key="idem:null-optionals",
+        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_npc_agency(dispatch, npc_pool=pool)
@@ -127,6 +131,7 @@ async def test_npc_agency_case_insensitive_lookup(minimal_npc_pool):
         params={"npc_name": "harlan", "situation": "spotted"},  # lowercase!
         depends_on=[],
         idempotency_key="idem:case",
+        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_npc_agency(dispatch, npc_pool=minimal_npc_pool)

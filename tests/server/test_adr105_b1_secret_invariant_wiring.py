@@ -53,6 +53,7 @@ def _redacted_dispatch(actor: str) -> SubsystemDispatch:
         subsystem="arcane_probe",
         params={"reading": "no ward-heat"},
         idempotency_key="k1",
+        confidence=1.0,
         visibility=VisibilityTag(
             visible_to=[actor],
             perception_fidelity={},

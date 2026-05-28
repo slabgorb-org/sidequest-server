@@ -142,6 +142,11 @@ For each player action:
          graph. Describe WHICH exit by exit_descriptor only; the engine
          resolves it.
        - reflect_absence: player addresses someone/something not present.
+     Every dispatch carries a per-dispatch confidence (0.0-1.0): how certain you
+     are that THIS specific mechanical engagement is what the player intended.
+     Score the confidence for each dispatch honestly — a high score fires the
+     engine, a low score degrades the dispatch to a narrator hint instead of
+     engaging. Do not inflate confidence to force engagement.
   3. Emit narrator_instructions — must_narrate / must_not_narrate /
      distinctive_detail_for_referent / canonical_only_do_not_reveal_to_others.
   4. Set confidence_global to your overall confidence across the turn.

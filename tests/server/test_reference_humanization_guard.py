@@ -37,7 +37,11 @@ from pathlib import Path
 
 import pytest
 
-from sidequest.server.reference_renderer import assemble_lore_page, render_node
+from sidequest.server.reference_renderer import (
+    _DEVNOTE_MARKERS,
+    assemble_lore_page,
+    render_node,
+)
 
 # --- Fixture scaffolding (no live content/pack slugs) ---------------------
 
@@ -51,10 +55,8 @@ _MINIMAL_THEME_YAML = (
     "dinkus:\n  glyph:\n    light: '—'\n    medium: '❧'\n    heavy: '❧❧❧'\n"
 )
 
-# Markers TEA treats as dev-note / placeholder prose (leading token,
-# case-insensitive). Restricted to the least-ambiguous code-comment markers so
-# the guard never eats legitimate in-world prose. Architect may extend/trim.
-_DEVNOTE_MARKERS = ("TODO", "FIXME", "XXX", "PLACEHOLDER", "DEV NOTE")
+# Dev-note markers are imported from the renderer (single source of truth) so
+# the test never goes stale silently when the production set changes.
 
 
 def _write_lore_pack(
@@ -206,6 +208,51 @@ def test_underscore_prefixed_key_suppressed(tmp_path):
     assert "A real fact." in html
 
 
+def test_devnote_in_scalar_list_item_suppressed(tmp_path):
+    """AC4 HOLE (Reviewer HIGH #1). A dev-note marker inside a scalar-LIST
+    value leaks today: ``_is_devnote`` is only checked on scalar dict values,
+    so ``_render_list``'s scalar fast-path renders ``<li>TODO: …</li>`` raw.
+    The marker item must be suppressed while a benign sibling list item still
+    renders — surgical, exactly like the dict-value path."""
+    pack_dir, world_dir = _write_lore_pack(
+        tmp_path,
+        lore_yaml=(
+            "genre_conventions:\n"
+            "  notes:\n"
+            "    - 'TODO: fix this section'\n"
+            "    - 'A real surviving note'\n"
+        ),
+    )
+    html = assemble_lore_page("demo", "demoworld", pack_dir, world_dir)
+    assert "TODO" not in html, "dev-note leaked through a scalar-list item"
+    assert "fix this section" not in html
+    # Surgical: the benign sibling list item still renders.
+    assert "A real surviving note" in html
+
+
+def test_devnote_list_item_suppression_fires_span(tmp_path, otel_capture):
+    """Loud suppression on the list path too (No Silent Fallbacks) — dropping
+    a list item is the same author-content decision as dropping a dict value,
+    so it must fire the same span and be visible on the GM panel."""
+    pack_dir, world_dir = _write_lore_pack(
+        tmp_path,
+        lore_yaml=("genre_conventions:\n  notes:\n    - 'FIXME: rebalance this'\n    - 'Keeps rendering'\n"),
+    )
+    html = assemble_lore_page("demo", "demoworld", pack_dir, world_dir)
+    assert "FIXME" not in html
+    assert "Keeps rendering" in html
+
+    spans = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == "sidequest.reference.devnote_suppressed"
+    ]
+    assert spans, (
+        "expected a devnote_suppressed span for the list-item drop; emitted: "
+        f"{sorted({s.name for s in otel_capture.get_finished_spans()})}"
+    )
+
+
 # =========================================================================
 # AC6 — OTEL engagement (suppression fires a SPAN_REFERENCE_* span)
 # =========================================================================
@@ -289,9 +336,17 @@ def test_devnote_suppression_fires_span_during_real_render(tmp_path, otel_captur
 
 def test_lore_page_output_scan_has_no_raw_dev_strings(tmp_path):
     """THE GATE. Render a fixture lore page whose fallback-walk content mixes
-    every hazard — snake_case + caps key, bool, dev-note value, private key,
-    nested container — and assert the *served HTML artifact* is free of every
-    raw developer signature. Behavior-against-artifact, not source-text.
+    every hazard — snake_case + caps key, bool, dev-note value (dict AND list),
+    private key, nested container — and assert the *served HTML artifact* is
+    free of every raw developer signature. Behavior-against-artifact, not
+    source-text.
+
+    Strengthened (Reviewer HIGH #2): the original scan was all-negative and
+    would pass green even if the entire ``genre_conventions`` section were
+    dropped (no content, vacuous heading loop). The POSITIVE assertions below
+    prove suppression is *surgical* — real humanized content survives — so the
+    gate distinguishes a clean fix from a total-failure regression. It now also
+    covers the list-valued dev-note path (Reviewer HIGH #1).
     """
     pack_dir, world_dir = _write_lore_pack(
         tmp_path,
@@ -302,23 +357,38 @@ def test_lore_page_output_scan_has_no_raw_dev_strings(tmp_path):
             "  MECHANICAL_surface: 'present'\n"
             "  designer_note: 'TODO: rebalance the lethality dial'\n"
             "  _internal_flag: 'scaffolding'\n"
+            "  notes:\n"
+            "    - 'FIXME: drop this list item'\n"
+            "    - 'This in-world note survives'\n"
             "  nested:\n"
             "    sub_value: 5\n"
         ),
     )
     html = assemble_lore_page("demo", "demoworld", pack_dir, world_dir)
 
-    # No raw bool tokens in text nodes.
+    # --- POSITIVE: real humanized content IS present (suppression is surgical,
+    # not total — guards against the section being dropped wholesale). ---
+    headings = _headings(html)
+    assert headings, "expected rendered headings; output appears empty"
+    assert "Mechanical Surface" in html, "humanized snake_case+caps heading missing"
+    assert "Yes" in html, "bool True should humanize to Yes and survive"
+    assert "No" in html, "bool False should humanize to No and survive"
+    assert "This in-world note survives" in html, "benign list item must survive"
+    assert "<p>5</p>" in html, "nested scalar value must survive"
+
+    # --- NEGATIVE: no raw bool tokens in text nodes. ---
     assert ">True<" not in html and "<p>True</p>" not in html, "raw bool True leaked"
     assert ">False<" not in html and "<p>False</p>" not in html, "raw bool False leaked"
 
-    # No dev-note / placeholder prose.
-    assert "TODO" not in html, "dev-note marker leaked"
+    # No dev-note / placeholder prose — dict value, list item, or private key.
+    assert "TODO" not in html, "dev-note marker leaked (dict value)"
     assert "rebalance the lethality dial" not in html, "dev-note prose leaked"
+    assert "FIXME" not in html, "dev-note marker leaked (list item)"
+    assert "drop this list item" not in html, "dev-note list prose leaked"
     assert "scaffolding" not in html, "private-key value leaked"
 
     # No raw underscore in any heading.
-    for h in _headings(html):
+    for h in headings:
         assert "_" not in h, f"raw underscore in heading: {h!r}"
     assert "MECHANICAL_surface" not in html, "raw snake_case+caps key leaked"
 

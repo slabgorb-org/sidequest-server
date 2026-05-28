@@ -653,3 +653,21 @@ def test_plural_noun_after_comma_not_conjugated():
     out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
     assert "fittings gleam" in out, repr(out)
     assert "fitting gleam" not in out
+
+
+def test_npc_name_after_comma_verb_not_conjugated():
+    """Regression: NPC name after comma must NOT be treated as an adverb-to-skip.
+    'Carl nods, Maria steps forward.' → NPC verb 'steps' must stay 3rd-person."""
+    text = "Carl nods, Maria steps forward."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert "Maria steps" in out, repr(out)
+    assert "Maria step " not in out
+
+
+def test_npc_name_after_and_verb_not_conjugated():
+    """Regression: NPC name after 'and' must NOT be treated as an adverb-to-skip.
+    'Carl turns and Maria calls out.' → NPC verb 'calls' must stay 3rd-person."""
+    text = "Carl turns and Maria calls out."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert "Maria calls" in out, repr(out)
+    assert "Maria call " not in out

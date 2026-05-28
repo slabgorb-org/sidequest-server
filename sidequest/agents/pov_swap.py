@@ -462,8 +462,10 @@ def _rewrite_sentence(
                     return m.group(0)
                 count += 1
                 return f"and {conjugated} {word2}"
-            if _looks_like_verb(word2) and not _is_pronoun(word1):
-                # word1 is a leading adverb/then (not a pronoun) — skip it, conjugate word2.
+            if _looks_like_verb(word2) and not _is_pronoun(word1) and word1[0:1].islower():
+                # word1 is a leading adverb/then (lowercase, not a pronoun) — skip it,
+                # conjugate word2. The islower() guard prevents NPC names (capitalised)
+                # from being mis-classified as skippable adverbs.
                 conjugated = _conjugate(word2)
                 if conjugated == word2:
                     return m.group(0)
@@ -524,8 +526,10 @@ def _rewrite_sentence(
                     return m.group(0)
                 count += 1
                 return f", {conjugated} {word2}"
-            if _looks_like_verb(word2) and not _is_pronoun(word1):
-                # word1 is a leading adverb/then (not a pronoun) — skip it, conjugate word2.
+            if _looks_like_verb(word2) and not _is_pronoun(word1) and word1[0:1].islower():
+                # word1 is a leading adverb/then (lowercase, not a pronoun) — skip it,
+                # conjugate word2. The islower() guard prevents NPC names (capitalised)
+                # from being mis-classified as skippable adverbs.
                 conjugated = _conjugate(word2)
                 if conjugated == word2:
                     return m.group(0)

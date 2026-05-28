@@ -78,7 +78,10 @@ PUBLIC_STEMS: frozenset[str] = frozenset(
         "openings",
         "lore",
         "locations",
-        # LORE_PACK_FLAVOR_FILES stems (overlap above plus factions)
+        # factions is a PUBLIC (non-spoiler) stem in its own right — this
+        # allowlist is independent of where/whether factions renders. (The
+        # lore-page pack-flavor merge that once surfaced it was removed in
+        # Story 63-10; the stem stays PUBLIC regardless.)
         "factions",
     }
 )

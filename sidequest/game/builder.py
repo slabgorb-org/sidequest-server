@@ -24,6 +24,7 @@ from sidequest.game.creature_core import (
 from sidequest.game.creature_core import (
     HpConfigMissingClassError as _CoreHpConfigMissingClassError,
 )
+from sidequest.game.system_strain import SystemStrainPool
 from sidequest.genre.models.character import (
     BackstoryTables,
     CharCreationScene,
@@ -76,7 +77,7 @@ def qualifying_classes_arrangement(
     return [c for c in classes if (arrangement.get(c.prime_requisite) or 0) >= c.minimum_score]
 
 
-def seed_system_strain(rules: "RulesConfig", stats: dict[str, int]) -> "SystemStrainPool | None":
+def seed_system_strain(rules: RulesConfig, stats: dict[str, int]) -> SystemStrainPool | None:
     """Return a SystemStrainPool for a cwn pack (max = CONSTITUTION-flavor score), else None.
 
     For a cwn pack, ``rules.cwn.attribute_map["CONSTITUTION"]`` gives the
@@ -84,8 +85,6 @@ def seed_system_strain(rules: "RulesConfig", stats: dict[str, int]) -> "SystemSt
     Non-cwn packs receive None — SystemStrainPool is a CWN-only concept.
     ``_validate_cwn`` guarantees the CONSTITUTION key exists in attribute_map.
     """
-    from sidequest.game.system_strain import SystemStrainPool
-
     if rules.ruleset != "cwn" or rules.cwn is None:
         return None
     con_flavor = rules.cwn.attribute_map["CONSTITUTION"]  # validated present by _validate_cwn

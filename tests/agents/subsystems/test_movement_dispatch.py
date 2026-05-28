@@ -778,3 +778,131 @@ def test_success_returns_no_directives(capture_spans):
         )
     )
     assert out.directives == []
+
+
+# ---------------------------------------------------------------------------
+# Story 59-12 — surface→deep handoff: bind a surface-bound PC onto a live
+# dungeon-graph node so run_movement_dispatch resolves the descent.
+#
+# Repro (RED): a fresh beneath_sunden PC is bound by init_region_location to
+# the SURFACE cartography region 'ropefoot' (cartography.starting_region) —
+# which is NOT a node of the procedural dungeon RegionGraph. The dungeon
+# attach seam (session_integration) only binds the graph entrance when
+# current_region is blank, and the per-turn projection treats a surface
+# cartography region as the "surface lane" (returns None, no re-seed). So when
+# the player descends, region_for() returns 'ropefoot', project_region() is
+# called with a non-graph region, and the descent never crosses surface→deep.
+#
+# These tests assert the DESIGN-AGNOSTIC contract: a surface-bound PC who
+# dispatches `deeper` ends up bound to a REAL dungeon-graph node, the descent
+# resolves (movement.resolved fires — the OTEL lie-detector), and the move is
+# mechanically backed by the per-PC WorldStatePatch path. They do NOT pin the
+# target to a specific node (entrance vs first deep node) — that is the Dev /
+# Architect seam decision flagged in Delivery Findings.
+# ---------------------------------------------------------------------------
+
+_SURFACE_REGION = "ropefoot"  # beneath_sunden cartography.starting_region
+
+
+def _surface_to_deep_graph() -> RegionGraph:
+    """A minimal procedural dungeon graph. Note: the SURFACE region
+    'ropefoot' is deliberately ABSENT — it is a cartography region, never a
+    graph node (the whole point of the surface→deep gap)."""
+    return _graph_with(
+        [("entrance", 0.0), ("deep_1", 5.0)],
+        [("entrance", "deep_1", "shaft", False)],
+    )
+
+
+def test_surface_bound_pc_descends_onto_dungeon_graph(capture_spans):
+    """AC1 — a PC bound to the surface region 'ropefoot' dispatching `deeper`
+    is rebound onto a live dungeon-graph node and the descent resolves.
+
+    RED today: region_for() returns 'ropefoot' (non-empty, passes the
+    no_pc_region guard), then project_region(graph, 'ropefoot', ...) raises
+    ValueError because 'ropefoot' is not a graph node — the descent crashes
+    instead of crossing surface→deep.
+    """
+    g = _surface_to_deep_graph()
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": _SURFACE_REGION}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(direction="deeper"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=store,
+            palette=_FakePalette(),
+        )
+    )
+    # The descent resolved (no honest-surface unresolved error).
+    assert out.data.get("error") is None, f"descent failed: {out.data}"
+    # …onto a REAL dungeon-graph node (design-agnostic: entrance OR deeper).
+    assert out.data.get("to_region") in g.nodes, (
+        f"resolved to non-graph node {out.data.get('to_region')!r}"
+    )
+    # …and the PC's per-PC region is rebound off the surface onto the graph.
+    assert snap.pc_regions["Rux"] in g.nodes, (
+        f"PC still stranded on non-graph region {snap.pc_regions['Rux']!r}"
+    )
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert len(resolved) == 1
+    # …via the surface→deep handoff specifically — proves the engine took the
+    # rebind path, not a coincidental in-graph resolve.
+    assert resolved[0].attributes["resolved_via"] == "surface_descent"
+
+
+def test_surface_descent_is_mechanically_backed_through_bank(capture_spans):
+    """AC2 + AC4 — drive the descent through the REAL dispatch bank (the
+    production invocation path) and assert the surface→deep crossing is
+    mechanically backed, not improvised.
+
+    The bank swallows per-handler exceptions into error spans, so the RED
+    failure here is the production-observable one: the descent silently
+    no-ops — no movement.resolved span fires and the PC stays stranded on the
+    surface region (the Illusionism failure the GM panel must catch).
+
+    Post-fix contract: movement.resolved fires AND a per-PC
+    frontier.region_transition span proves the WorldStatePatch path advanced
+    THIS PC onto a real dungeon-graph node.
+    """
+    g = _surface_to_deep_graph()
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": _SURFACE_REGION}, {"s1": "Rux"})
+    package = DispatchPackage(
+        turn_id="t1",
+        per_player=[
+            PlayerDispatch(
+                player_id="Rux",
+                raw_action="I climb down into the dark",
+                dispatch=[_dispatch(direction="deeper")],
+            )
+        ],
+        confidence_global=0.9,
+    )
+    _run(
+        run_dispatch_bank(
+            package,
+            context={
+                "snapshot": snap,
+                "player_name": "Rux",
+                "dungeon_store": store,
+                "palette": _FakePalette(),
+                "npcs_present": [],
+            },
+        )
+    )
+    # The engine resolved the descent (lie-detector: not the narrator).
+    assert _spans_named(capture_spans, "movement.resolved"), (
+        "no movement.resolved — descent silently no-opped (Illusionism)"
+    )
+    # The PC crossed surface→deep onto a real dungeon-graph node.
+    assert snap.pc_regions["Rux"] in g.nodes, (
+        f"PC still on surface region {snap.pc_regions['Rux']!r} after descent"
+    )
+    # The crossing is backed by the per-PC region-transition path.
+    transitions = _spans_named(capture_spans, "frontier.region_transition")
+    assert transitions, "no frontier.region_transition — descent not mechanically backed"
+    last = transitions[-1]
+    assert last.attributes["pc_name"] == "Rux"
+    assert last.attributes["to_region"] in g.nodes

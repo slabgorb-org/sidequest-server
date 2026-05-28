@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 
+import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -78,3 +79,10 @@ def test_downed_emits_spans():
     names = [s.name for s in exporter.get_finished_spans()]
     assert "cwn.mortal_injury.declared" in names
     assert "cwn.major_injury.roll" in names
+
+
+def test_non_cwn_cfg_fails_loud():
+    core = _core()
+    with pytest.raises(ValueError):
+        _MOD.resolve_downed(core=core, save_target=10, scene_traumatic=False,
+                            cfg=None, rng=random.Random(1))

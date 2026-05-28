@@ -82,6 +82,7 @@ def test_rest_recovers_down_to_permanent_floor():
     assert core.system_strain.current == 5
     r2 = _MOD.apply_system_strain(core=core, kind="rest", amount=10, source="long_rest", cfg=_CFG)
     assert core.system_strain.current == 2
+    assert core.system_strain.permanent == 2
 
 
 def test_first_aid_uses_config_cost():
@@ -104,6 +105,23 @@ def test_unknown_kind_fails_loud():
         _MOD.apply_system_strain(core=core, kind="bogus", amount=1, source="x", cfg=_CFG)
 
 
+def test_non_cwn_config_fails_loud():
+    from sidequest.genre.models.rules import SwnConfig
+    core = _core()
+    with pytest.raises(ValueError, match="CwnConfig"):
+        _MOD.apply_system_strain(core=core, kind="temporary", amount=1, source="x", cfg=None)
+    with pytest.raises(ValueError, match="CwnConfig"):
+        _MOD.apply_system_strain(core=core, kind="temporary", amount=1, source="x", cfg=SwnConfig(attribute_map=_AMAP))
+
+
+def test_rest_with_zero_nights_is_noop():
+    core = _core(current=4, max=12, permanent=1)
+    r = _MOD.apply_system_strain(core=core, kind="rest", amount=0, source="catnap", cfg=_CFG)
+    assert r.applied is True
+    assert core.system_strain.current == 4
+    assert r.delta == 0
+
+
 def test_emits_otel_on_apply_and_on_refusal():
     exporter, tracer = _exporter()
     core = _core(current=10, max=12)
@@ -113,3 +131,5 @@ def test_emits_otel_on_apply_and_on_refusal():
     assert [s.name for s in spans] == ["cwn.system_strain.delta", "cwn.system_strain.delta"]
     applied_flags = [dict(s.attributes or {})["applied"] for s in spans]
     assert applied_flags == [True, False]
+    assert dict(spans[0].attributes)["new_total"] == 11
+    assert dict(spans[1].attributes)["new_total"] == 11

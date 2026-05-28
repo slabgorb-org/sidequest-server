@@ -392,9 +392,10 @@ def _validate_history_trope_refs(
         return []
     data, read_err = _read_yaml(history_path, label)
     if read_err is not None:
-        # A YAML parse failure is already surfaced by the parse layer; don't
-        # double-report. Cross-ref simply has nothing to check.
-        return []
+        # No pydantic model is wired to history.yaml, so the cross-ref pass is
+        # the only line of defence — surface the parse failure loudly (it names
+        # the file) instead of swallowing it (No Silent Fallbacks).
+        return [read_err]
     chapters = _iter_history_chapters(data)
 
     # Pass 1: collect inline-defined ids across all chapters.
@@ -437,6 +438,10 @@ def _validate_legend_trope_refs(
     for legend_path in sorted(legends_dir.glob("*.yaml")):
         data, read_err = _read_yaml(legend_path, label)
         if read_err is not None:
+            # No pydantic model is wired to legend files, so the cross-ref pass
+            # is the only line of defence — surface the parse failure loudly (it
+            # names the file) instead of skipping past it (No Silent Fallbacks).
+            errors.append(read_err)
             continue
         if not isinstance(data, dict):
             continue

@@ -66,9 +66,10 @@ from typing import Any
 
 import psycopg
 import pytest
-from alembic import command
 from alembic.config import Config
 from opentelemetry import trace
+
+from alembic import command
 
 _ADMIN_ENV = "SIDEQUEST_TEST_DATABASE_URL"
 

@@ -170,8 +170,12 @@ def _humanize_label(raw: object) -> str:
       ALWAYS split and Title-Cased so the raw separator can never survive into a
       heading ("the_maw" → "The Maw", "MECHANICAL_surface" → "Mechanical
       Surface", "tier-1" → "Tier 1"). Story 63-9 AC1: no raw "_" reaches HTML.
-    - A separator-free token with any uppercase letter is an acronym or proper
-      noun and returned UNCHANGED ("USB", "McGuffin").
+    - A *separator-free* token with any uppercase letter is an acronym or
+      proper noun and returned UNCHANGED ("USB", "McGuffin"). NOTE: this only
+      protects a whole-string acronym. An acronym embedded in a compound
+      identifier key ("USB_port") still splits and Title-Cases each part
+      ("Usb Port") — the AC1 safe invariant (no raw "_" in HTML) wins over
+      acronym fidelity, since a snake_case key is a developer string first.
     - A bare lowercase word is Title-Cased ("setting" → "Setting").
     """
     text = str(raw).strip()
@@ -198,11 +202,13 @@ def _is_devnote(value: object) -> bool:
     """True when ``value`` is a string whose leading token is a dev-note marker."""
     if not isinstance(value, str):
         return False
-    stripped = value.lstrip()
-    upper = stripped.upper()
+    # Collapse internal whitespace runs (double space, tab, NBSP) to a single
+    # space so multi-word markers like "DEV  NOTE" / "DEV\tNOTE" still match.
+    normalized = re.sub(r"\s+", " ", value).strip()
+    upper = normalized.upper()
     for marker in _DEVNOTE_MARKERS:
         if upper.startswith(marker):
-            rest = stripped[len(marker) :]
+            rest = normalized[len(marker) :]
             # Leading token only — the marker must be followed by a boundary,
             # not be the prefix of a longer word ("todos" must not match TODO).
             if not rest or not (rest[0].isalnum() or rest[0] == "_"):
@@ -212,9 +218,13 @@ def _is_devnote(value: object) -> bool:
 
 def _scalar_text(value: object) -> str:
     """Humanize a leaf scalar to display text. Bools become Yes/No so raw
-    ``True``/``False`` never reach the reader (Story 63-9 AC3)."""
+    ``True``/``False`` never reach the reader (Story 63-9 AC3); ``None`` becomes
+    the same ``(none)`` placeholder ``_render_scalar`` uses, never bare
+    ``None``."""
     if isinstance(value, bool):
         return "Yes" if value else "No"
+    if value is None:
+        return "<em>(none)</em>"
     return escape(str(value))
 
 
@@ -378,8 +388,23 @@ def _render_list(
     ctx: PresenterContext | None = None,
 ) -> str:
     if all(not isinstance(item, (dict, list)) for item in items):
-        lis = "".join(f"<li>{_scalar_text(item)}</li>" for item in items)
-        return f"<ul>{lis}</ul>"
+        lis: list[str] = []
+        for item in items:
+            # Story 63-9: dev-note markers leak through scalar-LIST items too,
+            # not just scalar dict values. Suppress here (ctx-bearing walk) and
+            # fire the same span as the dict path — a dropped list item is the
+            # same loud author-content decision (No Silent Fallbacks).
+            if ctx is not None and _is_devnote(item):
+                with reference_devnote_suppressed_span(
+                    pack=ctx.pack,
+                    world=ctx.world,
+                    file_stem=ctx.file_stem,
+                    key_path=ctx.key_path,
+                ):
+                    pass
+                continue
+            lis.append(f"<li>{_scalar_text(item)}</li>")
+        return f"<ul>{''.join(lis)}</ul>"
     parts: list[str] = []
     for index, item in enumerate(items):
         if isinstance(item, dict):

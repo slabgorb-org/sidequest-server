@@ -65,9 +65,14 @@ def _write_lore_pack(
     lore_yaml: str,
     world_yaml: str = "description: A quiet fixture plateau.\n",
 ) -> tuple[Path, Path]:
-    """Build a throwaway pack whose pack-tier ``lore.yaml`` exercises the
+    """Build a throwaway pack whose WORLD-tier ``lore.yaml`` exercises the
     generic fallback walk (``lore`` has sub-key presenters but no file-root
     presenter, so an unknown PUBLIC key falls through to the fallback path).
+
+    Story 63-10: the lore page renders world-tier files only (no pack-flavor
+    merge), so the exercised ``lore.yaml`` lives in ``world_dir`` — that is the
+    tier ``assemble_lore_page`` reads. The dev-note/humanization suppression
+    behavior under test is tier-agnostic; only the file location changed.
 
     Returns ``(pack_dir, world_dir)`` for ``assemble_lore_page``.
     """
@@ -75,7 +80,7 @@ def _write_lore_pack(
     world_dir = pack_dir / "worlds" / "demoworld"
     world_dir.mkdir(parents=True)
     (pack_dir / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
-    (pack_dir / "lore.yaml").write_text(lore_yaml)
+    (world_dir / "lore.yaml").write_text(lore_yaml)
     (world_dir / "world.yaml").write_text(world_yaml)
     return pack_dir, world_dir
 

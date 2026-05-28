@@ -150,6 +150,32 @@ def _looks_like_verb(word: str) -> bool:
     return lower.endswith("s") and not lower.endswith("ss")
 
 
+
+
+def _is_pronoun(word: str) -> bool:
+    """Check if a word is a pronoun (subject, object, or possessive form).
+    
+    Used in Pass 8 and Pass 9 to avoid treating pronouns as adverbs.
+    When word1 is a pronoun, we're not in an adverb-stranded-verb situation;
+    we're in a clause about a different character (an NPC or other actor).
+    """
+    if not word:
+        return False
+    lower = word.lower()
+    # All canonical pronouns across all three pronoun sets
+    pronouns = {
+        # he/him set
+        "he", "him", "his",
+        # she/her set  
+        "she", "her",
+        # they/them set
+        "they", "them", "their",
+        # Generic/other pronouns that should block Pass 8/9
+        "i", "me", "we", "us", "you", "it",
+    }
+    return lower in pronouns
+
+
 def _split_by_dialogue(text: str) -> list[tuple[str, str]]:
     """Split text into alternating prose / dialogue regions.
 
@@ -243,12 +269,30 @@ def _rewrite_sentence(
     name_esc = re.escape(target_name)
 
     # ------------------------------------------------------------------
-    # Pass 1: possessive name "Carl's" -> "Your"/"your"
+    # Pass 1: possessive name "Carl's" -> "Your"/"your" (attributive)
+    #         or "Yours"/"yours" (predicate/absolute).
+    #
+    # English distinguishes:
+    #   attributive  "Carl's polearm"  → "Your polearm"   (governs a noun)
+    #   predicate    "The polearm was Carl's." → "...was yours."  (stands alone)
+    #
+    # Predicate position: {Name}'s is followed by terminal punctuation
+    # (.!?…), a comma, semicolon, colon, end-of-text, or a coordinating
+    # conjunction (and/or/but/nor/so/yet).  Anything else is attributive.
     # ------------------------------------------------------------------
     def _pos_name_sub(m: re.Match) -> str:
         nonlocal count
         count += 1
         at_start = (m.start() == 0) or _is_sentence_start_in(text, m.start())
+        rest = text[m.end():]
+        stripped = rest.lstrip()
+        is_predicate = (
+            not stripped  # end of string
+            or stripped[0] in ".!?,;:…"  # terminal punctuation or clause boundary
+            or bool(re.match(r"\b(?:and|or|but|nor|so|yet)\b", stripped))  # coordinating conj
+        )
+        if is_predicate:
+            return "Yours" if at_start else "yours"
         return "Your" if at_start else "your"
 
     text = re.sub(rf"\b{name_esc}'s\b", _pos_name_sub, text)
@@ -386,18 +430,50 @@ def _rewrite_sentence(
     # Pass 8: "and <verb>" continuation. When this sentence had a
     # subject swap earlier, the implicit subject after "and" is still
     # "you" — conjugate the verb if it's in 3rd-person form.
+    #
+    # Adverb-skip extension (Story 71-6): if a single leading adverb /
+    # "then" sits between "and" and the real verb, capture both words so
+    # the verb can be conjugated.  Examples:
+    #   "…and slowly raises…"  → "…and slowly raise…"
+    #   "…and then fires…"     → "…and then fire…"
+    # The second-word group is optional — falls back to original
+    # single-word behaviour when no adverb is present.
     # ------------------------------------------------------------------
     if had_subject_swap:
 
         def _and_verb_sub(m: re.Match) -> str:
             nonlocal count
-            verb = m.group(1)
-            if not _looks_like_verb(verb):
-                return m.group(0)
-            count += 1
-            return f"and {_conjugate(verb)}"
+            word1 = m.group(1)
+            word2 = m.group(2)
+            if word2 is None:
+                # Single word after "and" — original behaviour.
+                if not _looks_like_verb(word1):
+                    return m.group(0)
+                conjugated = _conjugate(word1)
+                if conjugated == word1:
+                    return m.group(0)
+                count += 1
+                return f"and {conjugated}"
+            # Two words captured: "and <word1> <word2>".
+            if _looks_like_verb(word1):
+                # word1 is the verb (no adverb before it).
+                conjugated = _conjugate(word1)
+                if conjugated == word1:
+                    return m.group(0)
+                count += 1
+                return f"and {conjugated} {word2}"
+            if _looks_like_verb(word2) and not _is_pronoun(word1) and word1[0:1].islower():
+                # word1 is a leading adverb/then (lowercase, not a pronoun) — skip it,
+                # conjugate word2. The islower() guard prevents NPC names (capitalised)
+                # from being mis-classified as skippable adverbs.
+                conjugated = _conjugate(word2)
+                if conjugated == word2:
+                    return m.group(0)
+                count += 1
+                return f"and {word1} {conjugated}"
+            return m.group(0)
 
-        text = re.sub(r"\band\s+(\w+)", _and_verb_sub, text)
+        text = re.sub(r"\band\s+(\w+)(?:\s+(\w+))?", _and_verb_sub, text)
 
     # ------------------------------------------------------------------
     # Pass 9: ", <verb>" comma-coordinated continuation. Same logic as
@@ -415,25 +491,53 @@ def _rewrite_sentence(
     # clause boundaries). Further gated by ``_looks_like_verb`` so plural
     # nouns or commas-before-articles ("..., the bronze fitting") pass
     # through unchanged.
+    #
+    # Adverb-skip extension (Story 71-6): mirrors Pass 8 — if a single
+    # leading adverb/"then" sits between the comma and the real verb,
+    # capture both words so the verb can be conjugated.  Example:
+    #   "…steadies it, then fires."  → "…steady it, then fire."
     # ------------------------------------------------------------------
     if had_subject_swap:
 
         def _comma_verb_sub(m: re.Match) -> str:
             nonlocal count
-            verb = m.group(1)
-            if not _looks_like_verb(verb):
+            word1 = m.group(1)
+            word2 = m.group(2)
+            # Pass 8 owns the "and <verb>" surface.
+            if word1.lower() == "and":
                 return m.group(0)
-            # Don't conjugate "and" itself if the regex happens to catch
-            # ", and " — Pass 8 owns the "and <verb>" surface.
-            if verb.lower() == "and":
+            if word2 is None:
+                # Single word after comma — original behaviour.
+                if not _looks_like_verb(word1):
+                    return m.group(0)
+                conjugated = _conjugate(word1)
+                if conjugated == word1:
+                    return m.group(0)
+                count += 1
+                return f", {conjugated}"
+            # Two words captured: ", <word1> <word2>".
+            if word2.lower() == "and":
+                # ", word and …" — let Pass 8 handle the "and <verb>" part.
                 return m.group(0)
-            conjugated = _conjugate(verb)
-            if conjugated == verb:
-                return m.group(0)
-            count += 1
-            return f", {conjugated}"
+            if _looks_like_verb(word1):
+                # word1 is the verb (no adverb before it).
+                conjugated = _conjugate(word1)
+                if conjugated == word1:
+                    return m.group(0)
+                count += 1
+                return f", {conjugated} {word2}"
+            if _looks_like_verb(word2) and not _is_pronoun(word1) and word1[0:1].islower():
+                # word1 is a leading adverb/then (lowercase, not a pronoun) — skip it,
+                # conjugate word2. The islower() guard prevents NPC names (capitalised)
+                # from being mis-classified as skippable adverbs.
+                conjugated = _conjugate(word2)
+                if conjugated == word2:
+                    return m.group(0)
+                count += 1
+                return f", {word1} {conjugated}"
+            return m.group(0)
 
-        text = re.sub(r",\s+(\w+)", _comma_verb_sub, text)
+        text = re.sub(r",\s+(\w+)(?:\s+(\w+))?", _comma_verb_sub, text)
 
     return text, count
 

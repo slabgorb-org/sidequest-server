@@ -635,14 +635,27 @@ def test_scroll_spy_script_remains_under_2kb(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_factions_yaml_emits_cult_namespaced_ids(tmp_path: Path) -> None:
-    """AC7: list-of-dict items in factions.yaml get ``cult-<slug>`` ids
-    (not ``factions-<slug>``). Plan Task 22 step 4 explicitly maps
-    factions → cult for the lore-tier namespace."""
+def test_pack_tier_factions_absent_from_lore_page(tmp_path: Path) -> None:
+    """Story 63-10 (absolute world-only) REVERSES 63-7's pack-flavor merge.
+
+    63-7 (Task F) wired pack-tier ``factions.yaml`` into the lore page and
+    namespaced its items as ``cult-<slug>``. 63-10 drops
+    ``LORE_PACK_FLAVOR_FILES`` from ``assemble_lore_page`` entirely, so pack-tier
+    factions no longer render on a world's lore page (factions are world-tier
+    per SOUL "Flavor in the World"). The Architect ruled this is fixture-only —
+    zero of ten live packs ship a ``factions.yaml`` — so the cut removes no real
+    factions-on-lore-page rendering.
+
+    This is the factions facet of the absence guards (AC1–AC3/AC5): a seeded
+    pack-tier ``factions.yaml`` must NOT surface its ``cult-<slug>`` ids on the
+    lore page. (The ``factions → cult`` namespace mapping itself is still
+    asserted, render-independently, by
+    ``test_kind_overrides_contains_factions_to_cult_mapping``.)
+    """
     from sidequest.server.reference_renderer import assemble_lore_page
 
     pack = _seed_pack(tmp_path)
-    # Add factions.yaml to pack-flavor sweep so it renders on the lore page.
+    # Seed a pack-tier factions.yaml that 63-7 would have merged onto the page.
     (pack / "factions.yaml").write_text(
         "- name: river-cabal\n  disposition: hostile\n- name: old-folk\n  disposition: wary\n"
     )
@@ -650,12 +663,13 @@ def test_factions_yaml_emits_cult_namespaced_ids(tmp_path: Path) -> None:
 
     html = assemble_lore_page("space_opera", "coyote_star", pack, world)
 
-    assert 'id="cult-river-cabal"' in html, (
-        "AC7: factions.yaml item 'river-cabal' should produce "
-        'id="cult-river-cabal" — plan v3 Task 22 step 4 namespaces '
-        "factions → cult."
+    assert 'id="cult-river-cabal"' not in html, (
+        "63-10: pack-tier factions.yaml must NOT merge onto the lore page — "
+        "the world-only cut drops LORE_PACK_FLAVOR_FILES."
     )
-    assert 'id="cult-old-folk"' in html
+    assert 'id="cult-old-folk"' not in html, (
+        "63-10: pack-tier factions.yaml must NOT merge onto the lore page."
+    )
 
 
 def test_kind_overrides_contains_factions_to_cult_mapping() -> None:

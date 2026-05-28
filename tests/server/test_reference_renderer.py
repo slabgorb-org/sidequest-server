@@ -11,7 +11,6 @@ import yaml as _yaml
 
 from sidequest.server.reference_renderer import (
     EXCLUDED_FILES,
-    LORE_PACK_FLAVOR_FILES,
     LORE_WORLD_FILES,
     RULES_FILES,
     render_node,
@@ -297,17 +296,6 @@ def test_lore_world_files_in_documented_order():
     )
 
 
-def test_lore_pack_flavor_files_in_documented_order():
-    # Story 63-7 added "factions.yaml" so lore-tier list-of-dict items
-    # in the new ``cult-<slug>`` namespace render on the lore page.
-    assert LORE_PACK_FLAVOR_FILES == (
-        "cultures.yaml",
-        "lore.yaml",
-        "history.yaml",
-        "factions.yaml",
-    )
-
-
 def test_npcs_and_seed_tropes_are_excluded():
     assert "npcs.yaml" in EXCLUDED_FILES
     assert "seed_tropes.yaml" in EXCLUDED_FILES
@@ -347,7 +335,7 @@ def test_tropes_content_never_rendered_on_rules_page(tmp_path):
 
 
 def test_no_overlap_between_included_and_excluded():
-    included = set(RULES_FILES) | set(LORE_WORLD_FILES) | set(LORE_PACK_FLAVOR_FILES)
+    included = set(RULES_FILES) | set(LORE_WORLD_FILES)
     overlap = included & EXCLUDED_FILES
     assert overlap == set(), f"file appears in both included and excluded: {overlap}"
 
@@ -427,18 +415,13 @@ def test_assemble_rules_page_never_renders_excluded_files(tmp_path):
     assert "seed_tropes" not in html.lower()
 
 
-def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
-    """Both world-tier and pack-tier flavor content must be reachable on
-    the lore page.
-
-    Story 63-7 note: this test previously asserted ``world.yaml`` appeared
-    BEFORE the ``(genre)`` label suffix in the rendered HTML — enforcing a
-    tier-ordering invariant. The v3 TOC-driven layout buckets renders by
-    ``PACK_TOC[pack].id`` via ``TOC_TO_FILES``, so file order inside
-    ``<main>`` follows the per-pack TOC, not the world-then-flavor
-    iteration order. Tier-ordering at the markup level is no longer a
-    spec invariant; what matters is that BOTH tiers' content reaches
-    the rendered page. Content-presence is what the test verifies now.
+def test_assemble_lore_page_renders_world_tier_only(tmp_path):
+    """Story 63-10 (absolute world-only): the lore page renders world-tier
+    files (``LORE_WORLD_FILES`` from ``world_dir``) and does NOT merge pack/
+    genre-tier flavor. Replaces the prior ``…combines_world_and_pack_flavor``
+    test, whose merge invariant was deliberately removed — a world's lore can
+    contradict its pack's cosmology, so concatenating pack flavor produced
+    incoherent pages (see ``test_reference_lore_world_only.py``).
     """
     from sidequest.server.reference_renderer import assemble_lore_page
 
@@ -446,10 +429,7 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
     world_dir = pack_dir / "worlds" / "demoworld"
     world_dir.mkdir(parents=True)
     (pack_dir / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
-    # Use a PUBLIC field (setting_anchor) for the pack-flavor lore.yaml so
-    # the visibility gate does not drop it. The purpose of this test is to
-    # verify that BOTH world-tier and pack-tier content reaches the page;
-    # the field name itself is not significant.
+    # Pack-tier flavor — must NOT reach the page after the cut.
     (pack_dir / "lore.yaml").write_text("setting_anchor: genre-flavor-value\n")
     (pack_dir / "cultures.yaml").write_text(
         "- name: Genre Traveller\n  summary: a genre-culture value\n"
@@ -459,18 +439,15 @@ def test_assemble_lore_page_combines_world_and_pack_flavor(tmp_path):
 
     html = assemble_lore_page("demo", "demoworld", pack_dir, world_dir)
 
+    # World-tier content renders.
     assert "<title>demo / demoworld — Lore</title>" in html
     assert "Demoworld" in html
     assert "a tale" in html
-    assert "genre-flavor-value" in html
-    assert "genre-culture value" in html
-    # Both world-tier content (world.yaml) and pack-tier flavor (cultures.yaml)
-    # are reachable via their stable section anchor ids. Task 15 suppresses the
-    # legacy <h1>{filename}</h1> for presented files, so "world.yaml" and
-    # "(genre)" no longer appear as heading text; the section wrappers still
-    # emit so deep-links resolve.
     assert 'id="file-world"' in html
-    assert 'id="file-cultures"' in html
+    # Pack-tier flavor is NOT merged: neither its content nor a cultures section.
+    assert "genre-flavor-value" not in html
+    assert "genre-culture value" not in html
+    assert 'id="file-cultures"' not in html
 
 
 def test_assemble_handles_malformed_yaml_with_loud_marker(tmp_path):

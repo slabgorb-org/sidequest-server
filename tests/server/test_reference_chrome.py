@@ -36,7 +36,6 @@ def _seed_pack(tmp_path: Path) -> Path:
     (pack / "theme.yaml").write_text(_THEME_YAML)
     (pack / "archetypes.yaml").write_text("kinds:\n  - sleuth\n")
     (pack / "classes.yaml").write_text("- name: knight\n  signature: charge\n")
-    (pack / "cultures.yaml").write_text("- name: highlander\n  language: gaelic\n")
     return pack
 
 
@@ -50,6 +49,10 @@ def _seed_world(pack_dir: Path, world_name: str, *, with_lore: bool = True) -> P
             f"epigraph: A quiet valley where nothing has happened for a hundred years.\n"
         )
     (world / "legends.yaml").write_text("- name: the-grey-pilgrim\n  origin: unknown\n")
+    # Story 63-10: cultures render on the lore page from the WORLD tier
+    # (LORE_WORLD_FILES); pack-tier flavor is no longer merged. Seed at the
+    # world tier so the culture-anchor namespacing invariant still exercises.
+    (world / "cultures.yaml").write_text("- name: highlander\n  language: gaelic\n")
     return world
 
 
@@ -330,7 +333,7 @@ def test_listdict_item_ids_remain_namespaced(tmp_path):
 
     html = assemble_lore_page("demo", "glenross", pack, world)
 
-    # classes.yaml emits via rules page, cultures via lore (pack flavor)
+    # classes.yaml emits via rules page; cultures via lore (world tier, 63-10)
     assert 'id="culture-highlander"' in html
 
 

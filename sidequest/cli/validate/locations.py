@@ -91,8 +91,12 @@ def _safe_load_yaml(
     try:
         return yaml.safe_load(path.read_text())
     except yaml.YAMLError as exc:
+        # pyyaml's problem_mark.line is 0-indexed; 1-index it so the structured
+        # field matches the 1-indexed line the embedded {exc} prose reports (and
+        # author/editor conventions). A self-consistent Issue for the content
+        # author reading it.
         mark = getattr(exc, "problem_mark", None)
-        line = getattr(mark, "line", None)
+        line = mark.line + 1 if mark is not None else None
         result.record(
             Issue(
                 code="MALFORMED_YAML",

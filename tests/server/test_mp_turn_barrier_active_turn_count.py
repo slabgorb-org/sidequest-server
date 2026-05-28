@@ -81,6 +81,7 @@ async def test_barrier_fires_when_only_playing_peer_submits_evropi_scenario(
     msg = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I check the door for traps"),
+            round=0,
         ),
         player_id="rux",
     )
@@ -130,6 +131,7 @@ async def test_barrier_does_not_fire_on_one_submission_when_all_are_playing(
     msg = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I draw my sword"),
+            round=0,
         ),
         player_id="rux",
     )
@@ -197,6 +199,7 @@ async def test_barrier_fires_after_chargen_peers_abandon_via_disconnect(
     msg = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I push forward alone"),
+            round=0,
         ),
         player_id="rux",
     )
@@ -247,6 +250,7 @@ async def test_barrier_wait_span_fires_when_barrier_does_not_fire(
         msg = PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I prepare for the dungeon"),
+                round=0,
             ),
             player_id="p1",
         )
@@ -327,6 +331,7 @@ async def test_barrier_wait_span_carries_lobby_and_active_counts(
         msg = PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I check for traps"),
+                round=0,
             ),
             player_id="rux",
         )
@@ -379,6 +384,7 @@ async def test_barrier_wait_span_fires_when_barrier_does_fire(
         msg = PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I open the door"),
+                round=0,
             ),
             player_id="rux",
         )
@@ -459,6 +465,7 @@ async def test_mp_round_dispatched_player_count_matches_barrier_predicate(
         msg = PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I press forward alone"),
+                round=0,
             ),
             player_id="rux",
         )

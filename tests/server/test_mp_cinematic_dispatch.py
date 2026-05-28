@@ -150,6 +150,7 @@ async def test_first_of_two_players_buffers_and_returns_empty(
     msg = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I prepare for the dungeon"),
+            round=0,
         ),
         player_id="p1",
     )
@@ -205,6 +206,7 @@ async def test_two_players_combine_into_one_narrator_dispatch(
     msg1 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I prepare for the dungeon"),
+            round=0,
         ),
         player_id="p1",
     )
@@ -216,6 +218,7 @@ async def test_two_players_combine_into_one_narrator_dispatch(
     msg2 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I get my pole"),
+            round=0,
         ),
         player_id="p2",
     )
@@ -268,6 +271,7 @@ async def test_mp_round_advances_interaction_exactly_once(
     msg1 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I prepare for the dungeon"),
+            round=0,
         ),
         player_id="p1",
     )
@@ -276,6 +280,7 @@ async def test_mp_round_advances_interaction_exactly_once(
     msg2 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I get my pole"),
+            round=0,
         ),
         player_id="p2",
     )
@@ -317,6 +322,7 @@ async def test_solo_room_dispatches_immediately_no_buffering_observable(
     msg = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I look around"),
+            round=0,
         ),
         player_id="p1",
     )
@@ -369,12 +375,14 @@ async def test_concurrent_submissions_dispatch_exactly_once(
     msg1 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I prepare for the dungeon"),
+            round=0,
         ),
         player_id="p1",
     )
     msg2 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I get my pole"),
+            round=0,
         ),
         player_id="p2",
     )
@@ -468,6 +476,7 @@ async def test_otel_events_emitted_on_barrier_fire_and_dispatch(
         msg1 = PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I prepare for the dungeon"),
+                round=0,
             ),
             player_id="p1",
         )
@@ -476,6 +485,7 @@ async def test_otel_events_emitted_on_barrier_fire_and_dispatch(
         msg2 = PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I get my pole"),
+                round=0,
             ),
             player_id="p2",
         )
@@ -532,12 +542,14 @@ async def test_dispatch_fires_in_round_two_after_round_one_completes(
     msg1a = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("Round 1 — Gladstone"),
+            round=0,
         ),
         player_id="p1",
     )
     msg1b = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("Round 1 — Zanzibar"),
+            round=0,
         ),
         player_id="p2",
     )
@@ -551,12 +563,14 @@ async def test_dispatch_fires_in_round_two_after_round_one_completes(
     msg2a = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("Round 2 — Gladstone"),
+            round=0,
         ),
         player_id="p1",
     )
     msg2b = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("Round 2 — Zanzibar"),
+            round=0,
         ),
         player_id="p2",
     )

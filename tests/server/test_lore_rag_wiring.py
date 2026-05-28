@@ -236,7 +236,7 @@ class TestLoreRagWiring:
             action_text = "I look around the dusty cavern"
             result = await handler.handle_message(
                 PlayerActionMessage(
-                    payload=PlayerActionPayload(action=action_text),
+                    payload=PlayerActionPayload(action=action_text, round=0),
                     player_id="pid",
                 )
             )

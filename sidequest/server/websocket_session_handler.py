@@ -59,7 +59,6 @@ from sidequest.protocol.enums import MessageType
 from sidequest.protocol.messages import (
     ChapterMarkerMessage,
     ChapterMarkerPayload,
-    ConfrontationMessage,
     ConfrontationPayload,
     ImageMessage,
     ImagePayload,
@@ -223,7 +222,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     # ------------------------------------------------------------------
 
     def _emit_event(
-        self, kind: str, payload_model: object, *, author_player_id: str | None = None
+        self,
+        kind: str,
+        payload_model: object,
+        *,
+        author_player_id: str | None = None,
+        per_recipient_payload: Callable[[str], object] | None = None,
     ) -> object:
         """Persist + fan-out an event. Delegates to ``emitters.emit_event``.
 
@@ -231,12 +235,20 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         merged-MP turn whose driver is merely the last-submitter, so the
         emitter is projected like any recipient. ``None`` (solo/legacy)
         preserves the raw-bypass + lazy_fill invariant.
+
+        ``per_recipient_payload`` (Story 59-16): a supplier delivering one
+        class-filtered CONFRONTATION frame to every connected socket while
+        the canonical union is persisted to the EventLog only.
         """
         from sidequest.server import emitters
 
-        if author_player_id is None:
-            return emitters.emit_event(self, kind, payload_model)
-        return emitters.emit_event(self, kind, payload_model, author_player_id=author_player_id)
+        return emitters.emit_event(
+            self,
+            kind,
+            payload_model,
+            author_player_id=author_player_id,
+            per_recipient_payload=per_recipient_payload,
+        )
 
     def _dispatch_pending_magic_frames(self, snapshot: GameSnapshot) -> None:
         """Phase 5 (Story 47-3): drain pending magic-confrontation queues.
@@ -1605,11 +1617,61 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         }
 
                     if confrontation_payload is not None:
-                        # Story 45-3: lie-detector span for the post-narration
-                        # CONFRONTATION emit — confirms the engine emitted real
-                        # post-mutation momentum, not just prose mentioning combat.
-                        # Live branch only (the clear branch has no metrics to audit).
+                        # Story 59-16: ONE filtered delivery path. On the LIVE
+                        # branch, deliver a single class-filtered CONFRONTATION to
+                        # every connected socket (including the emitter) via a
+                        # per-recipient supplier; the canonical full-union payload
+                        # is persisted to the EventLog ONLY (replay/audit) and is
+                        # never sent to a client socket. This replaces the Story
+                        # 49-7 union-broadcast + per-PC overlay race (the UI's
+                        # last-message-wins reverted the tab to the 16-button union
+                        # after a flee/reconnect). A seated, connected PC whose
+                        # class will not resolve fails LOUD (ERROR span) and gets
+                        # no frame — never the union; an unseated/lobby socket gets
+                        # nothing silently. The clear branch (empty beats) stays a
+                        # single plain emit — there is nothing to per-PC filter.
                         if now_live and now_encounter is not None:
+                            from sidequest.server.dispatch.confrontation import (
+                                resolve_recipient_pc,
+                            )
+                            from sidequest.telemetry.spans.encounter import (
+                                confrontation_recipient_unresolved_span,
+                            )
+
+                            _live_encounter = now_encounter
+                            _live_cdef = cdef
+
+                            def _confrontation_frame_for(
+                                pid: str,
+                            ) -> ConfrontationPayload | None:
+                                recipient_pc, recipient_actor = resolve_recipient_pc(
+                                    snapshot=sd.snapshot,
+                                    genre_pack=sd.genre_pack,
+                                    player_id=pid,
+                                )
+                                if recipient_pc is None:
+                                    # (None, actor) ⇒ seated PC whose class won't
+                                    # resolve: fail loud, never the union.
+                                    # (None, None) ⇒ unseated/lobby socket: silent.
+                                    if recipient_actor is not None:
+                                        with confrontation_recipient_unresolved_span(
+                                            player_id=pid,
+                                            actor=recipient_actor,
+                                            reason="class_def_not_found",
+                                            confrontation_type=(_live_encounter.encounter_type),
+                                        ):
+                                            pass
+                                    return None
+                                _per_pc_dict = build_confrontation_payload(
+                                    encounter=_live_encounter,
+                                    cdef=_live_cdef,
+                                    genre_slug=sd.genre_slug,
+                                    recipient_pc=recipient_pc,
+                                    recipient_actor_name=recipient_actor,
+                                    core_resolver=sd.snapshot.find_creature_core,
+                                )
+                                return ConfrontationPayload(**_per_pc_dict)
+
                             with encounter_momentum_broadcast_span(
                                 encounter_type=now_encounter.encounter_type,
                                 player_metric_after=now_encounter.player_metric.current,
@@ -1620,69 +1682,20 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 confrontation_msg = self._emit_event(
                                     "CONFRONTATION",
                                     confrontation_payload,
+                                    per_recipient_payload=_confrontation_frame_for,
                                 )
                         else:
+                            # Clear (overlay unmount): empty beats, nothing to
+                            # per-PC filter — deliver the same frame to every
+                            # connected socket via the single path so the
+                            # dispatcher's tab unmounts too.
+                            _clear_payload = confrontation_payload
                             confrontation_msg = self._emit_event(
                                 "CONFRONTATION",
                                 confrontation_payload,
+                                per_recipient_payload=lambda _pid: _clear_payload,
                             )
 
-                        # Story 49-7: per-PC beat projection overlay. The canonical
-                        # emit above is full-union (every recipient saw the same
-                        # 16-button list regardless of class — caverns_sunden
-                        # 2026-05-12 bug). Follow it with a per-recipient
-                        # direct-queue overlay delivering a class-filtered
-                        # CONFRONTATION; the UI renders whichever arrives last, so
-                        # filtered wins. EventLog keeps the canonical row for audit.
-                        # _dispatcher_overlay_delivered tracks whether the overlay
-                        # covered the dispatcher's socket; the canonical push below
-                        # must then skip it, or the unfiltered frame lands last and
-                        # reverts the tab to the full union (pingpong 2026-05-12 17:48).
-                        _dispatcher_overlay_delivered = False
-                        if now_live and now_encounter is not None and self._room is not None:
-                            from sidequest.server.dispatch.confrontation import (
-                                resolve_recipient_pc,
-                            )
-
-                            socket_for_player_fn = getattr(self._room, "socket_for_player", None)
-                            queue_for_socket_fn = getattr(self._room, "queue_for_socket", None)
-                            connected_player_ids_fn = getattr(
-                                self._room, "connected_player_ids", None
-                            )
-                            if (
-                                callable(socket_for_player_fn)
-                                and callable(queue_for_socket_fn)
-                                and callable(connected_player_ids_fn)
-                            ):
-                                for _pid in connected_player_ids_fn():
-                                    _recipient_pc, _recipient_actor = resolve_recipient_pc(
-                                        snapshot=sd.snapshot,
-                                        genre_pack=sd.genre_pack,
-                                        player_id=_pid,
-                                    )
-                                    if _recipient_pc is None:
-                                        continue
-                                    _per_pc_dict = build_confrontation_payload(
-                                        encounter=now_encounter,
-                                        cdef=cdef,
-                                        genre_slug=sd.genre_slug,
-                                        recipient_pc=_recipient_pc,
-                                        recipient_actor_name=_recipient_actor,
-                                        core_resolver=sd.snapshot.find_creature_core,
-                                    )
-                                    _per_pc_msg = ConfrontationMessage(
-                                        payload=ConfrontationPayload(**_per_pc_dict),
-                                        player_id="server",
-                                    )
-                                    _socket_id = socket_for_player_fn(_pid)
-                                    if _socket_id is None:
-                                        continue
-                                    _q = queue_for_socket_fn(_socket_id)
-                                    if _q is None:
-                                        continue
-                                    _q.put_nowait(_per_pc_msg)
-                                    if _pid == sd.player_id:
-                                        _dispatcher_overlay_delivered = True
                         assert confrontation_event_attrs is not None
                         trace.get_current_span().add_event(
                             "confrontation.dispatched",
@@ -1804,61 +1817,30 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
 
                     outbound: list[object] = [narration_msg]
                     if confrontation_msg is not None:
-                        # Pingpong 2026-04-30 follow-on: CONFRONTATION rides
-                        # _emit_event for peer fan-out, but the dispatcher's copy
-                        # used to go to outbound (the pre-await socket). On a
-                        # mid-await reconnect that queue is dead, so the dial never
-                        # activates on the dispatcher's tab. Fix: deliver to the
-                        # dispatcher's CURRENT socket via queue_for_socket(
-                        # socket_for_player(...)) — looked up at delivery time.
-                        # Peers unchanged. Falls back to outbound when room is None
-                        # or a stub room lacks the socket helpers.
-                        socket_for_player = (
-                            getattr(
-                                self._room,
-                                "socket_for_player",
-                                None,
-                            )
-                            if _has_room
-                            else None
+                        # Story 59-16: emit_event already delivered the single
+                        # filtered CONFRONTATION to every connected socket —
+                        # including the dispatcher's CURRENT socket, looked up at
+                        # delivery time so a mid-await reconnect is covered. No
+                        # second push, and the canonical union never reaches a
+                        # socket. Legacy / stub rooms (no EventLog or no
+                        # connected_player_ids) get the emitter's filtered frame
+                        # appended to outbound so the return value carries it.
+                        connected_player_ids_fn = (
+                            getattr(self._room, "connected_player_ids", None) if _has_room else None
                         )
-                        queue_for_socket = (
-                            getattr(
-                                self._room,
-                                "queue_for_socket",
-                                None,
-                            )
-                            if _has_room
-                            else None
+                        _delivered_via_sockets = (
+                            _has_room
+                            and self._event_log is not None
+                            and callable(connected_player_ids_fn)
                         )
-                        if _has_room and callable(socket_for_player) and callable(queue_for_socket):
+                        if _delivered_via_sockets:
                             room = self._room
-                            assert room is not None  # noqa: S101 — narrowed by _has_room
-                            dispatcher_socket = socket_for_player(sd.player_id)
-                            dispatcher_queue = (
-                                queue_for_socket(dispatcher_socket)
-                                if dispatcher_socket is not None
-                                else None
-                            )
-                            # Pingpong 2026-05-12 17:48 (trailing-PC regression of
-                            # 49-7): push the unfiltered canonical to the
-                            # dispatcher only when the per-PC overlay didn't already
-                            # queue a filtered frame — otherwise the canonical lands
-                            # last and the UI snaps back to the full 16-button union.
-                            if dispatcher_queue is not None and not _dispatcher_overlay_delivered:
-                                dispatcher_queue.put_nowait(confrontation_msg)
-                            # OTEL lie-detector: per-recipient confrontation
-                            # delivery, mirroring the shared_world_frame_broadcast
-                            # watcher. dispatcher_delivery_path distinguishes
-                            # per_pc_overlay (the 17:48-protected branch) from
-                            # canonical_push so a regression of either is visible.
+                            assert room is not None  # noqa: S101 — narrowed above
+                            # OTEL lie-detector: how many sockets the single
+                            # filtered fan-out reached (catches a future skip).
                             try:
                                 slug_attr = getattr(room, "slug", "")
-                                connected = (
-                                    room.connected_player_ids()
-                                    if callable(getattr(room, "connected_player_ids", None))
-                                    else []
-                                )
+                                connected = connected_player_ids_fn()
                                 _watcher_publish(
                                     "shared_world_frame_broadcast",
                                     {
@@ -1867,12 +1849,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                         "recipient_count": len(connected),
                                         "recipient_player_ids": connected,
                                         "dispatcher_player_id": sd.player_id,
-                                        "dispatcher_socket_attached": dispatcher_queue is not None,
-                                        "dispatcher_delivery_path": (
-                                            "per_pc_overlay"
-                                            if _dispatcher_overlay_delivered
-                                            else "canonical_push"
-                                        ),
+                                        "dispatcher_delivery_path": "single_filtered",
                                     },
                                     component="multiplayer",
                                 )
@@ -1883,8 +1860,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                     exc,
                                 )
                         else:
-                            # Legacy / stub-room fallback: append to outbound so
-                            # test fixtures see CONFRONTATION in the return value.
+                            # Legacy / stub-room fallback: append the emitter's
+                            # filtered frame to outbound so the return value carries it.
                             outbound.append(confrontation_msg)
                     # CHAPTER_MARKER — drives the UI's useRunningHeader title. Emit
                     # one frame per location change so the header tracks narration

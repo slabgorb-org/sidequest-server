@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
 from .span import Span
@@ -293,6 +294,45 @@ SPAN_ROUTES[SPAN_CONFRONTATION_BEAT_FILTER] = SpanRoute(
         "spell_slots_remaining": (span.attributes or {}).get("spell_slots_remaining", 0.0),
     },
 )
+# Story 59-16 — fail-loud when a SEATED, connected PC cannot be resolved to a
+# class for the single filtered CONFRONTATION delivery. The encounter layer
+# must NEVER fall back to the unfiltered union for that socket; it fires this
+# ERROR span and sends nothing (a lobby/unseated socket is a different, silent
+# case). The GM panel surfaces it as a delivery failure, not a clean turn.
+SPAN_CONFRONTATION_RECIPIENT_UNRESOLVED = "confrontation.recipient_unresolved"
+SPAN_ROUTES[SPAN_CONFRONTATION_RECIPIENT_UNRESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="confrontation",
+    extract=lambda span: {
+        "field": "confrontation.recipient_unresolved",
+        "player_id": (span.attributes or {}).get("player_id", ""),
+        "actor": (span.attributes or {}).get("actor", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+        "confrontation_type": (span.attributes or {}).get("confrontation_type", ""),
+    },
+)
+
+
+@contextmanager
+def confrontation_recipient_unresolved_span(
+    *,
+    player_id: str,
+    actor: str,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open the ``confrontation.recipient_unresolved`` ERROR span for a
+    seated, connected PC whose class could not be resolved. Marks the span
+    status ERROR so the GM panel surfaces the delivery failure — never a
+    silent fallback to the unfiltered union (Story 59-16, CLAUDE.md No
+    Silent Fallbacks)."""
+    with Span.open(
+        SPAN_CONFRONTATION_RECIPIENT_UNRESOLVED,
+        {"player_id": player_id, "actor": actor, "reason": reason, **attrs},
+    ) as span:
+        span.set_status(Status(StatusCode.ERROR, reason))
+        yield span
 
 
 @contextmanager

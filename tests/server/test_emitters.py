@@ -191,7 +191,7 @@ def test_emit_event_delegate_calls_module_function(monkeypatch, session_handler_
     sentinel = object()
     captured: list[tuple] = []
 
-    def _spy(h, kind, payload):
+    def _spy(h, kind, payload, *, author_player_id=None, per_recipient_payload=None):
         captured.append((h, kind, payload))
         return sentinel
 

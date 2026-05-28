@@ -1,24 +1,27 @@
-"""Pingpong 2026-04-26 S2-BUG: Confrontations are PRIVATE to the acting player.
+"""CONFRONTATION fan-out — single filtered delivery path (Story 59-16).
 
-Repro from the Beatles 4-player session: Paul opened a Diplomatic Negotiation
-vs Veriti Onua. Paul saw the confrontation card, NPC, and action buttons.
-John, George, and Ringo's tabs froze on the prior shared beat — no NPC card,
-no narration, no buttons.
+Originally the 2026-04-26 S2-BUG suite: confrontations were PRIVATE to the
+acting player (peers froze) until the message was routed through
+``_emit_event("CONFRONTATION", ...)`` so the EventLog + ProjectionFilter
+fan-out reached every peer socket. Story 49-7 then added a per-PC
+class-filtered overlay so each player saw only their class's beats.
 
-Root cause: ``_execute_narration_turn`` built the ``ConfrontationMessage``
-directly via ``ConfrontationMessage(...)`` and only appended it to the
-acting player's ``outbound`` list — the same list returned to the caller
-and pushed to the actor's socket. Peer sockets were never notified.
+Story 59-16 collapses the two racing delivery mechanisms (unfiltered union
+broadcast + per-PC overlay) into ONE filtered path:
 
-Fix: route the message through ``self._emit_event("CONFRONTATION", payload)``
-so the canonical EventLog + ProjectionFilter fan-out path delivers a
-per-player frame to every connected peer (mirrors NARRATION at L3365 of
-session_handler.py).
+  * the canonical full-union payload goes to the EventLog ONLY,
+  * exactly one per-recipient class-filtered frame is delivered to every
+    connected socket including the emitter,
+  * a seated, connected PC that cannot resolve a class fails LOUD (no
+    silent union fallback).
 
-This is a wiring test — it drives the actual ``_execute_narration_turn``
-handler against a real :class:`SessionRoom` with four connected sockets
-and asserts every non-acting peer's outbound queue receives a
-CONFRONTATION frame.
+These tests therefore assert the *single filtered* contract: every seated
+peer (and the dispatcher) receives EXACTLY ONE CONFRONTATION frame and it
+carries only that player's class-legal beats — never the full union. They
+seat real PCs against the production caverns_and_claudes pack so
+``resolve_recipient_pc`` finds each class; the historical fixture-pack
+variants (no classes.yaml → unseated sockets) tested the union-broadcast
+behavior that 59-16 deletes.
 """
 
 from __future__ import annotations
@@ -29,7 +32,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from sidequest.agents.orchestrator import NarrationTurnResult
+from sidequest.agents.orchestrator import NarrationTurnResult, NpcMention
+from sidequest.game.character import Character
+from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.event_log import EventLog
 from sidequest.game.persistence import (
     GameMode,
@@ -40,6 +45,12 @@ from sidequest.protocol.messages import ConfrontationMessage
 from sidequest.server.session_room import RoomRegistry
 
 _SLUG = "s2-confrontation-broadcast-test"
+
+# Cross-class beat ids — a frame carrying any of these to a player whose
+# class can't use them is the full-union leak Story 59-16 removes.
+_OTHER_CLASS_BEATS = frozenset(
+    {"backstab", "slip_behind", "cast_cantrip", "cast_spell", "turn_undead", "pray_for_aid"}
+)
 
 
 @pytest.fixture(autouse=True)
@@ -65,14 +76,14 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
     db_pool.close_pool()
 
 
-def _seed_game_row(tmp_path: Path):
+def _seed_game_row(slug: str = _SLUG):
     """Register the session in Postgres and return the PgSaveRepository."""
     from sidequest.game import db_pool
     from sidequest.server.session_state import _build_pg_repos_for_slug
 
     repo, _dungeon, _sink = _build_pg_repos_for_slug(
         db_pool.get_pool(),
-        slug=_SLUG,
+        slug=slug,
         mode=str(GameMode.MULTIPLAYER),
         genre_slug="caverns_and_claudes",
         world_slug="",
@@ -80,53 +91,97 @@ def _seed_game_row(tmp_path: Path):
     return repo
 
 
+def _use_real_content_packs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repoint the genre loader at the real sidequest-content packs so
+    caverns_and_claudes carries real Fighter/Thief/Cleric classes with
+    distinct ``encounter_beat_choices``."""
+    content_packs = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
+    assert content_packs.is_dir(), (
+        f"real sidequest-content packs directory not found at {content_packs} — "
+        f"these tests assert per-class filtering that only manifests with the "
+        f"production class definitions."
+    )
+    monkeypatch.setattr(
+        "sidequest.genre.loader.DEFAULT_GENRE_PACK_SEARCH_PATHS",
+        [content_packs],
+    )
+
+
+def _seat(snap, pairs: list[tuple[str, str, str]]) -> None:
+    """Seat ``(player_id, character_name, char_class)`` PCs on the snapshot."""
+    for pid, char_name, char_class in pairs:
+        if not any(c.core.name == char_name for c in snap.characters):
+            snap.characters.append(
+                Character(
+                    core=CreatureCore(
+                        name=char_name,
+                        description=f"{char_name} the adventurer",
+                        personality="bold",
+                        inventory=Inventory(),
+                    ),
+                    char_class=char_class,
+                    race="Human",
+                    backstory="A wandering adventurer",
+                )
+            )
+        snap.player_seats[pid] = char_name
+
+
+def _drain_confrontations(queue: asyncio.Queue) -> list[ConfrontationMessage]:
+    frames: list[ConfrontationMessage] = []
+    while not queue.empty():
+        item = queue.get_nowait()
+        if isinstance(item, ConfrontationMessage):
+            frames.append(item)
+    return frames
+
+
 @pytest.mark.asyncio
-async def test_confrontation_broadcasts_to_all_four_peer_sockets(
+async def test_confrontation_delivers_one_filtered_frame_to_every_seated_peer(
     session_handler_factory,
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """4-player MP regression: every connected socket receives the
-    CONFRONTATION frame on encounter start, not just the actor's socket.
+    """4-player MP: every connected socket receives EXACTLY ONE
+    class-filtered CONFRONTATION frame on encounter start — never the union.
 
-    Drives the actual ``_execute_narration_turn`` handler — no mocked
-    broadcast, no projection-filter shortcut. Wires up a real
-    :class:`SessionRoom` with Paul, John, George, and Ringo connected on
-    distinct sockets, fires the encounter via the orchestrator mock, and
-    inspects each socket's ``asyncio.Queue`` for a delivered frame.
+    Drives the actual ``_execute_narration_turn`` handler against a real
+    :class:`SessionRoom` with four seated PCs of distinct classes. The
+    S2-BUG intent (peers are notified, not just the actor) is preserved:
+    each peer still receives a CONFRONTATION. Story 59-16 sharpens it — the
+    frame must be the player's class-filtered slice, and there must be
+    exactly one (no union arriving first and clobbering the tab).
 
-    Pre-fix: only Paul's outbound list (the function's return value)
-    received the frame; John/George/Ringo's queues stayed empty.
-    Post-fix: ``_emit_event("CONFRONTATION", ...)`` fans out to all three
-    peer queues via the projection-filter pipeline.
+    Pre-59-16: each peer received TWO frames — the canonical union (from
+    the emit_event fan-out) followed by the filtered overlay — so this
+    fails on both 'exactly one' and 'no union leak'.
     """
+    _use_real_content_packs(monkeypatch)
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
     sd.player_id = "paul"
     sd.player_name = "Paul"
     sd.mode = GameMode.MULTIPLAYER
     sd.game_slug = _SLUG
 
-    # Real EventLog + ProjectionFilter so _emit_event takes the production
-    # branch (not the legacy fallback). ComposedFilter.with_no_genre_rules
-    # is a pass-through filter — every recipient receives the same payload,
-    # which is the correct shared-world behavior for confrontation frames.
-    store = _seed_game_row(tmp_path)
-    repo = store
-    handler._event_log = EventLog(repo)
+    store = _seed_game_row()
+    handler._event_log = EventLog(store)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(repo)
+    handler._projection_cache = ProjectionCache(store)
 
-    # 4-socket multiplayer room. Paul is the actor; John/George/Ringo are
-    # peers. Each socket gets its own asyncio.Queue — the production
-    # fan-out path looks up queue_for_socket(socket_for_player(pid)) per
-    # recipient, so unique queues per socket are required.
+    # Seat four PCs of distinct classes so each recipient's class-legal
+    # slice is distinguishable. Paul is the dispatcher/emitter.
+    _seat(
+        sd.snapshot,
+        [
+            ("paul", "Paul", "Fighter"),
+            ("john", "John", "Thief"),
+            ("george", "George", "Mage"),
+            ("ringo", "Ringo", "Cleric"),
+        ],
+    )
+
     registry = RoomRegistry()
     room = registry.get_or_create(slug=_SLUG, mode=GameMode.MULTIPLAYER)
-    socket_ids = {
-        "paul": "sock-paul",
-        "john": "sock-john",
-        "george": "sock-george",
-        "ringo": "sock-ringo",
-    }
+    socket_ids = {pid: f"sock-{pid}" for pid in ("paul", "john", "george", "ringo")}
     queues: dict[str, asyncio.Queue[object]] = {pid: asyncio.Queue() for pid in socket_ids}
     for pid, sid in socket_ids.items():
         room.connect(pid, socket_id=sid)
@@ -134,21 +189,11 @@ async def test_confrontation_broadcasts_to_all_four_peer_sockets(
     handler._room = room
     handler._socket_id = socket_ids["paul"]
 
-    # Orchestrator mock: opens a confrontation on this turn (encounter is
-    # currently None on the snapshot; result.confrontation="combat" makes
-    # the dispatch branch take the now_live path).
-    # Story 45-33: combat encounters require an opponent post-fallback;
-    # supply Veriti Onua (already named in the prose) explicitly so the
-    # lifecycle does not raise — the test's focus is the broadcast fan-out.
-    from sidequest.agents.orchestrator import NpcMention
-
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="Paul squares off against Veriti Onua.",
             confrontation="combat",
-            npcs_present=[
-                NpcMention(name="Veriti Onua", side="opponent", role="hostile"),
-            ],
+            npcs_present=[NpcMention(name="Veriti Onua", side="opponent", role="hostile")],
         ),
     )
 
@@ -160,111 +205,93 @@ async def test_confrontation_broadcasts_to_all_four_peer_sockets(
         _build_turn_context(sd),
     )
 
-    # Pingpong 2026-04-30 follow-on (sibling of f0b40c7): CONFRONTATION
-    # delivery to the dispatcher was migrated off ``outbound.append`` —
-    # the closure-captured outbound is the dispatcher's PRE-await socket
-    # queue, which is dead when the WS cycles mid-narration. The
-    # dispatcher now receives CONFRONTATION via a current-socket lookup
-    # at delivery time (room.queue_for_socket(socket_for_player(...)))
-    # so reconnected sockets pick up the frame. Mirrors the f0b40c7
-    # pattern for NARRATION_END/CHAPTER_MARKER/PARTY_STATUS/AUDIO_CUE.
+    # The returned outbound list must not carry CONFRONTATION — delivery is
+    # via the per-recipient socket fan-out, not the dispatcher's return value.
     outbound_kinds = [type(m).__name__ for m in msgs]
     assert ConfrontationMessage.__name__ not in outbound_kinds, (
-        f"Actor's `outbound` list must NOT contain CONFRONTATION anymore — "
-        f"it's delivered to the dispatcher's current socket queue at "
-        f"delivery time so a reconnected dispatcher's NEW socket gets it. "
-        f"Got outbound: {outbound_kinds}"
+        f"CONFRONTATION must be delivered via the per-recipient fan-out, not "
+        f"the returned outbound list; got {outbound_kinds}"
     )
 
-    # Peer branch — every non-acting socket queue must have received
-    # exactly one CONFRONTATION frame via ``_emit_event`` peer fan-out.
-    # The new dispatcher-current-socket delivery does NOT broadcast to
-    # peers (avoids double-delivery), so peer count stays at 1.
-    for peer_pid in ("john", "george", "ringo"):
-        peer_frames: list[object] = []
-        while not queues[peer_pid].empty():
-            peer_frames.append(queues[peer_pid].get_nowait())
-        peer_conf = [f for f in peer_frames if isinstance(f, ConfrontationMessage)]
-        assert len(peer_conf) == 1, (
-            f"Peer {peer_pid!r} expected exactly one CONFRONTATION frame "
-            f"on their queue; got {len(peer_conf)} (frames on queue: "
-            f"{[type(f).__name__ for f in peer_frames]}). "
-            "Pingpong S2-BUG: confrontations were PRIVATE to the actor "
-            "before the _emit_event broadcast fix."
+    legal = {
+        "paul": "shield_bash",  # Fighter
+        "john": "backstab",  # Thief
+        "george": "cast_cantrip",  # Mage
+        "ringo": "turn_undead",  # Cleric
+    }
+    for pid, must_have in legal.items():
+        frames = _drain_confrontations(queues[pid])
+        assert len(frames) == 1, (
+            f"{pid!r} must receive exactly one CONFRONTATION frame (single "
+            f"filtered delivery); got {len(frames)}. Pre-59-16 each peer got "
+            f"union + overlay = 2."
         )
-        assert peer_conf[0].payload.active is True
-        assert peer_conf[0].payload.type == "combat"
-
-    # Pingpong 2026-04-30 follow-on: Paul's queue MUST contain exactly
-    # one CONFRONTATION frame, delivered via the dispatcher-current-socket
-    # lookup. Pre-fix this queue was empty (frame went to ``outbound``);
-    # if the dispatcher's WS cycled mid-narration, ``outbound`` landed
-    # on a dead queue and the encounter dial never activated.
-    paul_frames: list[object] = []
-    while not queues["paul"].empty():
-        paul_frames.append(queues["paul"].get_nowait())
-    paul_conf_via_queue = [f for f in paul_frames if isinstance(f, ConfrontationMessage)]
-    assert len(paul_conf_via_queue) == 1, (
-        f"Dispatcher (Paul) must receive exactly one CONFRONTATION frame "
-        f"on their CURRENT socket queue (post pingpong 2026-04-30 fix); "
-        f"got {len(paul_conf_via_queue)} (frames on queue: "
-        f"{[type(f).__name__ for f in paul_frames]}). "
-        "If 0, the dispatcher's reconnected socket would miss the encounter "
-        "activation — the bug this fix addresses."
-    )
-    assert paul_conf_via_queue[0].payload.active is True
-    assert paul_conf_via_queue[0].payload.type == "combat"
+        ids = {b["id"] for b in frames[0].payload.beats}
+        assert frames[0].payload.active is True
+        assert frames[0].payload.type == "combat"
+        assert must_have in ids, (
+            f"{pid!r} ({must_have}'s class) is missing its class-legal beat; got {sorted(ids)}"
+        )
+        # No other class's signature beats may leak to this recipient.
+        forbidden = _OTHER_CLASS_BEATS - {must_have}
+        leaked = ids & forbidden
+        assert not leaked, (
+            f"{pid!r} leaked other-class beats {sorted(leaked)} — the full union "
+            f"reached the tab (the 59-16 bug)."
+        )
 
 
 @pytest.mark.asyncio
-async def test_confrontation_reaches_dispatcher_after_socket_cycle(
+async def test_filtered_confrontation_reaches_dispatcher_after_socket_cycle(
     session_handler_factory,
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pingpong 2026-04-30 follow-on regression: dispatcher's WS cycles
-    mid-narration and the NEW socket receives CONFRONTATION.
+    """Reconnect is the 59-16 bug trigger. The dispatcher's WS cycles
+    mid-narration; the NEW socket must receive exactly one *class-filtered*
+    CONFRONTATION (not the union), and the old detached socket nothing.
 
-    Repro: 4P MP, Linus is the dispatch winner. During the 30-60s
-    Claude narration await, Linus's browser refreshes — old socket
-    detaches, new socket attaches with a different socket_id. Pre-fix,
-    ``outbound.append(confrontation_msg)`` landed on the closure-
-    captured pre-await queue (now dead, writer task cancelled); the
-    new socket's queue was empty, encounter dial never activated.
-    Post-fix: the dispatcher-current-socket lookup runs at delivery
-    time so the new queue receives the frame.
+    Repro: 4P MP, Linus (Fighter) is the dispatch winner. During the
+    narration await Linus's browser refreshes — old socket detaches, new
+    socket attaches with a different socket_id. The frame must follow the
+    current socket AND be Fighter-filtered.
     """
+    _use_real_content_packs(monkeypatch)
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
     sd.player_id = "linus"
     sd.player_name = "Linus"
     sd.mode = GameMode.MULTIPLAYER
     sd.game_slug = _SLUG + "-cycle"
 
-    store = _seed_game_row(tmp_path)
-    repo = store
-    handler._event_log = EventLog(repo)
+    store = _seed_game_row(sd.game_slug)
+    handler._event_log = EventLog(store)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(repo)
+    handler._projection_cache = ProjectionCache(store)
+
+    _seat(
+        sd.snapshot,
+        [
+            ("linus", "Linus", "Fighter"),
+            ("charlie", "Charlie", "Thief"),
+            ("snoopy", "Snoopy", "Mage"),
+            ("lucy", "Lucy", "Cleric"),
+        ],
+    )
 
     registry = RoomRegistry()
     room = registry.get_or_create(slug=sd.game_slug, mode=GameMode.MULTIPLAYER)
 
-    # Linus first connects on the PRE-await socket — this is the socket
-    # the merged-dispatch closure captures. Charlie/Snoopy/Lucy connect
-    # as peers.
     pre_socket_id = "sock-linus-pre"
     pre_queue: asyncio.Queue[object] = asyncio.Queue()
     room.connect("linus", socket_id=pre_socket_id)
     room.attach_outbound(pre_socket_id, pre_queue)
     handler._socket_id = pre_socket_id  # Closure captures THIS
 
-    peer_queues: dict[str, asyncio.Queue[object]] = {}
     for peer_pid, peer_sid in (
         ("charlie", "sock-charlie"),
         ("snoopy", "sock-snoopy"),
         ("lucy", "sock-lucy"),
     ):
         q: asyncio.Queue[object] = asyncio.Queue()
-        peer_queues[peer_pid] = q
         room.connect(peer_pid, socket_id=peer_sid)
         room.attach_outbound(peer_sid, q)
 
@@ -273,16 +300,14 @@ async def test_confrontation_reaches_dispatcher_after_socket_cycle(
     sd.orchestrator.run_narration_turn = AsyncMock(
         return_value=NarrationTurnResult(
             narration="Linus opens negotiations with Inspector Karenina.",
-            confrontation="negotiation",
+            confrontation="combat",
+            npcs_present=[NpcMention(name="Inspector Karenina", side="opponent", role="hostile")],
         ),
     )
 
-    # Simulate the WS cycle: between handler attach and the dispatch
-    # delivery, Linus's browser refreshes. The old socket detaches
-    # (writer task cancelled), a new socket attaches with a different
-    # socket_id and a fresh queue. The handler's closure-captured
-    # `_socket_id` still points at the OLD socket — this is the exact
-    # production race.
+    # Simulate the WS cycle: old socket detaches, a new socket attaches with
+    # a fresh queue. The handler's closure-captured `_socket_id` still points
+    # at the OLD socket — the production race.
     room.detach_outbound(pre_socket_id)
     post_socket_id = "sock-linus-post"
     post_queue: asyncio.Queue[object] = asyncio.Queue()
@@ -291,51 +316,32 @@ async def test_confrontation_reaches_dispatcher_after_socket_cycle(
 
     from sidequest.server.session_handler import _build_turn_context
 
-    msgs = await handler._execute_narration_turn(
+    await handler._execute_narration_turn(
         sd,
         "I open negotiations.",
         _build_turn_context(sd),
     )
 
-    # Load-bearing assertion: the NEW socket's queue receives
-    # CONFRONTATION even though the closure captured the OLD socket_id.
-    post_conf = []
-    while not post_queue.empty():
-        item = post_queue.get_nowait()
-        if isinstance(item, ConfrontationMessage):
-            post_conf.append(item)
+    post_conf = _drain_confrontations(post_queue)
     assert len(post_conf) == 1, (
-        f"Dispatcher's NEW (post-reconnect) socket queue must receive "
-        f"exactly one CONFRONTATION frame; got {len(post_conf)}. "
-        "Pre-fix the frame went to the OLD socket's outbound list and "
-        "was silently dropped — encounter dial never activated on the "
-        "reconnected tab."
+        f"dispatcher's NEW (post-reconnect) socket must receive exactly one "
+        f"CONFRONTATION frame; got {len(post_conf)}."
     )
     assert post_conf[0].payload.active is True
-
-    # And the old (now-detached) queue must not receive anything — the
-    # closure-captured socket_id no longer has an outbound queue
-    # registered, so the helper's `room.queue_for_socket(...)` returns
-    # None and skips delivery rather than landing on a dead queue.
-    pre_conf = []
-    while not pre_queue.empty():
-        item = pre_queue.get_nowait()
-        if isinstance(item, ConfrontationMessage):
-            pre_conf.append(item)
-    assert pre_conf == [], (
-        f"Old (detached) socket queue must not receive CONFRONTATION; "
-        f"got {len(pre_conf)} frames. If non-empty, the helper isn't "
-        "looking up the CURRENT socket at delivery time — the very "
-        "regression this test guards against."
+    ids = {b["id"] for b in post_conf[0].payload.beats}
+    assert "shield_bash" in ids, (
+        f"Linus (Fighter) must receive his class-legal beats after reconnect; got {sorted(ids)}"
+    )
+    leaked = ids & (_OTHER_CLASS_BEATS - {"shield_bash"})
+    assert not leaked, (
+        f"reconnected Fighter leaked other-class beats {sorted(leaked)} — the exact "
+        f"flee/reconnect regression 59-16 fixes."
     )
 
-    # Outbound list returned to the caller is also free of CONFRONTATION
-    # — guards against accidentally re-introducing the dead-queue path.
-    outbound_kinds = [type(m).__name__ for m in msgs]
-    assert ConfrontationMessage.__name__ not in outbound_kinds, (
-        f"Returned outbound list must not contain CONFRONTATION post-fix; "
-        f"got {outbound_kinds}. Re-introducing outbound.append would "
-        "resurrect the dead-queue race."
+    # The old (now-detached) socket must receive nothing.
+    pre_conf = _drain_confrontations(pre_queue)
+    assert pre_conf == [], (
+        f"old (detached) socket must not receive CONFRONTATION; got {len(pre_conf)} frames."
     )
 
 
@@ -350,59 +356,14 @@ async def test_seated_dispatcher_receives_class_filtered_not_unfiltered_canonica
     Repro from the 3-PC Carl/Donut/Katia caverns_sunden playtest: per-PC
     verb projection worked at confrontation-open, then after a couple of
     resolved rounds the dispatcher's Confrontation tab regressed to the
-    full 16-button class union. oq-2 isolated the pattern: the broken
-    tab was always the PC who appeared LAST in the resolved-round
-    narration order — i.e. the one whose ``sd.player_id`` became the
-    dispatcher for the merged-dispatch turn.
+    full 16-button class union — always the PC who narrated LAST (the
+    merged-dispatch dispatcher).
 
-    Root cause: ``_emit_event("CONFRONTATION", ...)`` returns the raw
-    unfiltered canonical payload as ``confrontation_msg`` for the
-    emitter. The per-PC overlay loop above the dispatcher-current-socket
-    push queues a class-filtered CONFRONTATION to every connected socket
-    (including the dispatcher's). The dispatcher-current-socket push
-    then queues the unfiltered ``confrontation_msg`` to the dispatcher's
-    queue AFTER the filtered overlay. UI renders last-message-wins, so
-    the dispatcher's tab snapped back to the full 16-button union.
-
-    Fix: skip the canonical push to the dispatcher when the per-PC
-    overlay above already queued a filtered frame for them. The
-    canonical push remains the dispatcher's sole delivery path in the
-    legacy/unseated branch (no PC seat / no class resolution / clear
-    payload / stub-room fixtures).
-
-    This test exercises the seated-PC branch with a real
-    caverns_and_claudes genre pack so ``resolve_recipient_pc`` actually
-    finds the Thief class for Katia. Asserts:
-
-      1. Katia's queue receives exactly one CONFRONTATION (not two —
-         no canonical-clobber after the filtered overlay).
-      2. The frame Katia receives is Thief-filtered: contains
-         ``backstab`` (Thief-specific) and DOES NOT contain
-         ``shield_bash`` (Fighter), ``cast_spell`` (Mage), or
-         ``turn_undead`` (Cleric).
+    Under Story 59-16's single filtered path the dispatcher (the emitter)
+    must receive exactly one Thief-filtered frame — the same contract as
+    every other recipient.
     """
-    from sidequest.agents.orchestrator import NpcMention
-    from sidequest.game.character import Character
-    from sidequest.game.creature_core import CreatureCore, Inventory
-
-    # Repoint genre-pack search at the real sidequest-content pack so the
-    # loaded pack carries the real Fighter/Cleric/Thief classes with their
-    # distinct encounter_beat_choices. The autouse
-    # ``_fixture_pack_search_paths`` fixture points the loader at
-    # tests/fixtures/packs which has no classes.yaml in caverns_and_claudes
-    # — that fixture is fine for shape tests but cannot exercise per-class
-    # beat filtering. This monkeypatch supersedes the autouse one for the
-    # duration of this test only.
-    content_packs = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
-    assert content_packs.is_dir(), (
-        f"real sidequest-content packs directory not found at {content_packs} — "
-        f"this test asserts behavior that only manifests with the production "
-        f"class definitions (Fighter has shield_bash, Thief has backstab, etc.)"
-    )
-    monkeypatch.setattr(
-        "sidequest.genre.loader.DEFAULT_GENRE_PACK_SEARCH_PATHS",
-        [content_packs],
-    )
+    _use_real_content_packs(monkeypatch)
 
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
     sd.player_id = "katia"
@@ -410,42 +371,20 @@ async def test_seated_dispatcher_receives_class_filtered_not_unfiltered_canonica
     sd.mode = GameMode.MULTIPLAYER
     sd.game_slug = _SLUG + "-seated-trail"
 
-    # Real EventLog + ProjectionFilter so the production emit path runs.
-    store = _seed_game_row(tmp_path)
-    repo = store
-    handler._event_log = EventLog(repo)
+    store = _seed_game_row(sd.game_slug)
+    handler._event_log = EventLog(store)
     handler._projection_filter = ComposedFilter.with_no_genre_rules()
-    handler._projection_cache = ProjectionCache(repo)
+    handler._projection_cache = ProjectionCache(store)
 
-    # Seat 3 PCs with distinct classes so the per-PC overlay produces
-    # different verb lists per recipient. The factory's default snapshot
-    # already has a "Rux" Fighter — append Donut (Cleric) and Katia
-    # (Thief). All three classes exist in caverns_and_claudes/classes.yaml
-    # with non-overlapping signature beats (shield_bash / turn_undead /
-    # backstab) — required for the class-filter assertion to be sharp.
-    snap = sd.snapshot
-    for char_name, char_class in (("Carl", "Fighter"), ("Donut", "Cleric"), ("Katia", "Thief")):
-        if not any(c.core.name == char_name for c in snap.characters):
-            snap.characters.append(
-                Character(
-                    core=CreatureCore(
-                        name=char_name,
-                        description=f"{char_name} the adventurer",
-                        personality="bold",
-                        inventory=Inventory(),
-                    ),
-                    char_class=char_class,
-                    race="Human",
-                    backstory="A wandering adventurer",
-                ),
-            )
-    snap.player_seats["carl"] = "Carl"
-    snap.player_seats["donut"] = "Donut"
-    snap.player_seats["katia"] = "Katia"
+    _seat(
+        sd.snapshot,
+        [
+            ("carl", "Carl", "Fighter"),
+            ("donut", "Donut", "Cleric"),
+            ("katia", "Katia", "Thief"),
+        ],
+    )
 
-    # Connect all 3 to a real SessionRoom. Katia is the dispatcher
-    # (sd.player_id), matching the playtest scenario where the last-
-    # narrated PC in merged dispatch became the dispatcher and broke.
     registry = RoomRegistry()
     room = registry.get_or_create(slug=sd.game_slug, mode=GameMode.MULTIPLAYER)
     queues: dict[str, asyncio.Queue[object]] = {}
@@ -473,29 +412,17 @@ async def test_seated_dispatcher_receives_class_filtered_not_unfiltered_canonica
         _build_turn_context(sd),
     )
 
-    # Drain Katia's queue and collect CONFRONTATION frames.
-    katia_frames: list[ConfrontationMessage] = []
-    while not queues["katia"].empty():
-        item = queues["katia"].get_nowait()
-        if isinstance(item, ConfrontationMessage):
-            katia_frames.append(item)
-
+    katia_frames = _drain_confrontations(queues["katia"])
     assert len(katia_frames) == 1, (
-        f"Dispatcher (Katia, seated as Thief) must receive EXACTLY ONE "
-        f"CONFRONTATION frame on their socket queue. Pre-fix the dispatcher "
-        f"received two frames — the per-PC overlay's filtered frame followed "
-        f"by the unfiltered canonical from the dispatcher-current-socket "
-        f"push — and the UI's last-message-wins render snapped the panel "
-        f"back to the full 16-button union (pingpong 2026-05-12 17:48). "
-        f"Got {len(katia_frames)} frames."
+        f"Dispatcher (Katia, Thief) must receive EXACTLY ONE CONFRONTATION frame. "
+        f"Pre-fix the dispatcher received the per-PC filtered frame followed by the "
+        f"unfiltered canonical and the UI's last-message-wins render snapped back to "
+        f"the full union. Got {len(katia_frames)} frames."
     )
 
     beat_ids = {b["id"] for b in katia_frames[0].payload.beats}
     assert "backstab" in beat_ids, (
-        f"Katia is seated as Thief; her Confrontation panel must include "
-        f"the Thief-specific 'backstab' beat. Got beats: {sorted(beat_ids)}. "
-        f"If 'backstab' is missing the per-PC overlay didn't reach Katia at "
-        f"all — distinct failure mode from the canonical-clobber regression."
+        f"Katia (Thief) must see the Thief-specific 'backstab' beat; got {sorted(beat_ids)}"
     )
     forbidden = {
         "shield_bash",
@@ -508,10 +435,6 @@ async def test_seated_dispatcher_receives_class_filtered_not_unfiltered_canonica
     }
     leaked = beat_ids & forbidden
     assert not leaked, (
-        f"Thief-only Katia's CONFRONTATION leaked non-Thief beats: {sorted(leaked)}. "
-        f"This is the exact playtest 2026-05-12 17:30 regression — the "
-        f"unfiltered canonical landed in Katia's queue after the filtered "
-        f"overlay and the UI rendered the union. Pre-fix beats included "
-        f"Fighter (shield_bash/cleave/parry), Mage (cast_spell), and Cleric "
-        f"(turn_undead/pray_for_aid) beats Katia (Thief) cannot use."
+        f"Thief-only Katia's CONFRONTATION leaked non-Thief beats: {sorted(leaked)} "
+        f"(the 2026-05-12 union regression)."
     )

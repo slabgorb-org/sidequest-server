@@ -173,8 +173,13 @@ _CAVERNS_SUNDEN_DEPRECATED_TESTS = frozenset(
         "server/test_chargen_dispatch.py",
         "server/test_chargen_persist_and_play.py",
         "server/test_chargen_story_dispatch.py",
-        "server/test_confrontation_mp_broadcast.py",
-        "server/test_confrontation_per_pc_projection.py",
+        # 59-16: test_confrontation_mp_broadcast.py and
+        # test_confrontation_per_pc_projection.py were re-pointed to the live
+        # caverns_and_claudes pack (the mp file rewritten to the single
+        # filtered-delivery contract; the projection file is a world-agnostic
+        # unit test of build_confrontation_payload). They no longer bind to the
+        # deprecated caverns_sunden world, so they are removed from this skip
+        # set — re-included deliberately and visibly per this block's contract.
         "server/test_dice_throw_session_wiring.py",
         "server/test_magic_init_caverns_and_claudes.py",
         "server/test_magic_init_mp_second_commit.py",

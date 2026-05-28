@@ -558,6 +558,37 @@ def dispatch_dice_throw(
                 f"beat {payload.beat_id!r} skipped: {apply_result.skipped_reason}"
             )
 
+        # CWN downed seam (spec 2026-05-28, Task 11): if this strike dropped a
+        # target to 0 HP, resolve the Mortal Injury (always) and Major Injury
+        # (only when a Traumatic Hit landed this scene). Gated on the bound
+        # ruleset being CWN — base resolve_downed is a no-op for native/swn, but
+        # _physical_save_target_for calls save_params (which native/swn DO have)
+        # and reads cwn-only cfg.trauma, so we gate the WHOLE seam on the ruleset
+        # rather than relying on the no-op return.
+        _down_name = _opposite_side_first_actor(encounter, actor.side)
+        if pack and pack.rules and pack.rules.ruleset == "cwn" and _down_name is not None:
+            _down_core = snapshot.find_creature_core(_down_name)
+            if _down_core is not None and _down_core.hp.current <= 0:
+                _cfg = pack.rules.ruleset_config()
+                _scene_traumatic = any(
+                    t.text == "Traumatic Hit Landed" for t in encounter.tags
+                )
+                _save_target = _physical_save_target_for(
+                    ruleset=ruleset,
+                    snapshot=snapshot,
+                    cdef=cdef,
+                    name=_down_name,
+                    core=_down_core,
+                    cfg=_cfg,
+                )
+                ruleset.resolve_downed(
+                    core=_down_core,
+                    save_target=_save_target,
+                    scene_traumatic=_scene_traumatic,
+                    cfg=_cfg,
+                    rng=random,
+                )
+
         own_delta = apply_result.deltas.own if apply_result.deltas else 0
 
         with encounter_beat_applied_span(
@@ -814,6 +845,63 @@ def dispatch_dice_throw(
 def new_request_id() -> str:
     """Return a fresh UUID4 string for a DiceRequest correlation id."""
     return str(uuid.uuid4())
+
+
+def _physical_save_target_for(
+    *,
+    ruleset,
+    snapshot: GameSnapshot,
+    cdef: ConfrontationDef,
+    name: str,
+    core,
+    cfg,
+) -> int:
+    """Physical-save target number for the downed actor (CWN Major Injury gate).
+
+    Computes ``ruleset.save_params(...).difficulty`` for the downed actor's
+    Physical save. The downed actor's stats + level are resolved the SAME way
+    the rest of dispatch does (CreatureCore/Npc carry no ability scores):
+
+    - PC (a ``snapshot.characters`` entry by name) → that ``Character.stats``
+      block + ``core.level``.
+    - Opponent (no matching Character) → the confrontation's
+      ``opponent_ability_scores()`` (reserved hp/armor_class/dexterity keys
+      removed) + ``core.level``.
+
+    Only reached inside the CWN 0-HP branch, so ``cfg`` is a CwnConfig. Fails
+    loud (No Silent Fallbacks) if ``cfg`` is None, the opponent has no authored
+    ability scores, or ``save_params`` rejects the stat block — never silently
+    defaults the target number.
+    """
+    from sidequest.genre.models.rules import CwnConfig
+
+    if not isinstance(cfg, CwnConfig):
+        raise DiceDispatchError(
+            "CWN downed seam reached with a non-CwnConfig ruleset config "
+            f"({type(cfg).__name__}); cannot compute the Physical save target "
+            "(CLAUDE.md No Silent Fallbacks — refusing to default to a fixed number)"
+        )
+
+    pc = next((c for c in snapshot.characters if c.core.name == name), None)
+    if pc is not None:
+        stats = pc.stats
+    else:
+        stats = cdef.opponent_ability_scores()
+        if not stats:
+            raise DiceDispatchError(
+                f"CWN downed seam: opponent {name!r} has no ability scores to "
+                "resolve a Physical save — author them under "
+                "opponent_default_stats (No Silent Fallbacks)"
+            )
+
+    level = int(getattr(core, "level", 1) or 1)
+    return ruleset.save_params(
+        stats=stats,
+        save=cfg.trauma.major_injury_save,
+        level=level,
+        label="major-injury",
+        cfg=cfg,
+    ).difficulty
 
 
 # ---------------------------------------------------------------------------

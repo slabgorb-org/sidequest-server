@@ -63,6 +63,7 @@ from sidequest.server.reference_theme import (
 )
 from sidequest.server.reference_visibility import Visibility, classify
 from sidequest.telemetry.spans.reference import (
+    reference_devnote_suppressed_span,
     reference_hero_unbound_span,
     reference_presenter_error_span,
     reference_toc_missing_span,
@@ -161,23 +162,77 @@ def _humanize_label(raw: object) -> str:
     identifier-shaped strings to Title Case ("The Maw", "Genre Conventions",
     "Rolls Per Slot", "Floor It").
 
-    Conservative by design: a string that already contains whitespace OR any
-    uppercase letter is assumed author-formatted and returned UNCHANGED, so a
-    real heading like "Floor It", an acronym, or a proper noun is never
-    mangled (no "USB" → "Usb"). Only pure identifier tokens are transformed.
+    Conservative by design:
+
+    - A string that already contains whitespace is assumed author-formatted and
+      returned UNCHANGED ("Floor It", "Item 3").
+    - A string carrying an underscore or hyphen is a developer identifier; it is
+      ALWAYS split and Title-Cased so the raw separator can never survive into a
+      heading ("the_maw" → "The Maw", "MECHANICAL_surface" → "Mechanical
+      Surface", "tier-1" → "Tier 1"). Story 63-9 AC1: no raw "_" reaches HTML.
+    - A *separator-free* token with any uppercase letter is an acronym or
+      proper noun and returned UNCHANGED ("USB", "McGuffin"). NOTE: this only
+      protects a whole-string acronym. An acronym embedded in a compound
+      identifier key ("USB_port") still splits and Title-Cases each part
+      ("Usb Port") — the AC1 safe invariant (no raw "_" in HTML) wins over
+      acronym fidelity, since a snake_case key is a developer string first.
+    - A bare lowercase word is Title-Cased ("setting" → "Setting").
     """
     text = str(raw).strip()
     if not text:
         return text
-    if any(c.isspace() for c in text) or any(c.isupper() for c in text):
+    if any(c.isspace() for c in text):
         return text
-    parts = [p for p in re.split(r"[_\-]+", text) if p]
-    return " ".join(p.capitalize() for p in parts) or text
+    if "_" in text or "-" in text:
+        parts = [p for p in re.split(r"[_\-]+", text) if p]
+        return " ".join(p.capitalize() for p in parts) or text
+    if any(c.isupper() for c in text):
+        return text
+    return text.capitalize()
+
+
+# Story 63-9: leading-token markers that flag developer/placeholder prose. A
+# marker only suppresses when it is the leading token of the value (a token
+# boundary follows), so legitimate in-world prose like "a list of todos" is
+# never eaten. TEA-derived contract — do not widen without Architect sign-off.
+_DEVNOTE_MARKERS: tuple[str, ...] = ("TODO", "FIXME", "XXX", "PLACEHOLDER", "DEV NOTE")
+
+
+def _is_devnote(value: object) -> bool:
+    """True when ``value`` is a string whose leading token is a dev-note marker."""
+    if not isinstance(value, str):
+        return False
+    # Collapse internal whitespace runs (double space, tab, NBSP) to a single
+    # space so multi-word markers like "DEV  NOTE" / "DEV\tNOTE" still match.
+    normalized = re.sub(r"\s+", " ", value).strip()
+    upper = normalized.upper()
+    for marker in _DEVNOTE_MARKERS:
+        if upper.startswith(marker):
+            rest = normalized[len(marker) :]
+            # Leading token only — the marker must be followed by a boundary,
+            # not be the prefix of a longer word ("todos" must not match TODO).
+            if not rest or not (rest[0].isalnum() or rest[0] == "_"):
+                return True
+    return False
+
+
+def _scalar_text(value: object) -> str:
+    """Humanize a leaf scalar to display text. Bools become Yes/No so raw
+    ``True``/``False`` never reach the reader (Story 63-9 AC3); ``None`` becomes
+    the same ``(none)`` placeholder ``_render_scalar`` uses, never bare
+    ``None``."""
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if value is None:
+        return "<em>(none)</em>"
+    return escape(str(value))
 
 
 def _render_scalar(value: object) -> str:
     if value is None:
         return "<p><em>(none)</em></p>"
+    if isinstance(value, bool):
+        return f"<p>{'Yes' if value else 'No'}</p>"
     text = str(value)
     if "\n" in text:
         return f'<p class="multiline">{escape(text)}</p>'
@@ -198,6 +253,22 @@ def _render_dict(
     for key, value in node.items():
         slug = slugify(str(key))
         child_path = (ctx.key_path if ctx else ()) + (str(key),)
+
+        # Story 63-9 humanization guard. Suppress private (leading-underscore)
+        # keys and dev-note/placeholder values from the player-/author-facing
+        # walk. Lives here in the fallback walk — NOT in reference_visibility,
+        # whose stem-default for lore/rules is PUBLIC (TEA finding). Loud drop:
+        # fires an OTEL span so the GM panel sees the suppression, never silent.
+        if ctx is not None and (str(key).startswith("_") or _is_devnote(value)):
+            with reference_devnote_suppressed_span(
+                pack=ctx.pack,
+                world=ctx.world,
+                file_stem=ctx.file_stem,
+                key_path=child_path,
+            ):
+                pass
+            continue
+
         child_ctx = (
             PresenterContext(
                 pack=ctx.pack,
@@ -317,8 +388,23 @@ def _render_list(
     ctx: PresenterContext | None = None,
 ) -> str:
     if all(not isinstance(item, (dict, list)) for item in items):
-        lis = "".join(f"<li>{escape(str(item))}</li>" for item in items)
-        return f"<ul>{lis}</ul>"
+        lis: list[str] = []
+        for item in items:
+            # Story 63-9: dev-note markers leak through scalar-LIST items too,
+            # not just scalar dict values. Suppress here (ctx-bearing walk) and
+            # fire the same span as the dict path — a dropped list item is the
+            # same loud author-content decision (No Silent Fallbacks).
+            if ctx is not None and _is_devnote(item):
+                with reference_devnote_suppressed_span(
+                    pack=ctx.pack,
+                    world=ctx.world,
+                    file_stem=ctx.file_stem,
+                    key_path=ctx.key_path,
+                ):
+                    pass
+                continue
+            lis.append(f"<li>{_scalar_text(item)}</li>")
+        return f"<ul>{''.join(lis)}</ul>"
     parts: list[str] = []
     for index, item in enumerate(items):
         if isinstance(item, dict):

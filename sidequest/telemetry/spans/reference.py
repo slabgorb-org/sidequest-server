@@ -49,6 +49,11 @@ SPAN_REFERENCE_PRESENTER_ERROR = "sidequest.reference.presenter_error"
 SPAN_REFERENCE_POI_IMAGE_RESOLVED = "sidequest.reference.poi_image_resolved"
 SPAN_REFERENCE_POI_IMAGE_NOT_FOUND = "sidequest.reference.poi_image_not_found"
 
+# Humanization-guard suppression span (Story 63-9). Fired when the fallback
+# walk drops a dev-note / placeholder value or a private (leading-underscore)
+# key so it never reaches the player-/author-facing reference HTML.
+SPAN_REFERENCE_DEVNOTE_SUPPRESSED = "sidequest.reference.devnote_suppressed"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_REFERENCE_URL_ATTACHED,
@@ -62,6 +67,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_PRESENTER_ERROR,
         SPAN_REFERENCE_POI_IMAGE_RESOLVED,
         SPAN_REFERENCE_POI_IMAGE_NOT_FOUND,
+        SPAN_REFERENCE_DEVNOTE_SUPPRESSED,
     }
 )
 
@@ -287,6 +293,39 @@ def reference_presenter_error_span(
             "reference.file_stem": file_stem,
             "reference.key_path": ".".join(key_path) or "<root>",
         },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- Humanization-guard suppression span (Story 63-9) ---
+
+
+@contextmanager
+def reference_devnote_suppressed_span(
+    *,
+    pack: str,
+    world: str | None,
+    file_stem: str,
+    key_path: tuple[str, ...],
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """WARN — fired when the fallback walk suppresses a dev-note / placeholder
+    value or a private (leading-underscore) key so it never reaches the
+    player-/author-facing reference HTML.
+
+    Loud suppression, not a silent drop (SOUL "No Silent Fallbacks"): the GM
+    panel can see WHICH field was dropped on WHICH page via key_path."""
+    attrs: dict[str, Any] = {
+        "reference.pack": pack,
+        "reference.file_stem": file_stem,
+        "reference.key_path": ".".join(key_path) or "<root>",
+    }
+    if world is not None:
+        attrs["reference.world"] = world
+    with Span.open(
+        SPAN_REFERENCE_DEVNOTE_SUPPRESSED,
+        attrs,
         tracer_override=_tracer,
     ) as span:
         yield span

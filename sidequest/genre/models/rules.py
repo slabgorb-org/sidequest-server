@@ -793,6 +793,21 @@ class SwnConfig(BaseModel):
     attribute_map: dict[str, str] = Field(default_factory=dict)
 
 
+class CwnConfig(SwnConfig):
+    """Cities Without Number universal constants (Sine Nomine, CC0).
+
+    CWN shares SWN's resolution engine, so this inherits SwnConfig verbatim:
+    - unarmored_ac=10, save_base=15 (CWN's "16 - level" == "save_base - (level-1)").
+    - the 6/8/10/12/14 difficulty ladder.
+    - attribute_map: CWN attribute -> this pack's flavor stat (all six keys
+      required when ruleset == 'cwn'; validated on RulesConfig).
+    System Strain / Trauma fields are added by the System Strain and Combat
+    Lethality plans (YAGNI here).
+    """
+
+    model_config = {"extra": "forbid"}
+
+
 class RulesConfig(BaseModel):
     """Game rules configuration."""
 
@@ -853,6 +868,8 @@ class RulesConfig(BaseModel):
     luck_rules: LuckRules | None = None
     # Present only when ruleset == "swn"; None for all other rulesets.
     swn: SwnConfig | None = None
+    # Present only when ruleset == "cwn"; None for all other rulesets.
+    cwn: CwnConfig | None = None
     # ADR-113 confidence gate (Story 71-16): per-subsystem engagement
     # thresholds. Keys are dispatch subsystem names (``confrontation``,
     # ``magic_working``, ``scenario_clue``, ``npc_agency``, ``movement``,
@@ -902,6 +919,33 @@ class RulesConfig(BaseModel):
             if flavor not in declared:
                 raise ValueError(
                     f"swn attribute_map[{swn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cwn(self) -> RulesConfig:
+        """Enforce a complete attribute_map when ruleset == 'cwn'; raises ValueError if omitted."""
+        if self.ruleset != "cwn":
+            return self
+        if self.cwn is None:
+            object.__setattr__(self, "cwn", CwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        assert self.cwn is not None
+        amap = self.cwn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'cwn' requires rules.cwn.attribute_map (CWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"cwn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for cwn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"cwn attribute_map[{cwn_attr!r}] = {flavor!r} is not in "
                     f"ability_score_names {sorted(declared)}"
                 )
         return self

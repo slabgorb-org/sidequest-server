@@ -354,8 +354,10 @@ def emit_event(
         # CONFRONTATION is structured data whose per-PC class filtering is
         # computed by the supplier in the encounter layer (ADR-105: the
         # projection firewall has no class context).
-        if per_recipient_payload is not None and callable(
-            getattr(room, "connected_player_ids", None)
+        if (
+            per_recipient_payload is not None
+            and room is not None
+            and callable(getattr(room, "connected_player_ids", None))
         ):
             repo = event_log.repository
             with repo.transaction() as tx:

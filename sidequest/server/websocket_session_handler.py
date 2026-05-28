@@ -1565,6 +1565,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     confrontation_msg: object | None = None
                     confrontation_payload: ConfrontationPayload | None = None
                     confrontation_event_attrs: dict[str, object] | None = None
+                    cdef = None
                     if now_live and now_encounter is not None:
                         from sidequest.server.dispatch.confrontation import (
                             build_confrontation_payload,
@@ -1639,6 +1640,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             )
 
                             _live_encounter = now_encounter
+                            assert cdef is not None  # set above; the cdef-is-None case raised
                             _live_cdef = cdef
 
                             def _confrontation_frame_for(
@@ -1828,19 +1830,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         connected_player_ids_fn = (
                             getattr(self._room, "connected_player_ids", None) if _has_room else None
                         )
-                        _delivered_via_sockets = (
+                        if (
                             _has_room
                             and self._event_log is not None
                             and callable(connected_player_ids_fn)
-                        )
-                        if _delivered_via_sockets:
+                        ):
                             room = self._room
                             assert room is not None  # noqa: S101 — narrowed above
                             # OTEL lie-detector: how many sockets the single
                             # filtered fan-out reached (catches a future skip).
                             try:
                                 slug_attr = getattr(room, "slug", "")
-                                connected = connected_player_ids_fn()
+                                connected = list(room.connected_player_ids())
                                 _watcher_publish(
                                     "shared_world_frame_broadcast",
                                     {

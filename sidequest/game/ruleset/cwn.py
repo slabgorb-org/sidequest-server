@@ -9,6 +9,8 @@ by `ruleset: cwn`.
 
 from __future__ import annotations
 
+from typing import cast
+
 from opentelemetry import trace
 
 from sidequest.game.creature_core import CreatureCore
@@ -56,7 +58,7 @@ class CwnRulesetModule(SwnRulesetModule):
             raise ValueError(
                 f"{core.name!r} has no system_strain pool; cwn characters must seed one at chargen"
             )
-        scfg = cfg.system_strain  # type: ignore[union-attr]  # cfg is always CwnConfig for cwn packs
+        scfg = cast(CwnConfig, cfg).system_strain
 
         before = pool.current
         applied = True

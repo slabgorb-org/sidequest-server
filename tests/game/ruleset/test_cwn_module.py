@@ -101,3 +101,11 @@ def test_cwn_inherits_swn_attack_params_vs_ac():
     params = _C.attack_params(beat=beat, attacker_stats={"Reflex": 14}, attacker_core=None, target_core=_Core())
     assert params.modifier == 2 + 1 + 1  # attack_bonus + combat_skill + DEX(Reflex) mod
     assert params.target_number == 13
+
+
+def test_cwn_luck_save_at_level_1_equals_save_base():
+    # Boundary: save_base - (1-1) = save_base = 15, still no attribute mod.
+    cfg = CwnConfig(attribute_map=_NEON_AMAP)
+    p = _C.save_params(stats={"Body": 18}, save="luck", level=1, label="Luck save", cfg=cfg)
+    assert p.modifier == 0
+    assert p.difficulty == 15

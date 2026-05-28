@@ -52,3 +52,10 @@ def test_rules_cwn_accepts_complete_map():
     )
     assert rules.cwn is not None
     assert rules.cwn.attribute_map["INTELLIGENCE"] == "Tech"
+
+
+def test_rules_cwn_with_no_config_block_fails_loud():
+    # ruleset='cwn' but no cwn block: validator auto-populates an empty CwnConfig,
+    # then rejects it for the missing attribute_map (no silent default).
+    with pytest.raises(ValidationError, match="attribute_map"):
+        RulesConfig(ruleset="cwn", ability_score_names=_NEON_FLAVOR)

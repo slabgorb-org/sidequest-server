@@ -59,6 +59,8 @@ logs/
 .session/
 .envrc.local
 .claude/
+.frame-port
+frame-pid
 
 # Test scratch (pf solo / benchmark write-out targets)
 tests/server/_tmp_solo_new/

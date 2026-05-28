@@ -717,11 +717,7 @@ def _class_panel_body(item: dict) -> str:
             parts.append(
                 '<div class="ref-card__ability">'
                 '<div class="ref-card__kicker">Signature Ability</div>'
-                + (
-                    f'<div class="ref-card__ability-name">{escape(name)}</div>'
-                    if name
-                    else ""
-                )
+                + (f'<div class="ref-card__ability-name">{escape(name)}</div>' if name else "")
                 + (
                     f'<p class="ref-card__body">{escape(genre_description)}</p>'
                     if genre_description
@@ -925,12 +921,14 @@ def present_magic(node: object, ctx: PresenterContext) -> str:
     # Hard limits: dict {name: verdict} or list[str].
     limits = magic.get("hard_limits")
     if isinstance(limits, dict) and limits:
-        rows = "".join(
+        limit_rows = "".join(
             f"<li><strong>{escape(_format_chip_label(str(k)))}</strong>: "
             f"{escape(_format_chip_label(str(v)))}</li>"
             for k, v in limits.items()
         )
-        parts.append(f'<section class="ref-allowed"><h3>Hard Limits</h3><ul>{rows}</ul></section>')
+        parts.append(
+            f'<section class="ref-allowed"><h3>Hard Limits</h3><ul>{limit_rows}</ul></section>'
+        )
     elif isinstance(limits, list) and limits:
         strip = _chip_strip("Hard Limits", [_format_chip_label(str(x)) for x in limits])
         if strip:

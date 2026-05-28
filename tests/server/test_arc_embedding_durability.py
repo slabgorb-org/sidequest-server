@@ -110,7 +110,7 @@ def _content_chapters() -> list[HistoryChapter]:
     ]
 
 
-def _bind_pg_repository(sd) -> "object":
+def _bind_pg_repository(sd) -> object:
     """Rebind ``sd.repository`` AND the room store to one shared PG repo.
 
     Both production write paths exercised by this turn must land in the

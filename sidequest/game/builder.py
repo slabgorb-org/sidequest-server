@@ -76,6 +76,23 @@ def qualifying_classes_arrangement(
     return [c for c in classes if (arrangement.get(c.prime_requisite) or 0) >= c.minimum_score]
 
 
+def seed_system_strain(rules: "RulesConfig", stats: dict[str, int]) -> "SystemStrainPool | None":
+    """Return a SystemStrainPool for a cwn pack (max = CONSTITUTION-flavor score), else None.
+
+    For a cwn pack, ``rules.cwn.attribute_map["CONSTITUTION"]`` gives the
+    flavor stat name (e.g. "Body"). The pool max is clamped to at least 1.
+    Non-cwn packs receive None — SystemStrainPool is a CWN-only concept.
+    ``_validate_cwn`` guarantees the CONSTITUTION key exists in attribute_map.
+    """
+    from sidequest.game.system_strain import SystemStrainPool
+
+    if rules.ruleset != "cwn" or rules.cwn is None:
+        return None
+    con_flavor = rules.cwn.attribute_map["CONSTITUTION"]  # validated present by _validate_cwn
+    body_score = int(stats.get(con_flavor, 10))
+    return SystemStrainPool(current=0, max=max(1, body_score), permanent=0)
+
+
 def _seed_class_abilities(
     abilities: list[AbilityDefinition],
     class_def: ClassDef,
@@ -2201,6 +2218,11 @@ class CharacterBuilder:
                 },
             )
 
+        # SystemStrainPool seeding (CWN): max == Body/CON-flavor score.
+        # Non-cwn packs get None; seed_system_strain is a module-level
+        # pure helper (unit-testable without constructing a full builder).
+        system_strain = seed_system_strain(self._rules, stats)
+
         # Resolved archetype: pairs jungian_hint / rpg_role_hint if both
         # are present. archetype_provenance is populated downstream by
         # dispatch (connect.rs) once the tiered resolver runs.
@@ -2228,6 +2250,7 @@ class CharacterBuilder:
                 inventory=Inventory(items=items, gold=0),
                 statuses=[],
                 hp=hp,
+                system_strain=system_strain,
                 acquired_advancements=[],
             ),
             backstory=backstory_text,

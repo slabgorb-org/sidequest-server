@@ -174,7 +174,10 @@ def test_ac5_pack_flavor_not_merged_synthetic(tmp_path):
 
     assert sentinel not in html, "pack-tier flavor leaked into the world lore page"
     # Sanity: the world-tier content DID render (proves the page isn't just empty).
-    assert "Only the world voice here." in html
+    # Dropcap-immune fragment: the history presenter wraps the leading "O" of
+    # "Only…" in a <span class="ref-pull-quote__dropcap">, so assert on the
+    # mid-sentence remainder (same pitfall dodged in AC4).
+    assert "the world voice here." in html
 
 
 # =========================================================================

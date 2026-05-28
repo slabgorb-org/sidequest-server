@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sidequest.game.rig_composure_pool import RigComposurePool
 from sidequest.game.status import Status, migrate_legacy_statuses
+from sidequest.game.system_strain import SystemStrainPool
 
 
 class HpPool(BaseModel):
@@ -115,6 +116,7 @@ class CreatureCore(BaseModel):
     inventory: Inventory = Field(default_factory=Inventory)
     statuses: list[Status] = Field(default_factory=list)
     hp: HpPool = Field(default_factory=lambda: HpPool(current=10, max=10, base_max=10))
+    system_strain: SystemStrainPool | None = None
     armor_class: int = 10  # SWN ascending AC; unarmored = 10. Seeded from content armor.
     # Vessel-attached composure pool (Epic 53, story 53-2). None for any
     # character without a rig in inventory; populated by

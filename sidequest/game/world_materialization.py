@@ -788,15 +788,25 @@ def preload_authored_npcs(
 ) -> None:
     """Pre-load AuthoredNpcs into ``state.npcs`` as runtime ``Npc`` instances.
 
-    Fresh sessions only — defined as ``state.characters == []`` AND
-    ``state.turn_manager.interaction == 0``. Resumed sessions skip
-    pre-loading; their ``npcs`` / ``npc_pool`` are already populated
-    from prior turns and we do not retroactively rewrite them.
+    Fresh sessions only — discriminated by the **absence of a seated player
+    character** (``state.characters == []``). The sole production caller is the
+    chargen first-commit seam, which appends the player character *after* this
+    preload runs, so an empty ``characters`` list is the reliable fresh signal.
+    Resumed sessions (a PC already present) skip pre-loading; their ``npcs`` /
+    ``npc_pool`` are already populated from prior turns and we do not
+    retroactively rewrite them.
 
-    Emits ``npc.authored_loaded`` per pre-loaded NPC for GM-panel
-    visibility (CLAUDE.md "OTEL Observability Principle"). Empty
-    ``authored`` list is a hard no-op — neither the gate check nor any
-    span fires when there's nothing to load.
+    Story 71-7: we deliberately do NOT gate on ``turn_manager.interaction``. A
+    freshly materialized snapshot baselines at ``interaction == 1`` (the
+    ``TurnManager`` default), never 0, so the former ``interaction == 0`` clause
+    was unsatisfiable in production and silently skipped the authored crew on
+    every real fresh session.
+
+    Emits ``npc.authored_loaded`` per pre-loaded NPC for GM-panel visibility
+    (CLAUDE.md "OTEL Observability Principle"). On the resumed-session skip,
+    emits ``npc.authored_load_skipped`` with a ``reason`` so the skip is never a
+    silent fallback (CLAUDE.md "No Silent Fallbacks"). Empty ``authored`` list is
+    a hard no-op — there is genuinely nothing to load and nothing to observe.
 
     See ``docs/superpowers/specs/2026-05-01-canned-openings-design.md``
     §2.2.
@@ -804,14 +814,26 @@ def preload_authored_npcs(
     if not authored:
         return
 
-    is_fresh = (
-        not getattr(state, "characters", None)
-        and getattr(getattr(state, "turn_manager", None), "interaction", 0) == 0
+    from sidequest.telemetry.spans import (
+        SPAN_NPC_AUTHORED_LOAD_SKIPPED,
+        SPAN_NPC_AUTHORED_LOADED,
+        Span,
     )
-    if not is_fresh:
-        return
 
-    from sidequest.telemetry.spans import SPAN_NPC_AUTHORED_LOADED, Span
+    # Resumed session — a player character is already seated. Skip the preload,
+    # but emit a reason-carrying span so the GM panel can see the decision.
+    if getattr(state, "characters", None):
+        with Span.open(
+            SPAN_NPC_AUTHORED_LOAD_SKIPPED,
+            {
+                "reason": "resumed_session_player_character_present",
+                "authored_count": len(authored),
+                "genre_slug": getattr(state, "genre_slug", "") or "",
+                "world_slug": getattr(state, "world_slug", "") or "",
+            },
+        ):
+            pass
+        return
 
     for authored_npc in authored:
         # CreatureCore requires non-blank description + personality

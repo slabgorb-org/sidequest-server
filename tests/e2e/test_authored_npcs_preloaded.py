@@ -23,12 +23,14 @@ CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genr
 
 
 class _StubTurnManager:
-    interaction = 0
+    # Real fresh-session baseline (story 71-7) — a materialized snapshot
+    # baselines at interaction == 1, never 0.
+    interaction = 1
 
 
 class _StubState:
     """Minimal duck-typed snapshot satisfying ``preload_authored_npcs``'s
-    fresh-session predicate (``not characters and turn_manager.interaction == 0``).
+    fresh-session predicate (no seated player character — ``not characters``).
     """
 
     def __init__(self) -> None:
@@ -58,7 +60,7 @@ def test_coyote_star_authored_npcs_preload_into_state() -> None:
     assert len(state.npcs) >= 5
 
     # Crew are firmly friendly per spec §3.2 (initial_disposition 50–60).
-    crew_dispositions = sorted(npc.disposition for npc in state.npcs if npc.disposition >= 50)
+    crew_dispositions = sorted(npc.disposition.value for npc in state.npcs if npc.disposition.value >= 50)
     assert len(crew_dispositions) >= 4, (
         f"All 4 Kestrel crew should ship at disposition ≥ 50 — got {crew_dispositions!r}"
     )
@@ -69,4 +71,4 @@ def test_coyote_star_authored_npcs_preload_into_state() -> None:
     assert dura is not None, (
         f"Dura Mendes missing from preloaded npcs: {[n.core.name for n in state.npcs]}"
     )
-    assert dura.disposition == 0
+    assert dura.disposition.value == 0

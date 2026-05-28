@@ -105,6 +105,12 @@ def _deliver_fanout(
                 # merging leaves fields absent from the filtered dict at their
                 # canonical values, which would leak any field a future rule
                 # drops entirely.
+                # ADR-105 / Story 71-13: strip _visibility from the wire.
+                # _visibility is a server-side sidecar consumed by the
+                # projection pipeline; it must never appear in the serialised
+                # frame sent to any client.  Universal egress-strip here
+                # closes the pre-existing leak for ALL narration recipients.
+                filtered_data.pop("_visibility", None)
                 recipient_payload = payload_cls.model_validate({**filtered_data, "seq": seq})
                 recipient_msg = message_cls(payload=recipient_payload)
             else:
@@ -493,8 +499,12 @@ def emit_event(
             # solo Invariant-3 raw bypass. C3 rule applies: rebuild from
             # the filtered dict alone (+ seq) so no canonical field a
             # future (Track B) rule drops can leak back via model merge.
+            # ADR-105 / Story 71-13: strip _visibility from the driver
+            # frame too — consistent with the universal egress-strip in
+            # _deliver_fanout for peers.
             if isinstance(payload_model, BaseModel):
                 payload_cls_emitter = type(payload_model)
+                emitter_projected_dict.pop("_visibility", None)
                 emitter_payload = payload_cls_emitter.model_validate(
                     {**emitter_projected_dict, "seq": seq}
                 )

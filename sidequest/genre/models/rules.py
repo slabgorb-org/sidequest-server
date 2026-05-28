@@ -793,6 +793,23 @@ class SwnConfig(BaseModel):
     attribute_map: dict[str, str] = Field(default_factory=dict)
 
 
+class SystemStrainConfig(BaseModel):
+    """CWN System Strain tuning (genre-level, content-authorable).
+
+    max_source: the CANONICAL attribute whose flavor-stat score caps strain
+      (CWN: CONSTITUTION). Validated on RulesConfig to be a key of cwn.attribute_map.
+    rest_recovery_per_night: strain removed per night of rest (down to the
+      permanent floor).
+    first_aid_cost: temporary strain added per first-aid application.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    max_source: str = "CONSTITUTION"
+    rest_recovery_per_night: int = 1
+    first_aid_cost: int = 1
+
+
 class CwnConfig(SwnConfig):
     """Cities Without Number universal constants (Sine Nomine, CC0).
 
@@ -806,6 +823,8 @@ class CwnConfig(SwnConfig):
     """
 
     model_config = {"extra": "forbid"}
+
+    system_strain: SystemStrainConfig = Field(default_factory=SystemStrainConfig)
 
 
 class RulesConfig(BaseModel):
@@ -948,6 +967,12 @@ class RulesConfig(BaseModel):
                     f"cwn attribute_map[{cwn_attr!r}] = {flavor!r} is not in "
                     f"ability_score_names {sorted(declared)}"
                 )
+        strain_source = self.cwn.system_strain.max_source
+        if strain_source not in amap:
+            raise ValueError(
+                f"cwn.system_strain.max_source = {strain_source!r} is not a key of "
+                f"cwn.attribute_map {sorted(amap.keys())}"
+            )
         return self
 
     def ruleset_config(self) -> SwnConfig | None:

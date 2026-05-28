@@ -28,6 +28,21 @@ jobs:
       SIDEQUEST_DATABASE_URL: postgresql://sidequest:sidequest@localhost:5432/sidequest_test
     steps:
       - uses: actions/checkout@v4
+      # Tests resolve the content repo as a sibling of the server checkout
+      # (tests/conftest.py content_dir => <workspace>/../sidequest-content).
+      # sidequest-content is private, so the default GITHUB_TOKEN cannot read
+      # it — a fine-grained PAT with read-only Contents access is supplied via
+      # the CONTENT_REPO_TOKEN secret. checkout cannot target a path outside
+      # the workspace, so we clone into a subdir and relocate it to the sibling.
+      - name: Checkout sidequest-content
+        uses: actions/checkout@v4
+        with:
+          repository: slabgorb/sidequest-content
+          ref: develop
+          token: ${{ secrets.CONTENT_REPO_TOKEN }}
+          path: _sidequest-content
+      - name: Place sidequest-content beside the workspace
+        run: mv "$GITHUB_WORKSPACE/_sidequest-content" "$(dirname "$GITHUB_WORKSPACE")/sidequest-content"
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Sync dependencies

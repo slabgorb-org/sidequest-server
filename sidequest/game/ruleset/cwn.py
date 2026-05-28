@@ -9,14 +9,18 @@ by `ruleset: cwn`.
 
 from __future__ import annotations
 
+import random
+
 from opentelemetry import trace
 
 from sidequest.game.creature_core import CreatureCore
+from sidequest.game.lethality import LethalityResult
 from sidequest.game.ruleset.resolution import CheckRollParams
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.system_strain import StrainResult
+from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import CwnConfig, SwnConfig
-from sidequest.telemetry.spans.cwn import cwn_system_strain_delta_span
+from sidequest.telemetry.spans.cwn import cwn_system_strain_delta_span, cwn_trauma_roll_span
 
 
 class CwnRulesetModule(SwnRulesetModule):
@@ -33,6 +37,46 @@ class CwnRulesetModule(SwnRulesetModule):
                 label=label,
             )
         return super().save_params(stats=stats, save=save, level=level, label=label, cfg=cfg)
+
+    def resolve_trauma(
+        self,
+        *,
+        spec: DamageSpec,
+        base_total: int,
+        cfg: SwnConfig | None,
+        rng: random.Random,
+        actor: str = "",
+        _tracer: "trace.Tracer | None" = None,
+    ) -> LethalityResult:
+        """CWN Trauma: if the weapon has a Trauma Die, roll it; on a result that
+        meets/exceeds the Trauma Target, multiply total damage by trauma_rating.
+
+        Trauma Target = the weapon's override (spec.trauma_target) if set, else
+        the genre default (cfg.trauma.default_trauma_target, 6 for unarmored).
+        Emits cwn.trauma.roll on every CWN strike that has a trauma_die (the GM
+        lie-detector sees both traumatic and non-traumatic rolls)."""
+        if spec.trauma_die is None:
+            return LethalityResult(
+                base_total=base_total, final_total=base_total,
+                traumatic=False, trauma_roll=0, trauma_target=0,
+            )
+        if not isinstance(cfg, CwnConfig):
+            raise ValueError(
+                f"resolve_trauma requires a CwnConfig; got {type(cfg).__name__!r}"
+            )
+        target = spec.trauma_target if spec.trauma_target is not None else cfg.trauma.default_trauma_target
+        trauma_roll = DamageSpec(dice=spec.trauma_die).roll(rng)  # sum of the trauma dice (usually 1 die)
+        traumatic = trauma_roll >= target
+        final = base_total * spec.trauma_rating if traumatic else base_total
+        cwn_trauma_roll_span(
+            actor=actor, weapon_die=spec.trauma_die, roll=trauma_roll, target=target,
+            traumatic=traumatic, rating=spec.trauma_rating, base=base_total, final=final,
+            _tracer=_tracer,
+        )
+        return LethalityResult(
+            base_total=base_total, final_total=final,
+            traumatic=traumatic, trauma_roll=trauma_roll, trauma_target=target,
+        )
 
     def apply_system_strain(
         self,

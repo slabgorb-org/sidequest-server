@@ -703,6 +703,37 @@ def _class_panel_body(item: dict) -> str:
     if cells:
         parts.append('<div class="ref-label-grid">' + "".join(cells) + "</div>")
     parts.append(_picker_chip_strip("Beat Choices", item.get("encounter_beat_choices") or []))
+    # Story 71-1: signature ability (ADR-095 — exactly one per non-magical
+    # class). Render only when present and non-empty; magical classes carry no
+    # abilities list and emit no block. The `involuntary` flag is not a render
+    # filter — take the first ability as authored.
+    abilities = item.get("abilities")
+    if isinstance(abilities, list) and abilities:
+        ability = abilities[0]
+        if isinstance(ability, dict):
+            name = str(ability.get("name", "")).strip()
+            genre_description = str(ability.get("genre_description", "")).strip()
+            mechanical_effect = str(ability.get("mechanical_effect", "")).strip()
+            parts.append(
+                '<div class="ref-card__ability">'
+                '<div class="ref-card__kicker">Signature Ability</div>'
+                + (
+                    f'<div class="ref-card__ability-name">{escape(name)}</div>'
+                    if name
+                    else ""
+                )
+                + (
+                    f'<p class="ref-card__body">{escape(genre_description)}</p>'
+                    if genre_description
+                    else ""
+                )
+                + (
+                    f'<div class="ref-card__ability-effect">{escape(mechanical_effect)}</div>'
+                    if mechanical_effect
+                    else ""
+                )
+                + "</div>"
+            )
     return "".join(parts)
 
 

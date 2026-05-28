@@ -1619,6 +1619,68 @@ def resolve_item_recipient(
     return resolved
 
 
+def _apply_room_graph_transition_effects(
+    snapshot: GameSnapshot,
+    *,
+    actor: str,
+    from_room: str,
+    to_room: str,
+) -> None:
+    """ADR-055 / Story 71-15: room-graph traversal side-effects.
+
+    Fired once per room transition in room-graph navigation. Two effects,
+    each emitting an OTEL span (CLAUDE.md observability mandate — the GM
+    panel must see traversal turning the dungeon clock):
+
+    1. **Trope progression span.** Records which progressing tropes this
+       movement advanced. The single per-turn advance is done by the trope
+       engine (``tick_tropes`` in ``_execute_narration_turn``); this span
+       correlates that progression with the transition that earned it. It
+       does NOT re-advance — re-invoking the tick would double-count
+       against the per-turn tick (AC2 no-double-tick).
+
+    2. **Movement-consumed item depletion.** Each of the acting character's
+       items carrying a finite ``uses_remaining`` (torch model) burns one
+       use. At zero the item is flagged ``exhausted`` and kept in inventory
+       — never silently deleted (No Silent Fallbacks).
+    """
+    from sidequest.telemetry.spans import (
+        item_resource_depleted_span,
+        room_transition_tick_span,
+    )
+
+    progressing = [t.id for t in snapshot.active_tropes if t.status == "progressing"]
+    with room_transition_tick_span(
+        advanced_tropes=progressing,
+        from_room=from_room,
+        to_room=to_room,
+        pc_name=actor,
+    ):
+        pass
+
+    character = next((c for c in snapshot.characters if c.core.name == actor), None)
+    if character is None:
+        return
+    for item in character.core.inventory.items:
+        uses = item.get("uses_remaining")
+        if uses is None or uses <= 0:
+            continue
+        before = uses
+        after = before - 1
+        item["uses_remaining"] = after
+        exhausted = after == 0
+        if exhausted:
+            item["exhausted"] = True
+        with item_resource_depleted_span(
+            item=item.get("id") or item.get("name") or "unknown",
+            before=before,
+            after=after,
+            exhausted=exhausted,
+            actor=actor,
+        ):
+            pass
+
+
 def _apply_narration_result_to_snapshot(
     snapshot: GameSnapshot,
     result: object,
@@ -1760,6 +1822,26 @@ def _apply_narration_result_to_snapshot(
                 character_id=acting_character_name,
                 room_id=result.location,
                 current_turn=snapshot.turn_manager.interaction,
+            )
+        # Story 71-15 (ADR-055): room-graph traversal side-effects —
+        # per-transition trope-progression span + movement-consumed item
+        # depletion. Gated to room-graph navigation (``discovered_rooms`` is
+        # populated only by ``init_room_graph_location`` in room_graph mode)
+        # and to a genuine transition (old != new). Deliberately NOT routed
+        # through ``process_room_entry`` — that is a chassis-confrontation
+        # auto-fire hook that early-returns for ordinary room-graph rooms
+        # (Story 71-15 finding; ADR-055 2026-05-28 amendment).
+        if (
+            actor_for_location
+            and snapshot.discovered_rooms
+            and old_loc is not None
+            and result.location != old_loc
+        ):
+            _apply_room_graph_transition_effects(
+                snapshot,
+                actor=actor_for_location,
+                from_room=old_loc,
+                to_room=result.location,
             )
         # Bind this turn's location to the acting character. Legacy
         # callers that haven't been threaded with ``acting_character_name``

@@ -75,3 +75,57 @@ def inventory_narrator_extracted_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+# ---------------------------------------------------------------------------
+# Story 71-15 (ADR-055) — movement-consumed resource depletion.
+# Fires once per item burned on a room-graph transition (torch model). The
+# GM panel reads it as proof the dungeon clock is ablating resources rather
+# than the narrator improvising an inexhaustible light source.
+# ---------------------------------------------------------------------------
+
+SPAN_ITEM_RESOURCE_DEPLETED = "item.resource_depleted"
+SPAN_ROUTES[SPAN_ITEM_RESOURCE_DEPLETED] = SpanRoute(
+    event_type="state_transition",
+    component="inventory",
+    extract=lambda span: {
+        "field": "inventory",
+        "op": "resource_depleted",
+        "item": (span.attributes or {}).get("item"),
+        "before": (span.attributes or {}).get("before"),
+        "after": (span.attributes or {}).get("after"),
+        "exhausted": (span.attributes or {}).get("exhausted", False),
+        "actor": (span.attributes or {}).get("actor", ""),
+    },
+)
+
+
+@contextmanager
+def item_resource_depleted_span(
+    *,
+    item: str,
+    before: int,
+    after: int,
+    exhausted: bool,
+    actor: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """One span per movement-consumed item burned on a room-graph transition.
+
+    ``before`` / ``after`` are the ``uses_remaining`` count either side of the
+    decrement; ``exhausted`` is True when ``after == 0``.
+    """
+    with Span.open(
+        SPAN_ITEM_RESOURCE_DEPLETED,
+        {
+            "item": item,
+            "before": before,
+            "after": after,
+            "exhausted": exhausted,
+            "actor": actor,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span

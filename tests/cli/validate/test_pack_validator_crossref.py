@@ -490,3 +490,53 @@ def test_all_live_packs_pass_cross_reference_lint() -> None:
             failures[pack.name] = errors
 
     assert not failures, f"Live packs must pass cross-reference lint, but these failed: {failures}"
+
+
+# ===========================================================================
+# Silent-failure guard (Reviewer HIGH) — history.yaml / legends/*.yaml have NO
+# pydantic model wired to them, so the ONLY reader is the cross-ref trope-ref
+# pass. Today that pass swallows _read_yaml parse errors (returns []/continue),
+# so a syntactically BROKEN history or legend file makes the validator report
+# PASS — a silent failure (violates No Silent Fallbacks). A broken cross-ref
+# SOURCE must surface as a loud ERROR naming the file, never a clean pass.
+# ===========================================================================
+
+
+class TestBrokenCrossRefSourcesAreLoud:
+    def test_broken_history_yaml_is_error(self, tmp_path: Path) -> None:
+        """A syntactically invalid world history.yaml must produce an ERROR
+        naming the file — not a silent PASS. No pydantic model is wired to
+        history.yaml, so the cross-ref pass is the only line of defence."""
+        schema_path, _pack_dir, world_dir = _build_pack(tmp_path)
+        pack_dir = world_dir.parents[1]
+
+        # Unbalanced flow sequence — yaml.safe_load raises YAMLError.
+        (world_dir / "history.yaml").write_text(
+            "chapters:\n  - id: fresh\n    tropes: [unclosed\n", encoding="utf-8"
+        )
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        assert any("history.yaml" in e for e in errors), (
+            f"A broken history.yaml must surface a loud ERROR naming the file "
+            f"(No Silent Fallbacks), got: {errors}"
+        )
+
+    def test_broken_legend_yaml_is_error(self, tmp_path: Path) -> None:
+        """A syntactically invalid legends/*.yaml must produce an ERROR naming
+        the file — not a silent PASS. No pydantic model is wired to legend
+        files in the validator, so the cross-ref pass is the only defence."""
+        schema_path, _pack_dir, world_dir = _build_pack(tmp_path)
+        pack_dir = world_dir.parents[1]
+
+        # legends/ is a required world dir (created empty by the builder).
+        (world_dir / "legends" / "broken_legend.yaml").write_text(
+            "name: The Phantom\nrelated_tropes: [unclosed\n", encoding="utf-8"
+        )
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        assert any("broken_legend.yaml" in e for e in errors), (
+            f"A broken legend file must surface a loud ERROR naming the file "
+            f"(No Silent Fallbacks), got: {errors}"
+        )

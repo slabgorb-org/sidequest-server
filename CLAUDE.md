@@ -148,9 +148,23 @@ The package layout mirrors the prior Rust crate layout 1:1 (load-bearing per ADR
 sidequest/
 ├── protocol/         # GameMessage discriminated union, typed payloads
 ├── server/           # FastAPI app, WebSocket, dispatch, sessions, watcher
+│                     #   intent_router_pass.py — execute_intent_router_pre_narrator_pass
+│                     #   (called from websocket_session_handler.py before the narrator)
 ├── handlers/         # Per-message-type dispatch handlers
 ├── agents/           # Anthropic SDK narrator (default) + claude -p/Ollama opt-in backends
+│                     #   intent_router.py — IntentRouter (pre-narrator Haiku-via-SDK pass →
+│                     #     DispatchPackage); subsystems/ — dispatch handlers + run_dispatch_bank;
+│                     #   dispatch_engagement_watcher.py — post-narration lie-detector
+│                     #     (emits dispatch_engagement.{subsystem}.mismatch OTEL spans)
 ├── game/             # ~70 modules — state, combat, chase, NPCs, OCEAN, lore, etc.
+│                     #   pg/ — Postgres repositories (PgSaveRepository, PgDungeonRepository,
+│                     #     PgTelemetrySink, PgForensicReader + events/snapshot/narrative/
+│                     #     scrapbook/asset_ledger/promotions/sessions sub-stores)
+│                     #   db_config.py, db_pool.py — connection config + psycopg_pool
+│                     #   importer.py — read-only legacy SQLite→Postgres importer
+│                     #   ruleset/ — pluggable SRD ruleset modules (registry.py, base.py
+│                     #     RulesetModule ABC, native.py default, swn.py Stars Without Number)
+│                     #   creature_core.py — HpPool ablative HP on CreatureCore (Character + Npc)
 ├── genre/            # YAML loader, layered genre/world pack models
 ├── audio/            # Music + SFX coordination
 ├── media/            # Image generation orchestration
@@ -174,6 +188,49 @@ sidequest.server
   └── sidequest.protocol
 ```
 
+### Persistence (ADR-115, complete)
+
+Saves and all session-scoped state live in a single PostgreSQL database, reached
+through `sidequest/game/pg/` (`PgSaveRepository`, `PgDungeonRepository`,
+`PgTelemetrySink`, `PgForensicReader`, plus events/snapshot/narrative/scrapbook/
+asset_ledger/promotions/sessions sub-stores). Connections come from
+`db_config.py` + `db_pool.py` (psycopg3 + `psycopg_pool`); per-session row locks
+serialize writes. DDL is owned entirely by Alembic (`alembic.ini`,
+`alembic/versions/0001_initial_unified_schema.py`,
+`0002_asset_ledger.py`) — do not hand-write `CREATE TABLE`. `SIDEQUEST_DATABASE_URL`
+is **required** with no silent default (fail-loud per the No Silent Fallbacks rule).
+The legacy SQLite write layer has been **deleted**; SQLite survives only as a
+read-only import *source* via `sidequest/game/importer.py`.
+
+### Pluggable rulesets (ADR-033/-114, live)
+
+`sidequest/game/ruleset/` holds pluggable SRD ruleset modules behind the
+`RulesetModule` ABC (`base.py`), resolved through `registry.py`. A pack binds one
+via `ruleset:` in its `rules.yaml`; an unknown name raises `UnknownRulesetError`
+(fail loud). Two modules are implemented: `native.py` (the dial/confrontation
+engine, ADR-033 — default) and `swn.py` (Stars Without Number). Ablative HP
+(`creature_core.py`) layers `HpPool` (`current`/`max`/`base_max`) onto
+`CreatureCore`, shared by `Character` and `Npc`: damage flows through the strike
+channel, 0 HP triggers the `hp_depletion` win condition, and each delta emits a
+`state_patch_hp` OTEL span. **ADR-114 is partial** — only Part 1 is live.
+
+### Intent Router (ADR-113, live/partial)
+
+`IntentRouter` (`sidequest/agents/intent_router.py`) is a pre-narrator
+Haiku-via-SDK pass that decomposes each player action into a `DispatchPackage`.
+`execute_intent_router_pre_narrator_pass` (`sidequest/server/intent_router_pass.py`)
+runs it from `websocket_session_handler.py` *before* the narrator so the
+mechanical engines engage first, then `run_dispatch_bank`
+(`sidequest/agents/subsystems/`) fires the matching dispatch handlers
+(confrontation, magic_working, scenario_clue, npc_agency, distinctive_detail_hint,
+reflect_absence, movement). After narration, `dispatch_engagement_watcher.py`
+acts as a lie-detector, emitting `dispatch_engagement.{subsystem}.mismatch` OTEL
+spans when prose claims a subsystem fired but the engine never engaged.
+**Honesty caveat:** the spine is **structurally live but operationally under
+validation** — per-dispatch confidence scoring and threshold-gating are *not*
+implemented (every dispatch in the package fires), and playtest validation (59-8)
+is still backlog.
+
 ## Key ADRs for this repo
 
 | Domain | ADRs |
@@ -181,13 +238,13 @@ sidequest.server
 | Core architecture | **101 (Anthropic SDK as narrator backend — supersedes 001)**, 001 (Claude CLI only — *superseded by 101*), 002 (SOUL principles), 005 (background-first), 006 (graceful degradation) |
 | Genre packs | 003 (pack architecture), 004 (lazy binding) |
 | Prompt engineering | 008 (three-tier taxonomy), 009 (attention-aware zones), 066 (persistent Opus sessions, Full/Delta tier — *superseded by 098*) |
-| Agent system | 011 (JSON patches), 012 (session mgmt), 057 (narrator-crunch separation), 059 (monster manual server-side pregen), 067 (unified narrator agent — supersedes 010), **098 (stateless narrator turns — supersedes 066)**, **102 (tool-use protocol for structured output — supersedes 039)** |
+| Agent system | 011 (JSON patches), 012 (session mgmt), 057 (narrator-crunch separation), 059 (monster manual server-side pregen), 067 (unified narrator agent — supersedes 010), **098 (stateless narrator turns — supersedes 066)**, **102 (tool-use protocol for structured output — supersedes 039)**, 113 (intent router — mechanical-engagement spine, *live/partial*) |
 | Characters | 007 (unified model), 014 (diamonds/coal), 015 (builder FSM), 016 (three-mode chargen), 080 (unified narrative weight) |
-| Encounters | 033 (confrontation engine), 077 (dogfight subsystem), 078 (edge/composure combat), 093 (confrontation difficulty calibration) |
+| Encounters | 033 (confrontation engine — `ruleset/native.py`), 077 (dogfight subsystem), 078 (edge/composure combat), 093 (confrontation difficulty calibration), 114 (ablative HP substrate — `creature_core.py`, *partial: Part 1 live*) |
 | World / NPCs | 018 (trope engine), 020 (NPC disposition), 022 (world maturity), 042 (OCEAN evolution), 055 (room graph navigation), 091 (culture-corpus Markov naming) |
 | Progression | 021 (four-track), 052 (narrative axis), 081 (advancement effect variants — deferred), 095 (class mechanical surface) |
 | Narrative pacing | 024 (dual-track tension), 025 (pacing detection), 050 (image pacing throttle), 051 (two-tier turn counter — see DRIFT) |
-| Session persistence | 023 (state + recap) |
+| Session persistence | 023 (state + recap), **115 (persistence substrate migration — SQLite-per-session → PostgreSQL, complete)** |
 | Protocol | 026 (client state mirror), 027 (reactive state messaging), 074 (dice resolution protocol), 076 (narration protocol collapse post-TTS) |
 | Multiplayer | 028 (perception rewriter — *superseded by 104*), 036 (multiplayer turn coordination), 037 (shared/per-player state split), 053 (scenario system), 104 (perception filtering at the tool layer), 105 (broadcast-layer perception firewall) |
 | Transport / IPC | 035 (Unix socket IPC for Python sidecar), 038 (WebSocket transport), 046 (GPU memory budget), 047 (prompt injection sanitization) |

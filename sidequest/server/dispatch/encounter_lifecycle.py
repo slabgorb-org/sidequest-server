@@ -193,7 +193,7 @@ def _roll_and_persist_initiative(
     from sidequest.game.ruleset import get_ruleset_module
     from sidequest.telemetry.spans.encounter import encounter_initiative_rolled_span
 
-    cfg = pack.rules.swn
+    cfg = pack.rules.ruleset_config()
     if cfg is None:
         return  # non-SWN ruleset: no ordering (native returns None anyway)
 

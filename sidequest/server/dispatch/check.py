@@ -9,6 +9,7 @@ module raises NotImplementedError) if the bound ruleset has no check/save suppor
 server-generated rolls (no client physics session). Downstream consumers (UI dice
 overlay, narrator) ignore these fields when the roll was server-side.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -43,16 +44,16 @@ class CheckThrowOutcome:
 
 def dispatch_check(
     *,
-    kind: str,                        # "skill_check" | "save"
-    attribute: str | None,            # stat name for skill_check
-    save: str | None,                 # save CATEGORY for save ("physical"|"evasion"|"mental")
+    kind: str,  # "skill_check" | "save"
+    attribute: str | None,  # stat name for skill_check
+    save: str | None,  # save CATEGORY for save ("physical"|"evasion"|"mental")
     skill_level: int,
-    difficulty_key: str | None,       # difficulty ladder key for skill_check (e.g. "tricky")
-    level: int,                       # character level, used by save_params
+    difficulty_key: str | None,  # difficulty ladder key for skill_check (e.g. "tricky")
+    level: int,  # character level, used by save_params
     label: str,
     character_stats: dict[str, int],
-    faces: list[int],                 # client-reported face values
-    pack,                             # genre pack with .rules.ruleset and .rules.swn
+    faces: list[int],  # client-reported face values
+    pack,  # genre pack with .rules.ruleset and a .rules.ruleset_config() block
     rolling_player_id: str,
     character_name: str,
     session_id: str,
@@ -65,7 +66,7 @@ def dispatch_check(
     and the five-tier ``RollOutcome`` ladder. Fails loud on unknown kind.
     """
     ruleset = get_ruleset_module(pack.rules.ruleset)
-    cfg = pack.rules.swn
+    cfg = pack.rules.ruleset_config()
 
     if kind == "skill_check":
         params = ruleset.check_params(

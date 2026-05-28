@@ -20,6 +20,7 @@ def _swn_pack():
     rules = MagicMock(spec=RulesConfig)
     rules.ruleset = "swn"
     rules.swn = SwnConfig(attribute_map=_ATTR_MAP)
+    rules.ruleset_config.return_value = SwnConfig(attribute_map=_ATTR_MAP)
     pack = MagicMock()
     pack.rules = rules
     return pack

@@ -52,7 +52,7 @@ def dispatch_check(
     label: str,
     character_stats: dict[str, int],
     faces: list[int],                 # client-reported face values
-    pack,                             # genre pack with .rules.ruleset and .rules.swn
+    pack,                             # genre pack with .rules.ruleset and a .rules.ruleset_config() block
     rolling_player_id: str,
     character_name: str,
     session_id: str,
@@ -65,7 +65,7 @@ def dispatch_check(
     and the five-tier ``RollOutcome`` ladder. Fails loud on unknown kind.
     """
     ruleset = get_ruleset_module(pack.rules.ruleset)
-    cfg = pack.rules.swn
+    cfg = pack.rules.ruleset_config()
 
     if kind == "skill_check":
         params = ruleset.check_params(

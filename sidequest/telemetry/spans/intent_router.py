@@ -89,6 +89,11 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_SUBSYSTEM] = SpanRoute(
         "idempotency_key": (span.attributes or {}).get("idempotency_key", ""),
         "produced_directives": (span.attributes or {}).get("produced_directives", 0),
         "error": (span.attributes or {}).get("error", ""),
+        # ADR-113 confidence gate (Story 71-16): the GM panel audits every gate
+        # decision — confidence scored, threshold applied, and engage vs degrade.
+        "confidence": (span.attributes or {}).get("confidence", 0.0),
+        "threshold": (span.attributes or {}).get("threshold", 0.0),
+        "decision": (span.attributes or {}).get("decision", ""),
     },
 )
 

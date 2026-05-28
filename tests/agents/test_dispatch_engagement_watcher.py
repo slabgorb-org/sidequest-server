@@ -99,6 +99,7 @@ def _make_dispatch(
         subsystem=subsystem,
         params=params,
         idempotency_key=idempotency_key,
+        confidence=1.0,
         visibility=_open_viz(),
     )
 

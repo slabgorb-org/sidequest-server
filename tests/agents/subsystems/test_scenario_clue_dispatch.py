@@ -139,6 +139,7 @@ def _scenario_clue_dispatch(
             "category": category,
         },
         idempotency_key=idempotency_key,
+        confidence=1.0,
         visibility=_open_viz(),
     )
 

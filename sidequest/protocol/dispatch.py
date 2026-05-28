@@ -94,6 +94,21 @@ class SubsystemDispatch(ProtocolBase):
     )
     idempotency_key: str
     visibility: VisibilityTag
+    # ADR-113 confidence gate (Story 71-16). Required — no silent default: the
+    # Intent Router scores how certain it is that THIS specific mechanical
+    # engagement is what the player intended. ``run_dispatch_bank`` engages the
+    # subsystem engine only when ``confidence >= threshold`` (per-subsystem,
+    # default 0.6); below threshold the dispatch degrades to a narrator hint
+    # rather than firing the engine. A defaulted score would let a router bug
+    # silently engage or gate an engine on a fabricated value.
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Per-dispatch engagement confidence (0.0-1.0) from the Intent Router. "
+            "Gated against the per-subsystem threshold in run_dispatch_bank."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

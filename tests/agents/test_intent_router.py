@@ -71,6 +71,7 @@ def haiku_response_pronoun_resolved() -> dict:
                         },
                         "depends_on": [],
                         "idempotency_key": "idem:turn-010:alice:0",
+                        "confidence": 0.9,
                         "visibility": {
                             "visible_to": "all",
                             "perception_fidelity": {},

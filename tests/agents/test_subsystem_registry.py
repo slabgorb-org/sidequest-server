@@ -35,6 +35,7 @@ def _make_dispatch(name: str, key: str, *, depends_on=(), params=None) -> Subsys
         params=params or {},
         depends_on=list(depends_on),
         idempotency_key=key,
+        confidence=1.0,
         visibility=_tag_all(),
     )
 

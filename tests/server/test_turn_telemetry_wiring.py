@@ -185,6 +185,7 @@ def _fake_narration_result_with_secret():
         subsystem="test_subsystem",
         idempotency_key="wiring-test-key-1",
         params={"note": "wiring proof"},
+        confidence=1.0,
         visibility=VisibilityTag(visible_to=["alice"]),
     )
     return NarrationTurnResult(

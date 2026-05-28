@@ -60,6 +60,7 @@ def test_dispatch_package_full_roundtrip():
                         params={"target": "npc:goblin_2", "hint": "broken tooth"},
                         depends_on=[],
                         idempotency_key="idem:turn-042:alice:0",
+                        confidence=1.0,
                         visibility=VisibilityTag(
                             visible_to="all",
                             perception_fidelity={},
@@ -72,6 +73,7 @@ def test_dispatch_package_full_roundtrip():
                         params={"addressee_hint": "no party"},
                         depends_on=[],
                         idempotency_key="idem:turn-042:alice:1",
+                        confidence=1.0,
                         visibility=VisibilityTag(
                             visible_to="all",
                             perception_fidelity={},
@@ -217,6 +219,7 @@ def test_dispatch_package_rejects_duplicate_idempotency_keys_within_player():
         params={},
         depends_on=[],
         idempotency_key="idem:same",
+        confidence=1.0,
         visibility=tag,
     )
     with pytest.raises(ValidationError):
@@ -250,6 +253,7 @@ def test_dispatch_package_rejects_duplicate_idempotency_keys_across_per_and_cros
         params={},
         depends_on=[],
         idempotency_key="idem:collision",
+        confidence=1.0,
         visibility=tag,
     )
     d_cross = SubsystemDispatch(
@@ -257,6 +261,7 @@ def test_dispatch_package_rejects_duplicate_idempotency_keys_across_per_and_cros
         params={"npc_name": "x"},
         depends_on=[],
         idempotency_key="idem:collision",
+        confidence=1.0,
         visibility=tag,
     )
     with pytest.raises(ValidationError):

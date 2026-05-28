@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.disposition import AttitudeThresholds
@@ -853,6 +853,30 @@ class RulesConfig(BaseModel):
     luck_rules: LuckRules | None = None
     # Present only when ruleset == "swn"; None for all other rulesets.
     swn: SwnConfig | None = None
+    # ADR-113 confidence gate (Story 71-16): per-subsystem engagement
+    # thresholds. Keys are dispatch subsystem names (``confrontation``,
+    # ``magic_working``, ``scenario_clue``, ``npc_agency``, ``movement``,
+    # ``distinctive_detail_hint``, ``reflect_absence``); values are the minimum
+    # router confidence required to engage that subsystem's engine. A subsystem
+    # absent from this map uses the 0.6 default (run_dispatch_bank). Empty by
+    # default — packs opt in to per-subsystem tuning.
+    dispatch_confidence_thresholds: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("dispatch_confidence_thresholds")
+    @classmethod
+    def _validate_dispatch_thresholds(cls, value: dict[str, float]) -> dict[str, float]:
+        """Fail loud on a malformed per-subsystem threshold (No Silent Fallbacks).
+
+        A threshold outside [0.0, 1.0] is a config error, not something to clamp
+        or silently default — raise so the pack fails to load.
+        """
+        for subsystem, threshold in value.items():
+            if not 0.0 <= threshold <= 1.0:
+                raise ValueError(
+                    f"dispatch_confidence_thresholds[{subsystem!r}] = {threshold} "
+                    f"is out of range; confidence thresholds must be in [0.0, 1.0]"
+                )
+        return value
 
     @model_validator(mode="after")
     def _validate_swn(self) -> RulesConfig:

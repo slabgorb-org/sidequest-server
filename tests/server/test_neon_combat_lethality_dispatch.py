@@ -301,3 +301,124 @@ def test_traumatic_hit_records_scene_tag(otel_capture, monkeypatch):
     assert tag.created_by == "Razor"
     assert tag.target is None
     assert tag.fleeting is False
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — Shock-on-miss seam
+# ---------------------------------------------------------------------------
+
+
+def _make_cwn_shock_pack():
+    """Like _make_cwn_pack but the strike weapon carries a Shock rating.
+
+    ``shock=12`` is both the chip amount and the AC ceiling (v1 models them as
+    the same content number). The opponent's Melee AC is _OPPONENT_AC (12), so
+    ``target_melee_ac (12) <= shock (12)`` and the chip applies on a MISS.
+    No trauma_die — Shock is a fixed chip on a miss, independent of the Trauma
+    seam (which only fires on a HIT that resolves damage).
+    """
+    from sidequest.genre.models.inventory import DamageSpec
+    from sidequest.genre.models.rules import (
+        BeatDef,
+        ConfrontationDef,
+        CwnConfig,
+        MetricDef,
+        ResolutionMode,
+        RulesConfig,
+        SystemStrainConfig,
+        TraumaConfig,
+    )
+
+    strike_beat = BeatDef.model_validate(
+        {
+            "id": "shoot",
+            "label": "Open Fire",
+            "kind": "strike",
+            "base": 2,
+            "stat_check": "Reflex",
+            "damage_channel": "strike",
+            "effect": "Target takes damage this round",
+            "narrator_hint": "Muzzle flash strobes the alley.",
+            "damage_override": DamageSpec(
+                dice="1d6",
+                shock=12,  # chip amount AND AC ceiling; opponent AC (12) <= shock
+            ),
+        }
+    )
+
+    cdef = ConfrontationDef(
+        type="combat",
+        label="Firefight",
+        category="combat",
+        resolution_mode=ResolutionMode.beat_selection,
+        player_metric=MetricDef(name="momentum", starting=0, threshold=7),
+        opponent_metric=MetricDef(name="momentum", starting=0, threshold=7),
+        beats=[strike_beat],
+    )
+
+    cwn_cfg = CwnConfig(
+        attribute_map=dict(_ATTRIBUTE_MAP),
+        system_strain=SystemStrainConfig(max_source="CONSTITUTION"),
+        trauma=TraumaConfig(default_trauma_target=6),
+    )
+
+    pack = MagicMock()
+    pack.rules = RulesConfig(
+        ruleset="cwn",
+        ability_score_names=list(_ABILITY_SCORE_NAMES),
+        confrontations=[cdef],
+        cwn=cwn_cfg,
+    )
+    pack.inventory = None
+    return pack
+
+
+def test_shock_chips_hp_on_miss(otel_capture):
+    """A CWN melee weapon chips fixed Shock damage on a MISS vs a low-AC target.
+
+    face=[1] forces the d20 to miss the opponent's AC, so the HIT path's
+    damage block is skipped. The new miss branch resolves the weapon spec,
+    sees shock=12 >= the opponent's Melee AC (12), and chips 12 HP. The
+    cwn.shock.applied span fires and the target's HP drops despite the miss.
+    """
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
+
+    pack = _make_cwn_shock_pack()
+    snap, enc = _make_snapshot_and_encounter("Razor", "Mr. Vex")
+    target_core = snap.find_creature_core("Mr. Vex")
+    assert target_core is not None
+    assert target_core.hp.current == target_core.hp.max  # precondition: full HP
+
+    dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="shock-miss",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[1],  # MISS
+            beat_id="shoot",
+        ),
+        rolling_player_id="player-razor",
+        character_name="Razor",
+        character_stats=dict(_STATS),
+        encounter=enc,
+        pack=pack,
+        genre_slug="neon_dystopia",
+        session_id="cwn-shock-dispatch",
+        round_number=1,
+        room_broadcast=[].append,
+        snapshot=snap,
+    )
+
+    span_names = [s.name for s in otel_capture.get_finished_spans()]
+    assert "cwn.shock.applied" in span_names, (
+        f"cwn.shock.applied span must fire when a CWN strike MISSES vs a "
+        f"low-Melee-AC target with a shock weapon; got spans: {span_names}"
+    )
+    assert target_core.hp.current < target_core.hp.max, (
+        f"Shock must chip the target's HP despite the miss; "
+        f"hp={target_core.hp.current}/{target_core.hp.max}"
+    )

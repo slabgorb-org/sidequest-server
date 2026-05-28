@@ -29,7 +29,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from sidequest.game.beat_kinds import _opposite_side_first_actor
+from sidequest.game.beat_kinds import _opposite_side_first_actor, apply_beat_hp_channel
 from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
 from sidequest.game.encounter import EncounterPhase, StructuredEncounter
 from sidequest.game.ruleset import get_ruleset_module
@@ -506,6 +506,42 @@ def dispatch_dice_throw(
                     component="encounter",
                 )
                 damage_resolver_fn = lambda: dmg_total  # noqa: E731
+
+        # CWN Shock seam (spec 2026-05-28, Task 10): a melee weapon with a
+        # Shock rating chips fixed damage on a MISS vs a low-Melee-AC target.
+        # Sibling of the HIT damage block above — fires ONLY on Fail/CritFail,
+        # so it never double-applies with the rolled-damage path. No-op for
+        # native/swn (base resolve_shock returns 0, so chip == 0).
+        if damage_channel == "strike" and resolved.outcome in (
+            RollOutcome.Fail,
+            RollOutcome.CritFail,
+        ):
+            actor_core = snapshot.find_creature_core(character_name)
+            shock_spec = ruleset.resolve_damage(
+                beat=beat,
+                actor_core=actor_core,
+                pack=pack,
+            )
+            shock_target_name = _opposite_side_first_actor(encounter, actor.side)
+            shock_target_core = (
+                snapshot.find_creature_core(shock_target_name)
+                if shock_target_name is not None
+                else None
+            )
+            if shock_spec is not None and shock_target_core is not None:
+                chip = ruleset.resolve_shock(
+                    spec=shock_spec,
+                    target_melee_ac=int(getattr(shock_target_core, "armor_class", 10)),
+                    actor=character_name,
+                )
+                if chip > 0:
+                    apply_beat_hp_channel(
+                        target=shock_target_core,
+                        channel="strike",
+                        damage_total=chip,
+                        target_mitigation=0,
+                        source_beat_id=f"{payload.beat_id}:shock",
+                    )
 
         apply_result = ruleset.apply_beat(
             encounter=encounter,

@@ -1,20 +1,16 @@
-"""Story 71-5 — MP opening narration POV-swap for the driving player.
+"""Story 71-5 — MP opening POV-swap WIRING test (end-to-end).
 
-The bug: in MP, the opening narration is a SINGLE shared blob anchored to ONE
-PC (the driver/lead). It is broadcast to peers via ``room.broadcast`` (raw) and
-returned to the driver via the handler's local ``out`` — but the driver's local
-copy is NOT POV-swapped, so the driver (the anchor) reads third-person
-("Carl steps...") instead of second-person ("You step...").
+The unit behaviour of the helper lives in
+``test_pov_swap_opening_helper_71_5.py``. THIS file is the project-doctrine
+wiring proof: drive the REAL ``_chargen_confirmation`` opening-broadcast block
+and confirm it routes the driver's copy through the swap (the driver's rendered
+prose card reads "You…") while ``room.broadcast`` still sends peers the RAW
+3rd-person originals byte-identically (single-anchor, seam Option a — peer path
+untouched; the anchor-is-a-peer live case is out of scope, → 71-13).
 
-Architect ruling (model CONFIRMED): single-anchor; driver-only bug; seam
-Option (a) — swap the driver's local copy at the opening-broadcast point in
-``_chargen_confirmation`` (chargen_mixin ~1453); peer broadcast stays raw.
-
-These tests drive the REAL ``_chargen_confirmation`` opening-broadcast seam with
-the narrator mocked (``_run_opening_turn_narration`` returns a canned, anchored
-opening). We assert the driver's returned card is swapped, peers' bytes are
-unchanged, and the ``opening.narration_pov_swapped`` watcher event fires only
-when a swap actually happened.
+The narrator is mocked (``_run_opening_turn_narration`` returns a canned
+single-anchor opening: a generic, unanchored cold-open seed + a driver-anchored
+prose card). Requires Postgres (the connect path persists per ADR-115).
 """
 
 from __future__ import annotations
@@ -42,11 +38,13 @@ PEER_PID = "p_peer"
 DRIVER_SOCK = "sock-driver"
 PEER_SOCK = "sock-peer"
 
+SEED_TEXT = "The galley hatch yawns open; cool recycled air drifts out."
+PROSE_TEXT = "Rux steps into the galley as the hatch seals behind Rux."
+
 
 @pytest.fixture(autouse=True)
 def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test
-    (ADR-115 F1: connect/events persist to Postgres)."""
+    """Bind the process pool to a per-worker throwaway PG db (ADR-115 F1)."""
     import psycopg
 
     from sidequest.game import db_pool
@@ -66,24 +64,23 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
     db_pool.close_pool()
 
 
-def _canned_opening(anchor_pc: str, *, seed_text: str, prose_text: str) -> list[object]:
-    """Two NARRATION cards (cold-open seed + narrator prose) carrying a
-    pc-anchored visibility sidecar — the shape the narrator emits for an MP
-    opening (ADR-036 / 49-8)."""
-    sidecar = {"visible_to": "all", "anchor_pc": anchor_pc, "pov_strategy": "pc_anchored"}
+def _canned_opening() -> list[object]:
+    """A single-anchor MP opening: a generic (unanchored) cold-open seed plus a
+    driver-anchored (Rux) narrator-prose card — the shape the narrator emits."""
+    anchored = {"visible_to": "all", "anchor_pc": "Rux", "pov_strategy": "pc_anchored"}
     return [
+        # Generic cold-open seed — NO sidecar (natural no-op for the swap).
+        NarrationMessage(payload=NarrationPayload(text=NonBlankString(SEED_TEXT))),
+        # Driver-anchored narrator prose — the card that must swap.
         NarrationMessage(
-            payload=NarrationPayload(text=NonBlankString(seed_text), visibility_sidecar=sidecar),
-        ),
-        NarrationMessage(
-            payload=NarrationPayload(text=NonBlankString(prose_text), visibility_sidecar=sidecar),
+            payload=NarrationPayload(text=NonBlankString(PROSE_TEXT), visibility_sidecar=anchored)
         ),
     ]
 
 
 async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
-    """Drive chargen up to (but not through) the confirmation commit, so the
-    driver's Character ('Rux') is fully built with pronouns."""
+    """Drive chargen up to (not through) the confirmation commit, building the
+    driver's Character ('Rux') with pronouns."""
     sd = h._session_data  # type: ignore[attr-defined]
     builder = sd.builder
     assert builder is not None
@@ -128,8 +125,7 @@ async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
 
 def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
     """Rebind the handler onto a fresh MULTIPLAYER room with the driver (Rux)
-    plus a seated peer (Donut), returning the peer's outbound queue. Mirrors
-    the conftest MP factory's post-chargen room shape."""
+    plus a seated peer (Donut); return the peer's outbound queue."""
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.server.session_room import SessionRoom
@@ -139,7 +135,6 @@ def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
     driver_pid = sd.player_id or DRIVER_PID
     sd.player_id = driver_pid
     snap = sd.snapshot
-    # Ensure a Donut character exists for the peer seat.
     if not any(c.core.name == "Donut" for c in snap.characters):
         snap.characters.append(
             Character(
@@ -173,29 +168,9 @@ def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
     return q_peer
 
 
-def _record_watcher(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict]]:
-    events: list[tuple[str, dict]] = []
-    real = chargen_mixin._watcher_publish
-
-    def _spy(event_type, fields, **kwargs):  # noqa: ANN001, ANN202
-        events.append((event_type, fields))
-        return real(event_type, fields, **kwargs)
-
-    monkeypatch.setattr(chargen_mixin, "_watcher_publish", _spy)
-    return events
-
-
-async def _fire_opening(
-    h: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,
-    opening: list[object],
-) -> list[object]:
-    """Force the opening to fire with the canned messages and return the
-    driver's local out list from the confirmation commit."""
+async def _fire_opening(h: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch) -> list[object]:
     monkeypatch.setattr(chargen_mixin, "_should_fire_opening_narration", lambda _sd, _room: True)
-    monkeypatch.setattr(
-        h, "_run_opening_turn_narration", AsyncMock(return_value=opening)
-    )
+    monkeypatch.setattr(h, "_run_opening_turn_narration", AsyncMock(return_value=_canned_opening()))
     out = await h.handle_message(
         CharacterCreationMessage(
             payload=CharacterCreationPayload(phase="confirmation"),
@@ -206,8 +181,6 @@ async def _fire_opening(
 
 
 def _narration_texts(messages: list[object]) -> list[str]:
-    """Pull the prose out of NARRATION messages. ``payload.text`` is a
-    ``NonBlankString`` (RootModel[str]), so coerce via ``.root``/``str``."""
     texts: list[str] = []
     for m in messages:
         payload = getattr(m, "payload", None)
@@ -220,138 +193,38 @@ def _narration_texts(messages: list[object]) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_driver_own_opening_card_is_pov_swapped(
+async def test_opening_block_swaps_driver_card_and_broadcasts_raw_to_peers(
     handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:
-    """AC1: the driver's own opening card (seed + prose), anchored to their PC,
-    is swapped to 2nd person ('You step...'), not raw 3rd person."""
-    await _connect(handler)
-    await _walk_to_confirmation(handler)
-    _make_mp(handler)
-    opening = _canned_opening(
-        "Rux",
-        seed_text="Rux steps into the galley as the hatch seals behind Rux.",
-        prose_text="Rux checks the console; Rux's hands are steady.",
-    )
-    out = await _fire_opening(handler, monkeypatch, opening)
-
-    texts = " \n ".join(_narration_texts(out))
-    assert "You step into the galley" in texts, (
-        f"driver's own opening card must be 2nd-person; got: {texts!r}"
-    )
-    assert "Rux steps into the galley" not in texts, (
-        f"driver must not see their own name in 3rd person; got: {texts!r}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_opening_swap_skipped_when_anchor_is_not_driver(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
-) -> None:
-    """AC2: when the opening is anchored to a DIFFERENT PC, the driver's copy is
-    NOT swapped (don't over-swap)."""
-    await _connect(handler)
-    await _walk_to_confirmation(handler)
-    _make_mp(handler)
-    opening = _canned_opening(
-        "Donut",  # anchored to the peer, not the driver (Rux)
-        seed_text="Donut steps into the galley as the hatch seals behind Donut.",
-        prose_text="Donut checks the console; Donut's hands are steady.",
-    )
-    out = await _fire_opening(handler, monkeypatch, opening)
-
-    texts = " \n ".join(_narration_texts(out))
-    assert "Donut steps into the galley" in texts, (
-        f"non-anchor card must stay 3rd-person for the driver; got: {texts!r}"
-    )
-    assert "You step into the galley" not in texts, (
-        f"driver must NOT be swapped for a peer-anchored card; got: {texts!r}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_opening_pov_swapped_watcher_event_emitted(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
-) -> None:
-    """AC3: a watcher event `opening.narration_pov_swapped` fires with the
-    documented attrs when a swap actually happens (swap_count > 0)."""
-    events = _record_watcher(monkeypatch)
-    await _connect(handler)
-    await _walk_to_confirmation(handler)
-    _make_mp(handler)
-    opening = _canned_opening(
-        "Rux",
-        seed_text="Rux steps into the galley as the hatch seals behind Rux.",
-        prose_text="Rux checks the console; Rux's hands are steady.",
-    )
-    await _fire_opening(handler, monkeypatch, opening)
-
-    swapped = [f for (name, f) in events if name == "opening.narration_pov_swapped"]
-    assert len(swapped) == 1, (
-        f"expected one opening.narration_pov_swapped event; got {len(swapped)}"
-    )
-    fields = swapped[0]
-    for key in (
-        "driver_player_id",
-        "anchor_pc",
-        "anchor_pronouns",
-        "swap_count",
-        "original_text_length",
-        "swapped_text_length",
-    ):
-        assert key in fields, f"watcher event missing attr {key!r}: {fields!r}"
-    assert fields["anchor_pc"] == "Rux"
-    assert fields["swap_count"] > 0
-
-
-@pytest.mark.asyncio
-async def test_no_pov_swapped_event_for_non_anchored_opening(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
-) -> None:
-    """AC3 (negative): an atmospheric / non-driver-anchored opening fires NO
-    opening.narration_pov_swapped event (swap_count would be 0)."""
-    events = _record_watcher(monkeypatch)
-    await _connect(handler)
-    await _walk_to_confirmation(handler)
-    _make_mp(handler)
-    opening = _canned_opening(
-        "Donut",  # not the driver → no swap for the driver
-        seed_text="Donut steps into the galley.",
-        prose_text="Donut checks the console.",
-    )
-    await _fire_opening(handler, monkeypatch, opening)
-
-    swapped = [f for (name, f) in events if name == "opening.narration_pov_swapped"]
-    assert swapped == [], f"no swap fired → no event expected; got {swapped!r}"
-
-
-@pytest.mark.asyncio
-async def test_peers_receive_raw_third_person_no_regression(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
-) -> None:
-    """AC4: MP single-anchor opening — the DRIVER sees 'You...' while PEERS
-    receive the raw 3rd-person card unchanged (peer broadcast untouched)."""
+    """AC4 + wiring: the inline opening block routes the driver's copy through
+    the swap (driver's prose card → 'You…'; generic seed unchanged), while peers
+    receive the RAW 3rd-person originals byte-identically (peer path untouched)."""
     await _connect(handler)
     await _walk_to_confirmation(handler)
     q_peer = _make_mp(handler)
-    seed = "Rux steps into the galley as the hatch seals behind Rux."
-    prose = "Rux checks the console; Rux's hands are steady."
-    opening = _canned_opening("Rux", seed_text=seed, prose_text=prose)
-    out = await _fire_opening(handler, monkeypatch, opening)
+    out = await _fire_opening(handler, monkeypatch)
 
-    # Driver: swapped.
-    driver_texts = " \n ".join(_narration_texts(out))
-    assert "You step into the galley" in driver_texts
+    driver_texts = _narration_texts(out)
+    driver_blob = " \n ".join(driver_texts)
+    # Driver's prose card → 2nd person (proves the block invoked the swap helper).
+    assert "You step into the galley" in driver_blob, (
+        f"driver's prose card must be 2nd-person; got: {driver_blob!r}"
+    )
+    assert "Rux steps into the galley" not in driver_blob, (
+        f"driver must not see their own name in 3rd person; got: {driver_blob!r}"
+    )
+    # Generic cold-open seed is unchanged for the driver (natural no-op).
+    assert SEED_TEXT in driver_texts, f"generic seed must be unchanged; got: {driver_texts!r}"
 
-    # Peer: raw 3rd-person, byte-identical to the canned input.
+    # Peers: raw 3rd-person, byte-identical to the canned originals.
     peer_msgs: list[object] = []
     while not q_peer.empty():
         peer_msgs.append(q_peer.get_nowait())
     peer_texts = _narration_texts(peer_msgs)
-    assert seed in peer_texts, f"peer must receive the raw seed unchanged; got {peer_texts!r}"
-    assert any("Rux steps into the galley" in t for t in peer_texts), (
-        f"peer must see 3rd-person (anchor name), NOT 'You'; got {peer_texts!r}"
+    assert PROSE_TEXT in peer_texts, (
+        f"peer must receive the raw 3rd-person prose unchanged; got: {peer_texts!r}"
     )
+    assert SEED_TEXT in peer_texts, f"peer must receive the raw seed; got: {peer_texts!r}"
     assert not any("You step into the galley" in t for t in peer_texts), (
-        f"peer must NOT be POV-swapped (single-anchor); got {peer_texts!r}"
+        f"peer must NOT be POV-swapped (single-anchor); got: {peer_texts!r}"
     )

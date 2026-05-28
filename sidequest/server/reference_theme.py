@@ -354,11 +354,12 @@ DEFAULT_RULES_TOC: list[dict[str, str]] = [
 # in a single ``<section id="{toc.id}">…</section>`` so the TOC link
 # resolves to the correct anchor.
 #
-# Missing files in a pack → the section renders empty (no entries
-# dropped from the TOC). File stems not referenced here render at the
-# end of the page in their own ``<section class="file">`` wrappers so
-# content is never lost — see ``_section_for_stem`` in
-# ``reference_renderer.py``.
+# Story 63-11: a section whose mapped stems render nothing (missing file,
+# or a presenter that suppressed present-but-empty data) is dropped — both
+# the empty ``<section>`` and its TOC entry — so no dangling nav link points
+# at an empty anchor. File stems not referenced here still render at the end
+# of the page in their own ``<section class="file">`` wrappers so content is
+# never lost — see ``_wrap_sections_by_toc`` in ``reference_renderer.py``.
 TOC_TO_FILES: dict[str, list[str]] = {
     "reckoning": ["lore", "world", "history"],
     "bearing": [

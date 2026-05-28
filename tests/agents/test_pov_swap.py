@@ -573,3 +573,83 @@ def test_only_target_swaps_other_pcs_untouched():
     assert "Donut's mace" in out, "Donut must stay third-person"
     assert "Katia eases" in out, "Katia must stay third-person"
     assert "You plant a boot" in out
+
+
+# ---------------------------------------------------------------------------
+# Story 71-6: predicate/absolute possessive → "yours" (Bug 1)
+# ---------------------------------------------------------------------------
+
+
+def test_predicate_possessive_mid_sentence_becomes_yours():
+    """Clause-final {Name}'s (before period) → 'yours', not 'your'."""
+    text = "The polearm was Carl's."
+    out, count = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "The polearm was yours.", repr(out)
+    assert count >= 1
+
+
+def test_predicate_possessive_before_comma_becomes_yours():
+    """Predicate possessive before a comma → 'yours'."""
+    text = "The decision was Carl's, not hers."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert "was yours," in out, repr(out)
+
+
+def test_predicate_possessive_at_sentence_start_capitalises():
+    """Sentence-initial predicate possessive → 'Yours' (capital)."""
+    text = "Carl's, that burden."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out.startswith("Yours,"), repr(out)
+
+
+def test_predicate_possessive_before_coordinating_conj_becomes_yours():
+    """Predicate possessive before 'and'/'but'/etc. → 'yours'."""
+    text = "The choice was Carl's and he knew it."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert "was yours and" in out, repr(out)
+
+
+def test_attributive_possessive_still_becomes_your():
+    """Regression: attributive 'Carl's polearm' → 'Your polearm', not 'Yours'."""
+    text = "Carl's polearm lies across the threshold."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out.startswith("Your polearm"), repr(out)
+    assert "Yours" not in out
+
+
+def test_attributive_possessive_mid_sentence_stays_your():
+    """Mid-sentence attributive possessive: 'Carl's sharp eye' → 'your sharp eye'."""
+    text = "The crowd follows Carl's sharp eye to the door."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert "your sharp eye" in out, repr(out)
+    assert "yours" not in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Story 71-6: stranded continuation verb after connector+adverb (Bug 2)
+# ---------------------------------------------------------------------------
+
+
+def test_comma_then_verb_conjugated():
+    """Pass 9 adverb-skip: ', then <3rd-verb>' → ', then <2nd-verb>'."""
+    text = "Carl steadies the pistol, then fires."
+    out, count = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You steady the pistol, then fire.", repr(out)
+    # subject-swap (steadies→steady = 2) + comma-then-verb (fires→fire = 1) = 3
+    assert count == 3
+
+
+def test_and_adverb_verb_conjugated():
+    """Pass 8 adverb-skip: 'and <adverb> <3rd-verb>' → 'and <adverb> <2nd-verb>'."""
+    text = "Carl turns and slowly raises the lantern."
+    out, count = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You turn and slowly raise the lantern.", repr(out)
+
+
+def test_plural_noun_after_comma_not_conjugated():
+    """Regression: ', the bronze fittings gleam.' — 'fittings' must NOT be conjugated
+    by the adverb-skip (it is a plural noun, not a 3rd-person verb in this position)."""
+    text = "Carl nods, the bronze fittings gleam."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert "fittings gleam" in out, repr(out)
+    assert "fitting gleam" not in out

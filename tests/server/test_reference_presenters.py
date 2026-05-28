@@ -538,6 +538,114 @@ def test_picker_no_ops_on_empty_input(fake_theme: ReferenceTheme) -> None:
     assert present_archetypes_picker("not a list", make_ctx("archetypes", (), fake_theme)) == ""
 
 
+def test_class_picker_renders_signature_ability(fake_theme: ReferenceTheme) -> None:
+    """Story 71-1 AC-1/2/3/4: a class with a signature ability renders the
+    ability name, genre_description, and mechanical_effect in a visually
+    distinct container, below the existing card elements."""
+    from sidequest.server.reference_presenters import present_classes_picker
+
+    classes = [
+        {
+            "id": "officer",
+            "display_name": "Officer",
+            "rpg_role": "leader",
+            "prime_requisite": "Influence",
+            "flavor": "The chain of command made flesh.",
+            "encounter_beat_choices": ["persuade", "threaten"],
+            "abilities": [
+                {
+                    "name": "Call the Shot",
+                    "genre_description": "You see the fight as a board, not a brawl.",
+                    "mechanical_effect": (
+                        "Once per confrontation, coordinate the crew at advantage."
+                    ),
+                    "involuntary": False,
+                }
+            ],
+        }
+    ]
+    html = present_classes_picker(classes, make_ctx("classes", (), fake_theme))
+
+    # AC-4 / AC-2: all three signature-ability fields render (abilities[0]).
+    assert "Call the Shot" in html
+    assert "You see the fight as a board, not a brawl." in html
+    assert "Once per confrontation, coordinate the crew at advantage." in html
+
+    # AC-2: Architect DOM contract — distinct container, named-ability block,
+    # body prose, and a dedicated mechanical-effect block, under a kicker.
+    assert "ref-card__ability" in html
+    assert "ref-card__ability-name" in html
+    assert "ref-card__ability-effect" in html
+    assert "Signature Ability" in html  # kicker
+
+    # AC-3: existing card elements are preserved.
+    assert "The chain of command made flesh." in html  # flavor
+    assert "ref-label-grid" in html  # role + prime-req grid
+    assert "Beat Choices" in html  # beat-choice chip strip
+
+    # AC-3: the ability section is rendered BELOW the beat choices.
+    assert html.index("Beat Choices") < html.index("ref-card__ability")
+
+
+def test_class_picker_omits_ability_section_when_absent(fake_theme: ReferenceTheme) -> None:
+    """AC-3: a class with no abilities (missing key OR empty list) renders no
+    ability container, and the rest of the card is unaffected."""
+    from sidequest.server.reference_presenters import present_classes_picker
+
+    classes = [
+        {
+            "id": "fighter",
+            "display_name": "Fighter",
+            "flavor": "Plate and patience.",
+            "encounter_beat_choices": ["attack", "defend"],
+        },
+        {
+            "id": "scout",
+            "display_name": "Scout",
+            "flavor": "Eyes forward.",
+            "encounter_beat_choices": ["sneak", "scan"],
+            "abilities": [],  # present but empty — still no ability section
+        },
+    ]
+    html = present_classes_picker(classes, make_ctx("classes", (), fake_theme))
+
+    assert "ref-card__ability" not in html
+    # Existing elements still render for both classes.
+    assert "Plate and patience." in html
+    assert "Eyes forward." in html
+    assert "Beat Choices" in html
+
+
+def test_class_picker_escapes_signature_ability_content(fake_theme: ReferenceTheme) -> None:
+    """Rule #11 (CWE-79): ability fields are HTML-escaped, never emitted raw.
+    Pack content is first-party today but the renderer's invariant is to
+    escape every interpolation (see _poi_image_html note)."""
+    from sidequest.server.reference_presenters import present_classes_picker
+
+    classes = [
+        {
+            "id": "operative",
+            "display_name": "Operative",
+            "abilities": [
+                {
+                    "name": "Ghost <Protocol>",
+                    "genre_description": "You were never <there> & gone.",
+                    "mechanical_effect": "<script>steal()</script> spoof the lock",
+                    "involuntary": False,
+                }
+            ],
+        }
+    ]
+    html = present_classes_picker(classes, make_ctx("classes", (), fake_theme))
+
+    # Raw markup must not survive into the output.
+    assert "<script>steal()</script>" not in html
+    # Escaped forms are present.
+    assert "&lt;script&gt;" in html
+    assert "Ghost &lt;Protocol&gt;" in html
+    assert "&amp; gone" in html
+
+
 # ---------------------------------------------------------------------------
 # present_progression
 # ---------------------------------------------------------------------------

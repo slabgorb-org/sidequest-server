@@ -65,6 +65,33 @@
     margin-top: auto;
 }
 
+/* --- Signature ability (Story 71-1 — one per non-magical class, ADR-095) --- */
+.ref-card__ability {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--ref-color-accent);
+    border-left-width: 3px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.04);
+}
+.ref-card__ability-name {
+    font-family: var(--ref-font-display);
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--ref-color-accent);
+}
+.ref-card__ability-effect {
+    margin: 0;
+    padding: 0.5rem 0.7rem;
+    border-left: 2px solid var(--ref-color-primary);
+    background: rgba(0, 0, 0, 0.18);
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
 /* --- Badges --- */
 .ref-badge {
     display: inline-block;

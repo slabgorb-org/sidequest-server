@@ -144,7 +144,15 @@ def persist_scrapbook_entry(
         narrative_excerpt=payload.narrative_excerpt,
         world_facts=list(payload.world_facts),
         npcs_present=[
-            {"name": ref.name, "role": ref.role, "disposition": ref.disposition}
+            {
+                "name": ref.name,
+                "role": ref.role,
+                "disposition": ref.disposition,
+                # Story 65-6: persist the world-scoped portrait URL so the
+                # post-game gallery + forensic export carry it losslessly
+                # (None when the NPC has no authored portrait).
+                "portrait_url": ref.portrait_url,
+            }
             for ref in payload.npcs_present
         ],
         render_status=payload.render_status,
@@ -644,6 +652,87 @@ def emit_event(
     return out_to_self
 
 
+def _world_portrait_slugs(pack: Any, world_slug: str | None) -> frozenset[str]:
+    """The set of portrait-manifest slugs for ``world_slug`` in ``pack``.
+
+    Slugs are derived with ``slugify_player_name`` — the exact mirror of the
+    daemon's ``CharacterCatalog._slugify_name`` that the render script
+    (``scripts/generate_portrait_images._slugify_name``) uses to name the
+    on-disk ``<slug>.png``. Output equality on the same input is the
+    load-bearing contract: a mismatched slug means the resolved URL 404s.
+
+    Returns an empty set when the pack/world is unbound or has no manifest —
+    the caller treats that as "no portrait" (an observable not-found), never
+    a crash.
+    """
+    from sidequest.server.utils import slugify_player_name
+
+    if pack is None or not world_slug:
+        return frozenset()
+    world = pack.worlds.get(world_slug)
+    if world is None:
+        return frozenset()
+    manifest = getattr(world, "portrait_manifest", None) or []
+    slugs: set[str] = set()
+    for entry in manifest:
+        name = getattr(entry, "name", "") or ""
+        if name:
+            slugs.add(slugify_player_name(name))
+    return frozenset(slugs)
+
+
+def _resolve_npc_portrait_url(
+    *,
+    pack: Any,
+    genre_slug: str,
+    world_slug: str | None,
+    npc_name: str,
+    manifest_slugs: frozenset[str] | None = None,
+) -> str | None:
+    """World-scoped portrait URL for an invoked NPC, or ``None`` (Story 65-6).
+
+    Attaches a portrait IFF ``npc_name`` slugifies to a slug present in the
+    current world's ``portrait_manifest``. The URL points at the world-scoped
+    asset path that the render script writes
+    (``genre_packs/<g>/worlds/<w>/assets/portraits/<slug>.png``), so URL ==
+    filename by construction. Both outcomes emit an OTEL span so the GM/dev
+    panel can confirm the lookup ran — a should-resolve-but-didn't is the
+    classic slug skew, and the not-found span proves the lookup happened
+    rather than being silently skipped (CLAUDE.md OTEL principle).
+
+    ``manifest_slugs`` may be precomputed by the caller to avoid rebuilding
+    the set per NPC in a multi-NPC turn; when omitted it is derived here.
+    """
+    from sidequest.server.asset_urls import resolve_asset_url
+    from sidequest.server.utils import slugify_player_name
+    from sidequest.telemetry.spans.scrapbook import (
+        scrapbook_npc_portrait_not_found_span,
+        scrapbook_npc_portrait_resolved_span,
+    )
+
+    slug = slugify_player_name(npc_name)
+    slugs = (
+        manifest_slugs if manifest_slugs is not None else _world_portrait_slugs(pack, world_slug)
+    )
+    world_for_span = world_slug or ""
+
+    if slug and slug in slugs:
+        url = resolve_asset_url(
+            f"genre_packs/{genre_slug}/worlds/{world_slug}/assets/portraits/{slug}.png"
+        )
+        with scrapbook_npc_portrait_resolved_span(
+            npc_name=npc_name, genre=genre_slug, world=world_for_span, slug=slug
+        ):
+            pass
+        return url
+
+    with scrapbook_npc_portrait_not_found_span(
+        npc_name=npc_name, genre=genre_slug, world=world_for_span, slug=slug
+    ):
+        pass
+    return None
+
+
 def emit_scrapbook_entry(
     handler: WebSocketSessionHandler,
     *,
@@ -710,6 +799,12 @@ def emit_scrapbook_entry(
     # inference. ``role`` is the side flag (player/opponent/neutral);
     # ``disposition`` falls back to role when no behavioral string was
     # extracted.
+    # Story 65-6: precompute the world's portrait-manifest slug set once per
+    # turn so a multi-NPC turn doesn't rebuild it per ref. The loaded pack +
+    # world are reachable from the session data (sd.genre_pack / sd.world_slug)
+    # — same accessors the location resolver above uses.
+    portrait_slugs = _world_portrait_slugs(sd.genre_pack, sd.world_slug)
+
     npc_refs: list[ScrapbookEntryNpcRef] = []
     for mention in result.npcs_present or []:
         name = (getattr(mention, "name", "") or "").strip()
@@ -717,11 +812,21 @@ def emit_scrapbook_entry(
             continue
         role = getattr(mention, "side", "") or "neutral"
         disposition = getattr(mention, "role", "") or role
+        # Attach a world-scoped portrait IFF the invoked NPC is in the
+        # manifest. Resolves to None (an observable not-found span) otherwise.
+        portrait_url = _resolve_npc_portrait_url(
+            pack=sd.genre_pack,
+            genre_slug=sd.genre_slug,
+            world_slug=sd.world_slug,
+            npc_name=name,
+            manifest_slugs=portrait_slugs,
+        )
         npc_refs.append(
             ScrapbookEntryNpcRef(
                 name=name,
                 role=role,
                 disposition=disposition,
+                portrait_url=portrait_url,
             )
         )
 

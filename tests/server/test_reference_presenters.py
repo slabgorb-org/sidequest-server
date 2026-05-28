@@ -566,13 +566,17 @@ def test_class_picker_renders_signature_ability(fake_theme: ReferenceTheme) -> N
     ]
     html = present_classes_picker(classes, make_ctx("classes", (), fake_theme))
 
-    # AC-4 / AC-2: all three signature-ability fields render.
+    # AC-4 / AC-2: all three signature-ability fields render (abilities[0]).
     assert "Call the Shot" in html
     assert "You see the fight as a board, not a brawl." in html
     assert "Once per confrontation, coordinate the crew at advantage." in html
 
-    # AC-2: the ability lives in a visually distinct container.
+    # AC-2: Architect DOM contract — distinct container, named-ability block,
+    # body prose, and a dedicated mechanical-effect block, under a kicker.
     assert "ref-card__ability" in html
+    assert "ref-card__ability-name" in html
+    assert "ref-card__ability-effect" in html
+    assert "Signature Ability" in html  # kicker
 
     # AC-3: existing card elements are preserved.
     assert "The chain of command made flesh." in html  # flavor

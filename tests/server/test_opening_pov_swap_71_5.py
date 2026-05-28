@@ -134,6 +134,16 @@ def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
     sd.mode = GameMode.MULTIPLAYER
     driver_pid = sd.player_id or DRIVER_PID
     sd.player_id = driver_pid
+    # The driver PC is BUILT during the confirmation commit (builder.build) and
+    # seated under its core.name (chargen_mixin:1303 → player_seats[pid] = name).
+    # The caverns fixture captures no freeform name, so the name falls back to
+    # sd.player_name. Set it to "Rux" so the built+seated PC, the seat slot, and
+    # the prose anchor_pc all agree — the PRODUCTION invariant
+    # (anchor_pc == character.core.name == seat slot; confirmed via
+    # classify_narration_visibility's PC-roster resolution + chargen seating).
+    # Pronouns (they/them) carry from the walk's story_confirm, so
+    # _pronouns_for_pc("Rux") resolves and the swap fires.
+    sd.player_name = "Rux"
     snap = sd.snapshot
     if not any(c.core.name == "Donut" for c in snap.characters):
         snap.characters.append(

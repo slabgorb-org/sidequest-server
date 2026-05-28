@@ -23,6 +23,7 @@ too would double-send to the rolling player.
 from __future__ import annotations
 
 import logging
+import random
 import re
 import uuid
 from collections.abc import Callable
@@ -455,6 +456,31 @@ def dispatch_dice_throw(
                     damage_request_payload.difficulty,
                 )
                 dmg_total = dmg_resolved.total
+                # CWN Trauma seam (spec 2026-05-28): multiply rolled damage on a
+                # Traumatic Hit, and flag the scene so a 0-HP drop this scene can
+                # roll Major Injury. No-op for native/swn (base passthrough).
+                _lethality = ruleset.resolve_trauma(
+                    spec=damage_spec,
+                    base_total=dmg_total,
+                    cfg=pack.rules.ruleset_config() if pack and pack.rules else None,
+                    rng=random,
+                    actor=character_name,
+                )
+                dmg_total = _lethality.final_total
+                if _lethality.traumatic:
+                    from sidequest.game.encounter_tag import EncounterTag
+
+                    if not any(t.text == "Traumatic Hit Landed" for t in encounter.tags):
+                        encounter.tags.append(
+                            EncounterTag(
+                                text="Traumatic Hit Landed",
+                                created_by=character_name,
+                                target=None,
+                                leverage=0,
+                                fleeting=False,
+                                created_turn=round_number,
+                            )
+                        )
                 dmg_seed = generate_dice_seed(session_id, round_number + 1)
                 damage_result_payload = _compose_result_payload(
                     request=damage_request_payload,

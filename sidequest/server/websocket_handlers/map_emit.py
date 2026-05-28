@@ -508,33 +508,69 @@ def _maybe_emit_location_description(
     from sidequest.server.reference_renderer import load_poi_image_slugs
     from sidequest.telemetry.spans.reference import (
         reference_url_attached_span,
+        reference_url_failed_span,
         reference_url_skipped_span,
     )
 
-    poi_slugs = load_poi_image_slugs(world_dir)
-    reference_url = reference_url_for_region(
-        pack=sd.genre_slug,
-        world=sd.world_slug,
-        region_id=room_id,
-        known_location_slugs=poi_slugs,
-    )
-    if reference_url is not None:
-        with reference_url_attached_span(
+    # Story 63-13 defense-in-depth: load_poi_image_slugs re-raises a malformed
+    # history.yaml as ValueError, and this call sits OUTSIDE the sourcing guards
+    # above — an unguarded raise here would crash a live room-change emit,
+    # violating the "must not crash a turn" contract. Degrade to no anchor and
+    # fire the FAILED span (loud, GM-panel-visible) — not a silent skip.
+    try:
+        poi_slugs = load_poi_image_slugs(world_dir)
+    except Exception as exc:  # noqa: BLE001 — malformed manifest must not crash a turn
+        logger.warning(
+            "location_description.poi_manifest_load_failed genre=%s world=%s room=%s error=%s",
+            sd.genre_slug,
+            sd.world_slug,
+            room_id,
+            exc,
+        )
+        _watcher_publish(
+            "location_description.poi_manifest_load_failed",
+            {
+                "genre": sd.genre_slug,
+                "world": sd.world_slug,
+                "room_id": room_id,
+                "error": str(exc),
+            },
+            component="location",
+            severity="warning",
+        )
+        reference_url = None
+        with reference_url_failed_span(
             kind="location",
             pack=sd.genre_slug,
             world=sd.world_slug,
             keys=(room_id,),
+            reason="malformed_poi_manifest",
         ):
             pass
     else:
-        with reference_url_skipped_span(
-            kind="location",
+        reference_url = reference_url_for_region(
             pack=sd.genre_slug,
             world=sd.world_slug,
-            keys=(room_id,),
-            reason="region_not_in_lore_poi_manifest",
-        ):
-            pass
+            region_id=room_id,
+            known_location_slugs=poi_slugs,
+        )
+        if reference_url is not None:
+            with reference_url_attached_span(
+                kind="location",
+                pack=sd.genre_slug,
+                world=sd.world_slug,
+                keys=(room_id,),
+            ):
+                pass
+        else:
+            with reference_url_skipped_span(
+                kind="location",
+                pack=sd.genre_slug,
+                world=sd.world_slug,
+                keys=(room_id,),
+                reason="region_not_in_lore_poi_manifest",
+            ):
+                pass
 
     payload = LocationDescriptionPayload(
         region_id=room_id,

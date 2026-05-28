@@ -1,22 +1,26 @@
-"""Story 71-5 — MP opening POV-swap WIRING test (end-to-end).
+"""Story 71-13 wiring tests (RED) — MP opening must route through emit_event.
 
-The unit behaviour of the helper lives in
-``test_pov_swap_opening_helper_71_5.py``. THIS file is the project-doctrine
-wiring proof: drive the REAL ``_chargen_confirmation`` opening-broadcast block
-and confirm it routes the driver's copy through the swap (the driver's rendered
-prose card reads "You…") while ``room.broadcast`` still sends peers the RAW
-3rd-person originals byte-identically (single-anchor, seam Option a — peer path
-untouched; the anchor-is-a-peer live case is out of scope, → 71-13).
+The 71-5 one-off helper path (room.broadcast + _pov_swap_opening_for_driver)
+is replaced by ``emit_event(author_player_id=<driver>)`` for uniform
+per-recipient POV + perception fanout + event-sourcing (story 71-13).
 
-The narrator is mocked (``_run_opening_turn_narration`` returns a canned
-single-anchor opening: a generic, unanchored cold-open seed + a driver-anchored
-prose card). Requires Postgres (the connect path persists per ADR-115).
+These three tests drive the REAL ``_chargen_confirmation`` opening block and
+assert the NEW 71-13 behaviour that doesn't yet exist:
+  1. ``room.broadcast`` is NOT called for the opening.
+  2. The ``opening.broadcast_to_peers`` watcher event is NOT emitted.
+  3. The ``opening.narration_pov_swapped`` watcher event is NOT emitted.
+
+All three FAIL NOW (RED) because the current code still uses room.broadcast
+and emits both legacy watcher events.  They will pass (GREEN) once Dev routes
+the opening through ``emit_event`` and deletes the helper + broadcast block.
+
+Requires Postgres (the connect path persists per ADR-115).
 """
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -65,13 +69,10 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
 
 
 def _canned_opening() -> list[object]:
-    """A single-anchor MP opening: a generic (unanchored) cold-open seed plus a
-    driver-anchored (Rux) narrator-prose card — the shape the narrator emits."""
+    """Single-anchor MP opening: unanchored cold-open seed + driver-anchored prose."""
     anchored = {"visible_to": "all", "anchor_pc": "Rux", "pov_strategy": "pc_anchored"}
     return [
-        # Generic cold-open seed — NO sidecar (natural no-op for the swap).
         NarrationMessage(payload=NarrationPayload(text=NonBlankString(SEED_TEXT))),
-        # Driver-anchored narrator prose — the card that must swap.
         NarrationMessage(
             payload=NarrationPayload(text=NonBlankString(PROSE_TEXT), visibility_sidecar=anchored)
         ),
@@ -79,8 +80,7 @@ def _canned_opening() -> list[object]:
 
 
 async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
-    """Drive chargen up to (not through) the confirmation commit, building the
-    driver's Character ('Rux') with pronouns."""
+    """Drive chargen up to (not through) the confirmation commit."""
     sd = h._session_data  # type: ignore[attr-defined]
     builder = sd.builder
     assert builder is not None
@@ -124,8 +124,7 @@ async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
 
 
 def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
-    """Rebind the handler onto a fresh MULTIPLAYER room with the driver (Rux)
-    plus a seated peer (Donut); return the peer's outbound queue."""
+    """Rebind handler onto a fresh MULTIPLAYER room with driver (Rux) + peer (Donut)."""
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.server.session_room import SessionRoom
@@ -134,15 +133,6 @@ def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
     sd.mode = GameMode.MULTIPLAYER
     driver_pid = sd.player_id or DRIVER_PID
     sd.player_id = driver_pid
-    # The driver PC is BUILT during the confirmation commit (builder.build) and
-    # seated under its core.name (chargen_mixin:1303 → player_seats[pid] = name).
-    # The caverns fixture captures no freeform name, so the name falls back to
-    # sd.player_name. Set it to "Rux" so the built+seated PC, the seat slot, and
-    # the prose anchor_pc all agree — the PRODUCTION invariant
-    # (anchor_pc == character.core.name == seat slot; confirmed via
-    # classify_narration_visibility's PC-roster resolution + chargen seating).
-    # Pronouns (they/them) carry from the walk's story_confirm, so
-    # _pronouns_for_pc("Rux") resolves and the swap fires.
     sd.player_name = "Rux"
     snap = sd.snapshot
     if not any(c.core.name == "Donut" for c in snap.characters):
@@ -154,12 +144,13 @@ def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
                 char_class="Fighter",
                 race="Human",
                 backstory="A wandering adventurer",
+                pronouns="she/her",
             )
         )
     snap.player_seats[driver_pid] = "Rux"
     snap.player_seats[PEER_PID] = "Donut"
 
-    room = SessionRoom(slug="pov-71-5", mode=GameMode.MULTIPLAYER)
+    room = SessionRoom(slug="pov-71-13", mode=GameMode.MULTIPLAYER)
     room.bind_world(snapshot=snap, store=sd.repository)
     room.connect(driver_pid, socket_id=DRIVER_SOCK)
     room.seat(driver_pid, character_slot="Rux")
@@ -178,9 +169,16 @@ def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
     return q_peer
 
 
-async def _fire_opening(h: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch) -> list[object]:
+async def _fire_opening(
+    h: WebSocketSessionHandler,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    opening_factory=None,
+) -> list[object]:
+    """Drive the confirmation commit with a canned opening; return local out."""
+    factory = opening_factory or _canned_opening
     monkeypatch.setattr(chargen_mixin, "_should_fire_opening_narration", lambda _sd, _room: True)
-    monkeypatch.setattr(h, "_run_opening_turn_narration", AsyncMock(return_value=_canned_opening()))
+    monkeypatch.setattr(h, "_run_opening_turn_narration", AsyncMock(return_value=factory()))
     out = await h.handle_message(
         CharacterCreationMessage(
             payload=CharacterCreationPayload(phase="confirmation"),
@@ -190,51 +188,102 @@ async def _fire_opening(h: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPa
     return list(out)
 
 
-def _narration_texts(messages: list[object]) -> list[str]:
-    texts: list[str] = []
-    for m in messages:
-        payload = getattr(m, "payload", None)
-        text = getattr(payload, "text", None)
-        if text is None:
-            continue
-        value = getattr(text, "root", None)
-        texts.append(value if isinstance(value, str) else str(text))
-    return texts
+# ---------------------------------------------------------------------------
+# RED tests (all three must FAIL under the current room.broadcast code path)
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_opening_block_swaps_driver_card_and_broadcasts_raw_to_peers(
+async def test_opening_does_not_use_room_broadcast(
     handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:
-    """AC4 + wiring: the inline opening block routes the driver's copy through
-    the swap (driver's prose card → 'You…'; generic seed unchanged), while peers
-    receive the RAW 3rd-person originals byte-identically (peer path untouched)."""
+    """AC1 (wiring) — RED: room.broadcast IS called now; must NOT be called after fix.
+
+    After 71-13, the opening must route through ``emit_event``, NOT
+    ``room.broadcast``.  Asserting ``not mock_broadcast.called`` fails today
+    (broadcast IS called at chargen_mixin:1593-1594) and passes once Dev
+    removes the broadcast block.
+    """
     await _connect(handler)
     await _walk_to_confirmation(handler)
     q_peer = _make_mp(handler)
-    out = await _fire_opening(handler, monkeypatch)
 
-    driver_texts = _narration_texts(out)
-    driver_blob = " \n ".join(driver_texts)
-    # Driver's prose card → 2nd person (proves the block invoked the swap helper).
-    assert "You step into the galley" in driver_blob, (
-        f"driver's prose card must be 2nd-person; got: {driver_blob!r}"
-    )
-    assert "Rux steps into the galley" not in driver_blob, (
-        f"driver must not see their own name in 3rd person; got: {driver_blob!r}"
-    )
-    # Generic cold-open seed is unchanged for the driver (natural no-op).
-    assert SEED_TEXT in driver_texts, f"generic seed must be unchanged; got: {driver_texts!r}"
+    with patch.object(handler._room, "broadcast", wraps=handler._room.broadcast) as mock_broadcast:
+        await _fire_opening(handler, monkeypatch)
 
-    # Peers: raw 3rd-person, byte-identical to the canned originals.
-    peer_msgs: list[object] = []
-    while not q_peer.empty():
-        peer_msgs.append(q_peer.get_nowait())
-    peer_texts = _narration_texts(peer_msgs)
-    assert PROSE_TEXT in peer_texts, (
-        f"peer must receive the raw 3rd-person prose unchanged; got: {peer_texts!r}"
+    assert not mock_broadcast.called, (
+        "Opening must NOT use room.broadcast after 71-13 — it must route through "
+        "emit_event(author_player_id=<driver>).  room.broadcast was called "
+        f"{mock_broadcast.call_count} time(s)."
     )
-    assert SEED_TEXT in peer_texts, f"peer must receive the raw seed; got: {peer_texts!r}"
-    assert not any("You step into the galley" in t for t in peer_texts), (
-        f"peer must NOT be POV-swapped (single-anchor); got: {peer_texts!r}"
+    # Silence unused-variable warning for q_peer (set up for room completeness).
+    _ = q_peer
+
+
+@pytest.mark.asyncio
+async def test_broadcast_to_peers_watcher_event_retired(
+    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """AC7 (OTEL retire) — RED: opening.broadcast_to_peers IS emitted now; must vanish after fix.
+
+    The ``opening.broadcast_to_peers`` watcher event was the lie-detector for
+    the old broadcast path.  Once the broadcast block is deleted, this event
+    must never fire — the standard ``emit.author_resolved`` /
+    ``projection.filter.decide`` spans replace it.  The assertion fails today
+    because the event IS emitted at chargen_mixin:1595-1604.
+    """
+    events: list[tuple[str, object]] = []
+
+    def _spy(event_type: str, fields: object, **_: object) -> None:
+        events.append((event_type, fields))
+
+    monkeypatch.setattr(chargen_mixin, "_watcher_publish", _spy)
+
+    await _connect(handler)
+    await _walk_to_confirmation(handler)
+    _make_mp(handler)
+    await _fire_opening(handler, monkeypatch)
+
+    broadcast_events = [f for (_, f) in events if isinstance(f, dict) and f.get("field") == "opening.broadcast_to_peers" or  # noqa: E501
+                        (isinstance(f, dict) and "opening.broadcast_to_peers" in str(f))]
+    # The watcher_publish for this event uses a positional event_type arg of
+    # "opening.broadcast_to_peers" (not a nested "field" key).
+    raw_broadcast = [et for (et, _) in events if et == "opening.broadcast_to_peers"]
+    assert raw_broadcast == [], (
+        "opening.broadcast_to_peers watcher event must be RETIRED after 71-13 "
+        "(broadcast block deleted, subsumed by emit.author_resolved + "
+        f"projection.filter.decide).  Got: {raw_broadcast!r}"
+    )
+    _ = broadcast_events  # silence unused
+
+
+@pytest.mark.asyncio
+async def test_pov_swap_helper_watcher_event_retired(
+    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """AC7 (OTEL retire) — RED: opening.narration_pov_swapped IS emitted now; must vanish.
+
+    The ``opening.narration_pov_swapped`` watcher event was emitted by the
+    now-deleted ``_pov_swap_opening_for_driver`` helper (when swap_count > 0).
+    Once the helper is deleted, this event must never fire.  Today the canned
+    opening has anchor_pc="Rux" and the driver IS Rux, so the swap fires and
+    the event IS emitted.  The assertion fails today.
+    """
+    events: list[tuple[str, object]] = []
+
+    def _spy(event_type: str, fields: object, **_: object) -> None:
+        events.append((event_type, fields))
+
+    monkeypatch.setattr(chargen_mixin, "_watcher_publish", _spy)
+
+    await _connect(handler)
+    await _walk_to_confirmation(handler)
+    _make_mp(handler)
+    await _fire_opening(handler, monkeypatch)
+
+    pov_events = [et for (et, _) in events if et == "opening.narration_pov_swapped"]
+    assert pov_events == [], (
+        "opening.narration_pov_swapped watcher event must be RETIRED after 71-13 "
+        "(_pov_swap_opening_for_driver helper deleted, subsumed by emit_event "
+        f"Track-A POV swap).  Got: {pov_events!r}"
     )

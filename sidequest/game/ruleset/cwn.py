@@ -14,13 +14,20 @@ import random
 from opentelemetry import trace
 
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.lethality import LethalityResult
+from sidequest.game.lethality import DownedResult, LethalityResult, major_injury_entry
+from sidequest.game.status import Status, StatusSeverity
 from sidequest.game.ruleset.resolution import CheckRollParams
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.system_strain import StrainResult
 from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import CwnConfig, SwnConfig
-from sidequest.telemetry.spans.cwn import cwn_shock_applied_span, cwn_system_strain_delta_span, cwn_trauma_roll_span
+from sidequest.telemetry.spans.cwn import (
+    cwn_major_injury_roll_span,
+    cwn_mortal_injury_declared_span,
+    cwn_shock_applied_span,
+    cwn_system_strain_delta_span,
+    cwn_trauma_roll_span,
+)
 
 
 class CwnRulesetModule(SwnRulesetModule):
@@ -185,4 +192,59 @@ class CwnRulesetModule(SwnRulesetModule):
             permanent=pool.permanent,
             delta=delta,
             reason=reason,
+        )
+
+    def resolve_downed(
+        self,
+        *,
+        core: CreatureCore,
+        save_target: int,
+        scene_traumatic: bool,
+        cfg: SwnConfig | None,
+        rng: random.Random,
+        _tracer: "trace.Tracer | None" = None,
+    ) -> DownedResult:
+        """Resolve a CWN character dropped to 0 HP.
+
+        Always declares a Mortal Injury (Scar status; the character dies at the
+        end of cfg.trauma.mortal_injury_rounds unless stabilized via the
+        stabilize_mortal_injury tool). If a Traumatic Hit landed this scene,
+        additionally rolls a Physical save (1d20 vs save_target); on failure,
+        rolls 1d12 on the Major Injury table and attaches that as a second Scar.
+        Emits cwn.mortal_injury.declared and (when rolled) cwn.major_injury.roll."""
+        if not isinstance(cfg, CwnConfig):
+            raise ValueError(
+                f"resolve_downed requires a CwnConfig; got {type(cfg).__name__!r}"
+            )
+        rounds = cfg.trauma.mortal_injury_rounds
+        core.statuses.append(
+            Status(
+                text=f"Mortal Injury — dies in {rounds} rounds unless stabilized",
+                severity=StatusSeverity.Scar,
+            )
+        )
+        cwn_mortal_injury_declared_span(actor=core.name, rounds_to_die=rounds, _tracer=_tracer)
+
+        major = False
+        major_roll = 0
+        major_text = ""
+        save_made = True
+        if scene_traumatic:
+            save_roll = rng.randint(1, 20)
+            save_made = save_roll >= save_target
+            if not save_made:
+                major = True
+                major_roll = rng.randint(1, 12)
+                major_text = major_injury_entry(major_roll)
+                core.statuses.append(
+                    Status(text=f"Major Injury — {major_text}", severity=StatusSeverity.Scar)
+                )
+            cwn_major_injury_roll_span(
+                actor=core.name, save_made=save_made, roll=major_roll,
+                text=major_text, _tracer=_tracer,
+            )
+
+        return DownedResult(
+            mortal=True, major=major, major_roll=major_roll,
+            major_text=major_text, save_made=save_made,
         )

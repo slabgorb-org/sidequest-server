@@ -46,6 +46,7 @@ from .content import *  # noqa: F401, F403
 from .continuity import *  # noqa: F401, F403
 from .cookbook import *  # noqa: F401, F403
 from .course import *  # noqa: F401, F403
+from .cwn import *  # noqa: F401, F403
 from .dice import *  # noqa: F401, F403
 from .dispatch_engagement import *  # noqa: F401, F403
 from .disposition import *  # noqa: F401, F403

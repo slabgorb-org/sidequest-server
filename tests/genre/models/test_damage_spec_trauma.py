@@ -38,8 +38,9 @@ def test_shock_non_negative():
 
 
 def test_catalog_item_armor_class_optional():
-    armor = CatalogItem(id="vest", name="Vest", description="x", category="armor",
-                        armor_class=15, mitigation=2)
+    armor = CatalogItem(
+        id="vest", name="Vest", description="x", category="armor", armor_class=15, mitigation=2
+    )
     assert armor.armor_class == 15
     assert armor.mitigation == 2
     plain = CatalogItem(id="rock", name="Rock", description="x", category="misc")

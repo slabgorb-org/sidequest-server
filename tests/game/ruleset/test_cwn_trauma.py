@@ -13,8 +13,12 @@ from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import CwnConfig, TraumaConfig
 
 _AMAP = {
-    "STRENGTH": "Brawn", "DEXTERITY": "Reflex", "CONSTITUTION": "Body",
-    "INTELLIGENCE": "Tech", "WISDOM": "Instinct", "CHARISMA": "Cool",
+    "STRENGTH": "Brawn",
+    "DEXTERITY": "Reflex",
+    "CONSTITUTION": "Body",
+    "INTELLIGENCE": "Tech",
+    "WISDOM": "Instinct",
+    "CHARISMA": "Cool",
 }
 _CFG = CwnConfig(attribute_map=_AMAP, trauma=TraumaConfig(default_trauma_target=6))
 _MOD = CwnRulesetModule()

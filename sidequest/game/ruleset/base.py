@@ -17,6 +17,7 @@ from sidequest.protocol.models import InitiativeEntry
 
 if TYPE_CHECKING:
     from sidequest.game.beat_kinds import ApplyResult
+    from sidequest.game.lethality import DownedResult, LethalityResult
     from sidequest.genre.models.inventory import DamageSpec
 
 
@@ -100,7 +101,9 @@ class RulesetModule(ABC):
         """
         return None
 
-    def resolve_trauma(self, *, spec, base_total, cfg, rng, actor="", _tracer=None):
+    def resolve_trauma(
+        self, *, spec, base_total, cfg, rng, actor="", _tracer=None
+    ) -> LethalityResult:
         """Per-hit lethality multiplier. Default: identity passthrough (no Trauma).
 
         Only CWN overrides. Returns a LethalityResult. Imported lazily to avoid
@@ -108,15 +111,20 @@ class RulesetModule(ABC):
         from sidequest.game.lethality import LethalityResult
 
         return LethalityResult(
-            base_total=base_total, final_total=base_total,
-            traumatic=False, trauma_roll=0, trauma_target=0,
+            base_total=base_total,
+            final_total=base_total,
+            traumatic=False,
+            trauma_roll=0,
+            trauma_target=0,
         )
 
     def resolve_shock(self, *, spec, target_melee_ac, actor="", _tracer=None) -> int:
         """Chip damage applied on a MISS. Default: 0 (no Shock). Only CWN overrides."""
         return 0
 
-    def resolve_downed(self, *, core, save_target, scene_traumatic, cfg, rng, _tracer=None):
+    def resolve_downed(
+        self, *, core, save_target, scene_traumatic, cfg, rng, _tracer=None
+    ) -> DownedResult | None:
         """Resolve a 0-HP character. Default: no special consequence (None).
 
         CWN overrides to declare Mortal Injury and (if a Traumatic Hit landed

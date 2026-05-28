@@ -7,8 +7,12 @@ from sidequest.genre.models.rules import CwnConfig, RulesConfig, TraumaConfig
 
 _FLAVOR = ["Brawn", "Reflex", "Body", "Tech", "Instinct", "Cool"]
 _AMAP = {
-    "STRENGTH": "Brawn", "DEXTERITY": "Reflex", "CONSTITUTION": "Body",
-    "INTELLIGENCE": "Tech", "WISDOM": "Instinct", "CHARISMA": "Cool",
+    "STRENGTH": "Brawn",
+    "DEXTERITY": "Reflex",
+    "CONSTITUTION": "Body",
+    "INTELLIGENCE": "Tech",
+    "WISDOM": "Instinct",
+    "CHARISMA": "Cool",
 }
 
 

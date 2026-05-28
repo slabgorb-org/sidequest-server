@@ -15,9 +15,9 @@ from opentelemetry import trace
 
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.lethality import DownedResult, LethalityResult, major_injury_entry
-from sidequest.game.status import Status, StatusSeverity
 from sidequest.game.ruleset.resolution import CheckRollParams
 from sidequest.game.ruleset.swn import SwnRulesetModule
+from sidequest.game.status import Status, StatusSeverity
 from sidequest.game.system_strain import StrainResult
 from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import CwnConfig, SwnConfig
@@ -51,7 +51,7 @@ class CwnRulesetModule(SwnRulesetModule):
         spec: DamageSpec,
         target_melee_ac: int,
         actor: str = "",
-        _tracer: "trace.Tracer | None" = None,
+        _tracer: trace.Tracer | None = None,
     ) -> int:
         """CWN Shock: a melee weapon with shock>0 chips `shock` damage on a MISS
         when the target's Melee AC <= the weapon's Shock rating. v1 models the
@@ -61,8 +61,11 @@ class CwnRulesetModule(SwnRulesetModule):
         if spec.shock <= 0 or target_melee_ac > spec.shock:
             return 0
         cwn_shock_applied_span(
-            actor=actor, amount=spec.shock, melee_ac=target_melee_ac,
-            shock_rating=spec.shock, _tracer=_tracer,
+            actor=actor,
+            amount=spec.shock,
+            melee_ac=target_melee_ac,
+            shock_rating=spec.shock,
+            _tracer=_tracer,
         )
         return spec.shock
 
@@ -74,7 +77,7 @@ class CwnRulesetModule(SwnRulesetModule):
         cfg: SwnConfig | None,
         rng: random.Random,
         actor: str = "",
-        _tracer: "trace.Tracer | None" = None,
+        _tracer: trace.Tracer | None = None,
     ) -> LethalityResult:
         """CWN Trauma: if the weapon has a Trauma Die, roll it; on a result that
         meets/exceeds the Trauma Target, multiply total damage by trauma_rating.
@@ -85,25 +88,41 @@ class CwnRulesetModule(SwnRulesetModule):
         lie-detector sees both traumatic and non-traumatic rolls)."""
         if spec.trauma_die is None:
             return LethalityResult(
-                base_total=base_total, final_total=base_total,
-                traumatic=False, trauma_roll=0, trauma_target=0,
+                base_total=base_total,
+                final_total=base_total,
+                traumatic=False,
+                trauma_roll=0,
+                trauma_target=0,
             )
         if not isinstance(cfg, CwnConfig):
-            raise ValueError(
-                f"resolve_trauma requires a CwnConfig; got {type(cfg).__name__!r}"
-            )
-        target = spec.trauma_target if spec.trauma_target is not None else cfg.trauma.default_trauma_target
-        trauma_roll = DamageSpec(dice=spec.trauma_die).roll(rng)  # sum of the trauma dice (usually 1 die)
+            raise ValueError(f"resolve_trauma requires a CwnConfig; got {type(cfg).__name__!r}")
+        target = (
+            spec.trauma_target
+            if spec.trauma_target is not None
+            else cfg.trauma.default_trauma_target
+        )
+        trauma_roll = DamageSpec(dice=spec.trauma_die).roll(
+            rng
+        )  # sum of the trauma dice (usually 1 die)
         traumatic = trauma_roll >= target
         final = base_total * spec.trauma_rating if traumatic else base_total
         cwn_trauma_roll_span(
-            actor=actor, weapon_die=spec.trauma_die, roll=trauma_roll, target=target,
-            traumatic=traumatic, rating=spec.trauma_rating, base=base_total, final=final,
+            actor=actor,
+            weapon_die=spec.trauma_die,
+            roll=trauma_roll,
+            target=target,
+            traumatic=traumatic,
+            rating=spec.trauma_rating,
+            base=base_total,
+            final=final,
             _tracer=_tracer,
         )
         return LethalityResult(
-            base_total=base_total, final_total=final,
-            traumatic=traumatic, trauma_roll=trauma_roll, trauma_target=target,
+            base_total=base_total,
+            final_total=final,
+            traumatic=traumatic,
+            trauma_roll=trauma_roll,
+            trauma_target=target,
         )
 
     def apply_system_strain(
@@ -202,7 +221,7 @@ class CwnRulesetModule(SwnRulesetModule):
         scene_traumatic: bool,
         cfg: SwnConfig | None,
         rng: random.Random,
-        _tracer: "trace.Tracer | None" = None,
+        _tracer: trace.Tracer | None = None,
     ) -> DownedResult:
         """Resolve a CWN character dropped to 0 HP.
 
@@ -213,9 +232,7 @@ class CwnRulesetModule(SwnRulesetModule):
         rolls 1d12 on the Major Injury table and attaches that as a second Scar.
         Emits cwn.mortal_injury.declared and (when rolled) cwn.major_injury.roll."""
         if not isinstance(cfg, CwnConfig):
-            raise ValueError(
-                f"resolve_downed requires a CwnConfig; got {type(cfg).__name__!r}"
-            )
+            raise ValueError(f"resolve_downed requires a CwnConfig; got {type(cfg).__name__!r}")
         rounds = cfg.trauma.mortal_injury_rounds
         core.statuses.append(
             Status(
@@ -240,11 +257,17 @@ class CwnRulesetModule(SwnRulesetModule):
                     Status(text=f"Major Injury — {major_text}", severity=StatusSeverity.Scar)
                 )
             cwn_major_injury_roll_span(
-                actor=core.name, save_made=save_made, roll=major_roll,
-                text=major_text, _tracer=_tracer,
+                actor=core.name,
+                save_made=save_made,
+                roll=major_roll,
+                text=major_text,
+                _tracer=_tracer,
             )
 
         return DownedResult(
-            mortal=True, major=major, major_roll=major_roll,
-            major_text=major_text, save_made=save_made,
+            mortal=True,
+            major=major,
+            major_roll=major_roll,
+            major_text=major_text,
+            save_made=save_made,
         )

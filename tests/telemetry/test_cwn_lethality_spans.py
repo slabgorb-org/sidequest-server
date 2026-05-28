@@ -37,8 +37,17 @@ def test_all_four_spans_are_routed():
 
 def test_trauma_span_emits():
     exporter, tracer = _exporter()
-    cwn_trauma_roll_span(actor="Mook", weapon_die="1d6", roll=6, target=6,
-                         traumatic=True, rating=3, base=7, final=21, _tracer=tracer)
+    cwn_trauma_roll_span(
+        actor="Mook",
+        weapon_die="1d6",
+        roll=6,
+        target=6,
+        traumatic=True,
+        rating=3,
+        base=7,
+        final=21,
+        _tracer=tracer,
+    )
     spans = exporter.get_finished_spans()
     assert spans[0].name == "cwn.trauma.roll"
     attrs = dict(spans[0].attributes or {})
@@ -60,8 +69,9 @@ def test_mortal_span_emits():
 
 def test_major_span_emits():
     exporter, tracer = _exporter()
-    cwn_major_injury_roll_span(actor="Jax", save_made=False, roll=9,
-                               text="Severed limb.", _tracer=tracer)
+    cwn_major_injury_roll_span(
+        actor="Jax", save_made=False, roll=9, text="Severed limb.", _tracer=tracer
+    )
     spans = exporter.get_finished_spans()
     assert spans[0].name == "cwn.major_injury.roll"
     assert dict(spans[0].attributes or {})["roll"] == 9

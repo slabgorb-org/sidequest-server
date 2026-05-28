@@ -92,9 +92,7 @@ class StabilizeMortalInjuryArgs(BaseModel):
     ),
     category=ToolCategory.WRITE,
 )
-async def stabilize_mortal_injury(
-    args: StabilizeMortalInjuryArgs, ctx: ToolContext
-) -> ToolResult:
+async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
@@ -116,12 +114,8 @@ async def stabilize_mortal_injury(
 
     if success:
         # Clear the Mortal Injury Scar and downgrade to a Frail Wound.
-        core.statuses = [
-            s for s in core.statuses if _MORTAL_INJURY_MARKER not in s.text
-        ]
-        core.statuses.append(
-            Status(text=_FRAIL_TEXT, severity=StatusSeverity.Wound)
-        )
+        core.statuses = [s for s in core.statuses if _MORTAL_INJURY_MARKER not in s.text]
+        core.statuses.append(Status(text=_FRAIL_TEXT, severity=StatusSeverity.Wound))
 
     ctx.repository.save(snapshot)
 

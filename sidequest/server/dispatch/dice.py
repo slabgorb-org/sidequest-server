@@ -295,8 +295,10 @@ def dispatch_dice_throw(
             target_core = snapshot.find_creature_core(target_name)
     attacker_core = snapshot.find_creature_core(character_name)
     attack = ruleset.attack_params(
-        beat=beat, attacker_stats=character_stats,
-        attacker_core=attacker_core, target_core=target_core,
+        beat=beat,
+        attacker_stats=character_stats,
+        attacker_core=attacker_core,
+        target_core=target_core,
     )
     modifier = attack.modifier
     difficulty = attack.target_number
@@ -570,9 +572,7 @@ def dispatch_dice_throw(
             _down_core = snapshot.find_creature_core(_down_name)
             if _down_core is not None and _down_core.hp.current <= 0:
                 _cfg = pack.rules.ruleset_config()
-                _scene_traumatic = any(
-                    t.text == "Traumatic Hit Landed" for t in encounter.tags
-                )
+                _scene_traumatic = any(t.text == "Traumatic Hit Landed" for t in encounter.tags)
                 _save_target = _physical_save_target_for(
                     ruleset=ruleset,
                     snapshot=snapshot,

@@ -15,11 +15,11 @@ class LethalityResult(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    base_total: int       # damage rolled before Trauma
-    final_total: int      # damage after Trauma multiplication (== base_total if not traumatic)
-    traumatic: bool       # did the Trauma Die meet/exceed the Trauma Target?
-    trauma_roll: int      # the Trauma Die result (0 if the weapon has no trauma_die)
-    trauma_target: int    # the target it was rolled against
+    base_total: int  # damage rolled before Trauma
+    final_total: int  # damage after Trauma multiplication (== base_total if not traumatic)
+    traumatic: bool  # did the Trauma Die meet/exceed the Trauma Target?
+    trauma_roll: int  # the Trauma Die result (0 if the weapon has no trauma_die)
+    trauma_target: int  # the target it was rolled against
 
 
 class DownedResult(BaseModel):
@@ -27,11 +27,11 @@ class DownedResult(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    mortal: bool          # Mortal Injury declared (always True under CWN at 0 HP from lethal damage)
-    major: bool           # Major Injury table rolled (only when a Traumatic Hit landed this scene)
-    major_roll: int       # 1d12 result (0 if no Major Injury roll)
-    major_text: str       # the table entry text ("" if no roll)
-    save_made: bool       # Physical save result (True = save succeeded, no Major Injury)
+    mortal: bool  # Mortal Injury declared (always True under CWN at 0 HP from lethal damage)
+    major: bool  # Major Injury table rolled (only when a Traumatic Hit landed this scene)
+    major_roll: int  # 1d12 result (0 if no Major Injury roll)
+    major_text: str  # the table entry text ("" if no roll)
+    save_made: bool  # Physical save result (True = save succeeded, no Major Injury)
 
 
 # CWN Major Injury table (1d12). Rolled when a character drops to 0 HP in a

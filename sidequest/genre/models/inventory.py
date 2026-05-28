@@ -110,7 +110,9 @@ class CatalogItem(BaseModel):
     resource_ticks: int | None = None
     damage: DamageSpec | None = None  # weapons
     mitigation: int | None = None  # armor: flat damage reduction (SWN soak)
-    armor_class: int | None = None  # armor: SWN ascending AC the attack rolls against (distinct from mitigation soak)
+    armor_class: int | None = (
+        None  # armor: SWN ascending AC the attack rolls against (distinct from mitigation soak)
+    )
 
 
 class CarryMode(StrEnum):

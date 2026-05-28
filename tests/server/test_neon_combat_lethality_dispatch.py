@@ -249,8 +249,12 @@ def test_trauma_span_fires_on_cwn_strike_hit(otel_capture, monkeypatch):
     snap, enc = _make_snapshot_and_encounter("Razor", "Mr. Vex")
 
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Razor",
-        request_id="trauma-span", round_number=1,
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Razor",
+        request_id="trauma-span",
+        round_number=1,
     )
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
@@ -278,8 +282,12 @@ def test_traumatic_hit_records_scene_tag(otel_capture, monkeypatch):
     )
 
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Razor",
-        request_id="trauma-tag", round_number=2,
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Razor",
+        request_id="trauma-tag",
+        round_number=2,
     )
 
     assert any(t.text == "Traumatic Hit Landed" for t in enc.tags), (
@@ -294,8 +302,12 @@ def test_traumatic_hit_records_scene_tag(otel_capture, monkeypatch):
     # The seam de-dups: a second traumatic strike in the same scene must NOT
     # append a duplicate tag.
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Razor",
-        request_id="trauma-tag-2", round_number=3,
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Razor",
+        request_id="trauma-tag-2",
+        round_number=3,
     )
     tagged = [t for t in enc.tags if t.text == "Traumatic Hit Landed"]
     assert len(tagged) == 1, (
@@ -591,8 +603,12 @@ def test_downed_target_gets_mortal_injury(otel_capture, monkeypatch):
     target_core = snap.find_creature_core("Mr. Vex")
 
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Razor",
-        request_id="downed-mortal", round_number=1,
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Razor",
+        request_id="downed-mortal",
+        round_number=1,
     )
 
     assert target_core.hp.current == 0, (
@@ -601,8 +617,7 @@ def test_downed_target_gets_mortal_injury(otel_capture, monkeypatch):
     )
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert "cwn.mortal_injury.declared" in span_names, (
-        f"a CWN target dropped to 0 HP must declare a Mortal Injury; "
-        f"got spans: {span_names}"
+        f"a CWN target dropped to 0 HP must declare a Mortal Injury; got spans: {span_names}"
     )
     assert any("Mortal Injury" in s.text for s in target_core.statuses), (
         f"the downed target must carry a Mortal Injury Scar status; "
@@ -638,8 +653,12 @@ def test_downed_after_traumatic_hit_rolls_major(otel_capture, monkeypatch):
     target_core = snap.find_creature_core("Mr. Vex")
 
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Razor",
-        request_id="downed-major", round_number=1,
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Razor",
+        request_id="downed-major",
+        round_number=1,
     )
 
     assert target_core.hp.current == 0, (

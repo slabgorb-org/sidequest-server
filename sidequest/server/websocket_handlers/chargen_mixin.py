@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 
@@ -90,6 +90,7 @@ logger = logging.getLogger(__name__)
 # Preserve the original tracer name so OTEL span sources do not rename when
 # this class moved out of session_handler.py. Phase-3 plan principle.
 tracer = trace.get_tracer("sidequest.server.session_handler")
+from sidequest.game.projection.view import SessionGameStateView  # noqa: E402
 from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
     _maybe_emit_location_description,
     _maybe_emit_tactical_grid,
@@ -98,6 +99,108 @@ from sidequest.server.websocket_handlers.opening_helpers import (  # noqa: E402
     _populate_opening_directive_on_chargen_complete,
     _should_fire_opening_narration,
 )
+
+
+def _pov_swap_opening_for_driver(
+    messages: list[Any],
+    *,
+    driver_player_id: str,
+    view: SessionGameStateView,
+    snapshot: GameSnapshot,
+) -> list[Any]:
+    """Story 71-5: POV-swap the DRIVING player's OWN opening cards to 2nd person.
+
+    Architect seam Option (a): the opening narration broadcasts to peers via
+    ``room.broadcast`` (raw, single-anchor — peers are non-anchor and correctly
+    see 3rd person), but the driver's local copy bypassed the perception fanout
+    where ``_apply_pov_swap`` runs, so it stayed 3rd-person. This helper builds a
+    SEPARATE swapped copy for the driver only, reusing the EXISTING
+    ``_apply_pov_swap`` + ``_pronouns_for_pc`` (no reimplemented POV logic):
+
+    - The driver-anchored prose card → rewritten to "You …".
+    - A generic cold-open seed (no ``_visibility``) → natural no-op (unchanged).
+    - The consumed ``_visibility`` sidecar is stripped from swapped cards.
+    - ``opening.narration_pov_swapped`` fires ONCE (aggregate) only when a swap
+      actually fired (swap_count > 0) — never for atmospheric/non-anchored
+      openings (GM-panel lie detector, CLAUDE.md OTEL principle).
+
+    Never mutates the input message objects (peers get the untouched originals
+    byte-identical); swapped cards are fresh copies.
+    """
+    import json  # noqa: PLC0415 — local import keeps the module load cycle-free
+
+    from pydantic import BaseModel  # noqa: PLC0415
+
+    from sidequest.agents.pov_swap import swap_to_second_person  # noqa: PLC0415
+    from sidequest.server.emitters import (  # noqa: PLC0415
+        _apply_pov_swap,
+        _pronouns_for_pc,
+    )
+
+    out: list[object] = []
+    total_swap_count = 0
+    anchor_pc_seen: str | None = None
+    anchor_pronouns_seen = ""
+    total_original_len = 0
+    total_swapped_len = 0
+
+    for msg in messages:
+        payload = getattr(msg, "payload", None)
+        if not isinstance(payload, BaseModel):
+            out.append(msg)
+            continue
+        raw_dict = json.loads(payload.model_dump_json())
+        original_text = raw_dict.get("text", "")
+        original_text = original_text if isinstance(original_text, str) else ""
+        swapped_dict = _apply_pov_swap(
+            raw_dict,
+            recipient_player_id=driver_player_id,
+            view=view,
+            snapshot=snapshot,
+        )
+        if swapped_dict is raw_dict:
+            # No swap (generic seed with no anchor, or anchor != driver) —
+            # pass the ORIGINAL object through so the peer broadcast that also
+            # references it stays byte-identical.
+            out.append(msg)
+            continue
+        # A swap fired for the driver. Re-derive the count deterministically
+        # (OTEL B — same inputs as the real swap), strip the consumed sidecar,
+        # and rebuild a FRESH driver-only copy (never touch the original).
+        viz = raw_dict.get("_visibility") or {}
+        anchor_pc = viz.get("anchor_pc")
+        pronouns = _pronouns_for_pc(snapshot, anchor_pc) if anchor_pc else ""
+        cnt = 0
+        if anchor_pc and pronouns:
+            _, cnt = swap_to_second_person(
+                original_text, target_name=anchor_pc, pronouns=pronouns
+            )
+        swapped_text = swapped_dict.get("text", "")
+        swapped_text = swapped_text if isinstance(swapped_text, str) else ""
+        total_swap_count += cnt
+        total_original_len += len(original_text)
+        total_swapped_len += len(swapped_text)
+        anchor_pc_seen = anchor_pc
+        anchor_pronouns_seen = pronouns
+        swapped_dict.pop("_visibility", None)  # consumed-not-leaked
+        new_payload = type(payload).model_validate(swapped_dict)
+        out.append(msg.model_copy(update={"payload": new_payload}))
+
+    if total_swap_count > 0:
+        _watcher_publish(
+            "opening.narration_pov_swapped",
+            {
+                "driver_player_id": driver_player_id,
+                "anchor_pc": anchor_pc_seen,
+                "anchor_pronouns": anchor_pronouns_seen,
+                "swap_count": total_swap_count,
+                "original_text_length": total_original_len,
+                "swapped_text_length": total_swapped_len,
+            },
+            component="opening_hook",
+            severity="info",
+        )
+    return out
 
 
 class CharGenMixin:
@@ -1450,7 +1553,29 @@ class CharGenMixin:
         # first committer still sees the opening.
         if _should_fire_opening_narration(sd, self._room):
             opening_messages = await self._run_opening_turn_narration(sd, player_id, span)
-            out.extend(opening_messages)
+            # Story 71-5: the committing player IS the driving player and a
+            # player at the table — their OWN opening card must read 2nd-person
+            # ("You step…"), not raw 3rd-person. Build a SEPARATE POV-swapped
+            # copy for the local return; the peer broadcast below still sends
+            # the untouched ORIGINALS (single-anchor: peers are non-anchor and
+            # correctly see 3rd person — peer fanout unchanged).
+            # Map player_id → PC name from the snapshot's seat roster. The seat
+            # slot equals the character's core.name (chargen seats from
+            # core.name), which is also the narrator's anchor_pc — so
+            # character_of(driver) matches the prose's anchor and the swap fires
+            # for the driver. player_seats is populated by seat-time at the
+            # opening (last committer), so it is authoritative here.
+            _driver_view = SessionGameStateView(
+                gm_player_id=None,
+                player_id_to_character=dict(sd.snapshot.player_seats),
+            )
+            driver_copies = _pov_swap_opening_for_driver(
+                opening_messages,
+                driver_player_id=(sd.player_id or player_id),
+                view=_driver_view,
+                snapshot=sd.snapshot,
+            )
+            out.extend(driver_copies)
             # MP: broadcast opening narration to peers so the earlier
             # committer (whose chargen.complete was deferred) sees the
             # canned opening when it finally fires here. Solo path

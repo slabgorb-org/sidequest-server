@@ -462,14 +462,6 @@ LORE_WORLD_FILES: tuple[str, ...] = (
     "locations.yaml",
 )
 
-LORE_PACK_FLAVOR_FILES: tuple[str, ...] = (
-    "cultures.yaml",
-    "lore.yaml",
-    "history.yaml",
-    # Story 63-7: factions live at the pack tier and namespace as `cult-*`.
-    "factions.yaml",
-)
-
 EXCLUDED_FILES: frozenset[str] = frozenset(
     {
         # Spoiler-bearing / keeper-side only
@@ -1096,11 +1088,13 @@ def load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
 def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -> str:
     """Build the /reference/lore/<pack>/<world> HTML document.
 
-    Lore pages render the world-tier files (``LORE_WORLD_FILES`` from
-    ``world_dir``) plus the pack-tier flavor files (``LORE_PACK_FLAVOR_FILES``
-    from ``pack_dir``). Pack-flavor renders get the ``(genre)`` label
-    suffix so authors can tell at a glance which tier the content
-    came from.
+    Lore pages render the world-tier files only (``LORE_WORLD_FILES`` from
+    ``world_dir``). Pack/genre-tier flavor is deliberately NOT merged in
+    (Story 63-10, Architect-ratified absolute world-only): a world's lore can
+    contradict its pack's cosmology, so concatenating pack flavor produced
+    incoherent pages (e.g. beneath_sunden rejecting the Keeper/Maw cosmology
+    its pack asserts). There is no ``(genre)`` tier label, since no genre-tier
+    content appears.
 
     Hero title is the world's ``world_name`` from ``world_dir/lore.yaml``,
     falling back to ``PACK_LABELS[pack]`` with a WARN span.
@@ -1116,24 +1110,8 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
         theme=theme,
         poi_image_slugs=load_poi_image_slugs(world_dir),
     )
-    flavor_rendered = _file_renders_by_stem(
-        LORE_PACK_FLAVOR_FILES,
-        pack_dir,
-        pack=pack,
-        world=world,
-        theme=theme,
-        label_suffix="(genre)",
-    )
-    # Merge: pack-flavor renders come AFTER same-stem world renders so
-    # world-tier content takes precedence in source order.
-    merged: dict[str, str] = dict(world_rendered)
-    for stem, rendered in flavor_rendered.items():
-        if stem in merged:
-            merged[stem] = merged[stem] + rendered
-        else:
-            merged[stem] = rendered
 
-    body = _wrap_sections_by_toc(pack, merged)
+    body = _wrap_sections_by_toc(pack, world_rendered)
     return _wrap_document(
         title=f"{pack} / {world} — Lore",
         body=body,

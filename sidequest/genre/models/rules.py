@@ -818,8 +818,8 @@ class CwnConfig(SwnConfig):
     - the 6/8/10/12/14 difficulty ladder.
     - attribute_map: CWN attribute -> this pack's flavor stat (all six keys
       required when ruleset == 'cwn'; validated on RulesConfig).
-    System Strain / Trauma fields are added by the System Strain and Combat
-    Lethality plans (YAGNI here).
+    System Strain is configured via ``system_strain`` (System Strain plan).
+    Trauma fields are deferred to the Combat Lethality plan (YAGNI here).
     """
 
     model_config = {"extra": "forbid"}

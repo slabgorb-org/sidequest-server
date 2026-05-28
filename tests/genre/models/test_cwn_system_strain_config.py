@@ -39,7 +39,9 @@ def test_cwn_accepts_valid_max_source():
     rules = RulesConfig(
         ruleset="cwn",
         ability_score_names=_FLAVOR,
-        cwn=CwnConfig(attribute_map=_AMAP, system_strain=SystemStrainConfig(max_source="CONSTITUTION")),
+        cwn=CwnConfig(
+            attribute_map=_AMAP, system_strain=SystemStrainConfig(max_source="CONSTITUTION")
+        ),
     )
     assert rules.cwn is not None
     assert rules.cwn.system_strain.max_source == "CONSTITUTION"

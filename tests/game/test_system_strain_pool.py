@@ -24,7 +24,9 @@ def test_pool_forbids_extra_fields():
 
 
 def test_strain_result_carries_outcome():
-    r = StrainResult(applied=False, current=12, max=12, permanent=2, delta=0, reason="would exceed max")
+    r = StrainResult(
+        applied=False, current=12, max=12, permanent=2, delta=0, reason="would exceed max"
+    )
     assert r.applied is False
     assert r.delta == 0
     assert r.reason == "would exceed max"

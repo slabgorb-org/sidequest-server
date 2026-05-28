@@ -24,7 +24,7 @@ from sidequest.genre.models.character import (
     MechanicalEffects,
 )
 from sidequest.genre.models.rules import CwnConfig, RulesConfig
-from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
+from tests._helpers.genre_paths import PackNotFound, find_pack_path
 
 CWN_ABILITY_NAMES = ["Brawn", "Reflex", "Body", "Tech", "Instinct", "Cool"]
 NATIVE_ABILITY_NAMES = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
@@ -229,8 +229,6 @@ def test_real_neon_character_gets_strain_pool() -> None:
     # Walk through all non-confirmation scenes by picking choice 0 each time.
     # confirmation scene has no choices; the builder becomes confirmable once all
     # prior scenes are processed.
-    from sidequest.game.builder import Confirmation
-
     while not builder.is_confirmation():
         scene = builder.current_scene()
         if scene.choices:

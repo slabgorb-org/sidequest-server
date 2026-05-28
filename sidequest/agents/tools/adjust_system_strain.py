@@ -80,9 +80,7 @@ class AdjustSystemStrainArgs(BaseModel):
     ),
     category=ToolCategory.WRITE,
 )
-async def adjust_system_strain(
-    args: AdjustSystemStrainArgs, ctx: ToolContext
-) -> ToolResult:
+async def adjust_system_strain(args: AdjustSystemStrainArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
@@ -90,9 +88,7 @@ async def adjust_system_strain(
     pack = ctx.genre_pack
     if pack is None or pack.rules is None or pack.rules.ruleset != "cwn":
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
-        raise ValueError(
-            f"adjust_system_strain is cwn-only; loaded pack has ruleset={ruleset!r}"
-        )
+        raise ValueError(f"adjust_system_strain is cwn-only; loaded pack has ruleset={ruleset!r}")
 
     snapshot = session.snapshot
     core = snapshot.find_creature_core(args.actor)

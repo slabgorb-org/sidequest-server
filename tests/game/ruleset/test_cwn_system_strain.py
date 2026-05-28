@@ -11,8 +11,12 @@ from sidequest.game.system_strain import SystemStrainPool
 from sidequest.genre.models.rules import CwnConfig
 
 _AMAP = {
-    "STRENGTH": "Brawn", "DEXTERITY": "Reflex", "CONSTITUTION": "Body",
-    "INTELLIGENCE": "Tech", "WISDOM": "Instinct", "CHARISMA": "Cool",
+    "STRENGTH": "Brawn",
+    "DEXTERITY": "Reflex",
+    "CONSTITUTION": "Body",
+    "INTELLIGENCE": "Tech",
+    "WISDOM": "Instinct",
+    "CHARISMA": "Cool",
 }
 _CFG = CwnConfig(attribute_map=_AMAP)
 _MOD = CwnRulesetModule()
@@ -20,7 +24,9 @@ _MOD = CwnRulesetModule()
 
 def _core(current=0, max=12, permanent=0) -> CreatureCore:
     return CreatureCore(
-        name="Jax", description="runner", personality="cool",
+        name="Jax",
+        description="runner",
+        personality="cool",
         system_strain=SystemStrainPool(current=current, max=max, permanent=permanent),
     )
 
@@ -34,7 +40,9 @@ def _exporter():
 
 def test_temporary_within_max_applies():
     core = _core(current=2, max=12)
-    r = _MOD.apply_system_strain(core=core, kind="temporary", amount=3, source="adrenal_boost", cfg=_CFG)
+    r = _MOD.apply_system_strain(
+        core=core, kind="temporary", amount=3, source="adrenal_boost", cfg=_CFG
+    )
     assert r.applied is True
     assert r.current == 5
     assert r.delta == 3
@@ -43,7 +51,9 @@ def test_temporary_within_max_applies():
 
 def test_temporary_over_max_is_refused():
     core = _core(current=10, max=12)
-    r = _MOD.apply_system_strain(core=core, kind="temporary", amount=5, source="overclock", cfg=_CFG)
+    r = _MOD.apply_system_strain(
+        core=core, kind="temporary", amount=5, source="overclock", cfg=_CFG
+    )
     assert r.applied is False
     assert r.delta == 0
     assert r.current == 10
@@ -61,7 +71,9 @@ def test_permanent_raises_floor_and_current():
 
 def test_permanent_install_over_max_is_refused():
     core = _core(current=11, max=12, permanent=4)
-    r = _MOD.apply_system_strain(core=core, kind="permanent", amount=3, source="reflex_wires", cfg=_CFG)
+    r = _MOD.apply_system_strain(
+        core=core, kind="permanent", amount=3, source="reflex_wires", cfg=_CFG
+    )
     assert r.applied is False
     assert core.system_strain.permanent == 4
     assert core.system_strain.current == 11
@@ -80,7 +92,7 @@ def test_rest_recovers_down_to_permanent_floor():
     r = _MOD.apply_system_strain(core=core, kind="rest", amount=1, source="night_rest", cfg=_CFG)
     assert r.applied is True
     assert core.system_strain.current == 5
-    r2 = _MOD.apply_system_strain(core=core, kind="rest", amount=10, source="long_rest", cfg=_CFG)
+    _MOD.apply_system_strain(core=core, kind="rest", amount=10, source="long_rest", cfg=_CFG)
     assert core.system_strain.current == 2
     assert core.system_strain.permanent == 2
 
@@ -107,11 +119,14 @@ def test_unknown_kind_fails_loud():
 
 def test_non_cwn_config_fails_loud():
     from sidequest.genre.models.rules import SwnConfig
+
     core = _core()
     with pytest.raises(ValueError, match="CwnConfig"):
         _MOD.apply_system_strain(core=core, kind="temporary", amount=1, source="x", cfg=None)
     with pytest.raises(ValueError, match="CwnConfig"):
-        _MOD.apply_system_strain(core=core, kind="temporary", amount=1, source="x", cfg=SwnConfig(attribute_map=_AMAP))
+        _MOD.apply_system_strain(
+            core=core, kind="temporary", amount=1, source="x", cfg=SwnConfig(attribute_map=_AMAP)
+        )
 
 
 def test_rest_with_zero_nights_is_noop():
@@ -125,8 +140,12 @@ def test_rest_with_zero_nights_is_noop():
 def test_emits_otel_on_apply_and_on_refusal():
     exporter, tracer = _exporter()
     core = _core(current=10, max=12)
-    _MOD.apply_system_strain(core=core, kind="temporary", amount=1, source="ok", cfg=_CFG, _tracer=tracer)
-    _MOD.apply_system_strain(core=core, kind="temporary", amount=9, source="too_much", cfg=_CFG, _tracer=tracer)
+    _MOD.apply_system_strain(
+        core=core, kind="temporary", amount=1, source="ok", cfg=_CFG, _tracer=tracer
+    )
+    _MOD.apply_system_strain(
+        core=core, kind="temporary", amount=9, source="too_much", cfg=_CFG, _tracer=tracer
+    )
     spans = exporter.get_finished_spans()
     assert [s.name for s in spans] == ["cwn.system_strain.delta", "cwn.system_strain.delta"]
     applied_flags = [dict(s.attributes or {})["applied"] for s in spans]

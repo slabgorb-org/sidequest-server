@@ -488,6 +488,14 @@ def test_unknown_pack_falls_back_to_default_toc_and_fires_error_span(
     from sidequest.server.reference_renderer import assemble_rules_page
 
     pack = _seed_pack(tmp_path, pack_name="never_real_pack")
+    # Story 63-11 drops empty rules sections + their TOC links. _seed_pack omits
+    # magic + achievements, so seed them here with real content — this test
+    # asserts all four DEFAULT_RULES_TOC sections are reachable, so each must
+    # carry content to render. Strengthens the default-TOC-coverage check.
+    (pack / "magic.yaml").write_text("genre: arcane\nallowed_sources:\n  - sorcery\n  - relic\n")
+    (pack / "achievements.yaml").write_text(
+        "- name: First Blood\n  condition: Win a duel\n  reward: Glory\n"
+    )
 
     calls: list[dict[str, str]] = []
     from contextlib import contextmanager

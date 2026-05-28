@@ -587,6 +587,24 @@ def _file_section_wrapper(path: Path, body: str) -> str:
     )
 
 
+# Generic-walk results that carry no player-facing content. render_node emits
+# these for empty containers / empty files; an all-KEEPER-dropped dict yields "".
+_EMPTY_BODY_PLACEHOLDERS: frozenset[str] = frozenset(
+    {"<p><em>(empty)</em></p>", "<p><em>(empty file)</em></p>"}
+)
+
+
+def _body_has_content(body: str) -> bool:
+    """True when a rendered file body carries real player-facing content.
+
+    False for whitespace-only output and for the generic walk's "(empty)" /
+    "(empty file)" placeholders — the signals Story 63-11 suppresses so an
+    empty section (and its TOC entry) is dropped rather than rendered hollow.
+    """
+    stripped = body.strip()
+    return bool(stripped) and stripped not in _EMPTY_BODY_PLACEHOLDERS
+
+
 def _render_file(
     path: Path,
     *,
@@ -645,11 +663,22 @@ def _render_file(
                 raise
             if rendered:
                 return _file_section_wrapper(path, rendered)
-            # Presenter returned empty — means "I don't recognise this shape",
-            # not "intentionally suppress". Fall through to the generic walk
-            # below so the file content is never silently blackholed.
+            # Presenter returned empty — it didn't recognise this data shape,
+            # NOT "intentionally suppress". Fall through to the generic walk so
+            # content the presenter can't render (e.g. a beat_vocabulary's
+            # event_flavor / decision_framings / chase_modes, which
+            # present_beat_vocabulary skips) is still surfaced, never
+            # blackholed. Genuinely-empty data is caught by the body check below.
 
     body = "<p><em>(empty file)</em></p>" if data is None else render_node(data, kind=kind, ctx=ctx)
+    # Story 63-11: present-but-empty data renders only a placeholder / nothing —
+    # achievements: [] -> "(empty)"; a beat_vocab carrying only the
+    # KEEPER-dropped `obstacles` key -> ""; an empty file -> "(empty file)".
+    # Suppress it (return "") so _file_renders_by_stem omits the stem and
+    # _wrap_sections_by_toc drops both the hollow <section> and its dangling TOC
+    # link. Real content (any other markup) still wraps and renders.
+    if not _body_has_content(body):
+        return ""
     return _file_section_wrapper(path, body)
 
 
@@ -921,19 +950,27 @@ def _wrap_sections_by_toc(
     rendered_by_stem: dict[str, str],
     *,
     toc_entries: list[dict[str, str]] | None = None,
-) -> str:
+) -> tuple[str, list[dict[str, str]]]:
     """Bucket the rendered file fragments into per-TOC-id sections.
 
-    For each TOC entry of ``pack``, emit
-    ``<section id="{toc.id}">{concatenated stems}</section>`` — even if
-    no mapped files exist (the TOC link must resolve, per AC4 + Task D).
+    For each TOC entry of ``pack`` whose mapped stems produced content, emit
+    ``<section id="{toc.id}">{concatenated stems}</section>``.
 
-    Stems not referenced by any TOC entry render afterwards in their
-    existing per-file wrappers so content is never silently dropped.
+    Story 63-11: a TOC entry whose mapped stems render NOTHING (absent file,
+    or a presenter that suppressed present-but-empty data) is dropped — both
+    the empty ``<section>`` AND the entry itself — so the caller can omit the
+    matching nav link. A dangling link to an empty anchor previously tripped
+    the bad-anchor banner and showed a placeholder section.
+
+    Returns ``(body_html, kept_entries)`` where ``kept_entries`` is the subset
+    of TOC entries that actually rendered a section, in order. Stems not
+    referenced by any TOC entry still render afterwards in their existing
+    per-file wrappers so content is never silently dropped.
     """
     entries = toc_entries if toc_entries is not None else _pack_toc_entries(pack)
     used_stems: set[str] = set()
     parts: list[str] = []
+    kept_entries: list[dict[str, str]] = []
     for entry in entries:
         toc_id = entry["id"]
         stems = TOC_TO_FILES.get(toc_id, [])
@@ -943,15 +980,17 @@ def _wrap_sections_by_toc(
                 section_body_parts.append(rendered_by_stem[stem])
                 used_stems.add(stem)
         section_body = "".join(section_body_parts)
-        # Emit the section wrapper even when empty so the TOC anchor
-        # resolves (a missing anchor would bring up the bad-anchor banner).
+        if not section_body:
+            # Empty section: drop it and its TOC entry (Story 63-11).
+            continue
         parts.append(f'<section id="{escape(toc_id)}">{section_body}</section>')
+        kept_entries.append(entry)
 
     # Append unmapped stems at the end so their content is reachable.
     for stem, rendered in rendered_by_stem.items():
         if stem not in used_stems:
             parts.append(rendered)
-    return "".join(parts)
+    return "".join(parts), kept_entries
 
 
 # --- Top-level document wrap ---
@@ -1036,7 +1075,7 @@ def assemble_rules_page(pack: str, pack_dir: Path) -> str:
     rendered_by_stem = _file_renders_by_stem(
         RULES_FILES, pack_dir, pack=pack, world=None, theme=theme
     )
-    body = _wrap_sections_by_toc(pack, rendered_by_stem, toc_entries=rules_toc)
+    body, kept_toc = _wrap_sections_by_toc(pack, rendered_by_stem, toc_entries=rules_toc)
     hero_html = _build_hero(pack=pack, world=None, world_dir=None)
     return _wrap_document(
         title=f"{pack} — Rules",
@@ -1044,7 +1083,7 @@ def assemble_rules_page(pack: str, pack_dir: Path) -> str:
         pack=pack,
         theme=theme,
         hero_html=hero_html,
-        toc_entries=rules_toc,
+        toc_entries=kept_toc,
     )
 
 
@@ -1111,7 +1150,7 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
         poi_image_slugs=load_poi_image_slugs(world_dir),
     )
 
-    body = _wrap_sections_by_toc(pack, world_rendered)
+    body, kept_toc = _wrap_sections_by_toc(pack, world_rendered)
     return _wrap_document(
         title=f"{pack} / {world} — Lore",
         body=body,
@@ -1119,4 +1158,5 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
         theme=theme,
         world=world,
         hero_html=hero_html,
+        toc_entries=kept_toc,
     )

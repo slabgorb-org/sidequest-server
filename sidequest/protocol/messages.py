@@ -242,6 +242,11 @@ class ScrapbookEntryNpcRef(ProtocolBase):
     name: str
     role: str = "neutral"
     disposition: str = ""
+    # Story 65-6: world-scoped portrait URL, attached when the invoked NPC
+    # matches a portrait_manifest entry for the current world. ``None`` when
+    # the NPC has no authored portrait (the common case — most invoked NPCs
+    # are ad-hoc). The UI renders a thumbnail next to the name when present.
+    portrait_url: str | None = None
 
 
 class ScrapbookEntryPayload(ProtocolBase):

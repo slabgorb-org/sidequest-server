@@ -94,7 +94,15 @@ def test_persist_scrapbook_entry_inserts_row() -> None:
         image_url=None,
         narrative_excerpt="The fighter pondered.",
         world_facts=["a fact"],
-        npcs_present=[{"name": "Goblin", "role": "opponent", "disposition": "hostile"}],
+        npcs_present=[
+            {
+                "name": "Goblin",
+                "role": "opponent",
+                "disposition": "hostile",
+                # Story 65-6: portrait_url persisted (None when unset).
+                "portrait_url": None,
+            }
+        ],
         render_status="rendered",
     )
 

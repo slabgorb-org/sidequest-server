@@ -20,7 +20,13 @@ working — these spans are that verification.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from opentelemetry import trace
+
 from ._core import SPAN_ROUTES, SpanRoute
+from .span import Span
 
 SPAN_SCRAPBOOK_COVERAGE_EVALUATED = "scrapbook.coverage_evaluated"
 SPAN_ROUTES[SPAN_SCRAPBOOK_COVERAGE_EVALUATED] = SpanRoute(
@@ -62,3 +68,93 @@ SPAN_ROUTES[SPAN_SCRAPBOOK_COVERAGE_GAP_DETECTED] = SpanRoute(
         "slug": (span.attributes or {}).get("slug", ""),
     },
 )
+
+
+# ---------------------------------------------------------------------------
+# Story 65-6 — NPC portrait resolution on scene invocation.
+#
+# When an NPC is invoked in a turn it lands as a ScrapbookEntryNpcRef. The
+# emitter attaches a world-scoped portrait_url IFF the NPC matches a
+# portrait_manifest entry for the current world. Both outcomes are observable
+# so the GM/dev panel can confirm the lookup ran (and Claude isn't silently
+# dropping authored art) — a portrait that should resolve but doesn't is a
+# slug/path skew (the classic 404), and the not-found span proves the lookup
+# happened rather than being skipped. Missing portraits are EXPECTED for
+# ad-hoc NPCs; this is observability, not an error.
+# ---------------------------------------------------------------------------
+
+SPAN_SCRAPBOOK_NPC_PORTRAIT_RESOLVED = "scrapbook.npc_portrait_resolved"
+SPAN_ROUTES[SPAN_SCRAPBOOK_NPC_PORTRAIT_RESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="scrapbook",
+    extract=lambda span: {
+        "field": "scrapbook",
+        "op": "npc_portrait_resolved",
+        "npc_name": (span.attributes or {}).get("npc_name", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "slug": (span.attributes or {}).get("slug", ""),
+    },
+)
+
+SPAN_SCRAPBOOK_NPC_PORTRAIT_NOT_FOUND = "scrapbook.npc_portrait_not_found"
+SPAN_ROUTES[SPAN_SCRAPBOOK_NPC_PORTRAIT_NOT_FOUND] = SpanRoute(
+    event_type="state_transition",
+    component="scrapbook",
+    extract=lambda span: {
+        "field": "scrapbook",
+        "op": "npc_portrait_not_found",
+        "npc_name": (span.attributes or {}).get("npc_name", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "slug": (span.attributes or {}).get("slug", ""),
+    },
+)
+
+
+def _portrait_attrs(*, npc_name: str, genre: str, world: str, slug: str) -> dict[str, str]:
+    return {
+        "npc_name": npc_name,
+        "genre": genre,
+        "world": world,
+        "slug": slug,
+    }
+
+
+@contextmanager
+def scrapbook_npc_portrait_resolved_span(
+    *,
+    npc_name: str,
+    genre: str,
+    world: str,
+    slug: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when an invoked NPC matches a portrait_manifest entry and a
+    world-scoped portrait_url is attached to its scrapbook ref (Story 65-6)."""
+    with Span.open(
+        SPAN_SCRAPBOOK_NPC_PORTRAIT_RESOLVED,
+        _portrait_attrs(npc_name=npc_name, genre=genre, world=world, slug=slug),
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def scrapbook_npc_portrait_not_found_span(
+    *,
+    npc_name: str,
+    genre: str,
+    world: str,
+    slug: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when an invoked NPC has no matching portrait_manifest entry
+    for the current world, so its scrapbook ref carries no portrait_url. Missing
+    portraits are EXPECTED for ad-hoc NPCs; the span proves the lookup ran."""
+    with Span.open(
+        SPAN_SCRAPBOOK_NPC_PORTRAIT_NOT_FOUND,
+        _portrait_attrs(npc_name=npc_name, genre=genre, world=world, slug=slug),
+        tracer_override=_tracer,
+    ) as span:
+        yield span

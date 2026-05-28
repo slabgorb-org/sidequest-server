@@ -20,7 +20,7 @@ from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.system_strain import StrainResult
 from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import CwnConfig, SwnConfig
-from sidequest.telemetry.spans.cwn import cwn_system_strain_delta_span, cwn_trauma_roll_span
+from sidequest.telemetry.spans.cwn import cwn_shock_applied_span, cwn_system_strain_delta_span, cwn_trauma_roll_span
 
 
 class CwnRulesetModule(SwnRulesetModule):
@@ -37,6 +37,27 @@ class CwnRulesetModule(SwnRulesetModule):
                 label=label,
             )
         return super().save_params(stats=stats, save=save, level=level, label=label, cfg=cfg)
+
+    def resolve_shock(
+        self,
+        *,
+        spec: DamageSpec,
+        target_melee_ac: int,
+        actor: str = "",
+        _tracer: "trace.Tracer | None" = None,
+    ) -> int:
+        """CWN Shock: a melee weapon with shock>0 chips `shock` damage on a MISS
+        when the target's Melee AC <= the weapon's Shock rating. v1 models the
+        chip amount and the AC ceiling as the same content number (spec.shock).
+        Returns the chip damage (0 when not applicable). Emits cwn.shock.applied
+        only when damage is actually chipped."""
+        if spec.shock <= 0 or target_melee_ac > spec.shock:
+            return 0
+        cwn_shock_applied_span(
+            actor=actor, amount=spec.shock, melee_ac=target_melee_ac,
+            shock_rating=spec.shock, _tracer=_tracer,
+        )
+        return spec.shock
 
     def resolve_trauma(
         self,

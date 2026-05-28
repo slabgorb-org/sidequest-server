@@ -44,6 +44,29 @@ class DamageSpec(BaseModel):
     bonus: int = 0
     armor_piercing: int = Field(default=0, ge=0)  # AP: reduces target Armor before subtraction
 
+    # CWN lethality (spec 2026-05-28). All default to "off" so non-CWN content
+    # validates unchanged. trauma_die: weapon's Trauma Die rolled vs the victim's
+    # Trauma Target; on a Traumatic Hit total damage is multiplied by trauma_rating.
+    # trauma_target overrides the victim's default Trauma Target when the weapon
+    # itself sets the bar (rare; usually None → cfg default). shock: melee chip
+    # damage applied on a MISS vs a low-Melee-AC target.
+    trauma_die: str | None = None
+    trauma_rating: int = Field(default=1, ge=1)
+    trauma_target: int | None = Field(default=None, ge=2)
+    shock: int = Field(default=0, ge=0)
+
+    @field_validator("trauma_die")
+    @classmethod
+    def _valid_trauma_die(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        m = _DICE_RE.match(v.strip())
+        if not m:
+            raise ValueError(f"trauma_die {v!r} is not NdM notation")
+        if DieSides.from_wire(int(m["faces"])) is DieSides.Unknown:
+            raise ValueError(f"trauma_die {v!r} uses unsupported face count")
+        return v
+
     @field_validator("dice")
     @classmethod
     def _valid_dice(cls, v: str) -> str:
@@ -87,6 +110,7 @@ class CatalogItem(BaseModel):
     resource_ticks: int | None = None
     damage: DamageSpec | None = None  # weapons
     mitigation: int | None = None  # armor: flat damage reduction (SWN soak)
+    armor_class: int | None = None  # armor: SWN ascending AC the attack rolls against (distinct from mitigation soak)
 
 
 class CarryMode(StrEnum):

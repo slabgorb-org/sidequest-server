@@ -73,6 +73,7 @@ async def test_quoted_dialogue_reaches_party_before_narration(
                 action=NonBlankString.model_validate(
                     'I face the warden and say "Open the gate. We carry the seal of Duke Halloran."'
                 ),
+                round=0,
             ),
             player_id="p1",
         )
@@ -83,6 +84,7 @@ async def test_quoted_dialogue_reaches_party_before_narration(
                 action=NonBlankString.model_validate(
                     "I keep my hand near my blade and watch the walls."
                 ),
+                round=0,
             ),
             player_id="p2",
         )

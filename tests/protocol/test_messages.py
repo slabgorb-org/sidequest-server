@@ -127,7 +127,7 @@ def parse_wire(json_str: str) -> GameMessage:
 def test_player_action_round_trip() -> None:
     msg = GameMessage(
         root=PlayerActionMessage(
-            payload=PlayerActionPayload(action=nbs("attack the goblin"), aside=False),
+            payload=PlayerActionPayload(action=nbs("attack the goblin"), aside=False, round=0),
             player_id="player1",
         )
     )
@@ -144,7 +144,7 @@ def test_player_action_wire_type_tag() -> None:
     """Type discriminator must appear in serialized JSON."""
     msg = GameMessage(
         root=PlayerActionMessage(
-            payload=PlayerActionPayload(action=nbs("go north"), aside=False),
+            payload=PlayerActionPayload(action=nbs("go north"), aside=False, round=0),
             player_id="",
         )
     )
@@ -486,7 +486,7 @@ def test_player_action_wire_format() -> None:
     wire = json.dumps(
         {
             "type": "PLAYER_ACTION",
-            "payload": {"action": "attack the goblin", "aside": False},
+            "payload": {"action": "attack the goblin", "aside": False, "round": 0},
             "player_id": "",
         }
     )
@@ -809,7 +809,7 @@ def test_game_message_payload_property() -> None:
 def test_game_message_player_id_property() -> None:
     msg = GameMessage(
         root=PlayerActionMessage(
-            payload=PlayerActionPayload(action=nbs("look around")),
+            payload=PlayerActionPayload(action=nbs("look around"), round=0),
             player_id="p1",
         )
     )
@@ -825,7 +825,7 @@ def test_game_message_player_id_property() -> None:
 def test_all_phase1_variants_parse_correctly() -> None:
     """Integration: all 12 Phase 1 variants must parse via GameMessage."""
     payloads = [
-        (MessageType.PLAYER_ACTION, {"payload": {"action": "go north", "aside": False}}),
+        (MessageType.PLAYER_ACTION, {"payload": {"action": "go north", "aside": False, "round": 0}}),
         (MessageType.NARRATION, {"payload": {"text": "You move forward."}}),
         (MessageType.NARRATION_END, {"payload": {}}),
         (MessageType.THINKING, {"payload": {}}),

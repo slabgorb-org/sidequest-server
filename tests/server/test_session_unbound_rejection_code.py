@@ -59,7 +59,7 @@ async def test_player_action_in_awaiting_connect_tags_session_unbound(caplog):
     session = _unbound_session()
     msg = PlayerActionMessage(
         type=MessageType.PLAYER_ACTION,
-        payload=PlayerActionPayload(action=NonBlankString("look around")),
+        payload=PlayerActionPayload(action=NonBlankString("look around"), round=0),
         player_id="p1",
     )
 
@@ -148,7 +148,7 @@ async def test_player_action_in_creating_state_does_not_tag_session_unbound():
 
     msg = PlayerActionMessage(
         type=MessageType.PLAYER_ACTION,
-        payload=PlayerActionPayload(action=NonBlankString("test")),
+        payload=PlayerActionPayload(action=NonBlankString("test"), round=0),
         player_id="p1",
     )
     outbound = await HANDLER.handle(session, msg)

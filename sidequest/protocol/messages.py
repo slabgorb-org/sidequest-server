@@ -62,6 +62,10 @@ class PlayerActionPayload(ProtocolBase):
     """The action text the player typed. Non-blank."""
     aside: bool = False
     """True if this is an out-of-character aside."""
+    round: int = Field(ge=0)
+    """Round (ADR-051) the action was submitted in. Required and non-negative:
+    a missing round fails loud rather than silently anchoring the peer-action
+    transcript to round 0 (Story 71-10, No Silent Fallbacks)."""
 
 
 # ---------------------------------------------------------------------------

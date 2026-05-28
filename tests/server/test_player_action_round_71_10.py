@@ -92,10 +92,6 @@ class TestPlayerActionRoundWiring:
         """A wire frame missing round must be refused at parse time, so the
         websocket handler raises rather than feeding the engine a roundless
         action that the transcript would mis-anchor."""
-        raw = (
-            '{"type": "PLAYER_ACTION", '
-            '"payload": {"action": "go north"}, '
-            '"player_id": "p1"}'
-        )
+        raw = '{"type": "PLAYER_ACTION", "payload": {"action": "go north"}, "player_id": "p1"}'
         with pytest.raises(ValidationError):
             GameMessage.model_validate_json(raw)

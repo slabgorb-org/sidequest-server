@@ -6,20 +6,24 @@ Port of sidequest-api/crates/sidequest-server/src/dispatch/
 
 from __future__ import annotations
 
+import random as _random
 from typing import cast
 
 from sidequest.game.disposition import Attitude
 from sidequest.game.encounter import (
     ActorSide,
     EncounterActor,
+    EncounterMetric,
     EncounterPhase,
     StructuredEncounter,
 )
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.resource_pool import ResourceThreshold
+from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
+from sidequest.game.table.types import TablePot, TableSeat, TableState
 from sidequest.genre.models.pack import GenrePack
-from sidequest.genre.models.rules import ResolutionMode, WinCondition
+from sidequest.genre.models.rules import ConfrontationDef, ResolutionMode, WinCondition
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
@@ -29,6 +33,7 @@ from sidequest.telemetry.spans import (
     encounter_sealed_letter_arity_rejected_span,
     npc_edge_published_span,
     participant_joined_span,
+    table_dealt_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -449,6 +454,72 @@ def _npc_fallback_at_location(
     return fallback, True
 
 
+def instantiate_table_encounter(
+    *,
+    cdef: ConfrontationDef,
+    player_names: list[str],
+    npc_names: list[str],
+    stake_kind: str,
+    stake_descriptor: str,
+    seed: int,
+    ruleset_slug: str = "native",
+) -> StructuredEncounter:
+    """Build + deal a table_resolution StructuredEncounter.
+
+    Seats every PC then every NPC (≥2 total or TableNeedsOthersError via
+    deal_table), populates each private_state via the kind's deal(), seeds the
+    pot from antes, and stamps win_condition=table_showdown. The dual dials are
+    inert placeholders (same as the hp_depletion path). Emits table.dealt.
+    """
+    parties = [(name, True) for name in player_names] + [(name, False) for name in npc_names]
+    seats: list[TableSeat] = []
+    actors: list[EncounterActor] = []
+    for idx, (party_name, is_pc) in enumerate(parties, start=1):
+        seat_id = f"seat_{idx}"
+        seats.append(
+            TableSeat(
+                seat_id=seat_id, party_name=party_name, is_pc=is_pc,
+                status="active", private_state={},
+            )
+        )
+        # every seat is its own party; side is cosmetic for table types
+        actors.append(
+            EncounterActor(
+                name=party_name, role=seat_id,
+                side="player" if is_pc else "opponent",
+            )
+        )
+
+    table_state = TableState(
+        game_kind=cdef.table_game or "",
+        seats=seats,
+        pot=TablePot(
+            stake_kind=stake_kind, stake_descriptor=stake_descriptor,
+            contributions={s.seat_id: 0 for s in seats},
+        ),
+        order=[s.seat_id for s in seats],
+        dealer_seat=seats[0].seat_id if seats else "",
+        max_decision_points=cdef.max_decision_points,
+    )
+
+    module = get_ruleset_module(ruleset_slug)
+    # Wrap the deal in the span so it captures the work and still emits even if
+    # the deal raises (TableNeedsOthersError on <2). All attrs are known up front.
+    with table_dealt_span(
+        seat_count=len(seats), game_kind=table_state.game_kind, stake_kind=stake_kind
+    ):
+        module.deal_table(table_state, rng=_random.Random(seed))
+
+    return StructuredEncounter(
+        encounter_type=cdef.confrontation_type,
+        win_condition=cdef.win_condition.value,
+        player_metric=EncounterMetric(name="table_player_inert", threshold=1),
+        opponent_metric=EncounterMetric(name="table_opponent_inert", threshold=1),
+        actors=actors,
+        table_state=table_state,
+    )
+
+
 def instantiate_encounter_from_trigger(
     *,
     snapshot: GameSnapshot,
@@ -510,6 +581,52 @@ def instantiate_encounter_from_trigger(
     cdef = find_confrontation_def(defs, encounter_type)
     if cdef is None:
         raise ValueError(f"unknown encounter_type {encounter_type!r} — not in pack confrontations")
+
+    # Free-for-all N-seat table resolution — exclusive of the dial/sealed-letter
+    # paths. Seated every PC + every NPC as TableSeats; deals hands; stamps
+    # win_condition=table_showdown. The dual dials are inert placeholders.
+    if cdef.resolution_mode == ResolutionMode.table_resolution:
+        additional = additional_player_names or []
+        table_location_available = True
+        npc_names_list = [getattr(n, "name", None) or str(n) for n in npcs_present]
+        if not npc_names_list:
+            # location fallback for table seats — adversary_only=False because
+            # gamblers/auction participants need not be hostile.
+            fallback, table_location_available = _npc_fallback_at_location(
+                snapshot, adversarial=False, acting_character_name=player_name,
+            )
+            npc_names_list = [getattr(n, "name", None) or str(n) for n in fallback]
+        # No table-mates after sourcing (explicit + fallback both empty) — a
+        # one-seat hand is not a confrontation (ADR-116, generalized by
+        # TableNeedsOthersError). Mirror the adversarial guard: surface the
+        # lie-detector signal via OTEL and DECLINE the encounter (return None,
+        # "caller leaves the current encounter alone") rather than letting
+        # deal_table raise TableNeedsOthersError and 500 the turn —
+        # confrontation.py only catches NoOpponentAvailableError.
+        total_parties = 1 + len(additional) + len(npc_names_list)
+        if total_parties < 2:
+            with encounter_no_opponent_available_span(
+                encounter_type=encounter_type,
+                genre_slug=genre_slug or "",
+                player_name=player_name,
+                category=cdef.category,
+                location_available=table_location_available,
+            ):
+                pass
+            return None
+        # stake_kind defaults to "money" for MVP; Task 16 will add content-declared
+        # stake blocks. stake_descriptor is the confrontation label.
+        enc = instantiate_table_encounter(
+            cdef=cdef,
+            player_names=[player_name, *additional],
+            npc_names=npc_names_list,
+            stake_kind="money",
+            stake_descriptor=cdef.label,
+            seed=snapshot.turn_manager.interaction,
+            ruleset_slug=pack.rules.ruleset if pack and pack.rules else "native",
+        )
+        snapshot.encounter = enc
+        return enc
 
     # Story 45-18: NPC fallback when narrator's npcs_present is empty.
     #

@@ -16,7 +16,7 @@ Two kinds of assertion, deliberately split:
 
 * ``test_neon_combat_lethality_config_wiring`` — needs NO database and NO
   dispatch. Loads the real pack and asserts the cwn config + content wiring is
-  present (trauma target, hp_depletion, momentum-combat retired, net_combat
+  present (trauma target, hp_depletion, momentum-combat retired, net_run
   dials intact). MUST run (not skip) when content is on disk.
 * The two dispatch-drive tests load the real pack, seat its REAL ``combat``
   confrontation, equip a REAL catalog weapon that carries a ``trauma_die``, and
@@ -235,9 +235,11 @@ def test_neon_combat_lethality_config_wiring() -> None:
         f"beat (damage_channel=strike); beats={[b.id for b in combat.beats]}"
     )
 
-    # --- Step 2: momentum combat retired; net_combat dials intact -----------
+    # --- Step 2: momentum combat retired; net_run dials intact --------------
     # The hp_depletion combat must NOT carry momentum dials — proves the old
-    # dual-track-momentum combat was retired in favour of ablative HP.
+    # dual-track-momentum combat was retired in favour of ablative HP. The
+    # hacking confrontation (net_run, which superseded net_combat in the CWN
+    # net-run plan) stays dial-based, proving only personal combat moved to HP.
     assert combat.player_metric is None, (
         "the hp_depletion combat confrontation must have NO player_metric "
         "(the momentum-dial combat was retired); "
@@ -248,13 +250,13 @@ def test_neon_combat_lethality_config_wiring() -> None:
         f"got {combat.opponent_metric!r}"
     )
 
-    net = next(c for c in pack.rules.confrontations if c.confrontation_type == "net_combat")
+    net = next(c for c in pack.rules.confrontations if c.confrontation_type == "net_run")
     assert net.player_metric is not None and net.opponent_metric is not None, (
-        "net_combat must retain its dual-track dials (only personal combat was "
+        "net_run must retain its dual-track dials (only personal combat was "
         "converted to hp_depletion)"
     )
-    assert net.player_metric.name == "extraction"
-    assert net.opponent_metric.name == "trace"
+    assert net.player_metric.name == "data"
+    assert net.opponent_metric.name == "alert"
 
 
 # ---------------------------------------------------------------------------

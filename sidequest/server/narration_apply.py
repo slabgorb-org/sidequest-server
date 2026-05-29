@@ -2857,12 +2857,54 @@ def _apply_narration_result_to_snapshot(
                     )
 
                 module = get_ruleset_module(pack.rules.ruleset)
+                # Snapshot seat statuses BEFORE resolve_table so the fold-mark
+                # loop below can mark only seats that NEWLY transitioned to
+                # "folded" this decision point — not every already-folded seat
+                # (which would re-mark a seat that folded on an earlier DP of a
+                # multi-decision-point hand).
+                _pre_status = {s.seat_id: s.status for s in enc.table_state.seats}
                 table_outcome = module.resolve_table(
                     enc.table_state, commits=table_commits, rng=_table_rng
                 )
+                # Part A (Task 15): fold-mark wiring.  After resolve_table mutates
+                # seat statuses, call room.mark_table_folded for every PC seat that
+                # JUST became "folded" this decision point so the barrier
+                # denominator drops for the remaining decision points of this hand.
+                # Build the reverse map (party_name → player_id) from
+                # snapshot.player_seats once — this map is correct for any
+                # multi-player snapshot.  NPC seats (is_pc=False) are skipped —
+                # they never hold a barrier slot.  A folded PC whose party_name is
+                # absent from the reverse map is a seating/data error; log it
+                # loudly (No Silent Fallbacks) but do not crash the turn.
+                if room is not None and enc.table_state is not None:
+                    _pc_name_to_player_id: dict[str, str] = {
+                        v: k for k, v in snapshot.player_seats.items() if v
+                    }
+                    for _tseat in enc.table_state.seats:
+                        if (
+                            _tseat.is_pc
+                            and _tseat.status == "folded"
+                            and _pre_status.get(_tseat.seat_id) != "folded"  # only NEWLY folded
+                        ):
+                            _pid = _pc_name_to_player_id.get(_tseat.party_name)
+                            if _pid is not None:
+                                room.mark_table_folded(_pid)
+                            else:
+                                logger.warning(
+                                    "table.fold_mark_missing_player_id "
+                                    "party_name=%r not in player_seats — "
+                                    "solo/test path or seating mismatch; "
+                                    "barrier denominator not adjusted for this seat",
+                                    _tseat.party_name,
+                                )
                 if table_outcome.showdown:
                     enc.resolved = True
                     enc.outcome = f"table_winner:{table_outcome.resolved_winner}"
+                    # Part A (Task 15): showdown teardown — clear the fold set so
+                    # the room is ready for a fresh hand.  Must fire exactly once
+                    # (on resolution), here and nowhere else in the table branch.
+                    if room is not None:
+                        room.clear_table_folds()
                     # Award the stake through the auditable state-patch path.
                     # Winner's party_name is the character/PC name.
                     winner_seat = enc.table_state.find_seat(table_outcome.pot_awarded_to)

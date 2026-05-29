@@ -279,7 +279,7 @@ async def _drive_one_real_turn(tmp_path: Path) -> None:
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I look around the dungeon."},
+                "payload": {"action": "I look around the dungeon.", "round": 1},
             }
         )
         await handler.handle_message(action)

@@ -90,7 +90,6 @@ logger = logging.getLogger(__name__)
 # Preserve the original tracer name so OTEL span sources do not rename when
 # this class moved out of session_handler.py. Phase-3 plan principle.
 tracer = trace.get_tracer("sidequest.server.session_handler")
-from sidequest.server.emitters import emit_event  # noqa: E402
 from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
     _maybe_emit_location_description,
     _maybe_emit_tactical_grid,
@@ -1457,29 +1456,18 @@ class CharGenMixin:
         # committer's narration is broadcast to peers below so the
         # first committer still sees the opening.
         if _should_fire_opening_narration(sd, self._room):
+            # Story 71-13: the opening turn is event-sourced + projected
+            # through the EventLog the same way a normal narration turn is —
+            # but that emission happens INSIDE _run_opening_turn_narration now
+            # (narrator NARRATION via _execute_narration_turn's internal
+            # _emit_event; cold-open prose via its own _emit_event). The
+            # returned frames are already emitted/built, so the caller appends
+            # them exactly like _handle_player_action does — it must NOT
+            # re-emit. The prior re-emit loop (sq-playtest 2026-05-28 #G1)
+            # blindly persisted RENDER_QUEUED / NARRATION_END / AUDIO_CUE
+            # frames under kind="NARRATION", bricking reconnect on replay.
             opening_messages = await self._run_opening_turn_narration(sd, player_id, span)
-            # Story 71-13: route opening narration through emit_event so
-            # every recipient gets per-recipient projection / POV swap /
-            # perception rewrite / event-sourcing — the same pipeline
-            # every normal narration turn uses.  ADR-105 Track A:
-            # author_player_id = driver pid for MP (driver projected like
-            # a peer) or None for solo (Invariant-3 raw bypass preserved).
-            # Both legacy watcher events (opening.broadcast_to_peers,
-            # opening.narration_pov_swapped) are retired; the standard
-            # emit.author_resolved + projection.filter.decide spans are
-            # the replacement lie-detectors.
-            from sidequest.game.persistence import (  # noqa: PLC0415 — break import cycle
-                GameMode as _GameMode2,
-            )
-
-            _author_pid = (
-                (sd.player_id or player_id)
-                if (self._room is not None and sd.mode == _GameMode2.MULTIPLAYER)
-                else None
-            )
-            for msg in opening_messages:
-                _out_msg = emit_event(self, "NARRATION", msg.payload, author_player_id=_author_pid)
-                out.append(_out_msg)
+            out.extend(opening_messages)
         else:
             # Defer: don't fire opening narration yet — the next
             # committer will populate the directive and fire it for

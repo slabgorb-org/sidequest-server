@@ -319,6 +319,15 @@ class AccumulatedChoices:
     # class_hint-or-default. Symmetric with background_label.
     class_label: str | None = None
     race_hint: str | None = None
+    # Display-only origin label — the choice LABEL of the scene whose
+    # MechanicalEffects.race_hint produced the mechanical origin archetype.
+    # Symmetric with background_label / class_label. tea_and_murder's
+    # "origins" scene maps rich flavor buttons ("The Village Itself") onto a
+    # small mechanical taxonomy (race_hint: Servant); the player-facing
+    # chargen summary should surface the chosen flavor, not the raw archetype
+    # slug (sq-playtest 2026-05-28 BUG-LOW). The mechanical Character.race
+    # still resolves from race_hint — this is display-only. Last-wins.
+    race_label: str | None = None
     personality_trait: str | None = None
     item_hints: list[str] = field(default_factory=list)
     affinity_hint: str | None = None
@@ -1107,12 +1116,25 @@ class CharacterBuilder:
             # Single-value hints — last one wins.
             if eff.class_hint is not None:
                 acc.class_hint = eff.class_hint
+                # Capture the chosen vocation LABEL when the class was picked
+                # from a choice button (e.g. "Country Veterinary Surgeon" →
+                # class_hint "Doctor"). Display-only; symmetric with
+                # background_label. Lets the summary + {class} prose show the
+                # flavor instead of the collapsed archetype slug.
+                if result.choice_label is not None:
+                    acc.class_label = result.choice_label
             # Freeform vocation display label (class-selecting scene answered
             # with free text). Last-wins, display-only.
             if result.freeform_class_label is not None:
                 acc.class_label = result.freeform_class_label
             if eff.race_hint is not None:
                 acc.race_hint = eff.race_hint
+                # Capture the chosen origin LABEL when picked from a choice
+                # button (e.g. "The Village Itself" → race_hint "Servant").
+                # Display-only; the mechanical Character.race still resolves
+                # from race_hint.
+                if result.choice_label is not None:
+                    acc.race_label = result.choice_label
             if eff.personality_trait is not None:
                 acc.personality_trait = eff.personality_trait
             if eff.affinity_hint is not None:
@@ -1232,6 +1254,11 @@ class CharacterBuilder:
         # Freeform vocation label (player's own words) wins for the prose slot;
         # canned classes fall through to class_hint.
         class_ = acc.class_label or acc.class_hint or ""
+        # {race} prose intentionally uses the mechanical hint, NOT race_label:
+        # templates phrase it as a noun ("come up from a {race} household"), so
+        # the archetype slug ("Servant") fits grammatically where an origin
+        # flavor label ("The Village Itself") would not. The chargen-summary
+        # FIELD uses race_label (display-only); the prose slot keeps the hint.
         race = acc.race_hint or ""
 
         had_name = "{name}" in text
@@ -2267,6 +2294,12 @@ class CharacterBuilder:
             archetype_provenance=None,
             background=acc.background_label or "",
             drive=acc.backstory_label or "",
+            # Display-only flavor labels (symmetric with background_label).
+            # acc.race_label / acc.class_label capture a CHOICE's chosen flavor
+            # when it differs from the collapsed mechanical hint; empty when the
+            # label IS the archetype. The live sheet shows these over the slug.
+            origin_label=acc.race_label or "",
+            calling_label=acc.class_label or "",
             first_name=first_name,
             last_name=last_name,
             nickname="",

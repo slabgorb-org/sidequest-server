@@ -18,6 +18,7 @@ from sidequest.agents.orchestrator import (
     Orchestrator,
     TurnContext,
 )
+from sidequest.agents.subsystems import BankResult
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroHp
 from sidequest.protocol.dispatch import (
@@ -65,6 +66,7 @@ async def test_pc_at_zero_edge_injects_paired_directives_in_prompt():
     context = TurnContext(
         character_name="Alice",
         dispatch_package=_empty_visible_package(),
+        bank_result=BankResult(),
         lethality_policy=_policy(),
         pc_cores_by_player={"alice": _pc(0)},
         npc_cores_by_name={},
@@ -85,6 +87,7 @@ async def test_pc_above_zero_edge_injects_no_lethality_directives():
     context = TurnContext(
         character_name="Alice",
         dispatch_package=_empty_visible_package(),
+        bank_result=BankResult(),
         lethality_policy=_policy(),
         pc_cores_by_player={"alice": _pc(7)},
         npc_cores_by_name={},
@@ -103,6 +106,7 @@ async def test_lethality_policy_none_leaves_bank_directives_unaffected():
     context = TurnContext(
         character_name="Alice",
         dispatch_package=_empty_visible_package(),
+        bank_result=BankResult(),
         lethality_policy=None,  # Group C not loaded — acts like pre-Group-C.
         pc_cores_by_player={"alice": _pc(0)},  # Even though at zero edge!
         npc_cores_by_name={},

@@ -755,16 +755,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     _dungeon_palette = (
                         _lookahead_handle.palette if _lookahead_handle is not None else None
                     )
-                    _dispatch_package = await execute_intent_router_pre_narrator_pass(
-                        intent_router=_intent_router,
-                        snapshot=snapshot,
-                        pack=sd.genre_pack,
-                        action=action,
-                        player_name=_acting_player_name,
-                        additional_player_names=_additional_player_names or None,
-                        dungeon_store=_dungeon_store,
-                        palette=_dungeon_palette,
-                        lookahead_handle=_lookahead_handle,
+                    _dispatch_package, _bank_result = (
+                        await execute_intent_router_pre_narrator_pass(
+                            intent_router=_intent_router,
+                            snapshot=snapshot,
+                            pack=sd.genre_pack,
+                            action=action,
+                            player_name=_acting_player_name,
+                            additional_player_names=_additional_player_names or None,
+                            dungeon_store=_dungeon_store,
+                            palette=_dungeon_palette,
+                            lookahead_handle=_lookahead_handle,
+                        )
                     )
                 except IntentRouterFailure as exc:
                     if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):
@@ -782,9 +784,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             exc,
                         )
                         _dispatch_package = None
+                        _bank_result = None
                     else:
                         raise
                 turn_context.dispatch_package = _dispatch_package
+                turn_context.bank_result = _bank_result
                 # The dispatch bank may have mutated snapshot.npcs; refresh so
                 # build_narrator_prompt sees post-dispatch state.
                 turn_context.npcs = list(snapshot.npcs)
@@ -2495,7 +2499,30 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             turn_context,
             is_opening_turn=True,
         )
-        messages = cold_open_messages + list(narrator_messages)
+
+        # Story 71-13 / sq-playtest 2026-05-28 #G1: route the cold-open prose
+        # through the EventLog HERE so it is event-sourced, projected, and
+        # replayable — the same pipeline the narrator's own NARRATION already
+        # used inside _execute_narration_turn. The narrator_messages are
+        # ALREADY emitted (NARRATION event-sourced internally; RENDER_QUEUED /
+        # NARRATION_END / AUDIO_CUE appended as non-durable frames), so the
+        # caller must NOT re-emit them. The prior caller-side loop blindly
+        # re-emitted EVERY opening message as kind="NARRATION", which persisted
+        # a RenderQueuedPayload (`{render_id}`) under NARRATION and bricked
+        # reconnect: replay rebuilt it as NarrationPayload, failed validation,
+        # and tore down the socket on every reconnect.
+        _opening_connected = (
+            self._room.connected_player_ids()
+            if self._room is not None
+            and callable(getattr(self._room, "connected_player_ids", None))
+            else []
+        )
+        _cold_open_author = sd.player_id if len(_opening_connected) > 1 else None
+        emitted_cold_open = [
+            self._emit_event("NARRATION", m.payload, author_player_id=_cold_open_author)
+            for m in cold_open_messages
+        ]
+        messages = emitted_cold_open + list(narrator_messages)
 
         # Canned-openings Phase 4 (Task 19): emit opening.played at consumption
         # so the GM panel can verify the opening reached the narrator's first

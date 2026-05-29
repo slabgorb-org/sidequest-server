@@ -459,6 +459,44 @@ def test_party_member_uses_per_character_location_when_set() -> None:
     assert str(shirley_member.current_location) == "Cockpit"
 
 
+def test_party_member_projects_origin_calling_flavor_labels() -> None:
+    """#G2 live-panel extension: a Character carrying display-only
+    ``origin_label``/``calling_label`` (the chargen flavor the player chose)
+    must project them onto ``member.sheet`` so the live CharacterPanel renders
+    "Country Veterinary Surgeon · The Village Itself" instead of the collapsed
+    mechanical slug "Doctor · Servant". The mechanical race/class are untouched.
+    """
+    pc = _char("Vyvyan")
+    pc.origin_label = "The Village Itself"
+    pc.calling_label = "Country Veterinary Surgeon"
+    sd = _sd("p:vyvyan", "Vyvyan", [pc])
+
+    handler = WebSocketSessionHandler(save_dir=Path("/tmp/sq-test-saves"))
+    member = views.party_member_from_character(handler, sd, pc, "p:vyvyan", "Vyvyan")
+
+    assert member.sheet is not None
+    assert str(member.sheet.origin_label) == "The Village Itself"
+    assert str(member.sheet.calling_label) == "Country Veterinary Surgeon"
+    # Mechanical class/race slug still flows for systems that key on it.
+    assert str(member.class_) == "Delver"
+    assert str(member.sheet.race) == "Human"
+
+
+def test_party_member_omits_flavor_labels_when_absent() -> None:
+    """When chargen produced no distinct flavor label (label == archetype),
+    the sheet's ``origin_label``/``calling_label`` are None so the UI cleanly
+    falls back to the mechanical race/class slug — no empty-string leakage."""
+    pc = _char("Solo")  # _char leaves origin_label/calling_label = ""
+    sd = _sd("p:solo", "Solo", [pc])
+
+    handler = WebSocketSessionHandler(save_dir=Path("/tmp/sq-test-saves"))
+    member = views.party_member_from_character(handler, sd, pc, "p:solo", "Solo")
+
+    assert member.sheet is not None
+    assert member.sheet.origin_label is None
+    assert member.sheet.calling_label is None
+
+
 def test_party_member_omits_location_when_per_char_absent() -> None:
     """Wave 2B (story 45-48) — when a PC has no ``character_locations``
     entry yet (pre-first-narration), the PARTY_STATUS frame omits the

@@ -111,14 +111,18 @@ class TestFreeformVocationLabel:
         assert b.accumulated().class_hint is None
         assert b.accumulated().class_label == "vegetarian and temperance lecturer"
 
-    def test_canned_choice_still_drives_class_slot(self) -> None:
-        # Regression guard: the canned path is unchanged — class_hint fills {class}.
+    def test_canned_choice_captures_flavor_label_but_keeps_mechanical_hint(self) -> None:
+        # sq-playtest 2026-05-28 BUG-LOW: a canned choice now captures its
+        # flavor LABEL ("Country Doctor") for display while the MECHANICAL
+        # class_hint stays the collapsed archetype ("Doctor") so the
+        # starting-loadout class match is unaffected. {class} prose prefers the
+        # flavor label (Diamonds-and-Coal: surface what the player chose).
         b = CharacterBuilder(scenes=[_vocation_scene()], rules=simple_rules())
         b.apply_choice(0)
         acc = b.accumulated()
-        assert acc.class_hint == "Doctor"
-        assert acc.class_label is None
-        assert b.interpolate_scene_narration("a {class}") == "a Doctor"
+        assert acc.class_hint == "Doctor"  # mechanical archetype unchanged
+        assert acc.class_label == "Country Doctor"  # display flavor captured
+        assert b.interpolate_scene_narration("a {class}") == "a Country Doctor"
 
     def test_freeform_on_non_class_scene_sets_no_label(self) -> None:
         # A name-entry style scene (freeform, no class-bearing choices) must not

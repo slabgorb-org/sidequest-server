@@ -130,6 +130,7 @@ async def run_confrontation_dispatch(
             npcs_present=actor_list,
             genre_slug=snapshot.genre_slug,
             additional_player_names=additional_player_names,
+            security_tier=dispatch.params.get("security_tier"),
         )
     except NoOpponentAvailableError as exc:
         logger.warning(

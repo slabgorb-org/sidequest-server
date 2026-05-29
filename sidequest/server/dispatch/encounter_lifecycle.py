@@ -458,6 +458,7 @@ def instantiate_encounter_from_trigger(
     npcs_present: list,
     genre_slug: str | None,
     additional_player_names: list[str] | None = None,
+    security_tier: str | None = None,
 ) -> StructuredEncounter | None:
     """Create a StructuredEncounter when the narrator emits ``confrontation=T``.
 
@@ -739,6 +740,29 @@ def instantiate_encounter_from_trigger(
                 "player_metric/opponent_metric; provide both (dial_threshold) or "
                 "neither (hp_depletion) — no silent discard"
             )
+
+        # net_run (CWN hacking, spec 2026-05-29): resolve the security tier the
+        # run targets. The "Other" is the alert dial, not an NPC, so this is the
+        # only adversary metadata net_run needs. Non-hacking confrontations
+        # leave security_tier=None.
+        stamped_security_tier: str | None = None
+        if cdef.category == "hacking":
+            from sidequest.genre.models.rules import CwnConfig
+
+            cfg = pack.rules.ruleset_config() if pack and pack.rules else None
+            if not isinstance(cfg, CwnConfig) or cfg.hacking is None:
+                raise ValueError(
+                    f"net_run confrontation {encounter_type!r} requires "
+                    "cwn.hacking config on the pack; none authored (No Silent "
+                    "Fallbacks)"
+                )
+            stamped_security_tier = security_tier or cfg.hacking.default_tier
+            if stamped_security_tier not in cfg.hacking.security_tiers:
+                raise ValueError(
+                    f"net_run security_tier {stamped_security_tier!r} is not in "
+                    f"cwn.hacking.security_tiers {sorted(cfg.hacking.security_tiers)}"
+                )
+
         enc = StructuredEncounter(
             encounter_type=encounter_type,
             win_condition=cdef.win_condition.value,
@@ -762,6 +786,7 @@ def instantiate_encounter_from_trigger(
             resolved=False,
             mood_override=cdef.mood,
             narrator_hints=[],
+            security_tier=stamped_security_tier,
         )
         snapshot.encounter = enc
         _watcher_publish(

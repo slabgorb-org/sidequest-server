@@ -198,6 +198,13 @@ class StructuredEncounter(BaseModel):
     # encounters that have nothing to add to the room description.
     location_overlay: EncounterLocationOverlay | None = None
 
+    # net_run (CWN hacking) only — the named security tier this run targets,
+    # stamped at instantiation from the dispatch param or the pack's
+    # cwn.hacking.default_tier. The effective DC at resolution time is
+    # cwn.hacking.security_tiers[security_tier] + alert escalation. None for
+    # every non-hacking confrontation.
+    security_tier: str | None = None
+
     @model_validator(mode="before")
     @classmethod
     def _reject_legacy_metric(cls, data: object) -> object:

@@ -508,7 +508,7 @@ class ConfrontationDef(BaseModel):
                     f"opponent_default_stats.dexterity={dex!r}; must be >= 3 "
                     "(SWN ability-score floor)"
                 )
-        valid_categories = {"combat", "social", "pre_combat", "movement"}
+        valid_categories = {"combat", "social", "pre_combat", "movement", "hacking"}
         if self.category not in valid_categories:
             raise ValueError(
                 f"invalid confrontation category '{self.category}': "
@@ -830,6 +830,34 @@ class TraumaConfig(BaseModel):
     major_injury_save: str = "physical"
 
 
+class HackingConfig(BaseModel):
+    """CWN cyberspace security tuning (genre-level, content-authorable).
+
+    security_tiers: named security level -> 2d6 difficulty in 2..12 (CWN
+      published security ratings are 7-12). A net_run resolves Program checks
+      against the tier's DC.
+    default_tier: the tier stamped on a net_run opened without a named tier.
+      An AUTHORED fallback declared in content (honors No Silent Fallbacks) —
+      NOT a silent code default; it must be a key of security_tiers.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    default_tier: str
+    security_tiers: dict[str, int]
+
+    @model_validator(mode="after")
+    def _validate(self) -> HackingConfig:
+        if not self.security_tiers:
+            raise ValueError("cwn.hacking.security_tiers must be non-empty")
+        if self.default_tier not in self.security_tiers:
+            raise ValueError(
+                f"cwn.hacking.default_tier {self.default_tier!r} "
+                f"not in security_tiers {sorted(self.security_tiers)}"
+            )
+        return self
+
+
 class CwnConfig(SwnConfig):
     """Cities Without Number universal constants (Sine Nomine, CC0).
 
@@ -840,12 +868,14 @@ class CwnConfig(SwnConfig):
       required when ruleset == 'cwn'; validated on RulesConfig).
     System Strain is configured via ``system_strain`` (System Strain plan).
     Trauma is configured via ``trauma`` (Combat Lethality plan).
+    Hacking is configured via ``hacking`` (optional; a net_run requires it).
     """
 
     model_config = {"extra": "forbid"}
 
     system_strain: SystemStrainConfig = Field(default_factory=SystemStrainConfig)
     trauma: TraumaConfig = Field(default_factory=TraumaConfig)
+    hacking: HackingConfig | None = None
 
 
 class RulesConfig(BaseModel):
@@ -1000,6 +1030,16 @@ class RulesConfig(BaseModel):
                 f"cwn.trauma.major_injury_save = {self.cwn.trauma.major_injury_save!r} "
                 f"is not one of {sorted(valid_saves)}"
             )
+        if self.cwn.hacking is not None:
+            # HackingConfig's own model_validator already enforces non-empty +
+            # default-in-ladder. Cross-check tier DCs are sane 2d6 numbers so a
+            # typo (e.g. 0 or 99) fails loud at pack load, not at dispatch.
+            for tier, dc in self.cwn.hacking.security_tiers.items():
+                if not (2 <= dc <= 12):
+                    raise ValueError(
+                        f"cwn.hacking.security_tiers[{tier!r}] = {dc} is not a "
+                        "valid 2d6 difficulty (must be 2..12)"
+                    )
         return self
 
     def ruleset_config(self) -> SwnConfig | None:

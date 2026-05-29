@@ -833,8 +833,9 @@ class TraumaConfig(BaseModel):
 class HackingConfig(BaseModel):
     """CWN cyberspace security tuning (genre-level, content-authorable).
 
-    security_tiers: named security level -> 2d6 difficulty (CWN published
-      ratings 7-12). A net_run resolves Program checks against the tier's DC.
+    security_tiers: named security level -> 2d6 difficulty in 2..12 (CWN
+      published security ratings are 7-12). A net_run resolves Program checks
+      against the tier's DC.
     default_tier: the tier stamped on a net_run opened without a named tier.
       An AUTHORED fallback declared in content (honors No Silent Fallbacks) —
       NOT a silent code default; it must be a key of security_tiers.
@@ -846,7 +847,7 @@ class HackingConfig(BaseModel):
     security_tiers: dict[str, int]
 
     @model_validator(mode="after")
-    def _validate(self) -> "HackingConfig":
+    def _validate(self) -> HackingConfig:
         if not self.security_tiers:
             raise ValueError("cwn.hacking.security_tiers must be non-empty")
         if self.default_tier not in self.security_tiers:

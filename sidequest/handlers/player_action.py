@@ -18,6 +18,7 @@ from sidequest.protocol.types import NonBlankString
 from sidequest.server.session_handler import _State
 from sidequest.server.session_helpers import (
     _build_turn_context,
+    _emit_unbound_rejection_event,
     _error_msg,
     _resolve_acting_character_name,
 )
@@ -264,6 +265,11 @@ class PlayerActionHandler:
                 "session.message_rejected_unbound type=PLAYER_ACTION state=%s",
                 session._state.name,
             )
+            # Story 67-7 (AC5): surface to the GM panel so a genuine unbound
+            # guard is distinguishable from reconnect churn. Co-located with the
+            # session_unbound branch only — the Creating-state / data-missing
+            # rejection below is a different class and must not borrow this tag.
+            _emit_unbound_rejection_event("PLAYER_ACTION", session._state.name)
             return [
                 _error_msg(
                     "Cannot process PLAYER_ACTION: not connected",

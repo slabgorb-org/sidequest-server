@@ -16,7 +16,10 @@ from sidequest.orbital.intent import (
     handle_orbital_intent,
 )
 from sidequest.protocol.messages import OrbitalChartMessage
-from sidequest.server.session_helpers import _error_msg
+from sidequest.server.session_helpers import (
+    _emit_unbound_rejection_event,
+    _error_msg,
+)
 
 if TYPE_CHECKING:
     from sidequest.protocol import GameMessage
@@ -41,6 +44,9 @@ class OrbitalIntentHandler:
                 "session.message_rejected_unbound type=ORBITAL_INTENT state=%s",
                 session._state.name,
             )
+            # Story 67-7 (AC5): surface to the GM panel so a genuine unbound
+            # guard is distinguishable from reconnect churn.
+            _emit_unbound_rejection_event("ORBITAL_INTENT", session._state.name)
             return [
                 _error_msg(
                     "Cannot process ORBITAL_INTENT: room not bound",

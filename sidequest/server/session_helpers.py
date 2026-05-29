@@ -1261,6 +1261,40 @@ def _error_msg(
     )
 
 
+def _emit_unbound_rejection_event(message_type: str, state_name: str) -> None:
+    """Surface a genuine session-unbound rejection to the GM panel (story 67-7).
+
+    The transport guard correctly rejects action frames that arrive before the
+    ``AwaitingConnect``→``Playing`` handshake binds the session — but a bare
+    ``logger.info`` is invisible to the GM panel, so it cannot tell a genuine
+    guard from the reconnect churn of a duplicate-socket loop. Emit a structured
+    watcher event carrying the rejected frame type, the session state, and the
+    ``session_unbound`` recovery classification. That classification is the
+    discriminator (AC5): reconnect churn does not carry it, so the panel can
+    separate a real unbound rejection from ordinary transport noise.
+
+    Per the OTEL Observability Principle, every subsystem decision must emit a
+    watcher event — the panel is the lie-detector. Call this only on the genuine
+    ``session_unbound`` branch (the one tagged ``code="session_unbound"``), never
+    on the Creating-state / data-missing rejection class, so the signal stays
+    trustworthy.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event
+
+    publish_event(
+        "state_transition",
+        {
+            "field": "session_binding",
+            "op": "message_rejected_unbound",
+            "message_type": message_type,
+            "state": state_name,
+            "recovery": "session_unbound",
+        },
+        component="session",
+        severity="warning",
+    )
+
+
 def _presence_msg(player_id: str, state: str) -> PlayerPresenceMessage:
     """PLAYER_PRESENCE message for connect/disconnect (MP-02 Task 4)."""
     return PlayerPresenceMessage(

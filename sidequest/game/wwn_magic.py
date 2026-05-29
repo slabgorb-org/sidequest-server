@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 EffortDuration = Literal["maintained", "scene", "day"]
 VeteransLuckMode = Literal["force_hit", "force_miss"]
+SaveCategory = Literal["physical", "evasion", "mental", "luck"]
 
 
 class EffortCommitment(BaseModel):
@@ -22,7 +23,7 @@ class EffortCommitment(BaseModel):
 
     points: int
     duration: EffortDuration
-    label: str = ""           # the Art/power the Effort fuels, for the GM panel
+    label: str = ""  # the Art/power the Effort fuels, for the GM panel
 
 
 class EffortPool(BaseModel):
@@ -60,6 +61,27 @@ class SpellcastingState(BaseModel):
     max_spell_level: int = 0
 
 
+class CastInput(BaseModel):
+    """Minimal spell protocol the cast spine (WwnRulesetModule.resolve_spellcast)
+    needs (SRD §4.2). The full content ``Spell`` model — schools, ranges,
+    prepared-from-spellbook, ``mechanical_effect`` prose — is authored in Plan 3;
+    the engine spine only needs the economy + roll inputs.
+
+    - ``save``: the save category the spell forces on the DEFENDER (``"physical"``
+      / ``"evasion"`` / ``"mental"`` / ``"luck"``), or None for a no-save spell.
+    - ``damage_die``: NdM die for a damage spell (e.g. ``"1d6"``), or None.
+    - ``damage_per_level``: when True, damage scales to caster_level x die.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    id: str
+    level: int
+    save: SaveCategory | None = None
+    damage_die: str | None = None
+    damage_per_level: bool = False
+
+
 class EffortResult(BaseModel):
     model_config = {"extra": "forbid"}
     applied: bool
@@ -82,5 +104,5 @@ class SpellcastResult(BaseModel):
 class VeteransLuckResult(BaseModel):
     model_config = {"extra": "forbid"}
     applied: bool
-    mode: VeteransLuckMode   # "force_hit" | "force_miss"
+    mode: VeteransLuckMode  # "force_hit" | "force_miss"
     reason: str = ""

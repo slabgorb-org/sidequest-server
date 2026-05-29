@@ -222,7 +222,9 @@ SPAN_ROUTES[SPAN_WWN_SPELL_CAST] = SpanRoute(
         "refused": (span.attributes or {}).get("refused", False),
         "casts_remaining": (span.attributes or {}).get("casts_remaining", 0),
         "save": (span.attributes or {}).get("save", ""),
-        "save_made": (span.attributes or {}).get("save_made", False),
+        # save_made is OMITTED from the span attributes when no save was resolved
+        # (None) — the GM panel must read "unresolved", never a misleading False.
+        "save_made": (span.attributes or {}).get("save_made", None),
         "damage": (span.attributes or {}).get("damage", ""),
     },
 )
@@ -291,12 +293,18 @@ def wwn_spell_cast_span(
     refused: bool,
     casts_remaining: int,
     save: str,
-    save_made: bool,
+    save_made: bool | None,
     damage: str,
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> None:
-    """Emit a wwn.spell.cast span (lie-detector for WWN spell casting)."""
+    """Emit a wwn.spell.cast span (lie-detector for WWN spell casting).
+
+    ``save_made`` is ``None`` when NO save was resolved (no-save spell, or a save
+    spell with no defender/stats). In that case the attribute is OMITTED entirely
+    rather than coerced to False — OTEL attributes must not carry a misleading
+    bool that tells the GM panel the defender "failed" a save that never rolled.
+    """
     attributes: dict[str, Any] = {
         "field": "spell_cast",
         "actor": actor,
@@ -305,10 +313,11 @@ def wwn_spell_cast_span(
         "refused": refused,
         "casts_remaining": casts_remaining,
         "save": save,
-        "save_made": save_made,
         "damage": damage,
         **attrs,
     }
+    if save_made is not None:
+        attributes["save_made"] = save_made
     with Span.open(SPAN_WWN_SPELL_CAST, attributes, tracer_override=_tracer):
         pass
 

@@ -39,8 +39,7 @@ def pack():
 def poker_conf(pack):
     matches = [c for c in pack.rules.confrontations if c.confrontation_type == "poker"]
     assert len(matches) == 1, (
-        f"expected exactly one 'poker' confrontation in spaghetti_western, "
-        f"found {len(matches)}"
+        f"expected exactly one 'poker' confrontation in spaghetti_western, found {len(matches)}"
     )
     return matches[0]
 
@@ -74,16 +73,14 @@ def test_spaghetti_western_poker_has_required_beat_ids(poker_conf):
     required = {"fold", "call", "cheat", "accuse", "read_table"}
     missing = required - beat_ids
     assert not missing, (
-        f"poker confrontation missing required beats: {sorted(missing)}; "
-        f"have: {sorted(beat_ids)}"
+        f"poker confrontation missing required beats: {sorted(missing)}; have: {sorted(beat_ids)}"
     )
 
 
 def test_spaghetti_western_poker_no_dial_metrics(poker_conf):
     """table_resolution types read table_state, not the dials — metrics should be absent."""
     assert poker_conf.player_metric is None, (
-        f"poker player_metric should be None for table_resolution, "
-        f"got {poker_conf.player_metric!r}"
+        f"poker player_metric should be None for table_resolution, got {poker_conf.player_metric!r}"
     )
     assert poker_conf.opponent_metric is None, (
         f"poker opponent_metric should be None for table_resolution, "

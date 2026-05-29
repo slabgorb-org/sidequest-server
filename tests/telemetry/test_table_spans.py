@@ -31,7 +31,9 @@ def test_dealt_span_opens_and_routes():
         pass
     route = SPAN_ROUTES["table.dealt"]
     # extract() must read attributes without raising even on a bare span shape
-    extracted = route.extract(type("S", (), {"attributes": {"seat_count": 3, "game_kind": "poker"}})())
+    extracted = route.extract(
+        type("S", (), {"attributes": {"seat_count": 3, "game_kind": "poker"}})()
+    )
     assert extracted["seat_count"] == 3
     assert extracted["op"] == "dealt"
 
@@ -46,7 +48,15 @@ def test_accuse_extract_reads_attributes():
     span = type(
         "S",
         (),
-        {"attributes": {"accuser": "seat_1", "target": "seat_2", "accuser_total": 18, "dc": 14, "landed": True}},
+        {
+            "attributes": {
+                "accuser": "seat_1",
+                "target": "seat_2",
+                "accuser_total": 18,
+                "dc": 14,
+                "landed": True,
+            }
+        },
     )()
     extracted = SPAN_ROUTES["table.accuse"].extract(span)
     assert extracted["landed"] is True

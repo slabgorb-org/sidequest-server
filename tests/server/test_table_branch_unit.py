@@ -51,9 +51,7 @@ def test_beat_selection_amount_zero_is_valid():
 
 
 def test_beat_selection_amount_none_explicit():
-    bs = BeatSelection.from_dict(
-        {"actor": "Doc", "beat_id": "raise", "amount": None}
-    )
+    bs = BeatSelection.from_dict({"actor": "Doc", "beat_id": "raise", "amount": None})
     assert bs.amount is None
 
 

@@ -8,21 +8,31 @@ from sidequest.game.table.types import TableCommit, TablePot, TableSeat, TableSt
 
 def _state(n=2, max_dp=1) -> TableState:
     seats = [
-        TableSeat(seat_id=f"seat_{i}", party_name=f"P{i}", is_pc=True, status="active", private_state={})
+        TableSeat(
+            seat_id=f"seat_{i}", party_name=f"P{i}", is_pc=True, status="active", private_state={}
+        )
         for i in range(1, n + 1)
     ]
     return TableState(
-        game_kind="auction", seats=seats,
-        pot=TablePot(stake_kind="item", stake_descriptor="the Ming vase",
-                     contributions={s.seat_id: 0 for s in seats}),
-        order=[s.seat_id for s in seats], dealer_seat="seat_1", max_decision_points=max_dp,
+        game_kind="auction",
+        seats=seats,
+        pot=TablePot(
+            stake_kind="item",
+            stake_descriptor="the Ming vase",
+            contributions={s.seat_id: 0 for s in seats},
+        ),
+        order=[s.seat_id for s in seats],
+        dealer_seat="seat_1",
+        max_decision_points=max_dp,
     )
 
 
 def test_deal_assigns_secret_valuations():
     game = AuctionTableGame()
     seats = _state(3).seats
-    pot = TablePot(stake_kind="item", stake_descriptor="vase", contributions={s.seat_id: 0 for s in seats})
+    pot = TablePot(
+        stake_kind="item", stake_descriptor="vase", contributions={s.seat_id: 0 for s in seats}
+    )
     game.deal(seats, pot, random.Random(1))
     for s in seats:
         assert s.private_state["valuation"] > 0

@@ -7,14 +7,22 @@ from sidequest.game.table.types import TableCommit, TablePot, TableSeat, TableSt
 
 def _state(n: int, max_dp: int = 1) -> TableState:
     seats = [
-        TableSeat(seat_id=f"seat_{i}", party_name=f"P{i}", is_pc=True, status="active", private_state={})
+        TableSeat(
+            seat_id=f"seat_{i}", party_name=f"P{i}", is_pc=True, status="active", private_state={}
+        )
         for i in range(1, n + 1)
     ]
     return TableState(
-        game_kind="poker", seats=seats,
-        pot=TablePot(stake_kind="money", stake_descriptor="the pot",
-                     contributions={s.seat_id: 0 for s in seats}),
-        order=[s.seat_id for s in seats], dealer_seat="seat_1", max_decision_points=max_dp,
+        game_kind="poker",
+        seats=seats,
+        pot=TablePot(
+            stake_kind="money",
+            stake_descriptor="the pot",
+            contributions={s.seat_id: 0 for s in seats},
+        ),
+        order=[s.seat_id for s in seats],
+        dealer_seat="seat_1",
+        max_decision_points=max_dp,
     )
 
 

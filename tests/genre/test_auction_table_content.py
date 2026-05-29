@@ -39,8 +39,7 @@ def pack():
 def auction_conf(pack):
     matches = [c for c in pack.rules.confrontations if c.confrontation_type == "auction"]
     assert len(matches) == 1, (
-        f"expected exactly one 'auction' confrontation in tea_and_murder, "
-        f"found {len(matches)}"
+        f"expected exactly one 'auction' confrontation in tea_and_murder, found {len(matches)}"
     )
     return matches[0]
 
@@ -74,8 +73,7 @@ def test_tea_and_murder_auction_has_required_beat_ids(auction_conf):
     required = {"raise_bid", "withdraw", "read_room"}
     missing = required - beat_ids
     assert not missing, (
-        f"auction confrontation missing required beats: {sorted(missing)}; "
-        f"have: {sorted(beat_ids)}"
+        f"auction confrontation missing required beats: {sorted(missing)}; have: {sorted(beat_ids)}"
     )
 
 

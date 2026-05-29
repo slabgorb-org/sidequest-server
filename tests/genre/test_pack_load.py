@@ -71,9 +71,7 @@ def test_space_opera_pack_loads_with_dual_dial_schema():
         cdef
         for cdef in pack.rules.confrontations
         if (
-            cdef.win_condition.value
-            if hasattr(cdef.win_condition, "value")
-            else cdef.win_condition
+            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
         )
         == "dial_threshold"
     ]
@@ -103,9 +101,7 @@ def test_spaghetti_western_pack_loads_with_dual_dial_schema():
         cdef
         for cdef in pack.rules.confrontations
         if (
-            cdef.win_condition.value
-            if hasattr(cdef.win_condition, "value")
-            else cdef.win_condition
+            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
         )
         == "dial_threshold"
     ]

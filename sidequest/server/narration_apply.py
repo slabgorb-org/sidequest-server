@@ -2846,8 +2846,7 @@ def _apply_narration_result_to_snapshot(
                 # the seed alone is not a stable resolution key without the same
                 # NPC iteration order.
                 _table_rng = Random(
-                    snapshot.turn_manager.interaction * 1000
-                    + enc.table_state.decision_point
+                    snapshot.turn_manager.interaction * 1000 + enc.table_state.decision_point
                 )
                 for _seat in enc.table_state.seats:
                     if _seat.is_pc or _seat.status != "active" or _seat.seat_id in table_commits:
@@ -2907,6 +2906,11 @@ def _apply_narration_result_to_snapshot(
                         room.clear_table_folds()
                     # Award the stake through the auditable state-patch path.
                     # Winner's party_name is the character/PC name.
+                    # The engine always sets pot_awarded_to on showdown — assert
+                    # narrows the type for pyright (invariant enforced by table engine).
+                    assert table_outcome.pot_awarded_to is not None, (
+                        "table showdown: engine must set pot_awarded_to when showdown=True"
+                    )
                     winner_seat = enc.table_state.find_seat(table_outcome.pot_awarded_to)
                     if winner_seat is None:
                         # The engine always returns a valid pot_awarded_to among

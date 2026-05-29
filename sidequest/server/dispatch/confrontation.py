@@ -319,9 +319,7 @@ def build_clear_confrontation_payload(
     }
 
 
-def project_table_frame_for_seat(
-    table_state: TableState, *, seat_id: str | None
-) -> dict[str, Any]:
+def project_table_frame_for_seat(table_state: TableState, *, seat_id: str | None) -> dict[str, Any]:
     """Per-recipient table frame: own private_state only (+ public state) until
     showdown, when all hands reveal. ``seat_id=None`` (unseated/lobby socket)
     gets public-only. The perception firewall pointed at table_state — no new

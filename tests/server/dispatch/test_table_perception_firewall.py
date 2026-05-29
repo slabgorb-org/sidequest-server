@@ -4,16 +4,30 @@ from sidequest.server.dispatch.confrontation import project_table_frame_for_seat
 
 def _state(resolved=False) -> TableState:
     seats = [
-        TableSeat(seat_id="seat_1", party_name="A", is_pc=True, status="active",
-                  private_state={"cards": ["AS", "AH"], "strength_band": "strong"}),
-        TableSeat(seat_id="seat_2", party_name="B", is_pc=True, status="active",
-                  private_state={"cards": ["2C", "7D"], "strength_band": "weak"}),
+        TableSeat(
+            seat_id="seat_1",
+            party_name="A",
+            is_pc=True,
+            status="active",
+            private_state={"cards": ["AS", "AH"], "strength_band": "strong"},
+        ),
+        TableSeat(
+            seat_id="seat_2",
+            party_name="B",
+            is_pc=True,
+            status="active",
+            private_state={"cards": ["2C", "7D"], "strength_band": "weak"},
+        ),
     ]
     st = TableState(
-        game_kind="poker", seats=seats,
-        pot=TablePot(stake_kind="money", stake_descriptor="pot",
-                     contributions={"seat_1": 2, "seat_2": 2}),
-        order=["seat_1", "seat_2"], dealer_seat="seat_1", max_decision_points=3,
+        game_kind="poker",
+        seats=seats,
+        pot=TablePot(
+            stake_kind="money", stake_descriptor="pot", contributions={"seat_1": 2, "seat_2": 2}
+        ),
+        order=["seat_1", "seat_2"],
+        dealer_seat="seat_1",
+        max_decision_points=3,
         resolved_winner="seat_1" if resolved else None,
     )
     return st

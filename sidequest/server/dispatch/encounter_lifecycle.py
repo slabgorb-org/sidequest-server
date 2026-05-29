@@ -478,14 +478,18 @@ def instantiate_table_encounter(
         seat_id = f"seat_{idx}"
         seats.append(
             TableSeat(
-                seat_id=seat_id, party_name=party_name, is_pc=is_pc,
-                status="active", private_state={},
+                seat_id=seat_id,
+                party_name=party_name,
+                is_pc=is_pc,
+                status="active",
+                private_state={},
             )
         )
         # every seat is its own party; side is cosmetic for table types
         actors.append(
             EncounterActor(
-                name=party_name, role=seat_id,
+                name=party_name,
+                role=seat_id,
                 side="player" if is_pc else "opponent",
             )
         )
@@ -494,7 +498,8 @@ def instantiate_table_encounter(
         game_kind=cdef.table_game or "",
         seats=seats,
         pot=TablePot(
-            stake_kind=stake_kind, stake_descriptor=stake_descriptor,
+            stake_kind=stake_kind,
+            stake_descriptor=stake_descriptor,
             contributions={s.seat_id: 0 for s in seats},
         ),
         order=[s.seat_id for s in seats],
@@ -593,7 +598,9 @@ def instantiate_encounter_from_trigger(
             # location fallback for table seats — adversary_only=False because
             # gamblers/auction participants need not be hostile.
             fallback, table_location_available = _npc_fallback_at_location(
-                snapshot, adversarial=False, acting_character_name=player_name,
+                snapshot,
+                adversarial=False,
+                acting_character_name=player_name,
             )
             npc_names_list = [getattr(n, "name", None) or str(n) for n in fallback]
         # No table-mates after sourcing (explicit + fallback both empty) — a

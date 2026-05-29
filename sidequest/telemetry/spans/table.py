@@ -152,7 +152,13 @@ def table_commit_span(
 ) -> Iterator[trace.Span]:
     with Span.open(
         SPAN_TABLE_COMMIT,
-        {"seat": seat, "beat_id": beat_id, "amount": amount, "decision_point": decision_point, **attrs},
+        {
+            "seat": seat,
+            "beat_id": beat_id,
+            "amount": amount,
+            "decision_point": decision_point,
+            **attrs,
+        },
         tracer_override=_tracer,
     ) as span:
         yield span
@@ -170,7 +176,13 @@ def table_npc_commit_span(
 ) -> Iterator[trace.Span]:
     with Span.open(
         SPAN_TABLE_NPC_COMMIT,
-        {"seat": seat, "strength_band": strength_band, "pot": pot, "chosen_beat": chosen_beat, **attrs},
+        {
+            "seat": seat,
+            "strength_band": strength_band,
+            "pot": pot,
+            "chosen_beat": chosen_beat,
+            **attrs,
+        },
         tracer_override=_tracer,
     ) as span:
         yield span

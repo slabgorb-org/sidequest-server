@@ -6,7 +6,9 @@ from sidequest.game.table.types import TablePot, TableSeat
 
 def _seats(n: int) -> list[TableSeat]:
     return [
-        TableSeat(seat_id=f"seat_{i}", party_name=f"P{i}", is_pc=True, status="active", private_state={})
+        TableSeat(
+            seat_id=f"seat_{i}", party_name=f"P{i}", is_pc=True, status="active", private_state={}
+        )
         for i in range(1, n + 1)
     ]
 
@@ -14,7 +16,9 @@ def _seats(n: int) -> list[TableSeat]:
 def test_deal_populates_real_hands_and_strength():
     game = PokerTableGame()
     seats = _seats(3)
-    pot = TablePot(stake_kind="money", stake_descriptor="pot", contributions={s.seat_id: 0 for s in seats})
+    pot = TablePot(
+        stake_kind="money", stake_descriptor="pot", contributions={s.seat_id: 0 for s in seats}
+    )
     game.deal(seats, pot, random.Random(42))
     for s in seats:
         assert len(s.private_state["cards"]) == 5
@@ -37,7 +41,9 @@ def test_deal_is_deterministic_under_seed():
 
 def test_deal_no_duplicate_cards_across_seats():
     seats = _seats(4)
-    pot = TablePot(stake_kind="money", stake_descriptor="pot", contributions={s.seat_id: 0 for s in seats})
+    pot = TablePot(
+        stake_kind="money", stake_descriptor="pot", contributions={s.seat_id: 0 for s in seats}
+    )
     PokerTableGame().deal(seats, pot, random.Random(99))
     all_cards = [c for s in seats for c in s.private_state["cards"]]
     assert len(all_cards) == len(set(all_cards)), "dealt the same card twice"

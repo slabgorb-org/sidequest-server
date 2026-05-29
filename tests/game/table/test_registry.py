@@ -39,7 +39,9 @@ def test_register_and_get_roundtrip():
 
     register_table_game(_Dummy())
     game = get_table_game("dummy_test_kind")
-    seat = TableSeat(seat_id="seat_1", party_name="P1", is_pc=True, status="active", private_state={})
+    seat = TableSeat(
+        seat_id="seat_1", party_name="P1", is_pc=True, status="active", private_state={}
+    )
     pot = TablePot(stake_kind="money", stake_descriptor="pot", contributions={"seat_1": 0})
     game.deal([seat], pot, random.Random(1))
     assert game.strength(seat) == 1
@@ -56,7 +58,9 @@ def test_default_cheat_and_read_raise_not_implemented():
             return 0
 
     g = _NoExtras()
-    seat = TableSeat(seat_id="seat_1", party_name="P1", is_pc=True, status="active", private_state={})
+    seat = TableSeat(
+        seat_id="seat_1", party_name="P1", is_pc=True, status="active", private_state={}
+    )
     with pytest.raises(NotImplementedError):
         g.cheat(seat, random.Random(0))
     with pytest.raises(NotImplementedError):

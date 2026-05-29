@@ -37,9 +37,7 @@ def test_hacking_config_rejects_default_not_in_ladder():
 
 def test_hacking_config_rejects_unknown_field():
     with pytest.raises(ValidationError):
-        HackingConfig(
-            default_tier="office", security_tiers={"office": 9}, bogus=1
-        )
+        HackingConfig(default_tier="office", security_tiers={"office": 9}, bogus=1)
 
 
 def test_cwn_config_hacking_defaults_none():

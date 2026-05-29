@@ -314,10 +314,7 @@ def dispatch_dice_throw(
         ) from exc
 
     is_net_run = bool(
-        pack
-        and pack.rules
-        and pack.rules.ruleset == "cwn"
-        and cdef.category == "hacking"
+        pack and pack.rules and pack.rules.ruleset == "cwn" and cdef.category == "hacking"
     )
 
     net_run_base_dc = 0

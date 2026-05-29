@@ -35,7 +35,9 @@ def _net_run_def() -> ConfrontationDef:
         player_metric=MetricDef(name="data", starting=0, threshold=10),
         opponent_metric=MetricDef(name="alert", starting=0, threshold=10),
         beats=[
-            BeatDef(id="run_program", label="Run Program", kind="strike", base=2, stat_check="Tech"),
+            BeatDef(
+                id="run_program", label="Run Program", kind="strike", base=2, stat_check="Tech"
+            ),
         ],
         mood="tension",
     )

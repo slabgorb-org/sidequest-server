@@ -161,9 +161,7 @@ def test_neon_net_run_config_and_confrontation() -> None:
 
     # net_run confrontation exists; net_combat does not.
     types = [c.confrontation_type for c in pack.rules.confrontations]
-    assert "net_run" in types, (
-        f"neon_dystopia must declare a net_run confrontation; got: {types}"
-    )
+    assert "net_run" in types, f"neon_dystopia must declare a net_run confrontation; got: {types}"
     assert "net_combat" not in types, (
         f"net_combat must have been retired in favour of net_run; got: {types}"
     )
@@ -176,9 +174,7 @@ def test_neon_net_run_config_and_confrontation() -> None:
 
     # run_program beat is present.
     beat_ids = [b.id for b in nr.beats]
-    assert "run_program" in beat_ids, (
-        f"net_run must have a run_program beat; got: {beat_ids}"
-    )
+    assert "run_program" in beat_ids, f"net_run must have a run_program beat; got: {beat_ids}"
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +214,7 @@ def test_neon_net_run_fires_security_check_through_dispatch(otel_capture) -> Non
         f"span must carry tier=black_site; got {attrs.get('tier')!r}"
     )
     assert attrs.get("effective_dc") == 12, (
-        f"effective_dc must be 12 (black_site base=12, alert=0); "
-        f"got {attrs.get('effective_dc')!r}"
+        f"effective_dc must be 12 (black_site base=12, alert=0); got {attrs.get('effective_dc')!r}"
     )
 
 
@@ -243,9 +238,7 @@ def test_neon_net_run_player_win_path(otel_capture) -> None:
         "encounter must resolve when player data reaches threshold; "
         f"encounter_resolved={outcome.encounter_resolved}"
     )
-    assert enc.outcome == "player_victory", (
-        f"outcome must be player_victory; got {enc.outcome!r}"
-    )
+    assert enc.outcome == "player_victory", f"outcome must be player_victory; got {enc.outcome!r}"
     assert enc.player_metric.current >= enc.player_metric.threshold, (
         f"player data must be at or above threshold; "
         f"current={enc.player_metric.current} threshold={enc.player_metric.threshold}"

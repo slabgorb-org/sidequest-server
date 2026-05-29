@@ -81,6 +81,64 @@ _MINIMAL_CASTER_CLASS = """\
       "2": 3
 """
 
+_CASTER_CLASS_WITH_STARTING_PREPARED = """\
+- id: elementalist
+  display_name: Elementalist
+  rpg_role: control
+  jungian_default: magician
+  prime_requisite: INT
+  minimum_score: 9
+  kit_table: elementalist_kit
+  magic_access: wwn
+  wwn_magic:
+    effort_sources:
+      - source: elementalist
+        governing_attr: INTELLIGENCE
+        relevant_skill: Magic
+        starting_skill_level: 1
+    casts_per_day_by_level:
+      "1": 1
+      "2": 2
+    max_spell_level_by_level:
+      "1": 1
+      "2": 1
+    prepared_by_level:
+      "1": 2
+      "2": 3
+    starting_prepared:
+      - cinder_lance
+      - still_the_breath
+"""
+
+_CASTER_CLASS_WITH_UNKNOWN_STARTING_PREPARED = """\
+- id: elementalist
+  display_name: Elementalist
+  rpg_role: control
+  jungian_default: magician
+  prime_requisite: INT
+  minimum_score: 9
+  kit_table: elementalist_kit
+  magic_access: wwn
+  wwn_magic:
+    effort_sources:
+      - source: elementalist
+        governing_attr: INTELLIGENCE
+        relevant_skill: Magic
+        starting_skill_level: 1
+    casts_per_day_by_level:
+      "1": 1
+      "2": 2
+    max_spell_level_by_level:
+      "1": 1
+      "2": 1
+    prepared_by_level:
+      "1": 2
+      "2": 3
+    starting_prepared:
+      - cinder_lance
+      - no_such_spell_id
+"""
+
 _MINIMAL_SPELL_CATALOG = """\
 version: "1.0"
 spells:
@@ -148,3 +206,30 @@ def test_non_wwn_pack_with_spells_file_does_not_load_catalog(tmp_path: Path) -> 
     pack = load_genre_pack(pack_dir)
 
     assert pack.wwn_spell_catalog is None
+
+
+@pytest.mark.skipif(not _EH_AVAILABLE, reason="sidequest-content not on disk")
+def test_wwn_caster_class_with_valid_starting_prepared_loads_ok(tmp_path: Path) -> None:
+    """A caster class whose starting_prepared ids are all in the catalog loads fine."""
+    pack_dir = _clone_pack(_EH_PACK_DIR, tmp_path / "eh_valid_starting_prepared")
+    (pack_dir / "spells_wwn.yaml").write_text(_MINIMAL_SPELL_CATALOG, encoding="utf-8")
+    (pack_dir / "classes.yaml").write_text(_CASTER_CLASS_WITH_STARTING_PREPARED, encoding="utf-8")
+
+    pack = load_genre_pack(pack_dir)
+
+    assert pack.wwn_spell_catalog is not None
+    assert pack.classes is not None
+    assert any(c.id == "elementalist" for c in pack.classes)
+
+
+@pytest.mark.skipif(not _EH_AVAILABLE, reason="sidequest-content not on disk")
+def test_wwn_caster_class_with_unknown_starting_prepared_id_fails_loud(tmp_path: Path) -> None:
+    """A caster class whose starting_prepared references an unknown spell id raises GenreLoadError."""
+    pack_dir = _clone_pack(_EH_PACK_DIR, tmp_path / "eh_bad_starting_prepared")
+    (pack_dir / "spells_wwn.yaml").write_text(_MINIMAL_SPELL_CATALOG, encoding="utf-8")
+    (pack_dir / "classes.yaml").write_text(
+        _CASTER_CLASS_WITH_UNKNOWN_STARTING_PREPARED, encoding="utf-8"
+    )
+
+    with pytest.raises(GenreLoadError, match="no_such_spell_id"):
+        load_genre_pack(pack_dir)

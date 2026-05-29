@@ -143,8 +143,14 @@ class WwnClassMagic(BaseModel):
     the B/X ``ClassMagicConfig``: WWN does NOT use ``slots_by_class_level``.
     The by-level dicts are str-keyed ("1".."10") because YAML/JSON flatten
     int keys to strings. ``prepared_by_level`` is capacity metadata consumed
-    by the rest/prepare action (Plan 3); it is NOT seeded into
-    ``SpellcastingState`` at chargen.
+    by the rest/prepare action (Plan 3).
+
+    ``starting_prepared`` is the chargen seed: a list of spell ids the class
+    prepares at character creation, before the first rest.  ``seed_wwn_magic``
+    seeds ``SpellcastingState.prepared`` from this list, capped at the level-1
+    prepared capacity (``prepared_by_level["1"]``).  When the key is absent no
+    truncation is applied.  Defaults to ``[]`` so non-spellcasting subclasses
+    and older packs that omit the field are unaffected.
     """
 
     model_config = {"extra": "forbid"}
@@ -153,6 +159,7 @@ class WwnClassMagic(BaseModel):
     casts_per_day_by_level: dict[str, int] = Field(default_factory=dict)  # "1": 1 ... "10": 6
     max_spell_level_by_level: dict[str, int] = Field(default_factory=dict)
     prepared_by_level: dict[str, int] = Field(default_factory=dict)
+    starting_prepared: list[str] = Field(default_factory=list)  # spell ids seeded at chargen
     partial: bool = False  # Partial class: Effort -1, min 1
 
 

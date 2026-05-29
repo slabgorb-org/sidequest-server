@@ -681,6 +681,37 @@ def _load_wwn_spell_catalog(
         raise GenreLoadError(path=spells_file, detail=str(exc)) from exc
 
 
+def _validate_wwn_starting_prepared_refs(
+    classes: list[ClassDef],
+    catalog: WwnSpellCatalog | None,
+) -> None:
+    """For a wwn pack with a loaded catalog, every starting_prepared spell id
+    in every class must exist in the catalog.  Fail loud on any unknown id.
+
+    No-op when catalog is None (packs with no spell catalog are covered by the
+    caster-without-catalog branch in _load_wwn_spell_catalog).  No-op when no
+    class has starting_prepared entries.
+    """
+    if catalog is None:
+        return
+    if not classes:
+        return
+
+    catalog_ids = {s.id for s in catalog.spells}
+    for cls in classes:
+        if cls.wwn_magic is None:
+            continue
+        for spell_id in cls.wwn_magic.starting_prepared:
+            if spell_id not in catalog_ids:
+                raise GenreLoadError(
+                    path=Path("spells_wwn.yaml"),
+                    detail=(
+                        f"class '{cls.id}' starting_prepared references unknown spell id "
+                        f"'{spell_id}'. Add the spell to spells_wwn.yaml or fix the id."
+                    ),
+                )
+
+
 # ---------------------------------------------------------------------------
 # World loader
 # ---------------------------------------------------------------------------
@@ -1210,6 +1241,10 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # AND non-empty casts_per_day_by_level) but has no spells_wwn.yaml is an
     # authoring bug. No silent fallback.
     wwn_catalog = _load_wwn_spell_catalog(path, rules, classes_list)
+
+    # Fail loud: every starting_prepared spell id on every class must resolve
+    # against the loaded catalog.  Unknown ids are authoring bugs.
+    _validate_wwn_starting_prepared_refs(classes_list, wwn_catalog)
 
     # Base archetypes and npc_traits live at content root (parent of genre_packs/)
     content_root: Path | None = None

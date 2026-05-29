@@ -213,6 +213,11 @@ class ClassDef(BaseModel):
     magic_config: ClassMagicConfig | None = None
     wwn_magic: WwnClassMagic | None = None
     saving_throws: SavingThrowsTable | None = None
+    # WWN Warrior-archetype marker (SRD §1.5.18). Task 11 sets warrior: true on
+    # the Guardian class YAML; the Killing Blow + Veteran's Luck dispatch seams
+    # gate on this flag. False by default so all existing non-wwn classes are
+    # unaffected without any YAML edits.
+    warrior: bool = False
 
 
 class CharCreationChoice(BaseModel):

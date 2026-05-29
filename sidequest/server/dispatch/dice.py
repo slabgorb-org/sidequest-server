@@ -33,6 +33,7 @@ from sidequest.game.beat_kinds import _opposite_side_first_actor, apply_beat_hp_
 from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
 from sidequest.game.encounter import EncounterPhase, StructuredEncounter
 from sidequest.game.ruleset import get_ruleset_module
+from sidequest.game.ruleset.wwn import WwnRulesetModule
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import ConfrontationDef, ResolutionMode
@@ -495,6 +496,27 @@ def dispatch_dice_throw(
         damage_resolver_fn = None
 
         damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
+
+        # WWN Killing Blow warrior-detection (SRD §1.5.18, Plan 3 Task 9).
+        # Resolved once here; reused in both the HIT and Shock (MISS) seams.
+        # Gate order: wwn ruleset first, then Warrior-archetype class flag.
+        # Non-wwn packs and non-Warrior classes are guaranteed byte-for-byte
+        # inert — no span, no bonus, no mutation.
+        _is_wwn_warrior = False
+        if pack and pack.rules and pack.rules.ruleset == "wwn":
+            _acting_char = next(
+                (c for c in snapshot.characters if c.core.name == character_name), None
+            )
+            _class_def = (
+                next(
+                    (cls for cls in pack.classes if cls.display_name == _acting_char.char_class),
+                    None,
+                )
+                if _acting_char is not None
+                else None
+            )
+            _is_wwn_warrior = bool(_class_def is not None and _class_def.warrior)
+
         if damage_channel == "strike" and resolved.outcome not in (
             RollOutcome.Fail,
             RollOutcome.CritFail,
@@ -558,6 +580,18 @@ def dispatch_dice_throw(
                     actor=character_name,
                 )
                 dmg_total = _lethality.final_total
+                # WWN Warrior Killing Blow rider — HIT path (SRD §1.5.18,
+                # Plan 3 Task 9). Adds ceil(level / divisor) to strike damage.
+                # Gate: wwn pack AND Warrior-archetype actor; inert otherwise.
+                if _is_wwn_warrior and actor_core is not None:
+                    assert isinstance(ruleset, WwnRulesetModule)
+                    cfg = pack.rules.ruleset_config()
+                    dmg_total = ruleset.apply_killing_blow(
+                        base_total=dmg_total,
+                        level=int(actor_core.level),
+                        cfg=cfg,
+                        actor=character_name,
+                    )
                 if _lethality.traumatic:
                     from sidequest.game.encounter_tag import EncounterTag
 
@@ -625,6 +659,19 @@ def dispatch_dice_throw(
                     target_melee_ac=int(getattr(shock_target_core, "armor_class", 10)),
                     actor=character_name,
                 )
+                # WWN Warrior Killing Blow rider — Shock path (SRD §1.5.18,
+                # Plan 3 Task 9). Killing Blow adds to Shock too (same gate).
+                # Only applies when chip > 0 (a genuine Shock hit).
+                if chip > 0 and _is_wwn_warrior:
+                    assert isinstance(ruleset, WwnRulesetModule)
+                    _kb_cfg = pack.rules.ruleset_config()
+                    _shock_actor_core = snapshot.find_creature_core(character_name)
+                    chip = ruleset.apply_killing_blow(
+                        base_total=chip,
+                        level=int(_shock_actor_core.level) if _shock_actor_core else 1,
+                        cfg=_kb_cfg,
+                        actor=character_name,
+                    )
                 if chip > 0:
                     apply_beat_hp_channel(
                         target=shock_target_core,

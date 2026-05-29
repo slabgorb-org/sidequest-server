@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.session import GameSnapshot
+from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.models.character import ClassDef
 from sidequest.genre.models.rules import ConfrontationDef
 from sidequest.magic.confrontations import BranchName
@@ -107,6 +108,7 @@ def build_confrontation_payload(
     recipient_pc: RecipientPc | None = None,
     recipient_actor_name: str | None = None,
     core_resolver: Callable[[str], CreatureCore | None] | None = None,
+    spellcasting: SpellcastingState | None = None,
 ) -> dict[str, Any]:
     """Assemble the CONFRONTATION payload the UI overlay consumes.
 
@@ -160,12 +162,14 @@ def build_confrontation_payload(
             class_def,
             spell_slots_remaining=spell_slots,
             prepared_spells=prepared_spells,
+            spellcasting=spellcasting,
         )
         rejection_reason = cast_spell_rejection_reason(
             cdef,
             class_def,
             spell_slots_remaining=spell_slots,
             prepared_spells=prepared_spells,
+            spellcasting=spellcasting,
         )
         span_kwargs: dict[str, Any] = {
             "actor": recipient_actor_name or "recipient",
@@ -367,6 +371,14 @@ def make_confrontation_frame_supplier(
                 ):
                     pass
             return None
+        # WWN arm (Task 5): when the seated PC has a SpellcastingState on
+        # their core, thread it into build_confrontation_payload so the
+        # beat filter uses WWN economy instead of B/X slot gates.
+        sc: SpellcastingState | None = None
+        if recipient_actor is not None:
+            actor_core = snapshot.find_creature_core(recipient_actor)
+            if actor_core is not None:
+                sc = actor_core.spellcasting
         per_pc_dict = build_confrontation_payload(
             encounter=encounter,
             cdef=cdef,
@@ -374,6 +386,7 @@ def make_confrontation_frame_supplier(
             recipient_pc=recipient_pc,
             recipient_actor_name=recipient_actor,
             core_resolver=snapshot.find_creature_core,
+            spellcasting=sc,
         )
         return ConfrontationPayload(**per_pc_dict)
 

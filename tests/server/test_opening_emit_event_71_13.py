@@ -39,6 +39,7 @@ SKIP ≠ RED — tests must run and FAIL, not skip.
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 import pytest
 from opentelemetry import trace
@@ -104,7 +105,7 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
         ).fetchall()
         if rows:
             names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")  # pyright: ignore[reportCallIssue, reportArgumentType]
     monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
     db_pool.close_pool()
     yield
@@ -126,7 +127,7 @@ def _setup_tracing() -> InMemorySpanExporter:
     exporter = InMemorySpanExporter()
     current = trace.get_tracer_provider()
     if hasattr(current, "add_span_processor"):
-        current.add_span_processor(SimpleSpanProcessor(exporter))
+        cast(TracerProvider, current).add_span_processor(SimpleSpanProcessor(exporter))
     else:
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -155,6 +156,7 @@ def _narration_decide_player_ids(exporter: InMemorySpanExporter) -> set[str]:
 async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
     """Drive chargen up to (not through) the confirmation commit."""
     sd = h._session_data  # type: ignore[attr-defined]
+    assert sd is not None
     builder = sd.builder
     assert builder is not None
     while not builder.is_confirmation():
@@ -166,7 +168,7 @@ async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
             stat_order = list(builder._ability_score_names)  # type: ignore[attr-defined]
             for stat, value in zip(stat_order, sorted_pool, strict=True):
                 out = await h.handle_message(
-                    CharacterCreationMessage(
+                    CharacterCreationMessage(  # pyright: ignore[reportArgumentType]
                         payload=CharacterCreationPayload(
                             phase="arrange_assign", stat=stat, value=value
                         ),
@@ -190,7 +192,7 @@ async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
         else:
             payload = CharacterCreationPayload(phase="continue")
         out = await h.handle_message(
-            CharacterCreationMessage(payload=payload, player_id="pid")
+            CharacterCreationMessage(payload=payload, player_id="pid")  # pyright: ignore[reportArgumentType]
         )
         if out and isinstance(out[0], ErrorMessage):
             raise AssertionError(f"walk error: {out[0].payload.message}")
@@ -213,6 +215,7 @@ def _make_mp(
     from sidequest.server.session_room import SessionRoom
 
     sd = h._session_data  # type: ignore[attr-defined]
+    assert sd is not None
     sd.mode = GameMode.MULTIPLAYER
     driver_pid = sd.player_id or DRIVER_PID
     sd.player_id = driver_pid
@@ -298,7 +301,7 @@ async def _fire_opening(
 
     monkeypatch.setattr(h, "_run_opening_turn_narration", _emitting_opening)
     out = await h.handle_message(
-        CharacterCreationMessage(
+        CharacterCreationMessage(  # pyright: ignore[reportArgumentType]
             payload=CharacterCreationPayload(phase="confirmation"),
             player_id="pid",
         )
@@ -380,7 +383,7 @@ async def test_anchor_peer_gets_live_pov_swap_not_only_on_reconnect(
             NarrationMessage(
                 payload=NarrationPayload(
                     text=NonBlankString(PROSE_TEXT_PEER_ANCHOR),
-                    visibility_sidecar=anchored,
+                    visibility_sidecar=anchored,  # pyright: ignore[reportCallIssue]
                 )
             ),
         ]
@@ -435,7 +438,7 @@ async def test_visible_to_private_opening_card_excluded_from_non_recipients(
             NarrationMessage(
                 payload=NarrationPayload(
                     text=NonBlankString(PRIVATE_TEXT),
-                    visibility_sidecar={
+                    visibility_sidecar={  # pyright: ignore[reportCallIssue]
                         "visible_to": [driver_pid],
                         "anchor_pc": None,
                         "pov_strategy": None,
@@ -479,7 +482,7 @@ async def test_opening_events_persisted_with_seq_assigned(
             NarrationMessage(
                 payload=NarrationPayload(
                     text=NonBlankString(PROSE_TEXT_DRIVER_ANCHOR),
-                    visibility_sidecar=anchored,
+                    visibility_sidecar=anchored,  # pyright: ignore[reportCallIssue]
                 )
             ),
         ]
@@ -531,7 +534,7 @@ async def test_emit_author_resolved_fires_with_project_emitter_true(
             NarrationMessage(
                 payload=NarrationPayload(
                     text=NonBlankString(PROSE_TEXT_DRIVER_ANCHOR),
-                    visibility_sidecar=anchored,
+                    visibility_sidecar=anchored,  # pyright: ignore[reportCallIssue]
                 )
             ),
         ]
@@ -583,7 +586,7 @@ async def test_projection_filter_decide_fires_per_connected_player(
             NarrationMessage(
                 payload=NarrationPayload(
                     text=NonBlankString(PROSE_TEXT_DRIVER_ANCHOR),
-                    visibility_sidecar=anchored,
+                    visibility_sidecar=anchored,  # pyright: ignore[reportCallIssue]
                 )
             ),
         ]
@@ -636,7 +639,7 @@ async def test_solo_opening_also_persisted_with_seq(
             NarrationMessage(
                 payload=NarrationPayload(
                     text=NonBlankString(PROSE_TEXT_DRIVER_ANCHOR),
-                    visibility_sidecar=anchored,
+                    visibility_sidecar=anchored,  # pyright: ignore[reportCallIssue]
                 )
             ),
         ]
@@ -688,6 +691,7 @@ async def test_render_queued_frame_not_persisted_as_narration(
     await _walk_to_confirmation(handler)
 
     sd = handler._session_data  # type: ignore[attr-defined]
+    assert sd is not None
     poison_render_id = "5386571aacad"
 
     monkeypatch.setattr(chargen_mixin, "_should_fire_opening_narration", lambda _sd, _room: True)
@@ -707,7 +711,7 @@ async def test_render_queued_frame_not_persisted_as_narration(
 
     monkeypatch.setattr(handler, "_run_opening_turn_narration", _opening_with_render)
     await handler.handle_message(
-        CharacterCreationMessage(
+        CharacterCreationMessage(  # pyright: ignore[reportArgumentType]
             payload=CharacterCreationPayload(phase="confirmation"),
             player_id="pid",
         )

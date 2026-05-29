@@ -61,20 +61,20 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
         ).fetchall()
         if rows:
             names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")  # pyright: ignore[reportCallIssue, reportArgumentType]
     monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
     db_pool.close_pool()
     yield
     db_pool.close_pool()
 
 
-def _canned_opening() -> list[object]:
+def _canned_opening() -> list[NarrationMessage]:
     """Single-anchor MP opening: unanchored cold-open seed + driver-anchored prose."""
     anchored = {"visible_to": "all", "anchor_pc": "Rux", "pov_strategy": "pc_anchored"}
     return [
         NarrationMessage(payload=NarrationPayload(text=NonBlankString(SEED_TEXT))),
         NarrationMessage(
-            payload=NarrationPayload(text=NonBlankString(PROSE_TEXT), visibility_sidecar=anchored)
+            payload=NarrationPayload(text=NonBlankString(PROSE_TEXT), visibility_sidecar=anchored)  # pyright: ignore[reportCallIssue]
         ),
     ]
 
@@ -82,6 +82,7 @@ def _canned_opening() -> list[object]:
 async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
     """Drive chargen up to (not through) the confirmation commit."""
     sd = h._session_data  # type: ignore[attr-defined]
+    assert sd is not None
     builder = sd.builder
     assert builder is not None
     while not builder.is_confirmation():
@@ -93,7 +94,7 @@ async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
             stat_order = list(builder._ability_score_names)  # type: ignore[attr-defined]
             for stat, value in zip(stat_order, sorted_pool, strict=True):
                 out = await h.handle_message(
-                    CharacterCreationMessage(
+                    CharacterCreationMessage(  # pyright: ignore[reportArgumentType]
                         payload=CharacterCreationPayload(
                             phase="arrange_assign", stat=stat, value=value
                         ),
@@ -117,7 +118,7 @@ async def _walk_to_confirmation(h: WebSocketSessionHandler) -> None:
         else:
             payload = CharacterCreationPayload(phase="continue")
         out = await h.handle_message(
-            CharacterCreationMessage(payload=payload, player_id="pid")
+            CharacterCreationMessage(payload=payload, player_id="pid")  # pyright: ignore[reportArgumentType]
         )
         if out and isinstance(out[0], ErrorMessage):
             raise AssertionError(f"walk error: {out[0].payload.message}")
@@ -130,6 +131,7 @@ def _make_mp(h: WebSocketSessionHandler) -> asyncio.Queue:
     from sidequest.server.session_room import SessionRoom
 
     sd = h._session_data  # type: ignore[attr-defined]
+    assert sd is not None
     sd.mode = GameMode.MULTIPLAYER
     driver_pid = sd.player_id or DRIVER_PID
     sd.player_id = driver_pid
@@ -200,7 +202,7 @@ async def _fire_opening(
 
     monkeypatch.setattr(h, "_run_opening_turn_narration", _emitting_opening)
     out = await h.handle_message(
-        CharacterCreationMessage(
+        CharacterCreationMessage(  # pyright: ignore[reportArgumentType]
             payload=CharacterCreationPayload(phase="confirmation"),
             player_id="pid",
         )
@@ -230,6 +232,7 @@ async def test_opening_does_not_use_room_broadcast(
     await _walk_to_confirmation(handler)
     q_peer = _make_mp(handler)
 
+    assert handler._room is not None
     with patch.object(handler._room, "broadcast", wraps=handler._room.broadcast) as mock_broadcast:
         await _fire_opening(handler, monkeypatch)
 

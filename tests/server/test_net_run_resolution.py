@@ -25,7 +25,7 @@ from sidequest.genre.models.rules import (
     MetricDef,
     RulesConfig,
 )
-from sidequest.protocol.dice import DiceThrowPayload, DieSides, ThrowParams
+from sidequest.protocol.dice import DiceThrowPayload, DieSides, RollOutcome, ThrowParams
 from sidequest.protocol.messages import DiceRequestMessage
 from sidequest.server.dispatch.dice import dispatch_dice_throw
 
@@ -87,7 +87,7 @@ def _encounter(alert_current: int = 0, security_tier: str = "black_site") -> Str
     )
 
 
-def _drive(*, faces, alert_current, tracer=None):
+def _drive(*, faces, alert_current, security_tier="black_site"):
     captured: list = []
     snap = GameSnapshot()
     snap.genre_slug = "test_neon"
@@ -102,7 +102,7 @@ def _drive(*, faces, alert_current, tracer=None):
         rolling_player_id="p1",
         character_name="Rux",
         character_stats={"Tech": 14},  # SWN curve: score 14 → +1 mod
-        encounter=_encounter(alert_current),
+        encounter=_encounter(alert_current, security_tier=security_tier),
         pack=_pack(),
         genre_slug="test_neon",
         session_id="s1",
@@ -130,31 +130,7 @@ def test_net_run_controlled_faces_resolve_tier():
     # office=9, alert 0 → DC 9.
     # Faces 2+3=5, +modifier(INT +1 + Program 1 = 2) → 7 < 9 → Fail.
     # Use faces well clear of the DC so the tier (Fail) is unambiguous.
-    enc = _encounter(0, security_tier="office")
-    captured: list = []
-    snap = GameSnapshot()
-    snap.genre_slug = "test_neon"
-    payload = DiceThrowPayload(
-        request_id=str(uuid.uuid4()),
-        throw_params=_THROW,
-        face=[2, 3],
-        beat_id="run_program",
-    )
-    outcome = dispatch_dice_throw(
-        payload=payload,
-        rolling_player_id="p1",
-        character_name="Rux",
-        character_stats={"Tech": 14},
-        encounter=enc,
-        pack=_pack(),
-        genre_slug="test_neon",
-        session_id="s1",
-        round_number=1,
-        room_broadcast=captured.append,
-        snapshot=snap,
-    )
-    from sidequest.protocol.dice import RollOutcome
-
+    outcome, _ = _drive(faces=[2, 3], alert_current=0, security_tier="office")
     assert outcome.outcome == RollOutcome.Fail
 
 

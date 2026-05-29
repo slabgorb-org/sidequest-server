@@ -126,9 +126,21 @@ def build_confrontation_payload(
     full-union shape so callers that have not migrated (narrator-prompt
     builder, tests, etc.) continue to work.
 
-    ``recipient_actor_name`` is the PC actor's display name and is used
-    only to stamp the OTEL span attributes — it has no effect on the
-    payload shape. Defaults to ``"recipient"`` when omitted.
+    ``recipient_actor_name`` is the PC actor's display name; besides
+    stamping the OTEL span attributes it is used (with ``core_resolver``)
+    to DERIVE the recipient's WWN ``SpellcastingState`` for the cast_spell
+    gate (Task 5). Defaults to ``"recipient"`` when omitted.
+
+    WWN cast_spell gate (Task 5): when ``recipient_pc`` is supplied the
+    cast_spell beat is gated on the recipient's ``core.spellcasting``
+    (WWN casts/prepared economy) instead of the B/X slot economy. The
+    ``SpellcastingState`` is resolved centrally HERE — explicit
+    ``spellcasting`` wins; otherwise it is derived from
+    ``core_resolver(recipient_actor_name).spellcasting``. This single
+    derivation point covers every per-PC caller (panel projection AND the
+    yield-projection path AND any future site) without per-caller
+    threading. B/X packs have ``spellcasting is None`` on every core, so
+    the derived value is None and the B/X arm runs byte-for-byte unchanged.
 
     The filter call also emits a ``confrontation_beat_filter_span``
     tagged ``source='ui_panel_projection'`` so the GM panel can
@@ -157,19 +169,31 @@ def build_confrontation_payload(
         from sidequest.telemetry.spans import confrontation_beat_filter_span
 
         class_def, spell_slots, prepared_spells = recipient_pc
+        # WWN arm (Task 5): centralize SpellcastingState derivation so EVERY
+        # per-PC caller benefits (panel projection AND yield-projection AND
+        # any future per-PC site) without per-caller threading. Explicit
+        # `spellcasting` wins; otherwise derive from the recipient core via
+        # ``core_resolver``. A B/X core has ``spellcasting is None``, so the
+        # derived value is None and the B/X arm runs unchanged (no-op) — the
+        # WWN/B/X behavior split lives entirely in beat_filter.
+        effective_spellcasting = spellcasting
+        if effective_spellcasting is None and core_resolver is not None and recipient_actor_name:
+            recipient_core = core_resolver(recipient_actor_name)
+            if recipient_core is not None:
+                effective_spellcasting = recipient_core.spellcasting
         filtered = beats_available_for(
             cdef,
             class_def,
             spell_slots_remaining=spell_slots,
             prepared_spells=prepared_spells,
-            spellcasting=spellcasting,
+            spellcasting=effective_spellcasting,
         )
         rejection_reason = cast_spell_rejection_reason(
             cdef,
             class_def,
             spell_slots_remaining=spell_slots,
             prepared_spells=prepared_spells,
-            spellcasting=spellcasting,
+            spellcasting=effective_spellcasting,
         )
         span_kwargs: dict[str, Any] = {
             "actor": recipient_actor_name or "recipient",
@@ -371,14 +395,11 @@ def make_confrontation_frame_supplier(
                 ):
                     pass
             return None
-        # WWN arm (Task 5): when the seated PC has a SpellcastingState on
-        # their core, thread it into build_confrontation_payload so the
-        # beat filter uses WWN economy instead of B/X slot gates.
-        sc: SpellcastingState | None = None
-        if recipient_actor is not None:
-            actor_core = snapshot.find_creature_core(recipient_actor)
-            if actor_core is not None:
-                sc = actor_core.spellcasting
+        # WWN arm (Task 5): build_confrontation_payload now derives the
+        # recipient's SpellcastingState internally from ``core_resolver`` +
+        # ``recipient_actor_name`` (centralized so the yield path and any
+        # future per-PC caller get WWN cast_spell gating for free). No
+        # explicit ``spellcasting`` pass is needed here.
         per_pc_dict = build_confrontation_payload(
             encounter=encounter,
             cdef=cdef,
@@ -386,7 +407,6 @@ def make_confrontation_frame_supplier(
             recipient_pc=recipient_pc,
             recipient_actor_name=recipient_actor,
             core_resolver=snapshot.find_creature_core,
-            spellcasting=sc,
         )
         return ConfrontationPayload(**per_pc_dict)
 

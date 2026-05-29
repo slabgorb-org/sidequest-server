@@ -83,6 +83,7 @@ SPAN_ROUTES[SPAN_CWN_SHOCK_APPLIED] = SpanRoute(
         "amount": (span.attributes or {}).get("amount", 0),
         "melee_ac": (span.attributes or {}).get("melee_ac", 0),
         "shock_rating": (span.attributes or {}).get("shock_rating", 0),
+        "shock_ac": (span.attributes or {}).get("shock_ac", 0),
     },
 )
 
@@ -147,6 +148,7 @@ def cwn_shock_applied_span(
     amount: int,
     melee_ac: int,
     shock_rating: int,
+    shock_ac: int | None = None,
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> None:
@@ -157,6 +159,7 @@ def cwn_shock_applied_span(
         "amount": amount,
         "melee_ac": melee_ac,
         "shock_rating": shock_rating,
+        "shock_ac": shock_ac,
         **attrs,
     }
     with Span.open(SPAN_CWN_SHOCK_APPLIED, attributes, tracer_override=_tracer):

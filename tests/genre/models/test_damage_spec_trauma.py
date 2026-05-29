@@ -11,15 +11,24 @@ def test_damage_spec_trauma_fields_default_off():
     assert spec.trauma_die is None
     assert spec.trauma_rating == 1
     assert spec.shock == 0
+    assert spec.shock_ac is None
     assert spec.trauma_target is None
 
 
 def test_damage_spec_accepts_trauma_and_shock():
-    spec = DamageSpec(dice="2d8", trauma_die="1d6", trauma_rating=3, shock=2, trauma_target=7)
+    spec = DamageSpec(
+        dice="2d8", trauma_die="1d6", trauma_rating=3, shock=2, shock_ac=15, trauma_target=7
+    )
     assert spec.trauma_die == "1d6"
     assert spec.trauma_rating == 3
     assert spec.shock == 2
+    assert spec.shock_ac == 15
     assert spec.trauma_target == 7
+
+
+def test_shock_requires_shock_ac():
+    with pytest.raises(ValidationError):
+        DamageSpec(dice="1d6", shock=2)
 
 
 def test_trauma_die_validated_as_dice_notation():

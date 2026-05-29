@@ -12,7 +12,7 @@ returns a CONFRONTATION_OUTCOME payload for the WebSocket dispatcher.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import StructuredEncounter
@@ -21,6 +21,9 @@ from sidequest.genre.models.character import ClassDef
 from sidequest.genre.models.rules import ConfrontationDef
 from sidequest.magic.confrontations import BranchName
 from sidequest.magic.outputs import apply_mandatory_outputs
+
+if TYPE_CHECKING:
+    from sidequest.protocol.messages import ConfrontationPayload
 
 # Story 49-7: a per-recipient PC context — (class_def, spell_slots_remaining,
 # prepared_spells) — matching the existing pc_classes_by_name tuple shape
@@ -321,7 +324,7 @@ def make_confrontation_frame_supplier(
     encounter: StructuredEncounter,
     cdef: ConfrontationDef,
     genre_slug: str,
-) -> Callable[[str], Any]:
+) -> Callable[[str], ConfrontationPayload | None]:
     """Build the per-recipient CONFRONTATION supplier for ``emit_event``.
 
     Story 59-16 introduced this single-filtered-delivery contract on the
@@ -346,7 +349,7 @@ def make_confrontation_frame_supplier(
         confrontation_recipient_unresolved_span,
     )
 
-    def _frame_for(player_id: str) -> Any:
+    def _frame_for(player_id: str) -> ConfrontationPayload | None:
         recipient_pc, recipient_actor = resolve_recipient_pc(
             snapshot=snapshot,
             genre_pack=genre_pack,

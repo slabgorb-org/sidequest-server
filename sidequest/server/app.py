@@ -244,9 +244,15 @@ def create_app(
     @app.on_event("startup")
     async def _open_db_pool() -> None:
         from sidequest.game import db_pool
+        from sidequest.game.db_schema_check import assert_schema_at_head
 
         pool = db_pool.get_pool()
         pool.wait(timeout=10.0)  # fail loud if Postgres is unreachable at boot
+        # Reachable is not enough: a schema stamped behind alembic head boots
+        # fine and only explodes mid-turn on the first write to an unmigrated
+        # table (playtest #G4). Extend the ADR-115 fail-loud contract to assert
+        # the schema is at head before declaring the pool wired.
+        assert_schema_at_head()
         logger.info("db_pool.startup_wired name=%s", pool.name)
 
     @app.on_event("shutdown")

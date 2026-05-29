@@ -6,7 +6,10 @@ Port of sidequest-api/crates/sidequest-server/src/dispatch/
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from sidequest.agents.orchestrator import NpcMention
 
 from sidequest.game.disposition import Attitude
 from sidequest.game.encounter import (
@@ -468,7 +471,7 @@ def instantiate_encounter_from_trigger(
     genre_slug: str | None,
     additional_player_names: list[str] | None = None,
     security_tier: str | None = None,
-    materialized_threat: Any | None = None,
+    materialized_threat: NpcMention | None = None,
 ) -> StructuredEncounter | None:
     """Create a StructuredEncounter when the narrator emits ``confrontation=T``.
 

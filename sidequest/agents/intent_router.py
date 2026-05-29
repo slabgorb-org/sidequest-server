@@ -37,6 +37,7 @@ from sidequest.agents.llm_factory import (
     _INTENT_ROUTER_MODEL,
     IntentRouterEmptyResponse,
 )
+from sidequest.agents.narrator_guardrails import CONFRONTATION_TRIGGER_CORE
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.spans.intent_router import (
     intent_router_decompose_span,
@@ -99,7 +100,8 @@ def _dispatch_tool_schema() -> dict[str, Any]:
     return DispatchPackage.model_json_schema()
 
 
-_SYSTEM_PROMPT = """You are the Intent Router — an impartial structured-output reader.
+_SYSTEM_PROMPT = (
+    """You are the Intent Router — an impartial structured-output reader.
 
 Your job: read a player's action + the game state summary, then emit the
 DispatchPackage by calling the ``emit_dispatch_package`` tool exactly once.
@@ -122,7 +124,15 @@ For each player action:
          a flee/pursue → a movement-category type). The type MUST be one of the
          values listed in game_state.confrontation_types — never invent a type
          and never describe the action here instead of naming the type.
-       - magic_working: spell or magical ability usage. params is a
+         Recognise a stake-binding engagement and emit the confrontation
+         dispatch on the SAME turn its trigger appears in the fiction. The
+         recognition rules below (shared verbatim with the narrator's
+         game_patch steering — story 61-18 / ADR-111) name which fictional
+         beats are real triggers; the type names they cite are illustrative,
+         so always pick from game_state.confrontation_types:
+"""
+    + CONFRONTATION_TRIGGER_CORE
+    + """       - magic_working: spell or magical ability usage. params is a
          MagicWorking-shaped object (the spell/effect fields).
        - scenario_clue: clue/evidence discovery. params={"fact_id": "<id>"}
          (optional "summary", "category").
@@ -156,6 +166,7 @@ perception_fidelity unless the state clearly names asymmetric visibility.
 
 Pydantic rejects unknown fields. Stay inside the schema. Emit everything
 through the tool input — no preamble, no commentary, no extra text blocks."""
+)
 
 
 def _build_user_prompt(action: str, state_summary: Any) -> str:

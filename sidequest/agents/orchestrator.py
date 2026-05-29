@@ -1569,15 +1569,29 @@ class Orchestrator:
     ) -> None:
         """Register a Recency-zone guardrail PromptSection on the legacy backend only.
 
-        ADR-111 (story 57-4): on the SDK tool-use path
-        (``isinstance(self._client, ToolingLlmClient)``) the four guardrail
-        prose blocks live at their migration targets — the
-        ``tools=`` array's ``description`` field (for tool-owned artifacts)
-        or the slimmed-sidecar Primacy/Stable cached prose (for sidecar-
-        owned artifacts). On the legacy ``claude -p`` / Ollama paths the
-        Recency-zone registration stays byte-identical to pre-111. This
-        helper centralises the gate so the four registration sites in
-        ``build_narrator_prompt`` collapse from ~10 lines each to one call.
+        ADR-111 (story 57-4) + story 61-18: on the SDK tool-use path
+        (``isinstance(self._client, ToolingLlmClient)``) the guardrail prose
+        lives at per-guardrail migration targets, NOT in the Recency zone:
+
+          - ``npc_intro_visual`` / ``npc_extraction`` → the slimmed-sidecar
+            Primacy/Stable cached prose (``NARRATOR_OUTPUT_ONLY``).
+          - ``location_patch`` → the ``apply_world_patch`` tool ``description``.
+          - ``confrontation_trigger`` → its framing-neutral
+            ``CONFRONTATION_TRIGGER_CORE`` is composed into the IntentRouter
+            ``_SYSTEM_PROMPT`` (``intent_router.py``). On the SDK path the
+            narrator does not emit the ``confrontation`` patch field — the
+            IntentRouter (ADR-113) decides the trigger pre-narrator — so the
+            recognition steering rides the router, not a narrator surface.
+            (Story 61-18 corrected the earlier docstring, which wrongly
+            implied this guardrail reached the SDK model via a tool
+            description; it reached nothing — it was dead prose on the SDK
+            path until the core moved to the router.)
+
+        On the legacy ``claude -p`` / Ollama paths (opt-in, non-default) the
+        narrator still emits a ``game_patch``, so the Recency-zone
+        registration stays byte-identical to pre-111. This helper centralises
+        the gate so the registration sites in ``build_narrator_prompt``
+        collapse from ~10 lines each to one call.
         """
         if not isinstance(self._client, ToolingLlmClient):
             registry.register_section(

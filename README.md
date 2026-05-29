@@ -116,7 +116,7 @@ Gitflow. `develop` is the integration branch. `main` tracks releases. PRs target
 
 ## Related repos
 
-- [orc-quest](https://github.com/slabgorb/orc-quest) — Orchestrator, ADRs, sprint tracking
+- [sidequest](https://github.com/slabgorb/sidequest) — Orchestrator, ADRs, sprint tracking
 - [sidequest-ui](https://github.com/slabgorb/sidequest-ui) — React client
 - [sidequest-daemon](https://github.com/slabgorb/sidequest-daemon) — Python media services (Z-Image, ACE-Step)
 - [sidequest-content](https://github.com/slabgorb/sidequest-content) — Genre packs (single source of truth)

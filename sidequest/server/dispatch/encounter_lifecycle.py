@@ -490,6 +490,7 @@ def _build_table_seat_seeds(
     the engine's .get(..., default) fallbacks apply and crunch degrades
     gracefully for that seat only.
     """
+
     def _stat_mod(score: int) -> int:
         return (score - 10) // 2  # native ruleset modifier formula
 

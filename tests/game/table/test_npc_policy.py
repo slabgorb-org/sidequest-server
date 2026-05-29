@@ -50,9 +50,7 @@ def _state() -> TableState:
 
 def _auction_state() -> TableState:
     seats = [
-        TableSeat(
-            seat_id="seat_1", party_name="PC", is_pc=True, status="active", private_state={}
-        ),
+        TableSeat(seat_id="seat_1", party_name="PC", is_pc=True, status="active", private_state={}),
         TableSeat(
             seat_id="seat_2",
             party_name="Bidder",
@@ -72,7 +70,9 @@ def _auction_state() -> TableState:
         game_kind="auction",
         seats=seats,
         pot=TablePot(
-            stake_kind="item", stake_descriptor="the Ming vase", contributions={"seat_1": 0, "seat_2": 0}
+            stake_kind="item",
+            stake_descriptor="the Ming vase",
+            contributions={"seat_1": 0, "seat_2": 0},
         ),
         order=["seat_1", "seat_2"],
         dealer_seat="seat_1",
@@ -162,18 +162,13 @@ def test_auction_npc_never_returns_unauthored_beat():
     npc.private_state["ocean"] = {"neuroticism": 0.2}
     npc.private_state["disposition"] = "larcenous"
     for seed in range(80):
-        commit = decide_npc_commit(
-            st, npc, rng=random.Random(seed), available_beats=_AUCTION_BEATS
-        )
+        commit = decide_npc_commit(st, npc, rng=random.Random(seed), available_beats=_AUCTION_BEATS)
         assert commit.beat_id in _AUCTION_BEATS, (
-            f"seed={seed}: got unauthored beat {commit.beat_id!r}; "
-            f"auction beats={_AUCTION_BEATS}"
+            f"seed={seed}: got unauthored beat {commit.beat_id!r}; auction beats={_AUCTION_BEATS}"
         )
     # "cheat" must never appear
     all_beats = {
-        decide_npc_commit(
-            st, npc, rng=random.Random(s), available_beats=_AUCTION_BEATS
-        ).beat_id
+        decide_npc_commit(st, npc, rng=random.Random(s), available_beats=_AUCTION_BEATS).beat_id
         for s in range(80)
     }
     assert "cheat" not in all_beats, f"larcenous auction NPC emitted 'cheat': {all_beats}"
@@ -226,9 +221,7 @@ def test_auction_larcenous_npc_resolve_no_notimplementederror():
     npc.private_state["ocean"] = {"neuroticism": 0.2}
 
     # Simulate the narration_apply auto-commit path: decide then resolve.
-    npc_commit = decide_npc_commit(
-        st, npc, rng=random.Random(7), available_beats=_AUCTION_BEATS
-    )
+    npc_commit = decide_npc_commit(st, npc, rng=random.Random(7), available_beats=_AUCTION_BEATS)
     assert npc_commit.beat_id in _AUCTION_BEATS
 
     pc_commit = TableCommit(seat_id="seat_1", beat_id="raise_bid", amount=5)

@@ -102,6 +102,53 @@ def pg_conn(migrated_db: str) -> Iterator[Any]:
             conn.rollback()
 
 
+@pytest.fixture
+def behind_head_db() -> Iterator[str]:
+    """A real Postgres database upgraded to base revision 0001 — deliberately
+    BEHIND alembic head (Story 71-20 / finding #G4).
+
+    Mirrors ``migrated_db`` but stops the upgrade at the base revision instead of
+    ``head``, so the schema is reachable but stale — the exact silent-landmine
+    condition this story guards against. Yields the plain ``postgresql://``
+    conninfo (what ``db_config`` / ``db_pool`` consume) and DROPs the DB on
+    teardown. Function-scoped so each behind-head test gets a fresh stale DB.
+    """
+    import psycopg
+    from alembic.config import Config
+
+    from alembic import command
+
+    admin = _pg_admin_conninfo()
+    db_name = f"sq_behind_{uuid.uuid4().hex[:8]}"
+
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{db_name}"')
+
+    target = _pg_swap_dbname(admin, db_name)
+    plain = target.replace("postgresql+psycopg://", "postgresql://", 1)
+    try:
+        cfg = Config("alembic.ini")
+        cfg.set_main_option("script_location", "alembic")
+        cfg.set_main_option(
+            "sqlalchemy.url",
+            target
+            if target.startswith("postgresql+psycopg://")
+            else target.replace("postgresql://", "postgresql+psycopg://", 1),
+        )
+        # Stop at the base revision — NOT head. This leaves the DB behind head
+        # (0002 asset_ledger and any later migrations unapplied).
+        command.upgrade(cfg, "0001")
+        yield plain
+    finally:
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+            conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--update-snapshots",

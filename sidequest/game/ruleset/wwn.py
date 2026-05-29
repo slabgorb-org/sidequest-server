@@ -12,6 +12,7 @@ fallback — selected explicitly by `ruleset: wwn`.
 
 from __future__ import annotations
 
+import math
 import random
 
 from opentelemetry import trace
@@ -22,19 +23,33 @@ from sidequest.game.ruleset.resolution import AttackRollParams, CheckRollParams
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.status import Status, StatusSeverity
 from sidequest.game.system_strain import StrainResult
-from sidequest.game.wwn_magic import CastInput, EffortCommitment, EffortResult, SpellcastResult
+from sidequest.game.wwn_magic import (
+    CastInput,
+    EffortCommitment,
+    EffortResult,
+    SpellcastResult,
+    VeteransLuckResult,
+    VeteransLuckMode,
+)
 from sidequest.genre.models.inventory import _DICE_RE, DamageSpec
 from sidequest.genre.models.rules import SwnConfig, WwnConfig
 from sidequest.telemetry.spans.wwn import (
     wwn_effort_commit_span,
     wwn_effort_reclaim_span,
+    wwn_killing_blow_span,
     wwn_major_injury_roll_span,
     wwn_mortal_injury_declared_span,
     wwn_shock_applied_span,
     wwn_spell_cast_span,
     wwn_system_strain_delta_span,
     wwn_trauma_roll_span,
+    wwn_veterans_luck_span,
 )
+
+# Scene-scoped used-marker for Veteran's Luck (Status.text sentinel).
+# StatusSeverity.Scratch → cleared by clear_scratch_on_scene_end at scene end,
+# so this flag is automatically reset each scene without any new cleanup code.
+VETERANS_LUCK_USED_MARKER = "Veteran's Luck used this scene"
 
 
 class WwnRulesetModule(SwnRulesetModule):
@@ -566,3 +581,89 @@ class WwnRulesetModule(SwnRulesetModule):
             save_made=save_made,
             damage=damage,
         )
+
+    # ------------------------------------------------------------------
+    # Warrior abilities (WWN SRD §1.5.18, spec §E)
+    # ------------------------------------------------------------------
+
+    def apply_killing_blow(
+        self,
+        *,
+        base_total: int,
+        level: int,
+        cfg: SwnConfig | None,
+        actor: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> int:
+        """WWN Warrior Killing Blow (SRD §1.5.18): add ceil(level / divisor) to
+        the damage of any attack/spell/ability (and to Shock). Returns the new
+        total; emits wwn.killing_blow.
+
+        Pure math + span — no core mutation, not wired to dispatch (Plan 3).
+        cfg guard raises on non-WwnConfig, consistent with other methods.
+        """
+        if not isinstance(cfg, WwnConfig):
+            raise ValueError(
+                f"apply_killing_blow requires a WwnConfig; got {type(cfg).__name__!r}"
+            )
+        bonus = math.ceil(int(level) / cfg.magic.killing_blow_divisor)
+        total = base_total + bonus
+        wwn_killing_blow_span(
+            actor=actor,
+            level=level,
+            bonus=bonus,
+            base=base_total,
+            total=total,
+            _tracer=_tracer,
+        )
+        return total
+
+    def veterans_luck(
+        self,
+        core: CreatureCore,
+        *,
+        mode: VeteransLuckMode,
+        _tracer: trace.Tracer | None = None,
+    ) -> VeteransLuckResult:
+        """WWN Warrior Veteran's Luck (SRD §1.5.18): once per scene Instant action.
+
+        First call this scene → applied=True, sets a scene-scoped Scratch Status
+        on ``core`` (cleared automatically by ``clear_scratch_on_scene_end`` at
+        scene end, so the ability refreshes each scene without any new cleanup).
+        Subsequent calls same scene → applied=False (reason set). Emits
+        wwn.veterans_luck on EVERY call (applied True and False both recorded —
+        fail-loud-but-recorded, consistent with commit_effort).
+
+        ``mode`` must be ``"force_hit"`` or ``"force_miss"`` (declared by the
+        caller; dispatch integration is Plan 3).
+        """
+        already_used = any(
+            s.text == VETERANS_LUCK_USED_MARKER for s in core.statuses
+        )
+        if already_used:
+            wwn_veterans_luck_span(
+                actor=core.name,
+                mode=mode,
+                applied=False,
+                _tracer=_tracer,
+            )
+            return VeteransLuckResult(
+                applied=False,
+                mode=mode,
+                reason="Veteran's Luck already used this scene",
+            )
+
+        # Mark as used — Scratch severity so the existing scene-end sweep clears it.
+        core.statuses.append(
+            Status(
+                text=VETERANS_LUCK_USED_MARKER,
+                severity=StatusSeverity.Scratch,
+            )
+        )
+        wwn_veterans_luck_span(
+            actor=core.name,
+            mode=mode,
+            applied=True,
+            _tracer=_tracer,
+        )
+        return VeteransLuckResult(applied=True, mode=mode)

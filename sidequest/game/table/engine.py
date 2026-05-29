@@ -144,6 +144,15 @@ def _apply_signature_beat(state, seat_id, commit, *, game, rng, read_results) ->
         reader_stat = int(seat.private_state.get("perception", 0))
         read = game.read(seat, target, reader_stat=reader_stat)
         read_results[seat_id] = read
+        # Deliver the intel into the reader's own private_state so the perception
+        # firewall (project_table_frame_for_seat) routes it to the reader's next
+        # private frame and hides it from all other seats. Multiple reads in one
+        # hand accumulate — a player remembers everything they've read.
+        seat.private_state.setdefault("read_intel", []).append({
+            "target_seat": read.target_seat,
+            "strength_band": read.info.get("strength_band"),
+            "suspicious_trace": read.info.get("suspicious_trace", False),
+        })
         with table_read_span(
             reader=seat_id,
             target=target.seat_id,

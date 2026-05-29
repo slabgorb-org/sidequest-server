@@ -175,6 +175,12 @@ async def execute_intent_router_pre_narrator_pass(
             # disposition subsystem engages in THIS pass instead of failing
             # on a missing kwarg.
             "npc_pool": list(snapshot.npc_pool or []),
+            # ``npcs`` — the authored roster. npc_agency resolves its target
+            # against the roster FIRST (roster NPCs are not mirrored into
+            # npc_pool; presence is tracked via last_seen_location), so
+            # without this the subsystem never engaged for the game's primary
+            # NPCs (playtest #C1, 2026-05-28). Signature-filtered by the bank.
+            "npcs": list(snapshot.npcs or []),
             # Movement subsystem (§0 context threading): the live region
             # graph + palette + worker handle the movement handler needs.
             # The bank signature-filters context, so subsystems that do not

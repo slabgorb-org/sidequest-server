@@ -118,6 +118,70 @@ async def test_pre_narrator_pass_engages_npc_agency_with_pool_from_snapshot() ->
     )
 
 
+def _snapshot_with_roster_npc(npc_name: str, *, disposition: int = 0) -> Any:
+    """A snapshot where the NPC is in the AUTHORED roster (snapshot.npcs) and
+    NOT in npc_pool — the coyote_star crew / Old Tam shape (playtest #C1)."""
+    from sidequest.game.creature_core import CreatureCore, HpPool
+    from sidequest.game.disposition import Disposition
+    from sidequest.game.session import GameSnapshot, Npc
+
+    npc = Npc(
+        core=CreatureCore(
+            name=npc_name,
+            description="An NPC.",
+            personality="Neutral.",
+            hp=HpPool(current=10, max=10, base_max=10),
+        ),
+        disposition=Disposition(disposition),
+    )
+    return GameSnapshot(
+        genre_slug="tea_and_murder",
+        world_slug="glenross",
+        encounter=None,
+        player_seats={"player:Vyvyan": "Vyvyan"},
+        npcs=[npc],
+        npc_pool=[],  # deliberately empty — the roster is the only source
+    )
+
+
+async def test_pre_narrator_pass_engages_npc_agency_for_roster_npc_not_in_pool() -> None:
+    """#C1: a disposition read on an authored roster NPC (snapshot.npcs, NOT in
+    npc_pool) must engage. This pins the full wiring — the pre-narrator pass
+    threads ``npcs`` into the bank context, the bank signature-filters it into
+    ``run_npc_agency``, and the roster path produces the disposition directive.
+    Before the fix the pool-only lookup returned ``npc_not_registered`` and the
+    subsystem never fired for the game's primary NPCs."""
+    from sidequest.server.intent_router_pass import (
+        execute_intent_router_pre_narrator_pass,
+    )
+
+    snap = _snapshot_with_roster_npc("Old Tam", disposition=40)  # friendly
+    assert snap.npc_pool == []  # the NPC is ONLY in the roster
+    package = _npc_agency_package()
+    router = MagicMock()
+    router.decompose = AsyncMock(return_value=package)
+    pack = MagicMock()
+    pack.rules = None
+
+    _returned_pkg, bank_result = await execute_intent_router_pre_narrator_pass(
+        intent_router=router,
+        snapshot=snap,
+        pack=pack,
+        action="I study Old Tam's face — eager, or reluctant?",
+        player_name="Vyvyan",
+    )
+
+    assert bank_result.errors == [], f"npc_agency dispatch failed: {bank_result.errors}"
+    out = bank_result.outputs_by_key["vyvyan_read_old_tam"]
+    assert out.data.get("source") == "npcs_roster", (
+        f"roster NPC did not resolve via the roster path: {out.data}"
+    )
+    assert out.data.get("disposition") == "friendly"
+    assert any("Old Tam" in d.payload for d in bank_result.directives), (
+        "npc_agency produced no directive for a roster NPC — wiring break"
+    )
+
+
 async def test_build_narrator_prompt_fails_loud_when_bank_result_missing() -> None:
     """Consolidation invariant: a present ``dispatch_package`` means the
     pre-narrator pass ran and stashed its ``BankResult``. ``build_narrator_prompt``

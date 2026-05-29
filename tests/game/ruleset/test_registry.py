@@ -25,3 +25,12 @@ def test_cwn_registered():
     module = get_ruleset_module("cwn")
     assert isinstance(module, CwnRulesetModule)
     assert module.slug == "cwn"
+
+
+def test_wwn_registered_and_singleton():
+    from sidequest.game.ruleset.registry import get_ruleset_module
+    from sidequest.game.ruleset.wwn import WwnRulesetModule
+
+    mod = get_ruleset_module("wwn")
+    assert isinstance(mod, WwnRulesetModule)
+    assert get_ruleset_module("wwn") is mod  # stateless singleton

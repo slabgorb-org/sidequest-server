@@ -223,6 +223,7 @@ class SessionRoom:
         snapshot: GameSnapshot,
         store: SaveRepository,
         world_dir: Path | None = None,
+        ruleset: str | None = None,
     ) -> None:
         """Bind canonical snapshot + store to the room. Idempotent.
 
@@ -238,6 +239,11 @@ class SessionRoom:
         ``room.session.orbital_content``. Worlds without an orbital
         tier (no ``orbits.yaml``) bind cleanly with
         ``orbital_content=None``; malformed orbital data fails loud.
+
+        ``ruleset`` is the bound pack's ruleset slug (``pack.rules.ruleset``,
+        e.g. ``"wwn"``). Threaded onto the ``Session`` so scene-end can
+        gate the WWN Effort reclaim on it. ``None`` when the pack declares
+        no ruleset.
         """
         orbital_content: OrbitalContent | None = None
         if world_dir is not None:
@@ -258,7 +264,7 @@ class SessionRoom:
                 return
             self._snapshot = snapshot
             self._store = store
-            self._session = Session(snapshot, orbital_content=orbital_content)
+            self._session = Session(snapshot, orbital_content=orbital_content, ruleset=ruleset)
 
     @property
     def snapshot(self) -> GameSnapshot | None:

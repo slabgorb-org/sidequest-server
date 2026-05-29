@@ -907,6 +907,38 @@ class CwnConfig(SwnConfig):
     hacking: HackingConfig | None = None
 
 
+class MagicConfig(BaseModel):
+    """WWN magic ruleset constants (Sine Nomine, CC0). Per-class tables (Effort
+    sources, casts/day, max spell level) live on the class def (WwnClassMagic),
+    NOT here — this holds engine-level constants only. Spells name their own save;
+    default_spell_save is the fallback when a spell omits one."""
+
+    model_config = {"extra": "forbid"}
+
+    effort_base: int = 1  # Effort max = effort_base + skill + attr mod
+    killing_blow_divisor: int = 2  # Killing Blow adds ceil(level / divisor)
+    day_reclaim_requires_comfort: bool = True  # day-Effort needs a comfortable rest
+    default_spell_save: str = "mental"
+
+
+class WwnConfig(SwnConfig):
+    """Worlds Without Number universal constants (Sine Nomine, CC0).
+
+    WWN shares the SWN/CWN resolution engine, so this inherits SwnConfig
+    verbatim (unarmored_ac=10, save_base=15, the 6/8/10/12/14 ladder,
+    attribute_map). It carries the same System Strain and Trauma tuning CWN
+    uses (reused models), but has NO hacking — WWN has no cyberspace. Magic
+    (Effort / spell slots / Fray Die) is configured via the `magic` block added
+    in Plan 2. NOT a fallback — selected explicitly by `ruleset: wwn`.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    system_strain: SystemStrainConfig = Field(default_factory=SystemStrainConfig)
+    trauma: TraumaConfig = Field(default_factory=TraumaConfig)
+    magic: MagicConfig = Field(default_factory=MagicConfig)
+
+
 class RulesConfig(BaseModel):
     """Game rules configuration."""
 
@@ -969,6 +1001,8 @@ class RulesConfig(BaseModel):
     swn: SwnConfig | None = None
     # Present only when ruleset == "cwn"; None for all other rulesets.
     cwn: CwnConfig | None = None
+    # Present only when ruleset == "wwn"; None for all other rulesets.
+    wwn: WwnConfig | None = None
     # ADR-113 confidence gate (Story 71-16): per-subsystem engagement
     # thresholds. Keys are dispatch subsystem names (``confrontation``,
     # ``magic_working``, ``scenario_clue``, ``npc_agency``, ``movement``,
@@ -1071,6 +1105,50 @@ class RulesConfig(BaseModel):
                     )
         return self
 
+    @model_validator(mode="after")
+    def _validate_wwn(self) -> RulesConfig:
+        """Enforce a complete attribute_map when ruleset == 'wwn'; raises ValueError if omitted."""
+        if self.ruleset != "wwn":
+            return self
+        if self.wwn is None:
+            object.__setattr__(self, "wwn", WwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        assert self.wwn is not None
+        amap = self.wwn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'wwn' requires rules.wwn.attribute_map (WWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"wwn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for wwn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"wwn attribute_map[{wwn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
+        strain_source = self.wwn.system_strain.max_source
+        if strain_source not in amap:
+            raise ValueError(
+                f"wwn.system_strain.max_source = {strain_source!r} is not a key of "
+                f"wwn.attribute_map {sorted(amap.keys())}"
+            )
+        valid_saves = {"physical", "evasion", "mental", "luck"}
+        if self.wwn.trauma.major_injury_save not in valid_saves:
+            raise ValueError(
+                f"wwn.trauma.major_injury_save = {self.wwn.trauma.major_injury_save!r} "
+                f"is not one of {sorted(valid_saves)}"
+            )
+        if self.wwn.magic.default_spell_save not in valid_saves:
+            raise ValueError(
+                f"wwn.magic.default_spell_save = {self.wwn.magic.default_spell_save!r} "
+                f"is not one of {sorted(valid_saves)}"
+            )
+        return self
+
     def ruleset_config(self) -> SwnConfig | None:
         """The config block for the bound ruleset, or None for engines that carry none.
 
@@ -1081,6 +1159,8 @@ class RulesConfig(BaseModel):
             return self.swn
         if self.ruleset == "cwn":
             return self.cwn
+        if self.ruleset == "wwn":
+            return self.wwn
         return None
 
     @property

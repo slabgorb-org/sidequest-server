@@ -105,7 +105,29 @@ async def run_confrontation_dispatch(
 
     actor_list = list(npcs_present) if npcs_present else []
 
-    if not actor_list:
+    # Story 59-23 (#C3 / ADR-116): a ship_combat trigger names a threat that is
+    # not an existing NPC entity (e.g. "three unregistered hulls running dark").
+    # Materialize it as the Other so the instantiation seam seats THAT rather
+    # than falling back to the player's own crew. The threat rides on
+    # ``params["threat"]`` (the router→engine channel this docstring already
+    # sanctions for explicit actor info) as ``{"name", "description"}`` or a bare
+    # name string. Seat it ``side="opponent"``; the backing CreatureCore (hull
+    # HP / AC) is created downstream from the confrontation's
+    # ``opponent_default_stats`` (Task 9).
+    materialized_threat = None
+    threat = dispatch.params.get("threat")
+    if threat and not actor_list:
+        from sidequest.agents.orchestrator import NpcMention
+
+        threat_name = threat.get("name") if isinstance(threat, dict) else str(threat)
+        if threat_name:
+            materialized_threat = NpcMention(
+                name=threat_name,
+                role="hostile",
+                side="opponent",
+            )
+
+    if not actor_list and materialized_threat is None:
         # Pre-existing observability: the legacy consumer logged this
         # before falling back to the location-scoped NPC registry. Keep
         # the span so the GM panel's per-turn audit retains the signal.
@@ -131,6 +153,7 @@ async def run_confrontation_dispatch(
             genre_slug=snapshot.genre_slug,
             additional_player_names=additional_player_names,
             security_tier=dispatch.params.get("security_tier"),
+            materialized_threat=materialized_threat,
         )
     except NoOpponentAvailableError as exc:
         logger.warning(

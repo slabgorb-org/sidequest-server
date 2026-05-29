@@ -67,6 +67,8 @@ from sidequest.genre.models.character import (
     MechanicalEffects,
     NpcArchetype,
     VisualStyle,
+    WwnClassMagic,
+    WwnEffortSource,
 )
 from sidequest.genre.models.chassis import (
     BondTier,
@@ -278,6 +280,8 @@ __all__ = [
     "MechanicalEffects",
     "NpcArchetype",
     "VisualStyle",
+    "WwnClassMagic",
+    "WwnEffortSource",
     # culture
     "CorpusRef",
     "Culture",

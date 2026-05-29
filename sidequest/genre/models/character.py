@@ -115,6 +115,47 @@ class ClassMagicConfig(BaseModel):
     turn_undead: bool = False  # cleric-only class-special
 
 
+class WwnEffortSource(BaseModel):
+    """One WWN class-source contributing an Effort pool (SRD §1.4.4).
+
+    A magic-using class draws Effort from one or more named sources (High
+    Mage, Vowed, Elementalist, ...). Effort from one source cannot fuel
+    another, so each source seeds its own pool. The pool max at chargen is
+    ``effort_base + starting_skill_level + governing_attr_mod``.
+
+    Copy-not-share with the B/X ``ClassMagicConfig`` — the WWN economy
+    (Effort + casts/day) is a separate model, not the slot-table shape.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    source: str  # "high_mage" | "vowed" | "elementalist" ...
+    governing_attr: str  # canonical WWN attr key, e.g. "WISDOM"
+    relevant_skill: str  # e.g. "Magic"
+    starting_skill_level: int  # chargen skill level for the Effort-max formula
+
+
+class WwnClassMagic(BaseModel):
+    """Per-class WWN magic data (Effort sources + spell economy tables).
+
+    Lives on the class def, consumed by ``seed_wwn_magic`` at chargen to
+    seed ``EffortPool``s and a ``SpellcastingState``. Copy-not-share with
+    the B/X ``ClassMagicConfig``: WWN does NOT use ``slots_by_class_level``.
+    The by-level dicts are str-keyed ("1".."10") because YAML/JSON flatten
+    int keys to strings. ``prepared_by_level`` is capacity metadata consumed
+    by the rest/prepare action (Plan 3); it is NOT seeded into
+    ``SpellcastingState`` at chargen.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    effort_sources: list[WwnEffortSource] = Field(default_factory=list)  # one per class-source
+    casts_per_day_by_level: dict[str, int] = Field(default_factory=dict)  # "1": 1 ... "10": 6
+    max_spell_level_by_level: dict[str, int] = Field(default_factory=dict)
+    prepared_by_level: dict[str, int] = Field(default_factory=dict)
+    partial: bool = False  # Partial class: Effort -1, min 1
+
+
 class ClassAbilityDef(BaseModel):
     """Class-source signature ability authored in classes.yaml.
 
@@ -163,6 +204,7 @@ class ClassDef(BaseModel):
     abilities: list[ClassAbilityDef] = Field(default_factory=list)
     magic_access: str | None = None
     magic_config: ClassMagicConfig | None = None
+    wwn_magic: WwnClassMagic | None = None
     saving_throws: SavingThrowsTable | None = None
 
 

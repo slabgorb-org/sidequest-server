@@ -397,6 +397,14 @@ class CharacterSheetDetails(ProtocolBase):
 
     race: NonBlankString
     """Character race/origin. Non-blank post-chargen."""
+    origin_label: NonBlankString | None = None
+    """Display-only flavor label for Origin (the chosen chargen phrase, e.g.
+    "The Village Itself"). None when the label IS the mechanical archetype —
+    the UI falls back to ``race``. Diamonds-and-Coal: flavor on the sheet."""
+    calling_label: NonBlankString | None = None
+    """Display-only flavor label for Calling (e.g. "Country Veterinary
+    Surgeon"). None when the label IS the mechanical class — the UI falls
+    back to the top-level ``class``."""
     stats: dict[str, int]
     """Ability scores / stats."""
     abilities: list[AbilityDefinition]

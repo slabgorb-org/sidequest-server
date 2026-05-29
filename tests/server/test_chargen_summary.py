@@ -207,6 +207,45 @@ class TestCoreFields:
         assert "Species: Mutant" in summary
         assert "Path: Ranger" in summary
 
+    def test_flavor_labels_preferred_over_collapsed_archetype_slug(
+        self, caverns_pack: GenrePack
+    ) -> None:
+        """sq-playtest 2026-05-28 BUG-LOW — when a chargen choice's flavor label
+        differs from its mechanical archetype slug, the player-facing summary
+        must show the chosen flavor, not the collapsed slug.
+
+        tea_and_murder maps rich buttons onto a tiny taxonomy: "The Village
+        Itself" → race_hint "Servant", "Country Veterinary Surgeon" → class_hint
+        "Doctor". Before the fix the summary rendered the raw hints ("Servant" /
+        "Doctor"); after it renders the captured choice labels.
+        """
+        rules = RulesConfig(
+            stat_generation="standard_array",
+            ability_score_names=["STR", "DEX", "CON", "INT", "WIS", "CHA"],
+            point_buy_budget=27,
+            race_label="Origin",
+            class_label="Calling",
+        )
+        scenes = [
+            make_scene(
+                "origins", choices=[make_choice("The Village Itself", race_hint="Servant")]
+            ),
+            make_scene(
+                "vocation",
+                choices=[make_choice("Country Veterinary Surgeon", class_hint="Doctor")],
+            ),
+        ]
+        b = CharacterBuilder(scenes=scenes, rules=rules)
+        b.apply_choice(0)
+        b.apply_choice(0)
+        msg = render_confirmation_summary(b, caverns_pack, "Rux", "p1")
+        summary = msg.payload.summary or ""
+        assert "Origin: The Village Itself" in summary
+        assert "Calling: Country Veterinary Surgeon" in summary
+        # The collapsed mechanical slugs must NOT be what the player sees.
+        assert "Origin: Servant" not in summary
+        assert "Calling: Doctor" not in summary
+
     def test_default_class_shown_when_class_hint_absent(self, caverns_pack: GenrePack) -> None:
         # Synthetic rules with default_class set — caverns_and_claudes no
         # longer has default_class (chargen-visible-dice 2026-05-09 dropped

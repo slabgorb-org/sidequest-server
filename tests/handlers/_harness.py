@@ -296,7 +296,7 @@ async def submit(harness: MpRoomHarness, player: str, text: str, *, aside: bool)
     """Drive the REAL handler for ``player``; return what the table saw."""
     session = harness._sessions[player]
     msg = PlayerActionMessage(
-        payload=PlayerActionPayload(action=text, aside=aside),
+        payload=PlayerActionPayload(action=text, aside=aside, round=harness.turn_round()),
         player_id=harness._pid[player],
     )
     before = len(harness._captured)

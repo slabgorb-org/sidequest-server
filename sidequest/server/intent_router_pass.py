@@ -35,7 +35,7 @@ import logging
 from typing import Any
 
 from sidequest.agents.intent_router import IntentRouter
-from sidequest.agents.subsystems import run_dispatch_bank
+from sidequest.agents.subsystems import BankResult, run_dispatch_bank
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
@@ -133,13 +133,17 @@ async def execute_intent_router_pre_narrator_pass(
     dungeon_store: Any | None = None,
     palette: Any | None = None,
     lookahead_handle: Any | None = None,
-) -> DispatchPackage:
+) -> tuple[DispatchPackage, BankResult]:
     """Run the IntentRouter and dispatch bank pre-narrator.
 
-    Returns the ``DispatchPackage`` the router produced — the caller
-    assigns this to ``turn_context.dispatch_package`` so the narrator
-    prompt builder (downstream) can consume it for redaction and
-    narrator-directive injection.
+    Returns ``(package, bank_result)``. The caller assigns the package to
+    ``turn_context.dispatch_package`` (the narrator prompt builder reads it
+    for redaction) and the ``BankResult`` to ``turn_context.bank_result``.
+    This pass is the SINGLE dispatch-bank run for the turn: the engines
+    engage here, on the snapshot, before the narrator. The orchestrator
+    consumes ``bank_result`` for narrator directives + the lethality
+    arbiter rather than re-running the bank — re-running would engage every
+    engine a second time (a PC moves twice, a clue is consumed twice).
 
     Raises ``IntentRouterFailure`` (from the router itself) if the
     bounded retry fails. The caller MUST NOT swallow this — the player's
@@ -158,7 +162,7 @@ async def execute_intent_router_pre_narrator_pass(
         state_summary=state_summary,
     )
 
-    await run_dispatch_bank(
+    bank_result = await run_dispatch_bank(
         package,
         context={
             "snapshot": snapshot,
@@ -166,6 +170,11 @@ async def execute_intent_router_pre_narrator_pass(
             "player_name": player_name,
             "npcs_present": [],
             "additional_player_names": additional_player_names,
+            # ``npc_pool`` is required (kw-only, no default) by
+            # ``run_npc_agency``; sourced from the live snapshot so the NPC
+            # disposition subsystem engages in THIS pass instead of failing
+            # on a missing kwarg.
+            "npc_pool": list(snapshot.npc_pool or []),
             # Movement subsystem (§0 context threading): the live region
             # graph + palette + worker handle the movement handler needs.
             # The bank signature-filters context, so subsystems that do not
@@ -185,7 +194,7 @@ async def execute_intent_router_pre_narrator_pass(
         snapshot.encounter is not None,
     )
 
-    return package
+    return package, bank_result
 
 
 __all__ = ["execute_intent_router_pre_narrator_pass"]

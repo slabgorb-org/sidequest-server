@@ -20,7 +20,7 @@ Requires Postgres (the connect path persists per ADR-115).
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -175,10 +175,30 @@ async def _fire_opening(
     *,
     opening_factory=None,
 ) -> list[object]:
-    """Drive the confirmation commit with a canned opening; return local out."""
+    """Drive the confirmation commit with a canned opening; return local out.
+
+    Post sq-playtest 2026-05-28 #G1, ``_run_opening_turn_narration`` emits its
+    own frames via ``emit_event`` and the chargen caller only extends the
+    returned list (no re-emit). This fake mirrors that contract — it routes the
+    canned opening frames through the REAL ``_emit_event`` so the no-room-broadcast
+    / event-sourcing outcomes under test still fire.
+    """
     factory = opening_factory or _canned_opening
     monkeypatch.setattr(chargen_mixin, "_should_fire_opening_narration", lambda _sd, _room: True)
-    monkeypatch.setattr(h, "_run_opening_turn_narration", AsyncMock(return_value=factory()))
+
+    async def _emitting_opening(sd: object, _player_id: str, _span: object) -> list[object]:
+        room = h._room
+        connected = (
+            room.connected_player_ids()
+            if room is not None and callable(getattr(room, "connected_player_ids", None))
+            else []
+        )
+        author = sd.player_id if len(connected) > 1 else None  # type: ignore[attr-defined]
+        return [
+            h._emit_event("NARRATION", m.payload, author_player_id=author) for m in factory()
+        ]
+
+    monkeypatch.setattr(h, "_run_opening_turn_narration", _emitting_opening)
     out = await h.handle_message(
         CharacterCreationMessage(
             payload=CharacterCreationPayload(phase="confirmation"),

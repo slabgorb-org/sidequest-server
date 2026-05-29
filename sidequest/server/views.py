@@ -407,6 +407,13 @@ def party_member_from_character(
 
     sheet = CharacterSheetDetails(
         race=NonBlankString(character.race),
+        # Display-only flavor labels — None when chargen produced no distinct
+        # label (label == archetype), so the UI cleanly falls back to the
+        # mechanical race/class slug.
+        origin_label=NonBlankString(character.origin_label) if character.origin_label else None,
+        calling_label=(
+            NonBlankString(character.calling_label) if character.calling_label else None
+        ),
         stats=stats,
         abilities=abilities,
         class_moves=class_moves,

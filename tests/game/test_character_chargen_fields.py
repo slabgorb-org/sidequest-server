@@ -202,6 +202,68 @@ class TestEmptyDefaults:
 
 
 # ---------------------------------------------------------------------------
+# Case 4b — origin/calling flavor labels plumbed onto Character (#G2 live-panel
+# extension). The collapsed mechanical race/class slug stays authoritative;
+# the display-only labels carry the chosen flavor for the player-facing sheet.
+# ---------------------------------------------------------------------------
+
+
+class TestOriginCallingLabelsPlumbed:
+    def _vocation_origin_scenes(self) -> list[CharCreationScene]:
+        # tea_and_murder shape: a CHOICE whose label is a rich flavor phrase
+        # that collapses onto a small mechanical archetype (race_hint/class_hint).
+        return [
+            make_scene(
+                "origin",
+                choices=[
+                    make_choice(
+                        "The Village Itself",
+                        description="A crofter, of the working village.",
+                        race_hint="Servant",
+                    ),
+                ],
+            ),
+            make_scene(
+                "vocation",
+                choices=[
+                    make_choice(
+                        "Country Veterinary Surgeon",
+                        description="You tend the parish's beasts.",
+                        class_hint="Doctor",
+                    ),
+                ],
+            ),
+        ]
+
+    def test_choice_flavor_labels_populate_character_labels(self) -> None:
+        b = CharacterBuilder(scenes=self._vocation_origin_scenes(), rules=base_rules())
+        b.apply_choice(0)
+        b.apply_choice(0)
+        char = b.build("Vyvyan Basterd")
+        # Display-only labels carry the chosen flavor.
+        assert char.origin_label == "The Village Itself"
+        assert char.calling_label == "Country Veterinary Surgeon"
+        # Mechanical archetype underneath is unchanged — loadout/genre read these.
+        assert char.race == "Servant"
+        assert char.char_class == "Doctor"
+
+    def test_labels_empty_when_no_distinct_flavor(self) -> None:
+        # A choice whose label IS the archetype leaves the labels empty so the
+        # UI falls back to the slug (label==hint → byte-identical surface).
+        scenes = [
+            make_scene(
+                "noop",
+                choices=[make_choice("Go", description="A blank slate.")],
+            ),
+        ]
+        b = CharacterBuilder(scenes=scenes, rules=base_rules())
+        b.apply_choice(0)
+        char = b.build("Anon")
+        assert char.origin_label == ""
+        assert char.calling_label == ""
+
+
+# ---------------------------------------------------------------------------
 # Case 5 — nickname always empty (no chargen source today).
 # ---------------------------------------------------------------------------
 

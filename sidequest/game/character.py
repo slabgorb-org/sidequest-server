@@ -115,6 +115,16 @@ class Character(BaseModel):
     # chassis-voice block).
     background: str = ""
     drive: str = ""
+
+    # Display-only flavor labels for the player-facing sheet (Diamonds-and-
+    # Coal: flavor on the surface, archetype underneath). When chargen used a
+    # CHOICE whose label differs from the collapsed mechanical archetype, these
+    # carry the chosen flavor ("Country Veterinary Surgeon" / "The Village
+    # Itself") so the live CharacterPanel shows it instead of the raw slug
+    # (race/char_class). Empty when the label IS the archetype. The mechanical
+    # ``race``/``char_class`` are unaffected — loadout/genre systems read those.
+    origin_label: str = ""
+    calling_label: str = ""
     first_name: str = ""
     last_name: str = ""
     nickname: str = ""

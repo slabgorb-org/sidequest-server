@@ -139,7 +139,7 @@ async def test_dispatch_logs_bridge_diagnostic_with_minted_count(
         {
             "type": "PLAYER_ACTION",
             "player_id": "thorn",
-            "payload": {"action": "I look around."},
+            "payload": {"action": "I look around.", "round": 1},
         }
     )
 
@@ -209,7 +209,7 @@ async def test_dispatch_force_flushes_tracer_provider(
         {
             "type": "PLAYER_ACTION",
             "player_id": "thorn",
-            "payload": {"action": "I look around."},
+            "payload": {"action": "I look around.", "round": 1},
         }
     )
 

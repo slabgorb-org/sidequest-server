@@ -204,3 +204,213 @@ def wwn_major_injury_roll_span(
     }
     with Span.open(SPAN_WWN_MAJOR_INJURY_ROLL, attributes, tracer_override=_tracer):
         pass
+
+
+# ---------------------------------------------------------------------------
+# Magic spans
+# ---------------------------------------------------------------------------
+
+SPAN_WWN_SPELL_CAST = "wwn.spell.cast"
+SPAN_ROUTES[SPAN_WWN_SPELL_CAST] = SpanRoute(
+    event_type="state_transition",
+    component="wwn",
+    extract=lambda span: {
+        "field": "spell_cast",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "spell_id": (span.attributes or {}).get("spell_id", ""),
+        "level": (span.attributes or {}).get("level", 0),
+        "refused": (span.attributes or {}).get("refused", False),
+        "casts_remaining": (span.attributes or {}).get("casts_remaining", 0),
+        "save": (span.attributes or {}).get("save", ""),
+        # save_made is OMITTED from the span attributes when no save was resolved
+        # (None) — the GM panel must read "unresolved", never a misleading False.
+        "save_made": (span.attributes or {}).get("save_made", None),
+        "damage": (span.attributes or {}).get("damage", ""),
+    },
+)
+
+SPAN_WWN_EFFORT_COMMIT = "wwn.effort.commit"
+SPAN_ROUTES[SPAN_WWN_EFFORT_COMMIT] = SpanRoute(
+    event_type="state_transition",
+    component="wwn",
+    extract=lambda span: {
+        "field": "effort_commit",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "source": (span.attributes or {}).get("source", ""),
+        "points": (span.attributes or {}).get("points", 0),
+        "duration": (span.attributes or {}).get("duration", ""),
+        "available": (span.attributes or {}).get("available", 0),
+        "applied": (span.attributes or {}).get("applied", True),
+    },
+)
+
+SPAN_WWN_EFFORT_RECLAIM = "wwn.effort.reclaim"
+SPAN_ROUTES[SPAN_WWN_EFFORT_RECLAIM] = SpanRoute(
+    event_type="state_transition",
+    component="wwn",
+    extract=lambda span: {
+        "field": "effort_reclaim",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "source": (span.attributes or {}).get("source", ""),
+        "points": (span.attributes or {}).get("points", 0),
+        "trigger": (span.attributes or {}).get("trigger", ""),
+        "available": (span.attributes or {}).get("available", 0),
+    },
+)
+
+SPAN_WWN_KILLING_BLOW = "wwn.killing_blow"
+SPAN_ROUTES[SPAN_WWN_KILLING_BLOW] = SpanRoute(
+    event_type="state_transition",
+    component="wwn",
+    extract=lambda span: {
+        "field": "killing_blow",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "level": (span.attributes or {}).get("level", 0),
+        "bonus": (span.attributes or {}).get("bonus", 0),
+        "base": (span.attributes or {}).get("base", 0),
+        "total": (span.attributes or {}).get("total", 0),
+    },
+)
+
+SPAN_WWN_VETERANS_LUCK = "wwn.veterans_luck"
+SPAN_ROUTES[SPAN_WWN_VETERANS_LUCK] = SpanRoute(
+    event_type="state_transition",
+    component="wwn",
+    extract=lambda span: {
+        "field": "veterans_luck",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "mode": (span.attributes or {}).get("mode", ""),
+        "applied": (span.attributes or {}).get("applied", False),
+    },
+)
+
+
+def wwn_spell_cast_span(
+    *,
+    actor: str,
+    spell_id: str,
+    level: int,
+    refused: bool,
+    casts_remaining: int,
+    save: str,
+    save_made: bool | None,
+    damage: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a wwn.spell.cast span (lie-detector for WWN spell casting).
+
+    ``save_made`` is ``None`` when NO save was resolved (no-save spell, or a save
+    spell with no defender/stats). In that case the attribute is OMITTED entirely
+    rather than coerced to False — OTEL attributes must not carry a misleading
+    bool that tells the GM panel the defender "failed" a save that never rolled.
+    """
+    attributes: dict[str, Any] = {
+        "field": "spell_cast",
+        "actor": actor,
+        "spell_id": spell_id,
+        "level": level,
+        "refused": refused,
+        "casts_remaining": casts_remaining,
+        "save": save,
+        "damage": damage,
+        **attrs,
+    }
+    if save_made is not None:
+        attributes["save_made"] = save_made
+    with Span.open(SPAN_WWN_SPELL_CAST, attributes, tracer_override=_tracer):
+        pass
+
+
+def wwn_effort_commit_span(
+    *,
+    actor: str,
+    source: str,
+    points: int,
+    duration: str,
+    available: int,
+    applied: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a wwn.effort.commit span (lie-detector for WWN effort commitment)."""
+    attributes: dict[str, Any] = {
+        "field": "effort_commit",
+        "actor": actor,
+        "source": source,
+        "points": points,
+        "duration": duration,
+        "available": available,
+        "applied": applied,
+        **attrs,
+    }
+    with Span.open(SPAN_WWN_EFFORT_COMMIT, attributes, tracer_override=_tracer):
+        pass
+
+
+def wwn_effort_reclaim_span(
+    *,
+    actor: str,
+    source: str,
+    points: int,
+    trigger: str,
+    available: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a wwn.effort.reclaim span (lie-detector for WWN effort reclamation)."""
+    attributes: dict[str, Any] = {
+        "field": "effort_reclaim",
+        "actor": actor,
+        "source": source,
+        "points": points,
+        "trigger": trigger,
+        "available": available,
+        **attrs,
+    }
+    with Span.open(SPAN_WWN_EFFORT_RECLAIM, attributes, tracer_override=_tracer):
+        pass
+
+
+def wwn_killing_blow_span(
+    *,
+    actor: str,
+    level: int,
+    bonus: int,
+    base: int,
+    total: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a wwn.killing_blow span (lie-detector for WWN Killing Blow bonus damage)."""
+    attributes: dict[str, Any] = {
+        "field": "killing_blow",
+        "actor": actor,
+        "level": level,
+        "bonus": bonus,
+        "base": base,
+        "total": total,
+        **attrs,
+    }
+    with Span.open(SPAN_WWN_KILLING_BLOW, attributes, tracer_override=_tracer):
+        pass
+
+
+def wwn_veterans_luck_span(
+    *,
+    actor: str,
+    mode: str,
+    applied: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a wwn.veterans_luck span (lie-detector for WWN Veteran's Luck activation)."""
+    attributes: dict[str, Any] = {
+        "field": "veterans_luck",
+        "actor": actor,
+        "mode": mode,
+        "applied": applied,
+        **attrs,
+    }
+    with Span.open(SPAN_WWN_VETERANS_LUCK, attributes, tracer_override=_tracer):
+        pass

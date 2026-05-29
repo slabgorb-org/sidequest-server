@@ -1,17 +1,32 @@
 """Single source of truth for the four Recency-zone narrator guardrails.
 
-ADR-111 §Implementation Notes mandates that the four prose constants
-governing the narrator's `npcs_present` / `confrontation` /
-`npcs_present` (extraction) / `location` emission rules live in one
-module. Post-61-9 the only consumer is the cached SDK surface — the
-slimmed sidecar `narrator_prompts/output_only.md` and the
-`apply_world_patch` / `generate_encounter` tool descriptions reference
-the same constants, no string duplication, no silent drift.
+ADR-111 §Implementation Notes mandates that the prose constants governing
+the narrator's `npcs_present` / `confrontation` / `npcs_present`
+(extraction) / `location` emission rules live in one module, so every
+consumer references the same string — no duplication, no silent drift.
 
-The constants are kept byte-identical to the prior inline strings at
-`orchestrator.py:1764, 1851, 1934, 1989` so the legacy `claude -p` path
-stays un-drifted from pre-111 behavior (ADR-111 §Decision: legacy path
-byte-identical).
+SDK-path consumers (per guardrail — the default `anthropic_sdk` backend):
+  - `npc_intro_visual_constraint`  → `narrator_prompts/output_only.md`
+    (`NARRATOR_OUTPUT_ONLY`, Primacy/Stable cached sidecar).
+  - `npc_extraction_constraint`    → `NARRATOR_OUTPUT_ONLY`.
+  - `location_patch_constraint`    → `apply_world_patch` tool description.
+  - `confrontation_trigger_constraint` → its framing-neutral core
+    (`CONFRONTATION_TRIGGER_CORE`) is composed into the IntentRouter
+    `_SYSTEM_PROMPT` (`sidequest/agents/intent_router.py`). On the SDK path
+    the narrator no longer emits the `confrontation` patch field — the
+    IntentRouter (ADR-113) decides the trigger pre-narrator — so the
+    recognition steering lives where the decision is made (story 61-18).
+    The pre-61-18 claim that this guardrail rode a `generate_encounter`
+    tool description was stale: that tool's `begin_confrontation` lift was
+    retired in 59-4.
+
+The legacy `claude -p` / Ollama path (opt-in, non-default) still emits a
+`game_patch`, so it consumes the full narrator-framed constants via
+`_maybe_register_legacy_guardrail` (`orchestrator.py`). The constants are
+kept byte-identical to the prior inline strings so that path stays
+un-drifted from pre-111 behavior (ADR-111 §Decision: legacy path
+byte-identical) — `CONFRONTATION_TRIGGER_CONSTRAINT` is now composed from
+`CONFRONTATION_TRIGGER_CORE` but reproduces the original bytes exactly.
 """
 
 from __future__ import annotations
@@ -52,13 +67,28 @@ NPC_INTRO_VISUAL_CONSTRAINT: str = (
 # (confrontation_intent_validator) catches post-hoc mismatches and emits
 # confrontation.intent_mismatch spans to the GM panel. Together they close
 # the gap without server-side auto-firing (which would be a silent fallback).
-CONFRONTATION_TRIGGER_CONSTRAINT: str = (
-    "<confrontation-trigger>\n"
-    "If your prose this turn describes any stake-binding "
-    "engagement — physical, social, or reputational — "
-    "your ``game_patch`` MUST populate ``confrontation`` "
-    "with the matching type from AVAILABLE ENCOUNTER "
-    "TYPES. Pick the MOST SPECIFIC type the genre offers; "
+#
+# Story 61-18: the trigger-recognition body is extracted into
+# ``CONFRONTATION_TRIGGER_CORE`` below. On the default SDK path the narrator no
+# longer emits the ``confrontation`` patch field — the IntentRouter (ADR-113)
+# decides the trigger pre-narrator — so the recognition steering moved to the
+# router's ``_SYSTEM_PROMPT`` (``sidequest/agents/intent_router.py``), which
+# composes the SAME core under its DispatchPackage framing. This constant keeps
+# the narrator/``game_patch`` framing for the opt-in legacy ``claude -p`` /
+# Ollama path, which DOES still emit a game_patch. One source, two framings, no
+# prose duplication (ADR-111 §Implementation Notes).
+
+# Framing-neutral trigger-recognition core (single source of truth, story
+# 61-18). Describes WHAT fictional beat counts as a confrontation trigger and
+# that the mechanical commit lands on the turn the trigger appears — with no
+# producer-contract framing (no ``game_patch``, no ``beat_selections``), so
+# both the legacy narrator path (wrapped below) and the SDK-path IntentRouter
+# consume identical prose. The load-bearing regression fingerprints
+# ("Do NOT defer it to the next turn", "exactly as mechanically binding as a
+# weapon drawn") live here — ADR-111 §Alternatives B kept the concrete
+# examples deliberately; they are the regression detector, not flavor.
+CONFRONTATION_TRIGGER_CORE: str = (
+    "Pick the MOST SPECIFIC type the genre offers; "
     "never default to a generic ``combat`` when "
     "``ship_combat``, ``dogfight``, ``social_duel``, or "
     "another specialized type applies. Spell the type "
@@ -105,7 +135,18 @@ CONFRONTATION_TRIGGER_CONSTRAINT: str = (
     "social side: when the writ is served, fire "
     "``trial`` now — do not wait for the court to "
     "convene.\n"
-    "Only emit ``confrontation`` on the turn the "
+)
+
+# Legacy narrator-path guardrail: the framing-neutral core wrapped in the
+# narrator's ``game_patch`` contract. Kept byte-identical to the pre-61-18
+# inline string (ADR-111 §Decision: legacy path byte-identical).
+CONFRONTATION_TRIGGER_CONSTRAINT: str = (
+    "<confrontation-trigger>\n"
+    "If your prose this turn describes any stake-binding "
+    "engagement — physical, social, or reputational — "
+    "your ``game_patch`` MUST populate ``confrontation`` "
+    "with the matching type from AVAILABLE ENCOUNTER "
+    "TYPES. " + CONFRONTATION_TRIGGER_CORE + "Only emit ``confrontation`` on the turn the "
     "encounter STARTS; once it is active, use "
     "``beat_selections`` for subsequent rounds."
     "\n</confrontation-trigger>"

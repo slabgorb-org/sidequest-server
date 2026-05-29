@@ -638,7 +638,12 @@ class ConnectHandler:
                 # room BEFORE the rename-save below. Idempotent — if a peer
                 # got here first, our load is discarded and we observe the
                 # already-bound snapshot.
-                room.bind_world(snapshot=snapshot, store=_pg_repository, world_dir=world_dir)
+                room.bind_world(
+                    snapshot=snapshot,
+                    store=_pg_repository,
+                    world_dir=world_dir,
+                    ruleset=(genre_pack.rules.ruleset if genre_pack.rules else None),
+                )
                 # All subsequent reads must come from the canonical room
                 # binding (which may differ from our local ``snapshot`` if
                 # we lost the bind race).
@@ -676,7 +681,12 @@ class ConnectHandler:
                 _pg_repository.init_session()
                 # ADR-037 Python port: bind the fresh snapshot to the room
                 # so the second-connect handler observes the same object.
-                room.bind_world(snapshot=snapshot, store=_pg_repository, world_dir=world_dir)
+                room.bind_world(
+                    snapshot=snapshot,
+                    store=_pg_repository,
+                    world_dir=world_dir,
+                    ruleset=(genre_pack.rules.ruleset if genre_pack.rules else None),
+                )
                 snapshot = room.snapshot  # type: ignore[assignment]
                 has_character = False
                 logger.info(

@@ -14,6 +14,8 @@ from __future__ import annotations
 from collections import deque
 from typing import TYPE_CHECKING
 
+from sidequest.game.ruleset.registry import get_ruleset_module
+from sidequest.game.ruleset.wwn import WwnRulesetModule
 from sidequest.orbital.beats import StoryBeat, StoryBeatKind, advance_clock_via_beat
 from sidequest.orbital.clock import Clock
 from sidequest.orbital.render import Scope
@@ -43,9 +45,15 @@ class Session:
         snapshot: GameSnapshot,
         *,
         orbital_content: OrbitalContent | None = None,
+        ruleset: str | None = None,
     ) -> None:
         self._snapshot = snapshot
         self._orbital_content = orbital_content
+        # Bound ruleset slug (e.g. "wwn"), threaded in by SessionRoom.bind_world
+        # from the loaded genre pack. None on construction paths that don't bind
+        # a ruleset (unit tests, pre-pack reconnect) — the scene-end Effort
+        # reclaim hook gates strictly on this, so those paths are untouched.
+        self._ruleset = ruleset
         # Orbital scope is transient session UI state — defaults to system
         # root on each connect rather than persisting across reconnects.
         self._orbital_scope: Scope | None = None
@@ -77,6 +85,25 @@ class Session:
         semantically.
         """
         clear_scratch_on_scene_end(self._snapshot, reason=reason, turn=turn)
+        # WWN scene-boundary Effort reclaim (spec §H). Gated strictly on the
+        # bound ruleset slug (mirrors the dice.py ruleset-slug gate) so non-WWN
+        # sessions are completely untouched — no module resolution, no iteration.
+        # reclaim_scene_effort drops only ``scene`` commitments and is a no-op
+        # for cores with none, so iterating every PC core is safe. It emits one
+        # wwn.effort.reclaim span per pool touched (GM-panel lie detector). The
+        # day/long-rest reclaim TRIGGER is deferred to Plan 3.
+        if self._ruleset == "wwn":
+            module = get_ruleset_module(self._ruleset)
+            # reclaim_scene_effort is WWN-specific (not on the RulesetModule ABC).
+            # The slug gate guarantees a WwnRulesetModule here; assert it to fail
+            # loud rather than silently skip if the registry binding ever drifts.
+            if not isinstance(module, WwnRulesetModule):
+                raise TypeError(
+                    f"ruleset 'wwn' resolved to {type(module).__name__!r}, "
+                    "expected WwnRulesetModule"
+                )
+            for char in self._snapshot.characters:
+                module.reclaim_scene_effort(core=char.core)
         self.advance_via_beat(StoryBeat(kind=StoryBeatKind.ENCOUNTER, trigger=f"scene-{reason}"))
 
     # ------------------------------------------------------------------

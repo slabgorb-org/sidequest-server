@@ -259,9 +259,7 @@ class SessionRoom:
                 return
             self._snapshot = snapshot
             self._store = store
-            self._session = Session(
-                snapshot, orbital_content=orbital_content, ruleset=ruleset
-            )
+            self._session = Session(snapshot, orbital_content=orbital_content, ruleset=ruleset)
 
     @property
     def snapshot(self) -> GameSnapshot | None:

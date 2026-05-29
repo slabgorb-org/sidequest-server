@@ -2319,9 +2319,7 @@ class CharacterBuilder:
         # WWN Effort pools + spellcasting state (wwn packs, magic classes).
         # Non-wwn / non-magic classes get ({}, None) — no silent partial state.
         # _resolved_class_def is the ClassDef resolved from class_str above.
-        wwn_effort, wwn_spellcasting = seed_wwn_magic(
-            self._rules, stats, _resolved_class_def
-        )
+        wwn_effort, wwn_spellcasting = seed_wwn_magic(self._rules, stats, _resolved_class_def)
 
         # Resolved archetype: pairs jungian_hint / rpg_role_hint if both
         # are present. archetype_provenance is populated downstream by

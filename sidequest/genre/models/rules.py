@@ -886,8 +886,8 @@ class MagicConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    effort_base: int = 1                       # Effort max = effort_base + skill + attr mod
-    killing_blow_divisor: int = 2              # Killing Blow adds ceil(level / divisor)
+    effort_base: int = 1  # Effort max = effort_base + skill + attr mod
+    killing_blow_divisor: int = 2  # Killing Blow adds ceil(level / divisor)
     day_reclaim_requires_comfort: bool = True  # day-Effort needs a comfortable rest
     default_spell_save: str = "mental"
 

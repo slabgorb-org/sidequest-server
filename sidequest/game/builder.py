@@ -24,7 +24,9 @@ from sidequest.game.creature_core import (
 from sidequest.game.creature_core import (
     HpConfigMissingClassError as _CoreHpConfigMissingClassError,
 )
+from sidequest.game.ruleset.swn import swn_attribute_modifier
 from sidequest.game.system_strain import SystemStrainPool
+from sidequest.game.wwn_magic import EffortPool, SpellcastingState
 from sidequest.genre.models.character import (
     BackstoryTables,
     CharCreationScene,
@@ -90,6 +92,71 @@ def seed_system_strain(rules: RulesConfig, stats: dict[str, int]) -> SystemStrai
     con_flavor = rules.cwn.attribute_map["CONSTITUTION"]  # validated present by _validate_cwn
     body_score = int(stats.get(con_flavor, 10))
     return SystemStrainPool(current=0, max=max(1, body_score), permanent=0)
+
+
+def seed_wwn_magic(
+    rules: RulesConfig,
+    stats: dict[str, int],
+    class_def: ClassDef | None,
+) -> tuple[dict[str, EffortPool], SpellcastingState | None]:
+    """Seed WWN Effort pools + spellcasting state at chargen (SRD §1.4.4, §4.2).
+
+    Returns ``({}, None)`` for non-wwn rulesets and for non-magic classes
+    (no ``wwn_magic`` on the class def) — no silent partial state.
+
+    For a magic class:
+      * One ``EffortPool`` per ``WwnEffortSource``, keyed by ``source.source``,
+        with ``max = rules.wwn.magic.effort_base + source.starting_skill_level
+        + swn_attribute_modifier(score-of-governing-attr)``. WWN shares the SWN
+        attribute curve. A Partial class subtracts 1 (floor 1). The governing
+        attr is a CANONICAL key ("WISDOM") resolved through
+        ``rules.wwn.attribute_map`` to the pack's flavor stat name, then to the
+        score in ``stats`` (mirrors ``seed_system_strain``).
+      * A ``SpellcastingState`` from the level-1 cast tables (chargen level is
+        always 1): ``casts_per_day`` / ``max_spell_level`` from the by-level
+        dicts (default 0 if absent), ``casts_remaining = casts_per_day`` (full
+        at chargen), ``prepared = []`` (spells chosen at rest, Plan 3). A class
+        with effort sources but NO cast tables (an Effort-only Art user, e.g.
+        the Vowed) yields ``spellcasting = None`` but still returns its effort
+        dict. ``prepared_by_level`` is capacity metadata for the rest/prepare
+        action — NOT seeded here.
+    """
+    if rules.ruleset != "wwn" or rules.wwn is None:
+        return {}, None
+    if class_def is None or class_def.wwn_magic is None:
+        return {}, None
+
+    cm = class_def.wwn_magic
+    effort_base = rules.wwn.magic.effort_base
+    attr_map = rules.wwn.attribute_map  # validated complete by _validate_wwn
+
+    effort: dict[str, EffortPool] = {}
+    for src in cm.effort_sources:
+        flavor = attr_map[src.governing_attr]  # canonical -> flavor stat name
+        score = int(stats.get(flavor, 10))
+        pool_max = effort_base + src.starting_skill_level + swn_attribute_modifier(score)
+        if cm.partial:
+            pool_max -= 1  # Partial class: Effort -1
+        pool_max = max(1, pool_max)  # WWN SRD: a caster's Effort is always at least 1
+        effort[src.source] = EffortPool(source=src.source, max=pool_max)
+
+    # Chargen level is always 1 (build() constructs level=1).
+    level_key = "1"
+    spellcasting: SpellcastingState | None = None
+    # casts_per_day_by_level is the canonical "is this a spell-caster class" signal:
+    # an Effort-only Art user (e.g. Vowed) has effort sources but no cast tables, so
+    # max_spell_level_by_level may be absent — gate the whole state on casts only.
+    if cm.casts_per_day_by_level:
+        casts_per_day = cm.casts_per_day_by_level.get(level_key, 0)
+        max_spell_level = cm.max_spell_level_by_level.get(level_key, 0)
+        spellcasting = SpellcastingState(
+            prepared=[],
+            casts_remaining=casts_per_day,
+            casts_per_day=casts_per_day,
+            max_spell_level=max_spell_level,
+        )
+
+    return effort, spellcasting
 
 
 def _seed_class_abilities(
@@ -2249,6 +2316,13 @@ class CharacterBuilder:
         # pure helper (unit-testable without constructing a full builder).
         system_strain = seed_system_strain(self._rules, stats)
 
+        # WWN Effort pools + spellcasting state (wwn packs, magic classes).
+        # Non-wwn / non-magic classes get ({}, None) — no silent partial state.
+        # _resolved_class_def is the ClassDef resolved from class_str above.
+        wwn_effort, wwn_spellcasting = seed_wwn_magic(
+            self._rules, stats, _resolved_class_def
+        )
+
         # Resolved archetype: pairs jungian_hint / rpg_role_hint if both
         # are present. archetype_provenance is populated downstream by
         # dispatch (connect.rs) once the tiered resolver runs.
@@ -2277,6 +2351,8 @@ class CharacterBuilder:
                 statuses=[],
                 hp=hp,
                 system_strain=system_strain,
+                effort=wwn_effort,
+                spellcasting=wwn_spellcasting,
                 acquired_advancements=[],
             ),
             backstory=backstory_text,

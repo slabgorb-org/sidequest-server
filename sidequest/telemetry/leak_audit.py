@@ -82,6 +82,20 @@ def audit_canonical_prose(
                 target = d.params.get("target") if isinstance(d.params, dict) else None
                 if isinstance(target, str):
                     redacted_entities.append(target)
+    # cross_player carries the same redactable SubsystemDispatch entries; without
+    # this loop a cross_player redacted target was never collected, so the audit
+    # reported a false leaks_detected=0 for a leaked shared-target secret. Mirror
+    # the per_player branch into the SAME redacted_entities accumulator (Story
+    # 59-24; sibling of the redact_dispatch_package fix in 59-9). CrossAction has
+    # no narrator_instructions field — dispatch is the only redaction surface.
+    for ca in package.cross_player:
+        for d in ca.dispatch:
+            if not isinstance(d, SubsystemDispatch):
+                continue
+            if d.visibility.redact_from_narrator_canonical:
+                target = d.params.get("target") if isinstance(d.params, dict) else None
+                if isinstance(target, str):
+                    redacted_entities.append(target)
 
     leaks: list[str] = []
     fragments: list[str] = []

@@ -18,6 +18,7 @@ from sidequest.protocol.models import InitiativeEntry
 if TYPE_CHECKING:
     from sidequest.game.beat_kinds import ApplyResult
     from sidequest.game.lethality import DownedResult, LethalityResult
+    from sidequest.game.table.types import TableCommit, TableResolutionOutcome, TableState
     from sidequest.genre.models.inventory import DamageSpec
 
 
@@ -138,3 +139,27 @@ class RulesetModule(ABC):
         emit nothing (parallels resolve_shock returning 0). Only CWN overrides
         to emit cwn.hacking.security_check."""
         return int(base_dc) + int(alert_modifier)
+
+    def deal_table(self, state: TableState, *, rng: random.Random) -> None:
+        """Seat-deal an N-seat table (poker / auction). Genre-general; the
+        per-kind deal is dispatched through the table-game registry. Concrete
+        here (not abstract) because table resolution is orthogonal to combat
+        resolution — every ruleset inherits it. See game/table/engine.py."""
+        from sidequest.game.table.engine import deal_table as _deal
+
+        _deal(state, rng=rng)
+
+    def resolve_table(
+        self,
+        state: TableState,
+        *,
+        commits: dict[str, TableCommit],
+        rng: random.Random,
+    ) -> TableResolutionOutcome:
+        """Resolve one decision point of an N-seat table. Delegates to the
+        generic engine; kind-specifics dispatch through the registry. Concrete
+        on the base — table resolution is orthogonal to combat resolution, so
+        every ruleset inherits it. See game/table/engine.py."""
+        from sidequest.game.table.engine import resolve_table as _resolve
+
+        return _resolve(state, commits=commits, rng=rng)

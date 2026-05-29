@@ -16,7 +16,6 @@ from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.models.rules import (
     BeatDef,
-    BeatKind,
     ConfrontationDef,
     MetricDef,
     SwnConfig,

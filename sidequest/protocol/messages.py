@@ -811,6 +811,12 @@ class ConfrontationPayload(ProtocolBase):
     # SWN P4: 1d8+DEX resolution order, rolled once at instantiation. Plain list
     # for the UI (no 3D dice overlay). None/empty for rulesets with no ordering.
     initiative_order: list[dict[str, int | str]] | None = None
+    # Free-for-all N-seat table (poker / auction): per-recipient projected
+    # table frame. Pre-showdown: only the recipient's own seat private_state
+    # (their hand / valuation) is included; other seats' private_state is
+    # redacted. At showdown (resolved_winner set): all hands reveal.
+    # None for every non-table confrontation.
+    table_state: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

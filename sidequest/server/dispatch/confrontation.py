@@ -11,12 +11,14 @@ returns a CONFRONTATION_OUTCOME payload for the WebSocket dispatcher.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.session import GameSnapshot
+from sidequest.game.table.types import TableState
 from sidequest.genre.models.character import ClassDef
 from sidequest.genre.models.rules import ConfrontationDef
 from sidequest.magic.confrontations import BranchName
@@ -317,6 +319,40 @@ def build_clear_confrontation_payload(
     }
 
 
+def project_table_frame_for_seat(table_state: TableState, *, seat_id: str | None) -> dict[str, Any]:
+    """Per-recipient table frame: own private_state only (+ public state) until
+    showdown, when all hands reveal. ``seat_id=None`` (unseated/lobby socket)
+    gets public-only. The perception firewall pointed at table_state — no new
+    perception infra (ADR-104/105 reuse)."""
+    revealed = table_state.resolved_winner is not None
+    seats_out = []
+    for seat in table_state.seats:
+        show_private = revealed or (seat_id is not None and seat.seat_id == seat_id)
+        seats_out.append(
+            {
+                "seat_id": seat.seat_id,
+                "party_name": seat.party_name,
+                "is_pc": seat.is_pc,
+                "status": seat.status,
+                "private_state": copy.deepcopy(seat.private_state) if show_private else {},
+            }
+        )
+    return {
+        "game_kind": table_state.game_kind,
+        "seats": seats_out,
+        "pot": {
+            "stake_kind": table_state.pot.stake_kind,
+            "stake_descriptor": table_state.pot.stake_descriptor,
+            "contributions": dict(table_state.pot.contributions),
+        },
+        "order": list(table_state.order),
+        "dealer_seat": table_state.dealer_seat,
+        "decision_point": table_state.decision_point,
+        "max_decision_points": table_state.max_decision_points,
+        "resolved_winner": table_state.resolved_winner,
+    }
+
+
 def make_confrontation_frame_supplier(
     *,
     snapshot: GameSnapshot,
@@ -375,6 +411,21 @@ def make_confrontation_frame_supplier(
             recipient_actor_name=recipient_actor,
             core_resolver=snapshot.find_creature_core,
         )
+        # Free-for-all N-seat table: attach a per-seat private projection so
+        # each socket sees only its own hand (+ public state) until showdown.
+        # Map recipient_actor (PC name) → seat_id via table_state.party_name;
+        # None when the recipient is not seated at the table (lobby socket
+        # or non-participant) → public-only projection.
+        if encounter.table_state is not None:
+            resolved_seat_id: str | None = None
+            if recipient_actor is not None:
+                for seat in encounter.table_state.seats:
+                    if seat.party_name == recipient_actor:
+                        resolved_seat_id = seat.seat_id
+                        break
+            per_pc_dict["table_state"] = project_table_frame_for_seat(
+                encounter.table_state, seat_id=resolved_seat_id
+            )
         return ConfrontationPayload(**per_pc_dict)
 
     return _frame_for

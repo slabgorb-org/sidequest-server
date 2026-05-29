@@ -71,9 +71,7 @@ def test_space_opera_pack_loads_with_dual_dial_schema():
         cdef
         for cdef in pack.rules.confrontations
         if (
-            cdef.win_condition.value
-            if hasattr(cdef.win_condition, "value")
-            else cdef.win_condition
+            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
         )
         == "dial_threshold"
     ]
@@ -91,9 +89,27 @@ def test_space_opera_pack_loads_with_dual_dial_schema():
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_spaghetti_western_pack_loads_with_dual_dial_schema():
+    """spaghetti_western's poker confrontation has been migrated to
+    ``resolution_mode: table_resolution`` (Task 16), which legitimately carries
+    NO player_metric/opponent_metric (table_state drives resolution, not dials).
+    Filter on win_condition == dial_threshold so the metricless table confrontation
+    is skipped. At least one dial confrontation must remain so the assertion is
+    not vacuous."""
     pack = load_pack("spaghetti_western")
     assert pack.rules is not None
-    for cdef in pack.rules.confrontations:
+    dial_confrontations = [
+        cdef
+        for cdef in pack.rules.confrontations
+        if (
+            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
+        )
+        == "dial_threshold"
+    ]
+    assert dial_confrontations, (
+        "spaghetti_western must retain at least one dial_threshold confrontation "
+        "for this dual-dial assertion to be meaningful"
+    )
+    for cdef in dial_confrontations:
         assert cdef.player_metric.threshold > 0
         assert cdef.opponent_metric.threshold > 0
         for beat in cdef.beats:

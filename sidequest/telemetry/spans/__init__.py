@@ -95,6 +95,7 @@ from .script_tool import *  # noqa: F401, F403
 from .seed import *  # noqa: F401, F403
 from .span import Span  # noqa: F401
 from .state_patch import *  # noqa: F401, F403
+from .table import *  # noqa: F401, F403
 from .trope import *  # noqa: F401, F403
 from .turn import *  # noqa: F401, F403
 from .world import *  # noqa: F401, F403

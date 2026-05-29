@@ -12,7 +12,7 @@ returns a CONFRONTATION_OUTCOME payload for the WebSocket dispatcher.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import StructuredEncounter
@@ -21,6 +21,9 @@ from sidequest.genre.models.character import ClassDef
 from sidequest.genre.models.rules import ConfrontationDef
 from sidequest.magic.confrontations import BranchName
 from sidequest.magic.outputs import apply_mandatory_outputs
+
+if TYPE_CHECKING:
+    from sidequest.protocol.messages import ConfrontationPayload
 
 # Story 49-7: a per-recipient PC context — (class_def, spell_slots_remaining,
 # prepared_spells) — matching the existing pc_classes_by_name tuple shape
@@ -312,3 +315,66 @@ def build_clear_confrontation_payload(
         "mood": None,
         "active": False,
     }
+
+
+def make_confrontation_frame_supplier(
+    *,
+    snapshot: GameSnapshot,
+    genre_pack: Any,
+    encounter: StructuredEncounter,
+    cdef: ConfrontationDef,
+    genre_slug: str,
+) -> Callable[[str], ConfrontationPayload | None]:
+    """Build the per-recipient CONFRONTATION supplier for ``emit_event``.
+
+    Story 59-16 introduced this single-filtered-delivery contract on the
+    post-narration path; Story 59-20 shares it across the dice mid-turn path
+    and the connect-resume path so "class-filtered delivery" has one source of
+    truth. The returned ``supplier(player_id)`` resolves the seated PC's class
+    and returns:
+
+    - a class-filtered ``ConfrontationPayload`` when the PC resolves;
+    - ``None`` for an unseated/lobby socket (``resolve_recipient_pc`` →
+      ``(None, None)``) — deliver nothing, silently;
+    - ``None`` for a seated PC whose class will not resolve
+      (``(None, actor)``) AFTER firing the fail-loud
+      ``confrontation.recipient_unresolved`` ERROR span — never the union.
+
+    ``emit_event`` persists the canonical union to the EventLog and delivers
+    ``supplier(pid)`` to every connected socket (incl. the emitter); the union
+    is never sent to a client socket.
+    """
+    from sidequest.protocol.messages import ConfrontationPayload
+    from sidequest.telemetry.spans.encounter import (
+        confrontation_recipient_unresolved_span,
+    )
+
+    def _frame_for(player_id: str) -> ConfrontationPayload | None:
+        recipient_pc, recipient_actor = resolve_recipient_pc(
+            snapshot=snapshot,
+            genre_pack=genre_pack,
+            player_id=player_id,
+        )
+        if recipient_pc is None:
+            # (None, actor) ⇒ seated PC whose class won't resolve: fail loud,
+            # never the union. (None, None) ⇒ unseated/lobby socket: silent.
+            if recipient_actor is not None:
+                with confrontation_recipient_unresolved_span(
+                    player_id=player_id,
+                    actor=recipient_actor,
+                    reason="class_def_not_found",
+                    confrontation_type=encounter.encounter_type,
+                ):
+                    pass
+            return None
+        per_pc_dict = build_confrontation_payload(
+            encounter=encounter,
+            cdef=cdef,
+            genre_slug=genre_slug,
+            recipient_pc=recipient_pc,
+            recipient_actor_name=recipient_actor,
+            core_resolver=snapshot.find_creature_core,
+        )
+        return ConfrontationPayload(**per_pc_dict)
+
+    return _frame_for

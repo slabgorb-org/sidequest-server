@@ -32,7 +32,6 @@ from sidequest.protocol.messages import (
     ChapterMarkerMessage,
     ChapterMarkerPayload,
     ConfrontationMessage,
-    ConfrontationPayload,
     Footnote,
     GameResumedMessage,
     NarrationMessage,
@@ -1530,9 +1529,8 @@ class ConnectHandler:
                     and session._session_data.genre_pack.rules is not None
                 ):
                     from sidequest.server.dispatch.confrontation import (
-                        build_confrontation_payload,
                         find_confrontation_def,
-                        resolve_recipient_pc,
+                        make_confrontation_frame_supplier,
                     )
 
                     cdef = find_confrontation_def(
@@ -1541,47 +1539,44 @@ class ConnectHandler:
                     )
                     if cdef is not None:
                         try:
-                            # Story 49-7: filter the bootstrap CONFRONTATION
-                            # to the resuming player's class so the
-                            # Confrontation tab paints with class-legal
-                            # beats only, matching the live-encounter path.
-                            recipient_pc, recipient_actor = resolve_recipient_pc(
+                            # Story 59-20: filter the bootstrap CONFRONTATION to the
+                            # resuming player's class via the SAME single-delivery
+                            # supplier the dice mid-turn + post-narration paths use.
+                            # A resolvable seat → its class-legal frame; an
+                            # unseated/unresolvable seat → None (the supplier fires
+                            # the fail-loud span for the latter), so the resumer
+                            # never bootstraps the 16-button union.
+                            resume_supplier = make_confrontation_frame_supplier(
                                 snapshot=snapshot,
                                 genre_pack=session._session_data.genre_pack,
-                                player_id=player_id,
-                            )
-                            conf_payload_dict = build_confrontation_payload(
                                 encounter=encounter,
                                 cdef=cdef,
                                 genre_slug=row.genre_slug,
-                                recipient_pc=recipient_pc,
-                                recipient_actor_name=recipient_actor,
-                                core_resolver=snapshot.find_creature_core,
                             )
-                            bootstrap_msgs.append(
-                                ConfrontationMessage(
-                                    payload=ConfrontationPayload(
-                                        **conf_payload_dict,
-                                    ),
-                                    player_id=player_id,
+                            resume_frame = resume_supplier(player_id)
+                            if resume_frame is not None:
+                                bootstrap_msgs.append(
+                                    ConfrontationMessage(
+                                        payload=resume_frame,
+                                        player_id=player_id,
+                                    )
                                 )
-                            )
-                            logger.info(
-                                "session.slug_resume_confrontation_emitted "
-                                "slug=%s encounter_type=%s player=%s",
-                                slug,
-                                encounter.encounter_type,
-                                player_id,
-                            )
-                            _watcher_publish(
-                                "confrontation_resume_emitted",
-                                {
-                                    "slug": slug,
-                                    "encounter_type": encounter.encounter_type,
-                                    "player_id": player_id,
-                                },
-                                component="confrontation",
-                            )
+                                logger.info(
+                                    "session.slug_resume_confrontation_emitted "
+                                    "slug=%s encounter_type=%s player=%s",
+                                    slug,
+                                    encounter.encounter_type,
+                                    player_id,
+                                )
+                                _watcher_publish(
+                                    "confrontation_resume_emitted",
+                                    {
+                                        "slug": slug,
+                                        "encounter_type": encounter.encounter_type,
+                                        "player_id": player_id,
+                                    },
+                                    component="confrontation",
+                                )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
                                 "session.slug_resume_confrontation_failed "

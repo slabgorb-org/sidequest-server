@@ -1637,46 +1637,19 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         # single plain emit — there is nothing to per-PC filter.
                         if now_live and now_encounter is not None:
                             from sidequest.server.dispatch.confrontation import (
-                                resolve_recipient_pc,
-                            )
-                            from sidequest.telemetry.spans.encounter import (
-                                confrontation_recipient_unresolved_span,
+                                make_confrontation_frame_supplier,
                             )
 
-                            _live_encounter = now_encounter
                             assert cdef is not None  # set above; the cdef-is-None case raised
-                            _live_cdef = cdef
-
-                            def _confrontation_frame_for(
-                                pid: str,
-                            ) -> ConfrontationPayload | None:
-                                recipient_pc, recipient_actor = resolve_recipient_pc(
-                                    snapshot=sd.snapshot,
-                                    genre_pack=sd.genre_pack,
-                                    player_id=pid,
-                                )
-                                if recipient_pc is None:
-                                    # (None, actor) ⇒ seated PC whose class won't
-                                    # resolve: fail loud, never the union.
-                                    # (None, None) ⇒ unseated/lobby socket: silent.
-                                    if recipient_actor is not None:
-                                        with confrontation_recipient_unresolved_span(
-                                            player_id=pid,
-                                            actor=recipient_actor,
-                                            reason="class_def_not_found",
-                                            confrontation_type=(_live_encounter.encounter_type),
-                                        ):
-                                            pass
-                                    return None
-                                _per_pc_dict = build_confrontation_payload(
-                                    encounter=_live_encounter,
-                                    cdef=_live_cdef,
-                                    genre_slug=sd.genre_slug,
-                                    recipient_pc=recipient_pc,
-                                    recipient_actor_name=recipient_actor,
-                                    core_resolver=sd.snapshot.find_creature_core,
-                                )
-                                return ConfrontationPayload(**_per_pc_dict)
+                            # Story 59-20: shared single-filtered-delivery supplier
+                            # (same seam the dice mid-turn + resume paths use).
+                            _confrontation_frame_for = make_confrontation_frame_supplier(
+                                snapshot=sd.snapshot,
+                                genre_pack=sd.genre_pack,
+                                encounter=now_encounter,
+                                cdef=cdef,
+                                genre_slug=sd.genre_slug,
+                            )
 
                             with encounter_momentum_broadcast_span(
                                 encounter_type=now_encounter.encounter_type,

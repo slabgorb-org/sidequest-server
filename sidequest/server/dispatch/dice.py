@@ -55,6 +55,7 @@ from sidequest.protocol.messages import (
 from sidequest.protocol.types import Stat
 from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
+    make_confrontation_frame_supplier,
 )
 from sidequest.server.dispatch.damage_roll import _DAMAGE_THROW_PARAMS, damage_request_from_spec
 from sidequest.server.dispatch.damage_roll import (
@@ -216,8 +217,7 @@ def dispatch_dice_throw(
     round_number: int,
     room_broadcast: Callable[[object], None] | None,
     snapshot: GameSnapshot,
-    connected_player_ids: list[str] | None = None,
-    per_recipient_emit: Callable[[str, object], None] | None = None,
+    emit_confrontation: Callable[[object, Callable[[str], object]], None] | None = None,
 ) -> DiceThrowOutcome:
     """Apply a beat, resolve dice, broadcast wire messages, return outcome.
 
@@ -235,16 +235,14 @@ def dispatch_dice_throw(
     the mid-turn CONFRONTATION frame (story 45-3); it must match the
     active genre pack's slug — there is no fallback resolution.
 
-    Story 49-7: ``connected_player_ids`` and ``per_recipient_emit`` (a
-    targeted ``(player_id, msg) -> None`` callable) drive the per-PC
-    CONFRONTATION overlay. After the canonical ``room_broadcast`` of the
-    mid-turn CONFRONTATION (which delivers the full-union payload to
-    every socket — matching pre-49-7 behavior), the dispatcher fans a
-    class-filtered CONFRONTATION to each connected player so the
-    Confrontation tab paints with only their class's legal beats.
-    Both params optional: when either is None the per-PC overlay is
-    skipped (legacy single-socket fixtures and tests that don't bind
-    a multi-player room).
+    Story 59-20: ``emit_confrontation`` is the handler's single-supplier
+    emit callable ``(union_payload, per_recipient_supplier) -> None`` that
+    routes the mid-turn CONFRONTATION through ``emit_event`` — the union is
+    persisted to the EventLog only and each connected socket receives one
+    class-filtered frame. When None (bare-dispatch callers with only
+    ``room_broadcast`` wired — e2e/legacy fixtures), the dispatcher falls back
+    to a single union ``room_broadcast``. This replaces the Story 49-7
+    union-broadcast + per-PC overlay race.
     """
     if payload.beat_id is None:
         raise DiceDispatchError(
@@ -709,26 +707,29 @@ def dispatch_dice_throw(
             room_broadcast(DiceRequestMessage(payload=damage_request_payload, player_id="server"))
             room_broadcast(DiceResultMessage(payload=damage_result_payload, player_id="server"))
 
-        # Story 45-3: Mid-turn CONFRONTATION emit. The metric mutation
-        # already landed via apply_beat above; without this broadcast the
-        # UI dial sits on the prior turn's CONFRONTATION snapshot through
-        # the entire dice + narration cycle (5–15s). Sebastien's lie-
-        # detector flag from playtest 2026-04-19. Skipped on the opposed
-        # branch where deltas are deferred to narration_apply.
+        # Story 45-3 / 59-20: Mid-turn CONFRONTATION emit. The metric mutation
+        # already landed via apply_beat above; without this the UI dial sits on
+        # the prior turn's CONFRONTATION snapshot through the entire dice +
+        # narration cycle (5–15s). Skipped on the opposed branch where deltas
+        # are deferred to narration_apply.
         if not opposed_pending:
-            # Canonical (full-union) mid-turn payload — delivered via
-            # ``room_broadcast`` so legacy stub-room test fixtures and
-            # any non-MP fallback path see a CONFRONTATION carrying
-            # post-apply momentum. ``recipient_pc=None`` is explicit:
-            # this call deliberately does not project per-PC — the
-            # overlay loop below overwrites each connected player's
-            # Confrontation tab with class-filtered beats (Story 49-7).
-            mid_turn_payload = build_confrontation_payload(
-                encounter=encounter,
-                cdef=cdef,
-                genre_slug=genre_slug,
-                recipient_pc=None,
-                core_resolver=snapshot.find_creature_core,
+            # The canonical full-union payload. Story 59-20: when the handler
+            # provides ``emit_confrontation`` (the production path), route it
+            # through the single ``emit_event(per_recipient_payload=...)``
+            # supplier — the union is persisted to the EventLog ONLY and each
+            # connected socket (incl. the emitter) receives one class-filtered
+            # frame. This replaces the Story 49-7 union-broadcast + per-PC
+            # overlay race. Bare-dispatch callers (no handler emit wired — e.g.
+            # e2e fixtures with only ``room_broadcast``) fall back to a single
+            # union ``room_broadcast``.
+            union_payload = ConfrontationPayload(
+                **build_confrontation_payload(
+                    encounter=encounter,
+                    cdef=cdef,
+                    genre_slug=genre_slug,
+                    recipient_pc=None,
+                    core_resolver=snapshot.find_creature_core,
+                )
             )
             with encounter_momentum_broadcast_span(
                 encounter_type=encounter.encounter_type,
@@ -737,52 +738,19 @@ def dispatch_dice_throw(
                 source="dice_throw",
                 beat_id=payload.beat_id,
             ):
-                room_broadcast(
-                    ConfrontationMessage(
-                        payload=ConfrontationPayload(**mid_turn_payload),
-                        player_id="server",
-                    ),
-                )
-
-                # Story 49-7: per-PC beat projection overlay on the mid-
-                # turn CONFRONTATION. The canonical room_broadcast above
-                # delivers the full-union payload to every socket (matches
-                # pre-49-7 behavior and what legacy single-PC tests
-                # exercise). Following it, fan a class-filtered
-                # CONFRONTATION to each connected player so the
-                # Confrontation tab paints with only their class's legal
-                # beats. UI renders whichever arrives last for a given
-                # encounter — filtered wins. Skipped when the caller did
-                # not bind both connected_player_ids and
-                # per_recipient_emit (legacy non-MP fixtures).
-                if connected_player_ids is not None and per_recipient_emit is not None:
-                    from sidequest.server.dispatch.confrontation import (
-                        resolve_recipient_pc,
+                if emit_confrontation is not None:
+                    supplier = make_confrontation_frame_supplier(
+                        snapshot=snapshot,
+                        genre_pack=pack,
+                        encounter=encounter,
+                        cdef=cdef,
+                        genre_slug=genre_slug,
                     )
-
-                    for pid in connected_player_ids:
-                        recipient_pc, recipient_actor = resolve_recipient_pc(
-                            snapshot=snapshot,
-                            genre_pack=pack,
-                            player_id=pid,
-                        )
-                        if recipient_pc is None:
-                            continue
-                        per_pc_payload = build_confrontation_payload(
-                            encounter=encounter,
-                            cdef=cdef,
-                            genre_slug=genre_slug,
-                            recipient_pc=recipient_pc,
-                            recipient_actor_name=recipient_actor,
-                            core_resolver=snapshot.find_creature_core,
-                        )
-                        per_recipient_emit(
-                            pid,
-                            ConfrontationMessage(
-                                payload=ConfrontationPayload(**per_pc_payload),
-                                player_id="server",
-                            ),
-                        )
+                    emit_confrontation(union_payload, supplier)
+                elif room_broadcast is not None:
+                    room_broadcast(
+                        ConfrontationMessage(payload=union_payload, player_id="server"),
+                    )
 
     replay_text = _format_replay_action(
         beat_label=beat.label,

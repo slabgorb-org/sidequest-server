@@ -245,6 +245,25 @@ def _apply_pov_swap(
     return {**payload_dict, "text": swapped}
 
 
+def _clear_confrontation_like(payload_model: object) -> object:
+    """A cleared CONFRONTATION frame derived from a union payload.
+
+    Story 59-20: when a ``per_recipient_payload`` supplier yields ``None`` for
+    the emitter, ``emit_event`` must still hand the caller a frame — but never
+    the canonical union. ``per_recipient_payload`` is a CONFRONTATION-only
+    contract, so build the overlay-unmount payload (``active=False``, empty
+    beats) from the union's encounter type + genre slug.
+    """
+    from sidequest.protocol.messages import ConfrontationPayload
+    from sidequest.server.dispatch.confrontation import build_clear_confrontation_payload
+
+    encounter_type = getattr(payload_model, "type", "") or ""
+    genre_slug = getattr(payload_model, "genre_slug", "") or ""
+    return ConfrontationPayload(
+        **build_clear_confrontation_payload(encounter_type=encounter_type, genre_slug=genre_slug)
+    )
+
+
 def emit_event(
     handler: WebSocketSessionHandler,
     kind: str,
@@ -405,7 +424,11 @@ def emit_event(
             if emitter_msg is None:
                 fallback = per_recipient_payload(emitter_player_id) if emitter_player_id else None
                 if fallback is None:
-                    fallback = payload_model
+                    # Story 59-20: the supplier said "nothing for the emitter"
+                    # (unseated, or a seated PC it surfaced as unresolved). NEVER
+                    # return the canonical union — hand back a cleared frame so
+                    # the emitter's tab unmounts instead of painting the union.
+                    fallback = _clear_confrontation_like(payload_model)
                 if isinstance(fallback, BaseModel):
                     fallback = fallback.model_copy(update={"seq": seq})
                 emitter_msg = message_cls(payload=fallback)
@@ -643,6 +666,13 @@ def emit_event(
         if per_recipient_payload is not None:
             _legacy_emitter = handler._session_data.player_id if handler._session_data else None
             _legacy_payload = per_recipient_payload(_legacy_emitter) if _legacy_emitter else None
+            # Solo / non-slug-connect path: a SINGLE socket, so there is no
+            # cross-player leak — when the emitter doesn't resolve to a seated PC
+            # (supplier → None) the player still sees their full confrontation via
+            # the canonical payload. The clear-frame fallback is reserved for the
+            # multiplayer per-recipient branch above, where the union must never
+            # reach a peer socket. (Story 59-20: the firewall is per-socket, not
+            # here.)
             out_to_self = message_cls(
                 payload=_legacy_payload if _legacy_payload is not None else payload_model
             )

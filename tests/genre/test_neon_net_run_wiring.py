@@ -286,3 +286,36 @@ def test_neon_net_run_opponent_win_path(otel_capture) -> None:
         f"opponent alert must be at or above threshold; "
         f"current={enc.opponent_metric.current} threshold={enc.opponent_metric.threshold}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 5: move_nodes is a strike (incremental advance), NOT a push (resolution).
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not _HAS_CONTENT, reason="sidequest-content not on disk")
+def test_neon_net_run_move_nodes_advances_without_resolving() -> None:
+    """move_nodes (kind=strike) advances the data dial by base on a Success and
+    does NOT end the run — that distinguishes it from jack_out (the exit beat).
+
+    A push beat resolves the confrontation on Success; move_nodes must not. With
+    data well below threshold, a successful move_nodes advances data by base (2)
+    and leaves the run open.
+
+    - black_site DC=12; faces [6,6] + modifier(+2) = 14 > 12 → Success.
+    - strike Success → own_delta = +base = +2.
+    - data 0 → 2 (< threshold 10) → encounter stays open.
+    """
+    pack = _load_neon()
+    enc = _make_encounter(data_current=0, alert_current=0, security_tier="black_site")
+
+    data_before = enc.player_metric.current
+    outcome = _drive_beat(pack=pack, enc=enc, faces=[6, 6], beat_id="move_nodes")
+
+    assert enc.player_metric.current == data_before + 2, (
+        "a successful move_nodes (strike, base=2) must advance the data dial "
+        f"by 2; before={data_before} after={enc.player_metric.current}"
+    )
+    assert outcome.encounter_resolved is False, (
+        "move_nodes is an incremental advance, not an exit — a Success well "
+        "below threshold must NOT resolve the run (that would mean it is still "
+        f"a push); encounter_resolved={outcome.encounter_resolved}"
+    )

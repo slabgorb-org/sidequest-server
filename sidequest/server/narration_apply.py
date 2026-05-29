@@ -39,12 +39,14 @@ from sidequest.game.region_validation import (
     canonicalize_region_name,
     validate_region_name,
 )
+from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.session import (
     ContainerState,
     GameSnapshot,
     Npc,
     RoomState,
 )
+from sidequest.game.table.types import TableCommit
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import FleeConsequence, MoraleTrigger, ResolutionMode
 from sidequest.magic.confrontations import (
@@ -80,6 +82,7 @@ from sidequest.telemetry.spans import (
     quest_update_span,
     region_entry_canonicalized_dedup_span,
     region_entry_rejected_span,
+    table_commit_span,
     trope_resolution_handshake_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -427,8 +430,13 @@ def _gate_applies_to_encounter(encounter, pack) -> bool:
 
     Sealed-letter dispatch (dogfight) is itself an explicit secret-commit
     UI — both pilots' commits arrive via that flow, not via prose
-    extraction. Excluding sealed-letter from the gate avoids breaking the
-    dogfight production path while still locking the legacy beat-loop
+    extraction. Table_resolution (poker/auction) is the analogous case: each
+    seat's per-decision-point commit is the player's explicit consent frame
+    (a classified "I raise"/"I fold"), not a beat the narrator inferred from
+    free prose. Excluding both modes from the gate keeps their production
+    paths working — without the exemption the gate's _filter_inferred_pc_beats
+    would silently DROP every PC table commit on the live narrator path
+    (from_explicit_action=False) — while still locking the legacy beat-loop
     against the [S2-BUG] failure mode.
     """
     if encounter is None or pack is None:
@@ -443,7 +451,10 @@ def _gate_applies_to_encounter(encounter, pack) -> bool:
         # Pack-data inconsistency — let the downstream code raise its own
         # ValueError so the caller sees the real bug. The gate stays off.
         return False
-    return cdef.resolution_mode != ResolutionMode.sealed_letter_lookup
+    return cdef.resolution_mode not in (
+        ResolutionMode.sealed_letter_lookup,
+        ResolutionMode.table_resolution,
+    )
 
 
 def _filter_inferred_pc_beats(
@@ -628,6 +639,13 @@ class NarrationApplyOutcome:
     magic: MagicApplyResult | None = None
     classified_intent: str = "unspecified"
     pending_dogfight_shot: PendingDogfightShot | None = None
+    # Free-for-all N-seat table (table_resolution): set when the table resolved
+    # to showdown. Carries recipient, stake_kind, stake_descriptor so callers
+    # can surface the award in the UI. Money stakes are applied to snapshot
+    # (gold mutation) directly inside the branch — see narration_apply.py Task 12.
+    # Non-money stakes (item/favor/information) are recorded here for narrator
+    # context but the inventory transfer is deferred to content-driven handling.
+    table_pot_award: dict | None = None
 
 
 def apply_magic_working(*, snapshot: GameSnapshot, patch_field: dict) -> MagicApplyResult:
@@ -2771,6 +2789,175 @@ def _apply_narration_result_to_snapshot(
                 # whole snapshot mutation phase.
                 # Fall-through: skip beat loop by NOT defining beat_by_id
                 # and gating the loop below.
+                _legacy_beat_path = False
+            elif cdef.resolution_mode == ResolutionMode.table_resolution:
+                # ---- Free-for-all N-seat table branch (poker / auction) ----
+                # EXCLUSIVE of apply_beat: table beats (fold/bet/cheat/...) are
+                # NOT dial beats; falling through would double-apply. Each seat's
+                # sealed action rides beat_selections (actor→seat, beat_id, amount,
+                # target). Folded/out seats are dropped from the barrier elsewhere
+                # (session_room). One decision point resolves per barrier turn.
+                if enc.table_state is None:
+                    raise ValueError(
+                        f"confrontation {enc.encounter_type!r} declares "
+                        "resolution_mode=table_resolution but encounter has no "
+                        "table_state — cannot dispatch table resolution"
+                    )
+                if pack is None or pack.rules is None:
+                    raise ValueError(
+                        f"table_resolution {enc.encounter_type!r} requires a pack "
+                        "(ruleset binding) but pack/rules is None"
+                    )
+                # Map each selection (actor name) → seat_id via the actor roster.
+                # actor.role holds the seat_id for table encounters (set by
+                # instantiate_table_encounter in encounter_lifecycle.py).
+                table_commits: dict[str, TableCommit] = {}
+                for sel in gated_selections:
+                    actor = enc.find_actor(sel.actor)
+                    if actor is None:
+                        raise ValueError(
+                            f"beat_selection actor {sel.actor!r} not found on "
+                            f"table encounter {enc.encounter_type!r}"
+                        )
+                    seat_id = actor.role  # role holds the seat_id for table encounters
+                    table_commit = TableCommit(
+                        seat_id=seat_id,
+                        beat_id=sel.beat_id,
+                        amount=int(sel.amount or 0),
+                        target_seat=sel.target,
+                    )
+                    table_commits[seat_id] = table_commit
+                    with table_commit_span(
+                        seat=seat_id,
+                        beat_id=sel.beat_id,
+                        amount=table_commit.amount,
+                        decision_point=enc.table_state.decision_point,
+                    ):
+                        pass
+
+                # Auto-commit NPC seats with no PC selection this turn.
+                # Only for active NPC seats not already committed.
+                from sidequest.game.table.npc_policy import decide_npc_commit  # noqa: PLC0415
+
+                # Seeded from (interaction, decision_point) for reproducibility.
+                # NOTE: full replay also requires replaying the NPC commit
+                # sequence below — the shared Random advances once per NPC commit
+                # (decide_npc_commit draws) before resolve_table consumes it, so
+                # the seed alone is not a stable resolution key without the same
+                # NPC iteration order.
+                _table_rng = Random(
+                    snapshot.turn_manager.interaction * 1000
+                    + enc.table_state.decision_point
+                )
+                for _seat in enc.table_state.seats:
+                    if _seat.is_pc or _seat.status != "active" or _seat.seat_id in table_commits:
+                        continue
+                    table_commits[_seat.seat_id] = decide_npc_commit(
+                        enc.table_state, _seat, rng=_table_rng
+                    )
+
+                module = get_ruleset_module(pack.rules.ruleset)
+                table_outcome = module.resolve_table(
+                    enc.table_state, commits=table_commits, rng=_table_rng
+                )
+                if table_outcome.showdown:
+                    enc.resolved = True
+                    enc.outcome = f"table_winner:{table_outcome.resolved_winner}"
+                    # Award the stake through the auditable state-patch path.
+                    # Winner's party_name is the character/PC name.
+                    winner_seat = enc.table_state.find_seat(table_outcome.pot_awarded_to)
+                    if winner_seat is None:
+                        # The engine always returns a valid pot_awarded_to among
+                        # the seats — a miss here is an engine/state mismatch, not
+                        # a recoverable state. Fail loud per No Silent Fallbacks.
+                        raise ValueError(
+                            f"table showdown: pot_awarded_to "
+                            f"{table_outcome.pot_awarded_to!r} not found in "
+                            "table_state.seats — engine/state mismatch"
+                        )
+                    # MVP proxy: award the abstract chip total as gold. The
+                    # AUTHORITATIVE money prize is the content-declared stake
+                    # value (Task 16: stake declaration in rules.yaml). Until
+                    # then this approximates the prize from the abstract pot.
+                    # TODO(task-16): source the money amount from the declared
+                    # stake, not sum(contributions).
+                    pot_total = sum(enc.table_state.pot.contributions.values())
+                    outcome.table_pot_award = {
+                        "recipient": winner_seat.party_name,
+                        "stake_kind": table_outcome.stake_kind,
+                        "stake_descriptor": table_outcome.stake_descriptor,
+                        "amount": pot_total,
+                    }
+                    # Money stake: apply gold directly to the winner's character
+                    # through the same auditable path used by gold_change above.
+                    if table_outcome.stake_kind == "money":
+                        winner_char = next(
+                            (
+                                c
+                                for c in snapshot.characters
+                                if c.core.name == winner_seat.party_name
+                            ),
+                            None,
+                        )
+                        if winner_char is None and winner_seat.is_pc:
+                            # A PC won but no matching Character — a
+                            # programming/seating error, not a valid state.
+                            # Fail loud per No Silent Fallbacks.
+                            raise ValueError(
+                                f"table money award: PC winner "
+                                f"{winner_seat.party_name!r} (seat "
+                                f"{winner_seat.seat_id!r}) not found in "
+                                "snapshot.characters"
+                            )
+                        # Apply the gold mutation only for a real PC Character
+                        # with a positive pot. NPC winners (not in
+                        # snapshot.characters) are an intentional gold-ledger
+                        # no-op; a zero pot mutates nothing — but BOTH still emit
+                        # the watcher event below so the GM panel never goes blind
+                        # on a resolution.
+                        before_gold: int | None = None
+                        after_gold: int | None = None
+                        if winner_char is not None:
+                            before_gold = int(winner_char.core.inventory.gold)
+                            after_gold = before_gold
+                            if pot_total > 0:
+                                after_gold = before_gold + pot_total
+                                winner_char.core.inventory.gold = after_gold
+                                logger.info(
+                                    "economy.table_pot_award player=%s actor=%s "
+                                    "turn=%d pot_total=%d before=%d after=%d",
+                                    player_name,
+                                    winner_seat.party_name,
+                                    snapshot.turn_manager.interaction,
+                                    pot_total,
+                                    before_gold,
+                                    after_gold,
+                                )
+                        _watcher_publish(
+                            "state_transition",
+                            {
+                                "kind": "economy.table_pot_award",
+                                "actor": winner_seat.party_name,
+                                "pot_total": pot_total,
+                                "stake_kind": table_outcome.stake_kind,
+                                "stake_descriptor": table_outcome.stake_descriptor,
+                                "before": before_gold,
+                                "after": after_gold,
+                                "npc_winner": not winner_seat.is_pc,
+                                "turn_number": snapshot.turn_manager.interaction,
+                                "player_name": player_name,
+                            },
+                            component="economy",
+                        )
+                    # Non-money stakes (item/information/favor): the award is
+                    # recorded on outcome.table_pot_award (above) + the narrator
+                    # hint (below). Full inventory transfer is deferred to
+                    # content-driven handling (Task 16+).
+                    snapshot.pending_resolution_signal = _build_resolution_signal(enc)
+                if table_outcome.narration_hint:
+                    enc.narrator_hints = [table_outcome.narration_hint]
+                else:
+                    enc.narrator_hints = []
                 _legacy_beat_path = False
             elif cdef.resolution_mode == ResolutionMode.opposed_check:
                 # ---- Opposed-check resolution branch (combat fairness, 2026-04-26) ----

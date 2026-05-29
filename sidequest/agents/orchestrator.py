@@ -274,6 +274,10 @@ class BeatSelection:
     # narration_apply uses this to look up the Spell in the world's catalog
     # and route the save branch.
     spell_id: str | None = None
+    # Table confrontations (poker/auction): raise/bet chips. None on every
+    # non-table beat. The existing ``target`` field carries the Read/Accuse
+    # target seat_id.
+    amount: int | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> BeatSelection:
@@ -319,12 +323,21 @@ class BeatSelection:
                     f"BeatSelection declared_tier={raw_outcome!r} not in RollOutcome"
                 ) from exc
         spell_id_raw = d.get("spell_id")
+        # Defensive coercion (parity with gold_change / declared_tier): a
+        # malformed amount degrades to None rather than throwing out of
+        # from_dict. The table branch reads `int(sel.amount or 0)`.
+        amount_raw = d.get("amount")
+        try:
+            amount = int(amount_raw) if amount_raw is not None else None
+        except (TypeError, ValueError):
+            amount = None
         return cls(
             actor=str(d.get("actor", "")),
             beat_id=str(d.get("beat_id", "")),
             outcome=outcome,
             target=d.get("target"),
             spell_id=str(spell_id_raw) if spell_id_raw else None,
+            amount=amount,
         )
 
 

@@ -1,7 +1,7 @@
 """Free-for-all N-seat table resolution spans.
 
-Eight spans cover the lifecycle: dealt, commit, npc_commit, cheat, read,
-accuse, fold, showdown. Each subsystem decision emits one so the GM panel
+The table spans cover the lifecycle: dealt, seat_seeded, commit, npc_commit,
+cheat, read, accuse, fold, showdown. Each subsystem decision emits one so the GM panel
 (lie detector) can confirm the cheat fired / the read returned a real value /
 the accuse checked an actual trace — narration claiming "you catch him palming
 an ace" with no table.accuse/table.cheat span is a logged mismatch
@@ -106,6 +106,19 @@ SPAN_ROUTES[SPAN_TABLE_FOLD] = SpanRoute(
         "op": "fold",
         "seat": (span.attributes or {}).get("seat", ""),
         "decision_point": (span.attributes or {}).get("decision_point", 0),
+    },
+)
+SPAN_TABLE_SEAT_SEEDED = "table.seat_seeded"
+SPAN_ROUTES[SPAN_TABLE_SEAT_SEEDED] = SpanRoute(
+    event_type="state_transition",
+    component="table",
+    extract=lambda span: {
+        "field": "table",
+        "op": "seat_seeded",
+        "seat_id": (span.attributes or {}).get("seat_id", ""),
+        "party_name": (span.attributes or {}).get("party_name", ""),
+        "is_pc": (span.attributes or {}).get("is_pc", False),
+        "keys_seeded": (span.attributes or {}).get("keys_seeded", ""),
     },
 )
 SPAN_TABLE_SHOWDOWN = "table.showdown"
@@ -266,6 +279,30 @@ def table_fold_span(
     with Span.open(
         SPAN_TABLE_FOLD,
         {"seat": seat, "decision_point": decision_point, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def table_seat_seeded_span(
+    *,
+    seat_id: str,
+    party_name: str,
+    is_pc: bool,
+    keys_seeded: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    with Span.open(
+        SPAN_TABLE_SEAT_SEEDED,
+        {
+            "seat_id": seat_id,
+            "party_name": party_name,
+            "is_pc": is_pc,
+            "keys_seeded": keys_seeded,
+            **attrs,
+        },
         tracer_override=_tracer,
     ) as span:
         yield span

@@ -6,6 +6,7 @@ Port of sidequest-api/crates/sidequest-server/src/dispatch/
 
 from __future__ import annotations
 
+import logging
 import random as _random
 from typing import cast
 
@@ -34,8 +35,11 @@ from sidequest.telemetry.spans import (
     npc_edge_published_span,
     participant_joined_span,
     table_dealt_span,
+    table_seat_seeded_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+_log = logging.getLogger(__name__)
 
 _VALID_SIDES = ("player", "opponent", "neutral")
 
@@ -454,6 +458,98 @@ def _npc_fallback_at_location(
     return fallback, True
 
 
+def _build_table_seat_seeds(
+    *,
+    player_names: list[str],
+    npc_names: list[str],
+    snapshot: GameSnapshot,
+) -> dict[str, dict]:
+    """Derive per-seat private_state seeds from real actor sheets.
+
+    Stat mappings (documented):
+    - PC ``perception`` ← WIS modifier: (WIS - 10) // 2.
+      Perception/notice is WIS-flavored in the native ruleset (see
+      native.py stat_modifier pattern). The modifier scale (~-1..+5) is
+      correct for the d20 opposed check in engine.py (``rng.randint(1,20)
+      + perception``).
+    - PC ``concealment`` ← DEX modifier: (DEX - 10) // 2.
+      Concealing a cheat is a sleight-of-hand action; DEX is the
+      canonical sleight stat. Same modifier scale as perception.
+    - NPC ``ocean`` ← npc.ocean (dict with at least ``neuroticism`` key,
+      or empty dict when None). Fed directly into the OCEAN policy knobs.
+    - NPC ``disposition`` ← mapped from npc.disposition.attitude():
+      Disposition.HOSTILE → "larcenous" (hostile NPC at a table is the
+      closest real-data approximation to "inclined to cheat"); FRIENDLY
+      and NEUTRAL both map to "neutral" (no cheat tendency). The policy
+      checks ``disposition == "larcenous"``; this mapping is the
+      reconciliation between the engine vocabulary and ADR-020's
+      three-tier attitude model.
+
+    Missing actor: empty seed + warning log (no crash). An NPC with no
+    backing Npc record (``snapshot.npcs`` lookup miss) gets empty seed;
+    the engine's .get(..., default) fallbacks apply and crunch degrades
+    gracefully for that seat only.
+    """
+    def _stat_mod(score: int) -> int:
+        return (score - 10) // 2  # native ruleset modifier formula
+
+    def _score(stats: dict[str, int], stat_key_upper: str, stat_key_lower: str) -> int | None:
+        # Membership check, NOT `.get() or`: a legitimate score of 0 is a
+        # valid stat (modifier -5) and must NOT be treated as absent.
+        if stat_key_upper in stats:
+            return stats[stat_key_upper]
+        if stat_key_lower in stats:
+            return stats[stat_key_lower]
+        return None
+
+    by_char_name = {c.core.name: c for c in snapshot.characters}
+    by_npc_name = {n.core.name: n for n in snapshot.npcs}
+
+    seeds: dict[str, dict] = {}
+
+    for name in player_names:
+        char = by_char_name.get(name)
+        if char is None:
+            _log.warning(
+                "table seat seed: PC %r not found in snapshot.characters — "
+                "seeding empty (no stat mods applied); this is a character-name "
+                "skew and should be investigated",
+                name,
+            )
+            seeds[name] = {}
+            continue
+        stats = char.stats
+        wis = _score(stats, "WIS", "wis")
+        dex = _score(stats, "DEX", "dex")
+        # An actor genuinely lacking the stat gets a 0 modifier (no bonus) —
+        # documented, not silent: the seat still seeds, just with no edge.
+        perception = _stat_mod(wis) if wis is not None else 0
+        concealment = _stat_mod(dex) if dex is not None else 0
+        seeds[name] = {"perception": perception, "concealment": concealment}
+
+    for name in npc_names:
+        npc = by_npc_name.get(name)
+        if npc is None:
+            _log.warning(
+                "table seat seed: NPC %r not found in snapshot.npcs — "
+                "seeding empty (no OCEAN/disposition applied)",
+                name,
+            )
+            seeds[name] = {}
+            continue
+        ocean: dict = dict(npc.ocean) if npc.ocean else {}
+        attitude = npc.disposition.attitude()
+        # Disposition vocabulary reconciliation: the engine's _choose_beat
+        # checks disposition == "larcenous". ADR-020 only gives three bands
+        # (friendly/neutral/hostile). Map HOSTILE → "larcenous" because a
+        # hostile NPC at a table is the real-data signal for cheat-inclined
+        # behaviour. FRIENDLY and NEUTRAL map to "neutral" (no cheat branch).
+        disposition_str = "larcenous" if attitude == Attitude.HOSTILE else "neutral"
+        seeds[name] = {"ocean": ocean, "disposition": disposition_str}
+
+    return seeds
+
+
 def instantiate_table_encounter(
     *,
     cdef: ConfrontationDef,
@@ -463,6 +559,7 @@ def instantiate_table_encounter(
     stake_descriptor: str,
     seed: int,
     ruleset_slug: str = "native",
+    seat_seeds: dict[str, dict] | None = None,
 ) -> StructuredEncounter:
     """Build + deal a table_resolution StructuredEncounter.
 
@@ -470,21 +567,40 @@ def instantiate_table_encounter(
     deal_table), populates each private_state via the kind's deal(), seeds the
     pot from antes, and stamps win_condition=table_showdown. The dual dials are
     inert placeholders (same as the hp_depletion path). Emits table.dealt.
+
+    ``seat_seeds`` is a dict keyed by party_name → seed dict to MERGE into each
+    seat's private_state BEFORE deal() runs. Keys set here (perception,
+    concealment, ocean, disposition) are NOT overwritten by deal() — deal only
+    sets its own keys (cards/strength/cheat_trace for poker; valuation/max_bid
+    for auction). This is the integration seam that bridges real actor stats
+    (Character.stats, Npc.ocean/disposition) into the crunch layer. The trigger
+    branch (``instantiate_encounter_from_trigger``) builds seat_seeds from the
+    real snapshot; direct-call tests may pass them explicitly.
     """
+    resolved_seeds: dict[str, dict] = seat_seeds or {}
     parties = [(name, True) for name in player_names] + [(name, False) for name in npc_names]
     seats: list[TableSeat] = []
     actors: list[EncounterActor] = []
     for idx, (party_name, is_pc) in enumerate(parties, start=1):
         seat_id = f"seat_{idx}"
+        pre_seed = dict(resolved_seeds.get(party_name, {}))
         seats.append(
             TableSeat(
                 seat_id=seat_id,
                 party_name=party_name,
                 is_pc=is_pc,
                 status="active",
-                private_state={},
+                private_state=pre_seed,
             )
         )
+        if pre_seed:
+            with table_seat_seeded_span(
+                seat_id=seat_id,
+                party_name=party_name,
+                is_pc=is_pc,
+                keys_seeded=",".join(sorted(pre_seed.keys())),
+            ):
+                pass
         # every seat is its own party; side is cosmetic for table types
         actors.append(
             EncounterActor(
@@ -623,14 +739,21 @@ def instantiate_encounter_from_trigger(
             return None
         # stake_kind defaults to "money" for MVP; Task 16 will add content-declared
         # stake blocks. stake_descriptor is the confrontation label.
+        all_player_names = [player_name, *additional]
+        seat_seeds = _build_table_seat_seeds(
+            player_names=all_player_names,
+            npc_names=npc_names_list,
+            snapshot=snapshot,
+        )
         enc = instantiate_table_encounter(
             cdef=cdef,
-            player_names=[player_name, *additional],
+            player_names=all_player_names,
             npc_names=npc_names_list,
             stake_kind="money",
             stake_descriptor=cdef.label,
             seed=snapshot.turn_manager.interaction,
             ruleset_slug=pack.rules.ruleset if pack and pack.rules else "native",
+            seat_seeds=seat_seeds,
         )
         snapshot.encounter = enc
         return enc

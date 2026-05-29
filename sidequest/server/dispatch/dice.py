@@ -145,6 +145,33 @@ def _build_request_payload(
     )
 
 
+def _build_check_request_payload(
+    *,
+    request_id: str,
+    rolling_player_id: str,
+    character_name: str,
+    stat: Stat,
+    modifier: int,
+    difficulty: int,
+    context: str,
+) -> DiceRequestPayload:
+    """Shape a 2d6 skill-check DiceRequest (CWN net_run hacking path).
+
+    Same envelope as _build_request_payload but a 2d6 pool instead of a single
+    d20 — the CWN cyberspace Program check (Tech + Program vs the security DC).
+    The physics overlay throws whatever pool the request names (ADR-074/075)."""
+    return DiceRequestPayload(
+        request_id=request_id,
+        rolling_player_id=rolling_player_id,
+        character_name=character_name,
+        dice=[DieSpec(sides=DieSides.D6, count=2)],
+        modifier=modifier,
+        stat=stat,
+        difficulty=difficulty,
+        context=context,
+    )
+
+
 def _compose_result_payload(
     *,
     request: DiceRequestPayload,
@@ -286,32 +313,77 @@ def dispatch_dice_throw(
             f"invalid stat_check {beat.stat_check!r} on beat {payload.beat_id!r}: {exc}"
         ) from exc
 
-    # Generalized attack setup: the module computes modifier + target number with the target
-    # in hand, so SWN reads target AC. native ignores the cores and reproduces stat_mod vs DC.
-    target_core = None
-    if encounter is not None:
-        target_name = _opposite_side_first_actor(encounter, "player")
-        if target_name is not None:
-            target_core = snapshot.find_creature_core(target_name)
-    attacker_core = snapshot.find_creature_core(character_name)
-    attack = ruleset.attack_params(
-        beat=beat,
-        attacker_stats=character_stats,
-        attacker_core=attacker_core,
-        target_core=target_core,
+    is_net_run = bool(
+        pack
+        and pack.rules
+        and pack.rules.ruleset == "cwn"
+        and cdef.category == "hacking"
     )
-    modifier = attack.modifier
-    difficulty = attack.target_number
 
-    request = _build_request_payload(
-        request_id=payload.request_id,
-        rolling_player_id=rolling_player_id,
-        character_name=character_name,
-        stat=stat,
-        modifier=modifier,
-        difficulty=difficulty,
-        context=f"{beat.label} — {beat.stat_check} check",
-    )
+    net_run_base_dc = 0
+    net_run_alert_modifier = 0
+    if is_net_run:
+        # CWN net_run (spec 2026-05-29): resolve as 2d6 + INT mod + Program
+        # skill vs the security DC, NOT d20 vs AC. The dice lib resolves any
+        # pool; this selects the 2d6 shape — it does not build a new resolver.
+        from sidequest.genre.models.rules import CwnConfig
+
+        cfg = pack.rules.ruleset_config()
+        if (
+            not isinstance(cfg, CwnConfig)
+            or cfg.hacking is None
+            or encounter.security_tier is None
+            or encounter.security_tier not in cfg.hacking.security_tiers
+        ):
+            raise DiceDispatchError(
+                "net_run dispatch reached without a resolvable security tier "
+                f"(tier={getattr(encounter, 'security_tier', None)!r}); the "
+                "lifecycle seam should have stamped it (No Silent Fallbacks)"
+            )
+        net_run_base_dc = cfg.hacking.security_tiers[encounter.security_tier]
+        # Alert escalation: each point of network alert (the opponent dial)
+        # raises the effective DC by 1 (CWN situational modifier).
+        net_run_alert_modifier = int(encounter.opponent_metric.current)
+        int_mod = ruleset.stat_modifier(character_stats, beat.stat_check)
+        program_skill = int(beat.combat_skill)
+        modifier = int_mod + program_skill
+        difficulty = net_run_base_dc + net_run_alert_modifier
+        request = _build_check_request_payload(
+            request_id=payload.request_id,
+            rolling_player_id=rolling_player_id,
+            character_name=character_name,
+            stat=stat,
+            modifier=modifier,
+            difficulty=difficulty,
+            context=f"Program check vs {encounter.security_tier} — DC {difficulty}",
+        )
+    else:
+        # Generalized attack setup: the module computes modifier + target number with the target
+        # in hand, so SWN reads target AC. native ignores the cores and reproduces stat_mod vs DC.
+        target_core = None
+        if encounter is not None:
+            target_name = _opposite_side_first_actor(encounter, "player")
+            if target_name is not None:
+                target_core = snapshot.find_creature_core(target_name)
+        attacker_core = snapshot.find_creature_core(character_name)
+        attack = ruleset.attack_params(
+            beat=beat,
+            attacker_stats=character_stats,
+            attacker_core=attacker_core,
+            target_core=target_core,
+        )
+        modifier = attack.modifier
+        difficulty = attack.target_number
+
+        request = _build_request_payload(
+            request_id=payload.request_id,
+            rolling_player_id=rolling_player_id,
+            character_name=character_name,
+            stat=stat,
+            modifier=modifier,
+            difficulty=difficulty,
+            context=f"{beat.label} — {beat.stat_check} check",
+        )
 
     emit_dice_request_sent(
         request_id=request.request_id,
@@ -340,6 +412,20 @@ def dispatch_dice_throw(
         )
     except ResolveError as exc:
         raise DiceDispatchError(f"dice resolution failed: {exc}") from exc
+
+    if is_net_run:
+        # Lie-detector: record the resolved Program check. resolve_hacking
+        # recomputes the same effective DC the request used and emits
+        # cwn.hacking.security_check with the resolved tier. Fired here (after
+        # resolve, before apply_beat) so the span carries the real outcome.
+        ruleset.resolve_hacking(
+            verb=beat.label,
+            tier=encounter.security_tier or "",
+            base_dc=net_run_base_dc,
+            alert_modifier=net_run_alert_modifier,
+            outcome=resolved.outcome.value,
+            actor=character_name,
+        )
 
     actor = encounter.find_actor(character_name)
     if actor is None:

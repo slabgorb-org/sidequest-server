@@ -198,8 +198,9 @@ async def test_orchestrator_routes_narration_through_sdk(
     # Story 59-4 / ADR-113 RETIRED begin_confrontation (atomic IntentRouter
     # cutover) — confrontation engagement moved off the narrator's tool
     # surface and onto the Intent Router pre-narrator pass. Back to 28.
-    # CWN System Strain (#506) added adjust_system_strain (29th tool). 29.
-    assert len(sent_tools) == len(default_registry.list_names()) == 29
+    # CWN System Strain (#506) added adjust_system_strain (29th tool).
+    # CWN combat lethality (#507) added stabilize_mortal_injury (30th tool). 30.
+    assert len(sent_tools) == len(default_registry.list_names()) == 30
 
     # 3. The result carries the SDK's text.
     assert result.narration == fake_response_text

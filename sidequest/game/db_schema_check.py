@@ -42,9 +42,17 @@ def _current_revision(conninfo: str) -> str | None:
     """The DB's stamped alembic revision, read from ``alembic_version``.
 
     Returns ``None`` when the table is absent — i.e. the DB was never migrated,
-    which is itself "behind head" and must fail loud.
+    which is itself "behind head" and must fail loud. A genuine connection or
+    query error (unreachable host, permission denied) is deliberately NOT caught
+    here: it propagates and fails the boot loudly, which is the intended
+    No-Silent-Fallbacks behaviour — relabelling it as "schema behind head" would
+    be a misleading error.
     """
     with psycopg.connect(conninfo) as conn:
+        # The EXISTS guard makes a never-migrated DB (no alembic_version table)
+        # return zero rows -> None, instead of raising UndefinedTable. That puts
+        # "table absent" on the same fail-loud path as "behind head" without a
+        # try/except that could accidentally swallow a real error.
         row = conn.execute(
             "SELECT version_num FROM alembic_version WHERE EXISTS "
             "(SELECT 1 FROM information_schema.tables "

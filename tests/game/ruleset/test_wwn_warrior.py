@@ -11,8 +11,6 @@ Span names are asserted LITERALLY (the GM panel is the lie detector).
 
 from __future__ import annotations
 
-import math
-
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -90,9 +88,7 @@ def test_killing_blow_shock_path():
 def test_killing_blow_emits_span_with_correct_fields():
     """Span name is 'wwn.killing_blow'; bonus and total carried as attributes."""
     exporter, tracer = _exporter()
-    total = _MOD.apply_killing_blow(
-        base_total=5, level=3, cfg=_CFG, actor="Torvin", _tracer=tracer
-    )
+    total = _MOD.apply_killing_blow(base_total=5, level=3, cfg=_CFG, actor="Torvin", _tracer=tracer)
     assert total == 7
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
@@ -166,7 +162,9 @@ def test_veterans_luck_scene_end_clears_marker():
     from sidequest.server.status_clear import clear_scratch_on_scene_end
 
     warrior = _warrior()
-    char = Character(core=warrior, char_class="Warrior", race="Human", backstory="A scarred fighter.")
+    char = Character(
+        core=warrior, char_class="Warrior", race="Human", backstory="A scarred fighter."
+    )
     # Build a minimal snapshot with one character.
     snap = GameSnapshot(characters=[char])
 

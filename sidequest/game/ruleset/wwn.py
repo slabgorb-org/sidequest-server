@@ -26,10 +26,11 @@ from sidequest.game.system_strain import StrainResult
 from sidequest.game.wwn_magic import (
     CastInput,
     EffortCommitment,
+    EffortDuration,
     EffortResult,
     SpellcastResult,
-    VeteransLuckResult,
     VeteransLuckMode,
+    VeteransLuckResult,
 )
 from sidequest.genre.models.inventory import _DICE_RE, DamageSpec
 from sidequest.genre.models.rules import SwnConfig, WwnConfig
@@ -305,7 +306,7 @@ class WwnRulesetModule(SwnRulesetModule):
         core: CreatureCore,
         source: str,
         points: int = 1,
-        duration: str = "scene",
+        duration: EffortDuration = "scene",
         label: str = "",
         _tracer: trace.Tracer | None = None,
     ) -> EffortResult:
@@ -603,9 +604,7 @@ class WwnRulesetModule(SwnRulesetModule):
         cfg guard raises on non-WwnConfig, consistent with other methods.
         """
         if not isinstance(cfg, WwnConfig):
-            raise ValueError(
-                f"apply_killing_blow requires a WwnConfig; got {type(cfg).__name__!r}"
-            )
+            raise ValueError(f"apply_killing_blow requires a WwnConfig; got {type(cfg).__name__!r}")
         bonus = math.ceil(int(level) / cfg.magic.killing_blow_divisor)
         total = base_total + bonus
         wwn_killing_blow_span(
@@ -637,9 +636,7 @@ class WwnRulesetModule(SwnRulesetModule):
         ``mode`` must be ``"force_hit"`` or ``"force_miss"`` (declared by the
         caller; dispatch integration is Plan 3).
         """
-        already_used = any(
-            s.text == VETERANS_LUCK_USED_MARKER for s in core.statuses
-        )
+        already_used = any(s.text == VETERANS_LUCK_USED_MARKER for s in core.statuses)
         if already_used:
             wwn_veterans_luck_span(
                 actor=core.name,

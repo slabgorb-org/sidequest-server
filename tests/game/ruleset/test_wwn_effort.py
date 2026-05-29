@@ -4,6 +4,7 @@ Mirrors the InMemorySpanExporter harness from test_cwn_shock.py.
 Covers: commit/over-commit, reclaim_effort (maintained), reclaim_scene_effort,
 reclaim_day_and_refresh — all per WwnRulesetModule spec (Task 4).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -26,7 +27,9 @@ def _exporter():
     return exporter, provider.get_tracer("test")
 
 
-def _core(*, effort: dict[str, EffortPool], spellcasting: SpellcastingState | None = None) -> CreatureCore:
+def _core(
+    *, effort: dict[str, EffortPool], spellcasting: SpellcastingState | None = None
+) -> CreatureCore:
     """Build a minimal CreatureCore with seeded effort pools."""
     return CreatureCore(
         name="Testor",
@@ -42,6 +45,7 @@ def _core(*, effort: dict[str, EffortPool], spellcasting: SpellcastingState | No
 # commit_effort
 # ---------------------------------------------------------------------------
 
+
 class TestCommitEffort:
     def test_commit_decrements_available(self):
         pool = EffortPool(source="high_mage", max=3)
@@ -55,7 +59,9 @@ class TestCommitEffort:
         pool = EffortPool(source="high_mage", max=3)
         core = _core(effort={"high_mage": pool})
         exporter, tracer = _exporter()
-        _MOD.commit_effort(core=core, source="high_mage", points=1, duration="maintained", _tracer=tracer)
+        _MOD.commit_effort(
+            core=core, source="high_mage", points=1, duration="maintained", _tracer=tracer
+        )
         spans = exporter.get_finished_spans()
         assert len(spans) == 1
         assert spans[0].name == "wwn.effort.commit"
@@ -64,7 +70,9 @@ class TestCommitEffort:
         pool = EffortPool(source="high_mage", max=3)
         core = _core(effort={"high_mage": pool})
         exporter, tracer = _exporter()
-        _MOD.commit_effort(core=core, source="high_mage", points=1, duration="scene", _tracer=tracer)
+        _MOD.commit_effort(
+            core=core, source="high_mage", points=1, duration="scene", _tracer=tracer
+        )
         attrs = dict(exporter.get_finished_spans()[0].attributes or {})
         assert attrs["applied"] is True
         assert attrs["source"] == "high_mage"
@@ -104,7 +112,9 @@ class TestCommitEffort:
     def test_commit_records_commitment_on_pool(self):
         pool = EffortPool(source="high_mage", max=3)
         core = _core(effort={"high_mage": pool})
-        _MOD.commit_effort(core=core, source="high_mage", points=2, duration="day", label="Arcanist's Eye")
+        _MOD.commit_effort(
+            core=core, source="high_mage", points=2, duration="day", label="Arcanist's Eye"
+        )
         assert len(core.effort["high_mage"].commitments) == 1
         assert core.effort["high_mage"].commitments[0].duration == "day"
         assert core.effort["high_mage"].commitments[0].label == "Arcanist's Eye"
@@ -113,6 +123,7 @@ class TestCommitEffort:
 # ---------------------------------------------------------------------------
 # reclaim_effort (maintained — explicit release of maintained commitments)
 # ---------------------------------------------------------------------------
+
 
 class TestReclaimEffort:
     def test_reclaim_maintained_returns_points_immediately(self):
@@ -148,7 +159,7 @@ class TestReclaimEffort:
             max=4,
             commitments=[
                 EffortCommitment(points=2, duration="maintained"),
-                EffortCommitment(points=1, duration="scene"),   # not touched
+                EffortCommitment(points=1, duration="scene"),  # not touched
             ],
         )
         core = _core(effort={"high_mage": pool})
@@ -157,7 +168,7 @@ class TestReclaimEffort:
         attrs = dict(exporter.get_finished_spans()[0].attributes or {})
         # 2 maintained points returned; scene commitment left intact
         assert attrs["points"] == 2
-        assert core.effort["high_mage"].committed == 1   # scene commitment remains
+        assert core.effort["high_mage"].committed == 1  # scene commitment remains
 
     def test_reclaim_no_matching_commitments_no_span(self):
         """Nothing to reclaim → no span emitted."""
@@ -168,7 +179,9 @@ class TestReclaimEffort:
         )
         core = _core(effort={"high_mage": pool})
         exporter, tracer = _exporter()
-        result = _MOD.reclaim_effort(core=core, source="high_mage", trigger="maintained", _tracer=tracer)
+        result = _MOD.reclaim_effort(
+            core=core, source="high_mage", trigger="maintained", _tracer=tracer
+        )
         assert result.applied is False
         assert len(exporter.get_finished_spans()) == 0
 
@@ -181,6 +194,7 @@ class TestReclaimEffort:
 # ---------------------------------------------------------------------------
 # reclaim_scene_effort
 # ---------------------------------------------------------------------------
+
 
 class TestReclaimSceneEffort:
     def test_drops_only_scene_commitments(self):
@@ -257,6 +271,7 @@ class TestReclaimSceneEffort:
 # reclaim_day_and_refresh
 # ---------------------------------------------------------------------------
 
+
 class TestReclaimDayAndRefresh:
     def test_drops_day_and_scene_commitments(self):
         pools = {
@@ -323,7 +338,6 @@ class TestReclaimDayAndRefresh:
             )
         }
         core = _core(effort=pools)
-        cfg = WwnConfig()
         # We need day_reclaim_requires_comfort=False; use a fresh config
         # WwnConfig is a Pydantic model — build it with override
         cfg2 = WwnConfig.model_validate({"magic": {"day_reclaim_requires_comfort": False}})
@@ -385,6 +399,7 @@ class TestReclaimDayAndRefresh:
 
     def test_requires_wwn_config(self):
         from sidequest.genre.models.rules import SwnConfig
+
         core = _core(effort={})
         with pytest.raises(ValueError, match="WwnConfig"):
             _MOD.reclaim_day_and_refresh(core=core, comfortable=True, cfg=SwnConfig())

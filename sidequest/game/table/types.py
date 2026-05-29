@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TableNeedsOthersError(ValueError):
@@ -53,6 +53,10 @@ class TableState(BaseModel):
     decision_point: int = 0
     max_decision_points: int  # abstracted betting — small (e.g. 3), content-declared
     resolved_winner: str | None = None
+    # Accusations are recorded when committed but RESOLVED at showdown (rolled
+    # against the final cheat_trace) so a cheat in a later decision point is
+    # still catchable. (accuser_seat_id, target_seat_id).
+    pending_accusations: list[tuple[str, str]] = Field(default_factory=list)
 
     def find_seat(self, seat_id: str) -> TableSeat | None:
         for s in self.seats:

@@ -20,11 +20,20 @@ from sidequest.game.table.types import (
     TableState,
 )
 from sidequest.telemetry.spans import (
+    table_accuse_span,
+    table_cheat_span,
     table_fold_span,
+    table_read_span,
     table_showdown_span,
 )
 
 _POT_ACTIONS = {"bet", "raise", "call", "bluff", "raise_bid"}
+
+# Accuse opposed-check tuning (content could later override via cdef).
+# DC = 10 + concealment - round(trace*8); trace=1.0,conceal=0 → DC 2 (near-certain
+# catch); trace=0,conceal=0 → DC 10 (~50% at zero perception stat).
+_ACCUSE_BASE_DC = 10
+_ACCUSE_TRACE_WEIGHT = 8  # cheat_trace (0..1) contributes 0..8 toward catchability
 
 
 def deal_table(state: TableState, *, rng: random.Random) -> None:
@@ -45,6 +54,7 @@ def resolve_table(
 ) -> TableResolutionOutcome:
     """Resolve one decision point. See module docstring."""
     game = get_table_game(state.game_kind)
+    read_results: dict = {}
 
     # Reject commits naming seats not on the table BEFORE applying anything —
     # fail loud before mutating, so a ghost commit can't leave a half-applied hand.
@@ -62,7 +72,14 @@ def resolve_table(
             continue
         if seat.status != "active":
             continue
-        _apply_commit(state, seat_id, commit, game=game, rng=rng)
+        _apply_commit(
+            state,
+            seat_id,
+            commit,
+            game=game,
+            rng=rng,
+            read_results=read_results,
+        )
 
     active = state.active_seat_ids()
     is_showdown = len(active) <= 1 or state.decision_point >= state.max_decision_points - 1
@@ -75,11 +92,12 @@ def resolve_table(
             stake_kind=None,
             stake_descriptor=None,
             narration_hint="",
+            read_results=read_results,
         )
-    return _showdown(state, game=game, rng=rng)
+    return _showdown(state, game=game, rng=rng, read_results=read_results)
 
 
-def _apply_commit(state, seat_id, commit, *, game, rng) -> None:
+def _apply_commit(state, seat_id, commit, *, game, rng, read_results) -> None:
     seat = state.find_seat(seat_id)
     beat = commit.beat_id
     if beat == "fold":
@@ -92,43 +110,113 @@ def _apply_commit(state, seat_id, commit, *, game, rng) -> None:
             0, commit.amount
         )
         return
-    # cheat / read_table / accuse handled in Task 8's _apply_signature_beat
-    _apply_signature_beat(state, seat_id, commit, game=game, rng=rng)
+    _apply_signature_beat(
+        state,
+        seat_id,
+        commit,
+        game=game,
+        rng=rng,
+        read_results=read_results,
+    )
 
 
-def _apply_signature_beat(state, seat_id, commit, *, game, rng) -> None:
-    # Filled in Task 8. Until then, an unauthored beat must fail loud.
+def _apply_signature_beat(state, seat_id, commit, *, game, rng, read_results) -> None:
+    beat = commit.beat_id
+    seat = state.find_seat(seat_id)
+    if beat == "cheat":
+        result = game.cheat(seat, rng)  # mutates seat.private_state
+        with table_cheat_span(
+            seat=seat_id,
+            strength_before=result.strength_before,
+            strength_after=result.strength_after,
+            new_trace=result.new_trace,
+        ):
+            pass
+        return
+    if beat in ("read_table", "read_room"):
+        target = _require_target(state, seat_id, commit)
+        reader_stat = int(seat.private_state.get("perception", 0))
+        read = game.read(seat, target, reader_stat=reader_stat)
+        read_results[seat_id] = read
+        with table_read_span(
+            reader=seat_id,
+            target=target.seat_id,
+            info_returned=str(read.info.get("strength_band", "")),
+        ):
+            pass
+        return
+    if beat == "accuse":
+        target = _require_target(state, seat_id, commit)
+        # Accusations are RECORDED at apply but ROLLED at showdown against the
+        # FINAL cheat_trace — a cheat in a later decision point is still catchable.
+        # The opposed check and table.accuse span both fire in _showdown.
+        state.pending_accusations.append((seat_id, target.seat_id))
+        return
     raise ValueError(
         f"unsupported table beat {commit.beat_id!r} for seat {seat_id!r} "
         f"(game_kind={state.game_kind!r})"
     )
 
 
-def _showdown(state, *, game, rng) -> TableResolutionOutcome:
-    """Compare strengths among non-folded seats; award the pot. Forfeit logic
-    (exposed cheats) is layered in Task 8 — here, no forfeits yet."""
-    forfeited: list[str] = []
-    contenders = [s for s in state.seats if s.status == "active"]
-    if not contenders:
-        # everyone folded except possibly one already-out seat — shouldn't happen
-        # because resolve_table triggers showdown at ≤1 active; guard anyway.
-        raise ValueError("showdown with zero active seats — engine invariant broken")
+def _require_target(state, seat_id, commit):
+    if commit.target_seat is None:
+        raise ValueError(f"beat {commit.beat_id!r} from {seat_id!r} requires a target_seat")
+    target = state.find_seat(commit.target_seat)
+    if target is None:
+        raise ValueError(f"beat {commit.beat_id!r} targets unknown seat {commit.target_seat!r}")
+    return target
 
-    if len(contenders) == 1:
-        winner = contenders[0]
-        revealed = ",".join(f"{s.seat_id}:{game.strength(s)}" for s in contenders)
-    else:
-        for s in contenders:
-            if "strength" not in s.private_state:
-                raise ValueError(
-                    f"showdown: seat {s.seat_id!r} has no readable strength — "
-                    "fail loud, never a coin-flip default"
-                )
-        revealed = ",".join(f"{s.seat_id}:{game.strength(s)}" for s in contenders)
-        winner = max(contenders, key=lambda s: game.strength(s))
+
+def _showdown(state, *, game, rng, read_results) -> TableResolutionOutcome:
+    forfeited: list[str] = []
+    for accuser_id, target_id in state.pending_accusations:
+        accuser = state.find_seat(accuser_id)
+        target = state.find_seat(target_id)
+        if accuser is None or target is None:
+            continue  # a seat that left the table; accusation lapses
+        accuser_stat = int(accuser.private_state.get("perception", 0))
+        concealment = int(target.private_state.get("concealment", 0))
+        trace_val = float(target.private_state.get("cheat_trace", 0.0))
+        accuser_total = rng.randint(1, 20) + accuser_stat
+        dc = _ACCUSE_BASE_DC + concealment - round(trace_val * _ACCUSE_TRACE_WEIGHT)
+        landed = accuser_total >= dc
+        with table_accuse_span(
+            accuser=accuser_id,
+            target=target_id,
+            accuser_total=accuser_total,
+            dc=dc,
+            landed=landed,
+        ):
+            pass
+        if landed:
+            if target_id not in forfeited:
+                forfeited.append(target_id)  # exposed cheat forfeits regardless of strength
+        else:
+            if accuser_id not in forfeited:
+                forfeited.append(accuser_id)  # slandered an honest seat: accuser eats the cost
+    state.pending_accusations = []  # resolved; hand is ending
+
+    contenders = [s for s in state.seats if s.status == "active" and s.seat_id not in forfeited]
+    if not contenders:
+        raise ValueError("showdown with zero eligible contenders — all seats folded/forfeited")
+
+    # Uniform fail-loud strength guard (single- and multi-contender alike) — never a
+    # coin-flip default, and never a bare KeyError from game.strength().
+    for s in contenders:
+        if "strength" not in s.private_state:
+            raise ValueError(
+                f"showdown: seat {s.seat_id!r} has no readable strength — "
+                "fail loud, never a coin-flip default"
+            )
+    revealed = ",".join(f"{s.seat_id}:{game.strength(s)}" for s in contenders)
+    winner = (
+        contenders[0] if len(contenders) == 1 else max(contenders, key=lambda s: game.strength(s))
+    )
 
     state.resolved_winner = winner.seat_id
     hint = f"{winner.party_name} takes {state.pot.stake_descriptor}"
+    if forfeited:
+        hint += f" (forfeits: {', '.join(forfeited)})"
     with table_showdown_span(
         winner=winner.seat_id,
         forfeits=forfeited,
@@ -144,4 +232,5 @@ def _showdown(state, *, game, rng) -> TableResolutionOutcome:
         stake_descriptor=state.pot.stake_descriptor,
         narration_hint=hint,
         forfeited_seats=forfeited,
+        read_results=read_results,
     )

@@ -11,6 +11,8 @@ flow (NPC seats, spans, perception) lives in Task 15's wiring test.
 
 from unittest.mock import MagicMock
 
+import pytest
+
 import sidequest.game.table.poker  # noqa: F401  (registers the poker kind)
 from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
 from sidequest.game.character import Character
@@ -233,3 +235,38 @@ def test_beat_selection_malformed_amount_degrades_to_none():
     declared_tier handling."""
     bs = BeatSelection.from_dict({"actor": "Doc", "beat_id": "raise", "amount": "lots"})
     assert bs.amount is None
+
+
+# ---------------------------------------------------------------------------
+# I1 — authored-beat validation in the table branch
+# ---------------------------------------------------------------------------
+
+
+def test_pc_unauthored_beat_raises_valueerror():
+    """I1: a PC commit with a beat_id not in cdef.beats raises ValueError.
+
+    This locks the table branch's authored-beat validation: an unauthored
+    beat (narrator hallucination or NPC-policy bug) is rejected BEFORE
+    resolve_table mutates state.  The error message must name the beat and
+    the encounter type so the GM panel can surface the drift.
+    """
+    snap, pack = _poker_table_snapshot()
+    # NOTE: relies on _poker_cdef NOT authoring "cheat" (its beats are
+    # [fold, call]). If "cheat" is ever added to that fixture, this assertion
+    # silently inverts — keep "cheat" out of _poker_cdef for this test to mean
+    # what it says. "cheat" not in cdef.beats → committing it from a PC raises.
+    result = NarrationTurnResult(
+        narration="Doc reaches under the table.",
+        beat_selections=[
+            BeatSelection(actor="Doc", beat_id="cheat", amount=0),
+        ],
+    )
+    with pytest.raises(ValueError, match="not authored"):
+        _apply_narration_result_to_snapshot(
+            snap,
+            result,
+            "Doc",
+            room=room_for(snap),
+            pack=pack,
+            from_explicit_action=False,
+        )

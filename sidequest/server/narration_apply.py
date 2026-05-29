@@ -2808,9 +2808,17 @@ def _apply_narration_result_to_snapshot(
                         f"table_resolution {enc.encounter_type!r} requires a pack "
                         "(ruleset binding) but pack/rules is None"
                     )
+                # Build the authored beat set once for validation + NPC policy.
+                # Both the PC-commit validator (I1) and decide_npc_commit require
+                # this set so the NPC policy can never emit an unauthored beat.
+                authored_beats: set[str] = {b.id for b in cdef.beats}
+
                 # Map each selection (actor name) → seat_id via the actor roster.
                 # actor.role holds the seat_id for table encounters (set by
                 # instantiate_table_encounter in encounter_lifecycle.py).
+                # I1: validate that every PC commit names an authored beat BEFORE
+                # building the TableCommit / before resolve_table mutates state.
+                # Matching the legacy beat loop's fail-loud on unknown beat_id.
                 table_commits: dict[str, TableCommit] = {}
                 for sel in gated_selections:
                     actor = enc.find_actor(sel.actor)
@@ -2818,6 +2826,11 @@ def _apply_narration_result_to_snapshot(
                         raise ValueError(
                             f"beat_selection actor {sel.actor!r} not found on "
                             f"table encounter {enc.encounter_type!r}"
+                        )
+                    if sel.beat_id not in authored_beats:
+                        raise ValueError(
+                            f"table beat {sel.beat_id!r} not authored for "
+                            f"{enc.encounter_type!r} — authored: {sorted(authored_beats)}"
                         )
                     seat_id = actor.role  # role holds the seat_id for table encounters
                     table_commit = TableCommit(
@@ -2837,6 +2850,8 @@ def _apply_narration_result_to_snapshot(
 
                 # Auto-commit NPC seats with no PC selection this turn.
                 # Only for active NPC seats not already committed.
+                # Pass available_beats so the NPC policy is kind-general and
+                # can never return a beat the confrontation did not author.
                 from sidequest.game.table.npc_policy import decide_npc_commit  # noqa: PLC0415
 
                 # Seeded from (interaction, decision_point) for reproducibility.
@@ -2852,7 +2867,7 @@ def _apply_narration_result_to_snapshot(
                     if _seat.is_pc or _seat.status != "active" or _seat.seat_id in table_commits:
                         continue
                     table_commits[_seat.seat_id] = decide_npc_commit(
-                        enc.table_state, _seat, rng=_table_rng
+                        enc.table_state, _seat, rng=_table_rng, available_beats=authored_beats
                     )
 
                 module = get_ruleset_module(pack.rules.ruleset)

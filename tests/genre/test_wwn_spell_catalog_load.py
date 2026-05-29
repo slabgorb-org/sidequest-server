@@ -55,6 +55,33 @@ def _clone_pack(src: Path, dst: Path) -> Path:
     return dst
 
 
+def _strip_class_filter_from_cast_spell(pack_dir: Path) -> None:
+    """Remove class_filter from the cast_spell encounter beat in rules.yaml.
+
+    When a cloned pack's rules.yaml carries a class_filter that references
+    real class display_names (e.g. Channeler, Spirit Medium) but the test
+    overrides classes.yaml with synthetic classes (e.g. Elementalist), the
+    loader's _validate_class_filter_refs raises PackError before the test's
+    intended assertion is reached.  Stripping class_filter makes the beat
+    universal in the synthetic pack — acceptable because these tests exercise
+    catalog/starting_prepared loading, not the cast gate itself.
+    """
+    rules_yaml = pack_dir / "rules.yaml"
+    if not rules_yaml.exists():
+        return
+    with rules_yaml.open("r", encoding="utf-8") as f:
+        rules_data = yaml.safe_load(f)
+    # Beats are nested under confrontations[].beats[] in rules.yaml.
+    for confrontation in rules_data.get("confrontations") or []:
+        if not isinstance(confrontation, dict):
+            continue
+        for beat in confrontation.get("beats") or []:
+            if isinstance(beat, dict) and beat.get("id") == "cast_spell":
+                beat.pop("class_filter", None)
+    with rules_yaml.open("w", encoding="utf-8") as f:
+        yaml.dump(rules_data, f, default_flow_style=False, sort_keys=False)
+
+
 _MINIMAL_CASTER_CLASS = """\
 - id: elementalist
   display_name: Elementalist
@@ -173,6 +200,10 @@ def test_wwn_pack_with_caster_class_and_no_spells_file_fails_loud(tmp_path: Path
     spells_file.unlink(missing_ok=True)
     # Write a classes.yaml with one wwn caster class.
     (pack_dir / "classes.yaml").write_text(_MINIMAL_CASTER_CLASS, encoding="utf-8")
+    # The cloned rules.yaml may have class_filter referencing real class names that
+    # don't exist in our synthetic classes.yaml.  Strip it so the loader reaches the
+    # intended assertion (no spells_wwn.yaml present with a caster class → fail loud).
+    _strip_class_filter_from_cast_spell(pack_dir)
 
     with pytest.raises(GenreLoadError):
         load_genre_pack(pack_dir)
@@ -214,6 +245,9 @@ def test_wwn_caster_class_with_valid_starting_prepared_loads_ok(tmp_path: Path) 
     pack_dir = _clone_pack(_EH_PACK_DIR, tmp_path / "eh_valid_starting_prepared")
     (pack_dir / "spells_wwn.yaml").write_text(_MINIMAL_SPELL_CATALOG, encoding="utf-8")
     (pack_dir / "classes.yaml").write_text(_CASTER_CLASS_WITH_STARTING_PREPARED, encoding="utf-8")
+    # Reconcile class_filter in the cloned rules.yaml so the synthetic Elementalist
+    # class is accepted by _validate_class_filter_refs before the catalog check.
+    _strip_class_filter_from_cast_spell(pack_dir)
 
     pack = load_genre_pack(pack_dir)
 
@@ -230,6 +264,10 @@ def test_wwn_caster_class_with_unknown_starting_prepared_id_fails_loud(tmp_path:
     (pack_dir / "classes.yaml").write_text(
         _CASTER_CLASS_WITH_UNKNOWN_STARTING_PREPARED, encoding="utf-8"
     )
+    # Reconcile class_filter in the cloned rules.yaml so the loader reaches the
+    # intended assertion (unknown starting_prepared id → fail loud), not an earlier
+    # PackError about class_filter referencing Channeler/Spirit Medium.
+    _strip_class_filter_from_cast_spell(pack_dir)
 
     with pytest.raises(GenreLoadError, match="no_such_spell_id"):
         load_genre_pack(pack_dir)

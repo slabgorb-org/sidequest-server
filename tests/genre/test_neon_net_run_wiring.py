@@ -253,36 +253,41 @@ def test_neon_net_run_player_win_path(otel_capture) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4: Opponent-win path — alert already at threshold → opponent_victory.
+# 4: Opponent-win path — a failed Program check spikes alert to threshold.
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(not _HAS_CONTENT, reason="sidequest-content not on disk")
 def test_neon_net_run_opponent_win_path(otel_capture) -> None:
-    """Alert at threshold when the beat fires → encounter resolves to opponent_victory.
+    """A failed run_program spikes the alert via the fail delta → opponent_victory.
 
-    The run_program crit_fail delta (own:-1, opponent:+2) is unreachable on 2d6
-    pools because CritFail only triggers on a d20 nat-1 (not a margin rule for
-    multi-die pools). Instead we seed the encounter with alert already at
-    threshold=10, drive any run_program beat, and verify the threshold check in
-    apply_beat fires the opponent_victory resolution path.
+    This is the ORGANIC loss path: the network wins when a botched Program check
+    trips the alarm. run_program carries a fail delta (own:-1, opponent:+2) — a
+    2d6 Program check resolves to RollOutcome.Fail when it lands under the
+    security DC (CritFail is a d20-nat-1 tier only, never a 2d6 outcome), so the
+    alert spike rides ``fail``. The ``strike`` Fail default is empty ``{}``, so
+    this override is what actually advances the alert.
 
-    This is a valid wiring test of the opponent-win branch: it exercises the
-    threshold detection code in beat_kinds.apply_beat that writes
-    enc.outcome = "opponent_victory" when opponent_metric.current >= threshold.
-
-    faces=[1,1] + modifier(+2) = 4 → Fail (no delta mutates alert) →
-    alert stays at 10 ≥ 10 → opponent_victory.
+    - black_site DC=12, alert starts at 8 (below threshold=10).
+    - Faces [1,1] + modifier(+2) = 4, well under DC 12 → Fail.
+    - The fail delta fires opponent:+2 → alert 8 → 10 >= threshold → the
+      threshold check in apply_beat resolves the run as opponent_victory.
     """
     pack = _load_neon()
-    enc = _make_encounter(data_current=0, alert_current=10, security_tier="black_site")
+    enc = _make_encounter(data_current=0, alert_current=8, security_tier="black_site")
 
+    alert_before = enc.opponent_metric.current
     outcome = _drive_beat(pack=pack, enc=enc, faces=[1, 1])
 
+    # The failed Program check must have spiked the alert by +2 (fail delta fired).
+    assert enc.opponent_metric.current == alert_before + 2, (
+        "the fail delta (opponent:+2) must have spiked the alert; "
+        f"before={alert_before} after={enc.opponent_metric.current}"
+    )
     assert outcome.encounter_resolved is True, (
-        "encounter must resolve when opponent alert is at threshold; "
+        "encounter must resolve when opponent alert reaches threshold; "
         f"encounter_resolved={outcome.encounter_resolved}"
     )
     assert enc.outcome == "opponent_victory", (
-        f"outcome must be opponent_victory when alert >= threshold; got {enc.outcome!r}"
+        f"outcome must be opponent_victory; got {enc.outcome!r}"
     )
     assert enc.opponent_metric.current >= enc.opponent_metric.threshold, (
         f"opponent alert must be at or above threshold; "

@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from sidequest.game.encounter_tag import EncounterTag
+from sidequest.game.table.types import TableState
 from sidequest.game.taunt import TauntState
 from sidequest.protocol.models import EncounterLocationOverlay, InitiativeEntry
 
@@ -152,7 +153,12 @@ class StructuredEncounter(BaseModel):
     # "dial_threshold" (default) | "hp_depletion". Stamped from ConfrontationDef.win_condition
     # at init (encounter_lifecycle). String-literal (NOT the WinCondition enum) to avoid a
     # game->genre.models import cycle; the Literal still rejects typos at validation time.
-    win_condition: Literal["dial_threshold", "hp_depletion"] = "dial_threshold"
+    win_condition: Literal["dial_threshold", "hp_depletion", "table_showdown"] = "dial_threshold"
+    # Free-for-all N-seat table (poker / auction). None for every non-table
+    # confrontation — the dual dials go unused for table types; the resolver
+    # reads table_state, not the metrics. See
+    # docs/superpowers/specs/2026-05-29-free-for-all-n-seat-table-design.md.
+    table_state: TableState | None = None
     player_metric: EncounterMetric
     opponent_metric: EncounterMetric
     beat: int = 0

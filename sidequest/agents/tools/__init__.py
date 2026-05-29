@@ -34,6 +34,7 @@ from sidequest.agents.tools import (
     query_scene_state,  # noqa: F401
     resolve_location_entity,  # noqa: F401
     roll_dice,  # noqa: F401
+    stabilize_mortal_injury,  # noqa: F401
     tick_tropes,  # noqa: F401
     update_npc_disposition,  # noqa: F401
     update_resource_pool,  # noqa: F401

@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from sidequest.agents.subsystems import BankResult
     from sidequest.game.lore_store import LoreStore
     from sidequest.game.monster_manual import MonsterManual
     from sidequest.game.session import GameSnapshot
@@ -748,6 +749,13 @@ class TurnContext:
     # run_narration_turn. Consumed by build_narrator_prompt to register the
     # narrator_directives PromptSection. Default None = decomposer did not run.
     dispatch_package: DispatchPackage | None = None
+
+    # The BankResult from the SINGLE pre-narrator dispatch-bank run
+    # (intent_router_pass). build_narrator_prompt consumes this for the
+    # narrator_directives section + the lethality arbiter instead of
+    # re-running the bank (which would engage every engine twice). Default
+    # None = no pre-narrator pass ran (decomposer absent / degraded path).
+    bank_result: BankResult | None = None
 
     # Group C — LethalityArbiter inputs. Session handler populates all three
     # from the active GenrePack + live snapshot before run_narration_turn.
@@ -2560,22 +2568,19 @@ class Orchestrator:
         # computed at the top of this method — entries flagged
         # ``redact_from_narrator_canonical`` are already gone.
         if visible_dispatch_package is not None:
-            from sidequest.agents.subsystems import run_dispatch_bank
-
-            # ``npc_pool`` is required by ``run_npc_agency`` (kw-only,
-            # no default; rewired from ``npc_registry`` in story 45-52).
-            # Always include it — even when empty — so the subsystem can
-            # invoke without TypeError. The bank filters context keys per
-            # subsystem signature so we don't accidentally blast
-            # ``npc_pool`` into subsystems that don't accept it.
-            bank_context: dict[str, object] = {
-                "npc_pool": list(context.npc_pool or []),
-            }
-
-            with context.phase_timings.phase("dispatch_bank"):
-                bank_result = await run_dispatch_bank(
-                    visible_dispatch_package,
-                    context=bank_context,
+            # The dispatch bank already ran ONCE in the pre-narrator pass
+            # (``intent_router_pass``), engaging every engine on the snapshot
+            # with a complete context. Re-running it here would engage each
+            # engine a SECOND time (double-dispatch — a PC moves twice, a clue
+            # is consumed twice), so consume the stashed ``BankResult`` instead.
+            bank_result = context.bank_result
+            if bank_result is None:
+                # Invariant: a present dispatch_package means the pre-narrator
+                # pass ran and stashed its BankResult. None here is a wiring
+                # break, not an expected state — fail loud (No Silent Fallbacks).
+                raise RuntimeError(
+                    "build_narrator_prompt: dispatch_package present but "
+                    "context.bank_result is None — pre-narrator pass wiring missing"
                 )
 
             # Group C — lethality arbitration runs after the bank and before
@@ -2599,7 +2604,19 @@ class Orchestrator:
                     arbiter_directives = l_result.directives
 
             with context.phase_timings.phase("prompt_build"):
-                combined_directives = list(bank_result.directives) + arbiter_directives
+                # The bank ran on the FULL package; strip directives whose
+                # visibility is redacted-from-narrator-canonical so the
+                # narrator prompt never sees a secret dispatch's directive (MP
+                # perception firewall, ADR-105). Mirrors redact_dispatch_package
+                # by the same visibility flag, at directive granularity — and
+                # uniformly covers subsystem-output directives, confidence-gate
+                # degraded hints, and decomposer narrator_instructions.
+                visible_bank_directives = [
+                    d
+                    for d in bank_result.directives
+                    if not d.visibility.redact_from_narrator_canonical
+                ]
+                combined_directives = visible_bank_directives + arbiter_directives
                 if combined_directives:
                     block = "\n".join(f"- [{d.kind}] {d.payload}" for d in combined_directives)
                     registry.register_section(

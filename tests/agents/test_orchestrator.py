@@ -23,6 +23,7 @@ from sidequest.agents.orchestrator import (
     _strip_json_fence,
     extract_structured_from_response,
 )
+from sidequest.agents.subsystems import run_dispatch_bank
 from sidequest.protocol.dispatch import (
     DispatchPackage,
     NarratorDirective,
@@ -844,7 +845,9 @@ async def test_build_narrator_prompt_registers_narrator_directives_when_present(
         cross_player=[],
         confidence_global=1.0,
     )
-    ctx = TurnContext(dispatch_package=pkg)
+    # The dispatch bank runs ONCE in the pre-narrator pass; the orchestrator
+    # consumes its BankResult. Mirror that here.
+    ctx = TurnContext(dispatch_package=pkg, bank_result=await run_dispatch_bank(pkg))
 
     prompt_text, registry = await orch.build_narrator_prompt("Let's go!", ctx)
 
@@ -917,7 +920,7 @@ async def test_build_narrator_prompt_strips_redacted_directive_payload():
         ],
         confidence_global=1.0,
     )
-    ctx = TurnContext(dispatch_package=pkg)
+    ctx = TurnContext(dispatch_package=pkg, bank_result=await run_dispatch_bank(pkg))
 
     prompt_text, registry = await orch.build_narrator_prompt("poison wine", ctx)
 
@@ -990,6 +993,14 @@ async def test_run_narration_turn_emits_leak_audit_span_with_zero_leaks(
     )
     ctx = TurnContext(
         dispatch_package=pkg,
+        bank_result=await run_dispatch_bank(
+            pkg,
+            context={
+                "npc_pool": [
+                    NpcPoolMember(name="Rickard", role="guard", drawn_from="world_authored")
+                ]
+            },
+        ),
         npc_pool=[NpcPoolMember(name="Rickard", role="guard", drawn_from="world_authored")],
     )
 

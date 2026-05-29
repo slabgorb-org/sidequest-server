@@ -20,6 +20,7 @@ from sidequest.agents.claude_client import ClaudeClient
 from sidequest.agents.orchestrator import (
     Orchestrator,
 )
+from sidequest.agents.subsystems import BankResult
 from sidequest.game.character import Character
 from sidequest.game.creature_core import (
     CreatureCore,
@@ -94,6 +95,7 @@ async def test_zero_edge_pc_in_mutant_wasteland_injects_permadeath_directives():
     sd = _session("mutant_wasteland", "flickering_reach", _character("Alice", edge_current=0))
     ctx = _build_turn_context(sd)
     ctx.dispatch_package = _dispatch_package()
+    ctx.bank_result = BankResult()
 
     orch = Orchestrator(client=ClaudeClient(spawn_fn=make_spawn_fn("narration")))
     prompt, _ = await orch.build_narrator_prompt(
@@ -114,6 +116,7 @@ async def test_zero_edge_pc_in_caverns_injects_comedic_directives():
     sd = _session("caverns_and_claudes", "mawdeep", _character("Alice", edge_current=0))
     ctx = _build_turn_context(sd)
     ctx.dispatch_package = _dispatch_package()
+    ctx.bank_result = BankResult()
 
     orch = Orchestrator(client=ClaudeClient(spawn_fn=make_spawn_fn("narration")))
     prompt, _ = await orch.build_narrator_prompt(
@@ -132,6 +135,7 @@ async def test_no_lethality_directives_when_character_above_zero_edge():
     sd = _session("mutant_wasteland", "flickering_reach", _character("Alice", edge_current=7))
     ctx = _build_turn_context(sd)
     ctx.dispatch_package = _dispatch_package()
+    ctx.bank_result = BankResult()
 
     orch = Orchestrator(client=ClaudeClient(spawn_fn=make_spawn_fn("narration")))
     prompt, _ = await orch.build_narrator_prompt(

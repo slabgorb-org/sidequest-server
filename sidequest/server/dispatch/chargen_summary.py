@@ -214,11 +214,17 @@ def render_confirmation_summary(
     # Only show fields the chargen actually accumulated. Genres like
     # caverns_and_claudes deliberately omit race/class scenes — we don't lie
     # with "Unknown" for fields the genre doesn't define.
+    # Prefer the player-chosen flavor LABEL over the collapsed mechanical
+    # archetype slug (sq-playtest 2026-05-28 BUG-LOW: tea_and_murder maps
+    # "The Village Itself"/"Country Veterinary Surgeon" onto race_hint
+    # "Servant" / class_hint "Doctor"; the sheet should show the chosen
+    # flavor). Falls back to the hint for packs whose choice label IS the
+    # archetype (label == hint → unchanged). Symmetric with backstory_source.
     if acc.race_hint is not None:
-        _add("race", acc.race_hint)
+        _add("race", acc.race_label or acc.race_hint)
 
     if acc.class_hint is not None:
-        _add("class", acc.class_hint)
+        _add("class", acc.class_label or acc.class_hint)
     elif (default_class := builder.default_class()) is not None:
         # If the genre has a default_class in rules.yaml (e.g. caverns
         # default_class: Delver), show it on the summary so the player sees

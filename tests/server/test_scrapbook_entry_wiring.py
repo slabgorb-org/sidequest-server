@@ -196,7 +196,7 @@ async def test_scrapbook_entry_persists_and_journals(tmp_path: Path) -> None:
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I look around the dungeon."},
+                "payload": {"action": "I look around the dungeon.", "round": 1},
             }
         )
         await handler.handle_message(action)
@@ -264,7 +264,7 @@ async def test_reconnecting_client_replays_prior_scrapbook_entry(
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I look around the dungeon."},
+                "payload": {"action": "I look around the dungeon.", "round": 1},
             }
         )
         await handler_a.handle_message(action)
@@ -381,7 +381,7 @@ async def test_scrapbook_render_status_skipped_policy_for_banter_turn(
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I take a moment to breathe."},
+                "payload": {"action": "I take a moment to breathe.", "round": 1},
             }
         )
         await handler.handle_message(action)
@@ -472,7 +472,7 @@ async def test_scrapbook_render_status_rendered_for_eligible_turn(
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I greet the caretaker."},
+                "payload": {"action": "I greet the caretaker.", "round": 1},
             }
         )
         await handler.handle_message(action)

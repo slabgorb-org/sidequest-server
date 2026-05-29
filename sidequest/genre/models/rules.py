@@ -810,6 +810,26 @@ class SystemStrainConfig(BaseModel):
     first_aid_cost: int = 1
 
 
+class TraumaConfig(BaseModel):
+    """CWN combat-lethality tuning (genre-level, content-authorable).
+
+    default_trauma_target: the Trauma Target an unarmored human presents — the
+      number a weapon's Trauma Die must MEET OR EXCEED for a Traumatic Hit
+      (CWN: 6). A weapon may override per-strike via DamageSpec.trauma_target.
+    mortal_injury_rounds: rounds a downed (0-HP) character survives before death
+      unless stabilized (CWN: 6).
+    major_injury_save: the save category rolled when a Traumatic Hit dropped the
+      character this scene (CWN: a Physical save). Must be a save the bound
+      module's save_params understands ("physical", "evasion", "mental", "luck").
+    """
+
+    model_config = {"extra": "forbid"}
+
+    default_trauma_target: int = 6
+    mortal_injury_rounds: int = 6
+    major_injury_save: str = "physical"
+
+
 class CwnConfig(SwnConfig):
     """Cities Without Number universal constants (Sine Nomine, CC0).
 
@@ -819,12 +839,13 @@ class CwnConfig(SwnConfig):
     - attribute_map: CWN attribute -> this pack's flavor stat (all six keys
       required when ruleset == 'cwn'; validated on RulesConfig).
     System Strain is configured via ``system_strain`` (System Strain plan).
-    Trauma fields are deferred to the Combat Lethality plan (YAGNI here).
+    Trauma is configured via ``trauma`` (Combat Lethality plan).
     """
 
     model_config = {"extra": "forbid"}
 
     system_strain: SystemStrainConfig = Field(default_factory=SystemStrainConfig)
+    trauma: TraumaConfig = Field(default_factory=TraumaConfig)
 
 
 class RulesConfig(BaseModel):
@@ -972,6 +993,12 @@ class RulesConfig(BaseModel):
             raise ValueError(
                 f"cwn.system_strain.max_source = {strain_source!r} is not a key of "
                 f"cwn.attribute_map {sorted(amap.keys())}"
+            )
+        valid_saves = {"physical", "evasion", "mental", "luck"}
+        if self.cwn.trauma.major_injury_save not in valid_saves:
+            raise ValueError(
+                f"cwn.trauma.major_injury_save = {self.cwn.trauma.major_injury_save!r} "
+                f"is not one of {sorted(valid_saves)}"
             )
         return self
 

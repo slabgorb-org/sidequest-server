@@ -251,7 +251,7 @@ async def test_pre_narrator_router_pass_helper_engages_confrontation() -> None:
     router = MagicMock()
     router.decompose = AsyncMock(return_value=package)
 
-    returned = await execute_intent_router_pre_narrator_pass(
+    returned, bank_result = await execute_intent_router_pre_narrator_pass(
         intent_router=router,
         snapshot=snap,
         pack=pack,
@@ -264,6 +264,10 @@ async def test_pre_narrator_router_pass_helper_engages_confrontation() -> None:
         "helper must return the DispatchPackage from the router so the "
         "downstream narrator prompt builder can consume it for redaction "
         "and narrator_instructions injection"
+    )
+    assert bank_result is not None, (
+        "helper must return the BankResult from the single dispatch-bank run "
+        "so the orchestrator consumes it instead of re-running the bank"
     )
     assert snap.encounter is not None, (
         "helper must have invoked the dispatch bank — the confrontation "

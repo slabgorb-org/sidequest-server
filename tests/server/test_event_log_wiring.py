@@ -157,7 +157,7 @@ async def test_narration_carries_seq_and_event_log_has_row(tmp_path: Path) -> No
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I look around the dungeon."},
+                "payload": {"action": "I look around the dungeon.", "round": 1},
             }
         )
         action_out = await handler.handle_message(action)

@@ -39,7 +39,6 @@ SKIP ≠ RED — tests must run and FAIL, not skip.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
 
 import pytest
 from opentelemetry import trace
@@ -270,11 +269,34 @@ async def _fire_opening(
     *,
     opening_factory,
 ) -> list[object]:
-    """Drive the confirmation commit with a canned opening; return local out."""
+    """Drive the confirmation commit with a canned opening; return local out.
+
+    Post sq-playtest 2026-05-28 #G1, the real ``_run_opening_turn_narration``
+    EMITS its frames through ``emit_event`` (cold-open) / ``_execute_narration_turn``
+    (narrator prose) and the chargen caller only ``out.extend(...)`` the already-
+    emitted frames — it no longer re-emits (the old loop blind-persisted
+    RENDER_QUEUED / NARRATION_END / AUDIO_CUE frames under kind="NARRATION" and
+    bricked reconnect). This fake mirrors that contract: it routes each canned
+    opening frame through the REAL ``_emit_event`` so the event-sourcing /
+    projection / POV / OTEL outcomes under test actually fire, using the same
+    author rule (driver pid when >1 connected, else None) the method uses.
+    """
     monkeypatch.setattr(chargen_mixin, "_should_fire_opening_narration", lambda _sd, _room: True)
-    monkeypatch.setattr(
-        h, "_run_opening_turn_narration", AsyncMock(return_value=opening_factory())
-    )
+
+    async def _emitting_opening(sd: object, _player_id: str, _span: object) -> list[object]:
+        room = h._room
+        connected = (
+            room.connected_player_ids()
+            if room is not None and callable(getattr(room, "connected_player_ids", None))
+            else []
+        )
+        author = sd.player_id if len(connected) > 1 else None  # type: ignore[attr-defined]
+        return [
+            h._emit_event("NARRATION", m.payload, author_player_id=author)
+            for m in opening_factory()
+        ]
+
+    monkeypatch.setattr(h, "_run_opening_turn_narration", _emitting_opening)
     out = await h.handle_message(
         CharacterCreationMessage(
             payload=CharacterCreationPayload(phase="confirmation"),
@@ -629,4 +651,101 @@ async def test_solo_opening_also_persisted_with_seq(
         "emit_event(author_player_id=None) runs the EventLog transaction even "
         "on the Invariant-3 raw-bypass path.  Currently seq=0 (no EventLog "
         f"call in the solo helper path).  Got: {seqs!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_render_queued_frame_not_persisted_as_narration(
+    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """sq-playtest 2026-05-28 #G1 regression — a RENDER_QUEUED frame in the
+    opening list must NOT be persisted as a NARRATION event.
+
+    The opening turn ends by dispatching a landscape render, so
+    ``_run_opening_turn_narration`` returns a ``RenderQueuedMessage`` (payload
+    ``{render_id}``) alongside the narration. The old chargen caller looped
+    ``emit_event(self, "NARRATION", msg.payload)`` over EVERY frame, persisting
+    the render-cue under ``kind="NARRATION"``. On reconnect, replay rebuilt it
+    via ``NarrationPayload(**{render_id, seq})`` → ValidationError → the whole
+    ws_endpoint aborted → an infinite reconnect brick-loop (160× in the log).
+
+    This test reproduces the producer end-to-end: it drives the real chargen
+    confirmation with an opening list containing an (already-emitted) NARRATION
+    plus a RenderQueuedMessage, then replays EVERY persisted event row through
+    ``_build_message_for_kind`` — the exact operation reconnect performs. After
+    the fix the render frame is passed through (never event-sourced), so replay
+    completes without raising and no NARRATION row carries a render-cue shape.
+    """
+    import json
+
+    import psycopg
+
+    from sidequest.protocol.enums import MessageType
+    from sidequest.protocol.messages import RenderQueuedMessage, RenderQueuedPayload
+    from sidequest.server.session_handler import _build_message_for_kind
+
+    await _connect(handler)
+    await _walk_to_confirmation(handler)
+
+    sd = handler._session_data  # type: ignore[attr-defined]
+    poison_render_id = "5386571aacad"
+
+    monkeypatch.setattr(chargen_mixin, "_should_fire_opening_narration", lambda _sd, _room: True)
+
+    async def _opening_with_render(_sd: object, _player_id: str, _span: object) -> list[object]:
+        # Mirror the real method: the NARRATION is already emitted via
+        # emit_event; the RENDER_QUEUED frame is appended un-persisted (the
+        # daemon round-trip is fire-and-forget).
+        narration = handler._emit_event(
+            "NARRATION", NarrationPayload(text=NonBlankString(SEED_TEXT))
+        )
+        render = RenderQueuedMessage(
+            type=MessageType.RENDER_QUEUED,  # type: ignore[arg-type]
+            payload=RenderQueuedPayload(render_id=poison_render_id),
+        )
+        return [narration, render]
+
+    monkeypatch.setattr(handler, "_run_opening_turn_narration", _opening_with_render)
+    await handler.handle_message(
+        CharacterCreationMessage(
+            payload=CharacterCreationPayload(phase="confirmation"),
+            player_id="pid",
+        )
+    )
+
+    # Read every persisted event row for this session and replay it exactly as
+    # reconnect does. This is the assertion that the brick-loop is gone.
+    session_id = sd.repository.session_id
+    plain = __import__("os").environ["SIDEQUEST_DATABASE_URL"]
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT seq, kind, payload_json FROM events "
+            "WHERE session_id = %s ORDER BY seq",
+            (session_id,),
+        ).fetchall()
+
+    assert rows, "Expected at least one persisted event after the opening turn"
+
+    # No NARRATION row may carry a render-cue shape (the exact poison).
+    for seq, kind, payload_json in rows:
+        if kind == "NARRATION":
+            data = json.loads(payload_json)
+            assert "render_id" not in data, (
+                f"NARRATION event seq={seq} carries a render-cue payload "
+                f"{data!r} — the #G1 producer regressed (render frame persisted "
+                "as NARRATION)."
+            )
+            assert "text" in data, (
+                f"NARRATION event seq={seq} is missing 'text' (payload={data!r}) "
+                "— a malformed NARRATION row would crash reconnect replay."
+            )
+
+    # Replay every row the way connect.py does. Must not raise.
+    for seq, kind, payload_json in rows:
+        _build_message_for_kind(kind=kind, payload_json=payload_json, seq=int(seq))
+
+    # And the poison render_id must not be event-sourced at all.
+    assert not any(poison_render_id in (pj or "") for _s, _k, pj in rows), (
+        f"render_id {poison_render_id!r} must never be persisted to the events "
+        "table — render cues are not event-sourced (fire-and-forget)."
     )

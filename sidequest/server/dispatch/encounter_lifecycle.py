@@ -6,7 +6,7 @@ Port of sidequest-api/crates/sidequest-server/src/dispatch/
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from sidequest.game.disposition import Attitude
 from sidequest.game.encounter import (
@@ -340,6 +340,15 @@ _ADVERSARIAL_ROLE_IDS = frozenset(
     {"hostile", "enemy", "opponent", "adversary", "rival", "antagonist"}
 )
 
+# Story 59-23 (#C3): ship-scale confrontations whose Other is a SHIP, never a
+# person standing in the room. For these the person-location fallback
+# (``_npc_fallback_at_location``) must NOT source opponents — it would conscript
+# the player's own crew (who share the bridge) as the enemy hull. The Other must
+# arrive as a materialized/named threat (ADR-116); absent one, the No-Opponent
+# guard fails loud. Personal combat / brawls / chases are unaffected — they
+# legitimately seat people in the room (story 59-13's chase dial depends on it).
+_SHIP_SCALE_CONFRONTATION_TYPES = frozenset({"ship_combat"})
+
 
 def _is_adversarial(category: str) -> bool:
     return category in _ADVERSARIAL_CATEGORIES
@@ -459,6 +468,7 @@ def instantiate_encounter_from_trigger(
     genre_slug: str | None,
     additional_player_names: list[str] | None = None,
     security_tier: str | None = None,
+    materialized_threat: Any | None = None,
 ) -> StructuredEncounter | None:
     """Create a StructuredEncounter when the narrator emits ``confrontation=T``.
 
@@ -550,7 +560,17 @@ def instantiate_encounter_from_trigger(
     # ``encounter.no_opponent_available`` span below.
     location_available = True
     seating_source = "router_named"
-    if not npcs_present:
+    if materialized_threat is not None:
+        # Story 59-23 (#C3 / ADR-116): the narrator/router named a threat that is
+        # not an existing NPC entity. Seat THAT as the Other — never the location
+        # fallback (which sources the player's own crew). The backing
+        # CreatureCore (hull HP / AC) is created downstream by
+        # ``_seed_combat_hp_depletion_to_npcs`` (Task 9) for the opponent actor
+        # lacking an Npc. ``materialized`` distinguishes this seat from a
+        # router-named or location-fallback one on the participant.joined span.
+        npcs_present = [materialized_threat]
+        seating_source = "materialized"
+    elif not npcs_present and cdef.confrontation_type not in _SHIP_SCALE_CONFRONTATION_TYPES:
         seating_source = "location_fallback"
         npcs_present, location_available = _npc_fallback_at_location(
             snapshot,
@@ -558,6 +578,9 @@ def instantiate_encounter_from_trigger(
             acting_character_name=player_name,
             adversary_only=cdef.resolution_mode == ResolutionMode.sealed_letter_lookup,
         )
+    # else (ship-scale + no materialized threat): leave npcs_present empty so the
+    # No-Opponent guard below fails loud — a ship fight needs an enemy ship, and
+    # the player's own crew (who share the bridge) are never it.
 
     # Story 45-33 / ADR-116: adversarial empty+empty guard (CLAUDE.md "No
     # Silent Fallbacks"). If narrator's ``npcs_present`` was empty AND

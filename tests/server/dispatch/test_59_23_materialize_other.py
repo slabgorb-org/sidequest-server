@@ -309,8 +309,7 @@ async def test_ship_combat_threads_named_threat_as_other(otel_capture):
     joined = [
         s
         for s in otel_capture.get_finished_spans()
-        if s.name == "participant.joined"
-        and (s.attributes or {}).get("name") == _THREAT_NAME
+        if s.name == "participant.joined" and (s.attributes or {}).get("name") == _THREAT_NAME
     ]
     assert joined, (
         f"no participant.joined span for the materialized Other {_THREAT_NAME!r} "
@@ -399,8 +398,7 @@ async def test_ship_combat_materialized_threat_resolves_on_hull(otel_capture):
     assert hull_core.hp.current <= 0, "the threat's hull must reach 0 on the killing salvo"
     assert outcome.encounter_resolved is True, "0 hull on the Other must resolve the fight"
     assert enc.outcome == "player_victory", (
-        f"hp_depletion on the materialized threat must resolve player_victory; "
-        f"got {enc.outcome!r}"
+        f"hp_depletion on the materialized threat must resolve player_victory; got {enc.outcome!r}"
     )
 
 

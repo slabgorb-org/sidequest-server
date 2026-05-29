@@ -143,8 +143,14 @@ def _check_npc_agency_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapsho
         return _MALFORMED_EVIDENCE.format(subsystem="npc_agency", key="npc_name")
     npc_name: str = dispatch.params["npc_name"]
     needle = npc_name.lower()
-    if not any(m.name.lower() == needle for m in snapshot.npc_pool):
-        return f"npc_name={npc_name!r} not in snapshot.npc_pool"
+    # npc_agency resolves against the authored roster (snapshot.npcs) first,
+    # then the present-in-scene npc_pool (playtest #C1). The engagement check
+    # must consider BOTH or it false-flags a mismatch for every roster NPC
+    # (the crew, Old Tam) the subsystem correctly engaged.
+    in_roster = any(n.core.name.lower() == needle for n in snapshot.npcs)
+    in_pool = any(m.name.lower() == needle for m in snapshot.npc_pool)
+    if not (in_roster or in_pool):
+        return f"npc_name={npc_name!r} not in snapshot.npcs or snapshot.npc_pool"
     return None
 
 

@@ -4,12 +4,14 @@ from sidequest.game.ruleset.base import RulesetModule, UnknownRulesetError
 from sidequest.game.ruleset.cwn import CwnRulesetModule
 from sidequest.game.ruleset.native import NativeRulesetModule
 from sidequest.game.ruleset.swn import SwnRulesetModule
+from sidequest.game.ruleset.wwn import WwnRulesetModule
 
 # Modules are stateless behavior -> safe singletons. New modules register here as their plans land.
 _REGISTRY: dict[str, RulesetModule] = {
     NativeRulesetModule.slug: NativeRulesetModule(),
     SwnRulesetModule.slug: SwnRulesetModule(),
     CwnRulesetModule.slug: CwnRulesetModule(),
+    WwnRulesetModule.slug: WwnRulesetModule(),
 }
 
 

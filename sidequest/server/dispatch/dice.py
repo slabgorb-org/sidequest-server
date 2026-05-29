@@ -641,15 +641,16 @@ def dispatch_dice_throw(
                 f"beat {payload.beat_id!r} skipped: {apply_result.skipped_reason}"
             )
 
-        # CWN downed seam (spec 2026-05-28, Task 11): if this strike dropped a
-        # target to 0 HP, resolve the Mortal Injury (always) and Major Injury
+        # CWN/WWN downed seam (spec 2026-05-28, Task 11): if this strike dropped
+        # a target to 0 HP, resolve the Mortal Injury (always) and Major Injury
         # (only when a Traumatic Hit landed this scene). Gated on the bound
-        # ruleset being CWN — base resolve_downed is a no-op for native/swn, but
-        # _physical_save_target_for calls save_params (which native/swn DO have)
-        # and reads cwn-only cfg.trauma, so we gate the WHOLE seam on the ruleset
-        # rather than relying on the no-op return.
+        # ruleset being CWN or WWN — base resolve_downed is a no-op for
+        # native/swn, but _physical_save_target_for calls save_params (which
+        # native/swn DO have) and reads cfg.trauma (present on CwnConfig AND
+        # WwnConfig, absent on SwnConfig), so we gate the WHOLE seam on the
+        # ruleset rather than relying on the no-op return.
         _down_name = _opposite_side_first_actor(encounter, actor.side)
-        if pack and pack.rules and pack.rules.ruleset == "cwn" and _down_name is not None:
+        if pack and pack.rules and pack.rules.ruleset in ("cwn", "wwn") and _down_name is not None:
             _down_core = snapshot.find_creature_core(_down_name)
             if _down_core is not None and _down_core.hp.current <= 0:
                 _cfg = pack.rules.ruleset_config()
@@ -907,7 +908,7 @@ def _physical_save_target_for(
     core,
     cfg,
 ) -> int:
-    """Physical-save target number for the downed actor (CWN Major Injury gate).
+    """Physical-save target number for the downed actor (CWN/WWN Major Injury gate).
 
     Computes ``ruleset.save_params(...).difficulty`` for the downed actor's
     Physical save. The downed actor's stats + level are resolved the SAME way
@@ -919,16 +920,16 @@ def _physical_save_target_for(
       ``opponent_ability_scores()`` (reserved hp/armor_class/dexterity keys
       removed) + ``core.level``.
 
-    Only reached inside the CWN 0-HP branch, so ``cfg`` is a CwnConfig. Fails
-    loud (No Silent Fallbacks) if ``cfg`` is None, the opponent has no authored
-    ability scores, or ``save_params`` rejects the stat block — never silently
-    defaults the target number.
+    Only reached inside the CWN/WWN 0-HP branch, so ``cfg`` is a
+    Cwn/WwnConfig. Fails loud (No Silent Fallbacks) if ``cfg`` is None, the
+    opponent has no authored ability scores, or ``save_params`` rejects the
+    stat block — never silently defaults the target number.
     """
-    from sidequest.genre.models.rules import CwnConfig
+    from sidequest.genre.models.rules import CwnConfig, WwnConfig
 
-    if not isinstance(cfg, CwnConfig):
+    if not isinstance(cfg, (CwnConfig, WwnConfig)):
         raise DiceDispatchError(
-            "CWN downed seam reached with a non-CwnConfig ruleset config "
+            "CWN/WWN downed seam reached with a non-CwnConfig/WwnConfig ruleset config "
             f"({type(cfg).__name__}); cannot compute the Physical save target "
             "(CLAUDE.md No Silent Fallbacks — refusing to default to a fixed number)"
         )
@@ -940,7 +941,7 @@ def _physical_save_target_for(
         stats = cdef.opponent_ability_scores()
         if not stats:
             raise DiceDispatchError(
-                f"CWN downed seam: opponent {name!r} has no ability scores to "
+                f"CWN/WWN downed seam: opponent {name!r} has no ability scores to "
                 "resolve a Physical save — author them under "
                 "opponent_default_stats (No Silent Fallbacks)"
             )

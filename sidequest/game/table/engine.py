@@ -27,6 +27,8 @@ from sidequest.telemetry.spans import (
     table_showdown_span,
 )
 
+# "bluff" is a pot action in both poker (a bluff is still a bet) and auction
+# (feigning deeper pockets still advances your standing bid; framing is in narration).
 _POT_ACTIONS = {"bet", "raise", "call", "bluff", "raise_bid"}
 
 # Accuse opposed-check tuning (content could later override via cdef).
@@ -100,7 +102,7 @@ def resolve_table(
 def _apply_commit(state, seat_id, commit, *, game, rng, read_results) -> None:
     seat = state.find_seat(seat_id)
     beat = commit.beat_id
-    if beat == "fold":
+    if beat in ("fold", "withdraw"):
         seat.status = "folded"
         with table_fold_span(seat=seat_id, decision_point=state.decision_point):
             pass
@@ -109,6 +111,10 @@ def _apply_commit(state, seat_id, commit, *, game, rng, read_results) -> None:
         state.pot.contributions[seat_id] = state.pot.contributions.get(seat_id, 0) + max(
             0, commit.amount
         )
+        # Mirror standing bid into private_state so AuctionTableGame.strength() can
+        # read it without knowing the pot directly. Harmless for poker — poker's
+        # strength() reads private_state["strength"], not _current_bid.
+        seat.private_state["_current_bid"] = state.pot.contributions[seat_id]
         return
     _apply_signature_beat(
         state,
@@ -201,13 +207,17 @@ def _showdown(state, *, game, rng, read_results) -> TableResolutionOutcome:
         raise ValueError("showdown with zero eligible contenders — all seats folded/forfeited")
 
     # Uniform fail-loud strength guard (single- and multi-contender alike) — never a
-    # coin-flip default, and never a bare KeyError from game.strength().
+    # coin-flip default. Call game.strength() to validate; each kind computes from
+    # its own private_state keys (poker: "strength"; auction: "_current_bid").
+    # A missing key inside strength() will propagate as a KeyError here — loud, not silent.
     for s in contenders:
-        if "strength" not in s.private_state:
+        try:
+            game.strength(s)
+        except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(
                 f"showdown: seat {s.seat_id!r} has no readable strength — "
                 "fail loud, never a coin-flip default"
-            )
+            ) from exc
     revealed = ",".join(f"{s.seat_id}:{game.strength(s)}" for s in contenders)
     winner = (
         contenders[0] if len(contenders) == 1 else max(contenders, key=lambda s: game.strength(s))

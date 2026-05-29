@@ -54,3 +54,150 @@ def cwn_system_strain_delta_span(
     }
     with Span.open(SPAN_CWN_SYSTEM_STRAIN_DELTA, attributes, tracer_override=_tracer):
         pass
+
+
+SPAN_CWN_TRAUMA_ROLL = "cwn.trauma.roll"
+SPAN_ROUTES[SPAN_CWN_TRAUMA_ROLL] = SpanRoute(
+    event_type="state_transition",
+    component="cwn",
+    extract=lambda span: {
+        "field": "trauma",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "weapon_die": (span.attributes or {}).get("weapon_die", ""),
+        "roll": (span.attributes or {}).get("roll", 0),
+        "target": (span.attributes or {}).get("target", 0),
+        "traumatic": (span.attributes or {}).get("traumatic", False),
+        "rating": (span.attributes or {}).get("rating", 1),
+        "base": (span.attributes or {}).get("base", 0),
+        "final": (span.attributes or {}).get("final", 0),
+    },
+)
+
+SPAN_CWN_SHOCK_APPLIED = "cwn.shock.applied"
+SPAN_ROUTES[SPAN_CWN_SHOCK_APPLIED] = SpanRoute(
+    event_type="state_transition",
+    component="cwn",
+    extract=lambda span: {
+        "field": "shock",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "amount": (span.attributes or {}).get("amount", 0),
+        "melee_ac": (span.attributes or {}).get("melee_ac", 0),
+        "shock_rating": (span.attributes or {}).get("shock_rating", 0),
+    },
+)
+
+SPAN_CWN_MORTAL_INJURY_DECLARED = "cwn.mortal_injury.declared"
+SPAN_ROUTES[SPAN_CWN_MORTAL_INJURY_DECLARED] = SpanRoute(
+    event_type="state_transition",
+    component="cwn",
+    extract=lambda span: {
+        "field": "mortal_injury",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "rounds_to_die": (span.attributes or {}).get("rounds_to_die", 0),
+    },
+)
+
+SPAN_CWN_MAJOR_INJURY_ROLL = "cwn.major_injury.roll"
+SPAN_ROUTES[SPAN_CWN_MAJOR_INJURY_ROLL] = SpanRoute(
+    event_type="state_transition",
+    component="cwn",
+    extract=lambda span: {
+        "field": "major_injury",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "save_made": (span.attributes or {}).get("save_made", True),
+        "roll": (span.attributes or {}).get("roll", 0),
+        "text": (span.attributes or {}).get("text", ""),
+    },
+)
+
+
+def cwn_trauma_roll_span(
+    *,
+    actor: str,
+    weapon_die: str,
+    roll: int,
+    target: int,
+    traumatic: bool,
+    rating: int,
+    base: int,
+    final: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a cwn.trauma.roll span (lie-detector for CWN trauma threshold check)."""
+    attributes: dict[str, Any] = {
+        "field": "trauma",
+        "actor": actor,
+        "weapon_die": weapon_die,
+        "roll": roll,
+        "target": target,
+        "traumatic": traumatic,
+        "rating": rating,
+        "base": base,
+        "final": final,
+        **attrs,
+    }
+    with Span.open(SPAN_CWN_TRAUMA_ROLL, attributes, tracer_override=_tracer):
+        pass
+
+
+def cwn_shock_applied_span(
+    *,
+    actor: str,
+    amount: int,
+    melee_ac: int,
+    shock_rating: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a cwn.shock.applied span (lie-detector for CWN shock damage application)."""
+    attributes: dict[str, Any] = {
+        "field": "shock",
+        "actor": actor,
+        "amount": amount,
+        "melee_ac": melee_ac,
+        "shock_rating": shock_rating,
+        **attrs,
+    }
+    with Span.open(SPAN_CWN_SHOCK_APPLIED, attributes, tracer_override=_tracer):
+        pass
+
+
+def cwn_mortal_injury_declared_span(
+    *,
+    actor: str,
+    rounds_to_die: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a cwn.mortal_injury.declared span (lie-detector for CWN mortal wound declaration)."""
+    attributes: dict[str, Any] = {
+        "field": "mortal_injury",
+        "actor": actor,
+        "rounds_to_die": rounds_to_die,
+        **attrs,
+    }
+    with Span.open(SPAN_CWN_MORTAL_INJURY_DECLARED, attributes, tracer_override=_tracer):
+        pass
+
+
+def cwn_major_injury_roll_span(
+    *,
+    actor: str,
+    save_made: bool,
+    roll: int,
+    text: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a cwn.major_injury.roll span (lie-detector for CWN major injury table roll)."""
+    attributes: dict[str, Any] = {
+        "field": "major_injury",
+        "actor": actor,
+        "save_made": save_made,
+        "roll": roll,
+        "text": text,
+        **attrs,
+    }
+    with Span.open(SPAN_CWN_MAJOR_INJURY_ROLL, attributes, tracer_override=_tracer):
+        pass

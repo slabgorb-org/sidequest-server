@@ -22,6 +22,7 @@ from sidequest.game.system_strain import StrainResult
 from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import CwnConfig, SwnConfig
 from sidequest.telemetry.spans.cwn import (
+    cwn_hacking_security_check_span,
     cwn_major_injury_roll_span,
     cwn_mortal_injury_declared_span,
     cwn_shock_applied_span,
@@ -273,3 +274,37 @@ class CwnRulesetModule(SwnRulesetModule):
             major_text=major_text,
             save_made=save_made,
         )
+
+    def resolve_hacking(
+        self,
+        *,
+        verb: str,
+        tier: str,
+        base_dc: int,
+        alert_modifier: int,
+        outcome: str,
+        actor: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> int:
+        """Record a CWN cyberspace security check; return the effective DC.
+
+        effective_dc = base_dc + alert_modifier (the CWN situational modifier:
+        each network-alert escalation adds +1). Emits cwn.hacking.security_check
+        — the GM lie-detector for the hacking subsystem; fires on EVERY net_run
+        verb so the panel sees engaged + unengaged rolls alike. Does NOT mutate
+        metrics or roll dice — the net_run dispatch seam builds the 2d6 check
+        whose difficulty is this returned DC, the dice lib resolves the throw,
+        and the confrontation engine applies the beat's tier deltas. Thin
+        record-and-compute, consistent with resolve_shock/resolve_trauma."""
+        effective_dc = int(base_dc) + int(alert_modifier)
+        cwn_hacking_security_check_span(
+            actor=actor,
+            verb=verb,
+            tier=tier,
+            base_dc=int(base_dc),
+            alert_modifier=int(alert_modifier),
+            effective_dc=effective_dc,
+            result=str(outcome),
+            _tracer=_tracer,
+        )
+        return effective_dc

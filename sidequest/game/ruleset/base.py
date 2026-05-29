@@ -130,3 +130,11 @@ class RulesetModule(ABC):
         CWN overrides to declare Mortal Injury and (if a Traumatic Hit landed
         this scene) roll the Major Injury table. Returns DownedResult | None."""
         return None
+
+    def resolve_hacking(
+        self, *, verb, tier, base_dc, alert_modifier, outcome, actor="", _tracer=None
+    ) -> int:
+        """CWN cyberspace security check. Default: compute the effective DC,
+        emit nothing (parallels resolve_shock returning 0). Only CWN overrides
+        to emit cwn.hacking.security_check."""
+        return int(base_dc) + int(alert_modifier)

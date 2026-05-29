@@ -878,6 +878,20 @@ class CwnConfig(SwnConfig):
     hacking: HackingConfig | None = None
 
 
+class MagicConfig(BaseModel):
+    """WWN magic ruleset constants (Sine Nomine, CC0). Per-class tables (Effort
+    sources, casts/day, max spell level) live on the class def (WwnClassMagic),
+    NOT here — this holds engine-level constants only. Spells name their own save;
+    default_spell_save is the fallback when a spell omits one."""
+
+    model_config = {"extra": "forbid"}
+
+    effort_base: int = 1                       # Effort max = effort_base + skill + attr mod
+    killing_blow_divisor: int = 2              # Killing Blow adds ceil(level / divisor)
+    day_reclaim_requires_comfort: bool = True  # day-Effort needs a comfortable rest
+    default_spell_save: str = "mental"
+
+
 class WwnConfig(SwnConfig):
     """Worlds Without Number universal constants (Sine Nomine, CC0).
 
@@ -893,6 +907,7 @@ class WwnConfig(SwnConfig):
 
     system_strain: SystemStrainConfig = Field(default_factory=SystemStrainConfig)
     trauma: TraumaConfig = Field(default_factory=TraumaConfig)
+    magic: MagicConfig = Field(default_factory=MagicConfig)
 
 
 class RulesConfig(BaseModel):
@@ -1096,6 +1111,11 @@ class RulesConfig(BaseModel):
         if self.wwn.trauma.major_injury_save not in valid_saves:
             raise ValueError(
                 f"wwn.trauma.major_injury_save = {self.wwn.trauma.major_injury_save!r} "
+                f"is not one of {sorted(valid_saves)}"
+            )
+        if self.wwn.magic.default_spell_save not in valid_saves:
+            raise ValueError(
+                f"wwn.magic.default_spell_save = {self.wwn.magic.default_spell_save!r} "
                 f"is not one of {sorted(valid_saves)}"
             )
         return self

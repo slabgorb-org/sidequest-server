@@ -33,11 +33,10 @@ def test_startup_fails_loud_on_behind_head_db(monkeypatch, behind_head_db: str) 
     db_pool.close_pool()  # deterministic start: no live pool
 
     try:
-        with pytest.raises(SchemaBehindHeadError):
-            # Entering the context fires the lifespan startup events; the schema
-            # guard must abort boot here, not let the app reach a ready state.
-            with TestClient(create_app()):
-                pass
+        # Entering the TestClient context fires the lifespan startup events; the
+        # schema guard must abort boot here, not let the app reach a ready state.
+        with pytest.raises(SchemaBehindHeadError), TestClient(create_app()):
+            pass
     finally:
         db_pool.close_pool()
 

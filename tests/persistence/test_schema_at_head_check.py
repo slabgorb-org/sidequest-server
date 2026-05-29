@@ -117,14 +117,15 @@ def test_check_logs_result_when_behind(monkeypatch, behind_head_db, caplog) -> N
     monkeypatch.setenv("SIDEQUEST_DATABASE_URL", behind_head_db)
     head = _alembic_head()
 
-    with caplog.at_level(logging.INFO, logger=_CHECK_LOGGER):
-        with pytest.raises(SchemaBehindHeadError):
-            assert_schema_at_head()
+    with (
+        caplog.at_level(logging.INFO, logger=_CHECK_LOGGER),
+        pytest.raises(SchemaBehindHeadError),
+    ):
+        assert_schema_at_head()
 
     messages = _check_log_messages(caplog)
     assert any("0001" in m and head in m for m in messages), (
-        f"expected a {_CHECK_LOGGER} log naming current (0001) and head ({head}); "
-        f"got: {messages!r}"
+        f"expected a {_CHECK_LOGGER} log naming current (0001) and head ({head}); got: {messages!r}"
     )
 
 
@@ -142,8 +143,7 @@ def test_check_logs_result_at_head(monkeypatch, migrated_db, caplog) -> None:
 
     messages = _check_log_messages(caplog)
     assert any(head in m for m in messages), (
-        f"expected a {_CHECK_LOGGER} log naming head ({head}) on the clean path; "
-        f"got: {messages!r}"
+        f"expected a {_CHECK_LOGGER} log naming head ({head}) on the clean path; got: {messages!r}"
     )
 
 

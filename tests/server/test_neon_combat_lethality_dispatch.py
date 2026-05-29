@@ -328,11 +328,13 @@ def test_traumatic_hit_records_scene_tag(otel_capture, monkeypatch):
 def _make_cwn_shock_pack():
     """Like _make_cwn_pack but the strike weapon carries a Shock rating.
 
-    ``shock=12`` is both the chip amount and the AC ceiling (v1 models them as
-    the same content number). The opponent's Melee AC is _OPPONENT_AC (12), so
-    ``target_melee_ac (12) <= shock (12)`` and the chip applies on a MISS.
-    No trauma_die — Shock is a fixed chip on a miss, independent of the Trauma
-    seam (which only fires on a HIT that resolves damage).
+    CWN "Shock X/AC Y" uses two decoupled numbers: ``shock=4`` is the chip
+    amount X, ``shock_ac=15`` is the Melee-AC ceiling Y. The opponent's Melee
+    AC is _OPPONENT_AC (12), so ``target_melee_ac (12) <= shock_ac (15)`` and
+    the chip (4) applies on a MISS. The chip amount (4) and ceiling (15) being
+    distinct demonstrates the decoupling. No trauma_die — Shock is a fixed chip
+    on a miss, independent of the Trauma seam (which only fires on a HIT that
+    resolves damage).
     """
     from sidequest.genre.models.inventory import DamageSpec
     from sidequest.genre.models.rules import (
@@ -358,7 +360,8 @@ def _make_cwn_shock_pack():
             "narrator_hint": "Muzzle flash strobes the alley.",
             "damage_override": DamageSpec(
                 dice="1d6",
-                shock=12,  # chip amount AND AC ceiling; opponent AC (12) <= shock
+                shock=4,  # chip amount X (distinct from ceiling)
+                shock_ac=15,  # AC ceiling Y; opponent AC (12) <= shock_ac (15)
             ),
         }
     )
@@ -395,7 +398,7 @@ def test_shock_chips_hp_on_miss(otel_capture):
 
     face=[1] forces the d20 to miss the opponent's AC, so the HIT path's
     damage block is skipped. The new miss branch resolves the weapon spec,
-    sees shock=12 >= the opponent's Melee AC (12), and chips 12 HP. The
+    sees the opponent's Melee AC (12) <= shock_ac (15), chips shock (4) HP. The
     cwn.shock.applied span fires and the target's HP drops despite the miss.
     """
     from sidequest.protocol.dice import DiceThrowPayload, ThrowParams

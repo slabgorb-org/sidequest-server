@@ -53,18 +53,20 @@ class CwnRulesetModule(SwnRulesetModule):
         actor: str = "",
         _tracer: trace.Tracer | None = None,
     ) -> int:
-        """CWN Shock: a melee weapon with shock>0 chips `shock` damage on a MISS
-        when the target's Melee AC <= the weapon's Shock rating. v1 models the
-        chip amount and the AC ceiling as the same content number (spec.shock).
-        Returns the chip damage (0 when not applicable). Emits cwn.shock.applied
-        only when damage is actually chipped."""
-        if spec.shock <= 0 or target_melee_ac > spec.shock:
+        """CWN Shock ("Shock X/AC Y"): a melee weapon with shock>0 chips `shock`
+        (the chip amount X) damage on a MISS when the target's Melee AC <=
+        `spec.shock_ac` (the AC ceiling Y). The chip amount and the AC ceiling
+        are two distinct content numbers. Returns the chip damage (0 when not
+        applicable). Emits cwn.shock.applied only when damage is actually
+        chipped."""
+        if spec.shock <= 0 or spec.shock_ac is None or target_melee_ac > spec.shock_ac:
             return 0
         cwn_shock_applied_span(
             actor=actor,
             amount=spec.shock,
             melee_ac=target_melee_ac,
             shock_rating=spec.shock,
+            shock_ac=spec.shock_ac,
             _tracer=_tracer,
         )
         return spec.shock

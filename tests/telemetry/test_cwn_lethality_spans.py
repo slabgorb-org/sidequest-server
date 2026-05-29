@@ -57,8 +57,12 @@ def test_trauma_span_emits():
 
 def test_shock_span_emits():
     exporter, tracer = _exporter()
-    cwn_shock_applied_span(actor="Mook", amount=2, melee_ac=8, shock_rating=10, _tracer=tracer)
-    assert exporter.get_finished_spans()[0].name == "cwn.shock.applied"
+    cwn_shock_applied_span(
+        actor="Mook", amount=2, melee_ac=8, shock_rating=10, shock_ac=15, _tracer=tracer
+    )
+    spans = exporter.get_finished_spans()
+    assert spans[0].name == "cwn.shock.applied"
+    assert dict(spans[0].attributes or {})["shock_ac"] == 15
 
 
 def test_mortal_span_emits():

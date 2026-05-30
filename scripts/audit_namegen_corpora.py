@@ -70,6 +70,32 @@ def _classify(word_count: int) -> str:
     return "OK"
 
 
+def _resolve_corpus_path(filename: str, corpus_dir: Path, fallback_dirs: list[Path]) -> Path | None:
+    """Resolve a corpus filename to a path, mirroring the runtime resolver.
+
+    Search order matches
+    ``sidequest.genre.names.generator._resolve_corpus_file``: the pack's
+    own ``corpus/`` dir first, then each fallback dir (the centralized
+    ``sidequest-content/corpus/shared/``). A pack that ships no per-pack
+    copy resolves the file from the shared fallback at runtime, so the
+    audit must search the same place or it reports false MISSING.
+
+    Returns ``None`` when the file is found nowhere. The runtime resolver
+    raises ``FileNotFoundError`` in that case; the audit's job is to
+    *report* the gap as a MISSING row, not abort — so it records the miss
+    instead of raising (No Silent Fallbacks: a genuine absence still
+    surfaces).
+    """
+    primary = corpus_dir / filename
+    if primary.exists():
+        return primary
+    for fdir in fallback_dirs:
+        candidate = fdir / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _load_cultures(cultures_yaml: Path) -> list[Culture]:
     """Validate ``cultures.yaml`` against the Culture model.
 
@@ -98,6 +124,13 @@ def _audit_pack(pack_dir: Path) -> list[CorpusEntry]:
     entries: list[CorpusEntry] = []
     pack_name = pack_dir.name
     corpus_dir = pack_dir / "corpus"
+    # Mirror the runtime resolver's fallback: a pack that ships no per-pack
+    # corpus/<file> still resolves from the centralized
+    # sidequest-content/corpus/shared/ at runtime (generator.py
+    # :_resolve_corpus_file, fed pack.source_dir.parent.parent/"corpus"/"shared"
+    # by narration_apply.py and the namegen/encountergen CLIs). pack_dir IS the
+    # pack source dir here, so the shared dir is pack_dir.parent.parent/corpus/shared.
+    fallback_dirs = [pack_dir.parent.parent / "corpus" / "shared"]
 
     def _walk_cultures(cultures: list[Culture], tier: str) -> None:
         for culture in cultures:
@@ -105,8 +138,8 @@ def _audit_pack(pack_dir: Path) -> list[CorpusEntry]:
                 if not slot_config.corpora:
                     continue
                 for corpus_ref in slot_config.corpora:
-                    corpus_path = corpus_dir / corpus_ref.corpus
-                    if not corpus_path.exists():
+                    corpus_path = _resolve_corpus_path(corpus_ref.corpus, corpus_dir, fallback_dirs)
+                    if corpus_path is None:
                         entries.append(
                             CorpusEntry(
                                 pack=pack_name,

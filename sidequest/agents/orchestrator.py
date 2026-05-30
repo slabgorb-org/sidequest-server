@@ -3909,6 +3909,15 @@ class Orchestrator:
                     # context.pack — begin_confrontation fails loudly rather than
                     # silently no-opping if it is missing.
                     genre_pack=context.pack,
+                    # Story 73-3: the canonical in-turn snapshot the rest of the
+                    # turn mutates and the end-of-turn save persists. WRITE tools
+                    # (advance_confrontation) must mutate THIS object — not a
+                    # fresh repository.load() copy — or the end-of-turn save
+                    # clobbers their write (the lost-update bug). Same seam as
+                    # genre_pack/lore_store above. None until _build_turn_context
+                    # stamps context.snapshot; the tool fails loud rather than
+                    # silently loading a fresh copy.
+                    snapshot=context.snapshot,
                 )
 
                 # Positive wiring confirmation (CLAUDE.md OTEL principle —

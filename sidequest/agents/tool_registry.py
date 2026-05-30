@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     )
     from sidequest.game.lore_store import LoreStore
     from sidequest.game.monster_manual import MonsterManual
+    from sidequest.game.session import GameSnapshot
     from sidequest.game.weather import WeatherState
     from sidequest.genre.names.generator import NameGenerator
 
@@ -140,6 +141,17 @@ class ToolContext:
     weather_state: WeatherState | None = None
     world_demographics: dict[str, Any] | None = None
     world_calendar: dict[str, Any] | None = None
+    # Story 73-3 amendment: the canonical in-turn GameSnapshot the narration
+    # pipeline mutates and the end-of-turn save persists (ADR-037 — the
+    # SessionRoom owns it). WRITE tools that nudge persistent state (e.g.
+    # advance_confrontation's dial move) MUST mutate THIS object, not a fresh
+    # ``repository.load()`` copy — otherwise the end-of-turn ``room.save()``
+    # writes the canonical object back over the tool's write and the change is
+    # silently lost (the 73-3 lost-update). Threaded from
+    # ``TurnContext.snapshot`` at the orchestrator construction site. None on
+    # legacy/fixture paths that never built a TurnContext; tools that need it
+    # fail loud (no silent fallback to repository.load()).
+    snapshot: GameSnapshot | None = None
 
 
 _ArgsT = TypeVar("_ArgsT", bound=BaseModel)

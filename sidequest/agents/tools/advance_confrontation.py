@@ -49,6 +49,11 @@ OTEL attributes
   pushed ``current`` from below ``threshold`` to at-or-above. A metric
   that was *already* past threshold and advances further is *not* a
   fresh crossing (the resolution beat already fired).
+* ``tool.confrontation.canonical`` — ``True`` (Story 73-3). Signals the
+  advance mutated the *canonical* in-turn snapshot (which the end-of-turn
+  save persists), not a fresh ``repository.load()`` copy. Lets the GM
+  panel confirm the dial move is durable, closing the "span fires but the
+  write is lost" lie.
 
 Concurrency
 ~~~~~~~~~~~
@@ -115,11 +120,24 @@ class AdvanceConfrontationArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.repository.load()
-    if session is None:
-        return ToolResult.error("no active session", recoverable=False)
+    # Story 73-3: mutate the CANONICAL in-turn snapshot the narration pipeline
+    # holds (ADR-037 — owned by the SessionRoom), NOT a fresh
+    # ``repository.load()`` copy. The old read-modify-write against a fresh load
+    # was silently clobbered by the end-of-turn ``room.save()`` (which persists
+    # the canonical object after the tool runs). Fail loud if the canonical
+    # snapshot is not wired onto the context — never silently fall back to
+    # ``repository.load()`` (CLAUDE.md "No Silent Fallbacks"), as that would
+    # re-introduce the exact lost-update this story fixes.
+    snapshot = ctx.snapshot
+    if snapshot is None:
+        return ToolResult.error(
+            "no canonical snapshot on tool context — cannot advance "
+            "confrontation (the in-turn snapshot was not threaded onto "
+            "ToolContext; refusing to fall back to a fresh repository.load() "
+            "that the end-of-turn save would clobber)",
+            recoverable=False,
+        )
 
-    snapshot = session.snapshot
     encounter = snapshot.encounter
     if encounter is None:
         return ToolResult.error(
@@ -132,7 +150,9 @@ async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext
     metric.current = value_before + args.delta
     value_after = metric.current
 
-    ctx.repository.save(snapshot)
+    # No in-tool save: the dial move rides the canonical snapshot, which the
+    # single end-of-turn ``room.save()`` persists. A second save here would be
+    # redundant and re-create the ordering hazard.
 
     crossed_threshold = (value_before < metric.threshold) and (value_after >= metric.threshold)
 
@@ -142,6 +162,10 @@ async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext
     ctx.otel_span.set_attribute("tool.confrontation.value_after", value_after)
     ctx.otel_span.set_attribute("tool.confrontation.reason", args.reason)
     ctx.otel_span.set_attribute("tool.confrontation.crossed_threshold", crossed_threshold)
+    # Story 73-3: the lie-detector signal — proves this advance mutated the
+    # canonical snapshot (which the end-of-turn save persists), not a doomed
+    # fresh-load copy. The GM panel uses this to confirm the dial move is real.
+    ctx.otel_span.set_attribute("tool.confrontation.canonical", True)
 
     return ToolResult.ok(
         {

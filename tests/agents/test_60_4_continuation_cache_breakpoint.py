@@ -158,16 +158,21 @@ def _count_message_level_markers(messages: list[dict[str, Any]]) -> int:
 
 
 @pytest.mark.asyncio
-async def test_continuation_user_message_carries_1h_cache_control_marker(
+async def test_continuation_user_message_carries_volatile_5m_cache_control_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-1: the iter-2 messages.create payload carries a
-    cache_control{ephemeral, 1h} marker on the LAST content block of the
-    newly-appended user (tool_result) message.
+    """AC-1 (TIER SUPERSEDED BY 61-19): the iter-2 messages.create payload
+    carries a cache_control marker on the LAST content block of the
+    newly-appended user (tool_result) message — at the VOLATILE 5m tier.
 
-    Measured in 60-3: this single placement flips the continuation's prefix
-    write from `ephemeral_5m_input_tokens` to `ephemeral_1h_input_tokens`,
-    which is the entire savings of the story (~$0.08/turn).
+    60-4 originally placed this marker at 1h to keep the continuation from
+    re-minting the stable prefix at 5m. Story 61-19 (2026-05-30) proved via
+    empirical probe (`probe_61_19_cache_tier.py`) that the marker's TTL can
+    drop to 5m WITHOUT re-minting the prefix: the stable system prefix has
+    its OWN 1h breakpoint (`system_blocks[0]`), so on warm turns it still
+    reads at 1h (`1h_write=0`, `cache_read~=prefix`) while only the volatile
+    per-turn tail writes — now at the cheaper 5m tier (1.25x vs 2x). The
+    marker's PRESENCE prevents the re-mint; its TTL only sets the tail tier.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sdk = _Sdk(responses=[_tool_use("toolu_1"), _end_turn("done")])
@@ -193,28 +198,37 @@ async def test_continuation_user_message_carries_1h_cache_control_marker(
         f"newest continuation message must be the user/tool_result pair; "
         f"got role={messages[-1]['role']!r}"
     )
-    assert _last_block_has_marker(messages[-1], expected_ttl="1h"), (
+    assert _last_block_has_marker(messages[-1], expected_ttl="5m"), (
         "the LAST content block of the newest continuation message MUST carry "
-        "cache_control={'type':'ephemeral','ttl':'1h'}. Without it, the API "
-        "re-mints the ~11.7k cached prefix at the default 5m TTL on every "
-        "continuation (measured: 60-3). Got messages[-1]="
+        "cache_control={'type':'ephemeral','ttl':'5m'} (61-19 volatile tier). "
+        "The marker's PRESENCE prevents the 60-3 prefix re-mint; 61-19's probe "
+        "proved the prefix still reads at 1h via its own breakpoint while this "
+        "volatile tail writes at the cheaper 5m tier. Got messages[-1]="
         f"{messages[-1]!r}"
     )
 
 
 @pytest.mark.asyncio
-async def test_continuation_marker_ttl_matches_client_5m_configuration(
+async def test_continuation_splits_tiers_volatile_5m_message_over_1h_system_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-1: a 5m-configured client must mark the continuation at ttl:'5m'.
+    """AC-1 (61-19 tier split — the non-trivial invariant). On a **1h**-
+    configured client, a continuation call MUST emit the 61-19 tier split:
+    the volatile message tail at ttl:'5m' while the STABLE system prefix
+    stays at ttl:'1h'.
 
-    The marker must echo `self.cache_ttl` — never hardcoded to 1h — so that
-    operators who explicitly opt into the 5m window keep their configured
-    behavior. (No silent upgrades, per CLAUDE.md "no silent fallback".)
+    Why this replaces the old `..._matches_client_5m_configuration` test:
+    after 61-19 the message marker is the hardcoded `_VOLATILE_CACHE_TTL`
+    (5m) regardless of `self.cache_ttl`, so a 5m-client/5m-assert test passed
+    trivially (5m==5m) and could no longer catch a regression that reverted
+    the message marker to `self.cache_ttl`. This 1h-client test IS that
+    regression guard: if the message marker ever echoes `self.cache_ttl`
+    again, it would read '1h' here and fail. It also pins that the split is
+    real — system prefix 1h, message tail 5m, in the same request.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sdk = _Sdk(responses=[_tool_use("toolu_2"), _end_turn("done")])
-    client = AnthropicSdkClient(sdk=sdk, cache_ttl="5m")
+    client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
 
     await client.complete_with_tools(
         system_blocks=[CacheableBlock(text="rules", cache=True)],
@@ -225,35 +239,41 @@ async def test_continuation_marker_ttl_matches_client_5m_configuration(
     )
 
     continuation = sdk.messages.calls[1]
+    # Volatile message tail → 5m (NOT self.cache_ttl, which is 1h here).
     assert _last_block_has_marker(continuation["messages"][-1], expected_ttl="5m"), (
-        "a 5m-configured client must emit cache_control{ttl:'5m'} on the "
-        "continuation — the marker must echo self.cache_ttl, not be "
-        "hardcoded to 1h. Got messages[-1]="
+        "61-19: the continuation's newest (tool_result) message MUST carry "
+        "cache_control{ttl:'5m'} even on a 1h-configured client — the volatile "
+        "tier is hardcoded, not echoing self.cache_ttl. A '1h' here means the "
+        "message marker regressed to self.cache_ttl. Got messages[-1]="
         f"{continuation['messages'][-1]!r}"
+    )
+    # Stable system prefix → still 1h (the amortizing half is untouched).
+    sys_block = continuation["system"][0]
+    assert sys_block.get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
+        "61-19: the stable system prefix MUST keep ttl:'1h' on a 1h client — "
+        "only the volatile message tail moved to 5m. Got system[0]="
+        f"{sys_block!r}"
     )
 
 
 @pytest.mark.asyncio
-async def test_single_iter_turn_marks_initial_user_message_at_configured_ttl(
+async def test_single_iter_turn_marks_initial_user_message_at_volatile_5m_tier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-1 (60-7 amendment). A turn that ends without a tool_use MUST mark
-    the initial user message's last content block with
-    `cache_control={'type':'ephemeral','ttl': self.cache_ttl}` on iter=1.
+    """AC-1 (60-7 amendment; TIER SUPERSEDED BY 61-19). A turn that ends
+    without a tool_use MUST mark the initial user message's last content
+    block on iter=1 — at the VOLATILE 5m tier (61-19), NOT `self.cache_ttl`.
 
-    This test was inverted by story 60-7 (2026-05-24). The prior assertion
-    ("must carry zero message-level markers") codified the bug — empirical
-    measurement on probe `probe/60-7-single-iter-prose` (live save
-    `~/.sidequest/saves/games/2026-05-24-coyote_star/save.db`) proved that
-    leaving the iter=1 tail unmarked causes Anthropic to auto-cache the
-    post-prefix content at the default 5m TTL, wasting ~$0.04/turn on a
-    write that gets displaced seconds later by the 60-4 iter=2 1h marker.
+    60-7 (2026-05-24) added the iter=1 marker (the prior assertion "zero
+    message-level markers" codified the auto-5m-then-1h-displacement bug).
+    61-19 (2026-05-30) then proved the marker should be 5m, not 1h: the user
+    message is volatile (it changes every turn), so the 1h tier's 2x premium
+    is wasted on it. The marker still EXISTS (overriding Anthropic's auto-5m
+    default and pinning the tail to a single explicit 5m write per turn); only
+    its TTL value changed. The stable prefix keeps 1h via `system_blocks[0]`.
 
     The 4-breakpoint budget still holds: system_blocks[0] + tools[-1] +
-    iter=1 user message = 3 markers on a single-iter turn (safe). On a
-    multi-iter turn the iter=2 newest-user marker brings it to exactly 4
-    (at the cap, not over) — see `tests/agents/test_60_7_iter1_cache_marker.py
-    ::test_iter1_marker_does_not_inflate_total_breakpoint_count`.
+    iter=1 user message = 3 markers on a single-iter turn (safe).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sdk = _Sdk(responses=[_end_turn("done")])
@@ -268,11 +288,12 @@ async def test_single_iter_turn_marks_initial_user_message_at_configured_ttl(
 
     assert len(sdk.messages.calls) == 1, "expected a single end_turn call"
     call = sdk.messages.calls[0]
-    assert _last_block_has_marker(call["messages"][-1], expected_ttl="1h"), (
+    assert _last_block_has_marker(call["messages"][-1], expected_ttl="5m"), (
         "a single-iter turn MUST mark the newest user message's last content "
-        "block with cache_control={'type':'ephemeral','ttl':'1h'} (60-7). "
-        "Without it the API auto-caches the post-prefix tail at 5m, wasting "
-        f"~$0.04/turn. Got messages[-1]={call['messages'][-1]!r}"
+        "block with cache_control={'type':'ephemeral','ttl':'5m'} (61-19 "
+        "volatile tier). The marker's presence pins the volatile tail to one "
+        "explicit 5m write/turn (overriding Anthropic's auto-5m default); its "
+        f"TTL is 5m, not 1h. Got messages[-1]={call['messages'][-1]!r}"
     )
 
 
@@ -354,16 +375,17 @@ async def test_marker_migrates_to_newest_message_across_iterations(
         model="claude-sonnet-4-6",
     )
 
-    # iter-2: marker is on the iter-1 tool_result (last user message)
+    # iter-2: marker is on the iter-1 tool_result (last user message), at the
+    # 61-19 volatile 5m tier.
     iter2 = sdk.messages.calls[1]
-    assert _last_block_has_marker(iter2["messages"][-1], expected_ttl="1h"), (
-        "iter-2 call must mark the newly-appended iter-1 tool_result"
+    assert _last_block_has_marker(iter2["messages"][-1], expected_ttl="5m"), (
+        "iter-2 call must mark the newly-appended iter-1 tool_result (5m tier)"
     )
 
     # iter-3: marker is on the iter-2 tool_result; the iter-1 one is clean.
     iter3 = sdk.messages.calls[2]
-    assert _last_block_has_marker(iter3["messages"][-1], expected_ttl="1h"), (
-        "iter-3 call must mark the newly-appended iter-2 tool_result"
+    assert _last_block_has_marker(iter3["messages"][-1], expected_ttl="5m"), (
+        "iter-3 call must mark the newly-appended iter-2 tool_result (5m tier)"
     )
 
     # The iter-1 tool_result (now older) must have had its marker cleared.

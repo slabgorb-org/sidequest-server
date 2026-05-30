@@ -133,6 +133,20 @@ CacheTtl = Literal["5m", "1h"]
 _VALID_TTLS: frozenset[str] = frozenset({"5m", "1h"})
 
 
+# Story 61-19 — the cache tier for VOLATILE (changes-every-turn) content.
+# The per-turn message tail (player action + tool_result deltas, and the
+# valley/recency system content that rides between the stable-prefix
+# breakpoint and the message breakpoint) is rewritten every turn and read
+# back at most once — within the same turn's tool loop, seconds later. The
+# 1h tier's 2x write premium only pays off when content persists and is
+# re-read across turns; volatile content has zero cross-turn value, so it
+# rides the 5m tier (1.25x), which still covers the within-turn read while
+# never paying the 1h premium. The STABLE system prefix + tools keep
+# ``self.cache_ttl`` (1h by default) — they amortize across turns. See
+# session 894 forensics in ``sprint/context/context-story-61-19.md``.
+_VOLATILE_CACHE_TTL: CacheTtl = "5m"
+
+
 # 1h ephemeral cache is a beta: without this header on the request the
 # API rejects ``ttl: "1h"`` and every narration turn 400s. Sent only on
 # the 1h path — see ``complete_with_tools``.
@@ -161,16 +175,25 @@ class AnthropicSdkClient:
         # an ~85-turn session. Operators can still opt back to 5m via the
         # env var.
         #
-        # Story 60-4 (2026-05-23): the 1h amortization is now realized on
-        # tool-use continuations as well. ``complete_with_tools`` adds a moving
+        # Story 60-4 (2026-05-23): ``complete_with_tools`` adds a moving
         # cache_control breakpoint on the last content block of the newest
         # continuation message, so the appended tool_use/tool_result blocks
-        # ride the same cache as system_blocks[0] + tools instead of forcing a
-        # 5m re-mint of the ~11.7k prefix on every iter 2+. Measured savings
-        # vs the original bug shape: ~70% of per-turn narrator cost (60-3
-        # baseline ~$0.116/turn → ~$0.035/turn post-fix). See
-        # ``sprint/archive/60-3-session.md`` (diagnosis) and
-        # ``sprint/archive/60-4-session.md`` (fix).
+        # stop forcing a 5m re-mint of the ~11.7k prefix on every iter 2+.
+        # The marker's PRESENCE is what prevents the re-mint (60-3 diagnosis);
+        # 60-4 originally set its TTL to ``self.cache_ttl`` (1h).
+        #
+        # Story 61-19 (2026-05-30): that message-level marker (iter=1 tail AND
+        # continuation) moved to ``_VOLATILE_CACHE_TTL`` (5m) — the tail is
+        # volatile, so 1h's 2x premium was wasted on it (~9.7k tok/turn, ~73%
+        # of session cost, session 894). Only the marker's TTL changed; its
+        # presence still prevents the prefix re-mint. The STABLE system prefix
+        # (``system_blocks[0]``) + tools keep ``self.cache_ttl`` (1h) and still
+        # amortize across turns — an empirical probe confirmed warm turns read
+        # the prefix at 1h (write=0) while only the tail writes at 5m. The
+        # original 60-4 "~70% savings" figure was measured under the pre-61-19
+        # 1h-everywhere layout. See ``sprint/archive/60-3-session.md`` +
+        # ``sprint/archive/60-4-session.md`` and
+        # ``sprint/context/context-story-61-19.md``.
         resolved_ttl = (
             cache_ttl
             if cache_ttl is not None
@@ -429,17 +452,21 @@ class AnthropicSdkClient:
                     severity="info",
                 )
 
-                # Story 60-7 — Lie-detector for the iter=1 cache_control
-                # regression class. A healthy iter writes to exactly one
-                # cache tier (the explicit 1h marker fires; nothing else
-                # defaults to 5m). Both > 0 in a single iter means a
-                # breakpoint defaulted to 5m while another explicit 1h
-                # marker fired on overlapping content — the same waste
-                # pattern the 60-7 fix eliminated. Fires per offending
-                # iter (not aggregated per turn) so the GM panel can pin
-                # which iteration is leaking. severity=warn (lie-detector,
-                # not hard error — the call already succeeded; the
-                # observation is the waste).
+                # Story 60-7 — Lie-detector for the cache_control regression
+                # class: a single iter writing to BOTH tiers at once.
+                # Post-61-19 the tiers are split by content — the stable
+                # system prefix + tools are the only 1h-marked content, the
+                # volatile message tail the only 5m-marked content. So a
+                # healthy WARM iter writes 5m-only (tail) with 1h=0 (prefix is
+                # a read); a COLD/warmup iter may legitimately write both (1h
+                # prefix mint + 5m tail). Both > 0 in a STEADY-STATE iter means
+                # the same content is being written to two tiers (e.g. a tail
+                # marker defaulting to 5m while a 1h marker covers overlapping
+                # content) — the waste pattern 60-7 eliminated. Fires per
+                # offending iter (not aggregated per turn) so the GM panel can
+                # pin which iteration leaks. severity=warn (lie-detector, not
+                # hard error — the call already succeeded; the observation is
+                # the waste).
                 if cache_write_5m > 0 and cache_write_1h > 0:
                     both_writes_fields: dict[str, Any] = {
                         "iteration": iteration,
@@ -505,6 +532,22 @@ class AnthropicSdkClient:
                 if session_id is not None:
                     self._emit_cost_running_total(
                         session_id=session_id,
+                        model=last_model,
+                    )
+                    # Story 61-19 AC5 — per-turn cache-write split so the GM
+                    # panel can spot churn regressions. Under the 61-19 tier
+                    # layout the TTL tier IS the stable/tail distinction: the
+                    # stable system prefix is the only 1h-marked content, and
+                    # the volatile per-turn tail is the only 5m-marked content.
+                    # A healthy session writes the stable prefix once (warmup)
+                    # then reads it (1h write ~0 thereafter); the tail write
+                    # recurs per turn but small. If a future field re-promotes
+                    # growth into the volatile block, tail_write_tokens climbs
+                    # and this event surfaces it. Fires once per turn (not per
+                    # tool-loop iter), aggregating the loop's writes.
+                    self._emit_cache_write_split(
+                        stable_prefix_write_tokens=cumulative_cache_write_1h,
+                        tail_write_tokens=cumulative_cache_write_5m,
                         model=last_model,
                     )
 
@@ -889,6 +932,35 @@ class AnthropicSdkClient:
         self._session_ceiling_announced.add(session_id)
         raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
 
+    def _emit_cache_write_split(
+        self,
+        *,
+        stable_prefix_write_tokens: int,
+        tail_write_tokens: int,
+        model: str,
+    ) -> None:
+        """Per-turn cache-write split (Story 61-19 AC5).
+
+        Splits the turn's cache_write into the amortizing stable prefix
+        (1h-tier write) vs the volatile per-turn tail (5m-tier write) so the
+        GM panel can plot write-churn and catch a regression that re-promotes
+        a growing field into the volatile block. Fires once per successful
+        turn (not per tool-loop iteration). Severity ``info`` — a routine
+        baseline pulse, grouped under ``narrator.sdk`` with the sibling cache
+        events.
+        """
+        _watcher_publish_event(
+            "narrator.cache.write_split",
+            {
+                "stable_prefix_write_tokens": stable_prefix_write_tokens,
+                "tail_write_tokens": tail_write_tokens,
+                "total_write_tokens": stable_prefix_write_tokens + tail_write_tokens,
+                "model": model,
+            },
+            component="narrator.sdk",
+            severity="info",
+        )
+
     def _emit_cost_running_total(
         self,
         *,
@@ -931,21 +1003,29 @@ class AnthropicSdkClient:
         """Build the ``messages`` array for a single ``messages.create`` call.
 
         Story 60-7 (supersedes 60-4): every iter — iter=1 included — marks the
-        LAST content block of the newest user message with
-        ``cache_control={'type':'ephemeral', 'ttl': self.cache_ttl}``.
+        LAST content block of the newest user message. Story 61-19 (2026-05-30)
+        sets that marker's TTL to ``_VOLATILE_CACHE_TTL`` (5m), NOT
+        ``self.cache_ttl`` — the message tail is volatile, so it rides the 5m
+        tier while the stable system prefix + tools keep ``self.cache_ttl``
+        (1h). The marker's PRESENCE (every iter) is the 60-7 fix; its 5m VALUE
+        is the 61-19 fix.
 
         Why marker every iter, not only on continuation: Anthropic auto-caches
         content that sits past the last explicit breakpoint at the default 5m
         TTL. The system_blocks[0] + tools[-1] prefix is marked at the
         configured TTL (1h by default), but the user message + recency-zone
-        deltas added on iter=1 (~17K tok) carry no marker by default, so the
-        API auto-caches that tail at 5m. On iter=2 the 60-4 continuation
-        marker writes the same content at 1h, displacing the 5m one within
-        seconds — pure waste. Marking iter=1 at the configured TTL overrides
-        the auto-5m default so the iter=1 write lands at 1h directly and
-        iter=2 reads it. Probe evidence: per-turn cost
-        $0.137 → $0.096 (~30% savings); see
-        ``sprint/archive/60-7-session.md``.
+        deltas added on iter=1 carry no marker by default, so the API
+        auto-caches that tail at 5m. Story 60-7 added an EXPLICIT marker on the
+        newest message every iter to pin that tail to a single write (the
+        unmarked auto-5m would otherwise be displaced by the iter=2 marker —
+        pure waste). Story 61-19 sets that marker's TTL to ``_VOLATILE_CACHE_TTL``
+        (5m), NOT the configured 1h: the tail is volatile, so the iter=1 write
+        lands at 5m deliberately and the within-turn iter=2 continuation reads
+        it at 5m (seconds later) without re-minting. The 1h amortization lives
+        on the stable prefix + tools (system_blocks[0] + tools[-1]), not on the
+        message tail. (The 60-7 "$0.137 → $0.096" figure was the pre-61-19
+        1h-tail layout; see ``sprint/archive/60-7-session.md`` and
+        ``sprint/context/context-story-61-19.md``.)
 
         ``is_continuation`` is retained as caller-facing intent (iter=1 vs
         iter=2+) — useful to the call site and to test naming — but no
@@ -996,9 +1076,18 @@ class AnthropicSdkClient:
         if isinstance(last_content, list) and last_content:
             last_block = last_content[-1]
             if isinstance(last_block, dict):
+                # Story 61-19 — the newest message tail is VOLATILE (it changes
+                # every turn). It still carries a marker (preserving 60-7's
+                # single-write / within-turn-reuse property — the API would
+                # otherwise auto-cache the post-prefix tail at 5m and the
+                # continuation could displace it), but at the 5m volatile tier,
+                # NOT ``self.cache_ttl``. Marking it 1h paid the 2x write
+                # premium on content invalidated next turn — ~9.7k tok/turn of
+                # waste (session 894). The stable system prefix keeps 1h
+                # (``_build_system_array``); only this per-turn tail moves.
                 last_block["cache_control"] = {
                     "type": "ephemeral",
-                    "ttl": self.cache_ttl,
+                    "ttl": _VOLATILE_CACHE_TTL,
                 }
             else:
                 # No Silent Fallbacks: every live call site appends dict blocks
@@ -1042,11 +1131,14 @@ class AnthropicSdkClient:
         # default). See ADR-101 four-region cache layout amendment.
         #
         # Story 60-4 (2026-05-23): the continuation-append site in
-        # complete_with_tools now adds a moving cache_control breakpoint on
-        # the newest tool_result message, which covers the appended messages
-        # under the same cache and unlocks the 1h rebate this marker promised
-        # in isolation. Together with system_blocks[0]'s marker, both halves
-        # of the cached prefix now rebate on continuation calls.
+        # complete_with_tools adds a moving cache_control breakpoint on the
+        # newest tool_result message. Its PRESENCE stops the continuation from
+        # re-minting this 1h tools+prefix cache (the 60-3 waste). Story 61-19
+        # (2026-05-30): that message-level breakpoint is now 5m
+        # (``_VOLATILE_CACHE_TTL``), not 1h — so the volatile tail rides 5m
+        # while THIS tools array and system_blocks[0] keep ``self.cache_ttl``
+        # (1h) and continue to read back at 1h on warm continuations
+        # (probe-confirmed: warm-turn 1h write = 0).
         if out:
             out[-1]["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
         return out

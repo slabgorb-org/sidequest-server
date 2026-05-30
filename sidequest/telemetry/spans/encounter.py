@@ -63,6 +63,28 @@ SPAN_ROUTES[SPAN_ENCOUNTER_BEAT_APPLIED] = SpanRoute(
         "metric_delta": (span.attributes or {}).get("metric_delta", 0),
     },
 )
+# Story 71-28: encounter-beat advance lie-detector. The advance_encounter_beat
+# WRITE tool sets tool.encounter.* attributes on its dispatch span
+# (tool.write.advance_encounter_beat), but that span name is *constructed
+# dynamically* by tool_dispatch_span (tool.{cat}.{name}), so it never appeared
+# as a SPAN_* constant and escaped the routing-completeness lint — the watcher
+# emitted only agent_span_close and the GM panel's state_transition tab was
+# half-blind to whether beats were advancing or stuck. Binding it to a SPAN_*
+# constant here both routes it to a typed state_transition AND brings it under
+# the lint going forward (test_routing_completeness). Mirrors the beat-related
+# encounter routes above (state_transition / component=encounter).
+SPAN_ENCOUNTER_BEAT_ADVANCE = "tool.write.advance_encounter_beat"
+SPAN_ROUTES[SPAN_ENCOUNTER_BEAT_ADVANCE] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.beat_advance",
+        "beat_from": (span.attributes or {}).get("tool.encounter.beat_from", -1),
+        "beat_to": (span.attributes or {}).get("tool.encounter.beat_to", -1),
+        "reason": (span.attributes or {}).get("tool.encounter.reason", ""),
+        "encounter_type": (span.attributes or {}).get("tool.encounter.encounter_type", ""),
+    },
+)
 SPAN_ENCOUNTER_CONFRONTATION_INITIATED = "encounter.confrontation_initiated"
 SPAN_ROUTES[SPAN_ENCOUNTER_CONFRONTATION_INITIATED] = SpanRoute(
     event_type="state_transition",

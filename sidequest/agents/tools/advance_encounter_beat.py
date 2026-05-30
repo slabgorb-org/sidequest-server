@@ -107,6 +107,10 @@ async def advance_encounter_beat(args: AdvanceEncounterBeatArgs, ctx: ToolContex
     ctx.otel_span.set_attribute("tool.encounter.beat_from", beat_from)
     ctx.otel_span.set_attribute("tool.encounter.beat_to", beat_to)
     ctx.otel_span.set_attribute("tool.encounter.reason", args.reason)
+    # Story 71-28: surface encounter context so SPAN_ROUTES[tool.write.
+    # advance_encounter_beat] can emit a typed state_transition the GM panel
+    # reads (the value is already in scope — also returned in the payload).
+    ctx.otel_span.set_attribute("tool.encounter.encounter_type", encounter.encounter_type)
 
     return ToolResult.ok(
         {

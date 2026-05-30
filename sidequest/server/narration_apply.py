@@ -88,6 +88,7 @@ from sidequest.telemetry.spans import (
     npc_invented_name_unrouted_span,
     npc_pc_name_skipped_span,
     npc_referenced_span,
+    npc_spawn_disposition_span,
     quest_update_span,
     region_entry_canonicalized_dedup_span,
     region_entry_rejected_span,
@@ -1067,12 +1068,26 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
         statuses=[],
         hp=HpPool(current=10, max=10, base_max=10),
     )
-    return Npc(
+    npc = Npc(
         core=core,
         pronouns=member.pronouns,
         appearance=member.appearance,
         pool_origin=member.name,
     )
+    # Story 72-5: a pool member (incl. narrator-invented) carries no
+    # disposition, so promotion spawns it neutral via the Npc default.
+    # Emit the spawn-disposition span so the GM panel can confirm an
+    # invented NPC was *not* born hostile — provenance is always
+    # ``default_neutral`` here (no creature-shape, no explicit value).
+    with npc_spawn_disposition_span(
+        npc_name=npc.core.name,
+        disposition=int(npc.disposition),
+        provenance="default_neutral",
+        is_creature=False,
+        pool_origin=member.name,
+    ):
+        pass
+    return npc
 
 
 def resolve_status_target(

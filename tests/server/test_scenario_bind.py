@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -29,8 +30,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.session import GameSnapshot, Npc
-from sidequest.genre.loader import load_genre_pack
-from sidequest.genre.models.pack import GenrePack
+from sidequest.genre.loader import _load_single_world, load_genre_pack
+from sidequest.genre.models.pack import GenrePack, World
 from sidequest.genre.models.scenario import (
     AssignmentMatrix,
     InitialBeliefs,
@@ -388,3 +389,387 @@ class TestDispatchIntegration:
             assert sd.active_scenario is None
 
         asyncio.run(body())
+
+
+# ===========================================================================
+# Story 71-32 — World-level scenario discovery + world-aware binding (RED)
+#
+# These tests encode the NEW contract and are expected to FAIL against the
+# current pack-level-only implementation:
+#   - World model gains a declared ``scenarios`` field (today: undeclared).
+#   - The loader discovers ``worlds/<world>/scenarios/`` (today: pack root only).
+#   - ``bind_scenario`` binds ONLY the active world's scenario via
+#     ``pack.worlds[world_slug].scenarios`` (today: ``next(iter(pack.scenarios))``,
+#     the first scenario in the WHOLE pack — world-agnostic).
+#   - Absence is explicit: a world with no scenario binds NOTHING and emits a
+#     ``scenario.bind_skipped`` watcher event — NO silent fallback to pack-level
+#     scenarios (SOUL.md / server CLAUDE.md "No Silent Fallbacks").
+#
+# Wiring is asserted by BEHAVIOR (OTEL events + real bind/load results), never
+# by grepping source (server CLAUDE.md "No Source-Text Wiring Tests"). The one
+# model-shape check uses ``World.model_fields`` — the blessed reflection
+# tripwire, NOT a ``hasattr`` check (``World`` is ``extra="allow"``, so
+# ``hasattr`` would pass spuriously on an undeclared extra attribute).
+# ===========================================================================
+
+
+# Synthetic world slugs for the two-world fixture. Deliberately NOT any real
+# authored world name — the fixture re-keys a real World object under these so
+# the tests never depend on which world the scaffold pack happens to ship.
+_WORLD_A = "manor_house"
+_WORLD_B = "garden_estate"
+
+
+def _two_world_pack(
+    base_pack: GenrePack,
+    *,
+    world_a_scenario: tuple[str, ScenarioPack] | None,
+    world_b_scenario: tuple[str, ScenarioPack] | None,
+    pack_level_scenario: tuple[str, ScenarioPack] | None,
+) -> GenrePack:
+    """Build a two-world pack from a real (scaffold) GenrePack.
+
+    Takes one real, fully-populated ``World`` object as a structural scaffold
+    (it needs valid config/lore/cartography, which are tedious to hand-build)
+    and re-keys deep copies under the synthetic slugs ``_WORLD_A`` / ``_WORLD_B``
+    — so the fixture is independent of the scaffold pack's authored world names.
+    Each world (and optionally the pack root) carries a DISTINCT scenario so a
+    world-agnostic binder is caught selecting the wrong one. ``scenarios`` is
+    assigned as an attribute — valid today because ``World`` is ``extra="allow"``,
+    and valid after the field is declared.
+    """
+    import copy as _copy
+
+    pack = _copy.deepcopy(base_pack)
+    template_world = next(iter(pack.worlds.values()))
+    pack.worlds = {}
+
+    world_a = _copy.deepcopy(template_world)
+    world_a.scenarios = (  # type: ignore[attr-defined]
+        {world_a_scenario[0]: world_a_scenario[1]} if world_a_scenario else {}
+    )
+    pack.worlds[_WORLD_A] = world_a
+
+    world_b = _copy.deepcopy(template_world)
+    world_b.scenarios = (  # type: ignore[attr-defined]
+        {world_b_scenario[0]: world_b_scenario[1]} if world_b_scenario else {}
+    )
+    pack.worlds[_WORLD_B] = world_b
+
+    pack.scenarios = {pack_level_scenario[0]: pack_level_scenario[1]} if pack_level_scenario else {}
+    return pack
+
+
+def _guilty_scenario(guilty_id: str, guilty_name: str) -> ScenarioPack:
+    """A scenario whose single can-be-guilty suspect is deterministic under
+    ``random.Random(0)`` — its ``scenario_state.guilty_npc`` equals ``guilty_id``."""
+    return _scenario_pack(
+        npcs=[_scenario_npc(guilty_id, guilty_name)],
+        suspects=[Suspect(id=guilty_id, archetype_ref="r", can_be_guilty=True)],
+    )
+
+
+class TestWorldModelScenarioField:
+    def test_world_declares_scenarios_field(self) -> None:
+        # Reflection tripwire (NOT hasattr — World is extra="allow").
+        # Today: scenarios is not a declared field → fails.
+        # (The empty-default behavior is covered hermetically by
+        # TestLoaderWorldLevelDiscovery.test_world_without_scenarios_dir_defaults_empty.)
+        assert "scenarios" in World.model_fields
+
+
+class TestBindSelectsActiveWorld:
+    def test_binds_only_the_active_worlds_scenario(self, caverns_pack: GenrePack) -> None:
+        """AC2 — binding World A binds World A's scenario, NOT World B's and
+        NOT the pack-level decoy. This is the core regression guard against
+        cross-world scenario bleed."""
+        pack = _two_world_pack(
+            caverns_pack,
+            world_a_scenario=("train_mystery", _guilty_scenario("porter", "The Porter")),
+            world_b_scenario=("garden_party", _guilty_scenario("gardener", "The Gardener")),
+            pack_level_scenario=("decoy_case", _guilty_scenario("decoy", "Pack Decoy")),
+        )
+        snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug=_WORLD_A)
+
+        result = bind_scenario(
+            pack,
+            snap,
+            genre_slug="caverns_and_claudes",
+            world_slug=_WORLD_A,
+            rng=random.Random(0),
+        )
+
+        assert result is not None
+        scenario_id, _ = result
+        assert scenario_id == "train_mystery"  # not "garden_party", not "decoy_case"
+        assert snap.scenario_state is not None
+        assert snap.scenario_state.guilty_npc == "porter"
+
+    def test_binds_the_other_worlds_scenario_when_that_world_is_active(
+        self, caverns_pack: GenrePack
+    ) -> None:
+        """AC2 — the same pack, binding World B, must select World B's
+        scenario. Proves selection follows ``world_slug``, not load order."""
+        pack = _two_world_pack(
+            caverns_pack,
+            world_a_scenario=("train_mystery", _guilty_scenario("porter", "The Porter")),
+            world_b_scenario=("garden_party", _guilty_scenario("gardener", "The Gardener")),
+            pack_level_scenario=("decoy_case", _guilty_scenario("decoy", "Pack Decoy")),
+        )
+        snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug=_WORLD_B)
+
+        result = bind_scenario(
+            pack,
+            snap,
+            genre_slug="caverns_and_claudes",
+            world_slug=_WORLD_B,
+            rng=random.Random(0),
+        )
+
+        assert result is not None
+        scenario_id, _ = result
+        assert scenario_id == "garden_party"
+        assert snap.scenario_state is not None
+        assert snap.scenario_state.guilty_npc == "gardener"
+
+
+class TestBindNoSilentFallback:
+    def test_world_without_scenario_binds_nothing_despite_pack_level(
+        self, caverns_pack: GenrePack
+    ) -> None:
+        """AC3 — a scenario-less world returns ``None`` EVEN WHEN the pack root
+        carries a scenario. No silent fallback to pack-level scenarios."""
+        pack = _two_world_pack(
+            caverns_pack,
+            world_a_scenario=None,  # World A has no scenario
+            world_b_scenario=None,
+            pack_level_scenario=("decoy_case", _guilty_scenario("decoy", "Pack Decoy")),
+        )
+        snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug=_WORLD_A)
+
+        result = bind_scenario(
+            pack,
+            snap,
+            genre_slug="caverns_and_claudes",
+            world_slug=_WORLD_A,
+            rng=random.Random(0),
+        )
+
+        assert result is None
+        assert snap.scenario_state is None
+
+    def test_unknown_world_slug_binds_nothing(self, caverns_pack: GenrePack) -> None:
+        """AC3 edge — an unknown ``world_slug`` returns ``None`` (no KeyError),
+        and does NOT fall back to the pack-level scenario."""
+        pack = _two_world_pack(
+            caverns_pack,
+            world_a_scenario=("train_mystery", _guilty_scenario("porter", "The Porter")),
+            world_b_scenario=None,
+            pack_level_scenario=("decoy_case", _guilty_scenario("decoy", "Pack Decoy")),
+        )
+        snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="no_such_world")
+
+        result = bind_scenario(
+            pack,
+            snap,
+            genre_slug="caverns_and_claudes",
+            world_slug="no_such_world",
+            rng=random.Random(0),
+        )
+
+        assert result is None
+        assert snap.scenario_state is None
+
+
+class TestBindOtelWorldAware:
+    def test_initialized_event_carries_active_world(self, caverns_pack: GenrePack) -> None:
+        """AC4 — the success span event records the ACTIVE world and that
+        world's scenario id (proves the GM panel sees the right binding)."""
+        pack = _two_world_pack(
+            caverns_pack,
+            world_a_scenario=("train_mystery", _guilty_scenario("porter", "The Porter")),
+            world_b_scenario=("garden_party", _guilty_scenario("gardener", "The Gardener")),
+            pack_level_scenario=("decoy_case", _guilty_scenario("decoy", "Pack Decoy")),
+        )
+        snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug=_WORLD_B)
+
+        provider, exporter = _fresh_otel()
+        tracer = provider.get_tracer("t")
+        with tracer.start_as_current_span("outer"):
+            bind_scenario(
+                pack,
+                snap,
+                genre_slug="caverns_and_claudes",
+                world_slug=_WORLD_B,
+                rng=random.Random(0),
+            )
+
+        events = [
+            e
+            for span in exporter.get_finished_spans()
+            for e in span.events
+            if e.name == "scenario.initialized"
+        ]
+        assert len(events) == 1
+        attrs = dict(events[0].attributes or {})
+        assert attrs["world"] == _WORLD_B
+        assert attrs["scenario_id"] == "garden_party"
+
+    def test_skip_emits_watcher_event_for_scenario_less_world(
+        self, caverns_pack: GenrePack
+    ) -> None:
+        """AC4 — the absence decision is observable. Binding a scenario-less
+        world emits a ``scenario.bind_skipped`` event carrying the world and
+        genre, so the GM panel can distinguish "no scenario here" from a
+        silently-improvised mystery. Today the None path emits nothing."""
+        pack = _two_world_pack(
+            caverns_pack,
+            world_a_scenario=None,
+            world_b_scenario=None,
+            pack_level_scenario=("decoy_case", _guilty_scenario("decoy", "Pack Decoy")),
+        )
+        snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug=_WORLD_A)
+
+        provider, exporter = _fresh_otel()
+        tracer = provider.get_tracer("t")
+        with tracer.start_as_current_span("outer"):
+            bind_scenario(
+                pack,
+                snap,
+                genre_slug="caverns_and_claudes",
+                world_slug=_WORLD_A,
+                rng=random.Random(0),
+            )
+
+        skip_events = [
+            e
+            for span in exporter.get_finished_spans()
+            for e in span.events
+            if e.name == "scenario.bind_skipped"
+        ]
+        assert len(skip_events) == 1
+        attrs = dict(skip_events[0].attributes or {})
+        assert attrs["world"] == _WORLD_A
+        assert attrs["genre"] == "caverns_and_claudes"
+
+
+# ---------------------------------------------------------------------------
+# Hermetic loader fixtures — a synthetic world on tmp_path, NO real content.
+# Mirrors tests/genre/test_loader_world_plumbing.py's minimal-world pattern.
+# ---------------------------------------------------------------------------
+
+_WORLD_YAML = textwrap.dedent(
+    """\
+    name: Testworld
+    description: Synthetic test world for world-level scenario discovery.
+    starting_location: testtown
+    """
+)
+
+_LORE_YAML = textwrap.dedent(
+    """\
+    world_name: Testworld
+    history: A brief history of testing.
+    geography: Flat. Featureless. Test-shaped.
+    cosmology: Two suns, no moons, deterministic stars.
+    """
+)
+
+_CARTOGRAPHY_YAML = textwrap.dedent(
+    """\
+    world_name: Testworld
+    starting_region: testtown
+    navigation_mode: region
+    regions:
+      testtown:
+        name: Testtown
+        summary: A region for tests.
+        description: A flat plain with one inn and a notional river.
+        terrain: settlement
+        adjacent: []
+    """
+)
+
+_OPENINGS_YAML = textwrap.dedent(
+    """\
+    version: "1.0.0"
+    world: testworld
+    genre: testgenre
+    openings:
+      - id: solo_default
+        triggers:
+          mode: either
+          min_players: 1
+          max_players: 6
+          backgrounds: []
+        setting:
+          location_label: testtown
+          situation: Standing in the square at noon.
+        establishing_narration: |
+          The square is empty. The sun is high. You stand alone.
+    """
+)
+
+# Minimal valid ScenarioPack — only scenario.yaml is required by
+# _load_single_scenario; the matrix/clue/atmosphere/npc files are optional.
+_SCENARIO_YAML = textwrap.dedent(
+    """\
+    name: The Morning Train
+    version: "1.0"
+    description: A synthetic whodunit for loader discovery.
+    duration_minutes: 90
+    max_players: 3
+    pacing:
+      scene_budget: 5
+    assignment_matrix:
+      suspects: []
+    npcs: []
+    """
+)
+
+
+def _make_world_tree(tmp_path: Path, *, with_scenario: bool) -> tuple[Path, Path]:
+    """Construct ``<tmp>/genre/worlds/testworld/`` + minimal required files.
+
+    When ``with_scenario`` is set, also drops
+    ``worlds/testworld/scenarios/the_morning_train/scenario.yaml``.
+    Returns ``(genre_root, world_path)``.
+    """
+    genre_root = tmp_path / "genre"
+    world_path = genre_root / "worlds" / "testworld"
+    world_path.mkdir(parents=True)
+    (world_path / "world.yaml").write_text(_WORLD_YAML, encoding="utf-8")
+    (world_path / "lore.yaml").write_text(_LORE_YAML, encoding="utf-8")
+    (world_path / "cartography.yaml").write_text(_CARTOGRAPHY_YAML, encoding="utf-8")
+    (world_path / "openings.yaml").write_text(_OPENINGS_YAML, encoding="utf-8")
+    if with_scenario:
+        scn_dir = world_path / "scenarios" / "the_morning_train"
+        scn_dir.mkdir(parents=True)
+        (scn_dir / "scenario.yaml").write_text(_SCENARIO_YAML, encoding="utf-8")
+    return genre_root, world_path
+
+
+class TestLoaderWorldLevelDiscovery:
+    """AC1/AC5 — the loader discovers ``worlds/<world>/scenarios/`` and attaches
+    them to the World model. Fully hermetic: a synthetic world on ``tmp_path``,
+    no real content pack. Exercises ``_load_single_world`` directly — the unit
+    Dev modifies. Fails in RED (no World.scenarios field; loader ignores the
+    world-level scenarios dir) and passes once both land.
+    """
+
+    def test_world_level_scenarios_dir_is_discovered(self, tmp_path: Path) -> None:
+        genre_root, world_path = _make_world_tree(tmp_path, with_scenario=True)
+
+        world = _load_single_world(world_path, [], genre_root)
+
+        assert world is not None
+        assert "the_morning_train" in world.scenarios  # type: ignore[attr-defined]
+        assert world.scenarios["the_morning_train"].name == "The Morning Train"  # type: ignore[attr-defined]
+
+    def test_world_without_scenarios_dir_defaults_empty(self, tmp_path: Path) -> None:
+        genre_root, world_path = _make_world_tree(tmp_path, with_scenario=False)
+
+        world = _load_single_world(world_path, [], genre_root)
+
+        assert world is not None
+        assert world.scenarios == {}  # type: ignore[attr-defined]

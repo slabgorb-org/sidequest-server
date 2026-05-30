@@ -287,6 +287,85 @@ def _migrate_s4_pc_regions(out: dict[str, Any]) -> dict[str, Any] | None:
     return {"s4_pc_regions_seeded": seeded}
 
 
+def _migrate_s5_reconcile_npc_pool(out: dict[str, Any]) -> dict[str, Any] | None:
+    """S5 (story 72-2 — epic 72 NPC Identity Hardening) — reconcile ``npcs``
+    against ``npc_pool`` to a single source of truth per logical name.
+
+    The two NPC stores share only a case-folded name string with no
+    consistency invariant. A save can carry an ``Npc`` ``Mara`` (mechanical
+    state, authoritative disposition) *and* a stale ``NpcPoolMember``
+    ``Mara`` (identity scaffold). On load the divergent pair survives and a
+    later case-folding lookup resolves to whichever it hits first.
+
+    For each pool member whose case-folded name matches an ``Npc`` in
+    ``out["npcs"]``:
+    - Remove the pool member — it is shadowed by the mechanical ``Npc``
+      (single source of truth). Counted in ``s5_pool_shadowed_removed``.
+    - If the removed member carried a ``disposition`` that diverged from the
+      authoritative ``Npc`` value, count it in ``s5_disposition_conflicts``.
+      The ``Npc`` is authoritative (it is the record ADR-020 deltas land on);
+      the divergence is recorded, never silently first-wins (No Silent
+      Fallbacks).
+
+    Runs in raw-dict space (before pydantic re-hydration), so disposition is
+    a bare int here. Operates on the deep-copied ``out`` — never the caller's
+    input. Returns OTEL attributes when it collapsed at least one duplicate,
+    else ``None`` (no-op — a pool-only or npcs-only name needs no
+    reconciliation). Must run after ``_migrate_s2_npc_registry_split`` so it
+    sees the post-split pool.
+    """
+    npcs = out.get("npcs")
+    pool = out.get("npc_pool")
+    if not isinstance(npcs, list) or not isinstance(pool, list):
+        return None
+    if not npcs or not pool:
+        return None
+
+    # Authoritative disposition by case-folded name, sourced from npcs.
+    npc_disposition: dict[str, Any] = {}
+    for npc in npcs:
+        if not isinstance(npc, dict):
+            continue
+        core = npc.get("core")
+        if not isinstance(core, dict):
+            continue
+        name = core.get("name", "")
+        if name:
+            npc_disposition[name.casefold()] = npc.get("disposition", 0)
+
+    if not npc_disposition:
+        return None
+
+    kept: list[Any] = []
+    shadowed_removed = 0
+    disposition_conflicts = 0
+    for member in pool:
+        if not isinstance(member, dict):
+            kept.append(member)
+            continue
+        name = member.get("name", "")
+        key = name.casefold() if name else ""
+        if key and key in npc_disposition:
+            # Shadowed by a mechanical Npc — drop the scaffold duplicate.
+            shadowed_removed += 1
+            member_disposition = member.get("disposition")
+            if member_disposition is not None and member_disposition != npc_disposition[key]:
+                # Scaffold disposition diverged from the authoritative Npc —
+                # record it (No Silent Fallbacks); the Npc value is kept.
+                disposition_conflicts += 1
+            continue
+        kept.append(member)
+
+    if shadowed_removed == 0:
+        return None
+
+    out["npc_pool"] = kept
+    return {
+        "s5_pool_shadowed_removed": shadowed_removed,
+        "s5_disposition_conflicts": disposition_conflicts,
+    }
+
+
 def migrate_legacy_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     """Rewrite a legacy snapshot dict into the canonical shape.
 
@@ -304,6 +383,8 @@ def migrate_legacy_snapshot(data: dict[str, Any]) -> dict[str, Any]:
         _migrate_s2_npc_registry_split,
         _migrate_s3_party_location,
         _migrate_s4_pc_regions,
+        # S5 must run after S2 — it reconciles against the post-split pool.
+        _migrate_s5_reconcile_npc_pool,
     ):
         attrs = sub(out)
         if attrs is not None:

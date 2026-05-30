@@ -156,6 +156,18 @@ class Disposition:
     def __int__(self) -> int:
         return self.value
 
+    def __eq__(self, other: object) -> bool:
+        # Value type (docstring): two Dispositions are equal when their
+        # clamped scores match. Required so models carrying a Disposition
+        # field (``Npc``, ``NpcPoolMember``) compare by value on JSON
+        # round-trip rather than by instance identity (story 72-2).
+        if isinstance(other, Disposition):
+            return self.value == other.value
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.value)
+
     def __repr__(self) -> str:
         return f"Disposition({self.value})"
 

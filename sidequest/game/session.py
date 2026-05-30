@@ -1520,7 +1520,7 @@ class GameSnapshot(BaseModel):
             statuses=[],
             hp=hp_pool,
         )
-        return Npc(
+        npc = Npc(
             core=core,
             pronouns=patch.pronouns,
             appearance=patch.appearance,
@@ -1536,6 +1536,22 @@ class GameSnapshot(BaseModel):
             abilities=list(patch.abilities) if patch.abilities is not None else [],
             morale=patch.morale,
         )
+        # Story 72-5: record the spawn-time disposition default so the GM
+        # panel can verify a person spawned neutral (0) and a creature
+        # spawned hostile (-20) — the disposition no longer "materializes
+        # from nowhere". NpcPatch carries no disposition field, so this seam
+        # is always a default (never narrator-explicit).
+        from sidequest.telemetry.spans import npc_spawn_disposition_span
+
+        with npc_spawn_disposition_span(
+            npc_name=npc.core.name,
+            disposition=int(npc.disposition),
+            provenance="default_creature_hostile" if is_creature else "default_neutral",
+            is_creature=is_creature,
+            pool_origin=None,
+        ):
+            pass
+        return npc
 
     def lowest_friendly_hp_ratio(self) -> float:
         """Lowest edge fraction among friendly characters. Returns 1.0 if none."""

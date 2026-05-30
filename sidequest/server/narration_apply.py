@@ -35,6 +35,7 @@ from sidequest.game.morale import (
     OpponentState,
     maybe_check_morale,
 )
+from sidequest.game.npc_development import develop_npc_on_engagement
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.region_validation import (
     canonicalize_region_name,
@@ -71,6 +72,8 @@ from sidequest.server.session_helpers import (
     _detect_npc_identity_drift,
 )
 from sidequest.telemetry.spans import (
+    SPAN_DISPOSITION_SHIFT,
+    Span,
     container_retrieval_blocked_span,
     container_retrieval_recorded_span,
     inventory_narrator_extracted_span,
@@ -78,6 +81,7 @@ from sidequest.telemetry.spans import (
     lore_established_span,
     magic_working_span,
     npc_auto_registered_span,
+    npc_developed_span,
     npc_pc_name_skipped_span,
     npc_referenced_span,
     quest_update_span,
@@ -1322,6 +1326,11 @@ def _apply_npc_mentions(
         if getattr(getattr(c, "core", None), "name", None)
     }
 
+    # Story 72-1: the development tick is one engagement *event* per NPC per
+    # turn — interest is boolean-per-turn, not per-utterance. A name the
+    # narrator cites twice in one turn's mention list develops once.
+    developed_this_turn: set[str] = set()
+
     for mention in mentions:
         matched_pc = pc_name_lookup.get(mention.name.lower())
         if matched_pc is not None:
@@ -1374,6 +1383,45 @@ def _apply_npc_mentions(
                     npc_hit.pool_origin,
                     turn_num,
                 )
+            # Story 72-1: interest-driven development tick. Rides this
+            # ``npcs_hit`` engagement signal (ADR-014 coal->diamond on player
+            # interest; ADR-020 disposition evolves through interaction).
+            # De-duped per turn so a name cited twice develops once.
+            if name_key not in developed_this_turn:
+                developed_this_turn.add(name_key)
+                tick = develop_npc_on_engagement(npc_hit)
+                with npc_developed_span(
+                    npc_name=npc_hit.core.name,
+                    non_transactional_interactions=tick.interactions,
+                    resolution_tier_before=tick.tier_before,
+                    resolution_tier_after=tick.tier_after,
+                    turn_number=turn_num,
+                ):
+                    logger.info(
+                        "npc.developed name=%r interactions=%d tier=%s->%s turn=%d",
+                        npc_hit.core.name,
+                        tick.interactions,
+                        tick.tier_before,
+                        tick.tier_after,
+                        turn_num,
+                    )
+                # Reuse the live ``disposition.shift`` contract (50-11) for the
+                # drift leg. Skip when the value didn't actually move (clamped
+                # at +-100) so the GM panel never shows a phantom shift.
+                if tick.disposition_delta != 0:
+                    with Span.open(
+                        SPAN_DISPOSITION_SHIFT,
+                        {
+                            "npc_name": npc_hit.core.name,
+                            "delta": tick.disposition_delta,
+                            "before": tick.disposition_before,
+                            "after": tick.disposition_after,
+                            "before_attitude": tick.attitude_before,
+                            "after_attitude": tick.attitude_after,
+                            "crossed": tick.attitude_crossed,
+                        },
+                    ):
+                        pass
             continue
 
         # Step 2: pool member match.

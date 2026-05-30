@@ -54,6 +54,7 @@ from sidequest.game.creature_core import CreatureCore
 from sidequest.game.disposition import (
     Attitude,
     AttitudeThresholds,
+    Disposition,
     configure_attitude_thresholds,
     reset_attitude_thresholds,
 )
@@ -121,13 +122,14 @@ def _engage(snapshot: GameSnapshot, name: str, *, turn: int, acting: str = "Hero
 
 
 def _drive(snapshot: GameSnapshot, name: str, *, turns: int) -> list[Npc]:
-    """Engage ``name`` once per turn for ``turns`` turns; return a snapshot of
-    the live ``Npc`` after each turn (same instance — read fields per step)."""
-    npc = next(n for n in snapshot.npcs if n.core.name == name)
+    """Engage ``name`` once per turn for ``turns`` turns; return a deep copy of
+    the ``Npc`` captured AFTER each turn so per-step ``resolution_tier`` /
+    ``disposition`` values reflect that turn (not the live mutable instance)."""
     steps: list[Npc] = []
     for t in range(1, turns + 1):
         _engage(snapshot, name, turn=t)
-        steps.append(npc)
+        npc = next(n for n in snapshot.npcs if n.core.name == name)
+        steps.append(npc.model_copy(deep=True))
     return steps
 
 
@@ -296,7 +298,7 @@ def test_top_tier_saturates_without_error() -> None:
 
 
 def test_sustained_engagement_warms_disposition() -> None:
-    snap = _snapshot(Npc(core=_core("Boris"), disposition=0))
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)))
     steps = _drive(snap, "Boris", turns=8)
     values = [int(npc.disposition) for npc in steps]
     assert values[-1] > 0, f"disposition never warmed across engagement: {values}"
@@ -305,7 +307,7 @@ def test_sustained_engagement_warms_disposition() -> None:
 
 
 def test_disposition_drift_respects_plus_100_clamp() -> None:
-    snap = _snapshot(Npc(core=_core("Boris"), disposition=99))
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(99)))
     steps = _drive(snap, "Boris", turns=10)
     values = [int(npc.disposition) for npc in steps]
     assert max(values) <= 100, f"disposition exceeded the +-100 clamp: {values}"
@@ -320,7 +322,7 @@ def test_band_derivation_honors_genre_configured_thresholds() -> None:
     the attitude must flip to FRIENDLY the moment value exceeds 2 (it would
     still read NEUTRAL under the default friendly_at=10)."""
     configure_attitude_thresholds(AttitudeThresholds(friendly_at=2, hostile_at=-2))
-    snap = _snapshot(Npc(core=_core("Boris"), disposition=0))
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)))
     steps = _drive(snap, "Boris", turns=15)
 
     for npc in steps:
@@ -483,7 +485,7 @@ def test_disposition_drift_emits_shift_span_with_crossed_true(otel_capture) -> N
     and matching before/after attitudes — the exact contract reused from the
     narrator ``npc_attitudes`` path (session.py:1416)."""
     configure_attitude_thresholds(AttitudeThresholds(friendly_at=2, hostile_at=-2))
-    snap = _snapshot(Npc(core=_core("Boris"), disposition=0))
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)))
     for t in range(1, 13):
         _engage(snap, "Boris", turn=t)
 
@@ -499,7 +501,7 @@ def test_disposition_drift_emits_shift_span_with_crossed_true(otel_capture) -> N
 def test_intra_band_drift_emits_shift_span_with_crossed_false(otel_capture) -> None:
     """Intra-band drift is still observable: a single small warm from neutral
     fires the span with ``crossed=False`` and a non-zero delta."""
-    snap = _snapshot(Npc(core=_core("Boris"), disposition=0))
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)))
     _engage(snap, "Boris", turn=1)
 
     spans = _shift_spans(otel_capture)
@@ -516,7 +518,7 @@ def test_clamped_engagement_emits_no_phantom_shift(otel_capture) -> None:
     """At the +100 clamp the value cannot move — the GM panel must not see a
     phantom shift. Either no span, or a span with delta==0/crossed==False.
     The counter still increments (the engagement is real)."""
-    snap = _snapshot(Npc(core=_core("Boris"), disposition=100))
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(100)))
     _engage(snap, "Boris", turn=1)
 
     assert snap.npcs[0].non_transactional_interactions == 1  # engagement is real

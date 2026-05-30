@@ -190,6 +190,28 @@ SPAN_ROUTES[SPAN_ENCOUNTER_OPPOSED_ROLL_RESOLVED] = SpanRoute(
     },
 )
 
+# Story 71-21: server-driven opponent attack (SWN hp_depletion enemy turn).
+# Fires on EVERY opponent reprisal — hit or miss — carrying the full to-hit math
+# so the GM panel can tell a real, mechanically-backed enemy attack from narrator
+# improv. The playtest bug: perseus_cloud hp_depletion combat had no enemy turn,
+# so the player could never lose; this span is the lie-detector for the fix.
+SPAN_ENCOUNTER_OPPONENT_ATTACK = "encounter.opponent_attack_resolved"
+SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_ATTACK] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.opponent_attack_resolved",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "attacker": (span.attributes or {}).get("attacker", ""),
+        "target": (span.attributes or {}).get("target", ""),
+        "d20": (span.attributes or {}).get("d20", 0),
+        "modifier": (span.attributes or {}).get("modifier", 0),
+        "attack_total": (span.attributes or {}).get("attack_total", 0),
+        "target_ac": (span.attributes or {}).get("target_ac", 0),
+        "hit": (span.attributes or {}).get("hit", False),
+    },
+)
+
 # Story 45-3: Mid-turn momentum broadcast lie-detector. Fires whenever the
 # server emits a CONFRONTATION frame carrying post-mutation momentum, so
 # the GM panel can audit "the dial moved on screen because the engine
@@ -525,6 +547,42 @@ def encounter_opposed_roll_resolved_span(
             "opponent_num_advantage": int(opponent_num_advantage),
             "shift": int(shift),
             "tier": tier,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def encounter_opponent_attack_resolved_span(
+    *,
+    encounter_type: str,
+    attacker: str,
+    target: str,
+    d20: int,
+    modifier: int,
+    attack_total: int,
+    target_ac: int,
+    hit: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Lie-detector for the server-driven opponent attack turn (story 71-21,
+    SWN hp_depletion combat). Emit on every reprisal so the GM panel can audit
+    that the enemy's "shot" was a real d20-vs-AC decision, not narrator prose.
+    ``hit`` is the verdict; ``attack_total`` == ``d20`` + ``modifier``."""
+    with Span.open(
+        SPAN_ENCOUNTER_OPPONENT_ATTACK,
+        {
+            "encounter_type": encounter_type,
+            "attacker": attacker,
+            "target": target,
+            "d20": int(d20),
+            "modifier": int(modifier),
+            "attack_total": int(attack_total),
+            "target_ac": int(target_ac),
+            "hit": bool(hit),
             **attrs,
         },
         tracer_override=_tracer,

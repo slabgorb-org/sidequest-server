@@ -34,6 +34,8 @@ from sidequest.cli.encountergen.encountergen import main as encountergen_main
 from sidequest.cli.namegen.namegen import main as namegen_main
 from sidequest.genre import load_genre_pack
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
+from sidequest.telemetry.spans.pregen import SPAN_PREGEN_SEED_MANUAL
+from sidequest.telemetry.spans.span import Span
 
 if TYPE_CHECKING:
     from sidequest.game.monster_manual import MonsterManual
@@ -211,9 +213,16 @@ def seed_manual(
         pack = None
 
     cultures: list[str] = []
+    cultures_source = "none"
     constraints: ArchetypeConstraints | None = None
     if pack is not None:
-        cultures = [c.name for c in pack.cultures[:MAX_CULTURES]]
+        # World-over-genre resolution (the SAME rule namegen uses): a world
+        # that declares its own cultures REPLACES the genre set. Reading
+        # ``pack.cultures`` raw here handed genre culture names to a name
+        # generator that validates against the WORLD set, so perseus_cloud
+        # seeding failed every time and seeded 0 NPCs (session 894).
+        effective, cultures_source = pack.effective_cultures(world)
+        cultures = [c.name for c in effective[:MAX_CULTURES]]
         constraints = pack.archetype_constraints
 
     # ── NPCs: 3 per culture (Rust parity) ─────────────────────
@@ -278,13 +287,32 @@ def seed_manual(
             logger.info("pregen.encounter_generated (tier=%d)", tier)
             manual.add_encounter(data, tier, [])
 
+    npcs_after = len(manual.npcs)
     logger.info(
         "pregen.seed_manual_complete (npcs_before=%d, npcs_after=%d, "
         "encounters_before=%d, encounters_after=%d)",
         npcs_before,
-        len(manual.npcs),
+        npcs_after,
         encounters_before,
         len(manual.encounters),
     )
+
+    # OTEL so the GM panel can confirm Monster-Manual seeding actually fired
+    # AND consulted the world layer — ``cultures_source=world`` + ``npcs_after>0``
+    # is the proof the perseus_cloud seeding gap is closed (0 NPCs seeded was
+    # invisible until forensics; the span makes it a first-class signal).
+    with Span.open(
+        SPAN_PREGEN_SEED_MANUAL,
+        {
+            "genre": genre,
+            "world": world or "",
+            "cultures_source": cultures_source,
+            "culture_count": len(cultures),
+            "npcs_before": npcs_before,
+            "npcs_after": npcs_after,
+            "encounters_after": len(manual.encounters),
+        },
+    ):
+        pass
 
     manual.save()

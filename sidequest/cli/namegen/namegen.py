@@ -27,7 +27,6 @@ from sidequest.genre import (
     GenrePack,
     NpcArchetype,
     TropeDefinition,
-    World,
     load_genre_pack,
 )
 from sidequest.genre.archetype import ResolutionSource, resolve_archetype
@@ -544,21 +543,13 @@ def generate_npc(
     corpus_dir = genre_dir / "corpus"
     corpus_fallbacks = [genre_dir.parent.parent / "corpus" / "shared"]
 
-    world_opt: World | None = pack.worlds.get(args.world) if args.world else None
-
-    if world_opt is not None and world_opt.cultures:
-        effective_cultures = list(world_opt.cultures)
-        cultures_source = "world"
-    else:
-        effective_cultures = list(pack.cultures)
-        cultures_source = "genre"
-
-    if world_opt is not None and world_opt.archetypes:
-        effective_archetypes = list(world_opt.archetypes)
-        archetypes_source = "world"
-    else:
-        effective_archetypes = list(pack.archetypes)
-        archetypes_source = "genre"
+    # Shared world-over-genre resolution (GenrePack.effective_*). The SAME
+    # helper Monster-Manual seeding (pregen.seed_manual) uses, so a seeded NPC's
+    # culture tag always resolves against the set the name generator validates
+    # against — preventing the perseus_cloud divergence (session 894) from
+    # recurring if either call site is edited.
+    effective_cultures, cultures_source = pack.effective_cultures(args.world)
+    effective_archetypes, archetypes_source = pack.effective_archetypes(args.world)
 
     if not effective_cultures:
         print(

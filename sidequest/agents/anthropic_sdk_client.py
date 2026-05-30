@@ -1003,8 +1003,12 @@ class AnthropicSdkClient:
         """Build the ``messages`` array for a single ``messages.create`` call.
 
         Story 60-7 (supersedes 60-4): every iter — iter=1 included — marks the
-        LAST content block of the newest user message with
-        ``cache_control={'type':'ephemeral', 'ttl': self.cache_ttl}``.
+        LAST content block of the newest user message. Story 61-19 (2026-05-30)
+        sets that marker's TTL to ``_VOLATILE_CACHE_TTL`` (5m), NOT
+        ``self.cache_ttl`` — the message tail is volatile, so it rides the 5m
+        tier while the stable system prefix + tools keep ``self.cache_ttl``
+        (1h). The marker's PRESENCE (every iter) is the 60-7 fix; its 5m VALUE
+        is the 61-19 fix.
 
         Why marker every iter, not only on continuation: Anthropic auto-caches
         content that sits past the last explicit breakpoint at the default 5m
@@ -1123,11 +1127,14 @@ class AnthropicSdkClient:
         # default). See ADR-101 four-region cache layout amendment.
         #
         # Story 60-4 (2026-05-23): the continuation-append site in
-        # complete_with_tools now adds a moving cache_control breakpoint on
-        # the newest tool_result message, which covers the appended messages
-        # under the same cache and unlocks the 1h rebate this marker promised
-        # in isolation. Together with system_blocks[0]'s marker, both halves
-        # of the cached prefix now rebate on continuation calls.
+        # complete_with_tools adds a moving cache_control breakpoint on the
+        # newest tool_result message. Its PRESENCE stops the continuation from
+        # re-minting this 1h tools+prefix cache (the 60-3 waste). Story 61-19
+        # (2026-05-30): that message-level breakpoint is now 5m
+        # (``_VOLATILE_CACHE_TTL``), not 1h — so the volatile tail rides 5m
+        # while THIS tools array and system_blocks[0] keep ``self.cache_ttl``
+        # (1h) and continue to read back at 1h on warm continuations
+        # (probe-confirmed: warm-turn 1h write = 0).
         if out:
             out[-1]["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
         return out

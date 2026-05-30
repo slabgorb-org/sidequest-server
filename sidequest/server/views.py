@@ -516,6 +516,8 @@ def party_member_from_character(
         character_name=char_name_nbs,
         current_hp=character.core.hp.current,
         max_hp=character.core.hp.max,
+        # Story 68-1: genre-level survivability label (None ⇒ UI default "HP").
+        survivability_pool_label=sd.genre_pack.rules.survivability_pool_label,
         statuses=[s.text for s in character.core.statuses],
         **{"class": class_nbs},  # type: ignore[arg-type]
         level=character.core.level,

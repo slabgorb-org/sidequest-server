@@ -443,6 +443,11 @@ class PartyMember(ProtocolBase):
     """Current HP."""
     max_hp: int
     """Maximum HP."""
+    survivability_pool_label: str | None = None
+    """Story 68-1: per-genre label for the survivability pool (Composure /
+    Standing / Poise on social packs). None ⇒ the UI renders the default
+    "HP". Genre-level (uniform across the table); it rides the per-member
+    frame because it labels current_hp/max_hp directly above."""
     statuses: list[str]
     """Active statuses."""
     class_: NonBlankString = Field(alias="class")

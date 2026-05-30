@@ -994,6 +994,12 @@ class RulesConfig(BaseModel):
     default_race: str | None = None
     race_label: str | None = None
     class_label: str | None = None
+    # Story 68-1: per-genre display label for the survivability (HP) pool.
+    # Social-register packs reskin the shared ablative-HP mechanic (ADR-114)
+    # with a flavor-true noun — Composure / Standing / Poise — instead of the
+    # default "HP" / "Vitality". None ⇒ the UI falls back to "HP" (mechanical
+    # packs are unaffected). The mechanic is unchanged; only the label moves.
+    survivability_pool_label: str | None = None
     # Per-pack character-sheet vocabulary. Keys are the canonical chargen
     # field names (``name``, ``race``, ``class``, ``personality``,
     # ``pronouns``, ``stats``, ``mutation``, ``affinity``, ``rig``,

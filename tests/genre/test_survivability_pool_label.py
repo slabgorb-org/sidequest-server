@@ -29,7 +29,6 @@ from pydantic import ValidationError
 
 from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.rules import RulesConfig
-
 from tests._helpers.genre_paths import find_pack_path
 
 # The flavor labels Epic 68 sanctions for social-register survivability pools.

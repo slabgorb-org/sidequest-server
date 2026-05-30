@@ -1,19 +1,26 @@
-"""Audit Markov namegen corpora across every genre pack (Story 45-28).
+"""Audit Markov namegen corpora across every genre pack (Stories 45-28, 64-7).
 
-Walks every genre pack via ``sidequest.genre.load_genre_pack``, resolves
-each culture's slot ``corpora`` references to disk paths, counts words
-in each corpus, and reports per-culture per-corpus status:
+Walks every genre pack's cultures (genre + world tiers), resolves each
+culture's slot ``corpora`` references to a disk path — the pack's own
+``corpus/`` dir first, then the centralized
+``sidequest-content/corpus/shared/`` fallback the runtime resolver uses
+(``generator.py:_resolve_corpus_file``; the shared fallback was added to
+this audit in Story 64-7 so it stops reporting false MISSING for files
+that resolve fine at runtime) — counts words, and reports per-culture
+per-corpus status:
 
 - **OK** — corpus has ≥ ``WARN_BELOW_WORDS`` (1000) words.
 - **THIN** — ``FAIL_BELOW_WORDS`` (200) ≤ corpus < ``WARN_BELOW_WORDS``.
 - **FAIL** — corpus < ``FAIL_BELOW_WORDS`` (200) words. Cannot
   produce coherent Markov output.
+- **MISSING** — corpus found in neither the pack ``corpus/`` nor the
+  shared fallback (No Silent Fallbacks: a genuine absence still surfaces).
 
 Exit code:
 
-- ``0`` if no FAIL rows (THIN allowed — those are operator warnings,
-  not CI gates).
-- ``1`` if any FAIL row.
+- ``0`` if no FAIL and no MISSING rows (THIN allowed — those are operator
+  warnings, not CI gates).
+- ``1`` if any FAIL or MISSING row.
 - ``2`` for invocation errors (missing pack root, no genre packs found).
 
 This is the AC1 deliverable for Story 45-28. Modeled on

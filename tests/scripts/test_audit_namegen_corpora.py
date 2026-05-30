@@ -1,26 +1,28 @@
-"""Tests for ``scripts/audit_namegen_corpora.py`` (Story 45-28).
+"""Tests for ``scripts/audit_namegen_corpora.py`` (Stories 45-28, 64-7).
 
-The audit script is the wire-first treatment for AC1 (corpus size
-audit) — it must hit the actual culture-loading path
-(``sidequest.genre.load_genre_pack``), resolve every culture's
-``corpora`` references to disk paths, count words, and produce a
-markdown report with three sections:
+The audit script walks every culture's ``corpora`` references, resolves
+each to a disk path — checking the pack's own ``corpus/`` first, then the
+centralized ``sidequest-content/corpus/shared/`` fallback the runtime
+resolver uses (``generator.py:_resolve_corpus_file``; added in Story
+64-7) — counts words, and produces a markdown report with four
+status bands:
 
 - **OK** — corpus ≥ ``WARN_BELOW_WORDS``
 - **THIN** — ``FAIL_BELOW_WORDS`` ≤ corpus < ``WARN_BELOW_WORDS``
 - **FAIL** — corpus < ``FAIL_BELOW_WORDS``
+- **MISSING** — corpus found in neither the pack ``corpus/`` nor the
+  shared fallback
 
 Exit code:
 
-- ``0`` if no FAIL rows (THIN allowed — those are warnings, not gates)
-- ``1`` if any FAIL row (CI gate signal)
+- ``0`` if no FAIL and no MISSING rows (THIN allowed — warnings, not gates)
+- ``1`` if any FAIL or MISSING row (CI gate signal)
 - ``2`` reserved for invocation errors (missing pack, bad ``--path``)
 
-The architect context (``Audit script — wire-first applied to content``)
-specifies modeling on ``audit_content_drift.py``. Tests pin the
-contract: shape of the output, exit code semantics, and the
-content-state regression (post-expansion no THIN rows for the three
-named corpora).
+Tests pin the contract: shape of the output, exit-code semantics, the
+shared-fallback resolution parity with the runtime resolver (Story 64-7),
+and the No-Silent-Fallbacks invariant (a genuinely absent corpus still
+reports MISSING / rc=1).
 """
 
 from __future__ import annotations
@@ -124,22 +126,24 @@ def test_audit_surfaces_consumption_by_culture() -> None:
         ("Voidborn", "polynesian.txt"),
         ("Xeno", "georgian.txt"),
     ):
-        assert corpus_name in out, (
-            f"{corpus_name} absent from audit report — the audit should walk "
-            f"the genre-tier culture that consumes it."
+        # The corpus must be attributed to its consuming culture on the SAME
+        # report row (the audit walks cultures, so each corpus is listed under
+        # its consumer). Asserting co-location — not two independent substrings —
+        # guards against mis-attribution and against either name leaking in from
+        # an unrelated row or an error trace.
+        rows = [line for line in out.splitlines() if culture in line and corpus_name in line]
+        assert rows, (
+            f"{corpus_name} not attributed to consuming culture {culture!r} on any "
+            f"report row — the audit must surface consumption-by-culture to stay "
+            f"actionable.\nstdout:\n{out}"
         )
-        assert culture in out, (
-            f"consuming culture {culture!r} not named in report — the audit "
-            f"must surface consumption-by-culture to stay actionable."
-        )
-        # Post-fix the corpus resolves via corpus/shared/ and must NOT be
-        # flagged MISSING anywhere in the report.
-        for line in out.splitlines():
-            if corpus_name in line and "MISSING" in line:
-                pytest.fail(
-                    f"{corpus_name} still MISSING after the shared-fallback "
-                    f"fix; the audit is not resolving corpus/shared/. line: {line!r}"
-                )
+        # Post-fix the corpus resolves via corpus/shared/, so its row(s) must NOT
+        # be flagged MISSING.
+        for line in rows:
+            assert "MISSING" not in line, (
+                f"{corpus_name} still MISSING after the shared-fallback fix; the "
+                f"audit is not resolving corpus/shared/. line: {line!r}"
+            )
 
 
 def test_audit_live_tree_no_named_corpora_left_thin_post_expansion() -> None:
@@ -233,9 +237,7 @@ def test_audit_live_tree_reports_zero_missing() -> None:
         "audit still reports MISSING corpora that resolve at runtime via "
         f"corpus/shared/.\nstdout:\n{out}"
     )
-    assert "0 MISSING" in out, (
-        f"audit summary should report 0 MISSING post-fix.\nstdout:\n{out}"
-    )
+    assert "0 MISSING" in out, f"audit summary should report 0 MISSING post-fix.\nstdout:\n{out}"
     assert result.returncode == 0, (
         f"audit must exit 0 once shared corpora resolve; got "
         f"{result.returncode}.\nstdout:\n{out}\nstderr:\n{result.stderr}"
@@ -423,9 +425,14 @@ def test_audit_synthetic_shared_fallback_resolves(tmp_path: Path) -> None:
         "a shared-resolved corpus must NOT be flagged MISSING — the audit "
         f"must mirror the runtime fallback.\nstdout:\n{result.stdout}"
     )
-    # Positively confirm it landed as a real, counted row (OK band), not
-    # silently skipped: 1500 words is well above WARN.
-    assert "OK" in result.stdout
+    # Confirm it landed as a real, counted OK row: the corpus name and the
+    # OK status must appear on the SAME report row. A bare ``"OK" in stdout``
+    # would be vacuous — the summary line always prints "... N OK." even when
+    # zero corpora resolved.
+    assert any("shared_only.txt" in line and "OK" in line for line in result.stdout.splitlines()), (
+        "shared_only.txt did not land as a counted OK row — the audit must "
+        f"resolve AND classify it, not merely mention it.\nstdout:\n{result.stdout}"
+    )
 
 
 def test_audit_synthetic_absent_corpus_still_missing(tmp_path: Path) -> None:

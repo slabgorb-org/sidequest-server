@@ -322,6 +322,23 @@ def _resolve_out_of_frame_sink() -> TelemetrySink | None:
     return _telemetry_sink
 
 
+# Event types that are LIVE-PUSH ONLY — broadcast to the GM panel but never
+# written to turn_telemetry. These carry ephemeral UI/keystroke state with no
+# forensic or mechanical value; event-sourcing them is pure write-amplification
+# (perseus_cloud session 894: action_reveal.composing was 30% of all telemetry
+# rows — one Postgres INSERT per debounced keystroke, zero audience in solo).
+# Mirrors the "ephemeral streaming delta — not event-sourced" stance. The
+# property is intrinsic to the event TYPE — it holds regardless of which call
+# site publishes it or whether a turn tx is open (Keith, 2026-05-29: "must NOT
+# be persisted in ANY mode"). Discrete events with diagnostic value
+# (action_reveal.submitted) are deliberately NOT here and keep persisting.
+_EPHEMERAL_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "action_reveal.composing",
+    }
+)
+
+
 _KIND_BY_OP: dict[str, str] = {
     "started": "ENCOUNTER_STARTED",
     "beat_applied": "ENCOUNTER_BEAT_APPLIED",
@@ -408,7 +425,16 @@ def _persist_turn_telemetry(
     Fully wrapped: ANY failure loud-logs (``turn_telemetry.sink_failed``) and
     returns. Never raises, never stalls the turn, never writes to a different
     DB (No-Silent-Fallbacks — a loud-logged drop, not a fallback path).
+
+    Ephemeral event types (:data:`_EPHEMERAL_EVENT_TYPES`) are LIVE-PUSH ONLY:
+    they reach the GM panel via ``watcher_hub.publish`` (already fired by
+    ``publish_event`` before this call) but are never event-sourced — in any
+    mode, in-frame or out. This is intentional (keystroke/UI state has no
+    forensic value), so it is NOT a silent fallback: there is nothing to fail
+    loudly about, by design.
     """
+    if event_type in _EPHEMERAL_EVENT_TYPES:
+        return
     rnd = fields.get("round") if isinstance(fields, dict) else None
     if not isinstance(rnd, int):
         rnd = None

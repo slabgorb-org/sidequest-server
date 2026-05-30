@@ -175,16 +175,25 @@ class AnthropicSdkClient:
         # an ~85-turn session. Operators can still opt back to 5m via the
         # env var.
         #
-        # Story 60-4 (2026-05-23): the 1h amortization is now realized on
-        # tool-use continuations as well. ``complete_with_tools`` adds a moving
+        # Story 60-4 (2026-05-23): ``complete_with_tools`` adds a moving
         # cache_control breakpoint on the last content block of the newest
         # continuation message, so the appended tool_use/tool_result blocks
-        # ride the same cache as system_blocks[0] + tools instead of forcing a
-        # 5m re-mint of the ~11.7k prefix on every iter 2+. Measured savings
-        # vs the original bug shape: ~70% of per-turn narrator cost (60-3
-        # baseline ~$0.116/turn → ~$0.035/turn post-fix). See
-        # ``sprint/archive/60-3-session.md`` (diagnosis) and
-        # ``sprint/archive/60-4-session.md`` (fix).
+        # stop forcing a 5m re-mint of the ~11.7k prefix on every iter 2+.
+        # The marker's PRESENCE is what prevents the re-mint (60-3 diagnosis);
+        # 60-4 originally set its TTL to ``self.cache_ttl`` (1h).
+        #
+        # Story 61-19 (2026-05-30): that message-level marker (iter=1 tail AND
+        # continuation) moved to ``_VOLATILE_CACHE_TTL`` (5m) — the tail is
+        # volatile, so 1h's 2x premium was wasted on it (~9.7k tok/turn, ~73%
+        # of session cost, session 894). Only the marker's TTL changed; its
+        # presence still prevents the prefix re-mint. The STABLE system prefix
+        # (``system_blocks[0]``) + tools keep ``self.cache_ttl`` (1h) and still
+        # amortize across turns — an empirical probe confirmed warm turns read
+        # the prefix at 1h (write=0) while only the tail writes at 5m. The
+        # original 60-4 "~70% savings" figure was measured under the pre-61-19
+        # 1h-everywhere layout. See ``sprint/archive/60-3-session.md`` +
+        # ``sprint/archive/60-4-session.md`` and
+        # ``sprint/context/context-story-61-19.md``.
         resolved_ttl = (
             cache_ttl
             if cache_ttl is not None
@@ -443,17 +452,21 @@ class AnthropicSdkClient:
                     severity="info",
                 )
 
-                # Story 60-7 — Lie-detector for the iter=1 cache_control
-                # regression class. A healthy iter writes to exactly one
-                # cache tier (the explicit 1h marker fires; nothing else
-                # defaults to 5m). Both > 0 in a single iter means a
-                # breakpoint defaulted to 5m while another explicit 1h
-                # marker fired on overlapping content — the same waste
-                # pattern the 60-7 fix eliminated. Fires per offending
-                # iter (not aggregated per turn) so the GM panel can pin
-                # which iteration is leaking. severity=warn (lie-detector,
-                # not hard error — the call already succeeded; the
-                # observation is the waste).
+                # Story 60-7 — Lie-detector for the cache_control regression
+                # class: a single iter writing to BOTH tiers at once.
+                # Post-61-19 the tiers are split by content — the stable
+                # system prefix + tools are the only 1h-marked content, the
+                # volatile message tail the only 5m-marked content. So a
+                # healthy WARM iter writes 5m-only (tail) with 1h=0 (prefix is
+                # a read); a COLD/warmup iter may legitimately write both (1h
+                # prefix mint + 5m tail). Both > 0 in a STEADY-STATE iter means
+                # the same content is being written to two tiers (e.g. a tail
+                # marker defaulting to 5m while a 1h marker covers overlapping
+                # content) — the waste pattern 60-7 eliminated. Fires per
+                # offending iter (not aggregated per turn) so the GM panel can
+                # pin which iteration leaks. severity=warn (lie-detector, not
+                # hard error — the call already succeeded; the observation is
+                # the waste).
                 if cache_write_5m > 0 and cache_write_1h > 0:
                     both_writes_fields: dict[str, Any] = {
                         "iteration": iteration,

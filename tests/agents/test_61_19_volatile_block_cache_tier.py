@@ -478,6 +478,12 @@ async def test_per_turn_event_exposes_stable_prefix_and_tail_write_split(
         "On a warm turn the stable prefix is read, not written; "
         f"stable_prefix_write_tokens must be 0, got {stable}."
     )
+    assert fields.get("total_write_tokens") == stable + tail, (
+        "total_write_tokens must equal stable_prefix_write_tokens + "
+        f"tail_write_tokens ({stable} + {tail}); got "
+        f"{fields.get('total_write_tokens')} — the GM panel's churn total "
+        "must stay internally consistent with its two legs."
+    )
 
 
 @pytest.mark.asyncio
@@ -561,6 +567,12 @@ async def test_per_turn_split_fires_once_per_turn_not_per_iter(
         "Per-turn tail_write_tokens must aggregate both iters' 5m writes "
         f"(900 + 120 = 1020); got {events[0]['fields'][TAIL_WRITE_FIELD]}."
     )
+    assert events[0]["fields"][STABLE_PREFIX_WRITE_FIELD] == 0, (
+        "Both iters reported cache_write_1h=0, so the aggregated "
+        "stable_prefix_write_tokens must be 0 — a non-zero value means the "
+        "1h/5m aggregation buckets are crossed. Got "
+        f"{events[0]['fields'][STABLE_PREFIX_WRITE_FIELD]}."
+    )
 
 
 # ===========================================================================
@@ -610,40 +622,71 @@ def test_moving_volatile_write_off_1h_reduces_per_turn_cost() -> None:
         f"Uncached input ({cost_uncached}) must be cheaper than a 1h write "
         f"({cost_1h}) of the same once-read tail — option (a)'s premise."
     )
+    # The third leg of the pricing triangle the design rests on:
+    # uncached ($3/M) < 5m-write ($3.75/M) < 1h-write ($6/M). If this inverts,
+    # option (a) "uncached" would be strictly cheaper than the chosen 5m tier
+    # and the story's read-count justification for 5m collapses.
+    assert cost_uncached < cost_5m, (
+        f"Uncached input ({cost_uncached}) must be cheaper than a 5m write "
+        f"({cost_5m}). If this fires, 5m is dearer than plain input and the "
+        "choice of 5m over option (a) needs revisiting."
+    )
 
 
-def test_bounded_volatile_tail_keeps_per_turn_cost_flat_across_turns() -> None:
-    """AC3 (flat-cost model guard). With the fix in place the per-turn cost
-    profile is: stable prefix READ (cheap, constant) + bounded volatile-tail
-    WRITE at the cheaper tier (constant, NOT growing). Simulate turns 5->50
-    with that bounded profile and assert per-turn cost never drifts more than
-    20% above the turn-5 steady-state baseline — the epic-61 flat-cost
-    invariant, with no linear creep from a re-written growing cache.
+def test_bounded_tail_flat_but_growing_tail_trips_the_flat_cost_guard() -> None:
+    """AC3 (flat-cost model guard — two arms prove it is NOT vacuous).
 
-    NOTE: this guards the invariant against a BOUNDED-input model. It proves
-    'if the tail stays bounded and cheap-tiered, cost stays flat'. It does
-    NOT prove the tail actually stays bounded in a live 50-turn session — that
-    is the 61-6-style live validation flagged in Delivery Findings.
+    With the fix in place the per-turn cost profile is: stable prefix READ
+    (cheap, constant) + bounded volatile-tail WRITE at the 5m tier. The
+    epic-61 invariant is that per-turn cost stays within 20% of the warmup
+    baseline across a long session — no linear creep from a re-written
+    growing cache.
+
+    This test models cost as a function of the per-turn tail-write size and
+    asserts BOTH directions, so the guard can actually fail:
+      - BOUNDED arm: a turn-independent ~1k tail write stays within 20% of
+        baseline across turns 5..50 (the post-fix steady state).
+      - GROWING arm (control): a tail that creeps linearly (~300 tok/turn — a
+        re-written growing cache leaking back in) MUST exceed the 20% bound by
+        turn 50. Without this control the bounded assertion would be vacuous
+        (it would pass against any always-flat constant).
+
+    NOTE: this guards the cost MODEL's response to growth, not a live session.
+    AC3's absolute 50-turn validation is the 61-6-style live run (deferred —
+    see Delivery Findings).
     """
-    def per_turn_cost(turn: int) -> float:
-        # Bounded, turn-INDEPENDENT volatile tail (the post-fix steady state):
-        # ~1k tail write at 5m + ~25k stable prefix read + small output.
+    def per_turn_cost(tail_write_tokens: int) -> float:
+        # ~25k stable prefix READ + small output are constant; only the 5m
+        # volatile-tail write varies (the thing the flat-cost invariant bounds).
         return compute_cost_usd(
             input_tokens=50,
             output_tokens=500,
             cached_input_read_tokens=25_000,
-            cached_input_write_5m_tokens=1_024,
+            cached_input_write_5m_tokens=tail_write_tokens,
             model=SONNET,
         )
 
-    baseline = per_turn_cost(5)
+    bounded_tail = 1_024  # post-fix steady-state tail, same every turn
+    baseline = per_turn_cost(bounded_tail)
+
+    # BOUNDED arm — flat across 5..50.
     for turn in range(5, 51):
-        cost = per_turn_cost(turn)
+        cost = per_turn_cost(bounded_tail)
         assert cost <= baseline * 1.20, (
             f"Per-turn cost at turn {turn} ({cost}) drifted >20% above the "
-            f"turn-5 steady-state baseline ({baseline}) — the flat-cost "
-            "invariant failed; a growing re-written cache leaked back in."
+            f"turn-5 steady-state baseline ({baseline}) on a BOUNDED tail."
         )
+
+    # GROWING arm (control) — a linearly-creeping tail MUST trip the guard by
+    # turn 50, proving the bounded assertion above is not vacuously green.
+    growing_tail_at_turn_50 = bounded_tail + 300 * (50 - 5)
+    assert per_turn_cost(growing_tail_at_turn_50) > baseline * 1.20, (
+        "control failed: a tail growing ~300 tok/turn did NOT exceed the 20% "
+        "flat-cost bound by turn 50 — if this fires, the flat-cost assertion "
+        "is vacuous (cannot detect a growing re-written cache). "
+        f"grown={per_turn_cost(growing_tail_at_turn_50)}, "
+        f"bound={baseline * 1.20}."
+    )
 
 
 # ===========================================================================

@@ -209,18 +209,26 @@ async def test_continuation_user_message_carries_volatile_5m_cache_control_marke
 
 
 @pytest.mark.asyncio
-async def test_continuation_marker_ttl_matches_client_5m_configuration(
+async def test_continuation_splits_tiers_volatile_5m_message_over_1h_system_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-1: a 5m-configured client must mark the continuation at ttl:'5m'.
+    """AC-1 (61-19 tier split — the non-trivial invariant). On a **1h**-
+    configured client, a continuation call MUST emit the 61-19 tier split:
+    the volatile message tail at ttl:'5m' while the STABLE system prefix
+    stays at ttl:'1h'.
 
-    The marker must echo `self.cache_ttl` — never hardcoded to 1h — so that
-    operators who explicitly opt into the 5m window keep their configured
-    behavior. (No silent upgrades, per CLAUDE.md "no silent fallback".)
+    Why this replaces the old `..._matches_client_5m_configuration` test:
+    after 61-19 the message marker is the hardcoded `_VOLATILE_CACHE_TTL`
+    (5m) regardless of `self.cache_ttl`, so a 5m-client/5m-assert test passed
+    trivially (5m==5m) and could no longer catch a regression that reverted
+    the message marker to `self.cache_ttl`. This 1h-client test IS that
+    regression guard: if the message marker ever echoes `self.cache_ttl`
+    again, it would read '1h' here and fail. It also pins that the split is
+    real — system prefix 1h, message tail 5m, in the same request.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sdk = _Sdk(responses=[_tool_use("toolu_2"), _end_turn("done")])
-    client = AnthropicSdkClient(sdk=sdk, cache_ttl="5m")
+    client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
 
     await client.complete_with_tools(
         system_blocks=[CacheableBlock(text="rules", cache=True)],
@@ -231,11 +239,20 @@ async def test_continuation_marker_ttl_matches_client_5m_configuration(
     )
 
     continuation = sdk.messages.calls[1]
+    # Volatile message tail → 5m (NOT self.cache_ttl, which is 1h here).
     assert _last_block_has_marker(continuation["messages"][-1], expected_ttl="5m"), (
-        "a 5m-configured client must emit cache_control{ttl:'5m'} on the "
-        "continuation — the marker must echo self.cache_ttl, not be "
-        "hardcoded to 1h. Got messages[-1]="
+        "61-19: the continuation's newest (tool_result) message MUST carry "
+        "cache_control{ttl:'5m'} even on a 1h-configured client — the volatile "
+        "tier is hardcoded, not echoing self.cache_ttl. A '1h' here means the "
+        "message marker regressed to self.cache_ttl. Got messages[-1]="
         f"{continuation['messages'][-1]!r}"
+    )
+    # Stable system prefix → still 1h (the amortizing half is untouched).
+    sys_block = continuation["system"][0]
+    assert sys_block.get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
+        "61-19: the stable system prefix MUST keep ttl:'1h' on a 1h client — "
+        "only the volatile message tail moved to 5m. Got system[0]="
+        f"{sys_block!r}"
     )
 
 

@@ -98,6 +98,43 @@ def test_swn_modifier_curve(score, mod):
     assert swn_attribute_modifier(score) == mod
 
 
+def test_swn_resolve_opponent_attack_hit_vs_player_ac():
+    """The enemy turn: opponent rolls d20 + attack_bonus + combat_skill +
+    attribute mod vs the PLAYER's AC. Mirrors attack_params but for the
+    opponent-as-attacker, returning a hit verdict + the to-hit math for OTEL
+    (playtest perseus_cloud: beat_selection hp_depletion combat had no
+    server-driven enemy attack, so the player could never lose)."""
+    # Physique 13 → SWN mod 0 (8–13 band); +attack_bonus 1 +combat_skill 1 = +2.
+    # d20 15 → total 17 vs player AC 12 → hit.
+    out = _S.resolve_opponent_attack(
+        attacker_stats={"Physique": 13},
+        stat_check="Physique",
+        attack_bonus=1,
+        combat_skill=1,
+        target_ac=12,
+        d20=15,
+    )
+    assert out.hit is True
+    assert out.modifier == 2
+    assert out.attack_total == 17
+    assert out.target_ac == 12
+
+
+def test_swn_resolve_opponent_attack_miss_below_ac():
+    """A low roll misses: total < target AC → hit=False (the player takes no
+    damage that round)."""
+    out = _S.resolve_opponent_attack(
+        attacker_stats={"Physique": 13},
+        stat_check="Physique",
+        attack_bonus=1,
+        combat_skill=1,
+        target_ac=16,
+        d20=3,
+    )
+    assert out.hit is False  # 3 + 2 = 5 < 16
+    assert out.attack_total == 5
+
+
 def test_swn_attack_params_uses_target_ac_and_attack_bonus():
     beat = BeatDef.model_validate(
         {

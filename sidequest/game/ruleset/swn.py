@@ -12,7 +12,11 @@ from __future__ import annotations
 import random
 
 from sidequest.game.ruleset.base import RulesetModule
-from sidequest.game.ruleset.resolution import AttackRollParams, CheckRollParams
+from sidequest.game.ruleset.resolution import (
+    AttackRollParams,
+    CheckRollParams,
+    OpponentAttackOutcome,
+)
 from sidequest.protocol.models import InitiativeEntry
 
 
@@ -79,6 +83,32 @@ class SwnRulesetModule(RulesetModule):
         return AttackRollParams(
             modifier=attack_bonus + combat_skill + attr_mod,
             target_number=target_ac,
+        )
+
+    def resolve_opponent_attack(
+        self,
+        *,
+        attacker_stats: dict[str, int],
+        stat_check: str,
+        attack_bonus: int,
+        combat_skill: int,
+        target_ac: int,
+        d20: int,
+    ) -> OpponentAttackOutcome:
+        """The enemy turn (SWN beat_selection hp_depletion combat): the opponent
+        rolls d20 + attack_bonus + combat_skill + attribute mod vs the player's
+        AC. Symmetric to ``attack_params`` but with the opponent as attacker and
+        a concrete d20 supplied by the caller (server-rolled). Pure — the caller
+        applies damage + emits OTEL."""
+        attr_mod = self.stat_modifier(attacker_stats, stat_check)
+        modifier = int(attack_bonus) + int(combat_skill) + attr_mod
+        total = int(d20) + modifier
+        return OpponentAttackOutcome(
+            hit=total >= int(target_ac),
+            attack_total=total,
+            modifier=modifier,
+            d20=int(d20),
+            target_ac=int(target_ac),
         )
 
     def ship_attack_params(

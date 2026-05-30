@@ -16,6 +16,22 @@ class AttackRollParams:
 
 
 @dataclass(frozen=True)
+class OpponentAttackOutcome:
+    """Result of one server-driven enemy attack (the SWN beat_selection enemy turn).
+
+    The opponent rolls d20 + modifier vs the player's AC; ``hit`` is the verdict.
+    Carries the full to-hit math so the GM-panel lie-detector can audit the
+    reprisal (playtest perseus_cloud: hp_depletion combat had no enemy turn, so
+    the player could never lose)."""
+
+    hit: bool
+    attack_total: int  # d20 + modifier
+    modifier: int  # attack_bonus + combat_skill + attribute mod
+    d20: int
+    target_ac: int
+
+
+@dataclass(frozen=True)
 class CheckRollParams:
     """A non-beat check (skill check or save): the dice pool, modifier, and difficulty."""
     sides: int           # 6 for 2d6 skill checks, 20 for saves

@@ -81,6 +81,22 @@ class RulesetModule(ABC):
         """Modifier + target number for one ship-gunnery shot (dogfight SWN layer)."""
         raise NotImplementedError(f"{self.slug} ruleset has no ship-gunnery resolution")
 
+    def resolve_opponent_attack(
+        self,
+        *,
+        attacker_stats: dict[str, int],
+        stat_check: str,
+        attack_bonus: int,
+        combat_skill: int,
+        target_ac: int,
+        d20: int,
+    ):
+        """The enemy turn for hp_depletion combat: opponent rolls vs player AC.
+        Ruleset-specific (SWN); rulesets whose combat is dial/opposed_check (e.g.
+        native) resolve the opponent through the opposed-check branch instead and
+        never call this."""
+        raise NotImplementedError(f"{self.slug} ruleset has no server-driven enemy-attack turn")
+
     def check_params(self, *, stats, attribute, skill_level, difficulty_key, label, cfg):
         raise NotImplementedError(f"{self.slug} ruleset has no non-beat skill-check resolution")
 

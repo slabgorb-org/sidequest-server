@@ -366,6 +366,29 @@ def _is_adversarial(category: str) -> bool:
     return category in _ADVERSARIAL_CATEGORIES
 
 
+def _requires_opponent(cdef) -> bool:
+    """True when this confrontation MUST seat an opponent-side Other.
+
+    Two sources of the requirement:
+
+    1. Adversarial category (``combat`` / ``movement``) — ADR-116's staged
+       rollout, unchanged.
+    2. ``resolution_mode: opposed_check`` — an opposed check resolves by
+       rolling BOTH sides' d20+modifier each beat (``narration_apply.
+       _resolve_opposed_check_branch``). That branch finds the opposing
+       roller via ``actor.side == "opponent"`` and hard-fails if none is
+       seated, so the Other MUST be opponent-side regardless of category.
+       This is the precise completion of ADR-116's social deferral
+       (playtest 59-8, Keith's "dice-driven" call): we don't make *all*
+       ``social`` adversarial — only the ones that actually roll an
+       opposed check need (and get) a metric-bearing Other. A social
+       ``beat_selection`` parley still seats its NPC as ``neutral``.
+    """
+    if _is_adversarial(cdef.category):
+        return True
+    return cdef.resolution_mode == ResolutionMode.opposed_check
+
+
 def _npc_is_adversary(npc: Npc) -> bool:
     """Sealed-letter duel candidacy: does this same-location NPC read as the Other?
 
@@ -825,7 +848,11 @@ def instantiate_encounter_from_trigger(
         seating_source = "location_fallback"
         npcs_present, location_available = _npc_fallback_at_location(
             snapshot,
-            adversarial=_is_adversarial(cdef.category),
+            # opposed_check social confrontations (e.g. social_duel) need the
+            # Other seated opponent-side so its dial can advance on its own
+            # roll — _requires_opponent folds that in alongside the adversarial
+            # categories (playtest 59-8).
+            adversarial=_requires_opponent(cdef),
             acting_character_name=player_name,
             adversary_only=cdef.resolution_mode == ResolutionMode.sealed_letter_lookup,
         )
@@ -848,10 +875,13 @@ def instantiate_encounter_from_trigger(
     # PLAYER, never "no opponent". A chase requires a pursuer; a one-sided
     # chase is not a confrontation — it's narration ("race against time"),
     # which the dispatch handler renders as prose when this raises. ``social``
-    # / ``pre_combat`` remain exempt for now (staged rollout — see
-    # ``_ADVERSARIAL_CATEGORIES``).
+    # / ``pre_combat`` (beat_selection) remain exempt from the category guard
+    # (staged rollout — see ``_ADVERSARIAL_CATEGORIES``), BUT an opposed_check
+    # confrontation of ANY category needs an Other to roll against — a duel of
+    # wits with nobody on the other side cannot resolve — so _requires_opponent
+    # folds opposed_check in here too (playtest 59-8).
     if (
-        _is_adversarial(cdef.category)
+        _requires_opponent(cdef)
         and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup
         and not npcs_present
     ):

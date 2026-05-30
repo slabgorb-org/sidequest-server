@@ -190,25 +190,24 @@ async def bound_hub() -> WatcherHub:
 # --- AC-3 / AC-6 — iter=1 cache_control marker (the fix) -------------------
 
 
-def test_build_messages_payload_marks_iter1_user_message_at_1h() -> None:
-    """AC-3 / AC-6 (direct, unit). Calling `_build_messages_payload` with
-    `is_continuation=False` (the iter=1 path) on a 1h-configured client
-    MUST return a payload where the LAST content block of the LAST message
-    carries `cache_control={"type": "ephemeral", "ttl": "1h"}`.
+def test_build_messages_payload_marks_iter1_user_message_at_volatile_5m() -> None:
+    """AC-3 / AC-6 (direct, unit; TIER SUPERSEDED BY 61-19). Calling
+    `_build_messages_payload` with `is_continuation=False` (the iter=1 path)
+    on a 1h-configured client MUST return a payload where the LAST content
+    block of the LAST message carries
+    `cache_control={"type": "ephemeral", "ttl": "5m"}` — the 61-19 volatile
+    tier, NOT 1h.
 
-    Why this is the fix:
-    Anthropic auto-caches content that sits past the last explicit
-    cache_control breakpoint at the default 5m TTL. The system_blocks+tools
-    prefix is marked 1h, but the user message + recency-zone deltas
-    (~17K tok) added on iter=1 carry no marker, so the API auto-mints a 5m
-    cache for them. On iter=2 the 60-4 continuation marker writes the same
-    content again at 1h, displacing the 5m one and burning the rebate.
-    Marking iter=1 at the configured TTL overrides the auto-5m default, so
-    the iter=1 write lands at 1h directly and iter=2 reads it.
+    Why the marker exists (60-7): Anthropic auto-caches content past the last
+    explicit breakpoint at the default 5m. Leaving the iter=1 tail unmarked
+    let the API auto-mint it, and the 60-4 continuation marker then displaced
+    it — burning a write. An explicit marker pins the tail to one write/turn.
 
-    Regression guard for the iter=1 cache_control marker introduced by 60-7.
-    Pre-60-7, `_build_messages_payload` short-circuited on `is_continuation=False`
-    and the iter=1 user message tail carried no marker.
+    Why the TTL is 5m, not 1h (61-19, 2026-05-30): the user-message tail is
+    VOLATILE (changes every turn), so 1h's 2x premium is wasted on it. An
+    empirical probe confirmed the stable prefix still reads at 1h via its own
+    `system_blocks[0]` breakpoint while only this tail writes — at 5m. The
+    marker's PRESENCE is the 60-7 fix; its TTL VALUE is the 61-19 fix.
     """
     sdk = _Sdk(responses=[])
     client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
@@ -232,12 +231,13 @@ def test_build_messages_payload_marks_iter1_user_message_at_1h() -> None:
     assert isinstance(last_block, dict), (
         f"newest message's last content block must be a dict; got {last_block!r}"
     )
-    assert last_block.get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
+    assert last_block.get("cache_control") == {"type": "ephemeral", "ttl": "5m"}, (
         "iter=1 (is_continuation=False) MUST mark the newest user message's "
-        "last content block with cache_control={'type':'ephemeral','ttl':'1h'} "
-        "to override Anthropic's auto-5m default on the post-prefix tail. "
-        f"Got last_block={last_block!r}. See sprint/.session/60-7-session.md "
-        "SM post-probe scope reconciliation for the empirical evidence."
+        "last content block with cache_control={'type':'ephemeral','ttl':'5m'} "
+        "(61-19 volatile tier) — the marker overrides Anthropic's auto-5m "
+        "default and pins the volatile tail to a single 5m write/turn, while "
+        "the stable prefix keeps 1h via system_blocks[0]. "
+        f"Got last_block={last_block!r}."
     )
 
 
@@ -314,9 +314,9 @@ def test_build_messages_payload_promotes_bare_string_content_to_block_list() -> 
     assert block.get("text") == "say something", (
         f"promoted block must preserve the original string; got text={block.get('text')!r}"
     )
-    assert block.get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
-        "promoted text block MUST carry cache_control{'type':'ephemeral','ttl':'1h'} "
-        f"on iter=1; got {block!r}"
+    assert block.get("cache_control") == {"type": "ephemeral", "ttl": "5m"}, (
+        "promoted text block MUST carry cache_control{'type':'ephemeral','ttl':'5m'} "
+        f"on iter=1 (61-19 volatile tier); got {block!r}"
     )
 
 
@@ -367,14 +367,14 @@ def test_build_messages_payload_promotes_bare_string_at_5m_ttl() -> None:
 
 
 @pytest.mark.asyncio
-async def test_single_iter_turn_carries_iter1_1h_cache_control_marker(
+async def test_single_iter_turn_carries_iter1_volatile_5m_cache_control_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-3 / AC-6 (integration). A turn that ends without a tool_use
-    (single `messages.create` call, iter=1 only) MUST send a payload whose
-    newest user message's last content block carries
-    `cache_control={'type':'ephemeral','ttl':'1h'}` on a 1h-configured
-    client.
+    """AC-3 / AC-6 (integration; TIER SUPERSEDED BY 61-19). A turn that ends
+    without a tool_use (single `messages.create` call, iter=1 only) MUST send
+    a payload whose newest user message's last content block carries
+    `cache_control={'type':'ephemeral','ttl':'5m'}` (the 61-19 volatile tier)
+    on a 1h-configured client.
 
     This is the inversion of 60-4's
     `test_no_continuation_marker_on_single_iter_turn` (which was edited in
@@ -408,11 +408,12 @@ async def test_single_iter_turn_carries_iter1_1h_cache_control_marker(
     assert isinstance(last_block, dict), (
         f"newest message's last content block must be a dict; got {last_block!r}"
     )
-    assert last_block.get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
+    assert last_block.get("cache_control") == {"type": "ephemeral", "ttl": "5m"}, (
         "single-iter turn (iter=1 only) MUST carry cache_control "
-        "{'type':'ephemeral','ttl':'1h'} on the newest user message's last "
-        "content block. Without it the API auto-caches the post-prefix tail "
-        "at 5m, wasting ~$0.04/turn on a write that never gets reused. "
+        "{'type':'ephemeral','ttl':'5m'} on the newest user message's last "
+        "content block (61-19 volatile tier). The marker's presence overrides "
+        "the API auto-5m default and pins one 5m write/turn; the stable prefix "
+        "keeps 1h via system_blocks[0]. "
         f"Got last_block={last_block!r}."
     )
 
@@ -454,9 +455,10 @@ async def test_continuation_still_carries_marker_on_final_user_message(
     assert isinstance(last_block, dict), (
         f"continuation newest-message last block must be a dict; got {last_block!r}"
     )
-    assert last_block.get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
-        "60-4 continuation marker MUST still land on iter=2's newest message "
-        f"after 60-7 adds iter=1 marker; got {last_block!r}"
+    assert last_block.get("cache_control") == {"type": "ephemeral", "ttl": "5m"}, (
+        "continuation marker MUST still land on iter=2's newest message "
+        "(61-19 volatile 5m tier) after 60-7 adds the iter=1 marker; "
+        f"got {last_block!r}"
     )
 
 

@@ -133,6 +133,20 @@ CacheTtl = Literal["5m", "1h"]
 _VALID_TTLS: frozenset[str] = frozenset({"5m", "1h"})
 
 
+# Story 61-19 — the cache tier for VOLATILE (changes-every-turn) content.
+# The per-turn message tail (player action + tool_result deltas, and the
+# valley/recency system content that rides between the stable-prefix
+# breakpoint and the message breakpoint) is rewritten every turn and read
+# back at most once — within the same turn's tool loop, seconds later. The
+# 1h tier's 2x write premium only pays off when content persists and is
+# re-read across turns; volatile content has zero cross-turn value, so it
+# rides the 5m tier (1.25x), which still covers the within-turn read while
+# never paying the 1h premium. The STABLE system prefix + tools keep
+# ``self.cache_ttl`` (1h by default) — they amortize across turns. See
+# session 894 forensics in ``sprint/context/context-story-61-19.md``.
+_VOLATILE_CACHE_TTL: CacheTtl = "5m"
+
+
 # 1h ephemeral cache is a beta: without this header on the request the
 # API rejects ``ttl: "1h"`` and every narration turn 400s. Sent only on
 # the 1h path — see ``complete_with_tools``.
@@ -505,6 +519,22 @@ class AnthropicSdkClient:
                 if session_id is not None:
                     self._emit_cost_running_total(
                         session_id=session_id,
+                        model=last_model,
+                    )
+                    # Story 61-19 AC5 — per-turn cache-write split so the GM
+                    # panel can spot churn regressions. Under the 61-19 tier
+                    # layout the TTL tier IS the stable/tail distinction: the
+                    # stable system prefix is the only 1h-marked content, and
+                    # the volatile per-turn tail is the only 5m-marked content.
+                    # A healthy session writes the stable prefix once (warmup)
+                    # then reads it (1h write ~0 thereafter); the tail write
+                    # recurs per turn but small. If a future field re-promotes
+                    # growth into the volatile block, tail_write_tokens climbs
+                    # and this event surfaces it. Fires once per turn (not per
+                    # tool-loop iter), aggregating the loop's writes.
+                    self._emit_cache_write_split(
+                        stable_prefix_write_tokens=cumulative_cache_write_1h,
+                        tail_write_tokens=cumulative_cache_write_5m,
                         model=last_model,
                     )
 
@@ -889,6 +919,35 @@ class AnthropicSdkClient:
         self._session_ceiling_announced.add(session_id)
         raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
 
+    def _emit_cache_write_split(
+        self,
+        *,
+        stable_prefix_write_tokens: int,
+        tail_write_tokens: int,
+        model: str,
+    ) -> None:
+        """Per-turn cache-write split (Story 61-19 AC5).
+
+        Splits the turn's cache_write into the amortizing stable prefix
+        (1h-tier write) vs the volatile per-turn tail (5m-tier write) so the
+        GM panel can plot write-churn and catch a regression that re-promotes
+        a growing field into the volatile block. Fires once per successful
+        turn (not per tool-loop iteration). Severity ``info`` — a routine
+        baseline pulse, grouped under ``narrator.sdk`` with the sibling cache
+        events.
+        """
+        _watcher_publish_event(
+            "narrator.cache.write_split",
+            {
+                "stable_prefix_write_tokens": stable_prefix_write_tokens,
+                "tail_write_tokens": tail_write_tokens,
+                "total_write_tokens": stable_prefix_write_tokens + tail_write_tokens,
+                "model": model,
+            },
+            component="narrator.sdk",
+            severity="info",
+        )
+
     def _emit_cost_running_total(
         self,
         *,
@@ -996,9 +1055,18 @@ class AnthropicSdkClient:
         if isinstance(last_content, list) and last_content:
             last_block = last_content[-1]
             if isinstance(last_block, dict):
+                # Story 61-19 — the newest message tail is VOLATILE (it changes
+                # every turn). It still carries a marker (preserving 60-7's
+                # single-write / within-turn-reuse property — the API would
+                # otherwise auto-cache the post-prefix tail at 5m and the
+                # continuation could displace it), but at the 5m volatile tier,
+                # NOT ``self.cache_ttl``. Marking it 1h paid the 2x write
+                # premium on content invalidated next turn — ~9.7k tok/turn of
+                # waste (session 894). The stable system prefix keeps 1h
+                # (``_build_system_array``); only this per-turn tail moves.
                 last_block["cache_control"] = {
                     "type": "ephemeral",
-                    "ttl": self.cache_ttl,
+                    "ttl": _VOLATILE_CACHE_TTL,
                 }
             else:
                 # No Silent Fallbacks: every live call site appends dict blocks

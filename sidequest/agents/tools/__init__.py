@@ -10,6 +10,7 @@ adapter so the registry is loaded by importing this package.
 from sidequest.agents.tools import (
     adjust_system_strain,  # noqa: F401
     advance_confrontation,  # noqa: F401
+    commit_effort,  # noqa: F401
     advance_encounter_beat,  # noqa: F401
     advance_scene_clue,  # noqa: F401
     apply_damage,  # noqa: F401
@@ -20,6 +21,7 @@ from sidequest.agents.tools import (
     generate_encounter,  # noqa: F401
     generate_loadout,  # noqa: F401
     generate_name,  # noqa: F401
+    long_rest,  # noqa: F401
     get_world_grounding,  # noqa: F401
     list_npcs_in_scene,  # noqa: F401
     lookup_monster,  # noqa: F401
@@ -38,4 +40,5 @@ from sidequest.agents.tools import (
     tick_tropes,  # noqa: F401
     update_npc_disposition,  # noqa: F401
     update_resource_pool,  # noqa: F401
+    veterans_luck,  # noqa: F401
 )

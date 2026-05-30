@@ -7,6 +7,7 @@ Re-exported by session_handler for back-compat.
 from __future__ import annotations
 
 import logging
+import random
 import re
 from dataclasses import dataclass, field
 from random import Random
@@ -216,6 +217,127 @@ def _resolve_innate_cast_for_beat(
     spent_at_level = magic_state.spent_spells.setdefault(actor.name, {}).setdefault(spell.level, [])
     if spell_id not in spent_at_level:
         spent_at_level.append(spell_id)
+
+
+def _resolve_wwn_cast_for_beat(
+    *,
+    sel: BeatSelection,
+    actor: EncounterActor,
+    snapshot: GameSnapshot,
+    pack: GenrePack,
+    encounter,
+    cdef,
+) -> None:
+    """WWN Content Plan 3 Task 7 — drive WwnRulesetModule.resolve_spellcast for a
+    cast_spell beat, apply rolled spell damage to the defender's HP, then run the
+    SAME CWN/WWN downed seam the strike path uses.
+
+    Mirrors ``_resolve_innate_cast_for_beat``'s guard idiom: each missing
+    precondition publishes a ``_watcher_publish`` event (the lie-detector) and
+    the cast is refused-but-recorded — never a silent no-op, never a raise on a
+    normal miss. ``resolve_spellcast`` emits the ``wwn.spell.cast`` span on every
+    call (including a validation refusal); this dispatch applies its damage and
+    drives the downed seam.
+    """
+    spell_id = getattr(sel, "spell_id", None)
+    if not spell_id:
+        _watcher_publish(
+            "wwn.cast_spell_no_spell_id",
+            {"actor": actor.name, "beat_id": "cast_spell"},
+            component="magic",
+            severity="warning",
+        )
+        return
+
+    catalog = pack.wwn_spell_catalog
+    if catalog is None:
+        _watcher_publish(
+            "wwn.cast_spell_no_catalog",
+            {"actor": actor.name, "spell_id": spell_id},
+            component="magic",
+            severity="warning",
+        )
+        return
+    try:
+        spell = catalog.get(spell_id)
+    except KeyError:
+        _watcher_publish(
+            "wwn.cast_spell_unknown",
+            {
+                "actor": actor.name,
+                "spell_id": spell_id,
+                "available_ids": [s.id for s in catalog.spells],
+            },
+            component="magic",
+            severity="warning",
+        )
+        return
+
+    caster_core = snapshot.find_creature_core(actor.name)
+    if caster_core is None:
+        _watcher_publish(
+            "wwn.cast_spell_no_caster_core",
+            {"actor": actor.name, "spell_id": spell_id},
+            component="magic",
+            severity="warning",
+        )
+        return
+
+    # Defender resolution (mirror the strike path): the first live actor on the
+    # side OPPOSITE the caster. resolve_spellcast still spends the cast with
+    # save_made=None when there is no defender (per its docstring), so a missing
+    # defender is NOT a guard-refusal here — it is a valid no-target cast.
+    from sidequest.game.beat_kinds import _opposite_side_first_actor
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.ruleset.wwn import WwnRulesetModule
+    from sidequest.server.dispatch.downed_seam import run_cwn_wwn_downed_seam
+
+    down_name = _opposite_side_first_actor(encounter, actor.side)
+    target_core = snapshot.find_creature_core(down_name) if down_name is not None else None
+
+    module = get_ruleset_module("wwn")
+    assert isinstance(module, WwnRulesetModule)
+    cfg = pack.rules.ruleset_config()
+
+    # Defender ability scores — sourced the SAME way the downed seam resolves
+    # them (PC stats block / confrontation opponent scores). resolve_spellcast
+    # rolls the defender save itself; we only supply the stat dict.
+    target_stats: dict[str, int] | None = None
+    if target_core is not None and spell.save is not None:
+        pc = next((c for c in snapshot.characters if c.core.name == down_name), None)
+        target_stats = dict(pc.stats) if pc is not None else cdef.opponent_ability_scores()
+
+    result = module.resolve_spellcast(
+        caster_core=caster_core,
+        spell=spell.to_cast_input(),
+        target_core=target_core if target_stats is not None else None,
+        target_stats=target_stats,
+        cfg=cfg,
+        rng=random,
+    )
+
+    # Apply rolled spell damage to the defender's HP channel the SAME way the
+    # strike path does (apply_beat_hp_channel emits the state_patch.hp span),
+    # then run the shared CWN/WWN downed seam if the defender hit 0 HP.
+    if result.cast and result.damage > 0 and target_core is not None:
+        from sidequest.game.beat_kinds import apply_beat_hp_channel
+
+        apply_beat_hp_channel(
+            target=target_core,
+            channel="strike",
+            damage_total=result.damage,
+            target_mitigation=0,
+            source_beat_id=f"cast_spell:{spell_id}",
+        )
+        run_cwn_wwn_downed_seam(
+            ruleset=module,
+            snapshot=snapshot,
+            encounter=encounter,
+            cdef=cdef,
+            pack=pack,
+            actor_side=actor.side,
+            rng=random,
+        )
 
 
 def _all_opponents_mindless(opp_actors, pack: GenrePack | None) -> bool:
@@ -3272,11 +3394,24 @@ def _apply_narration_result_to_snapshot(
                 # "infrastructure present but cast didn't fire" — per
                 # CLAUDE.md OTEL principle (lie detector for wiring gaps).
                 if beat.id == "cast_spell":
-                    _resolve_innate_cast_for_beat(
-                        sel=sel,
-                        actor=actor,
-                        snapshot=snapshot,
-                    )
+                    if pack and pack.rules and pack.rules.ruleset == "wwn":
+                        # WWN Content Plan 3 Task 7 — route to the WWN cast spine
+                        # (damage + downed seam). cdef/enc are in local scope here
+                        # (the legacy beat loop binds them above).
+                        _resolve_wwn_cast_for_beat(
+                            sel=sel,
+                            actor=actor,
+                            snapshot=snapshot,
+                            pack=pack,
+                            encounter=enc,
+                            cdef=cdef,
+                        )
+                    else:
+                        _resolve_innate_cast_for_beat(
+                            sel=sel,
+                            actor=actor,
+                            snapshot=snapshot,
+                        )
 
                 # ─── B/X morale per-beat hook (Task 9, architect feedback
                 # 2026-05-08) ───────────────────────────────────────────

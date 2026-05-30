@@ -19,6 +19,7 @@ memorize anything this morning". The two gates are NOT collapsed into one.
 
 from __future__ import annotations
 
+from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.error import PackError
 from sidequest.genre.models.character import ClassDef
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
@@ -36,6 +37,7 @@ def beats_available_for(
     class_def: ClassDef,
     spell_slots_remaining: float,
     prepared_spells: dict[int, list[str]] | None = None,
+    spellcasting: SpellcastingState | None = None,
 ) -> list[BeatDef]:
     """Return the BeatDefs the given class can select this turn.
 
@@ -44,6 +46,12 @@ def beats_available_for(
     skipped and behavior matches the pre-47-10 contract. Existing
     callers (narrator.py, orchestrator.py) continue to work; new
     callers should pass it.
+
+    ``spellcasting`` (WWN arm, Task 5): when a ``SpellcastingState`` is
+    provided, the cast_spell gate uses WWN economy (casts_remaining +
+    non-empty prepared list) and completely ignores ``spell_slots_remaining``
+    / ``prepared_spells``.  When ``spellcasting is None`` the existing B/X
+    behavior is preserved byte-for-byte.
     """
     if not class_def.encounter_beat_choices:
         raise PackError(f"class {class_def.display_name!r} has empty encounter_beat_choices")
@@ -68,14 +76,22 @@ def beats_available_for(
         if beat.id not in class_def.encounter_beat_choices:
             continue
         if beat.id == "cast_spell":
-            if spell_slots_remaining < 1.0:
-                continue
-            # Prepared-list gate runs only when the caller opts in by
-            # passing prepared_spells. Backward-compat: existing callers
-            # that don't pass the param skip this gate and rely on the
-            # slot gate alone.
-            if prepared_spells is not None and not _has_any_prepared(prepared_spells):
-                continue
+            if spellcasting is not None:
+                # WWN arm: gate on SpellcastingState, ignore B/X slots.
+                if spellcasting.casts_remaining < 1:
+                    continue
+                if not spellcasting.prepared:
+                    continue
+            else:
+                # B/X arm — unchanged.
+                if spell_slots_remaining < 1.0:
+                    continue
+                # Prepared-list gate runs only when the caller opts in by
+                # passing prepared_spells. Backward-compat: existing callers
+                # that don't pass the param skip this gate and rely on the
+                # slot gate alone.
+                if prepared_spells is not None and not _has_any_prepared(prepared_spells):
+                    continue
         pool.append(beat)
     return pool
 
@@ -85,17 +101,23 @@ def cast_spell_rejection_reason(
     class_def: ClassDef,
     spell_slots_remaining: float,
     prepared_spells: dict[int, list[str]] | None = None,
+    spellcasting: SpellcastingState | None = None,
 ) -> str | None:
     """Why was cast_spell filtered out for this actor?
 
     Returns one of:
       - ``None`` — cast_spell was selectable (no rejection), OR ``prepared_spells``
         was omitted (backward-compat caller — gate is dormant)
-      - ``"no_slots"`` — slot bar at zero; rest required
+      - ``"no_slots"`` — slot bar at zero; rest required (B/X) OR
+        casts_remaining == 0 (WWN — semantically "needs rest")
       - ``"unprepared"`` — caller passed a non-None ``prepared_spells`` and the
-        actor has no spells prepared at any level
+        actor has no spells prepared at any level (B/X), OR WWN
+        ``spellcasting.prepared`` is empty
       - ``"class"`` — class isn't allowed cast_spell at all (Fighter/Thief)
       - ``"absent"`` — beat isn't in this confrontation's pool
+
+    When ``spellcasting`` is provided the WWN economy takes precedence and
+    ``spell_slots_remaining``/``prepared_spells`` are ignored.
 
     Used by OTEL emitters to stamp distinct decision values on the
     confrontation.beat_filter span — the GM panel reads them to tell
@@ -108,6 +130,14 @@ def cast_spell_rejection_reason(
         return "class"
     if "cast_spell" not in (class_def.encounter_beat_choices or []):
         return "class"
+    if spellcasting is not None:
+        # WWN arm: gate on SpellcastingState, ignore B/X slots.
+        if spellcasting.casts_remaining < 1:
+            return "no_slots"
+        if not spellcasting.prepared:
+            return "unprepared"
+        return None
+    # B/X arm — unchanged.
     if spell_slots_remaining < 1.0:
         return "no_slots"
     # Symmetric with beats_available_for: when prepared_spells is omitted

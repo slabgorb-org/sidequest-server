@@ -82,9 +82,16 @@ SHIPPED_PACKS = [
 # sealed_letter_lookup (dogfight); those remain covered by the SHIPPED_PACKS
 # threshold tests above, which filter by resolution_mode and so correctly skip
 # the metricless hp_depletion combats rather than asserting against them.
+#
+# elemental_harmony is excluded for the same reason as of the WWN binding: its
+# combat confrontation ("Martial Exchange") moved off resolution_mode:
+# opposed_check to ruleset:wwn beat_selection + win_condition: hp_depletion,
+# exactly mirroring the space_opera→SWN migration. elemental_harmony therefore
+# intentionally carries ZERO opposed_check confrontations. Its remaining dial
+# confrontations (negotiation "Diplomatic Council", chase "Pursuit") are still
+# covered by the SHIPPED_PACKS threshold tests above.
 COMBAT_PACKS = [
     "caverns_and_claudes",
-    "elemental_harmony",
     "mutant_wasteland",
 ]
 

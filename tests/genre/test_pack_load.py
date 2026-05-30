@@ -131,9 +131,32 @@ def test_mutant_wasteland_pack_loads_with_dual_dial_schema():
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_elemental_harmony_pack_loads_with_dual_dial_schema():
+    """elemental_harmony is the WWN-bound pack: its ``combat`` confrontation
+    ("Martial Exchange") moved off opposed_check dual-dial metrics to
+    ``resolution_mode: beat_selection`` + ``win_condition: hp_depletion`` —
+    combat now resolves on HP reaching 0 and legitimately carries NO
+    player_metric/opponent_metric. The dual-dial invariant therefore only
+    applies to its remaining dial confrontations (negotiation "Diplomatic
+    Council", chase "Pursuit"), which are ``win_condition: dial_threshold``
+    (the model default) and still carry metrics. Filter on win_condition so
+    the metricless hp_depletion confrontations are skipped rather than
+    NPE-ing on ``player_metric.threshold``. At least one dial confrontation
+    must remain so this assertion does not pass vacuously."""
     pack = load_pack("elemental_harmony")
     assert pack.rules is not None
-    for cdef in pack.rules.confrontations:
+    dial_confrontations = [
+        cdef
+        for cdef in pack.rules.confrontations
+        if (
+            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
+        )
+        == "dial_threshold"
+    ]
+    assert dial_confrontations, (
+        "elemental_harmony must retain at least one dial_threshold confrontation "
+        "(negotiation/chase) for this dual-dial assertion to be meaningful"
+    )
+    for cdef in dial_confrontations:
         assert cdef.player_metric.threshold > 0
         assert cdef.opponent_metric.threshold > 0
         for beat in cdef.beats:

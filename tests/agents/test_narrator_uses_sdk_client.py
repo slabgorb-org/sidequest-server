@@ -200,7 +200,10 @@ async def test_orchestrator_routes_narration_through_sdk(
     # surface and onto the Intent Router pre-narrator pass. Back to 28.
     # CWN System Strain (#506) added adjust_system_strain (29th tool).
     # CWN combat lethality (#507) added stabilize_mortal_injury (30th tool). 30.
-    assert len(sent_tools) == len(default_registry.list_names()) == 30
+    # WWN content wiring (Plan 3) added the narrator-triggered WWN mechanics as
+    # WRITE tools mirroring adjust_system_strain: commit_effort (31st),
+    # veterans_luck (32nd), long_rest (33rd). 33.
+    assert len(sent_tools) == len(default_registry.list_names()) == 33
 
     # 3. The result carries the SDK's text.
     assert result.narration == fake_response_text

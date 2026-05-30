@@ -53,6 +53,7 @@ from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.visibility import VisibilityBaseline
 from sidequest.genre.models.world import CartographyConfig, WorldConfig
+from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 
 
 class RecommendedPlayers(BaseModel):
@@ -198,6 +199,7 @@ class GenrePack(BaseModel):
     projection_rules: ProjectionRules | None = None
     visibility_baseline: VisibilityBaseline | None = None
     lethality_policy: LethalityPolicy | None = None
+    wwn_spell_catalog: WwnSpellCatalog | None = None
     source_dir: Path | None = None
     client_theme_css: str | None = None
     """Raw contents of the genre's top-level ``client_theme.css`` if present.

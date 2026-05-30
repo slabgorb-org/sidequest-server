@@ -414,3 +414,46 @@ def wwn_veterans_luck_span(
     }
     with Span.open(SPAN_WWN_VETERANS_LUCK, attributes, tracer_override=_tracer):
         pass
+
+
+# ---------------------------------------------------------------------------
+# Long rest span (Plan 3 — party-wide Effort reclaim + casts refresh)
+# ---------------------------------------------------------------------------
+
+SPAN_WWN_LONG_REST = "wwn.long_rest"
+SPAN_ROUTES[SPAN_WWN_LONG_REST] = SpanRoute(
+    event_type="state_transition",
+    component="wwn",
+    extract=lambda span: {
+        "field": "long_rest",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "day_effort_reclaimed": (span.attributes or {}).get("day_effort_reclaimed", False),
+        "casts_refreshed_to": (span.attributes or {}).get("casts_refreshed_to", 0),
+        "reprepared": (span.attributes or {}).get("reprepared", False),
+        "comfortable": (span.attributes or {}).get("comfortable", True),
+    },
+)
+
+
+def wwn_long_rest_span(
+    *,
+    actor: str,
+    day_effort_reclaimed: bool,
+    casts_refreshed_to: int,
+    reprepared: bool,
+    comfortable: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a wwn.long_rest span (lie-detector for WWN long rest per PC)."""
+    attributes: dict[str, Any] = {
+        "field": "long_rest",
+        "actor": actor,
+        "day_effort_reclaimed": day_effort_reclaimed,
+        "casts_refreshed_to": casts_refreshed_to,
+        "reprepared": reprepared,
+        "comfortable": comfortable,
+        **attrs,
+    }
+    with Span.open(SPAN_WWN_LONG_REST, attributes, tracer_override=_tracer):
+        pass

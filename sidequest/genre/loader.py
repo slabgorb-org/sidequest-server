@@ -63,6 +63,7 @@ from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.world import CartographyConfig, NavigationMode, WorldConfig
+from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.genre.resolve import resolve_trope_inheritance
 
 # ---------------------------------------------------------------------------
@@ -636,6 +637,81 @@ def _validate_saving_throws_refs(classes: list[ClassDef], *, has_spell_catalogs:
         )
 
 
+def _load_wwn_spell_catalog(
+    path: Path,
+    rules: RulesConfig,
+    classes: list[ClassDef],
+) -> WwnSpellCatalog | None:
+    """Load spells_wwn.yaml for wwn packs; return None for non-wwn packs.
+
+    Fail-loud contract: if ruleset == 'wwn' AND the pack declares at least one
+    caster class (magic_access == 'wwn' with non-empty casts_per_day_by_level)
+    AND spells_wwn.yaml is absent, raise GenreLoadError.  No silent fallback.
+    """
+    if rules.ruleset != "wwn":
+        return None
+
+    spells_file = path / "spells_wwn.yaml"
+
+    if not spells_file.exists():
+        # Fail loud if there are caster classes — they need a spell catalog.
+        caster_classes = [
+            c
+            for c in classes
+            if c.magic_access == "wwn"
+            and c.wwn_magic is not None
+            and bool(c.wwn_magic.casts_per_day_by_level)
+        ]
+        if caster_classes:
+            names = [c.id for c in caster_classes]
+            raise GenreLoadError(
+                path=spells_file,
+                detail=(
+                    f"wwn pack has caster classes {names} but spells_wwn.yaml is absent. "
+                    "Author a spell catalog or remove the casts_per_day_by_level entries."
+                ),
+            )
+        return None
+
+    from sidequest.genre.models.wwn_spell import load_wwn_spell_catalog as _load
+
+    try:
+        return _load(spells_file)
+    except Exception as exc:
+        raise GenreLoadError(path=spells_file, detail=str(exc)) from exc
+
+
+def _validate_wwn_starting_prepared_refs(
+    classes: list[ClassDef],
+    catalog: WwnSpellCatalog | None,
+) -> None:
+    """For a wwn pack with a loaded catalog, every starting_prepared spell id
+    in every class must exist in the catalog.  Fail loud on any unknown id.
+
+    No-op when catalog is None (packs with no spell catalog are covered by the
+    caster-without-catalog branch in _load_wwn_spell_catalog).  No-op when no
+    class has starting_prepared entries.
+    """
+    if catalog is None:
+        return
+    if not classes:
+        return
+
+    catalog_ids = {s.id for s in catalog.spells}
+    for cls in classes:
+        if cls.wwn_magic is None:
+            continue
+        for spell_id in cls.wwn_magic.starting_prepared:
+            if spell_id not in catalog_ids:
+                raise GenreLoadError(
+                    path=Path("spells_wwn.yaml"),
+                    detail=(
+                        f"class '{cls.id}' starting_prepared references unknown spell id "
+                        f"'{spell_id}'. Add the spell to spells_wwn.yaml or fix the id."
+                    ),
+                )
+
+
 # ---------------------------------------------------------------------------
 # World loader
 # ---------------------------------------------------------------------------
@@ -1160,6 +1236,16 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         has_spell_catalogs=(path / "spells").is_dir(),
     )
 
+    # WWN spell catalog — load spells_wwn.yaml when ruleset == "wwn".
+    # Fail loud: a wwn pack that declares a caster class (magic_access == "wwn"
+    # AND non-empty casts_per_day_by_level) but has no spells_wwn.yaml is an
+    # authoring bug. No silent fallback.
+    wwn_catalog = _load_wwn_spell_catalog(path, rules, classes_list)
+
+    # Fail loud: every starting_prepared spell id on every class must resolve
+    # against the loaded catalog.  Unknown ids are authoring bugs.
+    _validate_wwn_starting_prepared_refs(classes_list, wwn_catalog)
+
     # Base archetypes and npc_traits live at content root (parent of genre_packs/)
     content_root: Path | None = None
     parent = path.parent  # genre_packs/
@@ -1260,6 +1346,7 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         projection_rules=projection_rules,
         visibility_baseline=visibility_baseline,
         lethality_policy=lethality_policy,
+        wwn_spell_catalog=wwn_catalog,
         source_dir=path,
         client_theme_css=client_theme_css,
     )

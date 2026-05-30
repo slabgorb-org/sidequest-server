@@ -115,11 +115,12 @@ def seed_wwn_magic(
       * A ``SpellcastingState`` from the level-1 cast tables (chargen level is
         always 1): ``casts_per_day`` / ``max_spell_level`` from the by-level
         dicts (default 0 if absent), ``casts_remaining = casts_per_day`` (full
-        at chargen), ``prepared = []`` (spells chosen at rest, Plan 3). A class
-        with effort sources but NO cast tables (an Effort-only Art user, e.g.
-        the Vowed) yields ``spellcasting = None`` but still returns its effort
-        dict. ``prepared_by_level`` is capacity metadata for the rest/prepare
-        action — NOT seeded here.
+        at chargen), ``prepared`` seeded from ``class_def.wwn_magic.starting_prepared``
+        capped at the level-1 prepared capacity (``prepared_by_level["1"]``); when
+        that key is absent no truncation is applied.  A class with effort sources
+        but NO cast tables (an Effort-only Art user, e.g. the Vowed) yields
+        ``spellcasting = None`` but still returns its effort dict.
+        ``prepared_by_level`` is capacity metadata for the rest/prepare action.
     """
     if rules.ruleset != "wwn" or rules.wwn is None:
         return {}, None
@@ -149,8 +150,14 @@ def seed_wwn_magic(
     if cm.casts_per_day_by_level:
         casts_per_day = cm.casts_per_day_by_level.get(level_key, 0)
         max_spell_level = cm.max_spell_level_by_level.get(level_key, 0)
+        # Seed prepared from the class's starting_prepared list, capped at
+        # the level-1 prepared capacity.  When "1" is absent in prepared_by_level,
+        # len(cm.starting_prepared) is used as the fallback cap — effectively
+        # no truncation.
+        capacity = cm.prepared_by_level.get(level_key, len(cm.starting_prepared))
+        prepared = cm.starting_prepared[:capacity]
         spellcasting = SpellcastingState(
-            prepared=[],
+            prepared=prepared,
             casts_remaining=casts_per_day,
             casts_per_day=casts_per_day,
             max_spell_level=max_spell_level,

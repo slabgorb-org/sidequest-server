@@ -18,6 +18,7 @@ Two layers:
 from __future__ import annotations
 
 import asyncio
+import copy
 import random
 import textwrap
 from pathlib import Path
@@ -162,13 +163,11 @@ def _attach_world_scenario(
     existing one: the caverns scaffold authors ``beneath_sunden`` while the
     bind tests address ``flickering_reach``.
     """
-    import copy as _copy
-
     world = pack.worlds.get(world_slug)
     if world is None:
-        world = _copy.deepcopy(next(iter(pack.worlds.values())))
+        world = copy.deepcopy(next(iter(pack.worlds.values())))
         pack.worlds[world_slug] = world
-    world.scenarios = {scenario_id: scenario}  # type: ignore[attr-defined]
+    world.scenarios = {scenario_id: scenario}
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +179,8 @@ def _attach_world_scenario(
 def caverns_pack() -> GenrePack:
     """Load caverns as a fully-assembled GenrePack — used by the unit
     tests that only care about ``bind_scenario``'s behavior, not the
-    rest of the pack content. We mutate ``pack.scenarios`` per test."""
+    rest of the pack content. Each test deep-copies it and injects
+    scenarios (world- or pack-level) as needed."""
     path = CONTENT_ROOT / "caverns_and_claudes"
     if not path.is_dir():
         pytest.skip(f"content pack not found at {path}")
@@ -190,9 +190,7 @@ def caverns_pack() -> GenrePack:
 class TestBindScenarioUnit:
     def test_returns_none_when_pack_has_no_scenarios(self, caverns_pack: GenrePack) -> None:
         # caverns ships without scenarios — copy and ensure it stays empty.
-        import copy as _copy
-
-        pack = _copy.deepcopy(caverns_pack)
+        pack = copy.deepcopy(caverns_pack)
         pack.scenarios = {}
         snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="flickering_reach")
         result = bind_scenario(
@@ -202,8 +200,6 @@ class TestBindScenarioUnit:
         assert snap.scenario_state is None
 
     def test_seeds_matching_npc_beliefs_and_emits_event(self, caverns_pack: GenrePack) -> None:
-        import copy as _copy
-
         snap = GameSnapshot(
             genre_slug="caverns_and_claudes",
             world_slug="flickering_reach",
@@ -229,7 +225,7 @@ class TestBindScenarioUnit:
             ],
             suspects=[Suspect(id="a", archetype_ref="r", can_be_guilty=True)],
         )
-        pack = _copy.deepcopy(caverns_pack)
+        pack = copy.deepcopy(caverns_pack)
         # Story 71-32: scenarios bind from the active world, not pack root.
         _attach_world_scenario(pack, "flickering_reach", "whodunit", scenario)
 
@@ -337,6 +333,7 @@ async def _connect(handler: WebSocketSessionHandler) -> None:
 
 async def _walk_and_confirm(handler: WebSocketSessionHandler) -> list:
     sd = handler._session_data  # type: ignore[attr-defined]
+    assert sd is not None
     builder = sd.builder
     assert builder is not None
 
@@ -367,6 +364,7 @@ class TestDispatchIntegration:
         async def body() -> None:
             await _connect(handler)
             sd = handler._session_data  # type: ignore[attr-defined]
+            assert sd is not None
 
             # Inject a scenario into the ACTIVE WORLD before confirmation
             # (Story 71-32: confirmation binds from pack.worlds[sd.world_slug],
@@ -405,6 +403,7 @@ class TestDispatchIntegration:
         async def body() -> None:
             await _connect(handler)
             sd = handler._session_data  # type: ignore[attr-defined]
+            assert sd is not None
             # Default caverns has no scenarios; confirm that directly
             # so the test stays honest if content later adds one.
             assert sd.genre_pack.scenarios == {}
@@ -420,15 +419,14 @@ class TestDispatchIntegration:
 
 
 # ===========================================================================
-# Story 71-32 — World-level scenario discovery + world-aware binding (RED)
+# Story 71-32 — World-level scenario discovery + world-aware binding
 #
-# These tests encode the NEW contract and are expected to FAIL against the
-# current pack-level-only implementation:
-#   - World model gains a declared ``scenarios`` field (today: undeclared).
-#   - The loader discovers ``worlds/<world>/scenarios/`` (today: pack root only).
+# These tests assert the world-aware contract:
+#   - World model declares a ``scenarios`` field.
+#   - The loader discovers ``worlds/<world>/scenarios/``.
 #   - ``bind_scenario`` binds ONLY the active world's scenario via
-#     ``pack.worlds[world_slug].scenarios`` (today: ``next(iter(pack.scenarios))``,
-#     the first scenario in the WHOLE pack — world-agnostic).
+#     ``pack.worlds[world_slug].scenarios`` (NOT pack-level
+#     ``next(iter(pack.scenarios))`` — that would be world-agnostic).
 #   - Absence is explicit: a world with no scenario binds NOTHING and emits a
 #     ``scenario.bind_skipped`` watcher event — NO silent fallback to pack-level
 #     scenarios (SOUL.md / server CLAUDE.md "No Silent Fallbacks").
@@ -437,7 +435,7 @@ class TestDispatchIntegration:
 # by grepping source (server CLAUDE.md "No Source-Text Wiring Tests"). The one
 # model-shape check uses ``World.model_fields`` — the blessed reflection
 # tripwire, NOT a ``hasattr`` check (``World`` is ``extra="allow"``, so
-# ``hasattr`` would pass spuriously on an undeclared extra attribute).
+# ``hasattr`` would pass spuriously on any extra attribute).
 # ===========================================================================
 
 
@@ -462,26 +460,18 @@ def _two_world_pack(
     and re-keys deep copies under the synthetic slugs ``_WORLD_A`` / ``_WORLD_B``
     — so the fixture is independent of the scaffold pack's authored world names.
     Each world (and optionally the pack root) carries a DISTINCT scenario so a
-    world-agnostic binder is caught selecting the wrong one. ``scenarios`` is
-    assigned as an attribute — valid today because ``World`` is ``extra="allow"``,
-    and valid after the field is declared.
+    world-agnostic binder is caught selecting the wrong one.
     """
-    import copy as _copy
-
-    pack = _copy.deepcopy(base_pack)
+    pack = copy.deepcopy(base_pack)
     template_world = next(iter(pack.worlds.values()))
     pack.worlds = {}
 
-    world_a = _copy.deepcopy(template_world)
-    world_a.scenarios = (  # type: ignore[attr-defined]
-        {world_a_scenario[0]: world_a_scenario[1]} if world_a_scenario else {}
-    )
+    world_a = copy.deepcopy(template_world)
+    world_a.scenarios = {world_a_scenario[0]: world_a_scenario[1]} if world_a_scenario else {}
     pack.worlds[_WORLD_A] = world_a
 
-    world_b = _copy.deepcopy(template_world)
-    world_b.scenarios = (  # type: ignore[attr-defined]
-        {world_b_scenario[0]: world_b_scenario[1]} if world_b_scenario else {}
-    )
+    world_b = copy.deepcopy(template_world)
+    world_b.scenarios = {world_b_scenario[0]: world_b_scenario[1]} if world_b_scenario else {}
     pack.worlds[_WORLD_B] = world_b
 
     pack.scenarios = {pack_level_scenario[0]: pack_level_scenario[1]} if pack_level_scenario else {}
@@ -499,8 +489,8 @@ def _guilty_scenario(guilty_id: str, guilty_name: str) -> ScenarioPack:
 
 class TestWorldModelScenarioField:
     def test_world_declares_scenarios_field(self) -> None:
-        # Reflection tripwire (NOT hasattr — World is extra="allow").
-        # Today: scenarios is not a declared field → fails.
+        # Reflection tripwire: `scenarios` must be a DECLARED field, not an
+        # `extra="allow"` attribute (a `hasattr` check would pass spuriously).
         # (The empty-default behavior is covered hermetically by
         # TestLoaderWorldLevelDiscovery.test_world_without_scenarios_dir_defaults_empty.)
         assert "scenarios" in World.model_fields
@@ -642,14 +632,15 @@ class TestBindOtelWorldAware:
         attrs = dict(events[0].attributes or {})
         assert attrs["world"] == _WORLD_B
         assert attrs["scenario_id"] == "garden_party"
+        assert attrs["guilty_npc"] == "gardener"
 
     def test_skip_emits_watcher_event_for_scenario_less_world(
         self, caverns_pack: GenrePack
     ) -> None:
         """AC4 — the absence decision is observable. Binding a scenario-less
-        world emits a ``scenario.bind_skipped`` event carrying the world and
-        genre, so the GM panel can distinguish "no scenario here" from a
-        silently-improvised mystery. Today the None path emits nothing."""
+        world emits a ``scenario.bind_skipped`` event carrying the world,
+        genre, and reason, so the GM panel can distinguish "no scenario here"
+        from a silently-improvised mystery."""
         pack = _two_world_pack(
             caverns_pack,
             world_a_scenario=None,
@@ -679,6 +670,10 @@ class TestBindOtelWorldAware:
         attrs = dict(skip_events[0].attributes or {})
         assert attrs["world"] == _WORLD_A
         assert attrs["genre"] == "caverns_and_claudes"
+        # _WORLD_A exists in pack.worlds (via _two_world_pack) but has no
+        # scenario → the reason is the "world present, empty" branch, not
+        # "unknown_world". Guards against the two reason strings being swapped.
+        assert attrs["reason"] == "no_world_scenario"
 
 
 # ---------------------------------------------------------------------------
@@ -791,8 +786,8 @@ class TestLoaderWorldLevelDiscovery:
         world = _load_single_world(world_path, [], genre_root)
 
         assert world is not None
-        assert "the_morning_train" in world.scenarios  # type: ignore[attr-defined]
-        assert world.scenarios["the_morning_train"].name == "The Morning Train"  # type: ignore[attr-defined]
+        assert "the_morning_train" in world.scenarios
+        assert world.scenarios["the_morning_train"].name == "The Morning Train"
 
     def test_world_without_scenarios_dir_defaults_empty(self, tmp_path: Path) -> None:
         genre_root, world_path = _make_world_tree(tmp_path, with_scenario=False)
@@ -800,4 +795,4 @@ class TestLoaderWorldLevelDiscovery:
         world = _load_single_world(world_path, [], genre_root)
 
         assert world is not None
-        assert world.scenarios == {}  # type: ignore[attr-defined]
+        assert world.scenarios == {}

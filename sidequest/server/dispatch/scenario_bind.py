@@ -2,10 +2,12 @@
 
 Port of the scenario-initialization block in
 ``sidequest-api/crates/sidequest-server/src/dispatch/connect.rs``
-(lines ~1948-2023). When the genre pack declares at least one
-scenario, pick the first one (future: player/DM selection), bind it
-to a :class:`ScenarioState`, and seed every matching in-snapshot NPC's
-:class:`BeliefState` from the pack's ``initial_beliefs``.
+(lines ~1948-2023). World-aware since Story 71-32: the scenario is
+selected from the ACTIVE world (``pack.worlds[world_slug].scenarios``),
+not pack-level ``GenrePack.scenarios`` — pick the first one (future:
+player/DM selection), bind it to a :class:`ScenarioState`, and seed
+every matching in-snapshot NPC's :class:`BeliefState` from the pack's
+``initial_beliefs``.
 
 The Rust implementation also stashes the pack clone on the
 shared-session holder (``active_scenario``) for cross-player pressure-
@@ -13,10 +15,12 @@ event / scene-budget visibility. Python's single-player Phase 1 has no
 shared-session analog yet, so this port returns the bound pack to the
 caller, which stashes it on the connection-scoped ``_SessionData``.
 
-Failure modes are loud:
+Decisions are observable (No Silent Fallbacks + OTEL Observability):
 
-- No scenarios in pack → return ``None`` silently (pack isn't using
-  the system; not a misconfiguration).
+- Active world declares no scenarios, or ``world_slug`` is unknown →
+  return ``None`` and emit a ``scenario.bind_skipped`` span event
+  (with ``reason``) + log. There is NO fallback to pack-level
+  ``GenrePack.scenarios``; an empty world is a valid authored state.
 - ``ScenarioPack`` present but malformed → the pydantic model raises
   at pack-load time; binding is a downstream no-op.
 """

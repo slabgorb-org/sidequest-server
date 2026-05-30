@@ -11,7 +11,9 @@ docs/superpowers/specs/2026-05-04-snapshot-split-brain-cleanup-design.md).
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from sidequest.game.disposition import Disposition
 
 
 class NpcPoolMember(BaseModel):
@@ -35,6 +37,15 @@ class NpcPoolMember(BaseModel):
     role: str | None = None
     pronouns: str | None = None
     appearance: str | None = None
+    disposition: Disposition = Field(default_factory=Disposition)
+    """Story 72-2 (epic 72 — NPC Identity Hardening): the relationship score
+    the scaffold carries so a known disposition survives the pool→``Npc``
+    promotion (``_promote_pool_member_to_npc``) instead of silently
+    flattening to neutral. Defaults neutral-0 — a narrator-invented or
+    legacy member enters the pool with no recorded relationship, so promotion
+    still spawns it neutral (preserving the Story 72-5 born-neutral default).
+    The NPC *development* pipeline (disposition drift) is 72-1's deliverable;
+    this field only preserves and round-trips an existing value."""
     archetype_id: str | None = None
     """OTEL attribution back to the genre-pack archetype source. ``None``
     for narrator-invented members or legacy-migrated members where

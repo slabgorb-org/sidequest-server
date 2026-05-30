@@ -1073,16 +1073,23 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
         pronouns=member.pronouns,
         appearance=member.appearance,
         pool_origin=member.name,
+        # Story 72-2: carry the scaffold's recorded disposition through
+        # promotion. A bartender the table befriended (e.g. +18) promotes
+        # friendly instead of silently flattening to neutral. Narrator-
+        # invented / legacy members default neutral-0, preserving 72-5.
+        disposition=member.disposition,
     )
-    # Story 72-5: a pool member (incl. narrator-invented) carries no
-    # disposition, so promotion spawns it neutral via the Npc default.
-    # Emit the spawn-disposition span so the GM panel can confirm an
-    # invented NPC was *not* born hostile — provenance is always
-    # ``default_neutral`` here (no creature-shape, no explicit value).
+    # Story 72-5: emit the spawn-disposition span so the GM panel can
+    # confirm what disposition a promoted NPC spawned with and why. When
+    # the scaffold carried no relationship (default neutral-0) the NPC is
+    # born neutral (``default_neutral``); when 72-2 carries a known value
+    # through, provenance is ``carried_from_pool`` so the lie-detector
+    # dial reflects the truth rather than reporting a false default.
+    provenance = "default_neutral" if int(member.disposition) == 0 else "carried_from_pool"
     with npc_spawn_disposition_span(
         npc_name=npc.core.name,
         disposition=int(npc.disposition),
-        provenance="default_neutral",
+        provenance=provenance,
         is_creature=False,
         pool_origin=member.name,
     ):
@@ -1142,6 +1149,11 @@ def resolve_status_target(
             "name": pool_match.name,
             "pool_origin": pool_match.name,
             "drawn_from": pool_match.drawn_from,
+            # Story 72-2: carry the preserved disposition (and its attitude
+            # band) so the GM panel can verify the relationship survived
+            # promotion rather than resetting to neutral.
+            "disposition": int(promoted.disposition),
+            "attitude": promoted.disposition.attitude().value,
             "trigger": trigger,
             "turn": turn_num,
         },

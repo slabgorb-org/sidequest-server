@@ -1,4 +1,4 @@
-"""Tests for the advance_confrontation tool — Phase C Task 21.
+"""Tests for the advance_confrontation tool — Phase C Task 21 + Story 73-3.
 
 WRITE tool. ADR-033 is *partial* — no formal ``Confrontation`` class
 exists yet. v1 binds to :class:`StructuredEncounter`'s dual dials:
@@ -7,6 +7,35 @@ exists yet. v1 binds to :class:`StructuredEncounter`'s dual dials:
 accepted forward-compat (eventually it'll select among multiple
 concurrent confrontations) but v1 always operates on
 ``snapshot.encounter``.
+
+Story 73-3 — canonical-snapshot contract
+----------------------------------------
+The lost-update bug: the tool used to ``repository.load()`` a *fresh*
+``SavedSession``, mutate the dial on that throwaway copy, and
+``repository.save()`` it. But the narration pipeline runs the whole turn
+against ONE canonical ``GameSnapshot`` (owned by the ``SessionRoom`` under
+ADR-037). The end-of-turn ``room.save()`` writes that canonical object
+*after* the tool runs — clobbering the tool's fresh-copy save. The dial
+move silently reverted: the prose said "two steps closer to breaking,"
+the GM panel showed a ``tool.confrontation`` span, and next turn the dial
+was exactly where it started.
+
+The fix routes the tool through the canonical in-turn snapshot
+(``ToolContext.snapshot``, threaded from ``TurnContext.snapshot`` at the
+``orchestrator`` construction site), mutating the same object the
+end-of-turn save persists — and drops the tool's own save. These tests
+encode that contract:
+
+* The dial move must survive a *subsequent* canonical save
+  (``store.save(canonical)``) — the load-bearing assertion is
+  load-after-canonical-save, NOT the tool's return payload (a payload-only
+  test passed against the buggy code, which is why the bug shipped).
+* The tool mutates the canonical object *in place* (object identity).
+* A missing canonical snapshot fails loud (``ERROR_FATAL``) — no silent
+  ``repository.load()`` fallback (CLAUDE.md "No Silent Fallbacks").
+* OTEL reports a ``tool.confrontation.canonical`` signal and a
+  ``value_after`` that matches the persisted dial (the lie-detector now
+  tells the truth).
 """
 
 from __future__ import annotations
@@ -103,7 +132,20 @@ def _store_with(snapshot: GameSnapshot):
     return pg_store_with(snapshot)
 
 
-def _make_ctx(store, *, session_id: str = "s") -> ToolContext:
+def _make_ctx(
+    store,
+    *,
+    snapshot: GameSnapshot | None = None,
+    session_id: str = "s",
+) -> ToolContext:
+    """Build a ToolContext carrying the canonical in-turn snapshot (Story 73-3).
+
+    ``snapshot`` is the canonical ``GameSnapshot`` the narration pipeline holds
+    and the end-of-turn save persists — NOT a fresh ``repository.load()`` copy.
+    Pass the *same* object that was handed to ``_store_with`` so the test models
+    production: the room owns the canonical object; the repo holds a serialized
+    copy.
+    """
     return ToolContext(
         world_id="w",
         session_id=session_id,
@@ -112,6 +154,7 @@ def _make_ctx(store, *, session_id: str = "s") -> ToolContext:
         repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
+        snapshot=snapshot,
     )
 
 
@@ -125,6 +168,11 @@ async def _call(arguments: dict, ctx: ToolContext) -> ToolResult:
 def _payload(r: ToolResult) -> dict[str, Any]:
     assert r.payload is not None
     return cast(dict[str, Any], r.payload)
+
+
+def _otel_attrs(ctx: ToolContext) -> dict[str, Any]:
+    span = cast(MagicMock, ctx.otel_span)
+    return {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +195,7 @@ async def test_advance_player_axis_positive_delta() -> None:
         encounter=_encounter(player_current=2),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call({"axis": "player", "delta": 3}, ctx)
     assert r.status is ToolResultStatus.OK
@@ -161,7 +209,8 @@ async def test_advance_player_axis_positive_delta() -> None:
     assert p["metric_name"] == "momentum"
     assert p["confrontation_id"] == ""
 
-    # Persisted.
+    # Persisted through the end-of-turn canonical save (room.save()).
+    store.save(snap)
     reloaded = store.load()
     assert reloaded is not None
     assert reloaded.snapshot.encounter is not None
@@ -177,7 +226,7 @@ async def test_advance_opponent_axis_negative_delta() -> None:
         encounter=_encounter(opponent_current=5),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call({"axis": "opponent", "delta": -2}, ctx)
     assert r.status is ToolResultStatus.OK
@@ -188,6 +237,7 @@ async def test_advance_opponent_axis_negative_delta() -> None:
     assert p["value_after"] == 3
     assert p["metric_name"] == "menace"
 
+    store.save(snap)
     reloaded = store.load()
     assert reloaded is not None
     assert reloaded.snapshot.encounter is not None
@@ -201,16 +251,14 @@ async def test_confrontation_id_default_recorded_in_otel() -> None:
         encounter=_encounter(),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call({"axis": "player", "delta": 1}, ctx)
     assert r.status is ToolResultStatus.OK
     p = _payload(r)
     assert p["confrontation_id"] == ""
 
-    span = cast(MagicMock, ctx.otel_span)
-    recorded = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
-    assert recorded["tool.confrontation.id"] == ""
+    assert _otel_attrs(ctx)["tool.confrontation.id"] == ""
 
 
 async def test_confrontation_id_passthrough() -> None:
@@ -220,7 +268,7 @@ async def test_confrontation_id_passthrough() -> None:
         encounter=_encounter(),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call(
         {"axis": "player", "delta": 1, "confrontation_id": "future-id-123"},
@@ -230,9 +278,7 @@ async def test_confrontation_id_passthrough() -> None:
     p = _payload(r)
     assert p["confrontation_id"] == "future-id-123"
 
-    span = cast(MagicMock, ctx.otel_span)
-    recorded = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
-    assert recorded["tool.confrontation.id"] == "future-id-123"
+    assert _otel_attrs(ctx)["tool.confrontation.id"] == "future-id-123"
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +292,7 @@ async def test_crossed_threshold_true_when_delta_pushes_past() -> None:
         encounter=_encounter(player_current=8, player_threshold=10),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call({"axis": "player", "delta": 4}, ctx)
     assert r.status is ToolResultStatus.OK
@@ -255,9 +301,7 @@ async def test_crossed_threshold_true_when_delta_pushes_past() -> None:
     assert p["value_after"] == 12
     assert p["crossed_threshold"] is True
 
-    span = cast(MagicMock, ctx.otel_span)
-    recorded = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
-    assert recorded["tool.confrontation.crossed_threshold"] is True
+    assert _otel_attrs(ctx)["tool.confrontation.crossed_threshold"] is True
 
 
 async def test_crossed_threshold_true_exactly_at_threshold() -> None:
@@ -267,7 +311,7 @@ async def test_crossed_threshold_true_exactly_at_threshold() -> None:
         encounter=_encounter(opponent_current=7, opponent_threshold=10),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call({"axis": "opponent", "delta": 3}, ctx)
     assert r.status is ToolResultStatus.OK
@@ -282,7 +326,7 @@ async def test_crossed_threshold_false_when_still_below() -> None:
         encounter=_encounter(player_current=2, player_threshold=10),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call({"axis": "player", "delta": 3}, ctx)
     assert r.status is ToolResultStatus.OK
@@ -298,7 +342,7 @@ async def test_crossed_threshold_false_when_already_past() -> None:
         encounter=_encounter(player_current=11, player_threshold=10),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call({"axis": "player", "delta": 2}, ctx)
     assert r.status is ToolResultStatus.OK
@@ -316,7 +360,7 @@ async def test_crossed_threshold_false_when_already_past() -> None:
 async def test_no_encounter_returns_fatal_error() -> None:
     snap = _build_snapshot(characters=[_character("Alice")], encounter=None)
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call({"axis": "player", "delta": 1}, ctx)
     assert r.status is ToolResultStatus.ERROR_FATAL
@@ -324,17 +368,31 @@ async def test_no_encounter_returns_fatal_error() -> None:
     assert "no active encounter" in r.message
 
 
-async def test_no_active_session_returns_fatal_error() -> None:
-    from tests.agents.tools.conftest import pg_empty_store
+async def test_missing_canonical_snapshot_fails_loud_no_repo_fallback() -> None:
+    """AC2 (No Silent Fallbacks): the canonical snapshot is absent from the
+    ToolContext, yet the repository HAS a saved session with a live encounter.
 
-    store = pg_empty_store()
-    # No init_session/save → load() returns None.
-    ctx = _make_ctx(store)
+    The tool must NOT silently ``repository.load()`` that encounter and succeed —
+    a silent fallback re-introduces the exact lost-update this story fixes
+    (it would mutate a fresh copy the end-of-turn save then clobbers). It must
+    fail loud with ``ERROR_FATAL``.
+    """
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(player_current=2),
+    )
+    store = _store_with(snap)  # repo HAS a session + encounter...
+    ctx = _make_ctx(store, snapshot=None)  # ...but no canonical snapshot
 
     r = await _call({"axis": "player", "delta": 1}, ctx)
     assert r.status is ToolResultStatus.ERROR_FATAL
     assert r.message is not None
-    assert "no active session" in r.message
+
+    # And it did not silently mutate-and-persist via a fresh load.
+    reloaded = store.load()
+    assert reloaded is not None
+    assert reloaded.snapshot.encounter is not None
+    assert reloaded.snapshot.encounter.player_metric.current == 2
 
 
 async def test_invalid_axis_rejected_by_args_model() -> None:
@@ -345,7 +403,7 @@ async def test_invalid_axis_rejected_by_args_model() -> None:
         encounter=_encounter(),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     out = await default_registry.dispatch(
         ToolUseBlock(
@@ -370,7 +428,7 @@ async def test_otel_attrs_set_on_success() -> None:
         encounter=_encounter(player_current=4, player_threshold=10),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store)
+    ctx = _make_ctx(store, snapshot=snap)
 
     r = await _call(
         {
@@ -383,14 +441,16 @@ async def test_otel_attrs_set_on_success() -> None:
     )
     assert r.status is ToolResultStatus.OK
 
-    span = cast(MagicMock, ctx.otel_span)
-    recorded = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    recorded = _otel_attrs(ctx)
     assert recorded["tool.confrontation.id"] == "fight-7"
     assert recorded["tool.confrontation.axis"] == "player"
     assert recorded["tool.confrontation.delta"] == 2
     assert recorded["tool.confrontation.value_after"] == 6
     assert recorded["tool.confrontation.reason"] == "feint succeeds"
     assert recorded["tool.confrontation.crossed_threshold"] is False
+    # Story 73-3: the canonical-mutation signal (distinguishes the fixed path
+    # from the old fresh-load path).
+    assert recorded["tool.confrontation.canonical"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -399,14 +459,16 @@ async def test_otel_attrs_set_on_success() -> None:
 
 
 async def test_parallel_advance_against_same_session_runs_sequentially() -> None:
-    """Two concurrent dispatches share the per-session WRITE lock — the
-    second call must read the first's persisted value, not the initial one."""
+    """Two concurrent dispatches share the per-session WRITE lock AND the same
+    canonical snapshot — the second call accumulates on the first's in-place
+    mutation, not the initial value. The composed total survives one
+    end-of-turn canonical save."""
     snap = _build_snapshot(
         characters=[_character("Alice")],
         encounter=_encounter(player_current=0, player_threshold=100),
     )
     store = _store_with(snap)
-    ctx = _make_ctx(store, session_id="shared-session")
+    ctx = _make_ctx(store, snapshot=snap, session_id="shared-session")
 
     results = await asyncio.gather(
         default_registry.dispatch(
@@ -428,7 +490,9 @@ async def test_parallel_advance_against_same_session_runs_sequentially() -> None
     )
     assert all(r.is_error is False for r in results)
 
-    # Sequential ordering: 0 → 3 → 8.
+    # Sequential ordering: 0 → 3 → 8, accumulated in-place on the canonical
+    # snapshot, then persisted by the single end-of-turn save.
+    store.save(snap)
     reloaded = store.load()
     assert reloaded is not None
     assert reloaded.snapshot.encounter is not None
@@ -437,3 +501,181 @@ async def test_parallel_advance_against_same_session_runs_sequentially() -> None
     # The two payloads form a serial sequence by value_after:
     after_values = sorted([json.loads(r.content)["value_after"] for r in results])
     assert after_values == [3, 8]
+
+
+# ---------------------------------------------------------------------------
+# Story 73-3 — canonical-snapshot lost-update fix
+# ---------------------------------------------------------------------------
+
+
+async def test_advance_survives_end_of_turn_canonical_save() -> None:
+    """AC1 (the lost-update regression). The dial move must survive a
+    subsequent end-of-turn canonical save.
+
+    Against the buggy code the tool mutates a fresh ``repository.load()`` copy
+    and saves it; the canonical ``snap`` is never touched, so
+    ``store.save(snap)`` writes the *original* value back over the tool's write
+    and the dial reverts. The load-after-canonical-save assertion is what
+    catches this — a return-payload-only assertion passes against the bug.
+    """
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(opponent_current=3, opponent_threshold=20),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call({"axis": "opponent", "delta": 4}, ctx)
+    assert r.status is ToolResultStatus.OK
+
+    # End-of-turn canonical save (room.save() / repository.save(canonical)),
+    # which previously clobbered the tool's fresh-copy write.
+    store.save(snap)
+
+    reloaded = store.load()
+    assert reloaded is not None
+    assert reloaded.snapshot.encounter is not None
+    assert reloaded.snapshot.encounter.opponent_metric.current == 7  # 3 + 4, NOT 3
+
+
+async def test_negative_advance_survives_end_of_turn_canonical_save() -> None:
+    """AC1 symmetry — a negative ("regroup"/"de-escalate") delta also persists
+    canonically through the end-of-turn save."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(opponent_current=6, opponent_threshold=20),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call({"axis": "opponent", "delta": -2}, ctx)
+    assert r.status is ToolResultStatus.OK
+
+    store.save(snap)
+    reloaded = store.load()
+    assert reloaded is not None
+    assert reloaded.snapshot.encounter is not None
+    assert reloaded.snapshot.encounter.opponent_metric.current == 4  # 6 - 2
+
+
+async def test_mutates_canonical_snapshot_in_place() -> None:
+    """AC2 — the tool mutates the canonical in-turn snapshot object the pipeline
+    holds (mutation-in-place / object identity), BEFORE any save. The fresh-load
+    code path leaves the canonical object untouched."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(player_current=2),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call({"axis": "player", "delta": 3}, ctx)
+    assert r.status is ToolResultStatus.OK
+
+    # The SAME object the pipeline holds reflects the change — no save needed.
+    assert snap.encounter is not None
+    assert snap.encounter.player_metric.current == 5
+
+
+async def test_sequential_same_axis_advances_compose() -> None:
+    """AC3 — two same-axis advances in one turn accumulate on the canonical
+    snapshot and the cumulative total persists through one end-of-turn save."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(opponent_current=0, opponent_threshold=100),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    assert (await _call({"axis": "opponent", "delta": 2}, ctx)).status is ToolResultStatus.OK
+    assert (await _call({"axis": "opponent", "delta": 3}, ctx)).status is ToolResultStatus.OK
+
+    store.save(snap)
+    reloaded = store.load()
+    assert reloaded is not None
+    assert reloaded.snapshot.encounter is not None
+    assert reloaded.snapshot.encounter.opponent_metric.current == 5  # 0 + 2 + 3
+
+
+async def test_sequential_mixed_axis_advances_both_persist() -> None:
+    """AC3 — advancing player then opponent in one turn leaves both deltas
+    intact on the canonical snapshot (no axis clobbers the other)."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(player_current=2, opponent_current=1),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    assert (await _call({"axis": "player", "delta": 2}, ctx)).status is ToolResultStatus.OK
+    assert (await _call({"axis": "opponent", "delta": 1}, ctx)).status is ToolResultStatus.OK
+
+    store.save(snap)
+    reloaded = store.load()
+    assert reloaded is not None
+    assert reloaded.snapshot.encounter is not None
+    assert reloaded.snapshot.encounter.player_metric.current == 4  # 2 + 2
+    assert reloaded.snapshot.encounter.opponent_metric.current == 2  # 1 + 1
+
+
+async def test_advance_and_resolve_same_turn_both_persist() -> None:
+    """AC4 — when an advance crosses a threshold and the encounter resolves that
+    same turn, BOTH the crossing dial value and the resolved state persist
+    through the single end-of-turn canonical save (the resolution reads the
+    canonical dial the tool moved, and the final dial is not clobbered)."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(opponent_current=8, opponent_threshold=10),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call({"axis": "opponent", "delta": 3}, ctx)  # 8 -> 11, crosses
+    assert r.status is ToolResultStatus.OK
+    assert _payload(r)["crossed_threshold"] is True
+
+    # Resolution fires this same turn on the canonical snapshot, as the
+    # narration-apply pipeline would when the dial reaches threshold.
+    assert snap.encounter is not None
+    snap.encounter.resolved = True
+    snap.encounter.outcome = "opponent_victory"
+
+    store.save(snap)  # single end-of-turn canonical save
+
+    reloaded = store.load()
+    assert reloaded is not None
+    assert reloaded.snapshot.encounter is not None
+    enc = reloaded.snapshot.encounter
+    assert enc.opponent_metric.current == 11  # crossing dial value, not clobbered
+    assert enc.resolved is True
+    assert enc.outcome == "opponent_victory"
+
+
+async def test_otel_reports_canonical_persisted_delta() -> None:
+    """AC5 — the emitted span reports a ``tool.confrontation.canonical`` signal
+    and a ``value_after`` that matches the dial actually persisted to the
+    canonical snapshot. The GM panel can now verify the advance is real,
+    closing the "span fires but the write is lost" lie."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(opponent_current=4, opponent_threshold=20),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call({"axis": "opponent", "delta": 3, "reason": "composure cracks"}, ctx)
+    assert r.status is ToolResultStatus.OK
+
+    store.save(snap)
+    reloaded = store.load()
+    assert reloaded is not None
+    assert reloaded.snapshot.encounter is not None
+    persisted = reloaded.snapshot.encounter.opponent_metric.current
+
+    attrs = _otel_attrs(ctx)
+    # Signal that distinguishes the canonical-mutation path from the old
+    # fresh-load path.
+    assert attrs["tool.confrontation.canonical"] is True
+    # value_after matches the persisted dial, and the intended delta landed.
+    assert attrs["tool.confrontation.value_after"] == persisted
+    assert attrs["tool.confrontation.value_after"] - 4 == 3

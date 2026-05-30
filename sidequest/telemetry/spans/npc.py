@@ -206,6 +206,51 @@ SPAN_ROUTES[SPAN_NPC_OBSERVATION_GATE_PURGED] = SpanRoute(
     },
 )
 
+# Story 72-4: narrator-invented NPC names routed through the ADR-091
+# culture-bound generator. When the narrator invents an NPC mid-scene it hands
+# back a bare name string; the Step-3 "novel" branch of ``_apply_npc_mentions``
+# now mints a culture-true *generated* name instead. This span is the
+# provenance record the GM panel reads to confirm the route fired — without it
+# you cannot tell a culture-bound mint from the narrator's raw improvisation.
+# ``collision_reroll`` records whether ``has_stem_collision`` (or a hit against
+# an existing store member) forced a re-roll past a bad candidate.
+SPAN_NPC_INVENTED_NAME_ROUTED = "npc.invented_name_routed"
+SPAN_ROUTES[SPAN_NPC_INVENTED_NAME_ROUTED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc_pool",
+        "op": "invented_name_routed",
+        "name": (span.attributes or {}).get("npc_name", ""),
+        "original_name": (span.attributes or {}).get("original_name", ""),
+        "culture": (span.attributes or {}).get("culture", ""),
+        "culture_source": (span.attributes or {}).get("culture_source", ""),
+        "collision_reroll": (span.attributes or {}).get("collision_reroll", False),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
+# Story 72-4 (No Silent Fallbacks): the narrator invented a name but the active
+# world resolved no culture (or the generator could not produce a name), so the
+# route could NOT run. The engine must fail LOUD rather than silently mint the
+# raw narrator string with no signal — ``severity="warning"`` renders this as a
+# GM-panel alert. ``reason`` discriminates ``no_culture_bound`` vs
+# ``generation_failed``.
+SPAN_NPC_INVENTED_NAME_UNROUTED = "npc.invented_name_unrouted"
+SPAN_ROUTES[SPAN_NPC_INVENTED_NAME_UNROUTED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc_pool",
+        "op": "invented_name_unrouted",
+        "name": (span.attributes or {}).get("original_name", ""),
+        "original_name": (span.attributes or {}).get("original_name", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # Story 45-21 / 45-52: combat-stats publish onto Npc.core.edge.
 # Fired when an encounter handshake (or other combat-stats emit) writes the
 # dial-derived edge pool onto a matched ``snapshot.npcs`` entry. Renamed from
@@ -284,6 +329,83 @@ def npc_referenced_span(
     }
     with Span.open(
         SPAN_NPC_REFERENCED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_invented_name_routed_span(
+    *,
+    original_name: str,
+    npc_name: str,
+    culture: str,
+    culture_source: str,
+    collision_reroll: bool,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 72-4: emitted when the Step-3 novel branch reroutes a
+    narrator-invented name through the ADR-091 culture-bound generator.
+
+    ``original_name`` is the narrator's bare string ("Bob Hegemonic");
+    ``npc_name`` is the culture-true name actually minted ("Veyra Solnë").
+    ``culture`` / ``culture_source`` record which culture (and whether it was
+    resolved from the world or the genre tier via
+    ``Pack.effective_cultures``) governed the generation. ``collision_reroll``
+    is True when a candidate was rejected (stem collision or an existing-member
+    name clash) and the route re-rolled. Attribute key ``npc_name`` avoids the
+    OTEL reserved ``name`` attribute (mirrors the sibling NPC spans).
+    """
+    attributes: dict[str, Any] = {
+        "original_name": original_name,
+        "npc_name": npc_name,
+        "culture": culture,
+        "culture_source": culture_source,
+        "collision_reroll": collision_reroll,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_INVENTED_NAME_ROUTED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_invented_name_unrouted_span(
+    *,
+    original_name: str,
+    reason: str,
+    world: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 72-4 (No Silent Fallbacks): emitted when a narrator-invented name
+    could NOT be routed through the generator — no culture bound for the active
+    world, or generation failed.
+
+    ``severity="warning"`` so the WatcherSpanProcessor renders this as a soft
+    alert (parallel to ``npc_recurring_presence_missed_span``). ``reason``
+    discriminates ``no_culture_bound`` vs ``generation_failed``. The engine then
+    deliberately degrades to the raw narrator string — a span-recorded degrade,
+    never a silent swallow.
+    """
+    attributes: dict[str, Any] = {
+        "original_name": original_name,
+        "reason": reason,
+        "world": world,
+        "turn_number": turn_number,
+        "severity": "warning",
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_INVENTED_NAME_UNROUTED,
         attributes,
         tracer_override=_tracer,
     ) as span:

@@ -861,6 +861,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     _apply_kwargs = dict(
                         room=sd._room,
                         pack=sd.genre_pack,
+                        world=sd.world_slug,
                         dice_failed=dice_failed,
                         dice_actor=dice_actor,
                         opposed_player_d20=opposed_player_d20,

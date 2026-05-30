@@ -87,56 +87,70 @@ def test_audit_live_tree_exits_zero_after_corpus_expansion() -> None:
     )
 
 
-def test_audit_live_tree_reports_named_thin_corpora_resolved() -> None:
-    """The audit walks cultures, not just files — corpora must appear under cultures.
+def test_audit_surfaces_consumption_by_culture() -> None:
+    """The audit walks cultures, not just files — corpora appear under their consumers.
 
-    Without the wire-first treatment, an audit could just ``ls
-    corpus/*.txt`` and miss that latin.txt is consumed by Span
-    Aristocracy. The whole point of the audit is to surface
-    consumption-by-culture so a "fix the latin corpus" task knows
-    *which culture suffers*.
+    Story 64-7: the audit's value is surfacing WHICH culture consumes a
+    given corpus, so a "fix corpus X" task knows which culture suffers.
+    The genre-tier ``space_opera`` cultures consume the shared-resolved
+    trio:
 
-    Pre-fix, all three named corpora appear; post-fix (corpus
-    expansion), they appear under their consuming cultures with OK
-    status. Either way, they show up.
+    - Hegemonic  -> latin.txt
+    - Voidborn   -> polynesian.txt
+    - Xeno       -> georgian.txt
 
-    Note: Span Aristocracy / Vaal-Kesh / Makhani live in
-    ``genre_workshopping/space_opera/worlds/aureate_span/`` (relocated
-    from ``genre_packs/`` in commit acc89a3 — see the workshopping skip
-    comment in tests/game/test_wire_genre_resources.py). The audit's
-    default ``--path`` is ``genre_packs/``; we run it twice — once on
-    each root — and combine the output so both production-canonical and
-    in-development cultures get coverage. When the aureate_span pack
-    graduates back to genre_packs, the second invocation becomes
-    redundant but the assertion still passes.
+    All three corpora live ONLY in ``sidequest-content/corpus/shared/``
+    (no per-pack copy), so the audit can only resolve them once it gains
+    the same shared fallback the runtime resolver already uses
+    (``generator.py:_resolve_corpus_file``).
+
+    Pre-fix this FAILS: the trio appear as MISSING rows under their
+    consuming cultures. Post-fix: they resolve (OK, not MISSING) and are
+    still attributed to the consuming culture so the report stays
+    actionable.
+
+    Note: this asserts on genre-tier cultures that the audit actually
+    walks (single ``cultures.yaml``). The aureate_span / perseus_cloud
+    worlds use a per-culture ``cultures/*.yaml`` DIRECTORY that the audit
+    walker does not yet read — that blindness is a separate defect
+    captured as a Delivery Finding, out of scope for 64-7's
+    resolution-path fix.
     """
-    workshopping_path = REPO_ROOT / "sidequest-content" / "genre_workshopping"
+    out = _run_audit().stdout
+    assert out.strip(), "audit produced empty stdout — cannot assert on an absent report"
 
-    result_packs = _run_audit()
-    result_workshopping = _run_audit("--path", str(workshopping_path))
-    out = result_packs.stdout + "\n" + result_workshopping.stdout
-
-    # Every named-thin corpus shows up in the report — pre-fix as THIN,
-    # post-fix as OK. We don't assert status here (that's the
-    # corpus-shape regression test below).
-    assert "latin.txt" in out
-    assert "polynesian.txt" in out
-    assert "georgian.txt" in out
-
-    # Cultures consuming them are named so the report is actionable.
-    assert "Span Aristocracy" in out
-    assert "Vaal-Kesh" in out
-    assert "Makhani" in out
+    for culture, corpus_name in (
+        ("Hegemonic", "latin.txt"),
+        ("Voidborn", "polynesian.txt"),
+        ("Xeno", "georgian.txt"),
+    ):
+        assert corpus_name in out, (
+            f"{corpus_name} absent from audit report — the audit should walk "
+            f"the genre-tier culture that consumes it."
+        )
+        assert culture in out, (
+            f"consuming culture {culture!r} not named in report — the audit "
+            f"must surface consumption-by-culture to stay actionable."
+        )
+        # Post-fix the corpus resolves via corpus/shared/ and must NOT be
+        # flagged MISSING anywhere in the report.
+        for line in out.splitlines():
+            if corpus_name in line and "MISSING" in line:
+                pytest.fail(
+                    f"{corpus_name} still MISSING after the shared-fallback "
+                    f"fix; the audit is not resolving corpus/shared/. line: {line!r}"
+                )
 
 
 def test_audit_live_tree_no_named_corpora_left_thin_post_expansion() -> None:
-    """AC3 regression: post-expansion, the three Aureate Span corpora are OK.
+    """Regression: the three named corpora resolve OK (not THIN/FAIL) on the live tree.
 
-    Pre-fix this test fails — those three corpora are in the THIN band
-    today (309-340 words). It's the most direct shape-of-content
-    regression test we can write: if Dev expands them past
-    ``WARN_BELOW_WORDS`` (1000), this passes; if a future commit
-    truncates them back below 1000, this fails.
+    Pre-fix this test fails because the audit exits rc=1 (the trio show
+    as MISSING — the audit can't find them without the corpus/shared
+    fallback). Post-fix the trio resolve from corpus/shared/ with
+    count_words latin=1326 / polynesian=1005 / georgian=1004 — all just
+    clear ``WARN_BELOW_WORDS`` (1000), so they carry no THIN/FAIL marker.
+    If a future commit truncates any of them below 1000, this fails.
     """
     result = _run_audit()
     assert result.returncode == 0, (
@@ -167,25 +181,65 @@ def test_audit_live_tree_no_named_corpora_left_thin_post_expansion() -> None:
                     )
 
 
-def test_audit_live_tree_corpora_above_warn_threshold() -> None:
-    """Direct word-count regression on the three expanded corpora.
+def test_shared_corpora_clear_warn_threshold() -> None:
+    """Direct word-count regression on the three named corpora — at their REAL home.
 
-    Belt-and-braces alongside the audit-marker test above: read the
-    files directly and assert ``len(text.split()) >= WARN_BELOW_WORDS``.
-    If the audit script's marker logic ever drifts, this test still
-    catches a corpus shrinkage.
+    Story 64-7 correction: these corpora were never per-pack files. They
+    live in the centralized ``sidequest-content/corpus/shared/`` that the
+    runtime resolver (``generator.py:_resolve_corpus_file``) and, post-fix,
+    the audit both fall back to. The prior version of this test read
+    ``genre_packs/space_opera/corpus/latin.txt`` — a path that never
+    existed — and so failed for the wrong reason.
+
+    Belt-and-braces alongside the consumption-by-culture test above: read
+    the files where they actually live and assert they clear WARN using
+    the SAME ``count_words`` the audit uses, so this regression guard
+    moves in lockstep with the audit's own classification. Catches a
+    shared-corpus shrinkage even if the audit's marker logic drifts.
     """
-    from sidequest.genre.names.thresholds import WARN_BELOW_WORDS
+    from sidequest.genre.names.thresholds import WARN_BELOW_WORDS, count_words
 
-    corpus_dir = CONTENT_ROOT / "genre_packs" / "space_opera" / "corpus"
+    shared_dir = CONTENT_ROOT / "corpus" / "shared"
     for corpus_name in ("latin.txt", "polynesian.txt", "georgian.txt"):
-        path = corpus_dir / corpus_name
-        assert path.is_file(), f"missing corpus {path}"
-        word_count = len(path.read_text(encoding="utf-8").split())
-        assert word_count >= WARN_BELOW_WORDS, (
-            f"{corpus_name} has {word_count} words; AC3 requires "
-            f">= {WARN_BELOW_WORDS} (post-expansion floor)."
+        path = shared_dir / corpus_name
+        assert path.is_file(), (
+            f"{corpus_name} must live in corpus/shared/ (single source of "
+            f"truth per ADR-091); missing at {path}"
         )
+        word_count = count_words(path.read_text(encoding="utf-8"))
+        assert word_count >= WARN_BELOW_WORDS, (
+            f"{corpus_name} has {word_count} words (count_words); below the "
+            f"WARN floor of {WARN_BELOW_WORDS} the audit will flag it THIN."
+        )
+
+
+def test_audit_live_tree_reports_zero_missing() -> None:
+    """Story 64-7 core AC: no corpus the audit walks is MISSING on the live tree.
+
+    Every corpus referenced by a walked culture must resolve — either in
+    the pack's own ``corpus/`` dir or via the ``corpus/shared/`` fallback
+    the runtime resolver already uses. Pre-fix: 61 MISSING rows, audit
+    exits rc=1. Post-fix: 0 MISSING, rc=0. This is the regression that
+    proves the audit stopped reporting MISSING for files that resolve
+    fine at runtime.
+
+    Asserting on the ``## MISSING`` section header (rendered only when
+    MISSING rows exist) rather than the bare substring ``MISSING`` —
+    the summary line always prints ``... 0 MISSING ...`` post-fix.
+    """
+    result = _run_audit()
+    out = result.stdout
+    assert "## MISSING" not in out, (
+        "audit still reports MISSING corpora that resolve at runtime via "
+        f"corpus/shared/.\nstdout:\n{out}"
+    )
+    assert "0 MISSING" in out, (
+        f"audit summary should report 0 MISSING post-fix.\nstdout:\n{out}"
+    )
+    assert result.returncode == 0, (
+        f"audit must exit 0 once shared corpora resolve; got "
+        f"{result.returncode}.\nstdout:\n{out}\nstderr:\n{result.stderr}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -284,3 +338,133 @@ def test_audit_synthetic_thin_corpus_exits_zero_with_thin_marker(
     )
     assert "THIN" in result.stdout
     assert "synth.txt" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Shared-fallback parity (Story 64-7) — the audit must resolve a corpus
+# from corpus/shared/ exactly as the runtime resolver does, and must NOT
+# paper over a corpus that is genuinely absent everywhere.
+# ---------------------------------------------------------------------------
+
+
+def _build_synthetic_pack_shared_only(root: Path, *, corpus_word_count: int) -> Path:
+    """Build a pack whose corpus lives ONLY in ``root/corpus/shared/``.
+
+    Mirrors the production layout that broke the audit: a culture
+    references ``shared_only.txt`` but the pack has NO per-pack
+    ``corpus/`` copy. The file sits in the centralized
+    ``corpus/shared/`` that the runtime resolver falls back to
+    (``generator.py:_resolve_corpus_file``, fed
+    ``pack.source_dir.parent.parent / "corpus" / "shared"`` by
+    ``narration_apply.py`` and the namegen/encountergen CLIs).
+
+    The audit computes the same fallback from the pack dir:
+    ``pack_dir.parent.parent / "corpus" / "shared"`` →
+    ``root/corpus/shared``. Pre-fix the audit ignores it and reports
+    MISSING; post-fix it resolves.
+    """
+    pack_dir = root / "genre_packs" / "synthshared"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "names").mkdir()
+    # Deliberately NO ``pack_dir / "corpus"`` — force the shared fallback.
+
+    shared_dir = root / "corpus" / "shared"
+    shared_dir.mkdir(parents=True)
+    words = " ".join(f"word{i}" for i in range(corpus_word_count))
+    (shared_dir / "shared_only.txt").write_text(words, encoding="utf-8")
+
+    (pack_dir / "pack.yaml").write_text(
+        "id: synthshared\nname: synthshared\ndescription: shared-fallback test pack\n",
+        encoding="utf-8",
+    )
+    (pack_dir / "cultures.yaml").write_text(
+        """\
+- name: Shared Culture
+  summary: shared-fallback test culture
+  description: shared-fallback test culture
+  slots:
+    given_name:
+      corpora:
+        - corpus: shared_only.txt
+          weight: 1.0
+      lookback: 2
+  person_patterns:
+    - "{given_name}"
+""",
+        encoding="utf-8",
+    )
+    return pack_dir
+
+
+def test_audit_synthetic_shared_fallback_resolves(tmp_path: Path) -> None:
+    """A corpus present ONLY in corpus/shared/ resolves — parity with the runtime resolver.
+
+    This is the heart of Story 64-7. The runtime resolver
+    (``generator.py:_resolve_corpus_file``) finds a corpus via the
+    ``corpus/shared/`` fallback when the pack ships no per-pack copy; the
+    audit must agree, or it reports false MISSING for files that resolve
+    fine at runtime.
+
+    Pre-fix: the audit only checks ``pack_dir/corpus/`` → MISSING → rc=1
+    (this assertion fails). Post-fix: resolves via the shared fallback →
+    OK → rc=0.
+    """
+    _build_synthetic_pack_shared_only(tmp_path, corpus_word_count=1500)
+
+    result = _run_audit("--path", str(tmp_path / "genre_packs"))
+
+    assert result.returncode == 0, (
+        f"a corpus resolvable via corpus/shared/ must not be MISSING "
+        f"(rc=0 expected); got {result.returncode}.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "shared_only.txt" in result.stdout
+    assert "## MISSING" not in result.stdout, (
+        "a shared-resolved corpus must NOT be flagged MISSING — the audit "
+        f"must mirror the runtime fallback.\nstdout:\n{result.stdout}"
+    )
+    # Positively confirm it landed as a real, counted row (OK band), not
+    # silently skipped: 1500 words is well above WARN.
+    assert "OK" in result.stdout
+
+
+def test_audit_synthetic_absent_corpus_still_missing(tmp_path: Path) -> None:
+    """A corpus in NEITHER the pack nor corpus/shared/ stays MISSING (rc=1).
+
+    No Silent Fallbacks: the shared fallback must resolve real files, not
+    suppress the MISSING signal for a corpus that is genuinely absent.
+    This pins that the fix narrows the gap to *resolvable* files and does
+    not blanket-silence MISSING. Passes both pre- and post-fix; it guards
+    the fix from over-reaching.
+    """
+    pack_dir = tmp_path / "genre_packs" / "synthabsent"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "pack.yaml").write_text(
+        "id: synthabsent\nname: synthabsent\ndescription: absent-corpus test pack\n",
+        encoding="utf-8",
+    )
+    (pack_dir / "cultures.yaml").write_text(
+        """\
+- name: Absent Culture
+  summary: absent-corpus test culture
+  description: absent-corpus test culture
+  slots:
+    given_name:
+      corpora:
+        - corpus: does_not_exist.txt
+          weight: 1.0
+      lookback: 2
+  person_patterns:
+    - "{given_name}"
+""",
+        encoding="utf-8",
+    )
+
+    result = _run_audit("--path", str(tmp_path / "genre_packs"))
+
+    assert result.returncode == 1, (
+        f"a genuinely-absent corpus must still exit 1; got {result.returncode}.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "does_not_exist.txt" in result.stdout
+    assert "## MISSING" in result.stdout

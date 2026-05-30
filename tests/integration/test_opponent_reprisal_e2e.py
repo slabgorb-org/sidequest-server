@@ -259,8 +259,7 @@ def test_opponent_hit_ablates_player_hp(otel_capture):
     )
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert SPAN_STATE_PATCH_HP in span_names, (
-        f"a state_patch.hp span must fire when the opponent damages the player; "
-        f"spans={span_names}"
+        f"a state_patch.hp span must fire when the opponent damages the player; spans={span_names}"
     )
 
 
@@ -282,8 +281,7 @@ def test_opponent_miss_leaves_player_hp_intact(otel_capture):
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert SPAN_OPPONENT_ATTACK in span_names, (
-        f"the opponent-attack span must fire even on a MISS (the reprisal ran); "
-        f"spans={span_names}"
+        f"the opponent-attack span must fire even on a MISS (the reprisal ran); spans={span_names}"
     )
     assert player_core.hp.current == hp_before, (
         f"a missed reprisal must not change the player's HP; "
@@ -312,8 +310,7 @@ def test_opponent_kill_resolves_hp_depletion_against_player(otel_capture):
     player_core = snap.find_creature_core(PLAYER)
     assert player_core is not None
     assert player_core.hp.current <= 0, (
-        f"the 1-HP player must be dropped to 0 by the reprisal; "
-        f"got {player_core.hp.current}"
+        f"the 1-HP player must be dropped to 0 by the reprisal; got {player_core.hp.current}"
     )
     assert enc.resolved, (
         "the encounter must resolve once the player's HP is depleted "
@@ -348,8 +345,7 @@ def test_opponent_attack_emits_otel_to_hit_span(otel_capture):
 
     spans = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_OPPONENT_ATTACK]
     assert len(spans) == 1, (
-        f"exactly one {SPAN_OPPONENT_ATTACK} span must fire per opponent turn; "
-        f"got {len(spans)}"
+        f"exactly one {SPAN_OPPONENT_ATTACK} span must fire per opponent turn; got {len(spans)}"
     )
     attrs = dict(spans[0].attributes)
     for key in ("attacker", "target", "d20", "modifier", "attack_total", "target_ac", "hit"):

@@ -204,6 +204,68 @@ def test_concurrent_publishers_dont_lose_rows(repo_and_sink):
     assert count == 2 * N
 
 
+class _RecordingSink:
+    """In-memory TelemetrySink that records out-of-frame writes (no DB)."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.rows: list[tuple[str, str, str]] = []
+
+    def record(self, *, round, ts, component, event_type, payload_json) -> None:  # noqa: A002
+        self.rows.append((component, event_type, payload_json))
+
+    def append_encounter_event(self, *, kind, payload_json):  # pragma: no cover - unused
+        raise NotImplementedError
+
+
+def test_concurrent_sessions_do_not_cross_contaminate_session_binding():
+    """Two interleaved asyncio sessions (one server process) must each persist
+    their OWN out-of-frame telemetry, not the last-bound session's.
+
+    Regression for the 2026-05-29 perseus_cloud playtest finding: a Glenross
+    span landed under the perseus_cloud session_id because the telemetry-sink
+    binding was a single mutable process-global. ``bind_event_store`` is now
+    ContextVar-scoped, so each ``/ws`` connection task resolves its own sink
+    even after a concurrent session rebinds the global.
+
+    Determinism: session A binds, then BLOCKS until session B has bound (and
+    thereby clobbered the process-global), THEN A publishes. Pre-fix A's
+    publish reads the global (= B's sink) and contaminates B. Post-fix A reads
+    its own ContextVar.
+    """
+    import asyncio
+
+    sink_a = _RecordingSink("glenross")
+    sink_b = _RecordingSink("perseus_cloud")
+
+    async def _run() -> None:
+        b_bound = asyncio.Event()
+
+        async def session_a() -> None:
+            bind_event_store(sink_a)
+            await b_bound.wait()  # let B clobber the process-global first
+            publish_event("confrontation_lifecycle", {"slug": "glenross"}, component="glenross")
+
+        async def session_b() -> None:
+            bind_event_store(sink_b)
+            b_bound.set()
+            await asyncio.sleep(0)  # yield so A's publish runs after the rebind
+            publish_event("state_transition", {"slug": "perseus"}, component="perseus")
+
+        await asyncio.gather(session_a(), session_b())
+
+    asyncio.run(_run())
+
+    a_events = [evt for _comp, evt, _payload in sink_a.rows]
+    b_events = [evt for _comp, evt, _payload in sink_b.rows]
+    assert a_events == ["confrontation_lifecycle"], (
+        f"Glenross sink must hold ONLY its own span, got {a_events}"
+    )
+    assert b_events == ["state_transition"], (
+        f"perseus sink must hold ONLY its own span, got {b_events}"
+    )
+
+
 def test_sink_failure_logs_loudly_and_does_not_crash_the_turn(repo_and_sink, caplog):
     """A forced sink error must produce a loud turn_telemetry.sink_failed
     WARNING and return — publish_event still completes normally."""

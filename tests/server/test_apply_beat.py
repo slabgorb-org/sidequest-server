@@ -671,6 +671,11 @@ def test_per_beat_dial_advance_emits_first_blood_through_apply_pipeline():
     )
     pack = MagicMock(spec=GenrePack)
     pack.rules = RulesConfig(confrontations=[cdef])
+    # Story 72-4: the apply pipeline now resolves a culture for invented NPCs
+    # via pack.effective_cultures(world); stub it so this bare mock returns the
+    # 2-tuple a real GenrePack would (no cultures bound → loud raw-name degrade).
+    pack.effective_cultures.return_value = ([], "genre")
+    pack.source_dir = None
 
     # Snapshot with an active encounter (player at 0, threshold=4).
     snap = GameSnapshot(

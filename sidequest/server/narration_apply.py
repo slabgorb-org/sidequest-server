@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from sidequest.agents.orchestrator import BeatSelection
     from sidequest.game.character import Character
     from sidequest.game.encounter import EncounterActor
+    from sidequest.genre.names.generator import NameGenerator
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
 
@@ -50,6 +51,7 @@ from sidequest.game.session import (
 from sidequest.game.table.types import TableCommit
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import FleeConsequence, MoraleTrigger, ResolutionMode
+from sidequest.genre.names.generator import build_from_culture, has_stem_collision
 from sidequest.magic.confrontations import (
     BranchName,
     evaluate_auto_fire_triggers,
@@ -78,6 +80,8 @@ from sidequest.telemetry.spans import (
     lore_established_span,
     magic_working_span,
     npc_auto_registered_span,
+    npc_invented_name_routed_span,
+    npc_invented_name_unrouted_span,
     npc_pc_name_skipped_span,
     npc_referenced_span,
     quest_update_span,
@@ -1290,12 +1294,126 @@ def promote_crossings_to_status_changes(
     return promotions
 
 
+# Story 72-4: bound on the namegen re-roll loop for a narrator-invented NPC.
+# Mirrors the ``namegen`` CLI's 10-attempt budget; the corpus produces ample
+# variety so a clean candidate is found in 1-2 draws in practice — the budget
+# only guards against a pathological corpus that keeps tripping the
+# stem-collision / existing-name filters.
+_INVENTED_NAME_MAX_ATTEMPTS = 10
+
+
+def _generate_invented_name(
+    *,
+    name_generator: NameGenerator,
+    snapshot: GameSnapshot,
+    fallback: str,
+) -> tuple[str, bool]:
+    """Generate a culture-true name for a narrator-invented NPC (Story 72-4).
+
+    Draws from the culture-bound ``NameGenerator`` and rejects a candidate
+    that either trips ``has_stem_collision`` (the "Frandrew Andrew" artifact)
+    or collides case-folded with an existing PC / ``Npc`` / pool-member name —
+    re-rolling until a clean candidate is found. The existing-name reject is
+    AC5(c): a generated name equal to an existing store member must never mint
+    a duplicate identity.
+
+    Returns ``(name, collision_reroll)`` where ``collision_reroll`` is True
+    when at least one candidate was rejected before a clean one was drawn. On
+    exhaustion within ``_INVENTED_NAME_MAX_ATTEMPTS`` the last candidate (or
+    ``fallback`` if the generator yielded nothing) is returned so the turn
+    keeps moving.
+    """
+    existing = {
+        c.core.name.casefold()
+        for c in snapshot.characters
+        if getattr(getattr(c, "core", None), "name", None)
+    }
+    existing |= {npc.core.name.casefold() for npc in snapshot.npcs}
+    existing |= {member.name.casefold() for member in snapshot.npc_pool}
+
+    collision_reroll = False
+    candidate = fallback
+    for _ in range(_INVENTED_NAME_MAX_ATTEMPTS):
+        candidate = name_generator.generate_person()
+        if has_stem_collision(candidate) or candidate.casefold() in existing:
+            collision_reroll = True
+            continue
+        return candidate, collision_reroll
+    return candidate, collision_reroll
+
+
+def _resolve_invented_naming_context(
+    pack: GenrePack | None, world: str | None
+) -> tuple[NameGenerator | None, str | None, str | None, bool]:
+    """Resolve the culture-bound naming context for narrator-invented NPCs.
+
+    Story 72-4. Returns
+    ``(name_generator, culture_name, culture_source, naming_unresolved)``.
+
+    Culture is resolved via ``Pack.effective_cultures(world)`` — NOT raw
+    ``pack.cultures``; reading the genre set while the world binds its own is
+    the perseus_cloud session-894 divergence (0 NPCs seeded). The corpus dir
+    mirrors the ``namegen`` CLI: ``<pack.source_dir>/corpus`` plus the shared
+    ``sidequest-content/corpus/shared`` fallback.
+
+    - No pack in context → all-None/False: the legacy context-free path (no
+      routing, no loud span).
+    - Pack present but the world resolves no culture, or the generator cannot
+      be built → ``naming_unresolved=True`` so the mint seam fails loud (No
+      Silent Fallbacks) and deliberately degrades to the raw narrator string.
+    """
+    if pack is None:
+        return None, None, None, False
+
+    cultures, culture_source = pack.effective_cultures(world)
+    if not cultures or pack.source_dir is None:
+        return None, None, None, True
+
+    corpus_dir = pack.source_dir / "corpus"
+    fallback_dirs = [pack.source_dir.parent.parent / "corpus" / "shared"]
+    # Try each bound culture (shuffled, so invented NPCs vary across a
+    # multi-culture world) and use the first whose corpus actually builds. A
+    # culture with a missing or below-floor corpus raises inside
+    # ``build_from_culture`` — which already emitted ``namegen.fail_loud`` /
+    # ``namegen.thin_corpus`` — so skip it and try the next rather than failing
+    # the whole route on one thin culture (perseus_cloud's provisional Yulan
+    # corpus is exactly this case). Only when NO bound culture can build do we
+    # surface the loud-degrade condition.
+    candidates = list(cultures)
+    random.shuffle(candidates)
+    for culture in candidates:
+        try:
+            generator = build_from_culture(culture, corpus_dir, fallback_dirs=fallback_dirs)
+        except (FileNotFoundError, ValueError):
+            logger.warning(
+                "namegen.invented_build_failed culture=%r world=%r — corpus "
+                "unavailable or below floor; trying next bound culture",
+                culture.name,
+                world,
+            )
+            continue
+        return generator, culture.name, culture_source, False
+
+    logger.warning(
+        "namegen.invented_all_cultures_failed world=%r cultures=%s — no bound "
+        "culture could be built; invented names degrade loud",
+        world,
+        [c.name for c in cultures],
+    )
+    return None, None, None, True
+
+
 def _apply_npc_mentions(
     *,
     snapshot: GameSnapshot,
     mentions: list[Any],
     turn_num: int,
     acting_character_name: str | None = None,
+    name_generator: NameGenerator | None = None,
+    culture_name: str | None = None,
+    culture_source: str | None = None,
+    pack: GenrePack | None = None,
+    world: str | None = None,
 ) -> None:
     """Apply narrator NPC mentions via 3-step lookup (Wave 2A, story 45-47).
 
@@ -1315,12 +1433,41 @@ def _apply_npc_mentions(
     The novel branch ALSO emits the existing ``SPAN_NPC_AUTO_REGISTERED``
     span (preserved from pre-Wave-2A telemetry — registry_len now reports
     pool length).
+
+    Story 72-4 — naming context for the Step-3 novel branch (ADR-091). Two
+    ways to supply it, both routing a novel narrator name through the
+    culture-bound generator instead of minting it verbatim:
+
+    * **Pre-built generator** (the unit-test / direct-injection contract):
+      pass ``name_generator`` plus ``culture_name``/``culture_source``. Used
+      as-is.
+    * **Lazy from pack** (the production path): pass ``pack`` + ``world`` and
+      the seam resolves the culture via ``Pack.effective_cultures(world)`` and
+      builds the generator **on the first novel mint** — so a turn with no
+      invented NPC never pays the corpus-read + Markov-train cost, and a turn
+      with several shares one generator.
+
+    ``npc.invented_name_routed`` records the provenance (original vs generated
+    name, resolved culture + source, collision-reroll flag). When a pack is in
+    context but the active world resolves no culture — or the generator can't be
+    built — the route fails loud via ``npc.invented_name_unrouted`` and
+    deliberately degrades to the raw string (No Silent Fallbacks; never a silent
+    swallow). With neither generator nor pack supplied (the legacy context-free
+    call) the branch keeps its original raw-mint behavior and fires no reroute
+    span.
     """
     pc_name_lookup = {
         c.core.name.lower(): c.core.name
         for c in snapshot.characters
         if getattr(getattr(c, "core", None), "name", None)
     }
+
+    # Story 72-4: lazy naming-context state. A directly-injected generator is
+    # "already resolved"; a pack is resolved on the first novel mint below.
+    # ``naming_unresolved`` records the loud-degrade condition (pack present but
+    # no culture bound / generator build failed) once resolution is attempted.
+    naming_resolved = name_generator is not None
+    naming_unresolved = False
 
     for mention in mentions:
         matched_pc = pc_name_lookup.get(mention.name.lower())
@@ -1412,8 +1559,70 @@ def _apply_npc_mentions(
             continue
 
         # Step 3: novel — narrator invented a name not in any store.
+        # Story 72-4: route the bare narrator string through the ADR-091
+        # culture-bound generator so invented NPCs are genre/culture-true by
+        # construction (Steps 1-2 already shadowed every known name, so
+        # reaching here means a fresh identity). The minted name — generated,
+        # raw-degraded, or legacy-raw — is what every downstream span reports.
+        original_name = mention.name
+        minted_name = original_name
+        # Lazy resolution: build the culture-bound generator from the pack on
+        # the first novel mint only (skipped entirely on quiet turns and when a
+        # generator was injected directly).
+        if not naming_resolved and pack is not None:
+            (
+                name_generator,
+                culture_name,
+                culture_source,
+                naming_unresolved,
+            ) = _resolve_invented_naming_context(pack, world)
+            naming_resolved = True
+        if name_generator is not None and culture_name is not None:
+            minted_name, collision_reroll = _generate_invented_name(
+                name_generator=name_generator,
+                snapshot=snapshot,
+                fallback=original_name,
+            )
+            with npc_invented_name_routed_span(
+                original_name=original_name,
+                npc_name=minted_name,
+                culture=culture_name,
+                culture_source=culture_source or "",
+                collision_reroll=collision_reroll,
+                turn_number=turn_num,
+            ):
+                logger.info(
+                    "npc.invented_name_routed original=%r minted=%r culture=%r "
+                    "source=%r reroll=%s turn=%d",
+                    original_name,
+                    minted_name,
+                    culture_name,
+                    culture_source,
+                    collision_reroll,
+                    turn_num,
+                )
+        elif naming_unresolved:
+            # No Silent Fallbacks: the active world bound no culture, so the
+            # route could not run. Fail loud, then deliberately degrade to the
+            # raw narrator string — a span-recorded degrade, never a silent
+            # swallow (recovery choice per the story's AC4 latitude).
+            with npc_invented_name_unrouted_span(
+                original_name=original_name,
+                reason="no_culture_bound",
+                world=world or "",
+                turn_number=turn_num,
+            ):
+                logger.warning(
+                    "npc.invented_name_unrouted original=%r world=%r "
+                    "reason=no_culture_bound turn=%d — no culture bound for the "
+                    "active world; degrading to the raw narrator name",
+                    original_name,
+                    world,
+                    turn_num,
+                )
+
         new_member = NpcPoolMember(
-            name=mention.name,
+            name=minted_name,
             role=mention.role or None,
             pronouns=mention.pronouns or None,
             appearance=mention.appearance or None,
@@ -1422,14 +1631,14 @@ def _apply_npc_mentions(
         )
         snapshot.npc_pool.append(new_member)
         with npc_referenced_span(
-            npc_name=mention.name,
+            npc_name=minted_name,
             match_strategy="invented",
             pool_origin=None,
             turn_number=turn_num,
         ):
             logger.info(
                 "npc.referenced name=%r match=invented turn=%d",
-                mention.name,
+                minted_name,
                 turn_num,
             )
         # Preserve pre-Wave-2A auto-registered telemetry — the
@@ -1437,7 +1646,7 @@ def _apply_npc_mentions(
         # via ``SPAN_ROUTES[SPAN_NPC_AUTO_REGISTERED]``. ``registry_len``
         # now reflects pool length.
         with npc_auto_registered_span(
-            npc_name=mention.name,
+            npc_name=minted_name,
             pronouns=mention.pronouns or "",
             role=mention.role or "",
             turn_number=turn_num,
@@ -1445,7 +1654,7 @@ def _apply_npc_mentions(
         ):
             logger.info(
                 "npc.auto_registered name=%r pronouns=%r role=%r turn=%d",
-                mention.name,
+                minted_name,
                 mention.pronouns or "",
                 mention.role or "",
                 turn_num,
@@ -1828,6 +2037,7 @@ def _apply_narration_result_to_snapshot(
     *,
     room: SessionRoom,
     pack: GenrePack | None = None,
+    world: str | None = None,
     dice_failed: bool | None = None,
     dice_actor: str | None = None,
     from_explicit_action: bool = False,
@@ -2596,11 +2806,19 @@ def _apply_narration_result_to_snapshot(
     # Once a PC is in the NPC registry, downstream beat-selection and party
     # state queries treat them as fungible with NPCs — the narrator and the
     # mechanical layer both stop knowing the player exists as a player.
+    # Story 72-4: thread the genre pack + active world so the Step-3 novel
+    # branch can mint narrator-invented NPCs through the ADR-091 culture-bound
+    # generator (culture resolves via Pack.effective_cultures(world) — the
+    # perseus_cloud session-894 guard). Resolution is LAZY inside the seam:
+    # the generator is built only when a genuinely novel name is about to be
+    # minted, so quiet turns (no invented NPC) pay nothing.
     _apply_npc_mentions(
         snapshot=snapshot,
         mentions=list(result.npcs_present),
         turn_num=turn_num,
         acting_character_name=acting_character_name,
+        pack=pack,
+        world=world,
     )
 
     # Story 45-53: detect known recurring NPCs named in prose but missing

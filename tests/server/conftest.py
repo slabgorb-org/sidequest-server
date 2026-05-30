@@ -896,6 +896,13 @@ def synthetic_two_dial_pack():
 
     pack = MagicMock(spec=GenrePack)
     pack.rules = RulesConfig(confrontations=[cdef])
+    # Story 72-4: _apply_narration_result_to_snapshot now resolves a culture for
+    # narrator-invented NPCs via pack.effective_cultures(world). This synthetic
+    # pack binds no cultures, so the route correctly fails loud and degrades to
+    # the raw narrator name — stub the call so the unpack doesn't blow up on the
+    # bare MagicMock (a real GenrePack always returns this 2-tuple).
+    pack.effective_cultures.return_value = ([], "genre")
+    pack.source_dir = None
     return pack
 
 

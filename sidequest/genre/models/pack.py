@@ -143,6 +143,15 @@ class World(BaseModel):
     chassis_instances: list[ChassisInstanceConfig] = Field(default_factory=list)
     magic_register: str = ""
     items: WorldItemsCatalog | None = None
+    scenarios: dict[str, ScenarioPack] = Field(default_factory=dict)
+    """ADR-053 scenarios authored at world tier (``worlds/<slug>/scenarios/``).
+
+    Populated by the loader (Story 71-32). A world either declares its own
+    scenarios here or declares none (``{}``) — there is NO silent fallback to
+    pack-level ``GenrePack.scenarios``. ``bind_scenario`` binds only the active
+    world's scenarios; an empty dict means "this world has no mystery," a valid
+    authored choice, not a misconfiguration.
+    """
     client_theme_css: str | None = None
     """Raw contents of ``worlds/<slug>/client_theme.css`` if present.
 

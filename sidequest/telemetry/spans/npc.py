@@ -84,6 +84,31 @@ SPAN_ROUTES[SPAN_NPC_REFERENCED] = SpanRoute(
     },
 )
 
+# Story 72-1: interest-driven development tick — fires on every
+# non-transactional engagement (an ``npcs_hit`` cite that resolves to a
+# stateful ``Npc``). The lie-detector signal: the GM panel sees the engine
+# *counting* interest and escalating ``resolution_tier``, so NPC depth is a
+# mechanically-grounded fact rather than narrator improv (ADR-014 / ADR-020).
+# Fires every engagement, including ticks that increment the counter without
+# crossing a tier threshold (old == new). ``npc_name`` avoids the OTEL-reserved
+# ``name`` span attribute.
+SPAN_NPC_DEVELOPED = "npc.developed"
+SPAN_ROUTES[SPAN_NPC_DEVELOPED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npcs",
+        "op": "developed",
+        "name": (span.attributes or {}).get("npc_name", ""),
+        "non_transactional_interactions": (span.attributes or {}).get(
+            "non_transactional_interactions", 0
+        ),
+        "resolution_tier_before": (span.attributes or {}).get("resolution_tier_before", ""),
+        "resolution_tier_after": (span.attributes or {}).get("resolution_tier_after", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # Story 45-53: recurring-presence detector — fires when narration prose
 # names a known recurring NPC (in snapshot.npcs or snapshot.npc_pool) but
 # the narrator failed to emit them in npcs_present. The lie-detector
@@ -384,6 +409,35 @@ def npc_invented_name_unrouted_span(
         attributes,
         tracer_override=_tracer,
     ) as span:
+        yield span
+
+
+@contextmanager
+def npc_developed_span(
+    *,
+    npc_name: str,
+    non_transactional_interactions: int,
+    resolution_tier_before: str,
+    resolution_tier_after: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 72-1: one interest-driven development tick on an engaged ``Npc``.
+
+    Carries the new interest count and the ``resolution_tier`` transition
+    (``before``/``after`` equal when the tick didn't cross a threshold).
+    ``npc_name`` avoids the OTEL-reserved ``name`` span attribute.
+    """
+    attributes: dict[str, Any] = {
+        "npc_name": npc_name,
+        "non_transactional_interactions": non_transactional_interactions,
+        "resolution_tier_before": resolution_tier_before,
+        "resolution_tier_after": resolution_tier_after,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(SPAN_NPC_DEVELOPED, attributes, tracer_override=_tracer) as span:
         yield span
 
 

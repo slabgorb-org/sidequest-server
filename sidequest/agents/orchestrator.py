@@ -2067,19 +2067,23 @@ class Orchestrator:
                 ),
             )
 
-        # World context (Valley zone) — persistent across turns.
-        # Currently carries the AVAILABLE CULTURES block with
-        # ``Culture.chargen=False`` entries filtered out (Story 41-11,
-        # closing the Phase 2.2 IOU). Strip the leading newline the
-        # helper emits for Rust-style concat — the registry handles
+        # World context — persistent across turns. Carries the AVAILABLE
+        # CULTURES block with ``Culture.chargen=False`` entries filtered out
+        # (Story 41-11, closing the Phase 2.2 IOU). Strip the leading newline
+        # the helper emits for Rust-style concat — the registry handles
         # section separation.
+        #
+        # Story 61-20 (ADR-112 zone-promotion): zoned ``Early`` (was Valley)
+        # and added to ``STABLE_SECTION_NAMES`` so the session-static culture
+        # roster rides the cache-marked system prefix and is written once per
+        # session instead of re-written into the volatile tail every turn.
         if context.world_context:
             registry.register_section(
                 agent_name,
                 PromptSection.new(
                     "world_context",
                     context.world_context.lstrip("\n"),
-                    AttentionZone.Valley,
+                    AttentionZone.Early,
                     SectionCategory.State,
                 ),
             )
@@ -2110,7 +2114,10 @@ class Orchestrator:
         # pay the ~400 tok these rules cost. Single gate, no parallel mechanism.
         if context.magic_state is not None:
             from sidequest.agents.narrator_prompts import NARRATOR_MAGIC_OUTPUT_RULES
-            from sidequest.magic.context_builder import build_magic_context_block
+            from sidequest.magic.context_builder import (
+                build_magic_static_block,
+                build_magic_volatile_block,
+            )
 
             registry.register_section(
                 agent_name,
@@ -2125,17 +2132,39 @@ class Orchestrator:
             reliquaries = None
             if context.world_items is not None:
                 reliquaries = list(context.world_items.reliquaries)
-            magic_block = build_magic_context_block(
+
+            # Story 61-20 (ADR-112 zone-promotion): split the old single
+            # ``magic_context`` block into its session-static head (world config
+            # + hard_limits) and its volatile per-actor tail (live ledger bar
+            # values, learned-magic, reliquaries). The static head rides the
+            # cache-marked system prefix (Early + STABLE_SECTION_NAMES) and is
+            # written once; the volatile tail stays in Valley (User bucket) so
+            # the per-turn ledger churn never pollutes the 1h prefix (the 61-19
+            # regression). Both still reach the narrator, just in different
+            # cacheable blocks.
+            magic_static = build_magic_static_block(magic_state=context.magic_state)
+            if magic_static:
+                registry.register_section(
+                    agent_name,
+                    PromptSection.new(
+                        "magic_hard_limits",
+                        f"<magic-context>\n{magic_static}\n</magic-context>",
+                        AttentionZone.Early,
+                        SectionCategory.State,
+                    ),
+                )
+
+            magic_volatile = build_magic_volatile_block(
                 magic_state=context.magic_state,
                 actor_id=context.character_name or None,
                 reliquaries=reliquaries,
             )
-            if magic_block:
+            if magic_volatile:
                 registry.register_section(
                     agent_name,
                     PromptSection.new(
                         "magic_context",
-                        f"<magic-context>\n{magic_block}\n</magic-context>",
+                        f"<magic-ledger>\n{magic_volatile}\n</magic-ledger>",
                         AttentionZone.Valley,
                         SectionCategory.State,
                     ),

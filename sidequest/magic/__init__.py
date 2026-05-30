@@ -5,7 +5,11 @@ See docs/superpowers/specs/2026-04-28-magic-system-coyote-star-implementation-de
 for the v1 implementation scope.
 """
 
-from sidequest.magic.context_builder import build_magic_context_block
+from sidequest.magic.context_builder import (
+    build_magic_context_block,
+    build_magic_static_block,
+    build_magic_volatile_block,
+)
 from sidequest.magic.models import (
     Flag,
     FlagSeverity,
@@ -31,6 +35,8 @@ __all__ = [
     "MAGIC_PLUGINS",
     "ApplyWorkingResult",
     "build_magic_context_block",
+    "build_magic_static_block",
+    "build_magic_volatile_block",
     "BarKey",
     "Flag",
     "FlagSeverity",

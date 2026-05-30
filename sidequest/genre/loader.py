@@ -1015,6 +1015,13 @@ def _load_single_world(
     # When present, this CSS replaces the genre-level theme at connect time.
     client_theme_css = _load_text_optional(world_path / "client_theme.css")
 
+    # ADR-053 / Story 71-32: world-tier scenarios (worlds/<slug>/scenarios/).
+    # Each world owns its scenarios; bind_scenario binds only the active world's.
+    # Absent dir → {} (no silent fallback to pack-level GenrePack.scenarios).
+    world_scenarios: dict[str, ScenarioPack] = _load_subdirectories(
+        world_path, "scenarios", _load_single_scenario
+    )
+
     return World(
         config=config,
         lore=lore,
@@ -1034,6 +1041,7 @@ def _load_single_world(
         chassis_instances=chassis_instances,
         magic_register=magic_register,
         items=items,
+        scenarios=world_scenarios,
         client_theme_css=client_theme_css,
     )
 

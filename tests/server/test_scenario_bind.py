@@ -151,6 +151,27 @@ def _fresh_otel() -> tuple[TracerProvider, InMemorySpanExporter]:
     return provider, exporter
 
 
+def _attach_world_scenario(
+    pack: GenrePack, world_slug: str, scenario_id: str, scenario: ScenarioPack
+) -> None:
+    """Place ``scenario`` at ``pack.worlds[world_slug].scenarios`` (the Story
+    71-32 world-aware contract — bind reads from the world, not pack root).
+
+    If the scaffold pack lacks ``world_slug``, synthesize that world from an
+    existing one: the caverns scaffold authors ``beneath_sunden`` while the
+    bind tests address ``flickering_reach``, and the field is only declared
+    once GREEN lands (``World`` is ``extra="allow"``, so the assignment is
+    valid either way).
+    """
+    import copy as _copy
+
+    world = pack.worlds.get(world_slug)
+    if world is None:
+        world = _copy.deepcopy(next(iter(pack.worlds.values())))
+        pack.worlds[world_slug] = world
+    world.scenarios = {scenario_id: scenario}  # type: ignore[attr-defined]
+
+
 # ---------------------------------------------------------------------------
 # Unit: bind_scenario against handcrafted pack + snapshot
 # ---------------------------------------------------------------------------
@@ -210,7 +231,8 @@ class TestBindScenarioUnit:
             suspects=[Suspect(id="a", archetype_ref="r", can_be_guilty=True)],
         )
         pack = _copy.deepcopy(caverns_pack)
-        pack.scenarios = {"whodunit": scenario}
+        # Story 71-32: scenarios bind from the active world, not pack root.
+        _attach_world_scenario(pack, "flickering_reach", "whodunit", scenario)
 
         provider, exporter = _fresh_otel()
         tracer = provider.get_tracer("t")
@@ -347,15 +369,22 @@ class TestDispatchIntegration:
             await _connect(handler)
             sd = handler._session_data  # type: ignore[attr-defined]
 
-            # Inject a scenario into the loaded pack before confirmation.
-            sd.genre_pack.scenarios["test_whodunit"] = _scenario_pack(
-                npcs=[
-                    _scenario_npc(
-                        "suspect",
-                        "A Person Not In The World",
-                    )
-                ],
-                suspects=[Suspect(id="suspect", archetype_ref="r", can_be_guilty=True)],
+            # Inject a scenario into the ACTIVE WORLD before confirmation
+            # (Story 71-32: confirmation binds from pack.worlds[sd.world_slug],
+            # not pack root). The confirmation path passes world_slug=sd.world_slug.
+            _attach_world_scenario(
+                sd.genre_pack,
+                sd.world_slug,
+                "test_whodunit",
+                _scenario_pack(
+                    npcs=[
+                        _scenario_npc(
+                            "suspect",
+                            "A Person Not In The World",
+                        )
+                    ],
+                    suspects=[Suspect(id="suspect", archetype_ref="r", can_be_guilty=True)],
+                ),
             )
 
             out = await _walk_and_confirm(handler)

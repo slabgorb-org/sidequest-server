@@ -50,7 +50,7 @@ def bind_scenario(
     world_slug: str,
     rng: random.Random | None = None,
 ) -> tuple[str, ScenarioPack] | None:
-    """Bind the first scenario in ``pack`` to ``snapshot``.
+    """Bind the active world's first scenario to ``snapshot``.
 
     Mutates ``snapshot`` in place: sets ``snapshot.scenario_state`` and
     seeds matching NPCs' ``belief_state`` with facts/suspicions from
@@ -58,18 +58,47 @@ def bind_scenario(
 
     Returns ``(scenario_id, scenario_pack)`` so the caller can stash
     the chosen pack on its session-scoped state (Rust's
-    ``shared_session.active_scenario`` analog). Returns ``None`` when
-    the pack declares no scenarios.
+    ``shared_session.active_scenario`` analog).
+
+    World-aware (Story 71-32): the scenario is selected from
+    ``pack.worlds[world_slug].scenarios`` — only the *active* world's
+    scenarios are eligible. Returns ``None`` (emitting a
+    ``scenario.bind_skipped`` event) when the active world declares no
+    scenarios, or when ``world_slug`` is not a world in ``pack``. There is
+    NO silent fallback to pack-level ``GenrePack.scenarios``: a world with
+    no mystery is a valid authored state, not a misconfiguration.
 
     ``rng`` is forwarded to :meth:`ScenarioState.from_genre_pack` for
     deterministic guilty-NPC selection in tests.
     """
-    if not pack.scenarios:
+    world = pack.worlds.get(world_slug)
+    world_scenarios = world.scenarios if world is not None else {}
+    if not world_scenarios:
+        # Explicit absence — this world binds no scenario. Emit the decision
+        # so the GM panel can tell "no mystery here" from a silently-improvised
+        # one (OTEL Observability Principle). NO pack-level fallback.
+        reason = "unknown_world" if world is None else "no_world_scenario"
+        span = trace.get_current_span()
+        span.add_event(
+            "scenario.bind_skipped",
+            {
+                "event": "scenario_bind_skipped",
+                "genre": genre_slug,
+                "world": world_slug,
+                "reason": reason,
+            },
+        )
+        logger.info(
+            "scenario.bind_skipped genre=%s world=%s reason=%s",
+            genre_slug,
+            world_slug,
+            reason,
+        )
         return None
 
-    # Pick the first scenario (dict insertion order is deterministic
-    # in Python 3.7+; for now "first" = YAML load order).
-    scenario_id, scenario_pack = next(iter(pack.scenarios.items()))
+    # Pick the first scenario in the active world (dict insertion order is
+    # deterministic in Python 3.7+; for now "first" = YAML load order).
+    scenario_id, scenario_pack = next(iter(world_scenarios.items()))
 
     scenario_state = ScenarioState.from_genre_pack(scenario_pack, rng=rng)
 

@@ -467,7 +467,9 @@ async def test_development_tick_reaches_watcher_hub_via_span_route(
         f"captured event_types={[e.get('event_type') for e in captured]!r}"
     )
     fields = dev_events[0]["fields"]
-    assert fields.get("npc_name") == "Boris"
+    # Routed events carry the NPC name under ``name`` (GM-panel convention,
+    # matching every sibling npc.* route); the span attribute stays ``npc_name``.
+    assert fields.get("name") == "Boris"
     assert int(fields[_DEV_SPAN_COUNT_ATTR]) == 1
 
 

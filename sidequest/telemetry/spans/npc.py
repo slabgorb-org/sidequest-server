@@ -100,7 +100,6 @@ SPAN_ROUTES[SPAN_NPC_DEVELOPED] = SpanRoute(
         "field": "npcs",
         "op": "developed",
         "name": (span.attributes or {}).get("npc_name", ""),
-        "npc_name": (span.attributes or {}).get("npc_name", ""),
         "non_transactional_interactions": (span.attributes or {}).get(
             "non_transactional_interactions", 0
         ),

@@ -29,14 +29,12 @@ from sidequest.game.disposition import Disposition
 if TYPE_CHECKING:
     from sidequest.game.session import Npc
 
-# Resolution-tier ladder (ADR-020 enrichment). Monotonic: an NPC only ever
-# climbs. ``spawn`` is the materialization default; ``acquaintance`` and
-# ``established`` are earned through sustained non-transactional engagement.
-RESOLUTION_TIER_LADDER: tuple[str, ...] = ("spawn", "acquaintance", "established")
-
-# Interest-count thresholds at which the tier escalates. The first threshold
-# is > 1 so a single engagement (or a lone combat hit) never promotes — depth
-# is earned over several turns, per the "talks for ten turns" framing.
+# Interest-count thresholds at which the resolution tier escalates up the
+# monotonic ladder spawn -> acquaintance -> established (ADR-020 enrichment).
+# ``spawn`` is the materialization default; the higher tiers are earned through
+# sustained non-transactional engagement. The first threshold is > 1 so a
+# single engagement (or a lone combat hit) never promotes — depth is earned
+# over several turns, per the "talks for ten turns" framing.
 ACQUAINTANCE_AT = 3
 ESTABLISHED_AT = 8
 

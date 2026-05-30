@@ -68,6 +68,49 @@ def _emit_recipient_dropped(kind: str, player_id: str, reason: str) -> None:
         logger.warning("emit_event.recipient_dropped watcher publish failed kind=%s", kind)
 
 
+def _deliver_to_connected_recipients(
+    room: Any,
+    recipients: Any,
+    *,
+    message_builder: Callable[[str], Any],
+    kind: str,
+) -> dict[str, Any]:
+    """Shared recipient-delivery dispatch (Story 59-22).
+
+    Walk ``recipients`` in order; for each, ask ``message_builder(pid)`` for the
+    frame to send. A ``None`` return means "send nothing to this socket" — the
+    single skip rule each caller folds its own gate into (``decision.include``
+    for the projection fan-out; the supplier returning ``None`` for the
+    CONFRONTATION path). A recipient whose socket/queue has gone mid-broadcast
+    is surfaced via :func:`_emit_recipient_dropped` rather than skipped
+    silently (the orphaned-turn blind spot — No Silent Fallbacks + the OTEL
+    lie-detector mandate).
+
+    Returns ``{pid: built_msg}`` for every recipient the builder produced a
+    non-``None`` frame for — INCLUDING recipients whose delivery was then
+    dropped — so a caller that needs a specific recipient's own frame (the
+    emitter, for ``emit_event``'s return value) can recover it without invoking
+    the builder a second time (a double call would double-fire the supplier's
+    per-recipient OTEL spans).
+    """
+    built: dict[str, Any] = {}
+    for pid in recipients:
+        msg = message_builder(pid)
+        if msg is None:
+            continue
+        built[pid] = msg
+        socket_id = room.socket_for_player(pid)
+        if socket_id is None:
+            _emit_recipient_dropped(kind, pid, "socket_gone")
+            continue
+        queue = room.queue_for_socket(socket_id)
+        if queue is None:
+            _emit_recipient_dropped(kind, pid, "queue_detached")
+            continue
+        queue.put_nowait(msg)
+    return built
+
+
 def _deliver_fanout(
     room: Any,
     fanout: list[tuple[str, FilterDecision, dict]],
@@ -85,18 +128,20 @@ def _deliver_fanout(
     testable against a real ``SessionRoom`` with synthetic fan-out tuples — no
     genre pack, no projection, no DB. ``emit_event`` is the sole production
     caller.
+
+    Story 59-22: the socket/queue/drop/``put_nowait`` dispatch is shared with
+    the CONFRONTATION supplier path via :func:`_deliver_to_connected_recipients`.
+    The per-recipient frame construction (the ``decision.include`` gate, the C3
+    ``model_validate`` rebuild, the ``_visibility`` egress-strip, and the
+    fail-loud ``fanout_failed`` log) is this path's own concern, so it lives in
+    the builder handed to the shared helper.
     """
-    for other_pid, decision, filtered_data in fanout:
+    by_pid = {other_pid: (decision, filtered_data) for other_pid, decision, filtered_data in fanout}
+
+    def _build(other_pid: str) -> Any:
+        decision, filtered_data = by_pid[other_pid]
         if not decision.include:
-            continue
-        socket_id = room.socket_for_player(other_pid)
-        if socket_id is None:
-            _emit_recipient_dropped(kind, other_pid, "socket_gone")
-            continue
-        queue = room.queue_for_socket(socket_id)
-        if queue is None:
-            _emit_recipient_dropped(kind, other_pid, "queue_detached")
-            continue
+            return None
         try:
             if payload_cls is not None:
                 # C3: rebuild the recipient payload from the filtered dict
@@ -111,9 +156,8 @@ def _deliver_fanout(
                 # closes the pre-existing leak for ALL narration recipients.
                 filtered_data.pop("_visibility", None)
                 recipient_payload = payload_cls.model_validate({**filtered_data, "seq": seq})
-                recipient_msg = message_cls(payload=recipient_payload)
-            else:
-                recipient_msg = message_cls(payload={**filtered_data, "seq": seq})
+                return message_cls(payload=recipient_payload)
+            return message_cls(payload={**filtered_data, "seq": seq})
         except Exception:
             # Never silently fail fan-out; log and skip this recipient.
             logger.error(
@@ -121,8 +165,14 @@ def _deliver_fanout(
                 kind,
                 other_pid,
             )
-            continue
-        queue.put_nowait(recipient_msg)
+            return None
+
+    _deliver_to_connected_recipients(
+        room,
+        [other_pid for other_pid, _decision, _filtered_data in fanout],
+        message_builder=_build,
+        kind=kind,
+    )
 
 
 def persist_scrapbook_entry(
@@ -399,22 +449,19 @@ def emit_event(
                     recipient_payload = recipient_payload.model_copy(update={"seq": seq})
                 return message_cls(payload=recipient_payload)
 
-            emitter_msg: object | None = None
-            for pid in room.connected_player_ids():
-                msg = _frame_for(pid)
-                if pid == emitter_player_id:
-                    emitter_msg = msg
-                if msg is None:
-                    continue
-                socket_id = room.socket_for_player(pid)
-                if socket_id is None:
-                    _emit_recipient_dropped(kind, pid, "socket_gone")
-                    continue
-                queue = room.queue_for_socket(socket_id)
-                if queue is None:
-                    _emit_recipient_dropped(kind, pid, "queue_detached")
-                    continue
-                queue.put_nowait(msg)
+            # Story 59-22: delivery dispatch is the shared helper; this path's
+            # per-recipient frame construction is `_frame_for`. The helper
+            # returns every built (non-None) frame keyed by pid, so the
+            # emitter's own frame is recovered without calling `_frame_for`
+            # (hence the supplier) a second time. A spy/no-op helper returns a
+            # falsy value → emitter_msg falls through to the back-compat block.
+            built = _deliver_to_connected_recipients(
+                room,
+                room.connected_player_ids(),
+                message_builder=_frame_for,
+                kind=kind,
+            )
+            emitter_msg: object | None = built.get(emitter_player_id) if built else None
 
             # Return the emitter's own frame for caller back-compat. If the
             # emitter was not connected (or the supplier returned None for

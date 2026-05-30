@@ -669,13 +669,14 @@ def test_bounded_tail_flat_but_growing_tail_trips_the_flat_cost_guard() -> None:
     bounded_tail = 1_024  # post-fix steady-state tail, same every turn
     baseline = per_turn_cost(bounded_tail)
 
-    # BOUNDED arm — flat across 5..50.
-    for turn in range(5, 51):
-        cost = per_turn_cost(bounded_tail)
-        assert cost <= baseline * 1.20, (
-            f"Per-turn cost at turn {turn} ({cost}) drifted >20% above the "
-            f"turn-5 steady-state baseline ({baseline}) on a BOUNDED tail."
-        )
+    # BOUNDED arm — a turn-independent tail stays at baseline, so any later
+    # turn is trivially within the 20% bound. A single assertion suffices;
+    # the GROWING arm below is what makes this guard able to fail (a 46x loop
+    # over the same constant input would be dead iteration — Rule #6).
+    assert per_turn_cost(bounded_tail) <= baseline * 1.20, (
+        f"A bounded (turn-independent) tail must stay within 20% of baseline "
+        f"({baseline}); got {per_turn_cost(bounded_tail)}."
+    )
 
     # GROWING arm (control) — a linearly-creeping tail MUST trip the guard by
     # turn 50, proving the bounded assertion above is not vacuously green.

@@ -1014,14 +1014,18 @@ class AnthropicSdkClient:
         content that sits past the last explicit breakpoint at the default 5m
         TTL. The system_blocks[0] + tools[-1] prefix is marked at the
         configured TTL (1h by default), but the user message + recency-zone
-        deltas added on iter=1 (~17K tok) carry no marker by default, so the
-        API auto-caches that tail at 5m. On iter=2 the 60-4 continuation
-        marker writes the same content at 1h, displacing the 5m one within
-        seconds — pure waste. Marking iter=1 at the configured TTL overrides
-        the auto-5m default so the iter=1 write lands at 1h directly and
-        iter=2 reads it. Probe evidence: per-turn cost
-        $0.137 → $0.096 (~30% savings); see
-        ``sprint/archive/60-7-session.md``.
+        deltas added on iter=1 carry no marker by default, so the API
+        auto-caches that tail at 5m. Story 60-7 added an EXPLICIT marker on the
+        newest message every iter to pin that tail to a single write (the
+        unmarked auto-5m would otherwise be displaced by the iter=2 marker —
+        pure waste). Story 61-19 sets that marker's TTL to ``_VOLATILE_CACHE_TTL``
+        (5m), NOT the configured 1h: the tail is volatile, so the iter=1 write
+        lands at 5m deliberately and the within-turn iter=2 continuation reads
+        it at 5m (seconds later) without re-minting. The 1h amortization lives
+        on the stable prefix + tools (system_blocks[0] + tools[-1]), not on the
+        message tail. (The 60-7 "$0.137 → $0.096" figure was the pre-61-19
+        1h-tail layout; see ``sprint/archive/60-7-session.md`` and
+        ``sprint/context/context-story-61-19.md``.)
 
         ``is_continuation`` is retained as caller-facing intent (iter=1 vs
         iter=2+) — useful to the call site and to test naming — but no

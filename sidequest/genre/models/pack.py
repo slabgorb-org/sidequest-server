@@ -216,6 +216,38 @@ class GenrePack(BaseModel):
     def name(self) -> str:
         return self.meta.name
 
+    # ── World-over-genre resolution (SOUL "Crunch in the Genre, Flavor in
+    # the World") ─────────────────────────────────────────────────────────
+    # A world that declares its own cultures/archetypes REPLACES the genre
+    # set; a world that declares none inherits the genre's. This is the SINGLE
+    # resolution every consumer must use — namegen (name generation) and
+    # ``pregen.seed_manual`` (Monster-Manual seeding) both call these so a
+    # seeded NPC's culture tag resolves against the SAME set the name generator
+    # validates against. Reading ``pack.cultures`` raw in one and resolving via
+    # the world in the other is the divergence that made perseus_cloud seeding
+    # fail (genre name "Hegemonic" handed to a world that only knows
+    # spacer/thari/yulan → 0 NPCs seeded, 2026-05-29 session 894).
+
+    def effective_cultures(self, world: str | None) -> tuple[list[Culture], str]:
+        """Resolve the active culture list for ``world``.
+
+        Returns ``(cultures, source)`` where ``source`` is ``"world"`` when the
+        named world supplies its own non-empty culture list, else ``"genre"``
+        (including when ``world`` is ``None`` or unknown).
+        """
+        world_opt = self.worlds.get(world) if world else None
+        if world_opt is not None and world_opt.cultures:
+            return list(world_opt.cultures), "world"
+        return list(self.cultures), "genre"
+
+    def effective_archetypes(self, world: str | None) -> tuple[list[NpcArchetype], str]:
+        """Resolve the active archetype list for ``world`` (same rule as
+        :meth:`effective_cultures`)."""
+        world_opt = self.worlds.get(world) if world else None
+        if world_opt is not None and world_opt.archetypes:
+            return list(world_opt.archetypes), "world"
+        return list(self.archetypes), "genre"
+
 
 # ClassDef.saving_throws uses a TYPE_CHECKING-only import of SavingThrowsTable to
 # avoid a circular dependency (character → rules → game.beat_kinds → game → genre).

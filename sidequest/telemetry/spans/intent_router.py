@@ -122,6 +122,46 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_CONFRONTATION_VOCABULARY] = SpanRoute(
 )
 
 
+SPAN_INTENT_ROUTER_DISPATCH_GATED = "intent_router.dispatch.gated"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_DISPATCH_GATED] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.dispatch.gated",
+        "subsystem": (span.attributes or {}).get("subsystem", ""),
+        "idempotency_key": (span.attributes or {}).get("idempotency_key", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_dispatch_gated_span(
+    *,
+    subsystem: str,
+    idempotency_key: str,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires once per dispatch the pre-narrator precondition gate drops.
+
+    A dropped dispatch is structurally inert on this snapshot (a world-level
+    precondition is unmet — e.g. ``scenario_clue`` with no ADR-053 scenario
+    graph loaded), so engaging it could only ever produce a guaranteed
+    ``dispatch_engagement.{subsystem}.mismatch`` false-positive. The gate
+    removes it before the bank and the watcher; this span is the LOUD record
+    of the skip the GM panel reads — never a silent fallback
+    (CLAUDE.md "No Silent Fallbacks").
+    """
+    with Span.open(
+        SPAN_INTENT_ROUTER_DISPATCH_GATED,
+        {"subsystem": subsystem, "idempotency_key": idempotency_key, "reason": reason, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 @contextmanager
 def intent_router_confrontation_vocabulary_span(
     *,

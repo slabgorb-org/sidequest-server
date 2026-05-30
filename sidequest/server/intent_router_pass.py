@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sidequest.agents.dispatch_precondition_gate import run_dispatch_precondition_gate
 from sidequest.agents.intent_router import IntentRouter
 from sidequest.agents.subsystems import BankResult, run_dispatch_bank
 from sidequest.game.session import GameSnapshot
@@ -161,6 +162,19 @@ async def execute_intent_router_pre_narrator_pass(
         action=action,
         state_summary=state_summary,
     )
+
+    # Precondition gate (Story 59-8): drop dispatches that are STRUCTURALLY
+    # inert on this snapshot — they can never engage no matter what the
+    # narrator does (e.g. scenario_clue with no ADR-053 scenario graph loaded),
+    # so engaging them only ever produces a guaranteed
+    # ``dispatch_engagement.*.mismatch`` false-positive. Gating here — BEFORE
+    # the bank AND before the package is returned to the caller (which assigns
+    # it to ``turn_context.dispatch_package`` for the post-turn watcher) —
+    # removes the inert dispatch from both the engine run and the lie-detector,
+    # while a loud ``intent_router.dispatch.gated`` span records each skip (NOT
+    # a silent fallback). A real scenario world is unaffected: the gate only
+    # fires when the precondition is unmet.
+    package = run_dispatch_precondition_gate(package=package, snapshot=snapshot)
 
     bank_result = await run_dispatch_bank(
         package,

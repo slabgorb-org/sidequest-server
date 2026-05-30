@@ -61,17 +61,16 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
-from typing import Any
 
 import pytest
+
+# Wires the tool adapters onto default_registry, matching the SDK path.
+import sidequest.agents.tools  # noqa: F401
 
 # Populate MAGIC_PLUGINS via import side effect (the tests/magic/ autouse
 # fixture is not in scope under tests/agents/). MagicState.from_config needs
 # the shipped plugins registered.
 import sidequest.magic.plugins  # noqa: F401
-
-# Wires the tool adapters onto default_registry, matching the SDK path.
-import sidequest.agents.tools  # noqa: F401
 from sidequest.magic.models import (
     HardLimit,
     LedgerBarSpec,

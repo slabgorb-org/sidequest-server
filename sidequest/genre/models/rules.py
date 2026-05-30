@@ -304,6 +304,7 @@ class WinCondition(StrEnum):  # noqa: UP042 — matches project convention
 
     dial_threshold = "dial_threshold"
     hp_depletion = "hp_depletion"
+    table_showdown = "table_showdown"
 
 
 class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (see protocol/enums.py)
@@ -325,6 +326,7 @@ class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (se
     beat_selection = "beat_selection"
     sealed_letter_lookup = "sealed_letter_lookup"
     opposed_check = "opposed_check"
+    table_resolution = "table_resolution"
 
 
 class InteractionCell(BaseModel):
@@ -433,6 +435,11 @@ class ConfrontationDef(BaseModel):
     opponent_weapon: str | None = None  # dogfight: opponent ace's weapon catalog id
     player_weapon: str | None = None  # dogfight: PC frame's weapon catalog id
     geometry_modifiers: GeometryModifiers | None = None
+    # Free-for-all N-seat table (table_resolution mode). ``table_game`` is the
+    # resolver discriminator ("poker" | "auction"); ``max_decision_points``
+    # bounds the abstracted betting loop. Both None/0 for non-table types.
+    table_game: str | None = None
+    max_decision_points: int = 0
     player_default_stats: dict[str, int] = Field(default_factory=dict)
     morale: MoraleDef | None = None
     intent_verbs: list[str] | None = None
@@ -455,6 +462,28 @@ class ConfrontationDef(BaseModel):
     def _validate(self) -> ConfrontationDef:
         if not self.confrontation_type:
             raise ValueError("confrontation type must not be empty")
+        if self.resolution_mode == ResolutionMode.table_resolution:
+            if not self.table_game:
+                raise ValueError(
+                    f"confrontation '{self.confrontation_type}' uses "
+                    "resolution_mode 'table_resolution' but declares no "
+                    "table_game (e.g. 'poker' | 'auction')"
+                )
+            if self.win_condition != WinCondition.table_showdown:
+                raise ValueError(
+                    f"confrontation '{self.confrontation_type}' uses "
+                    "resolution_mode 'table_resolution' but win_condition is "
+                    f"{self.win_condition.value!r}; it must be 'table_showdown'"
+                )
+            if self.max_decision_points < 1:
+                raise ValueError(
+                    f"confrontation '{self.confrontation_type}' uses "
+                    "table_resolution but max_decision_points="
+                    f"{self.max_decision_points} (must be >= 1)"
+                )
+            # table_showdown reads table_state, never the dials — return before
+            # the dial_threshold requirement below.
+            return self
         if self.win_condition == WinCondition.dial_threshold and (
             self.player_metric is None or self.opponent_metric is None
         ):

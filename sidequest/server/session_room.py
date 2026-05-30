@@ -205,6 +205,11 @@ class SessionRoom:
     # never orphans the table's turn. Cleared on drain (per-turn reset point)
     # exactly like ``_pending_actions``.
     _crash_released: set[str] = field(default_factory=set)
+    # Table confrontations: seats that folded/went out drop from the barrier
+    # denominator for the REST of the hand (multiple decision points), unlike
+    # crash-release which is per-interaction. Cleared only at table teardown
+    # via ``clear_table_folds()`` — NOT in ``drain_pending_actions``.
+    _table_folded_player_ids: set[str] = field(default_factory=set)
 
     # ------------------------------------------------------------------
     # Canonical world state (ADR-037 Python port). The room owns the
@@ -725,9 +730,32 @@ class SessionRoom:
         with self._lock:
             self._crash_released.add(player_id)
 
+    def mark_table_folded(self, player_id: str) -> None:
+        """Drop a folded/out table seat from the barrier denominator until the
+        hand ends. Idempotent — calling with the same player_id multiple times
+        has no additional effect.
+
+        Unlike crash-release (which is cleared on every ``drain_pending_actions``
+        call), table folds persist across decision points for the life of the
+        hand and are only cleared by ``clear_table_folds()`` at table teardown.
+        """
+        with self._lock:
+            self._table_folded_player_ids.add(player_id)
+
+    def clear_table_folds(self) -> None:
+        """Restore all folded seats to the barrier denominator.
+
+        Call at table confrontation teardown (when the hand ends and the
+        encounter resolves) so the room is ready for a fresh hand.
+        """
+        with self._lock:
+            self._table_folded_player_ids.clear()
+
     def effective_barrier_count(self) -> int:
-        """The submit-and-wait barrier denominator: PLAYING peers minus those
-        crash-released this interaction (Story 67-1).
+        """The submit-and-wait barrier denominator: PLAYING peers minus
+        crash-released seats (this interaction only, Story 67-1) AND minus
+        table-folded seats (for the life of the hand, Task 14). A seat in both
+        sets is subtracted once (the sets are unioned before counting).
 
         This is the ONE source of truth for "how many submissions does the
         barrier need". Both the normal submission path (`player_action.py`)
@@ -740,7 +768,8 @@ class SessionRoom:
         """
         with self._lock:
             playing = sum(1 for seat in self._seated.values() if seat.state == LobbyState.PLAYING)
-            raw = playing - len(self._crash_released)
+            released = self._crash_released | self._table_folded_player_ids
+            raw = playing - len(released)
         # Review finding [SEC] (2026-05-26): surface an underflow rather than
         # let recheck_barrier's `<= 0` guard silently freeze the interaction.
         # With crash-release bound to the sending socket this should not occur
@@ -749,10 +778,10 @@ class SessionRoom:
         # negative value signals state corruption and must not pass quietly.
         if raw < 0:
             _log.warning(
-                "session.effective_barrier_underflow slug=%s playing=%d crash_released=%d",
+                "session.effective_barrier_underflow slug=%s playing=%d released=%d",
                 self.slug,
                 playing,
-                len(self._crash_released),
+                len(released),
             )
         return max(0, raw)
 

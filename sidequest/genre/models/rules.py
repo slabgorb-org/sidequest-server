@@ -394,6 +394,32 @@ class GeometryModifiers(BaseModel):
     range: dict[str, int] = Field(default_factory=dict)
 
 
+class OpponentAttackDef(BaseModel):
+    """The opponent's attack profile for the server-driven enemy turn.
+
+    In ``beat_selection`` + ``win_condition: hp_depletion`` combat (SWN) the
+    player rolls attack beats that ablate the enemy's HP, but the engine has no
+    automatic enemy turn — so without this the opponent never hits back and the
+    player can win but never lose (playtest perseus_cloud, session 894). When a
+    combat declares ``opponent_attack``, the enemy reprisal fires each round:
+    d20 + ``attack_bonus`` + ``combat_skill`` + the ``stat_check`` attribute mod
+    vs the player's AC; on a hit ``damage`` ablates the player's HP.
+
+    ``damage`` is required — an enemy attack with no damage is a content bug, not
+    a silent zero (No Silent Fallbacks). Optional on the cdef: a confrontation
+    with no authored reprisal (dial/opposed_check social, or combat not yet
+    wired) simply gets no enemy turn, and the engine emits a lie-detector span so
+    the gap is visible rather than silent.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    stat_check: str
+    attack_bonus: int = 0
+    combat_skill: int = 0
+    damage: DamageSpec
+
+
 class ConfrontationDef(BaseModel):
     """A confrontation type declared by a genre pack in rules.yaml."""
 
@@ -432,6 +458,9 @@ class ConfrontationDef(BaseModel):
     # never leak into modifier resolution. All other keys are raw ability
     # scores (3..20 D&D-style; modifier = floor((score-10)/2)).
     opponent_default_stats: dict[str, int] | None = None
+    # Server-driven enemy turn (hp_depletion combat). See OpponentAttackDef.
+    # None = no enemy reprisal authored (engine no-ops + emits a lie-detector span).
+    opponent_attack: OpponentAttackDef | None = None
     opponent_weapon: str | None = None  # dogfight: opponent ace's weapon catalog id
     player_weapon: str | None = None  # dogfight: PC frame's weapon catalog id
     geometry_modifiers: GeometryModifiers | None = None

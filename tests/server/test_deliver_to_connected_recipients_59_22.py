@@ -281,24 +281,24 @@ class _FakeEventLog:
             self.seq = seq
 
     class _Txn:
-        def __init__(self, outer: "_FakeEventLog") -> None:
+        def __init__(self, outer: _FakeEventLog) -> None:
             self._outer = outer
 
-        def __enter__(self) -> "_FakeEventLog._Txn":
+        def __enter__(self) -> _FakeEventLog._Txn:
             return self
 
         def __exit__(self, *exc: object) -> bool:
             return False
 
-        def append_event(self, *, kind: str, payload_json: str) -> "_FakeEventLog._Row":
+        def append_event(self, *, kind: str, payload_json: str) -> _FakeEventLog._Row:
             self._outer._seq += 1
             return _FakeEventLog._Row(self._outer._seq)
 
     @property
-    def repository(self) -> "_FakeEventLog":
+    def repository(self) -> _FakeEventLog:
         return self
 
-    def transaction(self) -> "_FakeEventLog._Txn":
+    def transaction(self) -> _FakeEventLog._Txn:
         return self._Txn(self)
 
 

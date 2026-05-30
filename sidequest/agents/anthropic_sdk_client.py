@@ -334,14 +334,21 @@ class AnthropicSdkClient:
             # the API auto-caches the content sitting past our last explicit
             # breakpoint (the system_blocks[0]+tools prefix) at the default 5m
             # TTL — on iter=1 that's the new user message + recency-zone
-            # deltas (~17K tok), on iter=2+ it's the appended tool_use /
-            # tool_result blocks. The iter=2 marker then writes the same
-            # content at 1h seconds later, displacing the 5m write — pure
-            # waste. Stamping every iter at the configured TTL overrides the
-            # auto-5m default so the write lands at 1h directly. Measured
-            # savings: ~$0.041/turn ($0.137 → $0.096) on top of the 60-4
-            # baseline. The payload is rebuilt fresh per iteration so prior
-            # calls' captured kwargs stay snapshot-clean.
+            # deltas, on iter=2+ it's the appended tool_use / tool_result
+            # blocks. The marker pins that volatile tail to a known tier.
+            #
+            # Story 61-19 (TTL correction): the volatile-tail marker now resolves
+            # to ``_VOLATILE_CACHE_TTL`` (5m, 1.25x), NOT the client's 1h tier.
+            # The tail changes every turn, so a 1h (2x) write on it is invalidated
+            # after a single within-turn read — pure cross-turn waste; 5m covers
+            # the seconds-long tool loop at 1.25x. Only the stable system prefix
+            # (``system_blocks[0]``) + tools keep 1h, where they amortize.
+            # Story 61-20 (volume): the session-static AVAILABLE CULTURES roster
+            # and magic hard_limits are zone-promoted INTO that 1h prefix, so the
+            # recurring 5m tail shrinks toward the per-turn delta only.
+            #
+            # The payload is rebuilt fresh per iteration so prior calls' captured
+            # kwargs stay snapshot-clean.
             payload_messages = self._build_messages_payload(
                 running_messages,
                 is_continuation=len(running_messages) > initial_message_count,

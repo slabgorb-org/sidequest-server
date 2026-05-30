@@ -41,6 +41,12 @@ from tests.agents.fakes.fake_anthropic_sdk_client import (
 
 TURN_COUNT = 5
 
+# Story 61-20: world_context (AVAILABLE CULTURES) is a session-static promoted
+# field — set once, constant across the session, rides the cached prefix.
+_AVAILABLE_CULTURES = (
+    "AVAILABLE CULTURES: Dwarven (Khazad dialect), Human (Common), Elven (Sylvan)"
+)
+
 
 def _end_turn(text: str) -> ScriptedResponse:
     return ScriptedResponse(
@@ -58,13 +64,22 @@ def _mutating_contexts(base: TurnContext) -> list[TurnContext]:
     """Build 5 TurnContexts with progressively mutating state.
 
     Each turn adds or changes User-bucket fields (npc_pool, state_summary,
-    active_trope_summary, pending_trope_context, world_context) that should
-    land in the user message — NOT in system_blocks[0]. If any of these
-    mutations leak into the cached prefix, the byte-stability guarantee
-    is broken.
+    active_trope_summary, pending_trope_context) that should land in the user
+    message — NOT in system_blocks[0]. If any of these mutations leak into the
+    cached prefix, the byte-stability guarantee is broken.
+
+    Story 61-20: ``world_context`` (the AVAILABLE CULTURES roster) is now a
+    session-static PROMOTED field — it rides the cache-marked system prefix
+    (Early + STABLE_SECTION_NAMES). It is therefore set ONCE on the base
+    context here and held CONSTANT across all five turns (its real lifecycle:
+    fixed at connect for the life of the session). It legitimately lives in
+    system_blocks[0]; the test still proves the genuinely-volatile fields above
+    do not drift the prefix.
     """
+    base = replace(base, world_context=_AVAILABLE_CULTURES)
     return [
-        # Turn 0: base state — no mutable fields populated
+        # Turn 0: base state — no mutable fields populated (world_context is
+        # the session-static promoted field, constant from here on).
         replace(base, turn_number=0),
         # Turn 1: NPC roster appears (2 NPCs)
         replace(
@@ -127,10 +142,6 @@ def _mutating_contexts(base: TurnContext) -> list[TurnContext]:
                 "Recent: Left the tavern after confrontation with Drenwick"
             ),
             active_trope_summary="Active trope: The Sealed Letter (stage: escalation)",
-            world_context=(
-                "AVAILABLE CULTURES: Dwarven (Khazad dialect), "
-                "Human (Common), Elven (Sylvan)"
-            ),
         ),
     ]
 
@@ -162,7 +173,8 @@ async def test_stable_prefix_byte_identical_across_5_mutating_turns(
 ) -> None:
     """Core validation: system_blocks[0].text hashes to a single value
     across 5 turns with progressively mutating User-bucket state (NPC
-    roster, game state, trope context, world context).
+    roster, game state, trope context). world_context is held constant
+    (session-static promoted field, Story 61-20).
 
     If this fails, the stable prefix is NOT stable under live mutations
     and the 60-3 finding is disproved.

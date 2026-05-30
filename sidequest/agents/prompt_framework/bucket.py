@@ -74,6 +74,24 @@ STABLE_SECTION_NAMES: frozenset[str] = frozenset(
         "narrator_pov_rules",
         "narrator_referral_rule",
         "narrator_output_style",
+        # Story 61-20 (ADR-112 zone-promotion) — session-static content lifted
+        # out of the volatile Valley tail into the cache-marked system prefix so
+        # it is written once and read every subsequent turn (closes 61-19
+        # AC1/AC2/AC3 on volume, not just tier).
+        #
+        # ``world_context`` carries the per-world AVAILABLE CULTURES roster
+        # (orchestrator.py ~2076) — fixed for the life of a session.
+        #
+        # ``magic_hard_limits`` is the session-static HEAD of the old
+        # ``magic_context`` block (world_slug / allowed_sources / active_plugins
+        # / valid_cost_types / hard_limits / world_knowledge), split off in
+        # 61-20. The per-actor ledger (``active_ledger_for_<actor>`` + bar
+        # values), the magic_working instruction, learned-magic, and reliquary
+        # blocks STAY in ``magic_context`` (Valley, User bucket) because they
+        # change as magic is cast — promoting them would re-create the 61-19
+        # cross-turn churn. The split is the load-bearing half of this story.
+        "world_context",
+        "magic_hard_limits",
     }
 )
 

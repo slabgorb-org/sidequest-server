@@ -20,25 +20,14 @@ if TYPE_CHECKING:
     from sidequest.genre.models.items import WorldItem
 
 
-def build_magic_context_block(
-    *,
-    magic_state: MagicState | None,
-    actor_id: str | None,
-    reliquaries: list[WorldItem] | None = None,
-) -> str:
-    """Return the pre-prompt magic-context block (or empty string if state absent).
+def _static_lines(magic_state: MagicState) -> list[str]:
+    """The session-static head of the magic context: world-level config that
+    does not change turn-to-turn (world_slug / allowed_sources / active_plugins
+    / valid_cost_types / hard_limits / world_knowledge).
 
-    ``reliquaries`` is the world's item-catalog reliquaries section
-    (``World.items.reliquaries``). When the actor holds a ``divine_favor``
-    bar at or above the reliquary threshold and the session's free use
-    hasn't yet been spent, the eligible reliquary effect texts are
-    rendered into an ``<available-reliquaries>`` block so the narrator
-    can ground the Cleric's options without the daemon hallucinating a
-    relic that doesn't exist.
+    Story 61-20: split out so it can be zone-promoted into the cache-marked
+    system prefix (``magic_hard_limits`` section) and written once per session.
     """
-    if magic_state is None:
-        return ""
-
     config = magic_state.config
     lines: list[str] = ["ACTIVE MAGIC CONTEXT — " + config.world_slug]
     lines.append(f"allowed_sources: {config.allowed_sources}")
@@ -59,6 +48,25 @@ def build_magic_context_block(
     if wk.local_register:
         wk_str = f"{wk.primary} (local register: {wk.local_register})"
     lines.append(f"world_knowledge: {wk_str}")
+    return lines
+
+
+def _volatile_lines(
+    magic_state: MagicState,
+    actor_id: str | None,
+    reliquaries: list[WorldItem] | None,
+) -> list[str]:
+    """The per-turn / per-actor tail of the magic context: the live ledger bar
+    values, the magic_working instruction (which references
+    ``active_ledger_for_<actor>``), learned-magic, reliquaries, and the innate
+    worked-example.
+
+    Story 61-20: kept in the volatile ``magic_context`` section (Valley, User
+    bucket) — the ledger bar values change as magic is cast, so promoting these
+    to the 1h prefix would re-create the 61-19 cross-turn churn.
+    """
+    config = magic_state.config
+    lines: list[str] = []
 
     if actor_id is not None:
         lines.append(f"active_ledger_for_{actor_id}:")
@@ -219,4 +227,57 @@ def build_magic_context_block(
             '"consent_state": "involuntary"}'
         )
 
+    return lines
+
+
+def build_magic_static_block(magic_state: MagicState | None) -> str:
+    """Session-static magic config (or empty string if state absent).
+
+    Story 61-20: registered as the ``magic_hard_limits`` section at
+    ``AttentionZone.Early`` + ``STABLE_SECTION_NAMES`` so it rides the
+    cache-marked system prefix and amortizes across turns.
+    """
+    if magic_state is None:
+        return ""
+    return "\n".join(_static_lines(magic_state))
+
+
+def build_magic_volatile_block(
+    *,
+    magic_state: MagicState | None,
+    actor_id: str | None,
+    reliquaries: list[WorldItem] | None = None,
+) -> str:
+    """Per-turn / per-actor magic context (or empty string if state absent).
+
+    Story 61-20: registered as the ``magic_context`` section at
+    ``AttentionZone.Valley`` (User bucket) — stays in the volatile tail because
+    the ledger bar values change as magic is cast.
+    """
+    if magic_state is None:
+        return ""
+    return "\n".join(_volatile_lines(magic_state, actor_id, reliquaries))
+
+
+def build_magic_context_block(
+    *,
+    magic_state: MagicState | None,
+    actor_id: str | None,
+    reliquaries: list[WorldItem] | None = None,
+) -> str:
+    """Return the full pre-prompt magic-context block (or empty string if state
+    absent). Static head + volatile tail, byte-identical to the pre-61-20
+    output — preserved for non-prompt consumers and the context_builder tests.
+
+    ``reliquaries`` is the world's item-catalog reliquaries section
+    (``World.items.reliquaries``). When the actor holds a ``divine_favor``
+    bar at or above the reliquary threshold and the session's free use
+    hasn't yet been spent, the eligible reliquary effect texts are
+    rendered into an ``<available-reliquaries>`` block so the narrator
+    can ground the Cleric's options without the daemon hallucinating a
+    relic that doesn't exist.
+    """
+    if magic_state is None:
+        return ""
+    lines = _static_lines(magic_state) + _volatile_lines(magic_state, actor_id, reliquaries)
     return "\n".join(lines)

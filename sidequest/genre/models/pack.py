@@ -168,7 +168,13 @@ class GenrePack(BaseModel):
     theme: GenreTheme
     archetypes: list[NpcArchetype] = Field(default_factory=list)
     char_creation: list[CharCreationScene] = Field(default_factory=list)
-    visual_style: VisualStyle
+    # Optional per the 2026-05-29 directive: all visual prompts live at world
+    # level (each world ships its own visual_style.yaml). A pack-level
+    # visual_style.yaml is no longer required; when absent this is None and
+    # the daemon resolves style from the world scope. No silent fallback —
+    # if a render needs style and neither world nor genre supplies it, the
+    # daemon's StyleCatalog fails loud.
+    visual_style: VisualStyle | None = None
     progression: ProgressionConfig
     axes: AxesConfig
     audio: AudioConfig

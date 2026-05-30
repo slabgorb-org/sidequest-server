@@ -1128,7 +1128,10 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         if isinstance(char_creation_raw, list)
         else []
     )
-    visual_style = _load_yaml(path / "visual_style.yaml", VisualStyle)
+    # Pack-level visual_style is optional (2026-05-29 directive — visual
+    # prompts live at world level). Absent → None; the daemon resolves style
+    # from the world scope and fails loud if neither scope supplies it.
+    visual_style = _load_yaml_optional(path / "visual_style.yaml", VisualStyle)
     progression = _load_yaml(path / "progression.yaml", ProgressionConfig)
     axes = _load_yaml(path / "axes.yaml", AxesConfig)
     audio = _load_yaml(path / "audio.yaml", AudioConfig)

@@ -465,7 +465,11 @@ def build_visual_prompt(
     if context:
         parts.append(context)
 
-    parts.append(pack.visual_style.positive_suffix)
+    # Pack-level visual_style is optional (2026-05-29 directive — style lives
+    # at world level). When the genre carries no pack-level style there is no
+    # genre suffix to append; this is by-design absence, not a dropped config.
+    if pack.visual_style is not None:
+        parts.append(pack.visual_style.positive_suffix)
 
     cleaned = [p.strip().rstrip(",") for p in parts]
     return ", ".join(cleaned)

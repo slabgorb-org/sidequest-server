@@ -1,0 +1,433 @@
+"""Story 71-21 (RED) — perseus_cloud one-sided combat: server-driven opponent attack.
+
+PLAYTEST BUG (perseus_cloud / space_opera, SWN): personal combat is one-sided.
+The player's strike resolves server-side with full mechanical backing (d20-vs-AC,
+server-rolled damage, ablative-HP depletion) but the **opponent never takes a
+server-driven attack turn**. Any "enemy shoots back" is narrator prose with zero
+mechanical backing — the player can never actually lose a firefight.
+
+The mechanical primitive ALREADY EXISTS and is unit-tested:
+``ruleset.resolve_opponent_attack(...)`` on ``SwnRulesetModule`` (swn.py),
+returning ``OpponentAttackOutcome`` (resolution.py) — but it has **zero production
+callers** (verified: ``rg resolve_opponent_attack`` hits only base/swn/resolution/
+tests). This story WIRES it into the per-turn combat path. Do NOT reimplement it.
+
+These tests drive the **REAL space_opera pack** through ``dispatch_dice_throw``
+(``find_confrontation_def(..., "combat")`` returns the personal Firefight —
+``beat_selection`` + ``win_condition: hp_depletion``; the ship block is a separate
+``ship_combat`` type). They assert that after the player acts, the seated opponent
+reprises mechanically against the player.
+
+DETERMINISM WITHOUT TOUCHING THE ROLL SEAM: the opponent's to-hit modifier is
+fixed by content (shoot beat: attack_bonus 1 + combat_skill 1 + Physique-10 mod 0
+= +2, so attack_total ∈ [3, 22]). We force a guaranteed HIT by setting the
+**player's** AC = 2 (every roll clears it) and a guaranteed MISS by setting it to
+30 (no roll clears it). Wide margins keep the tests robust even if Dev sources the
+modifier slightly differently — the test pins behavior, not the Dev's internal
+seam choice.
+
+OPPONENT STAT SOURCE (Dev guidance): the opponent's ability scores for the attack
+come from ``cdef.opponent_ability_scores()`` (content ``opponent_default_stats``
+with hp/armor_class/dexterity stripped) — the real personal-combat cdef carries
+``Physique: 10``, which is the shoot/overload beats' ``stat_check``. The opponent's
+strike beat is the first eligible ``damage_channel: strike`` beat (``shoot``).
+Scope is ``beat_selection`` + ``hp_depletion`` ONLY — the ``opposed_check`` path
+already applies an opponent beat (do not double-drive it).
+
+Skips gracefully when sidequest-content is not on disk.
+
+``otel_capture`` is re-exported from ``tests/integration/conftest.py``.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from tests._helpers.genre_paths import PackNotFound, find_pack_path
+
+# The OTEL span the opponent-attack to-hit decision MUST emit (lie-detector).
+# Pinned here as the contract Dev implements (story 71-21 AC4 / architect rec).
+SPAN_OPPONENT_ATTACK = "encounter.opponent_attack_resolved"
+
+PLAYER = "Nova"
+OPPONENT = "Corsair"
+
+
+# ---------------------------------------------------------------------------
+# Pack + fixture helpers (inline — no cross-test coupling)
+# ---------------------------------------------------------------------------
+
+
+def _load_space_opera_pack():
+    from sidequest.genre.loader import load_genre_pack
+
+    try:
+        path = find_pack_path("space_opera")
+    except PackNotFound:
+        return None
+    return load_genre_pack(path)
+
+
+def _personal_combat_cdef(pack):
+    """The REAL personal-combat (Firefight) ConfrontationDef.
+
+    ``find_confrontation_def`` matches ``confrontation_type == "combat"`` — only
+    the personal Firefight is type ``combat`` (the ship block is ``ship_combat``).
+    Returns None if the pack shape ever changes so the test fails loud.
+    """
+    return next(
+        (c for c in pack.rules.confrontations if c.confrontation_type == "combat"),
+        None,
+    )
+
+
+def _make_snapshot(*, player_ac: int, player_hp: int, opponent_hp: int = 99):
+    """Snapshot with a player Character (AC + HP + blaster) and an opponent NPC.
+
+    - Player is the reprisal TARGET: their ``armor_class`` is the opponent's
+      ``target_ac`` and their HP pool is what the reprisal ablates.
+    - Opponent HP defaults to 99 so the player's own single strike (1d6 blaster,
+      max 6) can NEVER resolve the encounter first — guaranteeing the reprisal
+      fires (it must be gated on ``not encounter_resolved``).
+    """
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore, Inventory
+    from sidequest.game.session import GameSnapshot, Npc
+    from sidequest.game.turn import TurnManager
+
+    player_core = CreatureCore(
+        name=PLAYER,
+        description="Station-side gunhand",
+        personality="steady",
+        inventory=Inventory(items=[{"id": "blaster_sidearm", "name": "Sidearm Blaster"}]),
+        hp={"current": player_hp, "max": player_hp, "base_max": player_hp},
+        armor_class=player_ac,
+    )
+    player = Character(
+        core=player_core,
+        char_class="Soldier",
+        race="Coreworlder",
+        backstory="Ex-Hegemonic infantry.",
+    )
+
+    # Opponent mook with its own sidearm so its strike beat resolves real damage.
+    opponent_core = CreatureCore(
+        name=OPPONENT,
+        description="Corsair raider",
+        personality="brutal",
+        inventory=Inventory(items=[{"id": "blaster_sidearm", "name": "Sidearm Blaster"}]),
+        hp={"current": opponent_hp, "max": opponent_hp, "base_max": opponent_hp},
+        armor_class=12,
+    )
+
+    snap = GameSnapshot(
+        genre_slug="space_opera",
+        world_slug="test_world",
+        turn_manager=TurnManager(),
+    )
+    snap.characters.append(player)
+    snap.npcs.append(Npc(core=opponent_core))
+    return snap
+
+
+def _make_encounter():
+    """Firefight StructuredEncounter: player vs opponent, hp_depletion combat."""
+    from sidequest.game.encounter import (
+        EncounterActor,
+        EncounterMetric,
+        EncounterPhase,
+        StructuredEncounter,
+    )
+
+    return StructuredEncounter(
+        encounter_type="combat",
+        player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=7),
+        opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=7),
+        beat=0,
+        structured_phase=EncounterPhase.Setup,
+        secondary_stats=None,
+        actors=[
+            EncounterActor(name=PLAYER, role="combatant", side="player"),
+            EncounterActor(name=OPPONENT, role="combatant", side="opponent"),
+        ],
+        outcome=None,
+        resolved=False,
+        mood_override=None,
+        narrator_hints=[],
+    )
+
+
+def _drive_player_shoot(snap, enc, pack, *, broadcasts):
+    """Run one player ``shoot`` turn through dispatch_dice_throw.
+
+    face=18, Physique 10 (+0 mod), shoot base=2 → DC 14 → Success (damage fires).
+    The opponent reprisal must occur as part of resolving this same dispatch.
+    """
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
+
+    return dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="reprisal-req-1",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[18],
+            beat_id="shoot",
+        ),
+        rolling_player_id="player-nova",
+        character_name=PLAYER,
+        character_stats={"Physique": 10},
+        encounter=enc,
+        pack=pack,
+        genre_slug="space_opera",
+        session_id="reprisal-session",
+        round_number=1,
+        room_broadcast=broadcasts.append,
+        snapshot=snap,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC1 — the wiring exists: dispatch calls resolve_opponent_attack
+# ---------------------------------------------------------------------------
+
+
+def test_player_shoot_invokes_resolve_opponent_attack(monkeypatch):
+    """AC1: after the player's beat resolves, dispatch must call
+    ``ruleset.resolve_opponent_attack`` for the seated opponent. RED today —
+    the primitive has zero production callers."""
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+    assert _personal_combat_cdef(pack) is not None, (
+        "space_opera must expose a personal 'combat' (Firefight) confrontation"
+    )
+
+    from sidequest.game.ruleset.swn import SwnRulesetModule
+
+    calls: list[dict] = []
+    original = SwnRulesetModule.resolve_opponent_attack
+
+    def _spy(self, **kwargs):
+        calls.append(kwargs)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(SwnRulesetModule, "resolve_opponent_attack", _spy)
+
+    snap = _make_snapshot(player_ac=2, player_hp=12)
+    _drive_player_shoot(snap, _make_encounter(), pack, broadcasts=[])
+
+    assert len(calls) == 1, (
+        f"opponent must take exactly one server-driven attack turn per player "
+        f"beat; resolve_opponent_attack called {len(calls)} times"
+    )
+    # The reprisal targets the PLAYER's AC (the player is the Other from the
+    # opponent's seat).
+    assert calls[0]["target_ac"] == 2, (
+        f"opponent's target_ac must be the player's armor_class (2); "
+        f"got {calls[0].get('target_ac')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC2 — a hit ablates the player's HP; a miss leaves it intact
+# ---------------------------------------------------------------------------
+
+
+def test_opponent_hit_ablates_player_hp(otel_capture):
+    """AC2 (hit): with player AC=2 the opponent's reprisal always lands; the
+    player's HP must drop and a state_patch.hp span must fire on the player."""
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    from sidequest.telemetry.spans.state_patch import SPAN_STATE_PATCH_HP
+
+    snap = _make_snapshot(player_ac=2, player_hp=12)
+    player_core = snap.find_creature_core(PLAYER)
+    assert player_core is not None
+    hp_before = player_core.hp.current
+
+    _drive_player_shoot(snap, _make_encounter(), pack, broadcasts=[])
+
+    assert player_core.hp.current < hp_before, (
+        f"opponent reprisal must ablate the player's HP on a guaranteed hit; "
+        f"before={hp_before} after={player_core.hp.current}"
+    )
+    span_names = [s.name for s in otel_capture.get_finished_spans()]
+    assert SPAN_STATE_PATCH_HP in span_names, (
+        f"a state_patch.hp span must fire when the opponent damages the player; spans={span_names}"
+    )
+
+
+def test_opponent_miss_leaves_player_hp_intact(otel_capture):
+    """AC2 (miss edge): with player AC=30 the opponent's reprisal can never land
+    (max total 22). The opponent-attack span MUST still fire (the reprisal ran
+    and missed), but the player's HP must be unchanged. RED today — no reprisal
+    fires at all, so the opponent-attack span is absent."""
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    snap = _make_snapshot(player_ac=30, player_hp=12)
+    player_core = snap.find_creature_core(PLAYER)
+    assert player_core is not None
+    hp_before = player_core.hp.current
+
+    _drive_player_shoot(snap, _make_encounter(), pack, broadcasts=[])
+
+    span_names = [s.name for s in otel_capture.get_finished_spans()]
+    assert SPAN_OPPONENT_ATTACK in span_names, (
+        f"the opponent-attack span must fire even on a MISS (the reprisal ran); spans={span_names}"
+    )
+    assert player_core.hp.current == hp_before, (
+        f"a missed reprisal must not change the player's HP; "
+        f"before={hp_before} after={player_core.hp.current}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC3 — the player can actually lose (hp_depletion against the player)
+# ---------------------------------------------------------------------------
+
+
+def test_opponent_kill_resolves_hp_depletion_against_player(otel_capture):
+    """AC3: a 1-HP player with AC=2 is dropped by the guaranteed-hit reprisal;
+    the encounter must resolve via hp_depletion (the player loses). RED today —
+    the player never takes damage, so the encounter never resolves against them."""
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    snap = _make_snapshot(player_ac=2, player_hp=1)
+    enc = _make_encounter()
+
+    _drive_player_shoot(snap, enc, pack, broadcasts=[])
+
+    player_core = snap.find_creature_core(PLAYER)
+    assert player_core is not None
+    assert player_core.hp.current <= 0, (
+        f"the 1-HP player must be dropped to 0 by the reprisal; got {player_core.hp.current}"
+    )
+    assert enc.resolved, (
+        "the encounter must resolve once the player's HP is depleted "
+        "(the player can finally lose a firefight)"
+    )
+    # The hp_depletion resolution span must carry the hp_depletion source.
+    resolved_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "encounter.resolved"
+    ]
+    assert resolved_spans, "an encounter.resolved span must fire on the player's defeat"
+    sources = [s.attributes.get("source") for s in resolved_spans]
+    assert any("hp_depletion" in str(src) for src in sources), (
+        f"resolution must be sourced to hp_depletion; got sources={sources}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC4 — OTEL lie-detector: the opponent to-hit decision emits a span
+# ---------------------------------------------------------------------------
+
+
+def test_opponent_attack_emits_otel_to_hit_span(otel_capture):
+    """AC4: every opponent attack emits ``encounter.opponent_attack_resolved``
+    carrying the full to-hit math so the GM panel can tell a real reprisal from
+    narrator improv. RED today — the span does not exist."""
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    snap = _make_snapshot(player_ac=2, player_hp=12)
+    _drive_player_shoot(snap, _make_encounter(), pack, broadcasts=[])
+
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_OPPONENT_ATTACK]
+    assert len(spans) == 1, (
+        f"exactly one {SPAN_OPPONENT_ATTACK} span must fire per opponent turn; got {len(spans)}"
+    )
+    attrs = dict(spans[0].attributes)
+    for key in ("attacker", "target", "d20", "modifier", "attack_total", "target_ac", "hit"):
+        assert key in attrs, f"opponent-attack span must carry {key!r}; attrs={attrs}"
+
+    # Internal consistency the GM panel relies on.
+    assert attrs["target"] == PLAYER, "span 'target' must be the player"
+    assert attrs["target_ac"] == 2, "span 'target_ac' must equal the player's AC"
+    assert attrs["attack_total"] == attrs["d20"] + attrs["modifier"], (
+        "attack_total must equal d20 + modifier"
+    )
+    assert attrs["hit"] is True, "AC=2 guarantees a hit; span 'hit' must be True"
+
+
+# ---------------------------------------------------------------------------
+# AC5 — the opponent's roll is visible in the player-facing dice overlay
+# ---------------------------------------------------------------------------
+
+
+def test_opponent_roll_broadcasts_dice_pair(otel_capture):
+    """AC5: the opponent's attack roll must be broadcast as a DICE_REQUEST +
+    DICE_RESULT pair so Sebastien/Jade see the enemy roll animate (player-facing
+    math). RED today — only the player's own roll is broadcast.
+
+    The player's own turn broadcasts a check pair + (on a hit) a damage pair; the
+    opponent's reprisal must add at least one MORE result. We assert the total
+    DICE_RESULT count exceeds what the player-only path produces.
+    """
+    from sidequest.protocol.messages import DiceResultMessage
+
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    # Baseline: player-only result count is captured by the AC=30 miss case
+    # (no opponent damage roll), but the opponent STILL rolls to-hit and must
+    # broadcast that roll. So even on a miss there must be an opponent dice pair.
+    broadcasts: list[object] = []
+    snap = _make_snapshot(player_ac=30, player_hp=12)  # opponent misses → no opp damage roll
+    _drive_player_shoot(snap, _make_encounter(), pack, broadcasts=broadcasts)
+
+    results = [m for m in broadcasts if isinstance(m, DiceResultMessage)]
+    # Player check (1) + player damage on a Success hit (1) = 2 player results.
+    # The opponent's to-hit roll must add at least one more → >= 3.
+    assert len(results) >= 3, (
+        f"the opponent's attack roll must be broadcast (DICE_REQUEST+DICE_RESULT) "
+        f"so the table sees the enemy roll; got {len(results)} DICE_RESULTs "
+        f"(expected player check + player damage + opponent to-hit)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC6 — capability gate: SWN reprises, native fails loud (never silently skips)
+# ---------------------------------------------------------------------------
+
+
+def test_capability_gate_swn_provides_native_fails_loud():
+    """AC6 (contract): the gate must key on CAPABILITY, not the string 'swn'.
+    The SWN module implements ``resolve_opponent_attack``; native inherits the
+    base ``NotImplementedError`` (fail-loud, never a silent skip). This pins the
+    contract the dispatch gate must honor so wwn/cwn inherit and native is never
+    silently dropped."""
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    swn = get_ruleset_module("swn")
+    out = swn.resolve_opponent_attack(
+        attacker_stats={"Physique": 10},
+        stat_check="Physique",
+        attack_bonus=1,
+        combat_skill=1,
+        target_ac=2,
+        d20=10,
+    )
+    assert out.hit is True and out.target_ac == 2, "SWN must resolve a real outcome"
+
+    native = get_ruleset_module("native")
+    with pytest.raises(NotImplementedError):
+        native.resolve_opponent_attack(
+            attacker_stats={"Physique": 10},
+            stat_check="Physique",
+            attack_bonus=1,
+            combat_skill=1,
+            target_ac=2,
+            d20=10,
+        )

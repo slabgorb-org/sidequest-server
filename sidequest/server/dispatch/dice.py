@@ -32,7 +32,9 @@ from dataclasses import dataclass
 from sidequest.game.beat_kinds import _opposite_side_first_actor, apply_beat_hp_channel
 from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
 from sidequest.game.encounter import EncounterPhase, StructuredEncounter
+from sidequest.game.hp_depletion import check_hp_depletion
 from sidequest.game.ruleset import get_ruleset_module
+from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.wwn import WwnRulesetModule
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
@@ -76,6 +78,7 @@ from sidequest.telemetry.spans import (
     emit_dice_throw_received,
     encounter_beat_applied_span,
     encounter_momentum_broadcast_span,
+    encounter_opponent_attack_resolved_span,
     encounter_resolved_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -467,6 +470,11 @@ def dispatch_dice_throw(
     # of which branch executes.
     damage_request_payload: DiceRequestPayload | None = None
     damage_result_payload: DiceResultPayload | None = None
+    # Story 71-21: opponent reprisal dice (to-hit + damage), built when the
+    # seated opponent takes its server-driven attack turn. Broadcast AFTER the
+    # player's own dice pair so the overlay shows the player's roll, then the
+    # enemy's answer. Empty when no reprisal fires (opposed/dial/native paths).
+    opponent_reprisal_messages: list[object] = []
 
     if opposed_pending:
         # Pull the raw d20 face for the resolver. The dice pool is
@@ -751,6 +759,46 @@ def dispatch_dice_throw(
 
         encounter_resolved = apply_result.resolved
 
+        # --- Opponent reprisal: server-driven enemy attack turn (story 71-21) ---
+        # SWN hp_depletion combat had no enemy turn — the player could attack but
+        # the opponent never answered mechanically, so the player could never
+        # lose a firefight (perseus_cloud playtest). After the player's beat
+        # resolves — and unless it already ended the fight — the seated opponent
+        # attacks back: d20 + mods vs the player's AC, server-rolled damage to the
+        # player's HP, and hp_depletion resolution so the player can be downed.
+        # Gated on hp_depletion combat (cdef is authoritative — the encounter may
+        # not carry win_condition in every fixture) AND a ruleset that implements
+        # the enemy turn. The capability check keys on the OVERRIDE, not a
+        # ``== "swn"`` string, so wwn/cwn (which subclass SWN) inherit it and
+        # native/dial rulesets (which resolve the opponent via the opposed-check
+        # branch and leave the base NotImplementedError in place) never reach it.
+        module_has_opponent_turn = (
+            type(ruleset).resolve_opponent_attack is not RulesetModule.resolve_opponent_attack
+        )
+        if (
+            not encounter_resolved
+            and cdef.win_condition == "hp_depletion"
+            and module_has_opponent_turn
+        ):
+            opponent_reprisal_messages = _resolve_opponent_reprisal(
+                encounter=encounter,
+                cdef=cdef,
+                ruleset=ruleset,
+                pack=pack,
+                snapshot=snapshot,
+                player_name=character_name,
+                session_id=session_id,
+                round_number=round_number,
+                rng=random,
+            )
+            # NOTE: we intentionally do NOT fold the reprisal's resolution into
+            # ``encounter_resolved`` here. The reprisal's own ``check_hp_depletion``
+            # already emits the ``encounter.resolved`` span with
+            # ``source="hp_depletion"`` when it downs the player; the outer block
+            # below is keyed on the PLAYER-beat resolution (``source=
+            # "dice_throw_beat"``) and must not double-emit. The return value
+            # reads ``encounter.resolved`` directly to report the true state.
+
     with combat_tick_span(
         encounter_type=encounter.encounter_type,
         beat=encounter.beat,
@@ -830,6 +878,12 @@ def dispatch_dice_throw(
         ):
             room_broadcast(DiceRequestMessage(payload=damage_request_payload, player_id="server"))
             room_broadcast(DiceResultMessage(payload=damage_result_payload, player_id="server"))
+
+        # Story 71-21: the opponent's reprisal dice (to-hit, +damage on a hit).
+        # Fanned out AFTER the player's pair so the overlay reads "player rolls,
+        # then the enemy answers." Empty on the opposed/dial/native paths.
+        for _reprisal_msg in opponent_reprisal_messages:
+            room_broadcast(_reprisal_msg)
 
         # Story 45-3 / 59-20: Mid-turn CONFRONTATION emit. The metric mutation
         # already landed via apply_beat above; without this the UI dial sits on
@@ -925,11 +979,244 @@ def dispatch_dice_throw(
         result=result,
         replay_action_text=replay_text,
         outcome=resolved.outcome,
-        encounter_resolved=encounter_resolved,
+        # Report the TRUE resolution state: the player's beat may have ended the
+        # fight, or the opponent reprisal (story 71-21) may have downed the
+        # player. ``encounter.resolved`` is the live source of truth.
+        encounter_resolved=encounter_resolved or encounter.resolved,
         opposed_pending=opposed_pending,
         opposed_player_d20=opposed_player_d20 if opposed_pending else None,
         opposed_player_beat_id=payload.beat_id if opposed_pending else None,
     )
+
+
+def _resolve_opponent_reprisal(
+    *,
+    encounter: StructuredEncounter,
+    cdef: ConfrontationDef,
+    ruleset: RulesetModule,
+    pack: GenrePack,
+    snapshot: GameSnapshot,
+    player_name: str,
+    session_id: str,
+    round_number: int,
+    rng: random.Random,
+) -> list[object]:
+    """Server-driven opponent attack turn (story 71-21, SWN hp_depletion combat).
+
+    The seated opponent attacks the acting player: roll d20, resolve to-hit vs the
+    player's AC through ``ruleset.resolve_opponent_attack`` (the pre-existing,
+    unit-tested primitive — wired here, not reimplemented), and on a hit roll
+    server-side damage into the player's HP. ``check_hp_depletion`` then resolves
+    the encounter if the player is downed (the player can finally lose).
+
+    Mutates the player's ``CreatureCore`` HP and may resolve ``encounter``. Emits
+    ``encounter.opponent_attack_resolved`` on every attempt (the GM-panel
+    lie-detector). Returns the opponent's DICE_REQUEST/DICE_RESULT messages
+    (to-hit, plus damage on a hit) for the caller to broadcast after the player's
+    own dice pair. Returns an empty list — and logs loudly — when the reprisal
+    cannot proceed (no Other seated, no opponent strike beat, missing stats), per
+    No Silent Fallbacks: the absence is visible, never a silent skip.
+    """
+    messages: list[object] = []
+
+    opponent_name = _opposite_side_first_actor(encounter, "player")
+    if opponent_name is None:
+        # ADR-116: a confrontation requires an Other. None seated → no reprisal.
+        logger.warning(
+            "dice.opponent_reprisal_skipped reason=no_opponent_seated encounter=%s",
+            encounter.encounter_type,
+        )
+        return messages
+
+    opponent_beat = next(
+        (b for b in cdef.beats if str(getattr(b, "damage_channel", "none") or "none") == "strike"),
+        None,
+    )
+    if opponent_beat is None:
+        logger.warning(
+            "dice.opponent_reprisal_skipped reason=no_strike_beat encounter=%s",
+            encounter.encounter_type,
+        )
+        return messages
+
+    opponent_stats = cdef.opponent_ability_scores()
+    if not opponent_stats:
+        logger.warning(
+            "dice.opponent_reprisal_skipped reason=no_opponent_stats encounter=%s "
+            "(opponent_default_stats has no ability scores)",
+            encounter.encounter_type,
+        )
+        return messages
+
+    player_core = snapshot.find_creature_core(player_name)
+    if player_core is None:
+        logger.warning(
+            "dice.opponent_reprisal_skipped reason=no_player_core player=%s",
+            player_name,
+        )
+        return messages
+    target_ac = int(player_core.armor_class)
+
+    d20 = rng.randint(1, 20)
+    outcome = ruleset.resolve_opponent_attack(
+        attacker_stats=opponent_stats,
+        stat_check=opponent_beat.stat_check,
+        attack_bonus=int(getattr(opponent_beat, "attack_bonus", 0) or 0),
+        combat_skill=int(getattr(opponent_beat, "combat_skill", 0) or 0),
+        target_ac=target_ac,
+        d20=d20,
+    )
+
+    # Lie-detector: the to-hit decision, every attempt (hit or miss).
+    with encounter_opponent_attack_resolved_span(
+        encounter_type=encounter.encounter_type,
+        attacker=opponent_name,
+        target=player_name,
+        d20=outcome.d20,
+        modifier=outcome.modifier,
+        attack_total=outcome.attack_total,
+        target_ac=outcome.target_ac,
+        hit=outcome.hit,
+    ):
+        pass
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "encounter",
+            "op": "opponent_attack_resolved",
+            "attacker": opponent_name,
+            "target": player_name,
+            "beat_id": opponent_beat.id,
+            "d20": outcome.d20,
+            "modifier": outcome.modifier,
+            "attack_total": outcome.attack_total,
+            "target_ac": outcome.target_ac,
+            "hit": outcome.hit,
+            "source": "opponent_reprisal",
+        },
+        component="encounter",
+    )
+
+    # Broadcast the opponent's to-hit roll so the table sees the enemy answer
+    # animate in the dice overlay (player-facing math).
+    tohit_request = _build_request_payload(
+        request_id=str(uuid.uuid4()),
+        rolling_player_id="opponent",
+        character_name=opponent_name,
+        stat=Stat(opponent_beat.stat_check),
+        modifier=outcome.modifier,
+        difficulty=target_ac,
+        context=f"{opponent_beat.label} — enemy attack vs AC {target_ac}",
+    )
+    tohit_resolved = resolve_dice_with_faces(
+        tohit_request.dice, [d20], tohit_request.modifier, tohit_request.difficulty
+    )
+    tohit_result = _compose_result_payload(
+        request=tohit_request,
+        rolls=tohit_resolved.rolls,
+        total=tohit_resolved.total,
+        outcome=tohit_resolved.outcome,
+        seed=generate_dice_seed(session_id, round_number),
+        throw_params=_DAMAGE_THROW_PARAMS,
+    )
+    messages.append(DiceRequestMessage(payload=tohit_request, player_id="server"))
+    messages.append(DiceResultMessage(payload=tohit_result, player_id="server"))
+
+    if not outcome.hit:
+        return messages
+
+    # HIT: roll the opponent's weapon damage and ablate the player's HP.
+    opponent_core = snapshot.find_creature_core(opponent_name)
+    damage_spec = ruleset.resolve_damage(beat=opponent_beat, actor_core=opponent_core, pack=pack)
+    if damage_spec is None:
+        # The opponent's strike beat has no resolvable damage (no damage_override,
+        # no weapon, no unarmed default). The hit lands but deals no HP — surfaced
+        # loudly so a mook authored without a weapon is fixed, not silently inert.
+        # (TEA delivery finding: the `shoot` beat needs a weapon; `overload` carries
+        # its own damage_override.)
+        logger.warning(
+            "dice.opponent_reprisal_damage_spec_missing opponent=%s beat=%s encounter=%s "
+            "— hit landed but no damage source; player took no HP damage",
+            opponent_name,
+            opponent_beat.id,
+            encounter.encounter_type,
+        )
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "opponent_damage_spec_missing",
+                "opponent": opponent_name,
+                "beat_id": opponent_beat.id,
+                "rationale": (
+                    "opponent strike beat has no damage_override, no weapon with a "
+                    "damage spec, and no unarmed default — HP path skipped"
+                ),
+            },
+            component="encounter",
+            severity="warning",
+        )
+        return messages
+
+    dmg_request = damage_request_from_spec(
+        damage_spec,
+        request_id=str(uuid.uuid4()),
+        rolling_player_id="opponent",
+        character_name=opponent_name,
+    )
+    dmg_faces = _generate_server_faces(dmg_request.dice)
+    dmg_resolved = resolve_dice_with_faces(
+        dmg_request.dice, dmg_faces, dmg_request.modifier, dmg_request.difficulty
+    )
+    dmg_total = dmg_resolved.total
+
+    # SWN damage is gated by AC (the to-hit roll), not further reduced by armor —
+    # mitigation is 0, matching the player-side strike/shock channel.
+    apply_beat_hp_channel(
+        target=player_core,
+        channel="strike",
+        damage_total=dmg_total,
+        target_mitigation=0,
+        source_beat_id=f"{opponent_beat.id}:opponent_attack",
+    )
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "encounter",
+            "op": "opponent_damage_roll_resolved",
+            "opponent": opponent_name,
+            "target": player_name,
+            "beat_id": opponent_beat.id,
+            "damage_spec": damage_spec.dice,
+            "bonus": damage_spec.bonus,
+            "faces": dmg_faces,
+            "total": dmg_total,
+            "source": "opponent_reprisal",
+        },
+        component="encounter",
+    )
+
+    dmg_result = _compose_result_payload(
+        request=dmg_request,
+        rolls=dmg_resolved.rolls,
+        total=dmg_total,
+        outcome=RollOutcome.Success,  # damage rolls have no outcome tier
+        seed=generate_dice_seed(session_id, round_number + 1),
+        throw_params=_DAMAGE_THROW_PARAMS,
+    )
+    messages.append(DiceRequestMessage(payload=dmg_request, player_id="server"))
+    messages.append(DiceResultMessage(payload=dmg_result, player_id="server"))
+
+    # The player may now be at 0 HP — resolve hp_depletion against them so the
+    # player can actually lose the fight (emits encounter.resolved source=
+    # hp_depletion).
+    check_hp_depletion(
+        encounter,
+        snapshot.find_creature_core,
+        beat_id=f"{opponent_beat.id}:opponent_attack",
+    )
+
+    return messages
 
 
 # Intentional re-export: callers commonly need uuid to synthesize request_ids

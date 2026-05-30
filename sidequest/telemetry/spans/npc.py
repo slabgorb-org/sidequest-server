@@ -273,6 +273,33 @@ SPAN_ROUTES[SPAN_NPC_EDGE_PUBLISHED] = SpanRoute(
 )
 
 
+# Story 72-9: OCEAN + scenario belief_state seed for narrator-invented NPCs.
+# When the narrator names a stranger not in either store it is minted as a bare
+# ``NpcPoolMember(drawn_from="narrator_invented")``; on first promotion to a
+# mechanical ``Npc`` this span records that the engine gave that stranger a real
+# identity — an OCEAN profile, a neutral disposition, and (when a mystery is
+# running) a scenario role + live belief bubble. Without this span the GM panel
+# cannot tell a seeded invented NPC from one the narrator is improvising depth
+# for. ``scenario_registered`` is the dial that says whether the NPC was wired
+# into the active ``ScenarioState``; ``role`` is the role it was assigned
+# (``innocent`` — a walk-on is never the pre-selected guilty suspect), empty
+# when no scenario is active.
+SPAN_NPC_IDENTITY_SEEDED = "npc.identity_seeded"
+SPAN_ROUTES[SPAN_NPC_IDENTITY_SEEDED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc.identity_seeded",
+        "npc_name": (span.attributes or {}).get("npc_name", ""),
+        "ocean_seeded": bool((span.attributes or {}).get("ocean_seeded", False)),
+        "disposition": (span.attributes or {}).get("disposition", 0),
+        "scenario_registered": bool((span.attributes or {}).get("scenario_registered", False)),
+        "role": (span.attributes or {}).get("role", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
+
 @contextmanager
 def npc_auto_registered_span(
     *,
@@ -712,6 +739,47 @@ def npc_recurring_presence_missed_span(
     }
     with Span.open(
         SPAN_NPC_RECURRING_PRESENCE_MISSED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_identity_seeded_span(
+    *,
+    npc_name: str,
+    ocean_seeded: bool,
+    disposition: int,
+    scenario_registered: bool,
+    role: str,
+    turn_number: int = 0,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 72-9: emitted when a narrator-invented NPC is enriched with an
+    OCEAN profile (and, when a scenario is active, registered into the
+    scenario's ``npc_roles`` with a live ``BeliefState``) at the moment it is
+    promoted to a mechanical ``Npc``.
+
+    The lie-detector dial for invented-NPC identity: ``ocean_seeded`` confirms a
+    real Big-Five profile was attached (not ``None``), ``disposition`` is the
+    neutral spawn value, ``scenario_registered`` says whether the NPC was wired
+    into the active ``ScenarioState``, and ``role`` is the scenario role it was
+    given (``innocent`` for a walk-on, empty when no scenario is running).
+    ``npc_name`` avoids the OTEL-reserved ``name`` span attribute.
+    """
+    attributes: dict[str, Any] = {
+        "npc_name": npc_name,
+        "ocean_seeded": bool(ocean_seeded),
+        "disposition": int(disposition),
+        "scenario_registered": bool(scenario_registered),
+        "role": role,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_IDENTITY_SEEDED,
         attributes,
         tracer_override=_tracer,
     ) as span:

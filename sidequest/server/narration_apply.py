@@ -43,6 +43,7 @@ from sidequest.game.region_validation import (
     validate_region_name,
 )
 from sidequest.game.ruleset.registry import get_ruleset_module
+from sidequest.game.scenario_state import ScenarioRole, ScenarioState
 from sidequest.game.session import (
     ContainerState,
     GameSnapshot,
@@ -50,6 +51,7 @@ from sidequest.game.session import (
     RoomState,
 )
 from sidequest.game.table.types import TableCommit
+from sidequest.genre.models.ocean import OceanProfile
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import FleeConsequence, MoraleTrigger, ResolutionMode
 from sidequest.genre.names.generator import build_from_culture, has_stem_collision
@@ -84,6 +86,7 @@ from sidequest.telemetry.spans import (
     magic_working_span,
     npc_auto_registered_span,
     npc_developed_span,
+    npc_identity_seeded_span,
     npc_invented_name_routed_span,
     npc_invented_name_unrouted_span,
     npc_pc_name_skipped_span,
@@ -1044,13 +1047,67 @@ def _build_magic_confrontation_payload(
     }
 
 
-def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
+def _seed_invented_identity(npc: Npc, *, scenario_state: ScenarioState | None) -> None:
+    """Story 72-9: give a freshly-promoted narrator-invented NPC a real
+    identity — an OCEAN profile and, when a scenario is active, a scenario
+    role + live belief bubble — so it can subsequently develop (72-1) and
+    participate in mystery mechanics (ADR-053).
+
+    Scoped to the ``narrator_invented`` lineage by the caller. Idempotent:
+    skips if the NPC already carries an OCEAN profile so a re-engagement
+    never re-rolls personality or clobbers learned beliefs (context
+    §No-double-wire). The scenario role is ``Innocent`` — an invented
+    walk-on is never the pre-selected ``guilty_npc``. ``belief_state`` is
+    already a live ``BeliefState`` default; a walk-on carries no authored
+    ``initial_beliefs`` to seed, so the bubble starts empty but mutable.
+
+    OCEAN seed policy: a flat baseline ``OceanProfile`` (all 5.0). There is
+    no random/jitter generator in the codebase (see ``ocean.py`` docstring —
+    ADR-042's mutators were intentionally not ported), so the honest seed is
+    the explicit baseline, not an invented generator. ``ocean`` is the
+    serialized dict shape ``Npc.ocean: dict | None`` expects.
+    """
+    if npc.ocean is not None:
+        # Already enriched — do not re-seed (no personality re-roll, no
+        # belief clobber).
+        return
+
+    npc.ocean = OceanProfile().model_dump()
+
+    scenario_registered = False
+    role = ""
+    if scenario_state is not None:
+        role = ScenarioRole.Innocent
+        scenario_state.npc_roles[npc.core.name] = role
+        scenario_registered = True
+
+    with npc_identity_seeded_span(
+        npc_name=npc.core.name,
+        ocean_seeded=True,
+        disposition=int(npc.disposition),
+        scenario_registered=scenario_registered,
+        role=role,
+    ):
+        pass
+
+
+def _promote_pool_member_to_npc(
+    member: NpcPoolMember,
+    *,
+    scenario_state: ScenarioState | None = None,
+) -> Npc:
     """Build an ``Npc`` from an ``NpcPoolMember``, preserving identity
     (name, pronouns, appearance, role) and recording ``pool_origin`` so
     Sebastien's mechanical-visibility lens can trace the NPC back to the
     pool entry it was promoted from. Stat block is the same placeholder
     shape ``Session._npc_from_patch`` uses — fresh edge pool, empty
     inventory, level 1.
+
+    Story 72-9: a ``narrator_invented`` member is additionally enriched with
+    an OCEAN profile and, when ``scenario_state`` is supplied, registered into
+    the active scenario (``_seed_invented_identity``). Authored / MM-origin
+    lineages are left untouched — they receive identity at chargen via
+    ``world_materialization`` / ``_npc_from_patch``.
     """
     from sidequest.game.creature_core import (
         CreatureCore,
@@ -1094,6 +1151,12 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
         pool_origin=member.name,
     ):
         pass
+    # Story 72-9: enrich narrator-invented NPCs with OCEAN + scenario belief
+    # at the single point they first gain mechanical state. Scoped to the
+    # invented lineage so authored / MM-origin NPCs (which receive identity
+    # elsewhere) are never double-wired or belief-clobbered.
+    if member.drawn_from == "narrator_invented":
+        _seed_invented_identity(npc, scenario_state=scenario_state)
     return npc
 
 
@@ -1139,7 +1202,7 @@ def resolve_status_target(
     )
     if pool_match is None:
         return None
-    promoted = _promote_pool_member_to_npc(pool_match)
+    promoted = _promote_pool_member_to_npc(pool_match, scenario_state=snapshot.scenario_state)
     snapshot.npcs.append(promoted)
     _watcher_publish(
         "state_transition",

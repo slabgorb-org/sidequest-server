@@ -6,8 +6,9 @@ Two layers:
   :class:`GenrePack` + :class:`GameSnapshot`, asserting belief seeding
   and OTEL emission independently of the chargen pipeline.
 - Dispatch-level: full chargen walk through caverns_and_claudes with
-  a ScenarioPack injected into ``sd.genre_pack.scenarios`` before
-  confirmation, asserting the bind wires into
+  a ScenarioPack injected into the active world's
+  ``pack.worlds[world_slug].scenarios`` before confirmation (Story 71-32:
+  binding is world-aware), asserting the bind wires into
   ``_chargen_confirmation`` and populates both ``snapshot.scenario_state``
   and ``sd.active_scenario``.
 - No-scenarios path: the default caverns pack (no scenarios) leaves
@@ -159,9 +160,7 @@ def _attach_world_scenario(
 
     If the scaffold pack lacks ``world_slug``, synthesize that world from an
     existing one: the caverns scaffold authors ``beneath_sunden`` while the
-    bind tests address ``flickering_reach``, and the field is only declared
-    once GREEN lands (``World`` is ``extra="allow"``, so the assignment is
-    valid either way).
+    bind tests address ``flickering_reach``.
     """
     import copy as _copy
 

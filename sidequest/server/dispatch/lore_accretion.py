@@ -13,7 +13,6 @@ the same single-seat bug that starved non-host XP in ``award_turn_xp``.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
@@ -26,8 +25,6 @@ if TYPE_CHECKING:
         WebSocketSessionHandler,
         _SessionData,
     )
-
-logger = logging.getLogger(__name__)
 
 
 def accrete_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:

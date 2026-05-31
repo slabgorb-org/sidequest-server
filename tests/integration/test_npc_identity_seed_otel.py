@@ -50,7 +50,7 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.disposition import Attitude, Disposition
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.scenario_state import ScenarioState
+from sidequest.game.scenario_state import ScenarioRole, ScenarioState
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.server.narration_apply import resolve_status_target
 from sidequest.server.watcher import WatcherSpanProcessor
@@ -410,3 +410,91 @@ async def test_world_authored_promotion_does_not_fire_invented_seed(
     assert _find_event(captured, IDENTITY_SEEDED_FIELD) is None, (
         "invented identity-seed must not fire for a world_authored pool member"
     )
+
+
+# ---------------------------------------------------------------------------
+# Edge — scenario-role clobber: invented registration must NOT overwrite an
+# existing authored role (the murderer must stay guilty).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invented_npc_does_not_clobber_existing_scenario_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Edge (mystery integrity): ``npc_roles`` is keyed over *all*
+    ``scenario_pack.npcs`` at bind time — including the guilty NPC — even
+    those not yet materialized into ``snapshot.npcs``. The narrator-invented
+    mint path checks ``npcs``/``npc_pool`` for collisions but NOT ``npc_roles``,
+    so a walk-on whose name matches an authored suspect can be promoted via
+    ``resolve_status_target``. Seeding must NOT overwrite that NPC's existing
+    role: registering ``innocent`` over an authored ``guilty`` would turn the
+    murderer innocent and make the mystery unwinnable. The membership guard
+    (``if name not in scenario_state.npc_roles``) preserves the authored role.
+    """
+    await _setup(monkeypatch, "test-identity-seed-no-clobber-role")
+
+    # "Wexley" is the pre-selected guilty suspect, present in npc_roles but NOT
+    # yet materialized into snapshot.npcs (off-screen). The pool holds a
+    # narrator-invented "Wexley" walk-on (see _invented_snapshot).
+    scenario = ScenarioState(
+        guilty_npc="wexley_id",
+        npc_roles={"Wexley": ScenarioRole.Guilty},
+    )
+    snapshot = _invented_snapshot(scenario_state=scenario)
+
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=8, trigger="test")
+    await asyncio.sleep(0)
+
+    assert promoted is not None
+    # Confirm the seed actually ran the collision branch (vs being skipped):
+    # an invented promotion always seeds OCEAN.
+    assert promoted.ocean is not None, "the invented seed must have run"
+    # The authored Guilty role MUST survive — never silently demoted to innocent.
+    assert snapshot.scenario_state is not None
+    assert snapshot.scenario_state.npc_roles["Wexley"].lower() == "guilty", (
+        "an authored Guilty role must never be clobbered to innocent by an "
+        f"invented walk-on; got {snapshot.scenario_state.npc_roles['Wexley']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Edge — disposition carry-through (72-2 × 72-9): a non-zero carried
+# disposition survives seeding and is reported honestly by the span.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invented_npc_seed_preserves_carried_disposition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Edge (72-2 × 72-9): a ``narrator_invented`` pool member that accrued a
+    non-zero disposition before promotion (e.g. the table befriended it) keeps
+    that value — the OCEAN/scenario seed must not flatten it — and the
+    identity-seed span reports the *carried* value, not a hardcoded 0. Guards
+    the 72-2 preservation contract against 72-9 regression."""
+    captured = await _setup(monkeypatch, "test-identity-seed-carried-disposition")
+
+    snapshot = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        characters=[_make_pc("Hero")],
+        npc_pool=[
+            NpcPoolMember(
+                name="Wexley",
+                drawn_from="narrator_invented",
+                disposition=Disposition(30),
+            )
+        ],
+    )
+
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=5, trigger="test")
+    await asyncio.sleep(0)
+
+    assert promoted is not None
+    # 72-2 carry-through survives the 72-9 seed.
+    assert int(promoted.disposition) == 30, "carried disposition must not be flattened"
+    assert promoted.ocean is not None, "still enriched with OCEAN"
+    # The span reports the real carried disposition, not a "neutral spawn" 0.
+    evt = await _wait_for_event(captured, IDENTITY_SEEDED_FIELD)
+    assert evt["fields"]["disposition"] == 30

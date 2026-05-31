@@ -33,14 +33,17 @@ Shape mirrors the sibling watcher: a pure decision
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 from opentelemetry import trace
 
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.dispatch import DispatchPackage, SubsystemDispatch
-from sidequest.telemetry.spans.intent_router import intent_router_dispatch_gated_span
+from sidequest.telemetry.spans.intent_router import (
+    intent_router_dispatch_gated_span,
+    intent_router_dispatch_unregistered_span,
+)
 
 
 @dataclass(frozen=True)
@@ -149,8 +152,108 @@ def run_dispatch_precondition_gate(
     return filtered
 
 
+# ---------------------------------------------------------------------------
+# Unregistered-subsystem gate (Story 71-27)
+#
+# The Intent Router emits ``subsystem`` as a free string (the protocol layer is
+# deliberately permissive — runtime registration is the authority, and tests
+# construct dispatches with arbitrary placeholder names). When the router names
+# a subsystem with no registered handler — the canonical case is ``combat``,
+# which is a confrontation *type* (``params["type"]``) routed through the
+# ``confrontation`` subsystem, NOT a subsystem key — the dispatch can never
+# engage. The dispatch bank already drops it, but only AFTER it has polluted
+# ``turn_context.dispatch_package`` (read by narrator redaction and the
+# post-turn watcher). This gate removes it in the pre-narrator pass, before the
+# bank, and emits a loud ``intent_router.dispatch.unregistered`` span — the
+# "stop emitting" half of Story 71-27 (registering a ``combat`` handler would
+# be a stub for a non-subsystem; CLAUDE.md "No Stubbing").
+#
+# The registered-name set is INJECTED by the caller (the pass) rather than
+# imported here, so this module stays a pure, snapshot/registry-free decision
+# layer that tests can drive with an explicit vocabulary.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UnregisteredDispatch:
+    """One dispatch the gate dropped because its subsystem has no handler."""
+
+    subsystem: str
+    idempotency_key: str
+
+
+def gate_unregistered_subsystems(
+    *,
+    package: DispatchPackage,
+    registered: Collection[str],
+) -> tuple[DispatchPackage, list[UnregisteredDispatch]]:
+    """Return ``(filtered_package, dropped)`` without touching OTEL.
+
+    Drops every dispatch whose ``subsystem`` is absent from ``registered`` (the
+    live dispatch-bank registry keys). When nothing is dropped the original
+    ``package`` is returned unchanged (no copy). Uniqueness of idempotency keys
+    is preserved (the gate only removes keys), so the package-level validator's
+    invariant still holds.
+    """
+    dropped: list[UnregisteredDispatch] = []
+
+    def _keep(dispatch: SubsystemDispatch) -> bool:
+        if dispatch.subsystem in registered:
+            return True
+        dropped.append(
+            UnregisteredDispatch(
+                subsystem=dispatch.subsystem,
+                idempotency_key=dispatch.idempotency_key,
+            )
+        )
+        return False
+
+    new_per_player = [
+        pd.model_copy(update={"dispatch": [d for d in pd.dispatch if _keep(d)]})
+        for pd in package.per_player
+    ]
+    new_cross_player = [
+        ca.model_copy(update={"dispatch": [d for d in ca.dispatch if _keep(d)]})
+        for ca in package.cross_player
+    ]
+
+    if not dropped:
+        return package, []
+
+    filtered = package.model_copy(
+        update={"per_player": new_per_player, "cross_player": new_cross_player}
+    )
+    return filtered, dropped
+
+
+def run_unregistered_subsystem_gate(
+    *,
+    package: DispatchPackage,
+    registered: Collection[str],
+    tracer: trace.Tracer | None = None,
+) -> DispatchPackage:
+    """Gate the package and emit one ``intent_router.dispatch.unregistered``
+    span per dropped dispatch.
+
+    Returns the filtered package for the caller to feed to both the dispatch
+    bank and (via ``turn_context.dispatch_package``) the post-turn watcher.
+    """
+    filtered, dropped = gate_unregistered_subsystems(package=package, registered=registered)
+    for d in dropped:
+        with intent_router_dispatch_unregistered_span(
+            subsystem=d.subsystem,
+            idempotency_key=d.idempotency_key,
+            _tracer=tracer,
+        ):
+            pass
+    return filtered
+
+
 __all__ = [
     "GatedDispatch",
+    "UnregisteredDispatch",
     "gate_inert_dispatches",
+    "gate_unregistered_subsystems",
     "run_dispatch_precondition_gate",
+    "run_unregistered_subsystem_gate",
 ]

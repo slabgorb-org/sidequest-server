@@ -34,9 +34,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sidequest.agents.dispatch_precondition_gate import run_dispatch_precondition_gate
+from sidequest.agents.dispatch_precondition_gate import (
+    run_dispatch_precondition_gate,
+    run_unregistered_subsystem_gate,
+)
 from sidequest.agents.intent_router import IntentRouter
-from sidequest.agents.subsystems import BankResult, run_dispatch_bank
+from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch_bank
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
@@ -162,6 +165,20 @@ async def execute_intent_router_pre_narrator_pass(
         action=action,
         state_summary=state_summary,
     )
+
+    # Unregistered-subsystem gate (Story 71-27): drop dispatches whose
+    # ``subsystem`` names no registered handler — the canonical case is the
+    # router emitting ``combat`` (a confrontation *type*, routed through the
+    # ``confrontation`` subsystem) as if it were a subsystem key. Such a
+    # dispatch can NEVER engage; gating it here — BEFORE the precondition gate,
+    # the bank, AND the caller's ``turn_context.dispatch_package`` — stops the
+    # router from emitting an unhandlable dispatch into the redaction path and
+    # the post-turn watcher, while a loud ``intent_router.dispatch.unregistered``
+    # span records each drop (NOT a silent fallback). The dispatch bank's own
+    # unknown-subsystem skip remains as a defense-in-depth backstop. The
+    # registry is the single source of truth — injected here so the gate stays
+    # registry-free and testable.
+    package = run_unregistered_subsystem_gate(package=package, registered=set(get_registered()))
 
     # Precondition gate (Story 59-8): drop dispatches that are STRUCTURALLY
     # inert on this snapshot — they can never engage no matter what the

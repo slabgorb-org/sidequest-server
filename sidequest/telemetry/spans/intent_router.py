@@ -162,6 +162,48 @@ def intent_router_dispatch_gated_span(
         yield span
 
 
+SPAN_INTENT_ROUTER_DISPATCH_UNREGISTERED = "intent_router.dispatch.unregistered"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_DISPATCH_UNREGISTERED] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.dispatch.unregistered",
+        "subsystem": (span.attributes or {}).get("subsystem", ""),
+        "idempotency_key": (span.attributes or {}).get("idempotency_key", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_dispatch_unregistered_span(
+    *,
+    subsystem: str,
+    idempotency_key: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires once per dispatch the pre-narrator pass drops because its
+    ``subsystem`` names no registered handler (Story 71-27).
+
+    Distinct from :func:`intent_router_dispatch_gated_span`: a *gated* dispatch
+    is a valid subsystem that is merely inert on this snapshot (a world-shape
+    skip), whereas an *unregistered* dispatch is a ROUTER DEFECT — the router
+    emitted a subsystem name (e.g. ``combat``, which is a confrontation *type*,
+    not a subsystem key) that has no handler in the registry and could never
+    engage. Keeping the two spans separate lets the GM-panel lie-detector tell
+    "this world has no clue graph" apart from "the router emitted garbage". The
+    dispatch is removed before the bank and before the post-turn watcher reads
+    ``turn_context.dispatch_package``; this span is the LOUD record of the drop
+    (CLAUDE.md "No Silent Fallbacks").
+    """
+    with Span.open(
+        SPAN_INTENT_ROUTER_DISPATCH_UNREGISTERED,
+        {"subsystem": subsystem, "idempotency_key": idempotency_key, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 @contextmanager
 def intent_router_confrontation_vocabulary_span(
     *,

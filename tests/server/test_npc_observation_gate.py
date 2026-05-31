@@ -1086,10 +1086,9 @@ def test_span_observation_gate_order_violation_is_defined_in_catalog():
         "catalog — a gate/mint reordering would be unobservable, breaking the "
         "OTEL Observability Principle."
     )
-    assert (
-        spans_module.SPAN_NPC_OBSERVATION_GATE_ORDER_VIOLATION
-        == ORDER_VIOLATION_SPAN_NAME
-    ), f"Span name must be exactly {ORDER_VIOLATION_SPAN_NAME!r} for the GM panel filter to match."
+    assert spans_module.SPAN_NPC_OBSERVATION_GATE_ORDER_VIOLATION == ORDER_VIOLATION_SPAN_NAME, (
+        f"Span name must be exactly {ORDER_VIOLATION_SPAN_NAME!r} for the GM panel filter to match."
+    )
 
 
 def test_observation_gate_order_violation_span_is_routed():
@@ -1149,9 +1148,7 @@ def test_observation_gate_order_violation_route_extracts_required_attrs():
     assert extracted.get("turn_number") == 7
 
 
-def test_mint_reached_without_gate_raises_and_emits_violation_span(
-    otel_capture, monkeypatch
-):
+def test_mint_reached_without_gate_raises_and_emits_violation_span(otel_capture, monkeypatch):
     """AC1 + AC3 — wrong order fails loud, observable in OTEL.
 
     Simulate the reordering regression by neutralizing the gate on the real
@@ -1179,9 +1176,7 @@ def test_mint_reached_without_gate_raises_and_emits_violation_span(
     )
 
     snapshot = GameSnapshot()
-    snapshot.npc_pool.append(
-        _pending_member(name="Mother", role="mother", pronouns="she/her")
-    )
+    snapshot.npc_pool.append(_pending_member(name="Mother", role="mother", pronouns="she/her"))
 
     result = NarrationTurnResult(
         narration="Reverend Murchison waits in the parlour.",
@@ -1241,9 +1236,7 @@ def test_normal_apply_emits_no_order_violation_span(otel_capture):
     )
 
     snapshot = GameSnapshot()
-    snapshot.npc_pool.append(
-        _pending_member(name="Father", role="father", pronouns="he/him")
-    )
+    snapshot.npc_pool.append(_pending_member(name="Father", role="father", pronouns="he/him"))
 
     result = NarrationTurnResult(
         narration=(
@@ -1295,12 +1288,8 @@ def test_assert_guard_raises_and_spans_on_direct_invocation(otel_capture):
     )
 
     snapshot = GameSnapshot()
-    snapshot.npc_pool.append(
-        _pending_member(name="Father", role="father", pronouns="he/him")
-    )
-    snapshot.npc_pool.append(
-        _pending_member(name="Mother", role="mother", pronouns="she/her")
-    )
+    snapshot.npc_pool.append(_pending_member(name="Father", role="father", pronouns="he/him"))
+    snapshot.npc_pool.append(_pending_member(name="Mother", role="mother", pronouns="she/her"))
 
     with pytest.raises(ObservationGateOrderError):
         _assert_observation_gate_preceded_mint(snapshot=snapshot, turn_num=9)

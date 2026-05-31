@@ -87,6 +87,7 @@ from sidequest.telemetry.spans import (
     npc_identity_seeded_span,
     npc_invented_name_routed_span,
     npc_invented_name_unrouted_span,
+    npc_observation_gate_order_violation_span,
     npc_pc_name_skipped_span,
     npc_referenced_span,
     npc_spawn_disposition_span,
@@ -2185,6 +2186,60 @@ def _apply_room_graph_transition_effects(
             pass
 
 
+class ObservationGateOrderError(RuntimeError):
+    """Story 72-10: raised when ``_auto_mint_prose_only_npcs`` is reached with
+    unresolved prior-turn ``observation_pending`` pool members still present —
+    proof that ``_apply_npc_observation_gate`` did not run first this turn.
+
+    This is a fail-loud dev invariant guarding a load-bearing pipeline order.
+    In correct operation the gate resolves every pending member before the
+    minter runs, so this never fires. If a refactor reorders, removes, or
+    short-circuits the gate, the ratification step silently becomes a no-op and
+    the phantom-NPC failure mode returns — this turns that silent degradation
+    into an immediate, observable crash (CLAUDE.md "No Silent Fallbacks").
+    """
+
+
+def _assert_observation_gate_preceded_mint(
+    *,
+    snapshot: GameSnapshot,
+    turn_num: int,
+) -> None:
+    """Story 72-10: ordering invariant for the NPC ratification pipeline.
+
+    Invoked on the real apply path between ``_apply_npc_observation_gate`` and
+    ``_auto_mint_prose_only_npcs``. The gate resolves every prior-turn
+    ``observation_pending`` member (promote → flag cleared, or purge → removed),
+    so a surviving pending member here means the gate did not run first. Emit a
+    warning-severity violation span the GM panel can see, then raise.
+
+    Behavioral, not source-text: it reads runtime pool state, so it survives
+    refactors and only fires on a genuine ordering break (CLAUDE.md "No
+    Source-Text Wiring Tests").
+    """
+    unresolved = [m for m in snapshot.npc_pool if m.observation_pending]
+    if not unresolved:
+        return
+    pending_names = ", ".join(m.name for m in unresolved if m.name)
+    with npc_observation_gate_order_violation_span(
+        pending_count=len(unresolved),
+        pending_names=pending_names,
+        turn_number=turn_num,
+    ):
+        logger.warning(
+            "npc.observation_gate_order_violation pending_count=%d names=%r turn=%d",
+            len(unresolved),
+            pending_names,
+            turn_num,
+        )
+    raise ObservationGateOrderError(
+        f"_apply_npc_observation_gate must run before _auto_mint_prose_only_npcs: "
+        f"{len(unresolved)} prior-turn observation_pending pool member(s) survive "
+        f"at the mint call site ({pending_names or '<unnamed>'}); the ratification "
+        f"gate did not run first this turn (turn={turn_num})."
+    )
+
+
 def _apply_narration_result_to_snapshot(
     snapshot: GameSnapshot,
     result: object,
@@ -3000,6 +3055,13 @@ def _apply_narration_result_to_snapshot(
         emitted_mentions=list(result.npcs_present),
         turn_num=turn_num,
     )
+
+    # Story 72-10: ordering invariant. The gate above resolves every prior-turn
+    # observation_pending member, so the pool must hold zero pending entries
+    # before the minter runs. A survivor here means the gate did not precede the
+    # mint — fail loud + emit a violation span rather than let the ratification
+    # gate silently degrade into the phantom-NPC failure mode.
+    _assert_observation_gate_preceded_mint(snapshot=snapshot, turn_num=turn_num)
 
     # Story 49-2: auto-mint NPCs the narrator named in prose via role
     # (Father, mother, the doctor, ...) or honorific (Mrs. Gow, Dr.

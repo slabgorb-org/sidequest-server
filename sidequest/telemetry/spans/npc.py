@@ -206,6 +206,30 @@ SPAN_ROUTES[SPAN_NPC_OBSERVATION_GATE_PURGED] = SpanRoute(
     },
 )
 
+# Story 72-10: ordering-invariant violation. The ratification gate
+# (``_apply_npc_observation_gate``) resolves EVERY prior-turn
+# ``observation_pending`` pool member — promote or purge — so by the time
+# ``_auto_mint_prose_only_npcs`` runs the pool must hold zero pending members.
+# A surviving pending member at the mint call site proves the gate did not run
+# first this turn: a reordering regression that silently turns the gate into a
+# no-op and reopens the phantom-NPC failure mode (the 2026-05-11 Glenross
+# invented-Mother slip). Fired at ``severity="warning"`` — mirroring
+# ``npc.observation_gate_purged`` — so the GM panel surfaces the regression as a
+# soft alert before the runtime invariant raises. Per CLAUDE.md "No Silent
+# Fallbacks": the broken pipeline must be loud, not degrade into baseless drift.
+SPAN_NPC_OBSERVATION_GATE_ORDER_VIOLATION = "npc.observation_gate_order_violation"
+SPAN_ROUTES[SPAN_NPC_OBSERVATION_GATE_ORDER_VIOLATION] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc_pool",
+        "op": "observation_gate_order_violation",
+        "pending_count": (span.attributes or {}).get("pending_count", 0),
+        "pending_names": (span.attributes or {}).get("pending_names", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # Story 72-4: narrator-invented NPC names routed through the ADR-091
 # culture-bound generator. When the narrator invents an NPC mid-scene it hands
 # back a bare name string; the Step-3 "novel" branch of ``_apply_npc_mentions``
@@ -677,6 +701,40 @@ def npc_observation_gate_purged_span(
     }
     with Span.open(
         SPAN_NPC_OBSERVATION_GATE_PURGED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_observation_gate_order_violation_span(
+    *,
+    pending_count: int,
+    pending_names: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 72-10: emitted when the apply pipeline reaches
+    ``_auto_mint_prose_only_npcs`` while prior-turn ``observation_pending``
+    pool members still survive — i.e. ``_apply_npc_observation_gate`` did NOT
+    run first this turn. ``pending_count`` is how many unresolved members were
+    found; ``pending_names`` is a comma-joined sample for the GM panel.
+    ``severity="warning"`` mirrors ``npc_observation_gate_purged_span`` so the
+    panel renders the ordering regression as a soft alert. The span fires
+    immediately before the runtime invariant raises, so the lie-detector
+    records the violation even though the turn then fails loud.
+    """
+    attributes: dict[str, Any] = {
+        "pending_count": pending_count,
+        "pending_names": pending_names,
+        "turn_number": turn_number,
+        "severity": "warning",
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_OBSERVATION_GATE_ORDER_VIOLATION,
         attributes,
         tracer_override=_tracer,
     ) as span:

@@ -463,6 +463,14 @@ class ConfrontationDef(BaseModel):
     opponent_attack: OpponentAttackDef | None = None
     opponent_weapon: str | None = None  # dogfight: opponent ace's weapon catalog id
     player_weapon: str | None = None  # dogfight: PC frame's weapon catalog id
+    # Opponent's reprisal damage for hp_depletion combat whose strike beat has
+    # no damage_override (e.g. personal `combat`, where `shoot` resolves the
+    # PLAYER's weapon from inventory). The seeded opponent NPC has no inventory,
+    # so without this the enemy hits but deals 0 HP (playtest 67-10: opponent hit
+    # twice, opponent_damage_spec_missing both times, player took no damage). The
+    # reprisal reads this BEFORE the beat/inventory resolution, so it never caps
+    # the player's own weapon. None ⇒ fall back to beat damage_override / weapon.
+    opponent_damage: DamageSpec | None = None
     geometry_modifiers: GeometryModifiers | None = None
     # Free-for-all N-seat table (table_resolution mode). ``table_game`` is the
     # resolver discriminator ("poker" | "auction"); ``max_decision_points``

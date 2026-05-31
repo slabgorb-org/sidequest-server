@@ -81,7 +81,9 @@ def _personal_combat_cdef(pack):
     )
 
 
-def _make_snapshot(*, player_ac: int, player_hp: int, opponent_hp: int = 99):
+def _make_snapshot(
+    *, player_ac: int, player_hp: int, opponent_hp: int = 99, opponent_armed: bool = True
+):
     """Snapshot with a player Character (AC + HP + blaster) and an opponent NPC.
 
     - Player is the reprisal TARGET: their ``armor_class`` is the opponent's
@@ -89,6 +91,10 @@ def _make_snapshot(*, player_ac: int, player_hp: int, opponent_hp: int = 99):
     - Opponent HP defaults to 99 so the player's own single strike (1d6 blaster,
       max 6) can NEVER resolve the encounter first — guaranteeing the reprisal
       fires (it must be gated on ``not encounter_resolved``).
+    - ``opponent_armed=False`` reproduces PRODUCTION: ``_seed_combat_hp_depletion
+      _to_npcs`` creates the opponent NPC with an EMPTY inventory, so its `shoot`
+      beat resolves no weapon. The enemy must still damage the player via the
+      cdef's ``opponent_damage`` (playtest 67-10).
     """
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
@@ -110,12 +116,17 @@ def _make_snapshot(*, player_ac: int, player_hp: int, opponent_hp: int = 99):
         backstory="Ex-Hegemonic infantry.",
     )
 
-    # Opponent mook with its own sidearm so its strike beat resolves real damage.
+    # Opponent mook. ``opponent_armed`` toggles whether it carries a sidearm —
+    # production seeds it WEAPONLESS, so the weaponless case must lean on
+    # cdef.opponent_damage for the reprisal to deal HP.
+    opponent_items = (
+        [{"id": "blaster_sidearm", "name": "Sidearm Blaster"}] if opponent_armed else []
+    )
     opponent_core = CreatureCore(
         name=OPPONENT,
         description="Corsair raider",
         personality="brutal",
-        inventory=Inventory(items=[{"id": "blaster_sidearm", "name": "Sidearm Blaster"}]),
+        inventory=Inventory(items=opponent_items),
         hp={"current": opponent_hp, "max": opponent_hp, "base_max": opponent_hp},
         armor_class=12,
     )
@@ -261,6 +272,41 @@ def test_opponent_hit_ablates_player_hp(otel_capture):
     assert SPAN_STATE_PATCH_HP in span_names, (
         f"a state_patch.hp span must fire when the opponent damages the player; spans={span_names}"
     )
+
+
+def test_weaponless_opponent_still_ablates_player_hp_via_cdef_opponent_damage(otel_capture):
+    """Playtest 67-10: production seeds the opponent NPC WEAPONLESS, so the `shoot`
+    beat (which resolves the actor's inventory weapon) finds nothing — the enemy
+    hit twice and dealt 0 HP, the player never took damage. The cdef's authored
+    ``opponent_damage`` is the fix: the reprisal must ablate the player's HP even
+    with an empty opponent inventory, and must NOT emit opponent_damage_spec_missing."""
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    from sidequest.telemetry.spans.state_patch import SPAN_STATE_PATCH_HP
+
+    # Guard: the real personal-combat cdef must actually author opponent_damage,
+    # else this test would vacuously pass against a fixed inventory weapon.
+    cdef = _personal_combat_cdef(pack)
+    assert cdef is not None and cdef.opponent_damage is not None, (
+        "space_opera `combat` cdef must author opponent_damage (the reprisal "
+        "damage source for the weaponless seeded mook)"
+    )
+
+    snap = _make_snapshot(player_ac=2, player_hp=12, opponent_armed=False)
+    player_core = snap.find_creature_core(PLAYER)
+    assert player_core is not None
+    hp_before = player_core.hp.current
+
+    _drive_player_shoot(snap, _make_encounter(), pack, broadcasts=[])
+
+    assert player_core.hp.current < hp_before, (
+        f"a weaponless opponent must still ablate the player's HP via "
+        f"cdef.opponent_damage; before={hp_before} after={player_core.hp.current}"
+    )
+    span_names = [s.name for s in otel_capture.get_finished_spans()]
+    assert SPAN_STATE_PATCH_HP in span_names
 
 
 def test_opponent_miss_leaves_player_hp_intact(otel_capture):

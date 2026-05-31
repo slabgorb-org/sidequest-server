@@ -415,8 +415,16 @@ def test_confrontation_payload_carries_hp_through_real_dispatch():
     assert payload.opponent_hp["current"] < payload.opponent_hp["max"], (
         "opponent_hp.current must reflect the damage just applied (resolver is live)"
     )
-    assert payload.player_hp == {"current": 10, "max": 10}, (
-        "player_hp must come from the registered player core via the resolver"
+    # player_hp is sourced from the live player core via the resolver. Its max
+    # comes from the registered core (10); its current may be BELOW max because
+    # the opponent's reprisal can ablate the player this turn (playtest 67-10 —
+    # the enemy now actually deals damage via cdef.opponent_damage). Pinning this
+    # to 10/10 would re-encode the old "player never takes damage" bug.
+    assert payload.player_hp["max"] == 10, (
+        "player_hp.max must come from the registered player core via the resolver"
+    )
+    assert 0 <= payload.player_hp["current"] <= 10, (
+        "player_hp.current must be sourced from the live player core (0..max)"
     )
 
 

@@ -52,6 +52,10 @@ SPAN_ROUTES[SPAN_NPC_SPAWN_DISPOSITION] = SpanRoute(
         "provenance": (span.attributes or {}).get("provenance", ""),
         "is_creature": bool((span.attributes or {}).get("is_creature", False)),
         "pool_origin": (span.attributes or {}).get("pool_origin", ""),
+        # Story 72-3: provenance authorship marker — True when the Monster
+        # Manual (ADR-059) authored this NPC, so the GM panel can attribute
+        # MM-seeded NPCs vs narrator improv at the materialization decision.
+        "manual_origin": bool((span.attributes or {}).get("manual_origin", False)),
     },
 )
 
@@ -64,6 +68,7 @@ def npc_spawn_disposition_span(
     provenance: str,
     is_creature: bool,
     pool_origin: str | None = None,
+    manual_origin: bool = False,
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
@@ -83,6 +88,7 @@ def npc_spawn_disposition_span(
         "provenance": provenance,
         "is_creature": bool(is_creature),
         "pool_origin": pool_origin if pool_origin is not None else "",
+        "manual_origin": bool(manual_origin),
         **attrs,
     }
     with Span.open(

@@ -173,7 +173,9 @@ def test_merge_mm_patch_over_invented_npc_records_manual_origin() -> None:
 
     # The Monster Manual now authors the same name.
     snap.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Hob", threat_level=1, hp=4, manual_origin=True)])
+        WorldStatePatch(
+            npcs_present=[NpcPatch(name="Hob", threat_level=1, hp=4, manual_origin=True)]
+        )
     )
     assert len(snap.npcs) == 1
     assert snap.npcs[0].manual_origin is True
@@ -195,7 +197,9 @@ def test_merge_narrator_patch_does_not_clear_manual_origin() -> None:
 
     # Narrator re-describes the same NPC (no marker).
     snap.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Hob", description="now seems almost friendly")])
+        WorldStatePatch(
+            npcs_present=[NpcPatch(name="Hob", description="now seems almost friendly")]
+        )
     )
     assert len(snap.npcs) == 1
     assert snap.npcs[0].manual_origin is True, (

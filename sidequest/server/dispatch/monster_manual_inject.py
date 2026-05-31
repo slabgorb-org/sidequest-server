@@ -188,6 +188,8 @@ def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
         personality=personality,
         role=npc.role or None,
         location=location,
+        # Story 72-3: Monster Manual authorship marker (ADR-059).
+        manual_origin=True,
     )
 
 
@@ -273,6 +275,8 @@ def _creature_patch_from_enemy(enemy: Any, *, tier: int, location: str | None) -
         abilities=abilities or None,
         morale=morale,
         location=location,
+        # Story 72-3: Monster Manual authorship marker (ADR-059).
+        manual_origin=True,
     )
 
 

@@ -445,9 +445,7 @@ class ConnectHandler:
             # rather than a silent None and a downstream "weather grounding
             # mysteriously absent" symptom three turns in.
             try:
-                pack_dir = loader.find(row.genre_slug)
                 world_grounding = load_world_grounding(
-                    pack_dir=pack_dir,
                     world_dir=world_dir,
                     genre_slug=row.genre_slug,
                     seed_source=slug,

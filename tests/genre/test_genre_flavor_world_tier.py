@@ -35,8 +35,8 @@ from typing import Any
 
 import pytest
 
-from sidequest.game.lore_store import LoreStore
 from sidequest.game.lore_seeding import seed_world_lore
+from sidequest.game.lore_store import LoreStore
 from sidequest.game.world_grounding_bootstrap import load_world_grounding
 from sidequest.genre.error import GenreLoadError
 from sidequest.genre.loader import load_genre_pack
@@ -294,11 +294,10 @@ def test_ac4_weather_loads_from_world_dir(tmp_path: Path) -> None:
     ``load_pack_weather(pack_dir)`` + WeatherGenerator on ``pack_dir/weather.yaml``),
     so a world-only weather file yields ``weather_state is None``.
     """
-    pack_dir, world_dir = _make_grounding_dirs(tmp_path)
+    _pack_dir, world_dir = _make_grounding_dirs(tmp_path)
     shutil.copy2(WEATHER_FIXTURE, world_dir / "weather.yaml")
 
     result = load_world_grounding(
-        pack_dir=pack_dir,
         world_dir=world_dir,
         genre_slug="test_genre",
         seed_source="seed-74-1",
@@ -319,7 +318,6 @@ def test_ac4_pack_root_weather_is_ignored(tmp_path: Path) -> None:
     shutil.copy2(WEATHER_FIXTURE, pack_dir / "weather.yaml")  # only at the pack tier
 
     result = load_world_grounding(
-        pack_dir=pack_dir,
         world_dir=world_dir,
         genre_slug="test_genre",
         seed_source="seed-74-1",

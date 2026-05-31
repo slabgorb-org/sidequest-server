@@ -85,7 +85,6 @@ def _select_zone_season(rules: ClimateRulesFile, genre_slug: str) -> tuple[str, 
 
 def load_world_grounding(
     *,
-    pack_dir: Path | str,
     world_dir: Path | str,
     genre_slug: str,
     seed_source: str,

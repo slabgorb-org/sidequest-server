@@ -201,3 +201,24 @@ async def test_connect_handler_writes_identity_to_room_store(tmp_path: Path) -> 
         "the room store must reflect the WS-boundary resolved identity. "
         "If this fails, bind_player_identity() was not called from connect.py."
     )
+
+
+def test_perspective_character_name_uses_seat_then_falls_back():
+    from sidequest.server.websocket_session_handler import perspective_character_name
+
+    class _Snap:
+        def __init__(self, seats):
+            self.player_seats = seats
+
+    class _SD:
+        def __init__(self, pid, pname, seats):
+            self.player_id = pid
+            self.player_name = pname
+            self.snapshot = _Snap(seats)
+
+    # seated -> returns the seated character name
+    sd = _SD("p1", "DISPLAY", {"p1": "Rux"})
+    assert perspective_character_name(sd) == "Rux"
+    # unseated -> falls back to sd.player_name (behavior-preserving for pre-seat)
+    sd2 = _SD("p2", "Laverne", {})
+    assert perspective_character_name(sd2) == "Laverne"

@@ -122,6 +122,17 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("sidequest.server.session_handler")
 
 
+def perspective_character_name(sd) -> str:
+    """The seated character name to use as a party_location perspective key.
+
+    Story 67-6: the POV key is the seated CHARACTER, resolved from
+    snapshot.player_seats[player_id] — never the player identity. Falls back to
+    sd.player_name (which is itself the character name pre-seat) when no seat is
+    bound yet, preserving prior behavior.
+    """
+    return sd.snapshot.player_seats.get(sd.player_id, sd.player_name)
+
+
 # --- Extracted handler helpers (moved to websocket_handlers/) -------------
 # Free functions/mixins moved to sibling modules under ``websocket_handlers/``,
 # re-imported here so methods + external importers resolve the names unchanged.
@@ -2576,7 +2587,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         location_before = (
             snapshot_location_before
             if snapshot_location_before is not None
-            else sd.snapshot.party_location(perspective=sd.player_name)
+            else sd.snapshot.party_location(perspective=perspective_character_name(sd))
         )
         reason = classify_trigger(
             result,

@@ -126,6 +126,49 @@ def _load_cultures(cultures_yaml: Path) -> list[Culture]:
     return cultures
 
 
+def _load_world_cultures(world_dir: Path) -> list[Culture]:
+    """Discover a world's cultures, mirroring the loader (loader.py ~L895-914).
+
+    Worlds author cultures in one of two shapes, and the loader picks
+    between them with an ``if/else`` (the directory REPLACES the single
+    file — it does not merge):
+
+    - **Per-culture directory** — ``worlds/<world>/cultures/*.yaml``, one
+      Culture *mapping* per file (the model used by e.g. space_opera's
+      ``aureate_span`` / ``perseus_cloud``). ``.gitkeep`` is skipped, and so
+      is any mapping without a ``name`` key — those are art-pipeline
+      visual-token overlays that live in ``cultures/`` for the daemon image
+      pipeline, not name-generation cultures (loader.py L902-906).
+    - **Single file** — ``worlds/<world>/cultures.yaml``, a *list* of Culture
+      mappings (handled by :func:`_load_cultures`).
+
+    When a ``cultures/`` directory is present, the sibling ``cultures.yaml``
+    is ignored, exactly as the loader does.
+    """
+    cultures_dir = world_dir / "cultures"
+    if cultures_dir.is_dir():
+        cultures: list[Culture] = []
+        for f in sorted(cultures_dir.glob("*.yaml")):
+            if f.name == ".gitkeep":
+                continue
+            raw = yaml.safe_load(f.read_text(encoding="utf-8"))
+            # Skip art-pipeline visual-token overlays (have visual_tokens, not name).
+            if not isinstance(raw, dict) or "name" not in raw:
+                continue
+            try:
+                cultures.append(Culture.model_validate(raw))
+            except ValidationError:
+                # Schema-broken cultures are surfaced by audit_content_drift.py;
+                # this audit's scope is corpus sizes, not schema. Skip.
+                continue
+        return cultures
+
+    world_cultures_yaml = world_dir / "cultures.yaml"
+    if world_cultures_yaml.is_file():
+        return _load_cultures(world_cultures_yaml)
+    return []
+
+
 def _audit_pack(pack_dir: Path) -> list[CorpusEntry]:
     """Walk one genre pack's cultures (genre + world tiers) and audit corpora."""
     entries: list[CorpusEntry] = []
@@ -180,12 +223,9 @@ def _audit_pack(pack_dir: Path) -> list[CorpusEntry]:
         for world_dir in sorted(worlds_dir.iterdir()):
             if not world_dir.is_dir():
                 continue
-            world_cultures_yaml = world_dir / "cultures.yaml"
-            if world_cultures_yaml.is_file():
-                _walk_cultures(
-                    _load_cultures(world_cultures_yaml),
-                    tier=f"world:{world_dir.name}",
-                )
+            world_cultures = _load_world_cultures(world_dir)
+            if world_cultures:
+                _walk_cultures(world_cultures, tier=f"world:{world_dir.name}")
 
     return entries
 
@@ -275,7 +315,9 @@ def main(argv: list[str] | None = None) -> int:
         has_genre_cultures = (pack_dir / "cultures.yaml").is_file()
         worlds_dir = pack_dir / "worlds"
         has_world_cultures = worlds_dir.is_dir() and any(
-            (w / "cultures.yaml").is_file() for w in worlds_dir.iterdir() if w.is_dir()
+            (w / "cultures.yaml").is_file() or (w / "cultures").is_dir()
+            for w in worlds_dir.iterdir()
+            if w.is_dir()
         )
         if not (has_genre_cultures or has_world_cultures):
             continue

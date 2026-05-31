@@ -366,3 +366,161 @@ class TestValidationStillFiresFirst:
         assert "region.entry_rejected" in spans_by_name
         assert "region.entry_canonicalized_dedup" not in spans_by_name
         assert "(aside — narrator brief)" not in snap.discovered_regions
+
+
+# ---------------------------------------------------------------------------
+# Layer 1b — Unit: leading_place_segment + resolve_known_region_id
+# (Playtest 2026-05-31 burning_peace: "edo" + "Edo — The Shogunate's Capital"
+#  coexisted as duplicate discovered_regions. A narrator scene heading that
+#  denotes a KNOWN cartography region must resolve to that region's id rather
+#  than fork a compound entry; unknown leading places still fork — story 45-17.)
+# ---------------------------------------------------------------------------
+
+
+class TestLeadingPlaceSegment:
+    @pytest.mark.parametrize(
+        ("heading", "expected"),
+        [
+            ("Edo — The Shogunate's Capital", "Edo"),
+            ("Edo – Lower Ward", "Edo"),  # en-dash
+            ("Edo - Dock District", "Edo"),  # spaced hyphen
+            ("Edo: The Capital", "Edo"),  # colon
+            ("The Iga Mountains", "The Iga Mountains"),  # no separator
+            ("north-gate", "north-gate"),  # bare hyphen is NOT an epithet sep
+            ("  Kyoen — Imperial Court  ", "Kyoen"),  # surrounding whitespace
+        ],
+    )
+    def test_leading_segment(self, heading: str, expected: str) -> None:
+        from sidequest.game.region_validation import leading_place_segment
+
+        assert leading_place_segment(heading) == expected
+
+
+class TestResolveKnownRegionId:
+    # Mirrors burning_peace cartography.yaml: id -> display name.
+    KNOWN = {
+        "edo": "Edo",
+        "kyoen": "Kyōen",
+        "iga_mountains": "The Iga Mountains",
+    }
+
+    def test_full_name_match_returns_id(self) -> None:
+        from sidequest.game.region_validation import resolve_known_region_id
+
+        assert resolve_known_region_id("Edo", self.KNOWN) == "edo"
+
+    def test_epithet_heading_resolves_to_leading_place(self) -> None:
+        """The exact playtest failure: the heading collapses to the region id."""
+        from sidequest.game.region_validation import resolve_known_region_id
+
+        assert resolve_known_region_id("Edo — The Shogunate's Capital", self.KNOWN) == "edo"
+
+    def test_match_against_display_name_with_article(self) -> None:
+        """id 'iga_mountains' canonicalizes differently from the display
+        'The Iga Mountains'; matching both means an article-prefixed heading
+        still resolves."""
+        from sidequest.game.region_validation import resolve_known_region_id
+
+        assert (
+            resolve_known_region_id("The Iga Mountains — Hidden Pass", self.KNOWN)
+            == "iga_mountains"
+        )
+
+    def test_unknown_place_returns_none(self) -> None:
+        """A narrator-invented sub-area whose leading place is NOT a cartography
+        region returns None — the caller keeps the surface form (45-17 forking)."""
+        from sidequest.game.region_validation import resolve_known_region_id
+
+        assert resolve_known_region_id("The Whispering Vault — Lower", self.KNOWN) is None
+
+    def test_empty_known_returns_none(self) -> None:
+        from sidequest.game.region_validation import resolve_known_region_id
+
+        assert resolve_known_region_id("Edo", {}) is None
+
+
+# ---------------------------------------------------------------------------
+# Layer 3b — Wire: cartography-resolved dedup through the real pack
+# ---------------------------------------------------------------------------
+
+
+def _has_real_content() -> bool:
+    from tests._helpers.genre_paths import GENRE_PACKS_DIR
+
+    return GENRE_PACKS_DIR.is_dir()
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+class TestCartographyResolvedDedupWiring:
+    """``_apply_narration_result_to_snapshot`` resolves a known-region
+    epithet heading to its cartography id instead of forking a duplicate
+    (Playtest 2026-05-31 burning_peace)."""
+
+    def _load_burning_peace(self):
+        from sidequest.genre.loader import load_genre_pack
+        from tests._helpers.genre_paths import PackNotFound, find_pack_path
+
+        try:
+            return load_genre_pack(find_pack_path("elemental_harmony"))
+        except PackNotFound:
+            pytest.skip("elemental_harmony pack not on disk")
+
+    def test_epithet_heading_collapses_onto_seeded_region_id(self, otel_capture) -> None:
+        from sidequest.server.narration_apply import (
+            _apply_narration_result_to_snapshot,
+        )
+
+        pack = self._load_burning_peace()
+        snap = _make_minimal_snapshot()
+        # region.init seeds the bare cartography slug at chargen.
+        snap.discovered_regions = ["edo"]
+
+        _apply_narration_result_to_snapshot(
+            snap,
+            _make_narration_result(narration="…", location="Edo — The Shogunate's Capital"),
+            player_name="Kaede",
+            room=room_for(snap),
+            pack=pack,
+            world="burning_peace",
+        )
+
+        # No duplicate: the heading resolved to the already-present "edo".
+        assert snap.discovered_regions == ["edo"], (
+            "epithet heading of a known cartography region must NOT fork a "
+            f"second entry; got {snap.discovered_regions}"
+        )
+        # The cartography-resolution span fired (resolution='cartography').
+        dedup_spans = [
+            s
+            for s in otel_capture.get_finished_spans()
+            if s.name == "region.entry_canonicalized_dedup"
+        ]
+        assert dedup_spans, "cartography-resolution must emit the dedup span"
+        assert any(
+            dict(s.attributes or {}).get("resolution") == "cartography" for s in dedup_spans
+        ), "the resolution span must carry resolution='cartography'"
+
+    def test_unknown_subarea_still_forks(self) -> None:
+        """A narrator-invented place with no cartography region keeps the
+        surface form (45-17 forking preserved)."""
+        from sidequest.server.narration_apply import (
+            _apply_narration_result_to_snapshot,
+        )
+
+        pack = self._load_burning_peace()
+        snap = _make_minimal_snapshot()
+        snap.discovered_regions = ["edo"]
+
+        _apply_narration_result_to_snapshot(
+            snap,
+            _make_narration_result(narration="…", location="The Tanuki's Teahouse"),
+            player_name="Kaede",
+            room=room_for(snap),
+            pack=pack,
+            world="burning_peace",
+        )
+
+        assert snap.discovered_regions == ["edo", "The Tanuki's Teahouse"], (
+            "an invented sub-area with no cartography region must still fork; "
+            f"got {snap.discovered_regions}"
+        )

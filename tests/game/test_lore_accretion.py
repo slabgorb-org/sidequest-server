@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import pytest
 
+# The module under construction (RED: does not exist yet).
+from sidequest.game import lore_accretion
 from sidequest.game.character import KnownFact
 from sidequest.game.lore_store import (
     DuplicateLoreId,
@@ -31,9 +33,6 @@ from sidequest.game.lore_store import (
     LoreStore,
 )
 from sidequest.protocol.models import FactCategory
-
-# The module under construction (RED: does not exist yet).
-from sidequest.game import lore_accretion
 
 
 def _fact(content: str, *, category: FactCategory = FactCategory.Lore) -> KnownFact:

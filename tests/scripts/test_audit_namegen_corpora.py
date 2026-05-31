@@ -94,29 +94,28 @@ def test_audit_surfaces_consumption_by_culture() -> None:
 
     Story 64-7: the audit's value is surfacing WHICH culture consumes a
     given corpus, so a "fix corpus X" task knows which culture suffers.
-    The genre-tier ``space_opera`` cultures consume the shared-resolved
-    trio:
+    The ``space_opera`` cultures consume the shared-resolved trio:
 
     - Hegemonic  -> latin.txt
     - Voidborn   -> polynesian.txt
-    - Xeno       -> georgian.txt
+    - Tsveri     -> georgian.txt
 
     All three corpora live ONLY in ``sidequest-content/corpus/shared/``
-    (no per-pack copy), so the audit can only resolve them once it gains
-    the same shared fallback the runtime resolver already uses
+    (no per-pack copy), so the audit can only resolve them via the same
+    shared fallback the runtime resolver uses
     (``generator.py:_resolve_corpus_file``).
 
-    Pre-fix this FAILS: the trio appear as MISSING rows under their
-    consuming cultures. Post-fix: they resolve (OK, not MISSING) and are
-    still attributed to the consuming culture so the report stays
-    actionable.
+    These resolve (OK, not MISSING) and are attributed to the consuming
+    culture so the report stays actionable.
 
-    Note: this asserts on genre-tier cultures that the audit actually
-    walks (single ``cultures.yaml``). The aureate_span / perseus_cloud
-    worlds use a per-culture ``cultures/*.yaml`` DIRECTORY that the audit
-    walker does not yet read — that blindness is a separate defect
-    captured as a Delivery Finding, out of scope for 64-7's
-    resolution-path fix.
+    Tier note: epic-74 moved ``space_opera``'s flavor (cultures) out of the
+    genre tier and into the ``coyote_star`` world — the genre-level
+    ``cultures.yaml`` was deleted and these cultures now live in
+    ``worlds/coyote_star/cultures/*.yaml`` (the per-culture-directory
+    model). The audit walks that directory model since Story 64-15, so the
+    rows are tagged ``(world:coyote_star)``. The substring assertions below
+    are tier-agnostic — they match the culture name and corpus on the same
+    row regardless of whether the culture is genre- or world-tier.
     """
     out = _run_audit().stdout
     assert out.strip(), "audit produced empty stdout — cannot assert on an absent report"
@@ -124,7 +123,7 @@ def test_audit_surfaces_consumption_by_culture() -> None:
     for culture, corpus_name in (
         ("Hegemonic", "latin.txt"),
         ("Voidborn", "polynesian.txt"),
-        ("Xeno", "georgian.txt"),
+        ("Tsveri", "georgian.txt"),
     ):
         # The corpus must be attributed to its consuming culture on the SAME
         # report row (the audit walks cultures, so each corpus is listed under

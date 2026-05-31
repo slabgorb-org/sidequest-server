@@ -646,13 +646,44 @@ def _validate_world(
     world_extensions_schema: dict[str, Any] = world_schema.get("extensions", {})
     world_extensions_declared: list[str] = world_data.get("extensions", [])
 
+    # Explicit per-world completeness waiver. A live (non-draft) world that
+    # legitimately loads but is intentionally incomplete — e.g. an imported
+    # campaign skeleton whose remaining canon must NOT be fabricated — may
+    # declare ``incomplete_files`` / ``incomplete_dirs`` in world.yaml to waive
+    # those SPECIFIC required artifacts. This is the opposite of a silent
+    # fallback: each waived path is named in the world's own metadata (loudly,
+    # with an author rationale in a comment) and the validator still EMITS A
+    # WARNING for every waived item so it shows in --verbose and never silently
+    # disappears. Any required artifact NOT named here still hard-errors, and
+    # the waiver only applies to required_files/required_dirs the loader itself
+    # treats as optional — it cannot wave through a file the loader hard-requires
+    # (those would fail at load time regardless). Worlds that ship every required
+    # file are unaffected. Draft worlds ignore this (they already demote
+    # everything to warnings).
+    waived_files: set[str] = {str(f) for f in (world_data.get("incomplete_files") or [])}
+    waived_dirs: set[str] = {str(d) for d in (world_data.get("incomplete_dirs") or [])}
+
+    enforced_required_files = [f for f in world_required_files if f not in waived_files]
+    enforced_required_dirs = [d for d in world_required_dirs if d not in waived_dirs]
+    waiver_warnings: list[str] = [
+        f"{label}: required file '{f}' WAIVED via world.yaml incomplete_files "
+        f"(live-but-incomplete world; artifact intentionally unauthored)"
+        for f in world_required_files
+        if f in waived_files and not (world_dir / f).is_file()
+    ] + [
+        f"{label}: required directory '{d}' WAIVED via world.yaml incomplete_dirs "
+        f"(live-but-incomplete world; artifact intentionally unauthored)"
+        for d in world_required_dirs
+        if d in waived_dirs and not (world_dir / d).is_dir()
+    ]
+
     world_ext_files, world_ext_dirs = _resolve_extension_paths(
         world_extensions_declared, world_extensions_schema
     )
 
     structural_errors: list[str] = []
-    structural_errors.extend(_check_required_files(world_dir, world_required_files, label))
-    structural_errors.extend(_check_required_dirs(world_dir, world_required_dirs, label))
+    structural_errors.extend(_check_required_files(world_dir, enforced_required_files, label))
+    structural_errors.extend(_check_required_dirs(world_dir, enforced_required_dirs, label))
     structural_errors.extend(
         _check_extensions(world_dir, world_extensions_declared, world_extensions_schema, label)
     )
@@ -707,9 +738,15 @@ def _validate_world(
     if is_draft:
         # Demote structural + content problems to warnings for draft worlds.
         # A world.yaml parse failure is never demoted — it's an unconditional error.
-        return hard_errors, structural_errors + content_errors + orphan_warnings
+        return (
+            hard_errors,
+            structural_errors + content_errors + orphan_warnings + waiver_warnings,
+        )
     else:
-        return hard_errors + structural_errors + content_errors, orphan_warnings
+        return (
+            hard_errors + structural_errors + content_errors,
+            orphan_warnings + waiver_warnings,
+        )
 
 
 # ---------------------------------------------------------------------------

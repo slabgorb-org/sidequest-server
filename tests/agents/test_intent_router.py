@@ -239,7 +239,7 @@ async def test_intent_router_prompt_documents_subsystem_params_contract(
     assert 'params={"type"' in system, (
         "router prompt must document that a confrontation dispatch's params "
         "carry the chosen confrontation type as params['type'] — without this "
-        'the handler raises ValueError("missing required params[\'type\']")'
+        "the handler raises ValueError(\"missing required params['type']\")"
     )
 
 
@@ -429,6 +429,100 @@ async def test_intent_router_fail_loud_on_schema_invalid_output(otel_capture) ->
         s for s in otel_capture.get_finished_spans() if s.name == "intent_router.failed"
     ]
     assert len(failed_spans) == 2
+
+
+@pytest.mark.asyncio
+async def test_intent_router_schema_informed_retry_recovers_from_stray_key(
+    haiku_response_pronoun_resolved: dict,
+    otel_capture,
+) -> None:
+    """Playtest 2026-05-31 (burning_peace MP turn 1): Haiku leaked a ``target``
+    key onto a narrator_instructions item (``per_player.0.narrator_instructions
+    .N.target`` extra_forbidden), and DispatchPackage's ``extra="forbid"``
+    rejected the WHOLE package — every dispatch for the turn was lost and the
+    mechanical spine went silent (0 beats / 0 tropes).
+
+    The bare retry re-sent the identical prompt, so the deterministic confusion
+    reproduced and the package was lost a second time. The fix feeds the pydantic
+    error back into the retry prompt; the producer drops the stray key on the
+    informed retry and the package validates — dispatch survives instead of the
+    turn free-narrating with zero mechanical backing.
+    """
+    import copy
+
+    from sidequest.agents.intent_router import IntentRouter
+    from sidequest.protocol.dispatch import DispatchPackage
+
+    # First attempt: a valid package PLUS a stray ``target`` on the narrator
+    # directive — exactly the live failure shape.
+    bad = copy.deepcopy(haiku_response_pronoun_resolved)
+    bad["per_player"][0]["narrator_instructions"][0]["target"] = "npc:goblin_2"
+    # Second attempt (informed retry): the corrected, schema-valid package.
+    good = copy.deepcopy(haiku_response_pronoun_resolved)
+
+    llm = _make_sequenced_router_llm(bad, good)
+    router = IntentRouter(llm=llm)
+
+    pkg = await router.decompose(
+        action="Attack him!",
+        state_summary={"scene": "goblins 1-3"},
+    )
+
+    # Recovered — no raise, the real package (with its dispatch) is returned.
+    assert isinstance(pkg, DispatchPackage)
+    assert len(pkg.per_player) == 1
+    assert len(pkg.per_player[0].dispatch) == 1, (
+        "the turn's dispatch must survive — a stray advisory key must not sink it"
+    )
+    assert llm.emit_tool.await_count == 2, "must use the bounded retry"
+
+    # The retry prompt MUST carry the ACTUAL pydantic error (not just a static
+    # hint) so the producer knows precisely what to drop. The error path names
+    # the offending field, proving the real validation message was fed back.
+    first_user = llm.emit_tool.await_args_list[0].kwargs["user"]
+    retry_user = llm.emit_tool.await_args_list[1].kwargs["user"]
+    assert "<schema_correction>" not in first_user, (
+        "the first attempt must NOT carry a correction block"
+    )
+    assert "<schema_correction>" in retry_user, (
+        "the retry prompt must include the schema-correction block"
+    )
+    assert "narrator_instructions" in retry_user, (
+        "retry prompt must echo the concrete pydantic error path "
+        "(per_player.N.narrator_instructions.N.target) — proving the ACTUAL "
+        "validation error was fed back, not a generic canned hint"
+    )
+
+    # The self-heal is observable on the GM panel: the success span flags it.
+    decompose_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.decompose"
+    ]
+    assert len(decompose_spans) == 1
+    attrs = dict(decompose_spans[0].attributes or {})
+    assert attrs.get("retry_count") == 1
+    assert attrs.get("schema_corrected") is True, (
+        "intent_router.decompose must flag schema_corrected=True when the success "
+        "came from an error-informed retry (GM-panel visibility)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_intent_router_happy_path_marks_schema_not_corrected(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """A clean first attempt records ``schema_corrected=False`` — the flag only
+    trips when an error-informed retry rescued the turn."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="I look around quietly.", state_summary={})
+
+    # Only one call, no correction block ever appended.
+    assert llm.emit_tool.await_count == 1
+    user_prompt = llm.emit_tool.await_args.kwargs["user"]
+    assert "<schema_correction>" not in user_prompt
 
 
 @pytest.mark.asyncio

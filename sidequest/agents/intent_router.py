@@ -157,8 +157,17 @@ For each player action:
      Score the confidence for each dispatch honestly — a high score fires the
      engine, a low score degrades the dispatch to a narrator hint instead of
      engaging. Do not inflate confidence to force engagement.
-  3. Emit narrator_instructions — must_narrate / must_not_narrate /
+  3. Emit narrator_instructions — advisory directives to the narrator. Each
+     item is EXACTLY {kind, payload, visibility} and NOTHING else. Do NOT add
+     any other key (e.g. "target"); the schema forbids unknown fields and one
+     stray key REJECTS THE ENTIRE package, dropping every dispatch this turn.
+     kind is one of: must_narrate / must_not_narrate /
      distinctive_detail_for_referent / canonical_only_do_not_reveal_to_others.
+     For distinctive_detail_for_referent, put BOTH the referent and its detail
+     inside ``payload`` (e.g. "the goblin: broken tooth") — there is no separate
+     referent/target field here. (The ``target`` key belongs ONLY to the
+     distinctive_detail_hint DISPATCH in step 2 — a different mechanism; do not
+     carry it into narrator_instructions.)
   4. Set confidence_global to your overall confidence across the turn.
 
 Every dispatch carries a visibility tag. Default visible_to="all" with empty
@@ -178,6 +187,30 @@ def _build_user_prompt(action: str, state_summary: Any) -> str:
         f"<game_state>\n{state_text}\n</game_state>\n"
         f"<raw_action>\n{action}\n</raw_action>\n"
         f"Call emit_dispatch_package once for this single action."
+    )
+
+
+def _schema_correction_suffix(validation_error: str) -> str:
+    """Build the retry correction block fed back after a schema rejection.
+
+    The bare retry (re-sending the identical prompt) cannot fix a *deterministic*
+    schema confusion — the model reproduces the same malformed shape and the
+    whole DispatchPackage is lost a second time. Feeding the pydantic error back
+    lets the producer self-correct (drop the offending key / fix the field) on
+    the bounded retry, so a single hallucinated advisory key no longer sinks the
+    turn's mechanical dispatch. Still fail-loud: if the informed retry also
+    fails, ``decompose`` raises (No Silent Fallbacks)."""
+    return (
+        "\n\n<schema_correction>\n"
+        "Your previous emit_dispatch_package input was REJECTED by schema "
+        "validation:\n"
+        f"{validation_error}\n"
+        "Emit the SAME intent again, strictly inside the DispatchPackage schema. "
+        "Remove every field the schema does not define — Pydantic forbids unknown "
+        "keys, and one stray key drops the entire package. In particular, a "
+        "narrator_instructions item has ONLY {kind, payload, visibility}; never "
+        "add a 'target' key there — fold any referent id into 'payload'.\n"
+        "</schema_correction>"
     )
 
 
@@ -216,14 +249,21 @@ class IntentRouter:
         path: failure surfaces as an exception (per ADR-113 and memory
         rule ``feedback_no_fallbacks_hard``).
         """
-        user_prompt = _build_user_prompt(action, state_summary)
+        base_user_prompt = _build_user_prompt(action, state_summary)
         tool_schema = _dispatch_tool_schema()
         action_length = len(action)
         start_ns = time.perf_counter_ns()
         last_failure: tuple[str, str] | None = None
+        # When the prior attempt was rejected by DispatchPackage validation,
+        # carry the pydantic error into the retry prompt so the producer can
+        # self-correct instead of reproducing the same malformed shape.
+        last_schema_error: str | None = None
 
         for attempt_index in range(_MAX_TOTAL_ATTEMPTS):
             retry_count = attempt_index  # 0 on first try, 1 on retry.
+            user_prompt = base_user_prompt
+            if last_schema_error is not None:
+                user_prompt += _schema_correction_suffix(last_schema_error)
             try:
                 tool_input = await self._llm.emit_tool(
                     system=_SYSTEM_PROMPT,
@@ -281,6 +321,8 @@ class IntentRouter:
                 pkg = DispatchPackage.model_validate(tool_input)
             except ValidationError as exc:
                 last_failure = ("schema_invalid", type(exc).__name__)
+                # Feed the concrete error into the next attempt's prompt.
+                last_schema_error = str(exc)
                 _emit_failed_span(
                     reason="schema_invalid",
                     raw_preview=str(tool_input)[:_RAW_PREVIEW_LIMIT],
@@ -302,6 +344,10 @@ class IntentRouter:
                 span.set_attribute("latency_ms", int(latency_ms))
                 span.set_attribute("retry_count", retry_count)
                 span.set_attribute("confidence_global", float(pkg.confidence_global))
+                # True when this success came from a schema-error-informed
+                # retry — the GM panel can see the self-heal that saved the
+                # turn's dispatch from a malformed first attempt.
+                span.set_attribute("schema_corrected", last_schema_error is not None)
             return pkg
 
         assert last_failure is not None  # _MAX_TOTAL_ATTEMPTS >= 1

@@ -118,12 +118,22 @@ For each player action:
      handler reads. Emit exactly the keys listed; do not invent extra keys.
      Available subsystem keys and their required params:
        - confrontation: structured encounter (combat, negotiation, chase, etc.).
-         params={"type": "<one of game_state.confrontation_types[].type>"}.
+         params={"type": "<one of game_state.confrontation_types[].type>",
+                 "opponent": {"name": "<the adversary>", "description": "<one clause>"}}.
          Choose the single type whose category fits the action (a physical
          contest → a combat-category type; a parley → a social-category type;
          a flee/pursue → a movement-category type). The type MUST be one of the
          values listed in game_state.confrontation_types — never invent a type
          and never describe the action here instead of naming the type.
+         ALWAYS name the Other in params["opponent"] — the single adversary the
+         contest targets (the person grabbed, the NPC threatened, the pilot
+         pursued). A confrontation REQUIRES an Other (ADR-116): the engine seats
+         this opponent, and when they are named only in the fiction and are not
+         yet a tracked NPC it materializes them FROM this field. Omitting it
+         when an adversary exists is the failure mode that collapses a real
+         contest into prose — the encounter never starts and no dice roll. Use
+         the resolved referent's name; if the action is genuinely one-sided
+         (no adversary — forcing a locked door, steadying a fall) omit opponent.
          Recognise a stake-binding engagement and emit the confrontation
          dispatch on the SAME turn its trigger appears in the fiction. The
          recognition rules below (shared verbatim with the narrator's

@@ -244,6 +244,43 @@ async def test_intent_router_prompt_documents_subsystem_params_contract(
 
 
 @pytest.mark.asyncio
+async def test_intent_router_prompt_documents_confrontation_opponent(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """Regression (playtest 2026-05-31 burning_peace): a contested grapple
+    against a RESISTING, narratively-present-but-unseated NPC routed to
+    ``confrontation=combat`` but the dispatch named no Other, so the engine's
+    location fallback found no opponent (``encounter.no_opponent_available``)
+    and the contest collapsed to prose (encounter=null / 0 beats / no dice).
+
+    ADR-116: a confrontation REQUIRES an Other. The router must name the
+    adversary in ``params['opponent']`` so ``run_confrontation_dispatch`` can
+    seat (and, for a narrative-only name, materialize) it. Behavioral assertion
+    on the system prompt the router sends — not a source grep.
+    """
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(
+        action="I lunge and grab the watcher by the wrist, twist to pin",
+        state_summary={},
+    )
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert '"opponent"' in system, (
+        "router prompt must document params['opponent'] so a confrontation "
+        "names its Other (ADR-116) — without it the engine cannot seat the "
+        "adversary and the contest collapses to prose"
+    )
+    assert "ADR-116" in system, (
+        "router prompt must cite ADR-116 (a confrontation requires an Other) "
+        "as the reason the opponent must be named"
+    )
+
+
+@pytest.mark.asyncio
 async def test_intent_router_decompose_quiet_turn_empty_dispatch(
     haiku_response_quiet_turn: str,
 ) -> None:

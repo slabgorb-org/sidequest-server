@@ -421,7 +421,37 @@ def apply_beat(
     own_metric = enc.player_metric if actor.side == "player" else enc.opponent_metric
     other_metric = enc.opponent_metric if actor.side == "player" else enc.player_metric
 
-    if deltas.own != 0:
+    # hp_depletion (SWN combat): the dials are inert 1e6 placeholders synthesized
+    # by the init seam, and the HP channel (damage_channel/edge_delta below) is the
+    # authoritative resolution track. Applying dial deltas here advances that
+    # placeholder — playtest 67-10 (59-26) caught a Fail shoot pushing the inert
+    # dial to 2, broadcast as momentum and rendered by the overlay as the
+    # "0/1000000" bar. Suppress the dial mutation for hp_depletion; emit a span so
+    # the GM panel sees the deltas were computed-then-suppressed, not silently
+    # dropped (OTEL Observability Principle). The resolution-beat / HP branches
+    # below are unaffected.
+    hp_depletion = enc.win_condition == "hp_depletion"
+    if hp_depletion and (deltas.own != 0 or deltas.opponent != 0):
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "dial_suppressed_hp_depletion",
+                "actor": actor.name,
+                "actor_side": actor.side,
+                "beat_id": getattr(beat, "id", "?"),
+                "suppressed_own": deltas.own,
+                "suppressed_opponent": deltas.opponent,
+                "rationale": (
+                    "win_condition=hp_depletion — dials are inert placeholders; "
+                    "HP channel is authoritative, dial deltas not applied"
+                ),
+            },
+            component="encounter",
+            severity="info",
+        )
+
+    if deltas.own != 0 and not hp_depletion:
         before = own_metric.current
         own_metric.current = max(0, own_metric.current + deltas.own)
         with encounter_metric_advance_span(
@@ -446,7 +476,7 @@ def apply_beat(
             component="encounter",
         )
 
-    if deltas.opponent != 0:
+    if deltas.opponent != 0 and not hp_depletion:
         before = other_metric.current
         # Opponent dial: ``brace`` emits a negative delta; ascending dials
         # are clamped at 0.
@@ -826,8 +856,7 @@ def apply_beat(
     # gated OFF for this win condition so an inert dial can never falsely
     # resolve the fight. Emits ``encounter.resolved`` with ``source="hp_depletion"``
     # so the GM panel can tell an HP kill from a dial victory.
-    hp_depletion = enc.win_condition == "hp_depletion"
-
+    # (``hp_depletion`` computed once near the top of this function.)
     if hp_depletion and not resolved and edge_resolver is not None:
         result = check_hp_depletion(enc, edge_resolver, beat_id=getattr(beat, "id", "?"))
         if result is not None:

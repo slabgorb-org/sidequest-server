@@ -40,6 +40,7 @@ from sidequest.game.npc_development import develop_npc_on_engagement
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.region_validation import (
     canonicalize_region_name,
+    resolve_known_region_id,
     validate_region_name,
 )
 from sidequest.game.ruleset.registry import get_ruleset_module
@@ -2240,6 +2241,32 @@ def _assert_observation_gate_preceded_mint(
     )
 
 
+def _resolve_heading_to_cartography(
+    location: str, pack: GenrePack | None, world: str | None
+) -> str | None:
+    """Resolve a narrator location heading to a known cartography region id.
+
+    Returns the cartography ``region_id`` when ``location`` (full form, or
+    its leading ``Place — Epithet`` segment) names a region declared in
+    ``pack.worlds[world].cartography``; otherwise ``None``. ``None`` for
+    callers without a resolvable cartography (``pack=None`` test paths,
+    worlds with no regions) so they fall through to the surface-form region
+    path unchanged.
+    """
+    if pack is None or world is None:
+        return None
+    world_obj = pack.worlds.get(world)
+    if world_obj is None:
+        return None
+    cartography = getattr(world_obj, "cartography", None)
+    if cartography is None or not cartography.regions:
+        return None
+    return resolve_known_region_id(
+        location,
+        {rid: region.name for rid, region in cartography.regions.items()},
+    )
+
+
 def _apply_narration_result_to_snapshot(
     snapshot: GameSnapshot,
     result: object,
@@ -2472,34 +2499,70 @@ def _apply_narration_result_to_snapshot(
                     player_name,
                 )
         else:
-            # Story 45-17: canonical-slug dedup. The narrator emits
-            # surface variants for the same room across turns
-            # (Felix's Playtest 3: "The Crew Quarters" vs "the crew
-            # quarters"); compare slugs, not raw strings.
-            new_slug = canonicalize_region_name(result.location)
-            existing_match: str | None = None
-            for existing in snapshot.discovered_regions:
-                if canonicalize_region_name(existing) == new_slug:
-                    existing_match = existing
-                    break
-            if existing_match is None:
-                snapshot.discovered_regions.append(result.location)
-            elif existing_match != result.location:
-                # Surface variants — emit dedup span so the GM panel
-                # sees the merge fire (CLAUDE.md OTEL principle).
-                with region_entry_canonicalized_dedup_span(
-                    entry=result.location,
-                    canonical_slug=new_slug,
-                    existing_surface_form=existing_match,
-                    caller_path="narration_apply.location_update",
-                    player_name=player_name,
-                ):
-                    logger.info(
-                        "region.entry_canonicalized_dedup entry=%r existing=%r slug=%s caller=narration_apply.location_update",
-                        result.location,
-                        existing_match,
-                        new_slug,
-                    )
+            # Playtest 2026-05-31 (burning_peace): a narrator scene heading
+            # that denotes a KNOWN cartography region ("Edo — The Shogunate's
+            # Capital") must resolve to that region's id ("edo") rather than
+            # forking a duplicate beside the bare slug seeded at region.init.
+            # Match the heading (full form, then leading place) against the
+            # world's cartography regions; unknown leading places fall through
+            # to the surface-form path below, preserving narrator-invented
+            # sub-area forking (story 45-17).
+            known_region_id = _resolve_heading_to_cartography(result.location, pack, world)
+            if known_region_id is not None:
+                canonical_slug = canonicalize_region_name(known_region_id)
+                already_present = any(
+                    canonicalize_region_name(existing) == canonical_slug
+                    for existing in snapshot.discovered_regions
+                )
+                if not already_present:
+                    # Store the canonical region id (a real map-graph node),
+                    # not the epithet heading — map_emit filters
+                    # discovered_regions to node ids.
+                    snapshot.discovered_regions.append(known_region_id)
+                if known_region_id != result.location:
+                    with region_entry_canonicalized_dedup_span(
+                        entry=result.location,
+                        canonical_slug=canonical_slug,
+                        existing_surface_form=known_region_id,
+                        caller_path="narration_apply.location_update",
+                        resolution="cartography",
+                    ):
+                        logger.info(
+                            "region.entry_resolved_to_cartography entry=%r region_id=%r "
+                            "appended=%s caller=narration_apply.location_update",
+                            result.location,
+                            known_region_id,
+                            not already_present,
+                        )
+            else:
+                # Story 45-17: canonical-slug dedup. The narrator emits
+                # surface variants for the same room across turns
+                # (Felix's Playtest 3: "The Crew Quarters" vs "the crew
+                # quarters"); compare slugs, not raw strings.
+                new_slug = canonicalize_region_name(result.location)
+                existing_match: str | None = None
+                for existing in snapshot.discovered_regions:
+                    if canonicalize_region_name(existing) == new_slug:
+                        existing_match = existing
+                        break
+                if existing_match is None:
+                    snapshot.discovered_regions.append(result.location)
+                elif existing_match != result.location:
+                    # Surface variants — emit dedup span so the GM panel
+                    # sees the merge fire (CLAUDE.md OTEL principle).
+                    with region_entry_canonicalized_dedup_span(
+                        entry=result.location,
+                        canonical_slug=new_slug,
+                        existing_surface_form=existing_match,
+                        caller_path="narration_apply.location_update",
+                        player_name=player_name,
+                    ):
+                        logger.info(
+                            "region.entry_canonicalized_dedup entry=%r existing=%r slug=%s caller=narration_apply.location_update",
+                            result.location,
+                            existing_match,
+                            new_slug,
+                        )
         logger.info(
             "state.location_update old=%r new=%r player=%s",
             old_loc,

@@ -168,9 +168,7 @@ async def test_invented_npc_gets_ocean_profile(monkeypatch: pytest.MonkeyPatch) 
     await _setup(monkeypatch, "test-identity-seed-ocean")
     snapshot = _invented_snapshot()
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Wexley", turn_num=3, trigger="test"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=3, trigger="test")
     await asyncio.sleep(0)
 
     assert promoted is not None
@@ -202,9 +200,7 @@ async def test_invented_npc_spawns_neutral_disposition(
     await _setup(monkeypatch, "test-identity-seed-disposition")
     snapshot = _invented_snapshot()
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Wexley", turn_num=3, trigger="test"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=3, trigger="test")
     await asyncio.sleep(0)
 
     assert promoted is not None
@@ -232,9 +228,7 @@ async def test_invented_npc_registered_in_active_scenario(
     scenario = ScenarioState(guilty_npc="dr_mortimer")
     snapshot = _invented_snapshot(scenario_state=scenario)
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Wexley", turn_num=3, trigger="test"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=3, trigger="test")
     await asyncio.sleep(0)
 
     assert promoted is not None
@@ -246,7 +240,7 @@ async def test_invented_npc_registered_in_active_scenario(
     assert state.npc_roles["Wexley"].lower() == "innocent", (
         f"invented walk-on must default to innocent; got {state.npc_roles['Wexley']!r}"
     )
-    assert "Wexley" != state.guilty_npc, "invented NPC must never be the pre-selected culprit"
+    assert state.guilty_npc != "Wexley", "invented NPC must never be the pre-selected culprit"
     # Live mutation surface — gossip/questioning can add beliefs later.
     assert isinstance(promoted.belief_state.beliefs, list)
 
@@ -266,9 +260,7 @@ async def test_no_scenario_still_seeds_ocean_and_disposition(
     captured = await _setup(monkeypatch, "test-identity-seed-no-scenario")
     snapshot = _invented_snapshot(scenario_state=None)
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Wexley", turn_num=3, trigger="test"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=3, trigger="test")
     await asyncio.sleep(0)
 
     assert promoted is not None
@@ -299,9 +291,7 @@ async def test_identity_seed_span_fires_from_production_path(
     scenario = ScenarioState(guilty_npc="dr_mortimer")
     snapshot = _invented_snapshot(scenario_state=scenario)
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Wexley", turn_num=7, trigger="test"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=7, trigger="test")
     await asyncio.sleep(0)
     assert promoted is not None
 
@@ -364,16 +354,14 @@ async def test_existing_seeded_npc_not_reseeded(monkeypatch: pytest.MonkeyPatch)
         npc_pool=[NpcPoolMember(name="Wexley", drawn_from="narrator_invented")],
     )
 
-    resolved = resolve_status_target(
-        snapshot, actor_name="Wexley", turn_num=9, trigger="test"
-    )
+    resolved = resolve_status_target(snapshot, actor_name="Wexley", turn_num=9, trigger="test")
     await asyncio.sleep(0)
 
     assert resolved is not None
     # Learned belief survives — not clobbered by a fresh empty BeliefState.
-    assert any(
-        b.content == "saw the courier at midnight" for b in resolved.belief_state.beliefs
-    ), "an already-learned belief must survive name resolution (no clobber)"
+    assert any(b.content == "saw the courier at midnight" for b in resolved.belief_state.beliefs), (
+        "an already-learned belief must survive name resolution (no clobber)"
+    )
     # The distinctive authored OCEAN survives — not flattened to a baseline.
     assert resolved.ocean is not None
     assert resolved.ocean["openness"] == 9.0, "existing OCEAN must not be re-seeded"

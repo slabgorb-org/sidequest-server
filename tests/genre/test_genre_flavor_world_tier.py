@@ -1,4 +1,4 @@
-"""RED tests for story 74-1 — genre-tier flavor becomes world-tier/optional.
+"""Tests for story 74-1 — genre-tier flavor becomes world-tier/optional (GREEN).
 
 Epic 74 ("Genre tier = mechanics only", Keith 2026-05-30): genre packs hold
 MECHANICS ONLY; all flavor (lore, cultures, archetypes, theme, visual_style,
@@ -6,15 +6,16 @@ audio, weather) lives in the WORLD, not the genre. Worlds diverge too hard for
 shared genre flavor to be correct (spaghetti_western Mexican-border tropes are
 wrong for 1878 Pittsburgh).
 
-Today the genre-pack loader HARD-REQUIRES the genre-tier flavor files via
-``_load_yaml(path / "X.yaml", ...)`` (loader.py:1125-1147) — deleting any raises
-``GenreLoadError``. That mandatory load is the single blocker to the mechanics-
-only end state. Story 74-1 makes genre flavor optional and the world tier
-authoritative, with OTEL spans + wiring tests proving the world-tier loads fire.
+Before this story the genre-pack loader HARD-REQUIRED the genre-tier flavor
+files via ``_load_yaml(path / "X.yaml", ...)`` — deleting any raised
+``GenreLoadError``. That mandatory load was the single blocker to the
+mechanics-only end state. Story 74-1 makes genre flavor optional and the world
+tier authoritative, with OTEL spans + wiring tests proving the world-tier loads
+fire.
 
-These tests are written RED-first against the six acceptance criteria in
-``sprint/context/context-story-74-1.md``. Authoritative spec:
-``docs/genre-pack-content-audit.md``.
+These tests cover the six acceptance criteria in
+``sprint/context/context-story-74-1.md`` (authored RED-first, now GREEN).
+Authoritative spec: ``docs/genre-pack-content-audit.md``.
 
 Fixture strategy — *relocate, don't fabricate*: the AC1/AC2/AC5 fixtures clone a
 real live pack, copy its genre-tier ``theme``/``audio``/``visual_style`` DOWN into
@@ -173,7 +174,7 @@ def test_ac1_genre_pack_loads_without_any_genre_flavor(tmp_path: Path) -> None:
     """A pack whose root lacks lore/cultures/archetypes/theme/visual_style/audio
     loads without error and assembles a GenrePack with its world intact.
 
-    RED today: ``load_genre_pack`` calls mandatory ``_load_yaml(path/'lore.yaml')``
+    Before 74-1: ``load_genre_pack`` calls mandatory ``_load_yaml(path/'lore.yaml')``
     (loader.py:1125) and siblings, raising ``GenreLoadError`` on the deleted
     genre-tier flavor files.
     """
@@ -198,7 +199,7 @@ def test_ac2_world_is_authoritative_for_theme_and_audio(tmp_path: Path) -> None:
     world tier. Genre supplies neither, so a non-None value can ONLY be
     world-sourced — that *is* the authoritative-world assertion.
 
-    RED today: ``_load_single_world`` has no theme/audio loader, so the World
+    Before 74-1: ``_load_single_world`` has no theme/audio loader, so the World
     object carries no ``theme``/``audio`` at all.
     """
     pack_dir = _clone_pack_mechanics_only(NEON_PACK, tmp_path, NEON_WORLD)
@@ -206,12 +207,10 @@ def test_ac2_world_is_authoritative_for_theme_and_audio(tmp_path: Path) -> None:
     world = pack.worlds[NEON_WORLD]
 
     assert getattr(world, "theme", None) is not None, (
-        "world-tier theme not loaded — World.theme must be populated from "
-        "worlds/<slug>/theme.yaml"
+        "world-tier theme not loaded — World.theme must be populated from worlds/<slug>/theme.yaml"
     )
     assert getattr(world, "audio", None) is not None, (
-        "world-tier audio not loaded — World.audio must be populated from "
-        "worlds/<slug>/audio.yaml"
+        "world-tier audio not loaded — World.audio must be populated from worlds/<slug>/audio.yaml"
     )
     # visual_style already loads at the world tier today; assert it survives the
     # refactor (regression guard, not RED).
@@ -230,7 +229,7 @@ def test_ac2_world_missing_required_surface_fails_loud(tmp_path: Path) -> None:
     pins theme as the representative required surface and Dev confirms or
     adjusts during GREEN.
 
-    RED today: deleting genre theme raises at the GENRE tier (loader.py:1126),
+    Before 74-1: deleting genre theme raises at the GENRE tier (loader.py:1126),
     so the error names the pack root, NOT the world. The ``world-scoped`` half
     of this assertion is what fails now and must pass once the loud-fail moves
     to the world tier.
@@ -259,7 +258,7 @@ def test_ac3_genre_lore_no_longer_seeded() -> None:
     """The narrator's LoreStore for a world holds only world lore. Genre lore is
     no longer merged in.
 
-    RED today: ``seed_world_lore`` calls ``seed_lore_from_genre_pack`` first
+    Before 74-1: ``seed_world_lore`` calls ``seed_lore_from_genre_pack`` first
     (lore_seeding.py:220), so ``genre_added`` is > 0 for any pack with genre
     lore. neon_dystopia ships both genre lore and franchise_nations world lore.
     """
@@ -290,7 +289,7 @@ def test_ac4_weather_loads_from_world_dir(tmp_path: Path) -> None:
     """``load_world_grounding`` reads ``world_dir/weather.yaml``. With weather
     present ONLY at the world tier, bootstrap produces a WeatherState.
 
-    RED today: weather is read from ``pack_dir`` (world_grounding_bootstrap.py:111
+    Before 74-1: weather is read from ``pack_dir`` (world_grounding_bootstrap.py:111
     ``load_pack_weather(pack_dir)`` + WeatherGenerator on ``pack_dir/weather.yaml``),
     so a world-only weather file yields ``weather_state is None``.
     """
@@ -311,7 +310,7 @@ def test_ac4_weather_loads_from_world_dir(tmp_path: Path) -> None:
 def test_ac4_pack_root_weather_is_ignored(tmp_path: Path) -> None:
     """Pack-root weather is no longer consulted once weather is world-tier.
 
-    RED today: weather IS read from pack root, so this returns a WeatherState
+    Before 74-1: weather IS read from pack root, so this returns a WeatherState
     instead of None.
     """
     pack_dir, world_dir = _make_grounding_dirs(tmp_path)
@@ -341,7 +340,7 @@ def test_ac5_world_flavor_loads_emit_otel_spans(
     existing ``world_items`` span). Expected field names follow the world_items
     convention: ``world_theme``, ``world_visual_style``, ``world_audio``.
 
-    RED today: no world-tier flavor loaders exist, so no such spans are emitted.
+    Before 74-1: no world-tier flavor loaders exist, so no such spans are emitted.
     """
     pack_dir = _clone_pack_mechanics_only(NEON_PACK, tmp_path, NEON_WORLD)
 

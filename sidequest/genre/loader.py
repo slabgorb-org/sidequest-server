@@ -871,6 +871,12 @@ def _load_single_world(
             Used to locate the genre-tier ``magic.yaml`` so the magic loader
             can compose genre+world layers — both files are required by
             ``load_world_magic`` (see ``magic_loader.py``).
+        genre_theme: Genre-tier theme passed as a fallback when the world
+            authors no ``worlds/<slug>/theme.yaml`` (epic 74). ``None`` when the
+            genre pack ships no theme (mechanics-only pack). The effective theme
+            is the world's own ``theme.yaml`` if present, else ``genre_theme``;
+            when both are absent the pack-level invariant in ``load_genre_pack``
+            raises ``GenreLoadError`` naming the world (No Silent Fallbacks).
 
     Returns:
         A fully assembled World, or None if the world's world.yaml declares
@@ -960,11 +966,16 @@ def _load_single_world(
 
     # Theme is world-authoritative; the genre theme is a fallback only during the
     # transitional refactor (story 74-1) while live packs still ship genre flavor.
+    # The two branches yield DIFFERENT runtime types — a raw ``dict`` (world tier)
+    # or a ``GenreTheme`` (genre fallback). The union annotation is deliberate so
+    # consumers branch on the type rather than assume one shape (World.theme docs).
     # ``effective_theme`` is None only when NEITHER tier supplies one — the
     # loud-fail for that lives in ``load_genre_pack`` (pack-level invariant: every
     # world in a real pack must resolve a theme), so direct ``_load_single_world``
     # callers building themeless fixtures aren't forced to author a theme.
-    effective_theme: Any = world_theme if world_theme is not None else genre_theme
+    effective_theme: GenreTheme | dict[str, Any] | None = (
+        world_theme if world_theme is not None else genre_theme
+    )
 
     archetype_funnels: ArchetypeFunnels | None = _load_yaml_optional(
         world_path / "archetype_funnels.yaml", ArchetypeFunnels

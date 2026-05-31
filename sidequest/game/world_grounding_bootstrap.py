@@ -101,11 +101,13 @@ def load_world_grounding(
     error. A pack/world that authored no grounding yields all-``None`` (the
     loaders return None for absent files) — clean, not an error.
 
-    Note: ``load_pack_weather`` parses + validates the climate YAML to give
-    us the present/absent/malformed trichotomy and an early loud failure;
-    ``WeatherGenerator`` then re-reads the same small file (its constructor
-    only accepts a path — weather.py is out of scope for this story). One
-    extra parse of one file, once per session — acceptable.
+    Note: weather is read from ``world_dir/weather.yaml`` (epic 74 — weather is
+    world-tier flavor; the pack root is no longer consulted). ``load_pack_weather``
+    parses + validates the climate YAML to give us the present/absent/malformed
+    trichotomy and an early loud failure; ``WeatherGenerator`` then re-reads the
+    same small file (its constructor only accepts a path — weather.py rework is
+    out of scope for epic 74). One extra parse of one file, once per session —
+    acceptable.
     """
     # Epic 74 — weather is WORLD-tier flavor (climate belongs to the world, not
     # the shared genre). Read world_dir/weather.yaml; the pack-root file is no

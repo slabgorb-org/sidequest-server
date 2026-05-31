@@ -202,14 +202,14 @@ class TestLoreSeedingDispatch:
                 "Char-creation seeder must add at least one fragment "
                 "(grimvault has populated chargen scenes)."
             )
-            # Epic 74 — lore is WORLD-ONLY. Genre lore is no longer seeded, so
-            # NO ``lore_genre_*`` fragments may appear. Any GenrePack-sourced
-            # fragment must be world lore (``lore_world_*``). grimvault authors
-            # no world lore, so genre_pack_frags is legitimately empty here —
-            # the point is the absence of genre lore, not its presence.
-            assert all(f.id.startswith("lore_world_") for f in genre_pack_frags), (
-                "epic 74: GenrePack-sourced lore must be world lore "
-                f"(lore_world_*), never genre lore; got {[f.id for f in genre_pack_frags]}"
+            # Epic 74 — lore is WORLD-ONLY. grimvault authors no world lore and
+            # genre lore is no longer seeded, so GenrePack-sourced fragments must
+            # be EMPTY here (an empty `all(...)` would be vacuously true — assert
+            # the count directly so this catches grimvault unexpectedly gaining
+            # world lore AND genre lore leaking in).
+            assert len(genre_pack_frags) == 0, (
+                "epic 74: grimvault has no world lore and genre lore is not seeded; "
+                f"GenrePack-sourced fragments must be empty, got {[f.id for f in genre_pack_frags]}"
             )
             assert not any(
                 frag.id.startswith("lore_genre_") for frag in sd.lore_store.fragments_iter()

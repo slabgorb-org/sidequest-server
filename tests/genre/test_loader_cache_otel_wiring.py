@@ -136,7 +136,8 @@ def test_load_genre_pack_publishes_loaded_event_on_success(
     # also op="loaded"), so filter on field=="genre_pack" rather than counting
     # every loaded event.
     loaded = [
-        e for e in _genre_events(captured_watcher_events, "loaded")
+        e
+        for e in _genre_events(captured_watcher_events, "loaded")
         if e["fields"].get("field") == "genre_pack"
     ]
     assert len(loaded) == 1, (

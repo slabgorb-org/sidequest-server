@@ -281,43 +281,27 @@ class TestSeedFromWorld:
 # ---------------------------------------------------------------------------
 
 
-def test_websocket_session_handler_imports_genre_and_world_seeders() -> None:
+def test_websocket_session_handler_imports_world_seeder() -> None:
     """Production wiring guard: the chargen-confirmation hook in
-    ``websocket_session_handler.py`` must reach the genre+world seeders.
-    This is a static-import contract test — if a future refactor removes
-    the wiring, this fails before runtime ever encounters a session with
-    empty lore (the pingpong 2026-04-30 symptom).
+    ``chargen_mixin.py`` must reach the world-lore seeder. This is a
+    reflection-based import-contract test (the legitimate exception to the
+    no-source-text-wiring rule) — if a future refactor removes the wiring,
+    this fails before runtime ever encounters a session with empty lore
+    (the pingpong 2026-04-30 symptom).
 
-    Post slug-resume re-seed fix: the fresh chargen path no longer calls
-    ``seed_lore_from_genre_pack``/``seed_lore_from_world`` inline — both
-    the fresh path AND the slug-resume connect path now go through the
-    single shared ``seed_world_lore`` helper (DRY). The wiring guarantee
-    is therefore: the handler imports ``seed_world_lore`` (which itself
-    fans out to the genre + world seeders).
+    Epic 74: lore is world-only. The fresh chargen path AND the slug-resume
+    connect path both go through the single shared ``seed_world_lore`` helper
+    (DRY), which seeds WORLD lore only — genre lore is no longer seeded. The
+    behavioural guarantee (``genre_added == 0``, world lore present) is pinned
+    by ``test_genre_flavor_world_tier.py::test_ac3_genre_lore_no_longer_seeded``
+    and the resume-reseed tests; this test guards only the import wiring.
     """
     import sidequest.server.websocket_handlers.chargen_mixin as wsh
 
     assert hasattr(wsh, "seed_world_lore"), (
-        "websocket_session_handler must import seed_world_lore — the "
-        "shared genre+world seeding helper the chargen-confirm path uses "
-        "to seed the lore corpus into the per-session lore store. Pre-fix "
-        "the genre/world seeding was inline; the helper now backs BOTH "
-        "the fresh and the slug-resume paths so a resumed save's "
-        "query_lore no longer returns hit_count=0."
-    )
-    # The shared helper must seed WORLD lore — guards against a refactor that
-    # hollows seed_world_lore. Epic 74: lore is world-only; the helper must NOT
-    # seed genre lore (the genre tier is mechanics-only).
-    import inspect
-
-    from sidequest.game import lore_seeding
-
-    src = inspect.getsource(lore_seeding.seed_world_lore)
-    assert "seed_lore_from_genre_pack(" not in src, (
-        "epic 74: seed_world_lore must NOT call seed_lore_from_genre_pack — "
-        "genre lore is no longer seeded (lore is world-only)"
-    )
-    assert "seed_lore_from_world" in src, (
-        "seed_world_lore must call seed_lore_from_world so world-level "
-        "history/geography overrides reach the narrator's RAG retrieval"
+        "chargen_mixin must import seed_world_lore — the shared world-lore "
+        "seeding helper the chargen-confirm path uses to seed the lore corpus "
+        "into the per-session lore store. The helper backs BOTH the fresh and "
+        "the slug-resume paths so a resumed save's query_lore no longer "
+        "returns hit_count=0."
     )

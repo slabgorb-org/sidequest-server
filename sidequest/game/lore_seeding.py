@@ -1,16 +1,21 @@
-"""Seed a :class:`LoreStore` from genre pack + character creation data.
+"""Seed a :class:`LoreStore` from world lore + character creation data.
 
 Called at chargen confirmation so backstory choices made during
 character creation are visible to the later RAG retrieval pipeline.
 Without this seed the character's narrative anchors only live on the
 builder, which is discarded immediately after confirmation.
 
+Epic 74: lore is **world-only**. The genre tier is mechanics-only and
+genre lore is no longer seeded into the store (``seed_world_lore`` seeds
+world lore exclusively). ``seed_lore_from_genre_pack`` survives as a
+guarded utility but is not called on the live seeding path.
+
 Fragment id formats:
 
-- Genre pack: ``lore_genre_history`` / ``lore_genre_geography`` /
-  ``lore_genre_cosmology`` / ``lore_genre_faction_<slug>``
+- World pack: ``lore_world_<slug>_history`` / ``..._geography`` / etc.
 - Character creation: ``lore_char_creation_<scene_id>_<choice_index>``
 - Arc promotion (Story 45-23): ``lore_arc_<chapter_id>_<lore_index>``
+- Genre pack (legacy, no longer seeded): ``lore_genre_history`` / etc.
 
 Duplicate ids are silently skipped — seeding is idempotent so a
 reconnect that re-seeds won't hard-fail.
@@ -196,24 +201,26 @@ def seed_world_lore(
     *,
     emit: Callable[..., None] | None = None,
 ) -> tuple[int, int]:
-    """Seed ``store`` with the deterministic genre + world lore pair.
+    """Seed ``store`` with the deterministic world lore.
 
-    Single source of truth for the genre/world seeding the chargen
-    confirmation flow used to do inline (two ``seed_lore_from_*`` calls
-    plus a ``lore_store_loaded`` emission). Extracted so the slug-resume
-    connect path can re-seed an empty in-memory ``LoreStore`` with the
-    same fragments — pre-fix only the fresh chargen flow seeded it, so
-    every *resumed* save had an empty store, ``query_lore`` returned
-    ``hit_count=0``, and the SDK narrator confabulated world canon
-    instead of recalling it.
+    Single source of truth for the lore seeding the chargen confirmation
+    flow used to do inline (plus a ``lore_store_loaded`` emission).
+    Extracted so the slug-resume connect path can re-seed an empty
+    in-memory ``LoreStore`` with the same fragments — pre-fix only the
+    fresh chargen flow seeded it, so every *resumed* save had an empty
+    store, ``query_lore`` returned ``hit_count=0``, and the SDK narrator
+    confabulated world canon instead of recalling it.
 
-    Returns ``(genre_fragments_added, world_fragments_added)``.
+    Epic 74: lore is **world-only**. Genre lore is no longer seeded, so the
+    genre element of the returned tuple is always ``0``.
 
-    Idempotency: both underlying seeders use stable fragment ids and
-    swallow :class:`DuplicateLoreId`, so re-running this against a store
-    that already holds the genre/world fragments adds zero and never
-    grows the store unboundedly — safe to call on every connect (fresh
-    or any reconnect).
+    Returns ``(genre_fragments_added, world_fragments_added)`` —
+    ``genre_fragments_added`` is always ``0`` (world-only lore).
+
+    Idempotency: the world seeder uses stable fragment ids and swallows
+    :class:`DuplicateLoreId`, so re-running this against a store that
+    already holds the world fragments adds zero and never grows the store
+    unboundedly — safe to call on every connect (fresh or any reconnect).
 
     ``emit`` (optional) is invoked exactly once after seeding with the
     ``lore_store_loaded`` watcher payload kwargs so the GM panel / Jaeger

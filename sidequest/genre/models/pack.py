@@ -133,19 +133,21 @@ class World(BaseModel):
     tropes: list[TropeDefinition] = Field(default_factory=list)
     archetypes: list[NpcArchetype] = Field(default_factory=list)
     visual_style: Any = None  # can be VisualStyle or richer world-level JSON
-    theme: Any = None
-    """World-tier theme, epic 74. World-authoritative: the world's own
-    ``theme.yaml`` wins; during the transitional refactor (story 74-1) a world
-    without one falls back to the genre theme (a ``GenreTheme``). Loaded raw
-    (like ``visual_style``) — world flavor files are free-form overrides, not
-    the strict genre schema. Never ``None`` on a loaded World: the loader
-    rejects a world that resolves no theme from either tier (No Silent
-    Fallbacks)."""
-    audio: Any = None
-    """World-tier audio (``worlds/<slug>/audio.yaml``), epic 74. World wins when
-    present; ``None`` when the world authors none (genre audio still serves).
-    Loaded raw — world audio is a free-form hard-override (e.g.
-    ``spaghetti_western/five_points``), not the strict genre ``AudioConfig``."""
+    theme: GenreTheme | dict[str, Any] | None = None
+    """World-tier theme, epic 74. **Two runtime shapes** — the union is load-
+    bearing, not cosmetic: a ``dict`` when the world authors its own
+    ``worlds/<slug>/theme.yaml`` (loaded raw, free-form override), or a
+    ``GenreTheme`` when the loader falls back to the genre theme during the
+    transitional refactor (story 74-1). Consumers MUST branch on the type
+    (``isinstance(world.theme, GenreTheme)``) — do not assume attribute access.
+    Never ``None`` on a loaded World: the loader rejects a world that resolves
+    no theme from either tier (No Silent Fallbacks)."""
+    audio: dict[str, Any] | None = None
+    """World-tier audio (``worlds/<slug>/audio.yaml``), epic 74. A raw ``dict``
+    when the world authors one; ``None`` when it authors none (genre audio still
+    serves). World audio is a free-form hard-override (e.g.
+    ``spaghetti_western/five_points``), not the strict genre ``AudioConfig`` —
+    hence ``dict``, never the typed model."""
     history: Any = None
     legends_raw: Any = None
     portrait_manifest: list[PortraitManifestEntry] = Field(default_factory=list)

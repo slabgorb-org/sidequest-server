@@ -199,6 +199,49 @@ def test_build_session_start_party_status_carries_player_identity_from_room() ->
     assert peer_member.player_identity != peer_member.character_name
 
 
+def test_build_session_start_party_status_connected_peer_identity_visible() -> None:
+    """Gap 1 (Story 67-6): a connected peer WITH a room identity entry shows
+    their identity in the PARTY_STATUS frame.
+
+    The prior test proved "no room entry -> None". This test pins the OTHER
+    side of the seam: when the peer IS connected and their identity WAS bound
+    via ``set_player_identity``, the builder must resolve it through
+    ``seat_map.get(char.core.name)`` -> ``get_player_identity(pid)`` and stamp
+    it onto the peer's PartyMember.
+
+    Mutation check: if ``get_player_identity`` is dropped from the builder, or
+    the pid used for the lookup doesn't match the pid the identity was stored
+    under, ``peer_member.player_identity`` becomes None and the assertion fails.
+    """
+    laverne = _char("Laverne")
+    shirley = _char("Shirley")
+    sd = _sd("p:shirley", "Shirley", [laverne, shirley])
+
+    handler = WebSocketSessionHandler(save_dir=Path("/tmp/sq-test-saves"))
+    room = SessionRoom(slug="2026-05-31-peer-identity-mp", mode=GameMode.MULTIPLAYER)
+    room.seat("p:laverne", character_slot="Laverne")
+    room.seat("p:shirley", character_slot="Shirley")
+    # Both players have resolved identities — peer is connected, not absent.
+    room.set_player_identity("p:shirley", "shirley@example.com")
+    room.set_player_identity("p:laverne", "laverne@example.com")
+    handler._room = room
+
+    msg = views.build_session_start_party_status(handler, sd, shirley, "p:shirley")
+    by_name = {str(m.character_name): m for m in msg.payload.members}
+
+    self_member = by_name["Shirley"]
+    peer_member = by_name["Laverne"]
+
+    # Self identity flows from the room store.
+    assert self_member.player_identity == "shirley@example.com"
+    # Connected peer's identity also flows from the room store — this is what
+    # the prior test did NOT cover.
+    assert peer_member.player_identity == "laverne@example.com"
+    # Sanity: neither identity value equals the character name (no fabrication).
+    assert self_member.player_identity != str(self_member.character_name)
+    assert peer_member.player_identity != str(peer_member.character_name)
+
+
 def test_party_status_falls_back_to_synthetic_peer_id_when_no_seat() -> None:
     """If a peer character is in the snapshot but the room has no seat
     record (e.g. pre-PLAYER_SEAT race), use a stable synthetic id rather

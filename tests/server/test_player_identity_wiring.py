@@ -224,6 +224,76 @@ def test_perspective_character_name_uses_seat_then_falls_back():
     assert perspective_character_name(sd2) == "Laverne"
 
 
+# ---------------------------------------------------------------------------
+# OTEL span assertion — player_identity_resolved fires without PII (Gap 2)
+# ---------------------------------------------------------------------------
+
+
+def test_player_identity_resolved_span_fires_with_source_no_pii(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gap 2 (Story 67-6): ``bind_player_identity`` must emit a
+    ``player_identity_resolved`` watcher event carrying ``player_id`` and
+    ``source`` — never the identity value (no PII in telemetry).
+
+    Mutation check: if the ``_watcher_publish`` call is removed from
+    ``bind_player_identity``, ``captured`` stays empty and the assertion
+    ``len(captured) == 1`` fails.
+    """
+    from sidequest.handlers import connect as connect_mod
+
+    captured: list[dict] = []
+
+    def _capture(event_type, fields, *, component="sidequest-server", severity="info"):
+        captured.append(
+            {"event_type": event_type, "fields": fields, "component": component}
+        )
+
+    monkeypatch.setattr(connect_mod, "_watcher_publish", _capture)
+
+    room = _room()
+    connect_mod.bind_player_identity(
+        room, player_id="p:alice", identity="alice@example.com", source="cf_access"
+    )
+
+    # Exactly one event fires.
+    assert len(captured) == 1
+    ev = captured[0]
+    assert ev["event_type"] == "player_identity_resolved"
+    # Payload carries player_id and source.
+    assert ev["fields"]["player_id"] == "p:alice"
+    assert ev["fields"]["source"] == "cf_access"
+    # PII check: the email must NOT appear anywhere in the captured payload.
+    assert "alice@example.com" not in str(ev["fields"])
+
+
+def test_player_identity_resolved_span_does_not_fire_for_blank_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gap 2 (Story 67-6): the early-return path (None / blank identity) must
+    NOT emit a watcher event — no spurious span for unauthenticated connects.
+
+    Mutation check: if the early-return guard is removed and
+    ``_watcher_publish`` is called unconditionally, ``captured`` will be
+    non-empty and the assertion fails.
+    """
+    from sidequest.handlers import connect as connect_mod
+
+    captured: list[dict] = []
+
+    def _capture(event_type, fields, *, component="sidequest-server", severity="info"):
+        captured.append({"event_type": event_type, "fields": fields})
+
+    monkeypatch.setattr(connect_mod, "_watcher_publish", _capture)
+
+    room = _room()
+    connect_mod.bind_player_identity(room, player_id="p:anon", identity=None, source=None)
+    connect_mod.bind_player_identity(room, player_id="p:blank", identity="", source=None)
+
+    # Neither call should have emitted an event.
+    assert captured == []
+
+
 def test_party_member_identity_present_for_connected_absent_for_disconnected():
     """Self carries identity from the room; a disconnected peer carries None
     and is NEVER given the character name as a fabricated identity."""

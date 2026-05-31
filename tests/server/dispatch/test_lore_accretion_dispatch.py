@@ -217,3 +217,47 @@ async def test_accreted_fact_is_retrievable_after_embedding(
     hits = sd.lore_store.query_by_similarity([1.0, 0.0], top_k=5)
     hit_ids = [frag.id for _score, frag in hits]
     assert frag_id in hit_ids
+
+
+# ---------------------------------------------------------------------------
+# Rework (review [HIGH]) — accretion failure must never crash the turn
+# ---------------------------------------------------------------------------
+
+
+def test_accrete_for_turn_does_not_propagate_accretion_exception(
+    session_handler_factory, monkeypatch
+) -> None:
+    """`accrete_for_turn` runs in `_execute_narration_turn` BEFORE narration
+    is delivered. Like its sibling post-narration side-effects (`session.persist`,
+    `round_invariant` telemetry — both wrapped 'must never crash a turn'), an
+    accretion failure must be isolated: logged, surfaced as an `op="failed"`
+    watcher event, and SWALLOWED — never re-raised — so the player still gets
+    their narration."""
+    from sidequest.server.dispatch import lore_accretion
+
+    sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    _seed_fact(sd, "A fact that will trip a broken accretion path.")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated accretion failure")
+
+    monkeypatch.setattr(lore_accretion, "accrete_facts_to_lore", _boom)
+
+    captured: list[tuple] = []
+
+    def _capture(event_kind, payload, component=None, severity=None):
+        captured.append((event_kind, payload, component, severity))
+
+    monkeypatch.setattr(lore_accretion, "_watcher_publish", _capture)
+
+    # MUST NOT raise — the turn survives.
+    lore_accretion.accrete_for_turn(handler, sd)
+
+    failed = [c for c in captured if c[1].get("op") == "failed"]
+    assert len(failed) == 1, "accretion failure must emit an op='failed' watcher event"
+    kind, payload, component, severity = failed[0]
+    assert kind == "state_transition"
+    assert payload["field"] == "lore_accretion"
+    assert payload["error"] == "RuntimeError"
+    assert component == "lore"
+    assert severity == "error"

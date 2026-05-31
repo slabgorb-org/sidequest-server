@@ -215,8 +215,38 @@ def test_empty_fact_list_is_a_clean_no_op() -> None:
     assert result.accreted == 0
     assert result.skipped_duplicate == 0
     assert result.skipped_blank == 0
+    assert result.skipped_oversized == 0
     assert result.fragment_ids == []
     assert store.is_empty()
+
+
+# ---------------------------------------------------------------------------
+# Rework (review [MEDIUM]) — oversized content rejected loud at the boundary
+# ---------------------------------------------------------------------------
+
+
+def test_oversized_content_is_skipped_at_minting_boundary() -> None:
+    """A fact whose content exceeds the embed byte cap (`MAX_EMBED_BYTES`)
+    must be skipped EXPLICITLY at the minting boundary and counted as
+    `skipped_oversized` — not minted only to fail silently downstream in
+    the embed worker (No Silent Fallbacks). A normal fact alongside it
+    still accretes."""
+    from sidequest.daemon_client.client import MAX_EMBED_BYTES
+
+    store = LoreStore()
+    oversized = _fact("x" * (MAX_EMBED_BYTES + 1))  # 1 byte over the embed cap
+    normal = _fact("a normal-sized discovered fact")
+
+    result = lore_accretion.accrete_facts_to_lore(
+        store, [oversized, normal], interaction=1, pc_name="Rux"
+    )
+
+    assert result.skipped_oversized == 1
+    assert result.accreted == 1
+    # The oversized fact never became a fragment.
+    assert len(store.fragments) == 1
+    assert f"lore_kf_{normal.fact_id}" in store.fragments
+    assert f"lore_kf_{oversized.fact_id}" not in store.fragments
 
 
 # ---------------------------------------------------------------------------

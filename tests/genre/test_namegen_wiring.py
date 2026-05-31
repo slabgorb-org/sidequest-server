@@ -342,15 +342,23 @@ def test_thin_corpus_logs_warning(
 # ---------------------------------------------------------------------------
 
 
-def _stub_namespace(genre: str = "space_opera") -> argparse.Namespace:
+def _stub_namespace(
+    genre: str = "space_opera", world: str = "perseus_cloud"
+) -> argparse.Namespace:
     """Minimal argparse.Namespace that ``generate_npc`` reads from.
 
     Mirrors the surface ``cli/namegen/namegen.py:generate_npc`` consults
     — anything it doesn't read can stay None.
+
+    A ``world`` is required for ``space_opera``: under epic-74-strict (genre =
+    mechanics only, ADR-003 / story 71-31) the genre tier ships NO cultures, so
+    ``effective_cultures(world=None)`` is empty and ``generate_npc`` fails loud
+    (``sys.exit(2)``). ``perseus_cloud`` is a self-sufficient world (3 world
+    cultures) — the same world whose seeding divergence motivated this path.
     """
     return argparse.Namespace(
         genre=genre,
-        world=None,
+        world=world,
         culture=None,
         archetype=None,
         gender=None,

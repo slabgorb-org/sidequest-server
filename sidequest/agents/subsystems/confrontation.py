@@ -105,17 +105,25 @@ async def run_confrontation_dispatch(
 
     actor_list = list(npcs_present) if npcs_present else []
 
-    # Story 59-23 (#C3 / ADR-116): a ship_combat trigger names a threat that is
-    # not an existing NPC entity (e.g. "three unregistered hulls running dark").
-    # Materialize it as the Other so the instantiation seam seats THAT rather
-    # than falling back to the player's own crew. The threat rides on
-    # ``params["threat"]`` (the router→engine channel this docstring already
-    # sanctions for explicit actor info) as ``{"name", "description"}`` or a bare
-    # name string. Seat it ``side="opponent"``; the backing CreatureCore (hull
-    # HP / AC) is created downstream from the confrontation's
-    # ``opponent_default_stats`` (Task 9).
+    # ADR-116 (a confrontation requires an Other): the router names the
+    # adversary the contest targets in ``params["opponent"]`` — the person
+    # grabbed, the NPC threatened, the hull pursued. Materialize it as the
+    # Other so the instantiation seam seats THAT rather than falling back to
+    # the location registry (which is empty when the opponent was only minted
+    # in narration — playtest 2026-05-31 burning_peace: a contested grapple
+    # against a narratively-present-but-unseated watcher found no opponent and
+    # collapsed to prose, encounter=null / 0 beats / no DICE_THROW).
+    #
+    # The seating helper (encounter_lifecycle ``_seat_*``) dedupes by name, so
+    # naming an EXISTING NPC simply reuses it; a narrative-only name is created
+    # and appended to ``snapshot.npcs``. The backing CreatureCore (HP / AC) is
+    # seeded downstream from the confrontation's ``opponent_default_stats``.
+    #
+    # ``opponent`` is the general field; ``threat`` is the original
+    # ship_combat alias (story 59-23) — read both for back-compat. Either may
+    # be a ``{"name", "description"}`` object or a bare name string.
     materialized_threat = None
-    threat = dispatch.params.get("threat")
+    threat = dispatch.params.get("opponent") or dispatch.params.get("threat")
     if threat and not actor_list:
         from sidequest.agents.orchestrator import NpcMention
 

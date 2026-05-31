@@ -1126,8 +1126,16 @@ def _resolve_opponent_reprisal(
         return messages
 
     # HIT: roll the opponent's weapon damage and ablate the player's HP.
+    # Prefer the confrontation's authored ``opponent_damage`` (the enemy's own
+    # weapon) over beat/inventory resolution: the opponent reuses the player's
+    # strike beat only for the to-hit terms, and a beat like ``shoot`` resolves
+    # damage from the ACTOR's inventory — which the seeded opponent NPC lacks, so
+    # beat resolution returns None and the hit deals 0 HP (playtest 67-10). This
+    # never caps the player's weapon: it is read only on the opponent's turn.
     opponent_core = snapshot.find_creature_core(opponent_name)
-    damage_spec = ruleset.resolve_damage(beat=opponent_beat, actor_core=opponent_core, pack=pack)
+    damage_spec = cdef.opponent_damage or ruleset.resolve_damage(
+        beat=opponent_beat, actor_core=opponent_core, pack=pack
+    )
     if damage_spec is None:
         # The opponent's strike beat has no resolvable damage (no damage_override,
         # no weapon, no unarmed default). The hit lands but deals no HP — surfaced

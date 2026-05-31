@@ -49,9 +49,15 @@ def seed_lore_from_genre_pack(store: LoreStore, pack: GenrePack) -> int:
     """Seed ``store`` with fragments derived from ``pack.lore``.
 
     Returns the number of fragments successfully added (duplicates
-    skipped).
+    skipped). Epic 74: ``pack.lore`` is optional at the genre tier — a pack
+    with no genre lore seeds nothing (the world tier is authoritative). Not
+    called by ``seed_world_lore`` anymore (lore is world-only) but retained
+    as a utility for any caller holding a genre-lore-bearing pack.
     """
     count = 0
+
+    if pack.lore is None:
+        return 0
 
     if pack.lore.history and _try_add(
         store,
@@ -217,7 +223,11 @@ def seed_world_lore(
     ``sidequest.telemetry`` at module load — same import-cycle reasoning
     as :func:`seed_lore_from_arc_promotion`'s local span import.
     """
-    genre_added = seed_lore_from_genre_pack(store, pack)
+    # Epic 74 — lore is WORLD-ONLY. Genre lore is no longer seeded into the
+    # narrator's store; the genre tier carries mechanics only. World lore (below)
+    # is authoritative. ``genre_added`` stays 0 so the emit payload and callers
+    # report the truth: nothing came from the genre tier.
+    genre_added = 0
     world_added = 0
     if world_slug:
         # Inside ``if world_slug:`` pyright narrows ``world_slug`` from

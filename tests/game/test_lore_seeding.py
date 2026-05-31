@@ -305,16 +305,17 @@ def test_websocket_session_handler_imports_genre_and_world_seeders() -> None:
         "the fresh and the slug-resume paths so a resumed save's "
         "query_lore no longer returns hit_count=0."
     )
-    # The shared helper must itself fan out to the genre + world
-    # seeders — guards against a refactor that hollows seed_world_lore.
+    # The shared helper must seed WORLD lore — guards against a refactor that
+    # hollows seed_world_lore. Epic 74: lore is world-only; the helper must NOT
+    # seed genre lore (the genre tier is mechanics-only).
     import inspect
 
     from sidequest.game import lore_seeding
 
     src = inspect.getsource(lore_seeding.seed_world_lore)
-    assert "seed_lore_from_genre_pack" in src, (
-        "seed_world_lore must call seed_lore_from_genre_pack so the genre "
-        "lore corpus reaches the per-session store"
+    assert "seed_lore_from_genre_pack(" not in src, (
+        "epic 74: seed_world_lore must NOT call seed_lore_from_genre_pack — "
+        "genre lore is no longer seeded (lore is world-only)"
     )
     assert "seed_lore_from_world" in src, (
         "seed_world_lore must call seed_lore_from_world so world-level "

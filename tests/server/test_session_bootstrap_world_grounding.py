@@ -82,16 +82,19 @@ def _clone_test_genre(tmp_path: Path, slug: str) -> Path:
 @pytest.fixture
 def grounded_pack(tmp_path: Path) -> tuple[Path, str]:
     """Clone test_genre into tmp + drop in real tea_and_murder/glenross
-    grounding YAMLs (pack-level weather.yaml + world-level demographics +
-    calendar). Returns (search_paths_root, genre_slug)."""
+    grounding YAMLs (world-level weather.yaml + demographics + calendar).
+    Returns (search_paths_root, genre_slug).
+
+    Epic 74: weather is WORLD-tier flavor — weather.yaml lives under
+    worlds/<world>/, not the pack root."""
     slug = "grounded_pack"
     pack_dir = _clone_test_genre(tmp_path, slug)
 
     real_pack = CONTENT_GENRE_PACKS / "tea_and_murder"
     real_world = real_pack / "worlds" / "glenross"
 
-    shutil.copy(real_pack / "weather.yaml", pack_dir / "weather.yaml")
     world_dir = pack_dir / "worlds" / _WORLD
+    shutil.copy(real_pack / "weather.yaml", world_dir / "weather.yaml")
     shutil.copy(real_world / "demographics.yaml", world_dir / "demographics.yaml")
     shutil.copy(real_world / "calendar.yaml", world_dir / "calendar.yaml")
 
@@ -111,10 +114,11 @@ def bare_pack(tmp_path: Path) -> tuple[Path, str]:
 @pytest.fixture
 def malformed_weather_pack(tmp_path: Path) -> tuple[Path, str]:
     """A clone of test_genre with a syntactically invalid weather.yaml.
-    AC8: bootstrap must fail loud."""
+    AC8: bootstrap must fail loud. Epic 74: weather is world-tier, so the
+    malformed file lives under worlds/<world>/."""
     slug = "malformed_weather_pack"
     pack_dir = _clone_test_genre(tmp_path, slug)
-    (pack_dir / "weather.yaml").write_text(
+    (pack_dir / "worlds" / _WORLD / "weather.yaml").write_text(
         "climate_zones: { unterminated mapping\n",
         encoding="utf-8",
     )

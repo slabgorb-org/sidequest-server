@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from sidequest.game.lore_store import LoreStore
     from sidequest.genre.models.pack import GenrePack
     from sidequest.protocol.messages import SessionEventPayload
+    from sidequest.server.session_room import SessionRoom
     from sidequest.server.websocket_session_handler import WebSocketSessionHandler
 
 from opentelemetry import trace
@@ -238,6 +239,29 @@ def _seed_world_lore_on_resume(
     lie-detector mandate) — the SAME event the fresh path emits.
     """
     return seed_world_lore(lore_store, genre_pack, world_slug, emit=emit)
+
+
+def bind_player_identity(
+    room: SessionRoom,
+    *,
+    player_id: str,
+    identity: str | None,
+    source: str | None,
+) -> None:
+    """Bind the per-socket resolved identity to player_id in the room (Story 67-6).
+
+    Room-only and ephemeral. Emits a watcher event carrying the SOURCE only —
+    never the identity value (no PII in telemetry).
+    """
+    if not identity:
+        return
+    room.set_player_identity(player_id, identity)
+    _watcher_publish(
+        "player_identity_resolved",
+        {"player_id": player_id, "source": source or "unknown"},
+        component="session",
+        severity="info",
+    )
 
 
 class ConnectHandler:
@@ -785,6 +809,16 @@ class ConnectHandler:
             culture_ref = resolve_culture_reference(genre_pack, row.world_slug)
             world_context: str | None = culture_ref if culture_ref else None
             audio_backend = session._build_audio_backend(row.genre_slug, genre_pack)
+
+            # Story 67-6: bind the WS-boundary resolved identity (set by
+            # WebSocketSessionHandler before the connect message arrives) to
+            # this player_id in the room store. No-op when identity is absent.
+            bind_player_identity(
+                room,
+                player_id=player_id,
+                identity=getattr(session, "_player_identity", None),
+                source=getattr(session, "_player_identity_source", None),
+            )
 
             # ADR-067 single-narrator-per-slug: get the canonical
             # orchestrator from the room (constructing it lazily on

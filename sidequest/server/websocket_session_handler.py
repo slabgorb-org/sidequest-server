@@ -122,6 +122,17 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("sidequest.server.session_handler")
 
 
+def perspective_character_name(sd) -> str:
+    """The seated character name to use as a party_location perspective key.
+
+    Story 67-6: the POV key is the seated CHARACTER, resolved from
+    snapshot.player_seats[player_id] — never the player identity. Falls back to
+    sd.player_name (which is itself the character name pre-seat) when no seat is
+    bound yet, preserving prior behavior.
+    """
+    return sd.snapshot.player_seats.get(sd.player_id, sd.player_name)
+
+
 # --- Extracted handler helpers (moved to websocket_handlers/) -------------
 # Free functions/mixins moved to sibling modules under ``websocket_handlers/``,
 # re-imported here so methods + external importers resolve the names unchanged.
@@ -180,6 +191,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         self._socket_id: str | None = None
         self._out_queue: asyncio.Queue[object] | None = None
         self._room: SessionRoom | None = None
+        self._player_identity: str | None = None
+        self._player_identity_source: str | None = None
         # Bound in the slug-connect branch. The legacy genre/world connect path
         # leaves them None; _emit_event then falls back to a plain message
         # without seq (a real production path, not a test-only skip).
@@ -202,16 +215,23 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         registry: RoomRegistry,
         socket_id: str,
         out_queue: asyncio.Queue[object],
+        player_identity: str | None = None,
+        player_identity_source: str | None = None,
     ) -> None:
         """Attach the RoomRegistry, socket_id, and per-socket outbound queue.
 
         Called by ws_endpoint after accept(). out_queue is the asyncio.Queue
         the writer task drains. All three are required; the slug-connect branch
         fails loudly if this was not called.
+
+        player_identity and player_identity_source are optional (default None)
+        so existing callers/tests that omit them continue to work.
         """
         self._room_registry = registry
         self._socket_id = socket_id
         self._out_queue = out_queue
+        self._player_identity = player_identity
+        self._player_identity_source = player_identity_source
 
     def current_room(self) -> SessionRoom | None:
         """Return the room this handler is currently registered in, or None."""
@@ -2567,7 +2587,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         location_before = (
             snapshot_location_before
             if snapshot_location_before is not None
-            else sd.snapshot.party_location(perspective=sd.player_name)
+            else sd.snapshot.party_location(perspective=perspective_character_name(sd))
         )
         reason = classify_trigger(
             result,

@@ -437,6 +437,9 @@ class PartyMember(ProtocolBase):
     """Player identifier. Non-blank — identity key."""
     name: NonBlankString
     """Player lobby name. Non-blank."""
+    player_identity: str | None = None
+    """Resolved player identity (Cf-Access email / dev Host). None when the player
+    is not currently connected (room-only store). Story 67-6 / ADR-119."""
     character_name: NonBlankString | None = None
     """In-game character name. Optional (None = still in chargen)."""
     current_hp: int

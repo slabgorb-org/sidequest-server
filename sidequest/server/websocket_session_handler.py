@@ -1228,6 +1228,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     # Point-in-time emit; the helper sets the attributes.
                     pass
 
+                # Story 75-1: accrete this turn's runtime-discovered KnownFacts
+                # into the lore store BEFORE dispatching the embed worker, so the
+                # freshly minted GameEvent fragments are in the pending queue and
+                # get embedded this turn for next-turn RAG retrieval (restores the
+                # Rust lore_sync accumulate-and-persist loop).
+                self._accrete_lore_for_turn(sd)
+
                 # Story 37-33: embed pending lore fragments in the background so
                 # the next turn's RAG retrieval finds them. Fire-and-forget — the
                 # turn returns immediately; embeds populate during reading time.
@@ -2936,6 +2943,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         from sidequest.server.dispatch import lore_embed
 
         lore_embed.dispatch_worker(self, sd)
+
+    def _accrete_lore_for_turn(self, sd: _SessionData) -> None:
+        """Post-turn lore accretion. Delegates to ``lore_accretion.accrete_for_turn``."""
+        from sidequest.server.dispatch import lore_accretion
+
+        lore_accretion.accrete_for_turn(self, sd)
 
     async def _run_embed_worker(
         self, sd: _SessionData, pending_count: int, turn_number: int

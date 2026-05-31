@@ -149,6 +149,15 @@ class Npc(BaseModel):
     # lie-detector signal: per-session counts of ``None`` measure how often
     # the narrator invents off-pool.
     pool_origin: str | None = None
+    # Provenance marker (story 72-3): ``True`` when this NPC was authored by
+    # the Monster Manual seeder (ADR-059), ``False`` for narrator-invented
+    # NPCs. Lives alongside ``pool_origin`` but answers a different question —
+    # ``pool_origin`` records *which pool member* an NPC was promoted from;
+    # ``manual_origin`` records *whether the Manual authored it at all*.
+    # Carried from ``NpcPatch`` through both materialization legs and is
+    # monotonic on merge (MM authorship wins; never cleared by a later
+    # narrator patch).
+    manual_origin: bool = False
     # ``last_seen_location`` is the location string from the most recent
     # narration that mentioned this NPC. Distinct from ``location`` (current
     # scene location, set when actively framed) and ``current_room`` (chassis
@@ -328,6 +337,15 @@ class NpcPatch(BaseModel):
 
     morale: str | None = None
     """B/X morale descriptor (e.g. ``"cowardly"``, ``"steady"``)."""
+
+    # Provenance (story 72-3). ``True`` when this patch was authored by the
+    # Monster Manual seeder (ADR-059) — set by ``_human_patch`` /
+    # ``_creature_patch_from_enemy`` in ``monster_manual_inject.py``. The
+    # narrator path leaves it ``False``. A binary authorship predicate
+    # (orthogonal to ``creature_id``/``is_creature``, which only distinguish
+    # a Manual *creature* from a Manual *human*).
+    manual_origin: bool = False
+    """``True`` if this patch originates from the Monster Manual seam."""
 
     @field_validator("name")
     @classmethod
@@ -1498,6 +1516,12 @@ class GameSnapshot(BaseModel):
         if patch.hp is not None:
             npc.core.hp = _hp_pool_from_hp(patch.hp)
 
+        # Provenance (story 72-3): monotonic — an authored Monster Manual
+        # patch records manual-origin on the surviving record (E2 forward),
+        # and a later narrator patch (manual_origin=False) must NOT clear an
+        # existing marker (E2 reverse). Logical OR satisfies both.
+        npc.manual_origin = npc.manual_origin or patch.manual_origin
+
     def _npc_from_patch(self, patch: NpcPatch) -> Npc:
         # Creature signal: presence of any creature-shape field flags this
         # as a Monster Manual patch (ADR-059). Translate B/X hp → EdgePool
@@ -1535,6 +1559,9 @@ class GameSnapshot(BaseModel):
             threat_level=patch.threat_level,
             abilities=list(patch.abilities) if patch.abilities is not None else [],
             morale=patch.morale,
+            # Provenance (story 72-3): carry the Manual-authorship marker onto
+            # the fresh Npc. Narrator patches leave it False.
+            manual_origin=patch.manual_origin,
         )
         # Story 72-5: record the spawn-time disposition default so the GM
         # panel can verify a person spawned neutral (0) and a creature
@@ -1546,6 +1573,7 @@ class GameSnapshot(BaseModel):
         with npc_spawn_disposition_span(
             npc_name=npc.core.name,
             disposition=int(npc.disposition),
+            manual_origin=npc.manual_origin,
             provenance="default_creature_hostile" if is_creature else "default_neutral",
             is_creature=is_creature,
             pool_origin=None,

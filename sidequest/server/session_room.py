@@ -166,7 +166,7 @@ class SessionRoom:
     # Room-only and ephemeral (Story 67-6, ADR-119): re-resolved every
     # connect, never persisted to the snapshot/save. PARTY_STATUS reads it
     # so peer identity is the human, not the character name.
-    player_identities: dict[str, str] = field(default_factory=dict)
+    _player_identities: dict[str, str] = field(default_factory=dict)
     _lock: RLock = field(default_factory=RLock, repr=False)
     # socket_id -> asyncio.Queue for per-socket outbound message fan-out (MP-02 Task 4)
     _outbound_queues: dict[str, asyncio.Queue[Any]] = field(default_factory=dict)
@@ -502,7 +502,7 @@ class SessionRoom:
                     # Story 67-6: ephemeral identity is room-only; clear it
                     # when the player's last socket closes so we don't leak
                     # stale identity across reconnects.
-                    self.player_identities.pop(player_id, None)
+                    self._player_identities.pop(player_id, None)
                 else:
                     # Other live sockets exist for this player — do NOT
                     # clear `_connected[player_id]` and do NOT abandon
@@ -658,12 +658,14 @@ class SessionRoom:
             self._seated.pop(player_id, None)
 
     def set_player_identity(self, player_id: str, identity: str) -> None:
+        # Called from the connect path (Story 67-6 Task 4) to bind the
+        # per-socket resolved identity.
         with self._lock:
-            self.player_identities[player_id] = identity
+            self._player_identities[player_id] = identity
 
-    def clear_player_identity(self, player_id: str) -> None:
+    def get_player_identity(self, player_id: str) -> str | None:
         with self._lock:
-            self.player_identities.pop(player_id, None)
+            return self._player_identities.get(player_id)
 
     def connected_player_ids(self) -> list[str]:
         with self._lock:

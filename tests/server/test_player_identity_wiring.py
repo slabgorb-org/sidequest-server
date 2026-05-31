@@ -7,12 +7,15 @@ def _room() -> SessionRoom:
     return SessionRoom(slug="s", mode=GameMode.SOLO)
 
 
-def test_room_stores_and_clears_player_identity():
+def test_room_stores_and_reads_player_identity():
     room = _room()
+    assert room.get_player_identity("p1") is None
     room.set_player_identity("p1", "alice@example.com")
-    assert room.player_identities.get("p1") == "alice@example.com"
-    room.clear_player_identity("p1")
-    assert "p1" not in room.player_identities
+    assert room.get_player_identity("p1") == "alice@example.com"
+    # Reconnect overwrites via the same writer (the only non-disconnect path
+    # that mutates identity).
+    room.set_player_identity("p1", "bob@example.com")
+    assert room.get_player_identity("p1") == "bob@example.com"
 
 
 def test_identity_survives_transient_disconnect_cleared_on_last_socket():
@@ -29,12 +32,12 @@ def test_identity_survives_transient_disconnect_cleared_on_last_socket():
     # Transient close (latest socket): player still present on sock-A, so
     # identity must survive.
     assert room.disconnect(socket_id="sock-B") is None
-    assert room.player_identities.get("p1") == "alice@example.com", (
+    assert room.get_player_identity("p1") == "alice@example.com", (
         "identity must survive a transient disconnect while another WS is alive"
     )
 
     # Last socket close: player fully gone, identity must clear.
     assert room.disconnect(socket_id="sock-A") == "p1"
-    assert "p1" not in room.player_identities, (
+    assert room.get_player_identity("p1") is None, (
         "identity must clear when the player's last socket closes"
     )

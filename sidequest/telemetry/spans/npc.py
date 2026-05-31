@@ -764,9 +764,12 @@ def npc_identity_seeded_span(
 
     The lie-detector dial for invented-NPC identity: ``ocean_seeded`` confirms a
     real Big-Five profile was attached (not ``None``), ``disposition`` is the
-    neutral spawn value, ``scenario_registered`` says whether the NPC was wired
-    into the active ``ScenarioState``, and ``role`` is the scenario role it was
-    given (``innocent`` for a walk-on, empty when no scenario is running).
+    NPC's promotion-time disposition (0 for a fresh invented walk-on, but reflects
+    any value carried from the pool member per Story 72-2 — not a guaranteed 0),
+    ``scenario_registered`` says whether the NPC was wired into the active
+    ``ScenarioState``, and ``role`` is the *effective* scenario role
+    (``innocent`` for a newly-registered walk-on, the pre-existing authored role
+    when the name already held one, empty when no scenario is running).
     ``npc_name`` avoids the OTEL-reserved ``name`` span attribute.
     """
     attributes: dict[str, Any] = {

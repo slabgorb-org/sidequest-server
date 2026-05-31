@@ -1047,19 +1047,27 @@ def _build_magic_confrontation_payload(
     }
 
 
-def _seed_invented_identity(npc: Npc, *, scenario_state: ScenarioState | None) -> None:
+def _seed_invented_identity(
+    npc: Npc, *, scenario_state: ScenarioState | None, turn_num: int
+) -> None:
     """Story 72-9: give a freshly-promoted narrator-invented NPC a real
     identity — an OCEAN profile and, when a scenario is active, a scenario
-    role + live belief bubble — so it can subsequently develop (72-1) and
-    participate in mystery mechanics (ADR-053).
+    role — so it can subsequently develop (72-1) and participate in mystery
+    mechanics (ADR-053). The NPC's ``belief_state`` is *already* a live
+    ``BeliefState`` (the model default) before this runs; a walk-on carries no
+    authored ``initial_beliefs``, so this function does not touch it — it
+    starts empty but mutable, ready for gossip/questioning later.
 
     Scoped to the ``narrator_invented`` lineage by the caller. Idempotent:
-    skips if the NPC already carries an OCEAN profile so a re-engagement
-    never re-rolls personality or clobbers learned beliefs (context
-    §No-double-wire). The scenario role is ``Innocent`` — an invented
-    walk-on is never the pre-selected ``guilty_npc``. ``belief_state`` is
-    already a live ``BeliefState`` default; a walk-on carries no authored
-    ``initial_beliefs`` to seed, so the bubble starts empty but mutable.
+    skips if the NPC already carries an OCEAN profile so a re-engagement never
+    re-rolls personality or clobbers learned beliefs (context §No-double-wire).
+
+    Scenario role: a *new* participant is registered ``Innocent`` — an invented
+    walk-on is never the pre-selected guilty suspect. But if the name already
+    holds a role in ``npc_roles`` (an authored scenario NPC keyed at bind time,
+    possibly the guilty one, even if not yet materialized into ``snapshot.npcs``),
+    that role is **preserved, never overwritten** — registering ``Innocent`` over
+    an authored ``Guilty`` would turn the murderer innocent (72-9 review fix).
 
     OCEAN seed policy: a flat baseline ``OceanProfile`` (all 5.0). There is
     no random/jitter generator in the codebase (see ``ocean.py`` docstring —
@@ -1067,9 +1075,9 @@ def _seed_invented_identity(npc: Npc, *, scenario_state: ScenarioState | None) -
     the explicit baseline, not an invented generator. ``ocean`` is the
     serialized dict shape ``Npc.ocean: dict | None`` expects.
     """
-    if npc.ocean is not None:
-        # Already enriched — do not re-seed (no personality re-roll, no
-        # belief clobber).
+    if npc.ocean:
+        # Already enriched — do not re-seed (no personality re-roll, no belief
+        # clobber). Truthy check also rejects a stray empty ``{}``.
         return
 
     npc.ocean = OceanProfile().model_dump()
@@ -1077,9 +1085,16 @@ def _seed_invented_identity(npc: Npc, *, scenario_state: ScenarioState | None) -
     scenario_registered = False
     role = ""
     if scenario_state is not None:
-        role = ScenarioRole.Innocent
-        scenario_state.npc_roles[npc.core.name] = role
         scenario_registered = True
+        existing = scenario_state.npc_roles.get(npc.core.name)
+        if existing is None:
+            role = ScenarioRole.Innocent
+            scenario_state.npc_roles[npc.core.name] = role
+        else:
+            # Name already a scenario participant — keep the authored role
+            # (never clobber a pre-selected Guilty/Witness). The span reports
+            # the effective role so the GM panel sees the truth.
+            role = existing
 
     with npc_identity_seeded_span(
         npc_name=npc.core.name,
@@ -1087,6 +1102,7 @@ def _seed_invented_identity(npc: Npc, *, scenario_state: ScenarioState | None) -
         disposition=int(npc.disposition),
         scenario_registered=scenario_registered,
         role=role,
+        turn_number=turn_num,
     ):
         pass
 
@@ -1095,6 +1111,7 @@ def _promote_pool_member_to_npc(
     member: NpcPoolMember,
     *,
     scenario_state: ScenarioState | None = None,
+    turn_num: int = 0,
 ) -> Npc:
     """Build an ``Npc`` from an ``NpcPoolMember``, preserving identity
     (name, pronouns, appearance, role) and recording ``pool_origin`` so
@@ -1156,7 +1173,7 @@ def _promote_pool_member_to_npc(
     # invented lineage so authored / MM-origin NPCs (which receive identity
     # elsewhere) are never double-wired or belief-clobbered.
     if member.drawn_from == "narrator_invented":
-        _seed_invented_identity(npc, scenario_state=scenario_state)
+        _seed_invented_identity(npc, scenario_state=scenario_state, turn_num=turn_num)
     return npc
 
 
@@ -1166,7 +1183,7 @@ def resolve_status_target(
     actor_name: str,
     turn_num: int,
     trigger: str,
-):
+) -> Character | Npc | None:
     """Resolve a status-mutation actor name to a creature whose
     ``core.statuses`` can be appended to or popped from.
 
@@ -1202,7 +1219,9 @@ def resolve_status_target(
     )
     if pool_match is None:
         return None
-    promoted = _promote_pool_member_to_npc(pool_match, scenario_state=snapshot.scenario_state)
+    promoted = _promote_pool_member_to_npc(
+        pool_match, scenario_state=snapshot.scenario_state, turn_num=turn_num
+    )
     snapshot.npcs.append(promoted)
     _watcher_publish(
         "state_transition",

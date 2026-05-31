@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from sidequest.daemon_client.client import MAX_EMBED_BYTES
 from sidequest.game.character import KnownFact
 from sidequest.game.lore_store import (
     DuplicateLoreId,
@@ -57,6 +58,7 @@ class AccretionResult:
     accreted: int = 0
     skipped_duplicate: int = 0
     skipped_blank: int = 0
+    skipped_oversized: int = 0
     fragment_ids: list[str] = field(default_factory=list)
 
 
@@ -79,12 +81,21 @@ def accrete_facts_to_lore(
     re-minted and never surfacing :class:`DuplicateLoreId` (which would
     crash the turn). Blank-content facts cannot form a valid fragment
     (``content`` has ``min_length=1``) and are skipped explicitly as
-    ``skipped_blank`` rather than silently minted broken.
+    ``skipped_blank`` rather than silently minted broken. Content exceeding
+    ``MAX_EMBED_BYTES`` is rejected loud at the boundary as ``skipped_oversized``
+    instead of being minted and then failing embedding silently downstream.
     """
     result = AccretionResult()
     for fact in facts:
         if not fact.content.strip():
             result.skipped_blank += 1
+            continue
+        # Reject oversized content loud at the minting boundary. Without this
+        # the fragment is minted, then fails embedding downstream (exceeds
+        # MAX_EMBED_BYTES), gets retry-counted, and is silently dropped from
+        # the pending queue — a starving-index failure with no minting signal.
+        if len(fact.content.encode("utf-8")) > MAX_EMBED_BYTES:
+            result.skipped_oversized += 1
             continue
         frag_id = _fragment_id(fact)
         fragment = LoreFragment.new(

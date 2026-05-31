@@ -1,6 +1,47 @@
 """WS-boundary, room-store, and PARTY_STATUS wiring tests (Story 67-6)."""
+
+import pytest
+
 from sidequest.game.persistence import GameMode
 from sidequest.server.session_room import SessionRoom
+
+
+class _FakeWS:
+    """Minimal WebSocket double: headers + accept/close recording."""
+
+    def __init__(self, headers: dict[str, str]):
+        self.headers = headers
+        self.accepted = False
+        self.closed_code: int | None = None
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed_code = code
+
+
+@pytest.mark.asyncio
+async def test_ws_boundary_closes_when_identity_unresolvable():
+    from sidequest.server import websocket as ws_mod
+
+    ws = _FakeWS(headers={})  # no Cf-Access, no Host -> unresolvable
+    result = await ws_mod.resolve_identity_or_close(ws)
+
+    assert result is None
+    assert ws.accepted is False
+    assert ws.closed_code == 1008  # policy violation
+
+
+@pytest.mark.asyncio
+async def test_ws_boundary_returns_identity_and_source_when_resolvable():
+    from sidequest.server import websocket as ws_mod
+
+    ws = _FakeWS(headers={"cf-access-authenticated-user-email": "alice@example.com"})
+    result = await ws_mod.resolve_identity_or_close(ws)
+
+    assert result == ("alice@example.com", "cf_access")
+    assert ws.closed_code is None
 
 
 def _room() -> SessionRoom:

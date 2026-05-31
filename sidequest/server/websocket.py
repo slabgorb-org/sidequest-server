@@ -34,6 +34,11 @@ from sidequest.protocol.messages import (
     PlayerPresencePayload,
 )
 from sidequest.protocol.types import NonBlankString  # noqa: F401
+from sidequest.server.player_identity import (
+    MissingPlayerIdentityError,
+    identity_source,
+    resolve_player_identity,
+)
 
 if TYPE_CHECKING:
     from sidequest.server.session_handler import WebSocketSessionHandler
@@ -41,8 +46,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def resolve_identity_or_close(websocket: Any) -> tuple[str, str] | None:
+    """Resolve the authenticated player identity from WS headers before accept.
+
+    Fail-loud (No Silent Fallbacks): a connection with no resolvable identity is
+    a misconfiguration, not a guest. Close 1008 (policy violation) and return None.
+    """
+    try:
+        identity = resolve_player_identity(websocket.headers)
+    except MissingPlayerIdentityError:
+        logger.error(
+            "ws.identity_unresolved remote=%s — closing (no Cf-Access email or Host header)",
+            getattr(websocket, "client", None),
+        )
+        await websocket.close(code=1008)
+        return None
+    return identity, identity_source(websocket.headers)
+
+
 async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) -> None:
-    """WebSocket connection lifecycle — accept, loop, cleanup.
+    """WebSocket connection lifecycle — resolve identity, accept, loop, cleanup.
 
     On PLAYER_ACTION: dispatch through session_handler → emit NARRATION.
     On SESSION_EVENT{connect}: bind genre/world, load or create session.
@@ -50,11 +73,21 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
     On disconnect: detach outbound queue, disconnect from room, broadcast
       PLAYER_PRESENCE{disconnected} to remaining players, then persist and clean up.
     """
+    resolved = await resolve_identity_or_close(websocket)
+    if resolved is None:
+        return
+    player_identity, player_identity_source = resolved
     await websocket.accept()
     socket_id = uuid.uuid4().hex
     registry = websocket.app.state.room_registry
     out_queue: asyncio.Queue[Any] = asyncio.Queue()
-    handler.attach_room_context(registry=registry, socket_id=socket_id, out_queue=out_queue)
+    handler.attach_room_context(
+        registry=registry,
+        socket_id=socket_id,
+        out_queue=out_queue,
+        player_identity=player_identity,
+        player_identity_source=player_identity_source,
+    )
     logger.info("ws.connection_accepted remote=%s socket=%s", websocket.client, socket_id)
 
     async def _writer() -> None:

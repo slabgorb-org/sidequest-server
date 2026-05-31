@@ -84,6 +84,7 @@ from sidequest.telemetry.spans import (
     magic_working_span,
     npc_auto_registered_span,
     npc_developed_span,
+    npc_identity_seeded_span,
     npc_invented_name_routed_span,
     npc_invented_name_unrouted_span,
     npc_pc_name_skipped_span,
@@ -1097,6 +1098,77 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
     return npc
 
 
+def _seed_invented_npc_identity(
+    *,
+    npc: Npc,
+    member: NpcPoolMember,
+    snapshot: GameSnapshot,
+    turn_num: int,
+) -> None:
+    """Story 72-9: seed the three identity surfaces onto a *narrator-invented*
+    NPC at the moment it first becomes mechanical.
+
+    A human DM who invents a stranger gives them a personality, an attitude
+    toward the party, and — in a mystery — a stake in the plot. The engine
+    didn't: an invented person promoted to ``Npc`` carried ``ocean=None`` and
+    was invisible to the scenario ``belief_state`` graph. This seeds:
+
+    - **OCEAN** (ADR-042): a flat-baseline ``OceanProfile`` (all 5.0). There is
+      no random/jitter generator in the codebase (ocean.py docstring), so a
+      deterministic baseline is the honest seed — a real profile, never an
+      empty ``{}`` stub.
+    - **Disposition** (ADR-020): already neutral via ``_promote_pool_member_to_npc``
+      (72-2/72-5); not re-touched here.
+    - **Scenario ``belief_state``** (ADR-053): when a scenario is active, the NPC
+      is registered into ``scenario_state.npc_roles`` as ``innocent`` — a
+      mid-session walk-on is never the pre-selected ``guilty_npc`` — and its
+      ``BeliefState`` (already live on the ``Npc``) becomes the gossip/questioning
+      mutation surface. Mirrors ``bind_scenario``'s authored-NPC seeding.
+
+    Fires only for the ``drawn_from="narrator_invented"`` lineage; authored / MM
+    NPCs get their identity through ``world_materialization`` / ``_npc_from_patch``
+    and must not be double-wired. Skips an NPC that already holds an OCEAN
+    profile so a re-touch never clobbers learned identity.
+    """
+    if member.drawn_from != "narrator_invented":
+        return
+    if npc.ocean:
+        # Already seeded — never re-seed (would clobber learned identity).
+        return
+
+    from sidequest.game.scenario_state import ScenarioRole
+    from sidequest.genre.models.ocean import OceanProfile
+
+    npc.ocean = OceanProfile().model_dump()
+
+    scenario_registered = False
+    scenario_role = ""
+    scenario_state = snapshot.scenario_state
+    if scenario_state is not None:
+        name = npc.core.name
+        if name not in scenario_state.npc_roles:
+            scenario_state.npc_roles[name] = ScenarioRole.Innocent
+        scenario_role = scenario_state.npc_roles[name]
+        scenario_registered = True
+
+    with npc_identity_seeded_span(
+        npc_name=npc.core.name,
+        ocean_seeded=True,
+        disposition=int(npc.disposition),
+        scenario_registered=scenario_registered,
+        scenario_role=scenario_role,
+    ):
+        logger.info(
+            "npc.identity_seeded name=%r ocean_seeded=True disposition=%d "
+            "scenario_registered=%s role=%r turn=%d",
+            npc.core.name,
+            int(npc.disposition),
+            scenario_registered,
+            scenario_role,
+            turn_num,
+        )
+
+
 def resolve_status_target(
     snapshot: GameSnapshot,
     *,
@@ -1140,6 +1212,15 @@ def resolve_status_target(
     if pool_match is None:
         return None
     promoted = _promote_pool_member_to_npc(pool_match)
+    # Story 72-9: seed OCEAN + scenario belief_state onto narrator-invented
+    # NPCs at the promotion seam (where ``snapshot`` is in scope). No-op for
+    # authored / MM lineages and for already-seeded NPCs.
+    _seed_invented_npc_identity(
+        npc=promoted,
+        member=pool_match,
+        snapshot=snapshot,
+        turn_num=turn_num,
+    )
     snapshot.npcs.append(promoted)
     _watcher_publish(
         "state_transition",

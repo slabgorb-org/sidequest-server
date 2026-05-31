@@ -716,3 +716,63 @@ def npc_recurring_presence_missed_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+# Story 72-9: when a narrator-invented NPC first becomes mechanical (promoted
+# from an ``NpcPoolMember`` to an ``Npc``), it is seeded with an OCEAN profile
+# (ADR-042), a neutral disposition (ADR-020, carried by 72-2/72-5), and — when a
+# scenario is active — registered into the scenario ``npc_roles`` graph with a
+# live ``BeliefState`` surface (ADR-053). This span is the GM-panel lie-detector
+# that proves the identity wiring fired rather than the narrator improvising:
+# ``ocean_seeded`` confirms a real profile (not ``None``/``{}``), ``disposition``
+# is the spawn value, and ``scenario_registered`` + ``scenario_role`` record
+# whether the NPC joined an active scenario.
+SPAN_NPC_IDENTITY_SEEDED = "npc.identity_seeded"
+SPAN_ROUTES[SPAN_NPC_IDENTITY_SEEDED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_identity",
+    extract=lambda span: {
+        "field": "npc.identity_seeded",
+        "npc_name": (span.attributes or {}).get("npc_name", ""),
+        "ocean_seeded": bool((span.attributes or {}).get("ocean_seeded", False)),
+        "disposition": (span.attributes or {}).get("disposition", 0),
+        "scenario_registered": bool((span.attributes or {}).get("scenario_registered", False)),
+        "scenario_role": (span.attributes or {}).get("scenario_role", ""),
+    },
+)
+
+
+@contextmanager
+def npc_identity_seeded_span(
+    *,
+    npc_name: str,
+    ocean_seeded: bool,
+    disposition: int,
+    scenario_registered: bool,
+    scenario_role: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 72-9: emitted when a narrator-invented NPC is seeded with OCEAN /
+    disposition / scenario ``belief_state`` at promotion.
+
+    ``ocean_seeded`` is ``True`` when a real ``OceanProfile`` was attached;
+    ``scenario_registered`` is ``True`` only when a scenario was active and the
+    NPC was bound into ``npc_roles`` (``scenario_role`` carries the assigned
+    role, defaulting to ``"innocent"`` for a mid-session walk-on — never the
+    pre-selected ``guilty_npc``).
+    """
+    attributes: dict[str, Any] = {
+        "npc_name": npc_name,
+        "ocean_seeded": bool(ocean_seeded),
+        "disposition": int(disposition),
+        "scenario_registered": bool(scenario_registered),
+        "scenario_role": scenario_role,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_IDENTITY_SEEDED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span

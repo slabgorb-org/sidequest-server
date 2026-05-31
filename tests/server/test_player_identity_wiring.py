@@ -222,3 +222,25 @@ def test_perspective_character_name_uses_seat_then_falls_back():
     # unseated -> falls back to sd.player_name (behavior-preserving for pre-seat)
     sd2 = _SD("p2", "Laverne", {})
     assert perspective_character_name(sd2) == "Laverne"
+
+
+def test_party_member_identity_present_for_connected_absent_for_disconnected():
+    """Self carries identity from the room; a disconnected peer carries None
+    and is NEVER given the character name as a fabricated identity."""
+    from sidequest.protocol.models import PartyMember
+
+    identities = {"p1": "alice@example.com"}  # room knows p1 (connected), not peer:Rux
+
+    self_member = PartyMember(
+        player_id="p1", name="Laverne", player_identity=identities.get("p1"),
+        character_name="Laverne", current_hp=10, max_hp=10,
+        survivability_pool_label=None, statuses=[], **{"class": "Fighter"}, level=1,
+    )
+    peer_member = PartyMember(
+        player_id="peer:Rux", name="Rux", player_identity=identities.get("peer:Rux"),
+        character_name="Rux", current_hp=10, max_hp=10,
+        survivability_pool_label=None, statuses=[], **{"class": "Mage"}, level=1,
+    )
+    assert self_member.player_identity == "alice@example.com"
+    assert peer_member.player_identity is None
+    assert peer_member.player_identity != peer_member.character_name

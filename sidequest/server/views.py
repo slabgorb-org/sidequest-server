@@ -360,6 +360,7 @@ def party_member_from_character(
     character: Character,
     player_id: str,
     player_name: str,
+    player_identity: str | None = None,
 ) -> PartyMember:
     """Build a single PartyMember from a Character object.
 
@@ -513,6 +514,7 @@ def party_member_from_character(
     return PartyMember(
         player_id=NonBlankString(player_id or "anon"),
         name=NonBlankString(player_name or "Player"),
+        player_identity=player_identity,
         character_name=char_name_nbs,
         current_hp=character.core.hp.current,
         max_hp=character.core.hp.max,
@@ -605,7 +607,17 @@ def build_session_start_party_status(
         else:
             pid = seat_map.get(char.core.name) or f"peer:{char.core.name}"
             pname = char.core.name
-        members.append(party_member_from_character(handler, sd, char, pid, pname))
+        member_identity = (
+            handler._room.get_player_identity(pid)
+            if handler._room is not None
+            else None
+        )
+        members.append(
+            party_member_from_character(
+                handler, sd, char, pid, pname,
+                player_identity=member_identity,
+            )
+        )
 
     from sidequest.protocol.models import CompanionMember
     from sidequest.protocol.types import NonBlankString

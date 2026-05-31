@@ -133,6 +133,21 @@ class World(BaseModel):
     tropes: list[TropeDefinition] = Field(default_factory=list)
     archetypes: list[NpcArchetype] = Field(default_factory=list)
     visual_style: Any = None  # can be VisualStyle or richer world-level JSON
+    theme: GenreTheme | dict[str, Any] | None = None
+    """World-tier theme, epic 74. **Two runtime shapes** — the union is load-
+    bearing, not cosmetic: a ``dict`` when the world authors its own
+    ``worlds/<slug>/theme.yaml`` (loaded raw, free-form override), or a
+    ``GenreTheme`` when the loader falls back to the genre theme during the
+    transitional refactor (story 74-1). Consumers MUST branch on the type
+    (``isinstance(world.theme, GenreTheme)``) — do not assume attribute access.
+    Never ``None`` on a loaded World: the loader rejects a world that resolves
+    no theme from either tier (No Silent Fallbacks)."""
+    audio: dict[str, Any] | None = None
+    """World-tier audio (``worlds/<slug>/audio.yaml``), epic 74. A raw ``dict``
+    when the world authors one; ``None`` when it authors none (genre audio still
+    serves). World audio is a free-form hard-override (e.g.
+    ``spaghetti_western/five_points``), not the strict genre ``AudioConfig`` —
+    hence ``dict``, never the typed model."""
     history: Any = None
     legends_raw: Any = None
     portrait_manifest: list[PortraitManifestEntry] = Field(default_factory=list)
@@ -173,8 +188,12 @@ class GenrePack(BaseModel):
 
     meta: PackMeta
     rules: RulesConfig
-    lore: Lore
-    theme: GenreTheme
+    # Epic 74 — genre tier is mechanics-only. Flavor (lore/theme/audio) becomes
+    # optional at the genre tier; the world tier is authoritative. None when the
+    # pack ships no genre-tier file (live packs still ship them until the
+    # per-world migration, so these stay non-None at runtime for now).
+    lore: Lore | None = None
+    theme: GenreTheme | None = None
     archetypes: list[NpcArchetype] = Field(default_factory=list)
     char_creation: list[CharCreationScene] = Field(default_factory=list)
     # Optional per the 2026-05-29 directive: all visual prompts live at world
@@ -186,7 +205,7 @@ class GenrePack(BaseModel):
     visual_style: VisualStyle | None = None
     progression: ProgressionConfig
     axes: AxesConfig
-    audio: AudioConfig
+    audio: AudioConfig | None = None  # epic 74: genre-optional, world-authoritative
     cultures: list[Culture] = Field(default_factory=list)
     prompts: Prompts
     tropes: list[TropeDefinition] = Field(default_factory=list)

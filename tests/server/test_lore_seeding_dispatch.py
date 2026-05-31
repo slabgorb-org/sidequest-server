@@ -197,20 +197,23 @@ class TestLoreSeedingDispatch:
                     )
                 assert frag.content  # all fragments must have body text
 
-            # Both seeders must have contributed something. Pingpong
-            # 2026-04-30 root cause was zero genre_pack_frags — the
-            # genre lore corpus wasn't being seeded at all.
+            # Char-creation lore still seeds at confirmation.
             assert len(char_creation_frags) > 0, (
                 "Char-creation seeder must add at least one fragment "
                 "(grimvault has populated chargen scenes)."
             )
-            assert len(genre_pack_frags) > 0, (
-                "Genre-pack seeder must add at least one fragment after "
-                "the pingpong 2026-04-30 wiring fix — caverns_and_claudes "
-                "ships populated history/geography/cosmology/factions. "
-                "Zero genre fragments means the genre seeder was un-wired "
-                "again (the regression this test guards against)."
+            # Epic 74 — lore is WORLD-ONLY. grimvault authors no world lore and
+            # genre lore is no longer seeded, so GenrePack-sourced fragments must
+            # be EMPTY here (an empty `all(...)` would be vacuously true — assert
+            # the count directly so this catches grimvault unexpectedly gaining
+            # world lore AND genre lore leaking in).
+            assert len(genre_pack_frags) == 0, (
+                "epic 74: grimvault has no world lore and genre lore is not seeded; "
+                f"GenrePack-sourced fragments must be empty, got {[f.id for f in genre_pack_frags]}"
             )
+            assert not any(
+                frag.id.startswith("lore_genre_") for frag in sd.lore_store.fragments_iter()
+            ), "epic 74: genre lore must not be seeded (lore is world-only)"
 
         asyncio.run(body())
 

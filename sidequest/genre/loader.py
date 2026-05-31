@@ -828,10 +828,34 @@ def _load_world_items(items_path: Path, *, world_slug: str) -> WorldItemsCatalog
     return catalog
 
 
+def _emit_world_flavor_loaded(field: str, *, world_slug: str, source: Path) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier flavor load.
+
+    Epic 74: the world tier is authoritative for flavor (theme/audio/
+    visual_style). Each load fires a span — mirroring the ``world_items`` and
+    ``genre_pack`` spans — so the GM panel can prove the world-tier read fired
+    rather than the engine improvising from a genre default.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": field,
+            "op": "loaded",
+            "world_slug": world_slug,
+            "source": str(source / f"{field.removeprefix('world_')}.yaml"),
+        },
+        component="genre",
+    )
+
+
 def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
     genre_root: Path,
+    *,
+    genre_theme: GenreTheme | None = None,
 ) -> World | None:
     """Load a single world from its directory.
 
@@ -847,6 +871,12 @@ def _load_single_world(
             Used to locate the genre-tier ``magic.yaml`` so the magic loader
             can compose genre+world layers — both files are required by
             ``load_world_magic`` (see ``magic_loader.py``).
+        genre_theme: Genre-tier theme passed as a fallback when the world
+            authors no ``worlds/<slug>/theme.yaml`` (epic 74). ``None`` when the
+            genre pack ships no theme (mechanics-only pack). The effective theme
+            is the world's own ``theme.yaml`` if present, else ``genre_theme``;
+            when both are absent the pack-level invariant in ``load_genre_pack``
+            raises ``GenreLoadError`` naming the world (No Silent Fallbacks).
 
     Returns:
         A fully assembled World, or None if the world's world.yaml declares
@@ -915,6 +945,37 @@ def _load_single_world(
 
     visual_style: Any = _load_yaml_raw_optional(world_path / "visual_style.yaml")
     history: Any = _load_yaml_raw_optional(world_path / "history.yaml")
+
+    # === World-tier flavor — theme / audio / visual_style (epic 74) ===
+    # The genre tier is mechanics-only; flavor is world-authoritative. Load each
+    # surface the world authors; emit a state_transition span per load so the GM
+    # panel can prove world-tier flavor actually fired (mirrors _load_world_items
+    # and the genre_pack span). Loaded RAW like visual_style: world flavor files
+    # are free-form hard-overrides (e.g. five_points/audio.yaml), not the strict
+    # genre schemas. Absence yields None — no silent fabrication.
+    world_theme: Any = _load_yaml_raw_optional(world_path / "theme.yaml")
+    world_audio: Any = _load_yaml_raw_optional(world_path / "audio.yaml")
+
+    for field_name, value in (
+        ("world_theme", world_theme),
+        ("world_audio", world_audio),
+        ("world_visual_style", visual_style),
+    ):
+        if value is not None:
+            _emit_world_flavor_loaded(field_name, world_slug=world_path.name, source=world_path)
+
+    # Theme is world-authoritative; the genre theme is a fallback only during the
+    # transitional refactor (story 74-1) while live packs still ship genre flavor.
+    # The two branches yield DIFFERENT runtime types — a raw ``dict`` (world tier)
+    # or a ``GenreTheme`` (genre fallback). The union annotation is deliberate so
+    # consumers branch on the type rather than assume one shape (World.theme docs).
+    # ``effective_theme`` is None only when NEITHER tier supplies one — the
+    # loud-fail for that lives in ``load_genre_pack`` (pack-level invariant: every
+    # world in a real pack must resolve a theme), so direct ``_load_single_world``
+    # callers building themeless fixtures aren't forced to author a theme.
+    effective_theme: GenreTheme | dict[str, Any] | None = (
+        world_theme if world_theme is not None else genre_theme
+    )
 
     archetype_funnels: ArchetypeFunnels | None = _load_yaml_optional(
         world_path / "archetype_funnels.yaml", ArchetypeFunnels
@@ -1031,6 +1092,8 @@ def _load_single_world(
         tropes=tropes,
         archetypes=archetypes,
         visual_style=visual_style,
+        theme=effective_theme,
+        audio=world_audio,
         history=history,
         legends_raw=legends_raw,
         portrait_manifest=portrait_manifest,
@@ -1119,12 +1182,18 @@ def load_genre_pack(path: Path | str) -> GenrePack:
             detail="directory does not exist",
         )
 
-    # Load required files
+    # Load required mechanics files
     meta = _load_yaml(path / "pack.yaml", PackMeta)
     rules = _load_rules_config(path / "rules.yaml", path)
-    lore = _load_yaml(path / "lore.yaml", Lore)
-    theme = _load_yaml(path / "theme.yaml", GenreTheme)
-    archetypes_raw = _load_yaml_raw(path / "archetypes.yaml")
+    # Epic 74 — genre tier is mechanics-only. Flavor (lore/theme/archetypes/
+    # cultures/audio/visual_style) becomes OPTIONAL at the genre tier; the world
+    # tier is authoritative. Live packs still ship these files until the
+    # per-world migration, so absence is tolerated, not assumed. No silent
+    # fallback: a malformed file still raises (the *_optional helpers raise on
+    # parse/schema error, only absence yields None).
+    lore = _load_yaml_optional(path / "lore.yaml", Lore)
+    theme = _load_yaml_optional(path / "theme.yaml", GenreTheme)
+    archetypes_raw = _load_yaml_raw_optional(path / "archetypes.yaml")
     archetypes: list[NpcArchetype] = (
         [NpcArchetype.model_validate(a) for a in archetypes_raw]
         if isinstance(archetypes_raw, list)
@@ -1142,9 +1211,11 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     visual_style = _load_yaml_optional(path / "visual_style.yaml", VisualStyle)
     progression = _load_yaml(path / "progression.yaml", ProgressionConfig)
     axes = _load_yaml(path / "axes.yaml", AxesConfig)
-    audio = _load_yaml(path / "audio.yaml", AudioConfig)
-    _resolve_audio_urls(audio, genre_slug=path.name)
-    cultures_raw = _load_yaml_raw(path / "cultures.yaml")
+    # Epic 74 — genre audio optional / world-authoritative.
+    audio = _load_yaml_optional(path / "audio.yaml", AudioConfig)
+    if audio is not None:
+        _resolve_audio_urls(audio, genre_slug=path.name)
+    cultures_raw = _load_yaml_raw_optional(path / "cultures.yaml")
     cultures: list[Culture] = (
         [Culture.model_validate(c) for c in cultures_raw] if isinstance(cultures_raw, list) else []
     )
@@ -1274,9 +1345,27 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # Load worlds and scenarios from subdirectories.
     # _load_single_world returns None for worlds with draft: true — filter them out.
     worlds_raw: dict[str, World | None] = _load_subdirectories(
-        path, "worlds", lambda p: _load_single_world(p, genre_tropes, path)
+        path, "worlds", lambda p: _load_single_world(p, genre_tropes, path, genre_theme=theme)
     )
     worlds: dict[str, World] = {slug: w for slug, w in worlds_raw.items() if w is not None}
+
+    # Epic 74 — theme is world-authoritative and required. Every world must
+    # resolve a theme from its own tier or the genre fallback; a world that
+    # resolves none fails loud, named (No Silent Fallbacks). A themeless client
+    # (connect-time + reference-chrome) is broken. This pack-level check lets
+    # direct ``_load_single_world`` unit fixtures stay themeless while real packs
+    # enforce the invariant.
+    for slug, w in worlds.items():
+        if w.theme is None:
+            raise GenreLoadError(
+                path=path / "worlds" / slug / "theme.yaml",
+                detail=(
+                    f"World {slug!r} resolves no theme — neither worlds/{slug}/theme.yaml "
+                    f"nor the genre theme.yaml is present. Theme is world-authoritative "
+                    "(epic 74); every world must supply or inherit a theme."
+                ),
+            )
+
     scenarios: dict[str, ScenarioPack] = _load_subdirectories(
         path, "scenarios", _load_single_scenario
     )

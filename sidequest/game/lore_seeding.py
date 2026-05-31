@@ -1,16 +1,21 @@
-"""Seed a :class:`LoreStore` from genre pack + character creation data.
+"""Seed a :class:`LoreStore` from world lore + character creation data.
 
 Called at chargen confirmation so backstory choices made during
 character creation are visible to the later RAG retrieval pipeline.
 Without this seed the character's narrative anchors only live on the
 builder, which is discarded immediately after confirmation.
 
+Epic 74: lore is **world-only**. The genre tier is mechanics-only and
+genre lore is no longer seeded into the store (``seed_world_lore`` seeds
+world lore exclusively). ``seed_lore_from_genre_pack`` survives as a
+guarded utility but is not called on the live seeding path.
+
 Fragment id formats:
 
-- Genre pack: ``lore_genre_history`` / ``lore_genre_geography`` /
-  ``lore_genre_cosmology`` / ``lore_genre_faction_<slug>``
+- World pack: ``lore_world_<slug>_history`` / ``..._geography`` / etc.
 - Character creation: ``lore_char_creation_<scene_id>_<choice_index>``
 - Arc promotion (Story 45-23): ``lore_arc_<chapter_id>_<lore_index>``
+- Genre pack (legacy, no longer seeded): ``lore_genre_history`` / etc.
 
 Duplicate ids are silently skipped — seeding is idempotent so a
 reconnect that re-seeds won't hard-fail.
@@ -49,9 +54,15 @@ def seed_lore_from_genre_pack(store: LoreStore, pack: GenrePack) -> int:
     """Seed ``store`` with fragments derived from ``pack.lore``.
 
     Returns the number of fragments successfully added (duplicates
-    skipped).
+    skipped). Epic 74: ``pack.lore`` is optional at the genre tier — a pack
+    with no genre lore seeds nothing (the world tier is authoritative). Not
+    called by ``seed_world_lore`` anymore (lore is world-only) but retained
+    as a utility for any caller holding a genre-lore-bearing pack.
     """
     count = 0
+
+    if pack.lore is None:
+        return 0
 
     if pack.lore.history and _try_add(
         store,
@@ -190,24 +201,26 @@ def seed_world_lore(
     *,
     emit: Callable[..., None] | None = None,
 ) -> tuple[int, int]:
-    """Seed ``store`` with the deterministic genre + world lore pair.
+    """Seed ``store`` with the deterministic world lore.
 
-    Single source of truth for the genre/world seeding the chargen
-    confirmation flow used to do inline (two ``seed_lore_from_*`` calls
-    plus a ``lore_store_loaded`` emission). Extracted so the slug-resume
-    connect path can re-seed an empty in-memory ``LoreStore`` with the
-    same fragments — pre-fix only the fresh chargen flow seeded it, so
-    every *resumed* save had an empty store, ``query_lore`` returned
-    ``hit_count=0``, and the SDK narrator confabulated world canon
-    instead of recalling it.
+    Single source of truth for the lore seeding the chargen confirmation
+    flow used to do inline (plus a ``lore_store_loaded`` emission).
+    Extracted so the slug-resume connect path can re-seed an empty
+    in-memory ``LoreStore`` with the same fragments — pre-fix only the
+    fresh chargen flow seeded it, so every *resumed* save had an empty
+    store, ``query_lore`` returned ``hit_count=0``, and the SDK narrator
+    confabulated world canon instead of recalling it.
 
-    Returns ``(genre_fragments_added, world_fragments_added)``.
+    Epic 74: lore is **world-only**. Genre lore is no longer seeded, so the
+    genre element of the returned tuple is always ``0``.
 
-    Idempotency: both underlying seeders use stable fragment ids and
-    swallow :class:`DuplicateLoreId`, so re-running this against a store
-    that already holds the genre/world fragments adds zero and never
-    grows the store unboundedly — safe to call on every connect (fresh
-    or any reconnect).
+    Returns ``(genre_fragments_added, world_fragments_added)`` —
+    ``genre_fragments_added`` is always ``0`` (world-only lore).
+
+    Idempotency: the world seeder uses stable fragment ids and swallows
+    :class:`DuplicateLoreId`, so re-running this against a store that
+    already holds the world fragments adds zero and never grows the store
+    unboundedly — safe to call on every connect (fresh or any reconnect).
 
     ``emit`` (optional) is invoked exactly once after seeding with the
     ``lore_store_loaded`` watcher payload kwargs so the GM panel / Jaeger
@@ -217,7 +230,11 @@ def seed_world_lore(
     ``sidequest.telemetry`` at module load — same import-cycle reasoning
     as :func:`seed_lore_from_arc_promotion`'s local span import.
     """
-    genre_added = seed_lore_from_genre_pack(store, pack)
+    # Epic 74 — lore is WORLD-ONLY. Genre lore is no longer seeded into the
+    # narrator's store; the genre tier carries mechanics only. World lore (below)
+    # is authoritative. ``genre_added`` stays 0 so the emit payload and callers
+    # report the truth: nothing came from the genre tier.
+    genre_added = 0
     world_added = 0
     if world_slug:
         # Inside ``if world_slug:`` pyright narrows ``world_slug`` from

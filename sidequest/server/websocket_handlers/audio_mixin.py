@@ -74,6 +74,21 @@ class AudioDispatchMixin:
             return None
 
         audio_cfg = genre_pack.audio
+        if audio_cfg is None:
+            # Epic 74 — genre audio is optional (mechanics-only genre tier). No
+            # genre audio config → no library backend. World-tier audio override
+            # is a free-form file consumed elsewhere; this connect-time backend
+            # reads the genre AudioConfig only. Disable loud-but-clean, same as
+            # the empty-config path below (No Silent Fallbacks).
+            with audio_backend_disabled_span(
+                reason="no_audio_config",
+                genre=genre_slug,
+            ):
+                logger.info(
+                    "audio.backend_skipped reason=no_audio_config genre=%s",
+                    genre_slug,
+                )
+            return None
         if not audio_cfg.mood_tracks and not audio_cfg.themes and not audio_cfg.sfx_library:
             with audio_backend_disabled_span(
                 reason="empty_config",

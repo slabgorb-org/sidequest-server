@@ -52,6 +52,7 @@ from sidequest.game.belief_state import (
 )
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool
+from sidequest.game.disposition import Disposition
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.scenario_state import ScenarioRole, ScenarioState
 from sidequest.game.session import GameSnapshot
@@ -109,8 +110,8 @@ async def _setup(monkeypatch: pytest.MonkeyPatch, label: str) -> list[dict]:
 async def _wait_for_event(
     captured: list[dict], field_value: str, *, timeout_s: float = 1.0
 ) -> dict:
-    deadline = asyncio.get_event_loop().time() + timeout_s
-    while asyncio.get_event_loop().time() < deadline:
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while asyncio.get_running_loop().time() < deadline:
         for evt in captured:
             if (
                 evt.get("event_type") == "state_transition"
@@ -158,14 +159,16 @@ async def test_invented_npc_seeds_ocean_profile(monkeypatch: pytest.MonkeyPatch)
 
     snapshot = _invented_snapshot()
     promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=3, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
 
     assert promoted is not None
     # Not silently None, not an empty dict masquerading as "wired".
     assert promoted.ocean is not None
     assert promoted.ocean != {}
     # A real Big-Five profile: round-trips through OceanProfile with all five
-    # dimensions present and in-range.
+    # dimensions present. Pin the documented seed *policy* — the flat baseline
+    # (every dimension 5.0) — not an always-true [0,10] range check (which a
+    # broken 1000.0 default or an unclamped field would still pass).
     profile = OceanProfile(**promoted.ocean)
     dims = (
         profile.openness,
@@ -174,7 +177,7 @@ async def test_invented_npc_seeds_ocean_profile(monkeypatch: pytest.MonkeyPatch)
         profile.agreeableness,
         profile.neuroticism,
     )
-    assert all(0.0 <= d <= 10.0 for d in dims)
+    assert all(d == 5.0 for d in dims)
 
 
 # ---------------------------------------------------------------------------
@@ -192,11 +195,14 @@ async def test_invented_npc_spawns_neutral_disposition(monkeypatch: pytest.Monke
 
     snapshot = _invented_snapshot()
     promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=3, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
 
     assert promoted is not None
+    # AC-2 is the spawn *value* (0). The value→attitude mapping is Disposition's
+    # own tested behavior and depends on the process-global attitude thresholds
+    # (mutable by sibling tests under xdist), so asserting attitude() here would
+    # couple this test to global state it does not control — assert the value only.
     assert int(promoted.disposition) == 0
-    assert promoted.disposition.attitude().value == "neutral"
 
 
 # ---------------------------------------------------------------------------
@@ -217,14 +223,15 @@ async def test_invented_npc_registered_into_active_scenario(
     snapshot = _invented_snapshot(scenario=scenario)
 
     promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=4, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
 
     assert promoted is not None
     assert snapshot.scenario_state is not None
+    # Registered as the default walk-on role — never the pre-selected guilty
+    # suspect. (Asserting == Innocent already proves != Guilty, so no redundant
+    # tautological `!= Guilty` line.)
     assert "Wexley" in snapshot.scenario_state.npc_roles
     assert snapshot.scenario_state.npc_roles["Wexley"] == ScenarioRole.Innocent
-    # Never minted as the guilty suspect.
-    assert snapshot.scenario_state.npc_roles["Wexley"] != ScenarioRole.Guilty
 
 
 @pytest.mark.asyncio
@@ -241,11 +248,17 @@ async def test_invented_npc_carries_live_belief_surface(
     snapshot = _invented_snapshot(scenario=scenario)
 
     promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=4, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
 
     assert promoted is not None
     assert isinstance(promoted.belief_state, BeliefState)
-    # Live surface: a belief added now is readable back.
+    # The load-bearing 72-9 contract: a walk-on starts with an EMPTY belief
+    # bubble — no authored ``initial_beliefs`` leaked in from the pack (which
+    # would happen if the seed accidentally registered the invented NPC as an
+    # authored scenario actor). `isinstance` alone would pass with zero
+    # implementation, so pin the empty-start invariant explicitly.
+    assert promoted.belief_state.beliefs == []
+    # And the surface is live: a belief added now is readable back.
     promoted.belief_state.add_belief(
         BeliefFact(
             subject="Wexley",
@@ -275,7 +288,7 @@ async def test_no_scenario_still_seeds_ocean_no_scenario_wiring(
     assert snapshot.scenario_state is None
 
     promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=2, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
 
     assert promoted is not None
     assert promoted.ocean is not None  # OCEAN seeded regardless of scenario
@@ -304,7 +317,7 @@ async def test_identity_seeded_span_fires_from_production_path_with_scenario(
     snapshot = _invented_snapshot(scenario=scenario)
 
     promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=7, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
     assert promoted is not None
 
     evt = await _wait_for_event(captured, IDENTITY_SEEDED_FIELD)
@@ -314,6 +327,11 @@ async def test_identity_seeded_span_fires_from_production_path_with_scenario(
     assert fields["disposition"] == 0
     assert fields["scenario_registered"] is True
     assert fields["role"] == ScenarioRole.Innocent
+    # The span must carry the REAL turn it fired on, not a hardcoded default.
+    # ``resolve_status_target`` has ``turn_num`` in scope; a constant 0 would
+    # collapse every invented-NPC seed onto turn 0 in the GM timeline (the
+    # "lie-detector lies" failure the OTEL principle exists to prevent).
+    assert fields["turn_number"] == 7
 
 
 @pytest.mark.asyncio
@@ -327,7 +345,7 @@ async def test_identity_seeded_span_reports_unregistered_without_scenario(
 
     snapshot = _invented_snapshot(scenario=None)
     promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=7, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
     assert promoted is not None
 
     evt = await _wait_for_event(captured, IDENTITY_SEEDED_FIELD)
@@ -335,6 +353,10 @@ async def test_identity_seeded_span_reports_unregistered_without_scenario(
     assert fields["npc_name"] == "Wexley"
     assert fields["ocean_seeded"] is True
     assert fields["scenario_registered"] is False
+    # Contract: ``role`` is empty when no scenario is active (documented in the
+    # span/SpanRoute). If production set a role here despite no scenario, this
+    # would catch the contract violation.
+    assert fields["role"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +385,7 @@ async def test_world_authored_promotion_does_not_fire_invented_seed(
     promoted = resolve_status_target(
         snapshot, actor_name="Magistrate Vane", turn_num=5, trigger="test"
     )
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
 
     assert promoted is not None
     # The invented-only seed did not run for an authored member.
@@ -382,13 +404,15 @@ async def test_reengagement_does_not_clobber_seeded_identity(
 ) -> None:
     """Edge (no double-wire / no belief clobber): once an invented NPC is
     promoted and seeded, a later engagement resolves the existing ``Npc`` and
-    must NOT re-run the seed — a belief learned in between survives."""
-    await _setup(monkeypatch, "test-no-clobber-reseed")
+    must NOT re-run the seed — a belief learned in between survives, and the
+    identity-seed span fires exactly ONCE (the authoritative lie-detector
+    signal that no re-seed occurred)."""
+    captured = await _setup(monkeypatch, "test-no-clobber-reseed")
 
     snapshot = _invented_snapshot()
 
     first = resolve_status_target(snapshot, actor_name="Wexley", turn_num=3, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
     assert first is not None
     assert first.ocean is not None
 
@@ -401,16 +425,110 @@ async def test_reengagement_does_not_clobber_seeded_identity(
             source=BeliefSourceWitnessed(),
         )
     )
-    seeded_ocean = first.ocean
+    # Snapshot the seeded OCEAN as an independent COPY before re-engaging. The
+    # earlier `seeded_ocean = first.ocean` alias made the later comparison
+    # `first.ocean == first.ocean` (tautological — `second is first`); a copy
+    # detects an in-place re-roll of the dict.
+    seeded_ocean = dict(first.ocean)
 
     # Re-engage: resolve_status_target finds the existing Npc (npcs shadow the
     # pool) and returns it — no second promotion, no re-seed.
     second = resolve_status_target(snapshot, actor_name="Wexley", turn_num=6, trigger="test")
-    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
 
     assert second is not None
     assert second is first  # same object, not a fresh promotion
-    assert second.ocean == seeded_ocean  # OCEAN not re-rolled / clobbered
+    assert second.ocean == seeded_ocean  # OCEAN not re-rolled / clobbered (vs independent copy)
     assert second.belief_state.beliefs_about("Wexley")  # learned belief survived
     # Exactly one stateful Npc for Wexley — no duplicate promotion.
     assert sum(1 for n in snapshot.npcs if n.core.name == "Wexley") == 1
+    # The authoritative no-re-seed signal: the identity-seed span fired exactly
+    # once (on the first promotion), never on re-engagement.
+    identity_events = [
+        e for e in captured if e.get("fields", {}).get("field") == IDENTITY_SEEDED_FIELD
+    ]
+    assert len(identity_events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Edge — scenario-role clobber: invented registration must NOT overwrite an
+# existing authored role (the murderer must stay guilty).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invented_npc_does_not_clobber_existing_scenario_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Edge (HIGH — mystery integrity): ``npc_roles`` is keyed over *all*
+    ``scenario_pack.npcs`` at bind time, including the guilty NPC, even ones
+    not yet materialized into ``snapshot.npcs``. The narrator-invented mint
+    path checks ``npcs``/``npc_pool`` for collisions but NOT ``npc_roles`` —
+    so a walk-on whose name matches an authored suspect can be promoted via
+    ``resolve_status_target``. Seeding must NOT overwrite that NPC's existing
+    role: registering ``Innocent`` over an authored ``Guilty`` would turn the
+    murderer innocent and make the mystery unwinnable.
+
+    Drives the membership-guard fix: register the invented NPC only when its
+    name is not already a scenario participant.
+    """
+    await _setup(monkeypatch, "test-no-clobber-scenario-role")
+
+    # "Wexley" is the pre-selected guilty suspect, present in npc_roles but NOT
+    # yet materialized into snapshot.npcs (off-screen). The pool holds a
+    # narrator-invented "Wexley" walk-on (see _invented_snapshot).
+    scenario = ScenarioState(
+        guilty_npc="wexley_id",
+        npc_roles={"Wexley": ScenarioRole.Guilty},
+    )
+    snapshot = _invented_snapshot(scenario=scenario)
+
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=8, trigger="test")
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
+
+    assert promoted is not None
+    # The authored Guilty role MUST survive — never silently demoted to Innocent.
+    assert snapshot.scenario_state.npc_roles["Wexley"] == ScenarioRole.Guilty
+
+
+# ---------------------------------------------------------------------------
+# Edge — disposition carry-through (72-2 × 72-9): a non-zero carried
+# disposition survives seeding and is reported honestly by the span.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invented_npc_seed_preserves_carried_disposition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Edge (72-2 × 72-9): a ``narrator_invented`` pool member that accrued a
+    non-zero disposition before promotion (e.g. the table befriended it) must
+    keep that value — the OCEAN/scenario seed must not flatten it — and the
+    identity-seed span must report the *carried* value, not a hardcoded 0.
+    Guards the 72-2 preservation contract against 72-9 regression and pins
+    that the span's ``disposition`` is the real promotion-time value."""
+    captured = await _setup(monkeypatch, "test-invented-carried-disposition")
+
+    snapshot = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        characters=[_make_pc("Hero")],
+        npc_pool=[
+            NpcPoolMember(
+                name="Wexley",
+                drawn_from="narrator_invented",
+                disposition=Disposition(value=30),
+            )
+        ],
+    )
+
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=5, trigger="test")
+    await asyncio.sleep(0)  # yield: let the WatcherHub broadcast coroutine deliver to `captured`
+
+    assert promoted is not None
+    # 72-2 carry-through survives the 72-9 seed.
+    assert int(promoted.disposition) == 30
+    assert promoted.ocean is not None  # still enriched
+    # The span reports the real carried disposition, not a "neutral spawn" 0.
+    evt = await _wait_for_event(captured, IDENTITY_SEEDED_FIELD)
+    assert evt["fields"]["disposition"] == 30

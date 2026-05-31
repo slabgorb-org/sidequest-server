@@ -54,11 +54,14 @@ def _build_archetype(pack, name: str, *, class_hint: str):
     """Build a character with the given class_hint via the REAL builder.
 
     Walks the real char_creation scenes for elemental_harmony:
-      origins   (5 scenes, choices)
+      origins   (choices)
       pronouns  (choices + freeform)
-      element   (choices)
       path      (choices)
       confirmation (no choices)
+
+    (The pre-WWN "element"/affinity scene was removed 2026-05-31 — channeling
+    is determined by the WWN class seeded from the origin's class_hint, not a
+    standalone affinity pick.)
 
     For origins we select the first choice that carries the requested
     class_hint. For archetypes that have NO class_hint in origins

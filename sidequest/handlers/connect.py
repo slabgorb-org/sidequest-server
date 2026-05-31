@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from sidequest.game.lore_store import LoreStore
     from sidequest.genre.models.pack import GenrePack
     from sidequest.protocol.messages import SessionEventPayload
+    from sidequest.server.session_room import SessionRoom
     from sidequest.server.websocket_session_handler import WebSocketSessionHandler
 
 from opentelemetry import trace
@@ -241,7 +242,7 @@ def _seed_world_lore_on_resume(
 
 
 def bind_player_identity(
-    room,
+    room: SessionRoom,
     *,
     player_id: str,
     identity: str | None,

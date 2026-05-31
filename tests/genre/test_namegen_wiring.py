@@ -342,9 +342,7 @@ def test_thin_corpus_logs_warning(
 # ---------------------------------------------------------------------------
 
 
-def _stub_namespace(
-    genre: str = "space_opera", world: str = "perseus_cloud"
-) -> argparse.Namespace:
+def _stub_namespace(genre: str = "space_opera", world: str = "perseus_cloud") -> argparse.Namespace:
     """Minimal argparse.Namespace that ``generate_npc`` reads from.
 
     Mirrors the surface ``cli/namegen/namegen.py:generate_npc`` consults

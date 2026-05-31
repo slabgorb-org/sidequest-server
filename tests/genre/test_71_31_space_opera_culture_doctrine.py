@@ -56,9 +56,7 @@ GENRE_ONLY_NAMES: frozenset[str] = frozenset({"Frontier", "Synthetic", "Xeno"})
 # coyote_star's three world-unique cultures — they have NO genre equivalent, so they
 # can only resolve if authored at the world tier. (hegemonic / voidborn share a name
 # with deleted genre cultures and are an open Dev decision; deliberately NOT pinned.)
-COYOTE_REQUIRED_UNIQUE: frozenset[str] = frozenset(
-    {"broken_drift", "free_miners", "tsveri"}
-)
+COYOTE_REQUIRED_UNIQUE: frozenset[str] = frozenset({"broken_drift", "free_miners", "tsveri"})
 
 LIVE_WORLDS: tuple[str, ...] = ("perseus_cloud", "aureate_span", "coyote_star")
 

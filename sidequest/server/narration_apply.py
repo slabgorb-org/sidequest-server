@@ -1616,12 +1616,17 @@ def _apply_npc_mentions(
             # ``npc_role_id``, which is not narrator-cited prose). Pass
             # ``None`` so the drift detector skips the role check; pronouns
             # drift is still meaningful.
+            # Story 72-7: the npcs_hit path stays warn-only (no identity
+            # write onto the stateful ``Npc``); record ``applied=False`` so the
+            # span reflects observed-not-applied. Authoritative overwrite lives
+            # on the pool-hit path below.
             _detect_npc_identity_drift(
                 existing_name=npc_hit.core.name,
                 existing_role=None,
                 existing_pronouns=npc_hit.pronouns,
                 mention=mention,
                 turn_num=turn_num,
+                applied=False,
             )
             actor_loc = snapshot.party_location(perspective=acting_character_name)
             if actor_loc:
@@ -1687,18 +1692,42 @@ def _apply_npc_mentions(
                 pool_hit = member
                 break
         if pool_hit is not None:
+            # Story 72-7: narrator drift is authoritative for narrator-sourced
+            # identities — a later mention that disagrees overwrites the
+            # canonical pronoun/role (the session-894 Sitä-minutta fix). A
+            # *human-authored* member (``drawn_from="world_authored"``) is
+            # protected: the narrator must not silently overrule what an author
+            # (Jade/Keith) wrote into the world pack ("Yes, And" + No Silent
+            # Fallbacks — the disagreement is still span-visible, marked
+            # applied=False).
+            apply_overwrite = pool_hit.drawn_from != "world_authored"
             _detect_npc_identity_drift(
                 existing_name=pool_hit.name,
                 existing_role=pool_hit.role,
                 existing_pronouns=pool_hit.pronouns,
                 mention=mention,
                 turn_num=turn_num,
+                applied=apply_overwrite,
             )
-            # Additive upsert — fill empty identity fields from the mention,
-            # never overwrite a value already set.
-            if mention.role and not pool_hit.role:
+            # Identity upsert (Story 72-7): fill-empty always; on a disagreeing
+            # re-mention, overwrite role/pronouns when the entry is
+            # narrator-sourced. ``appearance`` stays additive (fill-empty only)
+            # — a re-described look is accretion, not an identity correction.
+            if mention.role and (
+                not pool_hit.role
+                or (
+                    apply_overwrite
+                    and mention.role.strip().lower() != pool_hit.role.strip().lower()
+                )
+            ):
                 pool_hit.role = mention.role
-            if mention.pronouns and not pool_hit.pronouns:
+            if mention.pronouns and (
+                not pool_hit.pronouns
+                or (
+                    apply_overwrite
+                    and mention.pronouns.strip().lower() != pool_hit.pronouns.strip().lower()
+                )
+            ):
                 pool_hit.pronouns = mention.pronouns
             if mention.appearance and not pool_hit.appearance:
                 pool_hit.appearance = mention.appearance

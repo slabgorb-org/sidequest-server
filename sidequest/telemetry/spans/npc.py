@@ -60,6 +60,9 @@ SPAN_ROUTES[SPAN_NPC_REINVENTED] = SpanRoute(
         "drift_field": (span.attributes or {}).get("drift_field", ""),
         "expected": (span.attributes or {}).get("expected", ""),
         "narrator": (span.attributes or {}).get("narrator", ""),
+        # Story 72-7: whether the disagreeing value was written onto the
+        # canonical entry (True) or merely observed (False).
+        "applied": (span.attributes or {}).get("applied", False),
         "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
 )

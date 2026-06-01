@@ -115,19 +115,18 @@ def test_apply_npc_pool_new_npc():
     assert snapshot.npc_pool[0].drawn_from == "narrator_invented"
 
 
-def test_apply_npc_pool_existing_is_additive_only():
-    """Wave 2A (story 45-47): existing pool members are not duplicated, and
-    canonical fields are frozen.
+def test_apply_npc_pool_existing_overwrites_role_and_fills_pronouns():
+    """Wave 2A (story 45-47): existing pool members are not duplicated.
 
-    Story 37-44 reviewer discipline: once a canonical field (role, pronouns,
-    appearance) is set, a narrator re-mention MUST NOT overwrite it — that
-    was the exact drift path (Frandrew she/her captain → he/him grease
-    monkey). Narrator-driven reinterpretation is detected by
-    ``_detect_npc_identity_drift`` and logged as ``npc.reinvented``, but the
-    canonical value stays.
+    Story 72-7 REVERSES the old 37-44 "canonical frozen" discipline: a
+    disagreeing narrator re-mention now **overwrites** the canonical role /
+    pronouns of a *narrator-sourced* member (``drawn_from`` !=
+    ``world_authored``) — the authoritative-drift fix for the Frandrew /
+    session-894 Sitä-minutta path. Drift is still detected and emitted as
+    ``npc.reinvented`` (now carrying ``applied=True``).
 
-    Fields that are still empty on the existing pool member CAN be filled
-    in additively (first-time population is not drift).
+    Fields still empty on the existing member are filled additively
+    (first-time population is not drift).
     """
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.npc_pool import NpcPoolMember
@@ -148,8 +147,8 @@ def test_apply_npc_pool_existing_is_additive_only():
     # Still 1 entry (no duplicate)
     assert len(snapshot.npc_pool) == 1
     member = snapshot.npc_pool[0]
-    # Canonical role is frozen — not overwritten by narrator re-interpretation
-    assert member.role == "stranger"
+    # 72-7: canonical role is overwritten by the disagreeing re-mention.
+    assert member.role == "barkeep"
     # Pronouns were empty on the existing member, so the additive-update
     # path fills them in on first assertion.
     assert member.pronouns == "she/her"

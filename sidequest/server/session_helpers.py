@@ -2008,8 +2008,9 @@ def _detect_npc_identity_drift(
     existing_pronouns: str | None,
     mention: NpcMention,
     turn_num: int,
+    applied: bool = False,
 ) -> None:
-    """Warn when narrator NPC mention disagrees with the canonical entry.
+    """Emit a drift span when a narrator NPC mention disagrees with canonical.
 
     Story 37-44. Empty fields on the mention = "no opinion"; only explicit
     disagreement triggers. Side-effect only (logger.warning + watcher).
@@ -2017,6 +2018,13 @@ def _detect_npc_identity_drift(
     Wave 2A (story 45-47): refactored to take primitive fields rather than
     a typed registry entry, since callers may now hold either an ``Npc``
     or an ``NpcPoolMember``.
+
+    Story 72-7: drift is now authoritative at the pool-hit upsert site. The
+    ``applied`` flag records whether the disagreeing value is being written
+    onto the canonical entry (True) or merely observed (False — e.g. a
+    human-authored ``world_authored`` member the narrator must not overwrite,
+    or the warn-only ``npcs_hit`` path). The marker rides the span so the GM
+    panel can tell "the record moved" from "a mismatch was noticed".
     """
     for field, m_val, e_val in (
         ("pronouns", mention.pronouns, existing_pronouns),
@@ -2033,12 +2041,14 @@ def _detect_npc_identity_drift(
                 expected=e_val,
                 narrator=m_val,
                 turn_number=turn_num,
+                applied=applied,
             ):
                 logger.warning(
-                    "npc.reinvented name=%r field=%s expected=%r narrator=%r turn=%d",
+                    "npc.reinvented name=%r field=%s expected=%r narrator=%r applied=%s turn=%d",
                     existing_name,
                     field,
                     e_val,
                     m_val,
+                    applied,
                     turn_num,
                 )

@@ -100,6 +100,28 @@ def _validate_side(actor_name: str, declared: str) -> ActorSide:
     raise ValueError(f"actor {actor_name!r} declared_side={declared!r} not in {_VALID_SIDES}")
 
 
+def _stamp_encounter_presence(npc, *, turn: int, location: str | None) -> None:
+    """Story 72-8: refresh recency on an NPC that is PRESENT in an encounter.
+
+    ``Npc.last_seen_turn`` / ``last_seen_location`` were stamped only on the
+    prose-mention path (``narration_apply._apply_npc_mentions`` → ``npcs_hit``).
+    An NPC physically seated as an encounter opponent — HP/dial mutated round
+    over round — went un-stamped when the narrator didn't also name it in that
+    turn's ``npcs_present`` prose, so the engine treated an actively-fought
+    combatant as "not recently seen". Presence is a stronger continuity signal
+    than a prose name-drop; this seam closes the gap (precondition for 72-6's
+    LRU/last-seen prune, which would otherwise mis-evict an on-board NPC).
+
+    Mirrors the prose path's write discipline exactly: ``last_seen_turn`` always
+    advances to the current turn; ``last_seen_location`` is overwritten ONLY when
+    a location actually resolved (No Silent Fallbacks — never stamp a bogus
+    location when ``party_location`` returned ``None``).
+    """
+    npc.last_seen_turn = turn
+    if location:
+        npc.last_seen_location = location
+
+
 def _seed_combat_hp_depletion_to_npcs(
     *,
     snapshot: GameSnapshot,
@@ -107,6 +129,7 @@ def _seed_combat_hp_depletion_to_npcs(
     cdef,
     turn: int,
     source: str,
+    acting_character_name: str,
 ) -> None:
     """Seed opponent ``Npc.core`` HP + AC from content for hp_depletion combats.
 
@@ -140,6 +163,12 @@ def _seed_combat_hp_depletion_to_npcs(
     hp = cdef.opponent_hp
     ac = cdef.opponent_armor_class
 
+    # Story 72-8: resolve the acting character's location ONCE (same accessor the
+    # prose path and ``_npc_fallback_at_location`` use) — every opponent seated in
+    # this encounter shares the acting frame's location. ``None`` when the seat has
+    # no resolved location; we then stamp only the turn, never a bogus location.
+    actor_loc = snapshot.party_location(perspective=acting_character_name)
+
     by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
         if actor.side != "opponent":
@@ -169,9 +198,13 @@ def _seed_combat_hp_depletion_to_npcs(
             # encounter resolves and is not re-instantiated) prevents that.
             npc.core.hp = hp_pool_from_hp(hp)
             npc.core.armor_class = ac
+        # Story 72-8: presence stamp — this opponent is on the board this turn.
+        _stamp_encounter_presence(npc, turn=turn, location=actor_loc)
         # OTEL doctrine: distinguish the CREATE branch (a narrator-improv /
         # router-named opponent materialized fresh — the GM panel must see
         # this as an NPC-materialization event) from the OVERWRITE branch.
+        # The stamped recency rides on the existing edge-published span so the
+        # GM panel can confirm presence-stamping fired without a new span family.
         with npc_edge_published_span(
             npc_name=actor.name,
             current=npc.core.hp.current,
@@ -180,6 +213,8 @@ def _seed_combat_hp_depletion_to_npcs(
             turn_number=turn,
             created=created,
             seed_source="opponent_default_stats",
+            last_seen_turn=npc.last_seen_turn,
+            last_seen_location=npc.last_seen_location or "",
         ):
             pass
 
@@ -265,6 +300,7 @@ def _publish_combat_edge_to_npcs(
     opponent_metric,
     turn: int,
     source: str,
+    acting_character_name: str,
 ) -> None:
     """Story 45-21 / 45-52: publish dial-derived edge onto opponent ``Npc``s.
 
@@ -312,6 +348,10 @@ def _publish_combat_edge_to_npcs(
     # at the dial cap still publishes a representable pool.
     hp_current = max(1, threshold - current_dial)
 
+    # Story 72-8: resolve the acting character's location ONCE (see the
+    # hp_depletion sibling) — shared by every opponent seated this turn.
+    actor_loc = snapshot.party_location(perspective=acting_character_name)
+
     by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
         if actor.side != "opponent":
@@ -322,12 +362,16 @@ def _publish_combat_edge_to_npcs(
         npc.core.hp.max = hp_max
         npc.core.hp.base_max = hp_max
         npc.core.hp.current = hp_current
+        # Story 72-8: presence stamp — this opponent is on the board this turn.
+        _stamp_encounter_presence(npc, turn=turn, location=actor_loc)
         with npc_edge_published_span(
             npc_name=actor.name,
             current=hp_current,
             max=hp_max,
             source=source,
             turn_number=turn,
+            last_seen_turn=npc.last_seen_turn,
+            last_seen_location=npc.last_seen_location or "",
         ):
             pass
 
@@ -1137,6 +1181,7 @@ def instantiate_encounter_from_trigger(
                     cdef=cdef,
                     turn=turn_no,
                     source="encounter_handshake",
+                    acting_character_name=player_name,
                 )
                 _roll_and_persist_initiative(
                     snapshot=snapshot,
@@ -1152,6 +1197,7 @@ def instantiate_encounter_from_trigger(
                     opponent_metric=enc.opponent_metric,
                     turn=turn_no,
                     source="encounter_handshake",
+                    acting_character_name=player_name,
                 )
         return enc
 

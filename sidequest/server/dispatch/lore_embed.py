@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
+from sidequest.game.entity_embedding import embed_pending_entity_cards
 from sidequest.game.lore_embedding import (
     embed_pending_fragments,
     retrieve_lore_context,
@@ -110,6 +111,39 @@ async def run_worker(
         component="lore",
     )
 
+    # Story 75-6: drain the universal-retrieval entity index on the same worker
+    # pass. Reprojected EntityCards carry embedding_pending=True; without this
+    # they are never embedded and stay invisible to query_by_similarity. Isolated
+    # from the lore drain above — an entity-embed failure cannot lose the lore
+    # telemetry already emitted (No Silent Fallbacks: the failure is surfaced).
+    try:
+        entity_result = await embed_pending_entity_cards(sd.entity_store)
+    except Exception as exc:  # noqa: BLE001 — worker cannot crash the loop
+        logger.exception("entity_embedding.worker_exception")
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "entity_embedding",
+                "op": "failed",
+                "reason": "exception",
+                "error": type(exc).__name__,
+                "turn_number": turn_number,
+            },
+            component="retrieval",
+            severity="error",
+        )
+        return
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "entity_embedding",
+            "op": "completed",
+            "turn_number": turn_number,
+            **entity_result.as_dict(),
+        },
+        component="retrieval",
+    )
+
 
 def dispatch_worker(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
     """Spawn a background embed worker for any newly-added lore.
@@ -148,7 +182,11 @@ def dispatch_worker(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
         )
         return
     pending = sd.lore_store.pending_embedding_ids(max_retries=3)
-    if not pending:
+    # Story 75-6: also dispatch when only entity cards are pending — a turn can
+    # reproject an entity without accreting any lore, and those cards must still
+    # be drained by run_worker (which embeds both stores).
+    entity_pending = sd.entity_store.pending_embedding_ids(max_retries=3)
+    if not pending and not entity_pending:
         return
     turn_number = sd.snapshot.turn_manager.interaction
     sd.embed_task = asyncio.create_task(run_worker(handler, sd, len(pending), turn_number))

@@ -531,14 +531,18 @@ def test_drift_detector_fires_on_pronoun_mismatch(caplog, monkeypatch):
     )
 
 
-def test_explicit_drift_does_not_overwrite_canonical_pronouns(caplog, monkeypatch):
-    """After drift is detected, the canonical registry field must stay frozen.
-    The Frandrew scenario: turn 17 registers her as she/her captain; turn 21
-    the narrator says he/him grease monkey. The drift detector fires a warning
-    — and then the upsert path MUST NOT silently overwrite the canonical
-    pronouns/role with the drifted values. Otherwise the warning fires once,
-    the drifted value becomes canonical, and subsequent drift goes undetected.
-    This is reviewer finding [CRITICAL] from the 37-44 review.
+def test_explicit_drift_overwrites_canonical_pronouns_and_role(caplog, monkeypatch):
+    """Story 72-7 REVERSES the old warn-only behavior. The Frandrew scenario:
+    turn 17 registers her as she/her captain; turn 21 the narrator settles her
+    as he/him grease monkey. Under 72-7 the narrator's correction is
+    *authoritative* — the canonical pronouns/role are **overwritten** so the
+    turn N+1 roster carries the corrected identity, not the first throwaway
+    guess.
+
+    This used to be ``test_explicit_drift_does_not_overwrite_canonical_pronouns``
+    (37-44, which froze the canonical value). 72-7 makes drift apply, so the
+    assertions flip: pronouns/role now move; ``appearance`` stays additive
+    (a paraphrased description is accretion, not an identity correction).
     """
     import logging
 
@@ -577,24 +581,26 @@ def test_explicit_drift_does_not_overwrite_canonical_pronouns(caplog, monkeypatc
             room=room_for(snapshot),
         )
 
-    # Drift detector must have fired
+    # Drift detector must still fire (it now records an *applied* overwrite).
     assert "npc.reinvented" in caplog.text, (
         "Drift detector did not fire — precondition for this test failed."
     )
 
-    # Canonical fields MUST remain untouched
+    # Canonical identity fields MUST now carry the narrator's correction.
     entry = snapshot.npc_pool[0]
-    assert entry.pronouns == "she/her", (
-        f"Canonical pronouns overwritten by drifted value: got {entry.pronouns!r}, "
-        "expected 'she/her'. Drift detection is theatre if the drifted value "
-        "silently canonicalizes — on turn N+1 the narrator will see he/him "
-        "in the roster and drift will be permanent."
+    assert entry.pronouns == "he/him", (
+        f"72-7: canonical pronouns were not overwritten on re-mention: got "
+        f"{entry.pronouns!r}, expected 'he/him'. The narrator's correction must "
+        "stick so the turn N+1 roster is right."
     )
-    assert entry.role == "captain", (
-        f"Canonical role overwritten by drifted value: got {entry.role!r}, expected 'captain'."
+    assert entry.role == "grease monkey", (
+        f"72-7: canonical role was not overwritten: got {entry.role!r}, "
+        "expected 'grease monkey'."
     )
+    # appearance is OUT of scope for overwrite — remains additive (fill-empty),
+    # so the already-set value is preserved, not churned by paraphrase.
     assert entry.appearance == "tall, scarred eyebrow", (
-        f"Canonical appearance overwritten: got {entry.appearance!r}."
+        f"appearance must stay additive (not overwritten): got {entry.appearance!r}."
     )
 
 
@@ -677,3 +683,418 @@ def test_case_insensitive_comparison_does_not_fire_drift(caplog, monkeypatch):
     assert "npc.reinvented" not in caplog.text, (
         "Drift detector fired on case-only difference — case-insensitive comparison broken."
     )
+
+
+# ===========================================================================
+# Story 72-7: Apply NPC identity drift authoritatively (overwrite, not warn-only)
+#
+# These tests drive ``_apply_narration_result_to_snapshot`` (the production
+# entry that feeds ``_apply_npc_mentions``) with a synthetic snapshot + an
+# ``NpcMention`` that disagrees with the canonical pool member, then assert on
+# (a) the **mutated snapshot state** (the canonical value moved) and (b) the
+# **emitted ``npc.reinvented`` span** carrying an ``applied`` marker + old→new.
+# Span assertions use the ``otel_capture`` in-memory exporter (conftest), not
+# log text, per server CLAUDE.md "No Source-Text Wiring Tests" and the story
+# context ("assert via the span/watcher harness, not log text").
+# ===========================================================================
+
+
+def _reinvented_spans(exporter):
+    """All captured ``npc.reinvented`` spans, in emission order."""
+    return [s for s in exporter.get_finished_spans() if s.name == "npc.reinvented"]
+
+
+def _drift_snapshot(member: NpcPoolMember) -> GameSnapshot:
+    return GameSnapshot(
+        genre_slug="space_opera",
+        world_slug="aureate_span",
+        location="Bridge",
+        npc_pool=[member],
+    )
+
+
+# --- AC-1: pronoun overwrite -------------------------------------------------
+
+
+def test_drift_overwrites_canonical_pronouns(otel_capture):
+    """AC-1. Canonical ``pronouns='they/them'`` is overwritten to ``'she/her'``
+    when a later mention for the same case-folded name disagrees. (Today the
+    additive-only upsert leaves it ``'they/them'`` forever — the session-894
+    Sitä-minutta bug.)
+    """
+    snapshot = _drift_snapshot(
+        NpcPoolMember(
+            name="Sitä-minutta",
+            role="floor-boss",
+            pronouns="they/them",
+            drawn_from="narrator_invented",
+        )
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="Sitä-minutta straightens. 'You're late,' she says.",
+            npcs_present=[NpcMention(name="Sitä-minutta", pronouns="she/her")],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    assert snapshot.npc_pool[0].pronouns == "she/her", (
+        "72-7 AC-1: canonical pronouns were not overwritten on disagreeing "
+        f"re-mention: got {snapshot.npc_pool[0].pronouns!r}, expected 'she/her'."
+    )
+
+
+# --- AC-2: role overwrite ----------------------------------------------------
+
+
+def test_drift_overwrites_canonical_role(otel_capture):
+    """AC-2. Canonical ``role='assistant'`` is overwritten to ``'captain'`` on a
+    disagreeing re-mention (the narrator promotes the assistant to captain and
+    the canonical record follows).
+    """
+    snapshot = _drift_snapshot(
+        NpcPoolMember(
+            name="Vey",
+            role="assistant",
+            pronouns="he/him",
+            drawn_from="narrator_invented",
+        )
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="Captain Vey takes the bridge.",
+            npcs_present=[NpcMention(name="Vey", role="captain")],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    assert snapshot.npc_pool[0].role == "captain", (
+        "72-7 AC-2: canonical role was not overwritten on disagreeing "
+        f"re-mention: got {snapshot.npc_pool[0].role!r}, expected 'captain'."
+    )
+
+
+# --- AC-3: applied drift span (old -> new) -----------------------------------
+
+
+def test_drift_applied_span_carries_applied_marker_and_old_new(otel_capture):
+    """AC-3 (emission contract). Each authoritative overwrite emits the
+    ``npc.reinvented`` span carrying ``expected`` (old), ``narrator`` (new),
+    ``drift_field``, and an ``applied`` attribute distinguishing it from the
+    prior warn-only emission. Today the span fires WITHOUT ``applied`` — this
+    is the marker the GM panel uses to tell "canonical record moved" from
+    "mismatch merely noticed".
+    """
+    snapshot = _drift_snapshot(
+        NpcPoolMember(
+            name="Sitä-minutta",
+            role="floor-boss",
+            pronouns="they/them",
+            drawn_from="narrator_invented",
+        )
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="'She,' Sitä-minutta corrects.",
+            npcs_present=[NpcMention(name="Sitä-minutta", pronouns="she/her")],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    spans = _reinvented_spans(otel_capture)
+    assert len(spans) == 1, f"expected exactly one npc.reinvented span, got {len(spans)}"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs.get("drift_field") == "pronouns", f"wrong drift_field: {attrs.get('drift_field')!r}"
+    assert attrs.get("expected") == "they/them", f"old value not captured: {attrs.get('expected')!r}"
+    assert attrs.get("narrator") == "she/her", f"new value not captured: {attrs.get('narrator')!r}"
+    assert attrs.get("applied") is True, (
+        "72-7 AC-3: span lacks the `applied=True` marker — the GM panel cannot "
+        "tell the overwrite was APPLIED vs the old warn-only emission. "
+        f"applied attribute = {attrs.get('applied')!r}."
+    )
+
+
+def test_npc_reinvented_route_projects_applied_marker():
+    """AC-3 (projection contract). The GM panel reads the *routed*
+    ``state_transition`` event, not the raw span. The
+    ``SPAN_ROUTES[SPAN_NPC_REINVENTED]`` extractor must propagate the
+    ``applied`` marker (and old/new) into the projected event dict, or the
+    lie-detector goes dark on whether the record actually moved.
+    """
+    from sidequest.telemetry import spans as spans_module
+
+    route = spans_module.SPAN_ROUTES[spans_module.SPAN_NPC_REINVENTED]
+
+    class _FakeSpan:
+        attributes = {
+            "npc_name": "Sitä-minutta",
+            "drift_field": "pronouns",
+            "expected": "they/them",
+            "narrator": "she/her",
+            "turn_number": 2,
+            "applied": True,
+        }
+
+    projected = route.extract(_FakeSpan())
+    assert projected.get("applied") is True, (
+        "72-7 AC-3: npc.reinvented route does not project the `applied` marker "
+        f"into the GM-panel event: {projected!r}."
+    )
+
+
+# --- AC-4: bounded to identity fields; mechanical state + appearance untouched
+
+
+def test_drift_overwrite_leaves_mechanical_state_and_appearance_untouched(otel_capture):
+    """AC-4. A pronoun/role overwrite must not reach mechanical state
+    (``disposition``) or churn ``appearance`` (which stays additive). Only the
+    identity fields move.
+    """
+    from sidequest.game.disposition import Disposition
+
+    snapshot = _drift_snapshot(
+        NpcPoolMember(
+            name="Vey",
+            role="assistant",
+            pronouns="they/them",
+            appearance="oil-streaked coveralls",
+            disposition=Disposition(25),
+            drawn_from="narrator_invented",
+        )
+    )
+    disp_before = int(snapshot.npc_pool[0].disposition)
+
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="Captain Vey, now in a pressed uniform, takes the bridge. 'She has it,'"
+            " someone mutters.",
+            npcs_present=[
+                NpcMention(
+                    name="Vey",
+                    role="captain",
+                    pronouns="she/her",
+                    appearance="pressed command uniform",
+                )
+            ],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    entry = snapshot.npc_pool[0]
+    # identity fields moved
+    assert entry.pronouns == "she/her" and entry.role == "captain", (
+        "precondition: identity overwrite must apply for this AC-4 test to be meaningful"
+    )
+    # appearance stayed additive (already set -> not overwritten by paraphrase)
+    assert entry.appearance == "oil-streaked coveralls", (
+        f"72-7 AC-4: appearance was overwritten (should stay additive): {entry.appearance!r}."
+    )
+    # disposition (mechanical) untouched
+    assert int(entry.disposition) == disp_before == 25, (
+        f"72-7 AC-4: disposition changed during identity overwrite: {int(entry.disposition)}."
+    )
+
+
+# --- AC-5: no-op when mention agrees or is empty (regression guards) ----------
+
+
+def test_agreeing_mention_performs_no_overwrite_and_no_span(otel_capture):
+    """AC-5. A re-mention that AGREES (case-insensitively) with canonical
+    values performs no overwrite and emits NO ``npc.reinvented`` span. Guards
+    the "empty = no opinion" / "agree = no drift" contract against accidental
+    always-fire regressions once overwrite is wired.
+    """
+    snapshot = _drift_snapshot(
+        NpcPoolMember(
+            name="Vey",
+            role="Captain",
+            pronouns="She/Her",
+            drawn_from="narrator_invented",
+        )
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="Vey nods.",
+            npcs_present=[NpcMention(name="Vey", role="captain", pronouns="she/her")],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    assert _reinvented_spans(otel_capture) == [], (
+        "72-7 AC-5: agreeing re-mention emitted a npc.reinvented span — "
+        "case-insensitive 'no drift' contract broken."
+    )
+    # canonical values preserved verbatim (no needless rewrite)
+    assert snapshot.npc_pool[0].pronouns == "She/Her"
+    assert snapshot.npc_pool[0].role == "Captain"
+
+
+def test_empty_mention_fields_perform_no_overwrite_and_no_span(otel_capture):
+    """AC-5. A bare-name re-mention (empty role/pronouns) is "no opinion": no
+    overwrite, no span. (Companion to the existing
+    ``test_bare_name_re_mention_does_not_overwrite_canonical_fields`` — adds the
+    span-silence assertion.)
+    """
+    snapshot = _drift_snapshot(
+        NpcPoolMember(
+            name="Vey",
+            role="captain",
+            pronouns="she/her",
+            drawn_from="narrator_invented",
+        )
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="Vey shrugs.",
+            npcs_present=[NpcMention(name="Vey")],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    assert _reinvented_spans(otel_capture) == [], (
+        "72-7 AC-5: bare-name re-mention emitted a drift span — 'empty = no "
+        "opinion' contract broken."
+    )
+    assert snapshot.npc_pool[0].pronouns == "she/her"
+    assert snapshot.npc_pool[0].role == "captain"
+
+
+# --- Edge: conflicting drift within one turn (last-mention-wins) --------------
+
+
+def test_conflicting_drift_within_turn_last_mention_wins(otel_capture):
+    """Edge. Two mentions of the same name in ONE turn carrying different new
+    pronouns must resolve deterministically (last-mention-wins, matching the
+    sequential apply loop) — the canonical record must not be left in an
+    order-indeterminate state, and each applied step is observable as a span.
+    """
+    snapshot = _drift_snapshot(
+        NpcPoolMember(
+            name="Vey",
+            pronouns="they/them",
+            role="assistant",
+            drawn_from="narrator_invented",
+        )
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="Vey enters, then corrects herself.",
+            npcs_present=[
+                NpcMention(name="Vey", pronouns="he/him"),
+                NpcMention(name="Vey", pronouns="she/her"),
+            ],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    assert snapshot.npc_pool[0].pronouns == "she/her", (
+        "72-7 edge: conflicting same-turn drift did not resolve last-wins: "
+        f"got {snapshot.npc_pool[0].pronouns!r}, expected 'she/her'."
+    )
+    # both applied steps must be observable (not collapsed to one)
+    assert len(_reinvented_spans(otel_capture)) == 2, (
+        "each applied overwrite step must emit its own npc.reinvented span; "
+        f"got {len(_reinvented_spans(otel_capture))}."
+    )
+
+
+# --- Edge: player/world-authored identity is NOT overwritten by narrator drift
+
+
+def test_drift_does_not_overwrite_world_authored_identity(otel_capture):
+    """Edge (policy decision — TEA). Narrator drift must NOT silently overwrite
+    a *human-authored* identity (``drawn_from='world_authored'`` — Jade/Keith
+    wrote this NPC into the world pack). The overwrite is suppressed and the
+    span records ``applied=False`` so the disagreement stays visible on the GM
+    panel (No Silent Fallbacks). Narrator-sourced members (other ``drawn_from``)
+    still overwrite — see AC-1/AC-2.
+    """
+    snapshot = _drift_snapshot(
+        NpcPoolMember(
+            name="Prefect Autelle",
+            role="prefect",
+            pronouns="they/them",
+            drawn_from="world_authored",
+        )
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="The prefect waves you off. 'She's busy,' an aide says.",
+            npcs_present=[NpcMention(name="Prefect Autelle", pronouns="she/her")],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    # canonical author-set identity is preserved
+    assert snapshot.npc_pool[0].pronouns == "they/them", (
+        "72-7 edge: narrator drift overwrote a world_authored identity: "
+        f"got {snapshot.npc_pool[0].pronouns!r}, expected 'they/them' preserved."
+    )
+    # but the disagreement is still span-visible, marked NOT applied
+    spans = _reinvented_spans(otel_capture)
+    assert len(spans) == 1, f"world_authored drift must still emit a span; got {len(spans)}"
+    assert dict(spans[0].attributes or {}).get("applied") is False, (
+        "72-7 edge: suppressed (world_authored) drift must mark the span "
+        "applied=False so the GM panel sees it was noticed-not-applied; got "
+        f"{dict(spans[0].attributes or {}).get('applied')!r}."
+    )
+
+
+# --- Edge: overwriting to match another NPC's values does not merge entries ---
+
+
+def test_drift_to_matching_values_does_not_merge_pool_entries(otel_capture):
+    """Edge. Overwriting member B's pronouns to a value another member A already
+    holds must NOT merge, alias, or cross-link the two pool entries — the join
+    key is the (unchanged) case-folded name, so they remain two distinct
+    members. Only B's identity field moves.
+    """
+    snapshot = GameSnapshot(
+        genre_slug="space_opera",
+        world_slug="aureate_span",
+        location="Bridge",
+        npc_pool=[
+            NpcPoolMember(name="Aria", pronouns="she/her", drawn_from="narrator_invented"),
+            NpcPoolMember(name="Bex", pronouns="they/them", drawn_from="narrator_invented"),
+        ],
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        NarrationTurnResult(
+            narration="Bex laughs. 'She knows,' Bex says of herself.",
+            npcs_present=[NpcMention(name="Bex", pronouns="she/her")],
+            is_degraded=False,
+        ),
+        "Felix",
+        room=room_for(snapshot),
+    )
+
+    assert len(snapshot.npc_pool) == 2, "overwrite must not drop/merge a pool entry"
+    by_name = {m.name: m for m in snapshot.npc_pool}
+    assert set(by_name) == {"Aria", "Bex"}, "names (join keys) must be unchanged and distinct"
+    assert by_name["Bex"].pronouns == "she/her", "B's pronoun overwrite did not apply"
+    assert by_name["Aria"].pronouns == "she/her", "A must be untouched by B's drift"

@@ -18,7 +18,7 @@ from pydantic import ValidationError
 if TYPE_CHECKING:
     from sidequest.agents.orchestrator import BeatSelection
     from sidequest.game.character import Character
-    from sidequest.game.encounter import EncounterActor
+    from sidequest.game.encounter import EncounterActor, EncounterPhase
     from sidequest.genre.names.generator import NameGenerator
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
@@ -4141,7 +4141,135 @@ def _apply_narration_result_to_snapshot(
     # opponent leaves, not only when a dial hits threshold.
     _resolve_if_no_opponent_remains(snapshot)
 
+    # Playtest 2026-06-01 (the_real_mccoy standoff): post-turn dial-threshold
+    # sweep. ``advance_confrontation`` moves a dial without touching
+    # ``beat``/``structured_phase``/resolution (only ``advance_encounter_beat``→
+    # ``apply_beat`` does that), so a confrontation the narrator drove with the
+    # dial tool alone heats past threshold while frozen in ``Setup`` and never
+    # resolves. This sweep runs every turn after ALL tool calls, so it catches
+    # the final dial regardless of which tool moved it.
+    _resolve_dial_threshold_and_phase(snapshot)
+
     return outcome
+
+
+# Dramatic-arc order for forward-only phase advancement (never regress).
+_PHASE_ORDER: tuple[str, ...] = (
+    "Setup",
+    "Opening",
+    "Escalation",
+    "Climax",
+    "Resolution",
+)
+
+
+def _phase_for_dial_progress(enc: object) -> EncounterPhase:
+    """Map the hottest dial's progress toward threshold onto the dramatic arc.
+
+    The encounter is as advanced as its hottest dial. Progress is
+    ``(current - starting) / (threshold - starting)`` per metric, clamped at
+    zero (negative "regroup" deltas don't push the phase below Setup). At/above
+    1.0 the resolution branch owns the transition; this helper only covers the
+    sub-threshold band.
+    """
+    from sidequest.game.encounter import EncounterPhase
+
+    def _ratio(metric: object) -> float:
+        span = metric.threshold - metric.starting  # type: ignore[attr-defined]
+        if span <= 0:
+            return 0.0
+        return max(0.0, (metric.current - metric.starting) / span)  # type: ignore[attr-defined]
+
+    ratio = max(_ratio(enc.player_metric), _ratio(enc.opponent_metric))  # type: ignore[attr-defined]
+    if ratio <= 0.0:
+        return EncounterPhase.Setup
+    if ratio < 0.34:
+        return EncounterPhase.Opening
+    if ratio < 0.67:
+        return EncounterPhase.Escalation
+    if ratio < 1.0:
+        return EncounterPhase.Climax
+    return EncounterPhase.Resolution
+
+
+def _resolve_dial_threshold_and_phase(snapshot: GameSnapshot) -> None:
+    """Post-turn resolution + phase sweep for ``dial_threshold`` confrontations.
+
+    Mirrors the ``current >= threshold`` resolution branch already in
+    ``apply_beat`` (beat_kinds.py), but runs from the narration-apply pipeline
+    so it fires no matter which tool moved the dial — closing the wedge where a
+    standoff driven purely by ``advance_confrontation`` heats past threshold and
+    never resolves.
+
+    * At/over threshold → ``resolved`` + ``player_victory``/``opponent_victory``
+      (player first, matching apply_beat's tie-break) + ``Resolution``. Emits
+      ``encounter.resolved`` (source=``dial_threshold_sweep``) and stamps the
+      resolution signal so the narrator's next frame sees the close.
+    * Below threshold → advance ``structured_phase`` FORWARD to track dial heat
+      (never regress past a beat-set phase), so the GM panel and mechanics-first
+      players see the standoff progressing instead of frozen in Setup. Emits a
+      ``state_transition`` watcher event on a real transition.
+
+    Gated to ``win_condition == "dial_threshold"``: ``hp_depletion`` dials are
+    synthesized inert (threshold ~1e6) and resolve on the HP path only;
+    ``table_showdown`` reads ``table_state``, not the metrics.
+    """
+    from sidequest.game.encounter import EncounterPhase
+    from sidequest.telemetry.spans import encounter_resolved_span
+
+    enc = getattr(snapshot, "encounter", None)
+    if enc is None or enc.resolved:
+        return
+    if enc.win_condition != "dial_threshold" or enc.table_state is not None:
+        return
+
+    # Resolution at threshold — player crossing wins the tie-break, matching
+    # apply_beat (sealed-letter order places player beats first).
+    if enc.player_metric.current >= enc.player_metric.threshold:
+        outcome = "player_victory"
+    elif enc.opponent_metric.current >= enc.opponent_metric.threshold:
+        outcome = "opponent_victory"
+    else:
+        outcome = None
+
+    if outcome is not None:
+        enc.resolved = True
+        enc.outcome = outcome
+        enc.structured_phase = EncounterPhase.Resolution
+        snapshot.pending_resolution_signal = _build_resolution_signal(enc)
+        with encounter_resolved_span(
+            encounter_type=enc.encounter_type,
+            outcome=outcome,
+            source="dial_threshold_sweep",
+            player_metric=enc.player_metric.current,
+            opponent_metric=enc.opponent_metric.current,
+        ):
+            pass
+        return
+
+    # Below threshold: advance the phase forward to reflect dial heat.
+    derived = _phase_for_dial_progress(enc)
+    current = enc.structured_phase or EncounterPhase.Setup
+    if _PHASE_ORDER.index(str(derived)) > _PHASE_ORDER.index(str(current)):
+        enc.structured_phase = derived
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter.structured_phase",
+                "op": "advanced",
+                "from": str(current),
+                "to": str(derived),
+                "player_metric": enc.player_metric.current,
+                "opponent_metric": enc.opponent_metric.current,
+                "rationale": (
+                    "dial-threshold confrontation phase derived from dial heat "
+                    "(advance_confrontation moved the dial without a beat); "
+                    "phase tracks progress toward threshold"
+                ),
+            },
+            component="encounter",
+            severity="info",
+        )
 
 
 def _resolve_if_no_opponent_remains(snapshot: GameSnapshot) -> None:

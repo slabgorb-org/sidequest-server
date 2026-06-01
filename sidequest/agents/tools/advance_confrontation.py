@@ -28,7 +28,14 @@ v1 mapping
   does *not* clamp; values can grow past ``threshold`` (or below zero
   for negative deltas — useful for "regroup" beats). The narrator is
   responsible for sensible deltas; ``crossed_threshold`` in the result
-  signals that a resolution beat is now due.
+  signals that a resolution beat is now due. The engine no longer relies
+  on the narrator to follow up: ``_resolve_dial_threshold_and_phase`` in
+  ``server/narration_apply.py`` runs a post-turn sweep that resolves the
+  encounter at threshold and advances ``structured_phase`` to track dial
+  heat, regardless of whether this tool or ``advance_encounter_beat``
+  moved the dial (playtest 2026-06-01: a standoff driven by this tool
+  alone otherwise heated to threshold frozen in ``Setup`` and never
+  resolved).
 * ``confrontation_id: str`` — accepted forward-compat for the eventual
   multi-confrontation registry (ADR-033's ``ConfrontationDefinition``
   graph). v1 always targets ``snapshot.encounter``; the id is recorded

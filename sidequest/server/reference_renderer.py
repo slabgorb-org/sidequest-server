@@ -49,6 +49,7 @@ import yaml
 from sidequest.server.reference_presenters import (
     PresenterContext,
     lookup_presenter,
+    poi_image_key,
 )
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import (
@@ -1155,11 +1156,6 @@ def load_r2_manifest_keys(manifest_path: Path) -> frozenset[str]:
     return frozenset(keys)
 
 
-def _poi_image_key(pack: str, world: str, slug: str) -> str:
-    """Canonical R2 object key for a POI landscape image."""
-    return f"genre_packs/{pack}/worlds/{world}/assets/poi/{slug}.png"
-
-
 def _gate_poi_slugs_on_manifest(
     authored_slugs: frozenset[str],
     *,
@@ -1194,7 +1190,7 @@ def _gate_poi_slugs_on_manifest(
     ):
         pass
     return frozenset(
-        slug for slug in authored_slugs if _poi_image_key(pack, world, slug) in manifest_keys
+        slug for slug in authored_slugs if poi_image_key(pack, world, slug) in manifest_keys
     )
 
 

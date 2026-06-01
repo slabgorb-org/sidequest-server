@@ -397,8 +397,8 @@ def reference_manifest_loaded_span(
     world_key_count: int,
     _tracer: trace.Tracer | None = None,
 ) -> Iterator[trace.Span]:
-    """INFO — fired once per lore render that consults r2_manifest.json (the
-    65-7 R2 existence oracle) to gate POI ``<img>`` emission. Carries the
+    """INFO — fired when a lore render consults r2_manifest.json (the 65-7 R2
+    existence oracle) to gate POI ``<img>`` emission. Carries the
     manifest path, total entry count, and the number of keys under this world's
     POI prefix, so the GM/dev panel can confirm the gate ran against a real
     oracle rather than improvising image URLs."""

@@ -837,3 +837,57 @@ def npc_identity_seeded_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+# Story 75-2: budgeted NPC working-set selection. Fires once per turn when the
+# roster is partitioned into the prompt working-set (scene-present full floor /
+# off-stage brief / off-stage compact). The GM-panel lie detector: it shows
+# considered-vs-selected counts so the dev can verify the budgeting engaged and
+# the prompt roster is bounded by relevance, not dumped verbatim (ADR-118 D5).
+SPAN_NPC_WORKING_SET = "npc.working_set"
+SPAN_ROUTES[SPAN_NPC_WORKING_SET] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc_working_set",
+        "op": "budgeted_selection",
+        "full_count": (span.attributes or {}).get("full_count", 0),
+        "brief_count": (span.attributes or {}).get("brief_count", 0),
+        "compact_count": (span.attributes or {}).get("compact_count", 0),
+        "total_pool": (span.attributes or {}).get("total_pool", 0),
+        "references_present": (span.attributes or {}).get("references_present", False),
+    },
+)
+
+
+@contextmanager
+def npc_working_set_span(
+    *,
+    full_count: int,
+    brief_count: int,
+    compact_count: int,
+    total_pool: int,
+    references_present: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 75-2: emitted once per ``build_npc_working_set`` call.
+
+    ``full_count`` is the scene-present floor (always full detail);
+    ``brief_count`` / ``compact_count`` are the off-stage tier in
+    reference-present / no-reference mode respectively. ``total_pool`` is the
+    full considered roster (``npcs`` + ``npc_pool``) — ``full+brief+compact``
+    must equal it (no eviction), and a mismatch is a budgeting bug the GM panel
+    can see. ``references_present`` records whether the off-stage tier was
+    brief (a reference was made) or compact.
+    """
+    attributes: dict[str, Any] = {
+        "full_count": full_count,
+        "brief_count": brief_count,
+        "compact_count": compact_count,
+        "total_pool": total_pool,
+        "references_present": references_present,
+        **attrs,
+    }
+    with Span.open(SPAN_NPC_WORKING_SET, attributes, tracer_override=_tracer) as span:
+        yield span

@@ -118,8 +118,7 @@ def test_scene_present_npcs_get_full_profiles_when_referenced() -> None:
         f"got {_names(ws.brief_entries)}"
     )
     assert ws.compact_names == [], (
-        "compact tier must be empty when the player referenced an NPC; "
-        f"got {ws.compact_names}"
+        f"compact tier must be empty when the player referenced an NPC; got {ws.compact_names}"
     )
 
 
@@ -289,7 +288,9 @@ def test_pool_members_compact_when_no_reference() -> None:
     pool = [_pool_member("Reeve"), _pool_member("Tally")]
     snap = _snap(current_turn=10, npcs=stateful, pool=pool)
 
-    ws = build_npc_working_set(snap, current_turn=10, player_referenced_npcs=set(), recency_window=2)
+    ws = build_npc_working_set(
+        snap, current_turn=10, player_referenced_npcs=set(), recency_window=2
+    )
 
     assert _names(ws.full_profiles) == {"Borin"}
     assert set(ws.compact_names) == {"Reeve", "Tally"}
@@ -302,7 +303,9 @@ def test_empty_roster_produces_empty_tiers() -> None:
 
     snap = _snap(current_turn=10, npcs=[], pool=[])
 
-    ws = build_npc_working_set(snap, current_turn=10, player_referenced_npcs=set(), recency_window=2)
+    ws = build_npc_working_set(
+        snap, current_turn=10, player_referenced_npcs=set(), recency_window=2
+    )
 
     assert ws.full_profiles == []
     assert ws.brief_entries == []
@@ -340,7 +343,9 @@ def test_working_set_span_emits_tier_counts(otel_capture) -> None:
     attrs = dict(fired[0].attributes or {})
     assert attrs.get("full_count") == 3, f"full_count should be 3; got {attrs.get('full_count')}"
     assert attrs.get("brief_count") == 2, f"brief_count should be 2; got {attrs.get('brief_count')}"
-    assert attrs.get("compact_count") == 0, f"compact_count should be 0; got {attrs.get('compact_count')}"
+    assert attrs.get("compact_count") == 0, (
+        f"compact_count should be 0; got {attrs.get('compact_count')}"
+    )
     assert attrs.get("total_pool") == 5, (
         f"total_pool (considered roster size) should be 5; got {attrs.get('total_pool')}"
     )
@@ -392,7 +397,7 @@ def test_budgeting_wired_into_build_turn_context(otel_capture) -> None:
     test is robust to that still-open question (see Delivery Findings).
     """
     from sidequest.genre.loader import load_genre_pack
-    from sidequest.server.session_handler import _SessionData, _build_turn_context
+    from sidequest.server.session_handler import _build_turn_context, _SessionData
     from sidequest.telemetry.spans import SPAN_NPC_WORKING_SET
     from tests._helpers.session_room import room_for
 

@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from sidequest.agents.npc_context import NpcWorkingSet
     from sidequest.agents.subsystems import BankResult
     from sidequest.game.lore_store import LoreStore
     from sidequest.game.monster_manual import MonsterManual
@@ -683,6 +684,14 @@ class TurnContext:
 
     # Full NPC structs (for merchant context injection — Phase 1 slice: skipped)
     npcs: list[Npc] = field(default_factory=list)
+
+    # Story 75-2: budgeted NPC working-set — the relevance-selected projection
+    # of ``npc_pool`` + ``npcs`` that actually enters the narrator prompt
+    # (scene-present full floor / off-stage brief or compact). The full roster
+    # above persists for other consumers; this is the bounded prompt view that
+    # ``register_npc_roster_section`` renders. ``None`` only on contexts built
+    # before the budgeting seam ran (legacy/direct construction).
+    npc_working_set: NpcWorkingSet | None = None
 
     # Chassis registry — chassis-as-speaker voice data (register, vocal tics,
     # bond-tier address-form). Defensive copy from session.chassis_registry
@@ -1997,7 +2006,17 @@ class Orchestrator:
         # than the deprecated ``npc_registry``; gaslight-preserving format
         # makes pool members and stateful Npcs indistinguishable to the
         # narrator.
-        if context.npc_pool or context.npcs:
+        # Story 75-2: render the budgeted working-set (scene-present full floor /
+        # off-stage brief or compact) instead of dumping the full roster every
+        # turn. The working-set is always populated by the live turn-build path;
+        # the npc_pool/npcs branch is the legacy fallback for contexts built
+        # without the budgeting seam (direct construction / older tests).
+        if context.npc_working_set is not None:
+            registry.register_npc_roster_section(
+                agent_name,
+                working_set=context.npc_working_set,
+            )
+        elif context.npc_pool or context.npcs:
             registry.register_npc_roster_section(
                 agent_name,
                 npc_pool=context.npc_pool,

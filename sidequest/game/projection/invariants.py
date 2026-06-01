@@ -190,7 +190,7 @@ class CoreInvariantStage:
             return InvariantOutcome(
                 terminal=True,
                 decision=FilterDecision(include=False, payload_json=""),
-                source="invariant:gm_only_kind",
+                source="invariant:player_excluded_kind",
             )
 
         return InvariantOutcome(terminal=False, decision=None, source=None)

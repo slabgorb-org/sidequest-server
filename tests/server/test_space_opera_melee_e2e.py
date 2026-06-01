@@ -1,9 +1,9 @@
-"""Story 71-24 — personal-melee confrontation beat bank (RED).
+"""Story 71-24 — personal-melee confrontation beat bank (GREEN — bank authored).
 
 space_opera (the SWN-bound pack that ``perseus_cloud`` rides on) ships ship/
 dogfight banks and a ranged ``combat`` ("Firefight") bank, but NO personal-melee
-bank. The Firefight ``intent_verbs`` already *advertise* melee (``swing``,
-``stab``, ``slay`` — ``rules.yaml:324``), so a knife-fight action matches into
+bank. Before 71-24 the Firefight ``intent_verbs`` advertised melee verbs
+(``swing``, ``stab``, ``strike``), so a knife-fight action matched into
 Firefight and the player is handed "Blaster bolts sear the corridor" beats for a
 melee brawl. That is precisely the "Claude wings convincing prose with zero
 mechanical backing" failure the OTEL principle exists to catch.
@@ -37,8 +37,8 @@ exception to "tests don't point at content"): the whole point is proving the
 melee bank resolves through the production path against the authored pack. They
 skip gracefully when sidequest-content is not on disk.
 
-RED: every melee assertion fails until the ``melee`` bank is authored in
-``genre_packs/space_opera/rules.yaml`` (story 71-24, Dev/green phase).
+History: authored RED (every assertion failed until the ``melee`` bank existed),
+now GREEN — the bank is authored in ``genre_packs/space_opera/rules.yaml``.
 """
 
 from __future__ import annotations

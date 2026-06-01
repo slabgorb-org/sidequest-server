@@ -40,7 +40,6 @@ from sidequest.server.session_handler import (
 
 def _view() -> SessionGameStateView:
     return SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={
             "player:Alice": "alice_char",
             "player:Bob": "bob_char",

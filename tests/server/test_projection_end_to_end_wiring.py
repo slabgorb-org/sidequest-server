@@ -1,12 +1,14 @@
 """End-to-end ProjectionFilter wiring test.
 
 Asserts the single-truth invariant in executable form:
-    - 2 players + 1 GM receive projections consistent with the rules
+    - 3 players (no GM seat — the narrator is the GM) receive projections
+      consistent with the rules
     - projection_cache has exactly N rows per event
     - projection.filter.decide span count equals the projection count
     - Reconnecting a player receives byte-identical frames to the live
       session (via cache read, no re-filter)
-    - GM canonical view is untouched by any rule
+    - Canonical truth lives in the events table (read server-side by the
+      narrator), untouched by any projection rule
 """
 
 from __future__ import annotations
@@ -91,13 +93,12 @@ rules:
   - kind: NARRATION
     redact_fields:
       - field: text
-        unless: is_gm()
+        unless: is_self(text)
         mask: "**"
         """
     )
     filt = ComposedFilter(rules=rules)
     view = SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={
             "alice": "alice_char",
             "bob": "bob_char",
@@ -124,13 +125,14 @@ rules:
     ]
     assert len(decide_spans) == 9
 
-    # 3. GM sees canonical; players see "**".
+    # 3. No GM seat exists — every player (including the one historically
+    #    named "gm") sees the masked "**". The canonical text lives only in
+    #    the events table (assertion 5), read server-side by the narrator,
+    #    never in a per-player projection.
     alice_rows = cache.read_since(player_id="alice", since_seq=0)
-    gm_rows = cache.read_since(player_id="gm", since_seq=0)
-    for r in alice_rows:
-        assert json.loads(r.payload_json)["text"] == "**"
-    for r in gm_rows:
-        assert json.loads(r.payload_json)["text"] in {"one", "two", "three"}
+    for pid in players:
+        for r in cache.read_since(player_id=pid, since_seq=0):
+            assert json.loads(r.payload_json)["text"] == "**"
 
     # 4. Reconnecting Alice replays byte-identical frames (cache-only path).
     replay = cache.read_since(player_id="alice", since_seq=0)
@@ -168,13 +170,12 @@ rules:
   - kind: NARRATION
     redact_fields:
       - field: text
-        unless: is_gm()
+        unless: is_self(text)
         mask: "**"
         """
     )
     filt = ComposedFilter(rules=rules, pack_slug="test_pack")
     view = SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={
             "alice": "alice_char",
             "bob": "bob_char",

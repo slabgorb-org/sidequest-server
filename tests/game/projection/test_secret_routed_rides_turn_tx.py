@@ -94,7 +94,7 @@ def test_secret_routed_publish_rides_open_turn_tx(repo_and_sink):
     filt = ComposedFilter.with_no_genre_rules()
     # bob is a non-GM, non-author recipient — routed through the
     # visibility-gated exclusion (visible_to=["alice"], so include=False).
-    view = SessionGameStateView(gm_player_id="gm")
+    view = SessionGameStateView()
 
     try:
         bind_event_store(sink)

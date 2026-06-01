@@ -27,7 +27,6 @@ def _env(kind: str, payload: dict, seq: int = 1) -> MessageEnvelope:
 def test_excludes_when_player_not_in_visible_to():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
-        gm_player_id=None,
         player_id_to_character={"p1": "c1", "p2": "c2"},
     )
     payload = {"text": "Alice sneaks.", "_visibility": {"visible_to": ["p1"]}}
@@ -38,7 +37,6 @@ def test_excludes_when_player_not_in_visible_to():
 def test_includes_when_player_in_visible_to():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
-        gm_player_id=None,
         player_id_to_character={"p1": "c1", "p2": "c2"},
     )
     payload = {"text": "Alice sneaks.", "_visibility": {"visible_to": ["p1"]}}
@@ -49,7 +47,6 @@ def test_includes_when_player_in_visible_to():
 def test_all_means_all():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
-        gm_player_id=None,
         player_id_to_character={"p1": "c1", "p2": "c2"},
     )
     payload = {"text": "Dawn breaks.", "_visibility": {"visible_to": "all"}}
@@ -60,7 +57,6 @@ def test_all_means_all():
 def test_missing_visibility_falls_through_to_pass_through():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
-        gm_player_id=None,
         player_id_to_character={"p1": "c1"},
     )
     payload = {"text": "No viz key."}
@@ -71,7 +67,6 @@ def test_missing_visibility_falls_through_to_pass_through():
 def test_fidelity_transform_strips_visual_spans_for_blinded():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
-        gm_player_id=None,
         player_id_to_character={"p1": "c1"},
     )
     payload = {

@@ -35,7 +35,6 @@ rules:
 
 def _view(pids: list[str], zones: dict[str, str] | None = None) -> SessionGameStateView:
     return SessionGameStateView(
-        gm_player_id=None,
         player_id_to_character={p: f"char_{p}" for p in pids},
         character_zones={f"char_{p}": z for p, z in (zones or {}).items()},
     )

@@ -84,7 +84,7 @@ def test_rejects_rule_with_both_target_only_and_redact_fields() -> None:
               field: to
             redact_fields:
               - field: hp
-                unless: is_gm()
+                unless: is_self()
                 mask: "??"
         """
     )
@@ -99,14 +99,14 @@ def test_predicate_with_no_args_parses() -> None:
           - kind: STATE_UPDATE
             redact_fields:
               - field: enemy.intent
-                unless: is_gm()
+                unless: is_self()
                 mask: null
         """
     )
     rules = load_rules_from_yaml_str(yaml)
     r = rules.rules[0]
     assert isinstance(r, RedactFieldsRule)
-    assert r.redact_fields[0].unless.predicate == "is_gm"
+    assert r.redact_fields[0].unless.predicate == "is_self"
     assert r.redact_fields[0].unless.arg is None
 
 

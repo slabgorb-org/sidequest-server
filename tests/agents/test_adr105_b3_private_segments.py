@@ -140,7 +140,6 @@ def test_narration_segment_registered_and_replay_round_trips():
 
 def _view() -> SessionGameStateView:
     return SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={"willes": "Willes", "narder": "Narder"},
     )
 

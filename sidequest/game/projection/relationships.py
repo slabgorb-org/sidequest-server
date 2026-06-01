@@ -15,6 +15,7 @@ from typing import Any
 from sidequest.game.disposition import DispositionBeat
 from sidequest.protocol.models import (
     DispositionBeatPayload,
+    RelationshipClaimPayload,
     RelationshipEntry,
 )
 
@@ -71,7 +72,10 @@ def build_relationship_entries(snapshot: Any) -> list[RelationshipEntry]:
                 beats=beats,
                 personality_read=personality_read(npc.ocean),
                 ocean=npc.ocean,
-                claims=[],
+                claims=[
+                    RelationshipClaimPayload(text=c["text"], credibility_hint=c["credibility_hint"])
+                    for c in claims_to_party(npc.belief_state)
+                ],
             )
         )
     return entries

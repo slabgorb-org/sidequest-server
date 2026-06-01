@@ -144,3 +144,63 @@ def test_build_entries_no_ocean_keeps_none():
     e = build_relationship_entries(_snapshot_with([npc]))[0]
     assert e.ocean is None
     assert e.personality_read is None
+
+
+def test_build_entries_populates_claims():
+    from sidequest.game.belief_state import BeliefClaim, BeliefSourceToldBy
+
+    npc = _npc("Tabitha")
+    npc.belief_state.beliefs.append(
+        BeliefClaim(
+            subject="alibi",
+            content="I was in the garden",
+            source=BeliefSourceToldBy(by="Tabitha"),
+            believed=True,
+        )
+    )
+    e = build_relationship_entries(_snapshot_with([npc]))[0]
+    assert len(e.claims) == 1
+    assert e.claims[0].text == "I was in the garden"
+    assert e.claims[0].credibility_hint  # non-empty
+
+
+def test_build_entries_claims_firewall_excludes_facts_and_suspicions():
+    # Security boundary: the production builder runs belief_state through
+    # claims_to_party, which drops Fact/Suspicion (the mystery's solution).
+    from sidequest.game.belief_state import (
+        BeliefClaim,
+        BeliefFact,
+        BeliefSourceToldBy,
+        BeliefSourceWitnessed,
+        BeliefSuspicion,
+    )
+
+    npc = _npc("Tabitha")
+    npc.belief_state.beliefs.append(
+        BeliefFact(
+            subject="killer",
+            content="The butler did it",
+            source=BeliefSourceWitnessed(),
+        )
+    )
+    npc.belief_state.beliefs.append(
+        BeliefSuspicion(
+            subject="motive",
+            content="It was about the will",
+            source=BeliefSourceWitnessed(),
+            confidence=0.5,
+        )
+    )
+    npc.belief_state.beliefs.append(
+        BeliefClaim(
+            subject="alibi",
+            content="I was in the garden",
+            source=BeliefSourceToldBy(by="Tabitha"),
+            believed=True,
+        )
+    )
+    e = build_relationship_entries(_snapshot_with([npc]))[0]
+    texts = [c.text for c in e.claims]
+    assert texts == ["I was in the garden"]
+    assert "The butler did it" not in texts
+    assert "It was about the will" not in texts

@@ -532,11 +532,17 @@ def generate_enemy(
     # Fall back to DEFAULT_HP_BASE; the materializer translates to EdgePool.
     hp = DEFAULT_HP_BASE * level
 
-    # Archetype
-    archetypes = pack.archetypes
+    # Archetype — world-over-genre resolution (GenrePack.effective_*), the SAME
+    # resolution namegen + pregen.seed_manual use. Reading pack.archetypes raw
+    # here was the perseus_cloud divergence (session 894) reaching this CLI:
+    # genres that keep flavor in the world (epic-74) ship empty genre-tier
+    # archetypes/cultures, so the raw read seeds zero encounters.
+    archetypes, _ = pack.effective_archetypes(args.world)
     if not archetypes:
+        world_clause = f" world '{args.world}'" if args.world else ""
         print(
-            f"sidequest-encountergen: genre '{args.genre}' has no archetypes",
+            f"sidequest-encountergen: no archetypes for genre '{args.genre}'{world_clause} "
+            "— archetypes.yaml is empty at both genre and world tiers",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -555,11 +561,13 @@ def generate_enemy(
     else:
         archetype = rng.choice(archetypes)
 
-    # Culture + name
-    cultures = pack.cultures
+    # Culture + name — world-over-genre resolution (see archetype note above).
+    cultures, _ = pack.effective_cultures(args.world)
     if not cultures:
+        world_clause = f" world '{args.world}'" if args.world else ""
         print(
-            f"sidequest-encountergen: genre '{args.genre}' has no cultures",
+            f"sidequest-encountergen: no cultures for genre '{args.genre}'{world_clause} "
+            "— cultures.yaml is empty at both genre and world tiers",
             file=sys.stderr,
         )
         sys.exit(1)

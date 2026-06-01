@@ -46,6 +46,7 @@ from pydantic_core import CoreSchema, core_schema
 
 __all__ = [
     "DISPOSITION_LOG_CAP",
+    "PATCH_BEAT_REASON",
     "Attitude",
     "AttitudeThresholds",
     "DEFAULT_ATTITUDE_THRESHOLDS",
@@ -62,6 +63,11 @@ __all__ = [
 # panel can show the *why* behind each shift (ADR-014 diamonds/coal: a
 # relationship story, not a reputation bar).
 DISPOSITION_LOG_CAP = 10
+
+# Neutral label for the apply_patch npc_attitudes path (ADR-136). A narrative
+# patch carries a delta but no narrator reason — show the shift without
+# inventing a specific cause (No Silent Fallbacks: an honest generic label).
+PATCH_BEAT_REASON = "shifted by unfolding events"
 
 
 class DispositionBeat(BaseModel):

@@ -1,9 +1,10 @@
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.disposition import (
     DISPOSITION_LOG_CAP,
+    PATCH_BEAT_REASON,
     DispositionBeat,
 )
-from sidequest.game.session import Npc
+from sidequest.game.session import GameSnapshot, Npc, WorldStatePatch
 
 
 def test_disposition_beat_fields():
@@ -66,3 +67,68 @@ def test_record_beat_emits_span():
     from sidequest.telemetry.spans import SPAN_RELATIONSHIP_BEAT_RECORDED
 
     assert SPAN_RELATIONSHIP_BEAT_RECORDED == "relationship.beat_recorded"
+
+
+def test_patch_beat_reason_constant():
+    assert isinstance(PATCH_BEAT_REASON, str) and PATCH_BEAT_REASON
+
+
+# ---------------------------------------------------------------------------
+# Site 3/4 (ADR-136): apply_world_patch npc_attitudes records a beat.
+#
+# These drive the REAL production path: a GameSnapshot carrying one Npc, fed
+# a WorldStatePatch with an npc_attitudes delta, must append a DispositionBeat
+# with the EFFECTIVE (post-clamp) delta and the neutral PATCH_BEAT_REASON
+# label. Construction mirrors tests/integration/test_disposition_threshold_crossing.py.
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_with_npc(npc: Npc) -> GameSnapshot:
+    return GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        characters=[],
+        npcs=[npc],
+    )
+
+
+def test_apply_world_patch_records_disposition_beat():
+    npc = _npc("Bartender")
+    snapshot = _snapshot_with_npc(npc)
+    snapshot.apply_world_patch(WorldStatePatch(npc_attitudes={"Bartender": 5}))
+
+    assert len(npc.disposition_log) == 1
+    beat = npc.disposition_log[-1]
+    assert beat.delta == 5
+    assert beat.reason == PATCH_BEAT_REASON
+    # turn comes from the snapshot's turn_manager.interaction (default 1).
+    assert beat.turn == snapshot.turn_manager.interaction
+    # No PCs seated → no party consensus → location is None (not a stale global).
+    assert beat.location is None
+
+
+def test_apply_world_patch_records_effective_clamped_delta():
+    # Start near the +100 ceiling so a large patch delta clamps; the beat must
+    # record the EFFECTIVE delta (after - before), not the raw patch delta.
+    npc = _npc("Ally")
+    npc.disposition = type(npc.disposition)(95)
+    snapshot = _snapshot_with_npc(npc)
+    snapshot.apply_world_patch(WorldStatePatch(npc_attitudes={"Ally": 50}))
+
+    assert int(npc.disposition) == 100
+    assert len(npc.disposition_log) == 1
+    beat = npc.disposition_log[-1]
+    # raw delta was 50, but clamp limited the real move to +5.
+    assert beat.delta == 5
+    assert beat.reason == PATCH_BEAT_REASON
+
+
+def test_apply_world_patch_clamped_noop_records_nothing():
+    # Already at the ceiling; a positive patch is a no-op → no beat.
+    npc = _npc("Maxed")
+    npc.disposition = type(npc.disposition)(100)
+    snapshot = _snapshot_with_npc(npc)
+    snapshot.apply_world_patch(WorldStatePatch(npc_attitudes={"Maxed": 20}))
+
+    assert int(npc.disposition) == 100
+    assert npc.disposition_log == []

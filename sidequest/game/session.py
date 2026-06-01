@@ -26,6 +26,7 @@ from sidequest.game.creature_core import (
 )
 from sidequest.game.disposition import (
     DISPOSITION_LOG_CAP,
+    PATCH_BEAT_REASON,
     Disposition,
     DispositionBeat,
 )
@@ -1488,6 +1489,16 @@ class GameSnapshot(BaseModel):
                             },
                         ):
                             pass
+                        # ADR-136: persist the shift. Patch deltas carry no
+                        # narrator reason; use the neutral label. Effective delta
+                        # (after - before) respects the ±100 clamp so a clamped
+                        # no-op records nothing.
+                        npc.record_disposition_beat(
+                            turn=self.turn_manager.interaction,
+                            delta=after - before,
+                            reason=PATCH_BEAT_REASON,
+                            location=self.party_location(),
+                        )
         if patch.npcs_present is not None:
             for npc_patch in patch.npcs_present:
                 existing = next((n for n in self.npcs if n.core.name == npc_patch.name), None)

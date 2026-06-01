@@ -25,6 +25,7 @@ from sidequest.agents.prompt_framework.types import (
 )
 
 if TYPE_CHECKING:
+    from sidequest.agents.npc_context import NpcWorkingSet
     from sidequest.dungeon.region_projection import RegionProjection
     from sidequest.game.chassis import ChassisInstance
     from sidequest.game.npc_pool import NpcPoolMember
@@ -472,8 +473,9 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         self,
         agent_name: str,
         *,
-        npc_pool: list[NpcPoolMember],
-        npcs: list[Npc],
+        npc_pool: list[NpcPoolMember] | None = None,
+        npcs: list[Npc] | None = None,
+        working_set: NpcWorkingSet | None = None,
     ) -> None:
         """Inject canonical NPC identity data into the narrator prompt.
 
@@ -483,7 +485,14 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         sees one list of "people who exist in this world"; storage shape
         does not leak.
 
-        Sources:
+        Story 75-2 adds the budgeted ``working_set`` path: when supplied, the
+        roster renders by tier — scene-present NPCs full (the floor), off-stage
+        NPCs/pool members brief (name+role) or compact (name only) — instead of
+        dumping the entire roster verbatim. The production turn path always
+        supplies ``working_set``; the legacy ``npc_pool`` / ``npcs`` path
+        remains for direct callers and renders the full roster unchanged.
+
+        Sources (legacy path):
         - ``npc_pool`` — identity-only ``NpcPoolMember`` entries (regenerable
           cast pool; no last-seen, no mechanical state).
         - ``npcs`` — stateful ``Npc`` records. Identity fields plus
@@ -494,6 +503,12 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         less over long sessions, which is the exact drift the original
         Story 37-44 fix was for.
         """
+        if working_set is not None:
+            self._register_budgeted_npc_roster(agent_name, working_set)
+            return
+
+        npc_pool = npc_pool or []
+        npcs = npcs or []
         if not npc_pool and not npcs:
             return
 
@@ -513,25 +528,94 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
             lines.append("- " + " ".join(parts))
 
         for npc in npcs:
-            parts = [npc.core.name]
+            lines.append(self._full_npc_line(npc))
+
+        lines.append(
+            "Use these exact pronouns and roles. Physical identity is "
+            "canonical; only emotional perception is POV."
+        )
+
+        self.register_section(
+            agent_name,
+            PromptSection.new(
+                "npc_roster",
+                "\n".join(lines),
+                AttentionZone.Early,
+                SectionCategory.State,
+            ),
+        )
+
+    def _full_npc_line(self, npc: Npc) -> str:
+        """Full-detail roster line for a stateful NPC — name, pronouns,
+        appearance, last-seen location, and the coarsened attitude band.
+
+        Shared by the legacy roster and the Story 75-2 budgeted full tier so
+        the format stays in sync. The ADR-104/105 perception firewall is
+        load-bearing here: only the qualitative ``attitude`` band reaches this
+        always-on narrator section — never the raw ``disposition.value``
+        integer, which is world-state-agent-only (Story 50-12).
+        """
+        parts = [npc.core.name]
+        tags: list[str] = []
+        if npc.pronouns:
+            tags.append(npc.pronouns)
+        if tags:
+            parts.append(f"({', '.join(tags)})")
+        if npc.appearance:
+            parts.append(f"— {npc.appearance}")
+        if npc.last_seen_location:
+            parts.append(f"[last seen: {npc.last_seen_location}]")
+        parts.append(f"[attitude: {npc.disposition.attitude().value}]")
+        return "- " + " ".join(parts)
+
+    def _register_budgeted_npc_roster(
+        self,
+        agent_name: str,
+        working_set: NpcWorkingSet,
+    ) -> None:
+        """Story 75-2: render the roster from the budgeted working-set.
+
+        Three tiers, cheapest detail for the least-relevant: scene-present NPCs
+        full (the floor — pronouns, appearance, last-seen, attitude band, same
+        as the legacy stateful rendering); off-stage NPCs/pool members brief
+        (name + pronouns/role); off-stage names compact (name only). The
+        perception firewall (ADR-104/105) is preserved — only the coarsened
+        attitude band reaches the prompt, never the raw disposition value, and
+        only on the full tier.
+        """
+        if (
+            not working_set.full_profiles
+            and not working_set.brief_entries
+            and not working_set.compact_names
+        ):
+            return
+
+        lines = ["## KNOWN NPCS — Canonical Identity (do not contradict)"]
+
+        for npc in working_set.full_profiles:
+            lines.append(self._full_npc_line(npc))
+
+        for entry in working_set.brief_entries:
+            core = getattr(entry, "core", None)
+            # core present → stateful Npc (name via ``.core.name``); absent →
+            # NpcPoolMember (``.name`` is a str attribute). ``str()`` keeps the
+            # type checker happy across the union — ``Npc.name`` is a method but
+            # that branch is never taken here (core is set for an Npc).
+            name = core.name if core is not None else str(entry.name)
             tags = []
-            if npc.pronouns:
-                tags.append(npc.pronouns)
+            pronouns = getattr(entry, "pronouns", None)
+            if pronouns:
+                tags.append(pronouns)
+            role = getattr(entry, "role", None)
+            if role:
+                tags.append(role)
+            parts = [name]
             if tags:
                 parts.append(f"({', '.join(tags)})")
-            if npc.appearance:
-                parts.append(f"— {npc.appearance}")
-            if npc.last_seen_location:
-                parts.append(f"[last seen: {npc.last_seen_location}]")
-            # Coarsened disposition stance — the "emotional perception is
-            # POV" layer the closing instruction references. Story 50-12:
-            # without this the narrator sees who exists but not how they
-            # feel, forcing a per-NPC query_npc round-trip. The raw
-            # disposition.value integer is world-state-agent-only and MUST
-            # NOT reach this always-on narrator section (ADR-104/105
-            # perception firewall) — emit only the qualitative band.
-            parts.append(f"[attitude: {npc.disposition.attitude().value}]")
             lines.append("- " + " ".join(parts))
+
+        for name in working_set.compact_names:
+            lines.append(f"- {name}")
 
         lines.append(
             "Use these exact pronouns and roles. Physical identity is "

@@ -17,6 +17,7 @@ import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
+from sidequest.agents.npc_context import build_npc_working_set
 from sidequest.agents.orchestrator import (
     RECENT_NARRATIVE_WINDOW_K,
     NpcMention,
@@ -1178,6 +1179,17 @@ def _build_turn_context(
         available_sfx=_sfx_ids_from_genre(sd.genre_pack),
         npc_pool=list(snapshot.npc_pool),
         npcs=list(snapshot.npcs),
+        # Story 75-2: budgeted working-set selection (the floor of ADR-118's
+        # universal retrieval). Scene-present NPCs render full, off-stage
+        # collapse to compact — bounding prompt cost without eviction. The
+        # ``player_referenced_npcs`` toggle (brief vs compact for off-stage) is
+        # deferred to a real reference signal in 75-5; v1 passes None (compact
+        # off-stage), which never drops the present-scene floor.
+        npc_working_set=build_npc_working_set(
+            snapshot,
+            current_turn=snapshot.turn_manager.interaction,
+            player_referenced_npcs=None,
+        ),
         party_peers=party_peers,
         opening_directive=opening_directive,
         world_context=sd.world_context,

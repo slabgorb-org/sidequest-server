@@ -110,3 +110,41 @@ def personality_read(ocean: dict[str, float] | None) -> str | None:
         for dim, dist in salient
     ]
     return f"{'; '.join(phrases).capitalize()}."
+
+
+def _credibility_hint(claim: Any, belief_state: Any) -> str:
+    """Coarse credibility bucket for a claim.
+
+    Prefer the credibility score of the claim's source NPC (when told_by);
+    fall back to the claim's own ``believed`` flag.
+    """
+    source = claim.source
+    score: float | None = None
+    if getattr(source, "kind", "") == "told_by":
+        cred = belief_state.credibility_scores.get(source.by)
+        if cred is not None:
+            score = cred.score
+    if score is None:
+        return "credible" if claim.believed else "doubtful"
+    if score >= 0.66:
+        return "credible"
+    if score >= 0.33:
+        return "uncertain"
+    return "doubtful"
+
+
+def claims_to_party(belief_state: Any) -> list[dict]:
+    """Filter belief_state to Claim entries only — the spoiler firewall (ADR-136).
+
+    Fact and Suspicion entries are the mystery's solution (ADR-053) and are
+    dropped entirely. Only Claim entries (statements in the NPC's knowledge,
+    sourced from others) cross, each with a coarse credibility hint.
+    """
+    out: list[dict] = []
+    for belief in belief_state.beliefs:
+        if getattr(belief, "variant", "") != "claim":
+            continue
+        out.append(
+            {"text": belief.content, "credibility_hint": _credibility_hint(belief, belief_state)}
+        )
+    return out

@@ -1,5 +1,6 @@
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.disposition import (
+    CHAPTER_BEAT_REASON,
     DISPOSITION_LOG_CAP,
     PATCH_BEAT_REASON,
     DispositionBeat,
@@ -147,8 +148,10 @@ def test_apply_world_patch_clamped_noop_records_nothing():
 # referencing the same NPC: the first mints the NPC (baseline, no beat), the
 # second moves its disposition (a beat). This exercises the production
 # _apply_npc existing-NPC branch end to end — deleting the seam call makes it
-# fail. The structural mirror test (test_chapter_upsert_existing_npc_records_
-# delta) is kept as a focused field-shape check.
+# fail.
+#
+# The chapter-upsert beat uses CHAPTER_BEAT_REASON (player-facing prose), not a
+# machine key — DispositionBeat.reason renders in the relationship panel.
 # ---------------------------------------------------------------------------
 
 
@@ -188,7 +191,7 @@ def test_materialization_existing_npc_records_disposition_beat():
     assert len(drakul.disposition_log) == 1
     beat = drakul.disposition_log[-1]
     assert beat.delta == -5
-    assert beat.reason == "world_chapter_upsert"
+    assert beat.reason == CHAPTER_BEAT_REASON
     assert beat.location == "Crypt"
     # turn comes from the snapshot's turn_manager.interaction (default 1).
     assert beat.turn == snap.turn_manager.interaction
@@ -210,16 +213,3 @@ def test_materialization_new_npc_baseline_records_no_beat():
     assert int(mira.disposition) == 8
     # New-NPC branch is a baseline, not a relationship shift → no beat.
     assert mira.disposition_log == []
-
-
-def test_chapter_upsert_existing_npc_records_delta():
-    """Structural mirror: a hand-rolled delta lands the right beat fields."""
-    npc = _npc("McCoy")
-    npc.disposition = type(npc.disposition)(10)
-    new_value = 16
-    delta = new_value - int(npc.disposition)
-    npc.record_disposition_beat(
-        turn=3, delta=delta, reason="world_chapter_upsert", location=npc.location
-    )
-    assert npc.disposition_log[-1].delta == 6
-    assert npc.disposition_log[-1].reason == "world_chapter_upsert"

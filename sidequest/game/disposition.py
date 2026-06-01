@@ -46,6 +46,7 @@ from pydantic_core import CoreSchema, core_schema
 
 __all__ = [
     "DISPOSITION_LOG_CAP",
+    "CHAPTER_BEAT_REASON",
     "PATCH_BEAT_REASON",
     "Attitude",
     "AttitudeThresholds",
@@ -68,6 +69,11 @@ DISPOSITION_LOG_CAP = 10
 # patch carries a delta but no narrator reason — show the shift without
 # inventing a specific cause (No Silent Fallbacks: an honest generic label).
 PATCH_BEAT_REASON = "shifted by unfolding events"
+
+# Display label for the chapter-upsert path (ADR-136): an existing NPC's
+# standing moved as the authored chronicle advanced. Player-facing prose, not
+# a machine key — it renders in the relationship panel.
+CHAPTER_BEAT_REASON = "shifted as your history together deepened"
 
 
 class DispositionBeat(BaseModel):

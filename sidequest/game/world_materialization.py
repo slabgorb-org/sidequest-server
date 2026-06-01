@@ -35,6 +35,7 @@ from sidequest.game.creature_core import (
     HpPool,
     Inventory,
 )
+from sidequest.game.disposition import CHAPTER_BEAT_REASON
 from sidequest.game.history_chapter import (
     ChapterCharacter,
     ChapterNpc,
@@ -509,7 +510,7 @@ class WorldBuilder:
                 existing.record_disposition_beat(
                     turn=snap.turn_manager.interaction,
                     delta=after - before,
-                    reason="world_chapter_upsert",
+                    reason=CHAPTER_BEAT_REASON,
                     location=npc_data.location or existing.location,
                 )
             if npc_data.description:

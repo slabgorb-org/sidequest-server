@@ -134,6 +134,14 @@ class TestEntityStoreEmbeddingContract:
         assert card.embedding == [0.1, 0.2, 0.3]
         assert card.embedding_pending is False
 
+    def test_update_embedding_rejects_empty_vector(self) -> None:
+        """No Silent Fallbacks: an empty embedding would clear the pending flag
+        while leaving the card un-rankable (cosine 0.0 forever) — fail loud."""
+        store = EntityStore()
+        store.add(EntityCard.new(EntityType.NPC, "borin", content="smith"))
+        with pytest.raises(ValueError, match="embedding must not be empty"):
+            store.update_embedding("npc:borin", [])
+
     def test_save_load_round_trip_preserves_embedding(self) -> None:
         """AC-5: like ``LoreStore``, the store serializes embeddings so a
         replayed session queries immediately without re-embedding."""

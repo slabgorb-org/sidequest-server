@@ -105,8 +105,13 @@ class EntityStore(BaseModel):
         resetting the retry count.
 
         Raises ``KeyError`` if the id is unknown — a silent no-op would hide a
-        genuine worker bug (No Silent Fallbacks), matching ``LoreStore``.
+        genuine worker bug (No Silent Fallbacks), matching ``LoreStore``. Raises
+        ``ValueError`` on an empty embedding: an empty vector would clear the
+        pending flag while leaving the card un-rankable (cosine 0.0 forever),
+        stranding it silently.
         """
+        if not embedding:
+            raise ValueError("embedding must not be empty")
         card = self.cards[card_id]
         card.embedding = list(embedding)
         card.embedding_pending = False

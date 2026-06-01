@@ -77,13 +77,35 @@ class TestEntityCardModel:
     def test_blank_content_is_rejected(self) -> None:
         """AC-1 / No Silent Fallbacks: whitespace-only content would embed to a
         degenerate vector — reject at the construction boundary, mirroring
-        ``LoreFragment._content_must_not_be_blank``."""
-        with pytest.raises(ValueError):
+        ``LoreFragment._content_must_not_be_blank``. ``match=`` pins the custom
+        validator (not some unrelated ValueError)."""
+        with pytest.raises(ValidationError, match="blank or whitespace"):
             EntityCard.new(EntityType.NPC, "ghost", content="   ")
 
     def test_empty_content_is_rejected(self) -> None:
-        with pytest.raises(ValueError):
+        """Empty content is caught by the ``min_length=1`` field constraint."""
+        with pytest.raises(ValidationError, match="at least 1 character"):
             EntityCard.new(EntityType.NPC, "ghost", content="")
+
+    def test_unknown_entity_type_is_rejected(self) -> None:
+        """No Silent Fallbacks: an entity_type not in _ID_NAMESPACE must raise,
+        not silently use the raw type string as the id namespace."""
+        with pytest.raises(ValueError, match="unknown entity_type"):
+            EntityCard.new("item", "sword", content="A rusty sword.")
+
+    def test_blank_entity_id_is_rejected(self) -> None:
+        """No Silent Fallbacks: a blank entity_id would yield a degenerate id
+        like ``"npc:"``."""
+        with pytest.raises(ValueError, match="entity_id must not be blank"):
+            EntityCard.new(EntityType.NPC, "   ", content="A ghost.")
+
+    def test_location_new_id_uses_loc_abbreviation(self) -> None:
+        """The load-bearing namespace divergence: entity_type is ``"location"``
+        but the id namespace abbreviates to ``loc`` (ADR-118 D3). Exercised here
+        via the direct ``.new`` path, not only through the projector."""
+        card = EntityCard.new(EntityType.LOCATION, "black_hart", content="A tavern.")
+        assert card.id == "loc:black_hart"
+        assert card.entity_type == "location"
 
     def test_metadata_round_trips(self) -> None:
         card = EntityCard.new(
@@ -148,12 +170,20 @@ class TestNpcProjector:
         assert Attitude.HOSTILE.value in card.content
 
     def test_projection_is_deterministic(self) -> None:
-        """ADR-118 D3 dual-rep risk: same state → same content every time, so
-        embeddings do not churn on reproject (75-6 relies on this)."""
+        """ADR-118 D3 dual-rep risk: same state → same exact content every time,
+        so embeddings do not churn on reproject (75-6 relies on this). Pin the
+        exact string — a wrong-but-stable projection must not pass."""
         member = NpcPoolMember(
             name="Borin", role="smith", pronouns="he/him", drawn_from="world_authored"
         )
-        assert project_npc_card(member).content == project_npc_card(member).content
+        assert project_npc_card(member).content == "Borin — smith — he/him — neutral"
+
+    def test_blank_name_rejected(self) -> None:
+        """No Silent Fallbacks: a blank NPC name would slug to a degenerate
+        ``"npc:"`` id — fail loud at the projector boundary."""
+        member = NpcPoolMember(name="   ", drawn_from="world_authored")
+        with pytest.raises(ValueError, match="name must not be blank"):
+            project_npc_card(member)
 
     def test_pending_for_embedding_on_projection(self) -> None:
         member = NpcPoolMember(name="Borin", drawn_from="world_authored")
@@ -189,7 +219,20 @@ class TestFactionProjector:
 
     def test_deterministic(self) -> None:
         faction = Faction(name="Tide Syndicate", summary="s", description="d", disposition="")
-        assert project_faction_card(faction).content == project_faction_card(faction).content
+        assert project_faction_card(faction).content == "Tide Syndicate — s"
+
+    def test_blank_summary_filtered_not_degenerate(self) -> None:
+        """A blank summary must not produce a trailing-separator degenerate
+        ``"Name — "`` content (blank-segment filter, matching the location
+        projector)."""
+        faction = Faction(name="Tide Syndicate", summary="", description="d", disposition="")
+        assert project_faction_card(faction).content == "Tide Syndicate"
+
+    def test_blank_name_rejected(self) -> None:
+        """No Silent Fallbacks: a blank faction name would slug to ``"faction:"``."""
+        faction = Faction(name="  ", summary="s", description="d", disposition="")
+        with pytest.raises(ValueError, match="name must not be blank"):
+            project_faction_card(faction)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +253,19 @@ class TestLocationProjector:
         assert card.id == "loc:black_hart"
         assert "Black Hart" in card.content
         assert "dockside tavern" in card.content
+        # the mechanical properties must actually reach the projected content
+        assert "cover: heavy" in card.content
+        assert "lighting: dim" in card.content
+
+    def test_mechanical_properties_absent_when_none(self) -> None:
+        """The properties segment must be absent (not an empty fragment) when no
+        mechanical_properties are supplied."""
+        card = project_location_card(
+            location_id="black_hart",
+            name="The Black Hart",
+            description="A tavern.",
+        )
+        assert card.content == "The Black Hart — A tavern."
 
     def test_linked_npcs_included(self) -> None:
         card = project_location_card(
@@ -223,6 +279,6 @@ class TestLocationProjector:
 
     def test_blank_description_rejected(self) -> None:
         """No Silent Fallbacks: a location with no projectable text must fail
-        loud, not emit an empty card."""
-        with pytest.raises(ValueError):
+        loud, not emit an empty card. ``match=`` pins the description guard."""
+        with pytest.raises(ValueError, match="description must not be blank"):
             project_location_card(location_id="void", name="", description="   ")

@@ -131,9 +131,17 @@ class EntityCard(BaseModel):
         estimate is always derived from ``content`` (never caller-supplied) using
         the same math as ``LoreFragment``. Cards start ``embedding_pending=True``
         so the worker picks them up on the next pass.
+
+        Raises ``ValueError`` on an ``entity_type`` not registered in
+        ``_ID_NAMESPACE`` or a blank ``entity_id`` — both would otherwise yield a
+        malformed id (No Silent Fallbacks: fail loud at the factory boundary).
         """
         type_str = str(entity_type)
-        namespace = _ID_NAMESPACE.get(entity_type, type_str)
+        if entity_type not in _ID_NAMESPACE:
+            raise ValueError(f"unknown entity_type {entity_type!r} — add it to _ID_NAMESPACE")
+        if not str(entity_id).strip():
+            raise ValueError("entity_id must not be blank or whitespace-only")
+        namespace = _ID_NAMESPACE[entity_type]
         return cls(
             id=f"{namespace}:{entity_id}",
             entity_type=type_str,
@@ -151,7 +159,14 @@ class EntityCard(BaseModel):
 
 def _slug(name: str) -> str:
     """Stable, case-folded id fragment. Epic-72 NPC identity is a case-folded
-    name string; factions follow the same convention."""
+    name string; factions follow the same convention.
+
+    Raises ``ValueError`` on a blank/whitespace name — a blank name would slug to
+    ``""`` and produce a degenerate id like ``"npc:"`` (No Silent Fallbacks: fail
+    at the boundary closest to the authoring mistake).
+    """
+    if not name.strip():
+        raise ValueError("entity name must not be blank or whitespace-only")
     return name.strip().casefold().replace(" ", "_")
 
 
@@ -183,7 +198,9 @@ def project_faction_card(faction: Faction) -> EntityCard:
     segments: list[str] = [faction.name, faction.summary]
     if faction.disposition:
         segments.append(faction.disposition)
-    content = " — ".join(segments)
+    # Filter blank segments (a blank summary would otherwise embed a degenerate
+    # "Name — " fragment) — same discipline as project_location_card.
+    content = " — ".join(seg for seg in segments if seg)
     return EntityCard.new(
         EntityType.FACTION,
         _slug(faction.name),

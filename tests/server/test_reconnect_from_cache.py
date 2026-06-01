@@ -50,7 +50,6 @@ def test_reconnect_replays_cached_payloads(pg_repo) -> None:
     cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()
     view = SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={"alice": "alice_char"},
     )
 

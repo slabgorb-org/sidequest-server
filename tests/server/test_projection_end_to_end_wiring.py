@@ -1,12 +1,14 @@
 """End-to-end ProjectionFilter wiring test.
 
 Asserts the single-truth invariant in executable form:
-    - 2 players + 1 GM receive projections consistent with the rules
+    - 3 players (no GM seat — the narrator is the GM) receive projections
+      consistent with the rules
     - projection_cache has exactly N rows per event
     - projection.filter.decide span count equals the projection count
     - Reconnecting a player receives byte-identical frames to the live
       session (via cache read, no re-filter)
-    - GM canonical view is untouched by any rule
+    - Canonical truth lives in the events table (read server-side by the
+      narrator), untouched by any projection rule
 """
 
 from __future__ import annotations
@@ -91,13 +93,12 @@ rules:
   - kind: NARRATION
     redact_fields:
       - field: text
-        unless: is_gm()
+        unless: is_self(text)
         mask: "**"
         """
     )
     filt = ComposedFilter(rules=rules)
     view = SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={
             "alice": "alice_char",
             "bob": "bob_char",
@@ -124,19 +125,23 @@ rules:
     ]
     assert len(decide_spans) == 9
 
-    # 3. GM sees canonical; players see "**".
+    # 3. No GM seat exists — every player (including the one historically
+    #    named "gm") sees the masked "**". The canonical text lives only in
+    #    the events table (assertion 5), read server-side by the narrator,
+    #    never in a per-player projection.
     alice_rows = cache.read_since(player_id="alice", since_seq=0)
-    gm_rows = cache.read_since(player_id="gm", since_seq=0)
-    for r in alice_rows:
-        assert json.loads(r.payload_json)["text"] == "**"
-    for r in gm_rows:
-        assert json.loads(r.payload_json)["text"] in {"one", "two", "three"}
+    # Guard against a vacuous replay comparison (assertion 4) on empty lists.
+    assert len(alice_rows) == 3
+    for pid in players:
+        for r in cache.read_since(player_id=pid, since_seq=0):
+            assert json.loads(r.payload_json)["text"] == "**"
 
     # 4. Reconnecting Alice replays byte-identical frames (cache-only path).
     replay = cache.read_since(player_id="alice", since_seq=0)
     assert [r.payload_json for r in replay] == [r.payload_json for r in alice_rows]
 
-    # 5. GM canonical: events table has true text, unaffected by any rule.
+    # 5. Canonical truth lives in the events table (read server-side by the
+    #    narrator), with the true text, unaffected by any projection rule.
     canonical_rows = repo.read_events_since(since_seq=0)
     assert [json.loads(r.payload_json)["text"] for r in canonical_rows] == ["one", "two", "three"]
 
@@ -168,13 +173,12 @@ rules:
   - kind: NARRATION
     redact_fields:
       - field: text
-        unless: is_gm()
+        unless: is_self(text)
         mask: "**"
         """
     )
     filt = ComposedFilter(rules=rules, pack_slug="test_pack")
     view = SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={
             "alice": "alice_char",
             "bob": "bob_char",
@@ -199,12 +203,12 @@ rules:
     filled = lazy_fill(event_log=log, cache=cache, filter_=filt, view=view, player_id=emitter_id)
     assert filled == 2
 
-    # Alice's now-cached projections match what bob (another non-GM) saw —
+    # Alice's now-cached projections match what bob (another player) saw —
     # byte-identical byte-for-byte. This is the single-truth invariant
     # applied to a just-reconnected emitter.
     alice_rows = cache.read_since(player_id=emitter_id, since_seq=0)
     bob_rows = cache.read_since(player_id="bob", since_seq=0)
     assert [r.payload_json for r in alice_rows] == [r.payload_json for r in bob_rows]
-    # And both non-GM views show the mask ("**"), never canonical text.
+    # And both views show the mask ("**"), never canonical text.
     for r in alice_rows:
         assert json.loads(r.payload_json)["text"] == "**"

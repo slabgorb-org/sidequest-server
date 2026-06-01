@@ -51,7 +51,7 @@ def test_pack_with_projection_yaml_loads_rules(tmp_path: Path) -> None:
   - kind: NARRATION
     redact_fields:
       - field: text
-        unless: is_gm()
+        unless: is_self()
         mask: null
 """
     )

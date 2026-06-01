@@ -140,7 +140,6 @@ def test_narration_segment_registered_and_replay_round_trips():
 
 def _view() -> SessionGameStateView:
     return SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={"willes": "Willes", "narder": "Narder"},
     )
 
@@ -169,7 +168,10 @@ def test_narration_segment_firewalled_for_non_owner():
     assert narder.include is False
     assert narder.payload_json == ""
 
-    # GM (lie-detector) still sees it canonically.
+    # No GM seat (71-35): the narrator is the lie-detector and reads
+    # canonical state server-side, NOT as a projection recipient — so a
+    # "gm" player_id gets no special treatment and is excluded like any
+    # other non-recipient.
     gm = filt.project(envelope=env, view=_view(), player_id="gm")
-    assert gm.include is True
-    assert "ward-heat" in gm.payload_json
+    assert gm.include is False
+    assert gm.payload_json == ""

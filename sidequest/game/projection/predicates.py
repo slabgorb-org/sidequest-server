@@ -41,10 +41,6 @@ def _read_field(payload: dict, field_ref: str | None) -> object | None:
     return payload[field_ref]
 
 
-def _is_gm(ctx: PredicateContext, field_ref: str | None) -> bool:
-    return ctx.view.is_gm(ctx.viewer_player_id)
-
-
 def _is_self(ctx: PredicateContext, field_ref: str | None) -> bool:
     value = _read_field(ctx.payload, field_ref)
     if value is None or ctx.viewer_character_id is None:
@@ -90,7 +86,6 @@ def _in_same_party(ctx: PredicateContext, field_ref: str | None) -> bool:
 
 
 PREDICATES: dict[str, Predicate] = {
-    "is_gm": _is_gm,
     "is_self": _is_self,
     "is_owner_of": _is_owner_of,
     "in_same_zone": _in_same_zone,

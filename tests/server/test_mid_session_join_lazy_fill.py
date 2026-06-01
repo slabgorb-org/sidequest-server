@@ -54,7 +54,6 @@ def test_lazy_fill_populates_cache_for_new_player(pg_repo) -> None:
     cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()
     view = SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={"alice": "alice_char"},
     )
 
@@ -80,7 +79,6 @@ def test_lazy_fill_skips_already_cached_events(pg_repo) -> None:
     cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()
     view = SessionGameStateView(
-        gm_player_id="gm",
         player_id_to_character={"alice": "alice_char"},
     )
 

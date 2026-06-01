@@ -45,13 +45,39 @@ from pydantic import BaseModel, GetCoreSchemaHandler, model_validator
 from pydantic_core import CoreSchema, core_schema
 
 __all__ = [
+    "DISPOSITION_LOG_CAP",
     "Attitude",
     "AttitudeThresholds",
     "DEFAULT_ATTITUDE_THRESHOLDS",
     "Disposition",
+    "DispositionBeat",
     "configure_attitude_thresholds",
     "reset_attitude_thresholds",
 ]
+
+
+# Disposition beat-log (ADR-136). Persists the delta + reason the engine
+# already computes at each disposition-shift site — rescuing data that today
+# lives only in transient SPAN_DISPOSITION_SHIFT spans — so the relationship
+# panel can show the *why* behind each shift (ADR-014 diamonds/coal: a
+# relationship story, not a reputation bar).
+DISPOSITION_LOG_CAP = 10
+
+
+class DispositionBeat(BaseModel):
+    """One persisted disposition shift: the delta the engine applied and why.
+
+    ``reason`` is narrator-supplied (``update_npc_disposition``), the engagement
+    tick label, or a neutral label for opaque patch/world paths. ``location`` is
+    the party location at the time, or ``None`` when not in scope.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    turn: int
+    delta: int
+    reason: str
+    location: str | None = None
 
 
 class Attitude(StrEnum):

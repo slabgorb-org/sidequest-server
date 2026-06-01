@@ -33,7 +33,6 @@ from sidequest.protocol.messages import (
     NarrationMessage,
     NarrationSegmentMessage,
     NarrationSegmentPayload,
-    RelationshipsMessage,
     ScrapbookEntryMessage,
     ScrapbookEntryPayload,
     SecretNoteMessage,
@@ -83,10 +82,15 @@ _KIND_TO_MESSAGE_CLS: dict[str, type] = {
     # just replaces its MapState, so reconnect repopulates on the next
     # turn). The NEW ADR-055 map message (ADR-019 MAP_UPDATE is dead).
     "DUNGEON_MAP": DungeonMapMessage,
-    # ADR-136: player-facing relationship roster. Reactive/event-sourced —
-    # emitted via _emit_event when the relationship set changes (disposition
-    # shift, NPC promoted, claim recorded), so it replays on reconnect.
-    "RELATIONSHIPS": RelationshipsMessage,
+    # ADR-136 (RELATIONSHIPS) is deliberately ABSENT here. Like its transient
+    # sibling LOCATION_DESCRIPTION, the relationship roster is emitted via the
+    # non-durable _emit_shared_world_frame broadcast path (not _emit_event), so
+    # it is never written to the events table and never replayed by
+    # _build_message_for_kind. On reconnect the resume site re-runs
+    # _maybe_emit_relationships, which rebroadcasts a fresh roster from live
+    # snapshot state. Registering it here would be a latent reconnect crash: a
+    # stray persisted RELATIONSHIPS row would fall through _build_message_for_kind's
+    # per-kind branches to the terminal ValueError (no reconstructor exists).
 }
 
 # Kinds persisted to the events table by side-channel writers (e.g.

@@ -70,7 +70,10 @@ class OceanProfile(BaseModel):
         Authored content uses short keys (``O/C/E/A/N``) on a 0..1 scale (ADR-042
         / #318). Runtime ``OceanProfile`` uses full keys on 0..10. Unknown keys
         raise — a typo in authored content is an authoring error, not a silent
-        default (No Silent Fallbacks). Missing dimensions keep the 5.0 center.
+        default (No Silent Fallbacks). Out-of-range values (outside 0..1) also
+        raise: an author who writes ``5`` thinking 0..10 must be told, not have
+        it silently clamped by the runtime ``clamp_dimension`` validator. Missing
+        dimensions keep the 5.0 center.
         """
         kwargs: dict[str, float] = {}
         for key, raw in authored.items():
@@ -79,7 +82,13 @@ class OceanProfile(BaseModel):
                     f"ocean: unknown authored key {key!r}; expected one of "
                     f"{sorted(_AUTHORED_KEY_MAP)}"
                 )
-            kwargs[_AUTHORED_KEY_MAP[key]] = float(raw) * 10.0
+            value = float(raw)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(
+                    f"ocean: authored value for key {key!r} is {value}; "
+                    f"expected 0..1 (authored OCEAN scale)"
+                )
+            kwargs[_AUTHORED_KEY_MAP[key]] = value * 10.0
         return cls(**kwargs)
 
 

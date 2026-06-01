@@ -49,6 +49,12 @@ SPAN_REFERENCE_PRESENTER_ERROR = "sidequest.reference.presenter_error"
 SPAN_REFERENCE_POI_IMAGE_RESOLVED = "sidequest.reference.poi_image_resolved"
 SPAN_REFERENCE_POI_IMAGE_NOT_FOUND = "sidequest.reference.poi_image_not_found"
 
+# R2-manifest existence-gate span (Story 65-8). The lore page loads
+# r2_manifest.json (the 65-7 R2 existence oracle) and gates POI <img> emission
+# on key presence, so authored-but-not-rendered POIs never produce a broken
+# image. Fired once per lore render that has POIs to gate.
+SPAN_REFERENCE_MANIFEST_LOADED = "sidequest.reference.manifest_loaded"
+
 # Humanization-guard suppression span (Story 63-9). Fired when the fallback
 # walk drops a dev-note / placeholder value or a private (leading-underscore)
 # key so it never reaches the player-/author-facing reference HTML.
@@ -67,6 +73,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_PRESENTER_ERROR,
         SPAN_REFERENCE_POI_IMAGE_RESOLVED,
         SPAN_REFERENCE_POI_IMAGE_NOT_FOUND,
+        SPAN_REFERENCE_MANIFEST_LOADED,
         SPAN_REFERENCE_DEVNOTE_SUPPRESSED,
     }
 )
@@ -374,6 +381,34 @@ def reference_poi_image_not_found_span(
     with Span.open(
         SPAN_REFERENCE_POI_IMAGE_NOT_FOUND,
         _poi_attrs(pack=pack, world=world, slug=slug),
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- R2-manifest existence-gate span (Story 65-8) ---
+
+
+@contextmanager
+def reference_manifest_loaded_span(
+    *,
+    path: str,
+    entry_count: int,
+    world_key_count: int,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired once per lore render that consults r2_manifest.json (the
+    65-7 R2 existence oracle) to gate POI ``<img>`` emission. Carries the
+    manifest path, total entry count, and the number of keys under this world's
+    POI prefix, so the GM/dev panel can confirm the gate ran against a real
+    oracle rather than improvising image URLs."""
+    with Span.open(
+        SPAN_REFERENCE_MANIFEST_LOADED,
+        {
+            "reference.manifest_path": path,
+            "reference.manifest_entry_count": entry_count,
+            "reference.world_key_count": world_key_count,
+        },
         tracer_override=_tracer,
     ) as span:
         yield span

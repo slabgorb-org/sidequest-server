@@ -115,6 +115,8 @@ class MessageType(StrEnum):
     # snapshot. Emitted on current_room change and session resume. The
     # LOCATION_OVERLAY_CHANGED delta variant lands in Story 54-7.
     LOCATION_DESCRIPTION = "LOCATION_DESCRIPTION"
+    # ADR-136: player-facing relationship surface (reactive, per-domain).
+    RELATIONSHIPS = "RELATIONSHIPS"
     # Story 54-7 / ADR-109: delta channel for encounter location overlay
     # state changes. Fires when an encounter with a non-None
     # location_overlay activates or deactivates touching a bound_room_id.

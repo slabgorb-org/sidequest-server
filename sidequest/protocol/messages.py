@@ -40,6 +40,7 @@ from sidequest.protocol.models import (
     LocationDescriptionPayload,
     LocationOverlayChangedPayload,
     PartyMember,
+    RelationshipsPayload,
     RolledStat,
     StateDelta,
     TacticalGridPayload,
@@ -1281,6 +1282,19 @@ class LocationOverlayChangedMessage(ProtocolBase):
     player_id: str = ""
 
 
+class RelationshipsMessage(ProtocolBase):
+    """GameMessage::Relationships — player-facing relationship roster (ADR-136).
+
+    Emitted reactively when the relationship set changes (a disposition shift, a
+    new NPC promoted into the stateful roster, or a claim recorded) — not every
+    turn (Cost Scales with Drama). Global payload, broadcast to all seated PCs.
+    """
+
+    type: Literal[MessageType.RELATIONSHIPS] = MessageType.RELATIONSHIPS
+    payload: RelationshipsPayload
+    player_id: str = ""
+
+
 # ---------------------------------------------------------------------------
 # DUNGEON_MAP — Beneath Sünden BETTER fix (seam 3). ADR-019 MAP_UPDATE was
 # deleted in the Rust→Python port; this is the NEW ADR-055 map frame (do
@@ -1479,6 +1493,7 @@ _Phase1Variant = Annotated[
     | TacticalGridMessage
     | LocationDescriptionMessage
     | LocationOverlayChangedMessage
+    | RelationshipsMessage
     | DungeonMapMessage
     | JournalRequestMessage
     | JournalResponseMessage

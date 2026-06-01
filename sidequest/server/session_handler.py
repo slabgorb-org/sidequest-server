@@ -33,6 +33,7 @@ from sidequest.protocol.messages import (
     NarrationMessage,
     NarrationSegmentMessage,
     NarrationSegmentPayload,
+    RelationshipsMessage,
     ScrapbookEntryMessage,
     ScrapbookEntryPayload,
     SecretNoteMessage,
@@ -82,6 +83,10 @@ _KIND_TO_MESSAGE_CLS: dict[str, type] = {
     # just replaces its MapState, so reconnect repopulates on the next
     # turn). The NEW ADR-055 map message (ADR-019 MAP_UPDATE is dead).
     "DUNGEON_MAP": DungeonMapMessage,
+    # ADR-136: player-facing relationship roster. Reactive/event-sourced —
+    # emitted via _emit_event when the relationship set changes (disposition
+    # shift, NPC promoted, claim recorded), so it replays on reconnect.
+    "RELATIONSHIPS": RelationshipsMessage,
 }
 
 # Kinds persisted to the events table by side-channel writers (e.g.

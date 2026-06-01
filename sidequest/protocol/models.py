@@ -659,6 +659,57 @@ class LocationOverlayChangedPayload(BaseModel):
     overlays: list[LocationDescriptionOverlaySummary] = Field(default_factory=list)
 
 
+class DispositionBeatPayload(BaseModel):
+    """One disposition shift surfaced to the player (ADR-136)."""
+
+    model_config = {"extra": "forbid"}
+
+    turn: int
+    delta: int
+    reason: str
+    location: str | None = None
+
+
+class RelationshipClaimPayload(BaseModel):
+    """A claim-to-party + coarse credibility hint (ADR-136 claims firewall)."""
+
+    model_config = {"extra": "forbid"}
+
+    text: str
+    credibility_hint: str
+
+
+class RelationshipEntry(BaseModel):
+    """One NPC's player-visible relationship state (ADR-136).
+
+    ``band`` is the 5-level display label; ``disposition`` is the raw reveal.
+    ``ocean`` is an OceanProfile dump (full keys, 0..10) or None. ``personality_read``
+    and ``claims`` are empty until Phases B/C.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    portrait_url: str | None = None
+    band: str
+    disposition: int
+    trend: str
+    last_seen_turn: int
+    last_seen_location: str | None = None
+    beats: list[DispositionBeatPayload] = Field(default_factory=list)
+    personality_read: str | None = None
+    ocean: dict[str, float] | None = None
+    claims: list[RelationshipClaimPayload] = Field(default_factory=list)
+
+
+class RelationshipsPayload(BaseModel):
+    """Full relationship roster snapshot (ADR-136)."""
+
+    model_config = {"extra": "forbid"}
+
+    entries: list[RelationshipEntry] = Field(default_factory=list)
+
+
 class LocationEntityResolution(BaseModel):
     """Result of resolve_location_entity. ADR-109 §5.3.
 

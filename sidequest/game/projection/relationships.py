@@ -10,7 +10,13 @@ projection fork.
 
 from __future__ import annotations
 
+from typing import Any
+
 from sidequest.game.disposition import DispositionBeat
+from sidequest.protocol.models import (
+    DispositionBeatPayload,
+    RelationshipEntry,
+)
 
 # 5-level DISPLAY band (ADR-136). Distinct from the engine 3-level Attitude enum.
 _TREND_WINDOW = 3
@@ -38,3 +44,34 @@ def trend_for(beats: list[DispositionBeat], k: int = _TREND_WINDOW) -> str:
     if total < 0:
         return "down"
     return "flat"
+
+
+def build_relationship_entries(snapshot: Any) -> list[RelationshipEntry]:
+    """Build one RelationshipEntry per NPC in ``snapshot.npcs``.
+
+    Phase A: band/disposition/trend/last-seen/beats. OCEAN (Phase B) and claims
+    (Phase C) ship empty here and are populated by later phases.
+    """
+    entries: list[RelationshipEntry] = []
+    for npc in snapshot.npcs:
+        value = int(npc.disposition)
+        beats = [
+            DispositionBeatPayload(turn=b.turn, delta=b.delta, reason=b.reason, location=b.location)
+            for b in npc.disposition_log
+        ]
+        entries.append(
+            RelationshipEntry(
+                name=npc.core.name,
+                portrait_url=None,  # Phase A: no portrait wiring (absence shown as absence)
+                band=band_for(value),
+                disposition=value,
+                trend=trend_for(npc.disposition_log),
+                last_seen_turn=npc.last_seen_turn,
+                last_seen_location=npc.last_seen_location,
+                beats=beats,
+                personality_read=None,
+                ocean=None,
+                claims=[],
+            )
+        )
+    return entries

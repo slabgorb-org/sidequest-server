@@ -39,6 +39,7 @@ from sidequest.genre import (
     NpcArchetype,
     load_genre_pack,
 )
+from sidequest.genre.models.character import spawnable_archetypes
 from sidequest.genre.models.narrative import PowerTier
 from sidequest.genre.names import build_from_culture
 
@@ -559,7 +560,17 @@ def generate_enemy(
             )
             sys.exit(1)
     else:
-        archetype = rng.choice(archetypes)
+        spawnable = spawnable_archetypes(archetypes)
+        if not spawnable:
+            world_clause = f" world '{args.world}'" if args.world else ""
+            print(
+                f"sidequest-encountergen: no spawnable archetypes for genre "
+                f"'{args.genre}'{world_clause} — all archetypes are named_individual "
+                "(specific people who must not be randomly generated as enemies)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        archetype = rng.choice(spawnable)
 
     # Culture + name — world-over-genre resolution (see archetype note above).
     cultures, _ = pack.effective_cultures(args.world)

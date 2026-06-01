@@ -2,6 +2,7 @@ from sidequest.game.disposition import Disposition, DispositionBeat
 from sidequest.game.projection.relationships import (
     band_for,
     build_relationship_entries,
+    personality_read,
     trend_for,
 )
 from tests.game.test_disposition_beat import _npc
@@ -87,3 +88,36 @@ def test_build_entries_never_seen_npc():
 
 def test_build_entries_empty_roster():
     assert build_relationship_entries(_snapshot_with([])) == []
+
+
+def test_personality_read_none_for_no_profile():
+    assert personality_read(None) is None
+
+
+def test_personality_read_picks_salient_traits():
+    # extraversion very high, agreeableness very low → outgoing + abrasive
+    read = personality_read(
+        {
+            "openness": 5.0,
+            "conscientiousness": 5.0,
+            "extraversion": 9.0,
+            "agreeableness": 1.0,
+            "neuroticism": 5.0,
+        }
+    )
+    assert read is not None
+    assert "outgoing" in read.lower()
+    assert "abrasive" in read.lower() or "blunt" in read.lower()
+
+
+def test_personality_read_flat_profile_is_balanced():
+    read = personality_read(
+        {
+            "openness": 5.0,
+            "conscientiousness": 5.0,
+            "extraversion": 5.0,
+            "agreeableness": 5.0,
+            "neuroticism": 5.0,
+        }
+    )
+    assert read is not None and "even-keeled" in read.lower()

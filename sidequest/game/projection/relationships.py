@@ -75,3 +75,38 @@ def build_relationship_entries(snapshot: Any) -> list[RelationshipEntry]:
             )
         )
     return entries
+
+
+# Narrative descriptors per OCEAN dimension at the high / low pole (ADR-040
+# narrative read; the numeric profile is the reveal detail).
+_OCEAN_DESCRIPTORS: dict[str, tuple[str, str]] = {
+    "openness": ("curious and imaginative", "conventional and grounded"),
+    "conscientiousness": ("disciplined and reliable", "careless and impulsive"),
+    "extraversion": ("outgoing and warm", "reserved and private"),
+    "agreeableness": ("gracious and trusting", "abrasive and blunt"),
+    "neuroticism": ("anxious and volatile", "calm and steady"),
+}
+
+
+def personality_read(ocean: dict[str, float] | None) -> str | None:
+    """Narrative personality read from an OceanProfile dump (full keys, 0..10).
+
+    Picks the up-to-two most salient dimensions (furthest from the 5.0 center,
+    distance >= 2.0). A flat profile reads as even-keeled. None in, None out —
+    absence is shown as absence, never a fabricated personality.
+    """
+    if not ocean:
+        return None
+    scored = sorted(
+        ((dim, val - 5.0) for dim, val in ocean.items() if dim in _OCEAN_DESCRIPTORS),
+        key=lambda kv: abs(kv[1]),
+        reverse=True,
+    )
+    salient = [(dim, dist) for dim, dist in scored if abs(dist) >= 2.0][:2]
+    if not salient:
+        return "Even-keeled and hard to read."
+    phrases = [
+        _OCEAN_DESCRIPTORS[dim][0] if dist > 0 else _OCEAN_DESCRIPTORS[dim][1]
+        for dim, dist in salient
+    ]
+    return f"{'; '.join(phrases).capitalize()}."

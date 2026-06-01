@@ -124,9 +124,15 @@ def test_redacted_dispatch_excludes_non_recipient_through_production_path(
     assert all(e["kwargs"].get("component") == "projection" for e in secret_routed)
 
 
-def test_gm_sees_redacted_dispatch_through_production_path() -> None:
-    """The GM (lie-detector) must see every secret canonically — the GM
-    short-circuit precedes the visibility gate.
+def test_no_gm_seat_dispatch_through_production_path() -> None:
+    """71-35: there is no GM seat. A ``"gm"`` player_id gets no special
+    treatment — it is firewalled like any other non-recipient through the
+    production fan-out. The narrator (the real lie-detector) reads
+    canonical state server-side, NOT as a projection recipient, so it
+    needs no GM short-circuit in the filter. (Was
+    ``test_gm_sees_redacted_dispatch_through_production_path``, which
+    asserted the now-deleted ``gm_sees_all`` branch returned canonical;
+    keeping this as an inverse guards against a future "re-seat a GM" PR.)
     """
     [envelope] = build_secret_note_events([_redacted_dispatch("player:Alice")], turn_id="g:w:p:7")
     filt = ComposedFilter(rules=load_rules_from_yaml_str("rules: []"))
@@ -137,5 +143,7 @@ def test_gm_sees_redacted_dispatch_through_production_path() -> None:
         view=_view(),
     )
     assert pid == "gm"
-    assert decision.include is True
-    assert json.loads(decision.payload_json)["subsystem"] == "arcane_probe"
+    # No gm_sees_all short-circuit: "gm" is not in visible_to=["player:Alice"]
+    # → excluded by the structural visibility gate, payload withheld.
+    assert decision.include is False
+    assert decision.payload_json == ""

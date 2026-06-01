@@ -35,7 +35,13 @@ def test_is_gm_not_in_predicate_registry() -> None:
 
 
 def test_surviving_predicates_are_player_identity_only() -> None:
-    """The firewall stands on player-identity predicates alone."""
+    """The firewall stands on player-identity predicates alone.
+
+    Intentional tripwire (exact-set assertion): a new projection predicate
+    is a new per-player asymmetry vector and a security-relevant addition,
+    so it should force a deliberate update here. When adding one, follow the
+    add-a-predicate checklist in ``predicates.py`` and extend this set.
+    """
     assert set(PREDICATES) == {
         "is_self",
         "is_owner_of",
@@ -99,3 +105,20 @@ def test_core_invariant_stage_never_emits_gm_sees_all() -> None:
         outcome = stage.evaluate(envelope=env, view=view, player_id=viewer)
         assert outcome.source != "invariant:gm_sees_all"
         assert outcome.terminal is False
+
+    # The load-bearing case: a SECRET_NOTE addressed to "alice" only.
+    # The DELETED gm_sees_all branch fired BEFORE the visibility gate and
+    # would have short-circuited this to canonical for a "gm" viewer. Post
+    # deletion, "gm" gets no special treatment and must fall through to the
+    # structural visibility gate → excluded (the firewall did not leave a
+    # gap that silently passes secrets to a "gm" id).
+    secret = MessageEnvelope(
+        kind="SECRET_NOTE",
+        payload_json='{"subsystem":"probe","_visibility":{"visible_to":["alice"]}}',
+        origin_seq=2,
+    )
+    gm_secret = stage.evaluate(envelope=secret, view=view, player_id="gm")
+    assert gm_secret.source == "invariant:visibility_gated"
+    assert gm_secret.source != "invariant:gm_sees_all"
+    assert gm_secret.terminal is True
+    assert gm_secret.decision.include is False

@@ -130,6 +130,8 @@ rules:
     #    the events table (assertion 5), read server-side by the narrator,
     #    never in a per-player projection.
     alice_rows = cache.read_since(player_id="alice", since_seq=0)
+    # Guard against a vacuous replay comparison (assertion 4) on empty lists.
+    assert len(alice_rows) == 3
     for pid in players:
         for r in cache.read_since(player_id=pid, since_seq=0):
             assert json.loads(r.payload_json)["text"] == "**"
@@ -138,7 +140,8 @@ rules:
     replay = cache.read_since(player_id="alice", since_seq=0)
     assert [r.payload_json for r in replay] == [r.payload_json for r in alice_rows]
 
-    # 5. GM canonical: events table has true text, unaffected by any rule.
+    # 5. Canonical truth lives in the events table (read server-side by the
+    #    narrator), with the true text, unaffected by any projection rule.
     canonical_rows = repo.read_events_since(since_seq=0)
     assert [json.loads(r.payload_json)["text"] for r in canonical_rows] == ["one", "two", "three"]
 

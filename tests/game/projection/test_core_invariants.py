@@ -73,7 +73,7 @@ def test_visibility_gated_all_sentinel_includes_everyone() -> None:
 
 def test_visibility_gated_malformed_fails_closed() -> None:
     """A secret kind with no usable ``_visibility.visible_to`` FAILS
-    CLOSED for non-GM (leaking is catastrophic; dropping recoverable).
+    CLOSED (leaking is catastrophic; dropping recoverable).
     """
     stage = CoreInvariantStage()
     # No _visibility at all.
@@ -136,7 +136,7 @@ def test_self_authored_kind_echoes_to_author_only() -> None:
     assert out_bob.decision.include is False
 
 
-def test_self_authored_missing_author_field_omits_for_all_non_gm() -> None:
+def test_self_authored_missing_author_field_omits_for_all_viewers() -> None:
     stage = CoreInvariantStage()
     env = MessageEnvelope(kind="DICE_THROW", payload_json='{"dice": "d20"}', origin_seq=7)
     outcome = stage.evaluate(envelope=env, view=_view(), player_id="alice")
@@ -150,3 +150,6 @@ def test_thinking_is_player_excluded_never_routed_to_players() -> None:
     outcome = stage.evaluate(envelope=env, view=_view(), player_id="alice")
     assert outcome.terminal is True
     assert outcome.decision.include is False
+    # Pin the OTEL source label the GM panel reads — a typo here would
+    # silently mislabel the firewall decision (CLAUDE.md OTEL mandate).
+    assert outcome.source == "invariant:player_excluded_kind"

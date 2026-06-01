@@ -42,6 +42,16 @@ class EntitySyncResult:
     the stored card (no churn); ``failed`` counts entities the projector
     rejected. ``outcome`` is derived so the watcher/span telemetry can never
     contradict the counts.
+
+    The three per-type counters (``npc_count``/``location_count``/
+    ``faction_count``) are honest reproject tallies per entity type, mirroring
+    the ``entity_sync.{npc,location,faction}_count`` span attributes (ADR-118
+    §D5). 75-6 syncs the NPC pool only, so ``location_count`` and
+    ``faction_count`` accurately report **0 reprojected** every turn until the
+    deferred faction/location sources are wired (logged deviation; ADR-118
+    permits the NPC-first v1). They are present now so the span schema the GM
+    panel reads is stable across that follow-up — not stub fields, but a true
+    zero measurement.
     """
 
     reprojected: int = 0

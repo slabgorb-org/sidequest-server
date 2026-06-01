@@ -113,18 +113,19 @@ async def embed_pending_entity_cards(
                 # MAX_EMBED_BYTES guard in the client — card content too large.
                 store.mark_embedding_failed(card_id)
                 result.failed_text_too_large += 1
+                content_bytes = len(card.content.encode("utf-8"))
                 span.add_event(
                     "embed_failed",
                     {
                         "card_id": card_id,
                         "reason": "text_too_large",
-                        "content_bytes": len(card.content.encode("utf-8")),
+                        "content_bytes": content_bytes,
                     },
                 )
                 logger.warning(
                     "entity_embedding.worker text_too_large card=%s content_bytes=%d error=%s",
                     card_id,
-                    len(card.content.encode("utf-8")),
+                    content_bytes,
                     exc,
                 )
                 continue

@@ -18,7 +18,7 @@ lie-detector) must fire once per distinct recipient.
 
 Regression anchor: before B1, ``TARGETED_KINDS["SECRET_NOTE"]="to"``
 read a ``to`` field ``SecretNotePayload`` never carries, so EVERY
-non-GM player resolved ``include=False`` — the channel was dead for
+player resolved ``include=False`` — the channel was dead for
 players (the legitimate recipient could not receive it either).
 """
 

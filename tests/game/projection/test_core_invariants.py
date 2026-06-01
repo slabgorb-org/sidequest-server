@@ -17,9 +17,9 @@ def _view() -> SessionGameStateView:
 
 def test_plain_narration_is_non_terminal() -> None:
     """A non-targeted NARRATION matches no core invariant — the stage
-    yields to GenreRuleStage. (Previously this also confirmed a non-GM
-    viewer passed through the now-deleted GM short-circuit; the
-    gm_sees_all branch is gone, so every viewer falls through here.)
+    yields to GenreRuleStage. (Previously this also confirmed a player
+    fell through the now-deleted GM short-circuit; that gm_sees_all
+    branch is gone, so every viewer falls through here.)
     """
     stage = CoreInvariantStage()
     env = MessageEnvelope(kind="NARRATION", payload_json='{"text":"hi"}', origin_seq=2)

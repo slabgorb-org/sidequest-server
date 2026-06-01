@@ -203,12 +203,12 @@ rules:
     filled = lazy_fill(event_log=log, cache=cache, filter_=filt, view=view, player_id=emitter_id)
     assert filled == 2
 
-    # Alice's now-cached projections match what bob (another non-GM) saw —
+    # Alice's now-cached projections match what bob (another player) saw —
     # byte-identical byte-for-byte. This is the single-truth invariant
     # applied to a just-reconnected emitter.
     alice_rows = cache.read_since(player_id=emitter_id, since_seq=0)
     bob_rows = cache.read_since(player_id="bob", since_seq=0)
     assert [r.payload_json for r in alice_rows] == [r.payload_json for r in bob_rows]
-    # And both non-GM views show the mask ("**"), never canonical text.
+    # And both views show the mask ("**"), never canonical text.
     for r in alice_rows:
         assert json.loads(r.payload_json)["text"] == "**"

@@ -275,17 +275,30 @@ def seed_manual(
                     manual.add_npc(data, [])
 
     # ── Encounters: tier 1 + tier 2 ───────────────────────────
-    for tier in ENCOUNTER_TIERS:
-        data = _generate_encounter(
-            genre_packs_path,
+    # Social, Composure-only packs (combat_encounters=False) have no combat —
+    # skip encounter generation entirely so the Manual never holds B/X-style
+    # combat enemies to inject (playtest 2026-06-01, blackthorn_moor). A pack
+    # that failed to load defaults to combat-enabled (the model default), since
+    # the no-culture fallback path is the legacy combat behavior.
+    combat_encounters = getattr(getattr(pack, "rules", None), "combat_encounters", True)
+    if combat_encounters:
+        for tier in ENCOUNTER_TIERS:
+            data = _generate_encounter(
+                genre_packs_path,
+                genre,
+                world,
+                tier=tier,
+                count=ENCOUNTERS_PER_TIER,
+            )
+            if data is not None:
+                logger.info("pregen.encounter_generated (tier=%d)", tier)
+                manual.add_encounter(data, tier, [])
+    else:
+        logger.info(
+            "pregen.encounters_skipped (genre=%s, world=%s, reason=combat_encounters=false)",
             genre,
             world,
-            tier=tier,
-            count=ENCOUNTERS_PER_TIER,
         )
-        if data is not None:
-            logger.info("pregen.encounter_generated (tier=%d)", tier)
-            manual.add_encounter(data, tier, [])
 
     npcs_after = len(manual.npcs)
     logger.info(
@@ -311,6 +324,7 @@ def seed_manual(
             "npcs_before": npcs_before,
             "npcs_after": npcs_after,
             "encounters_after": len(manual.encounters),
+            "combat_encounters": combat_encounters,
         },
     ):
         pass

@@ -246,6 +246,49 @@ def test_inject_materializes_encounter_creatures_with_hostile_disposition() -> N
     assert npc.core.hp.max == 12
 
 
+def _pack_with_combat(enabled: bool) -> object:
+    """Minimal stand-in pack exposing only ``rules.combat_encounters``."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(rules=SimpleNamespace(combat_encounters=enabled))
+
+
+def test_inject_suppresses_encounter_creatures_when_combat_disabled() -> None:
+    """Playtest 2026-06-01: a social pack (combat_encounters=False) must NOT
+    inject combat-encounter enemies — no hostile -20 NPCs with combat stats in
+    a drawing-room mystery. Human NPCs still surface; the Manual's stale combat
+    encounters are skipped at the injection seam (defense-in-depth for cached
+    manuals seeded before the flag landed)."""
+    sd = _FakeSessionData(genre_pack=_pack_with_combat(False))
+    sd.monster_manual = _manual_with(
+        npcs=[_human("Lady Catherine")],
+        encounters=[_creature_encounter(enemy_name="Captain Macaskill", tier=2, hp=24)],
+    )
+    snap = _snapshot()
+    count = monster_manual_inject.inject(
+        sd, snap, current_location="The Drawing Room", in_combat=True
+    )
+    names = [n.core.name for n in snap.npcs]
+    assert count == 1
+    assert names == ["Lady Catherine"]
+    assert "Captain Macaskill" not in names
+    # No hostile combatants leaked in.
+    assert all(int(n.disposition) == 0 for n in snap.npcs)
+
+
+def test_inject_keeps_encounter_creatures_when_combat_enabled_pack() -> None:
+    """A combat-enabled pack (explicit True) still injects encounter creatures —
+    the flag only suppresses when explicitly False."""
+    sd = _FakeSessionData(genre_pack=_pack_with_combat(True))
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="Salt Burrower", tier=2, hp=12)],
+    )
+    snap = _snapshot()
+    count = monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    assert count == 1
+    assert snap.npcs[0].core.name == "Salt Burrower"
+
+
 def test_inject_out_of_combat_caps_encounters() -> None:
     encs = [_creature_encounter(enemy_name=f"Mob{i}") for i in range(5)]
     sd = _FakeSessionData()

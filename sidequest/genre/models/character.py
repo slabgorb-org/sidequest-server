@@ -39,6 +39,25 @@ class NpcArchetype(BaseModel):
     ocean: OceanProfile | None = None
     mindless: bool = False
     saves_as_class: str = "Fighter"
+    # When True, this archetype is a SPECIFIC named individual (a real or
+    # historical person — e.g. "Charles Taze Russell" — or a unique authored
+    # figure), present for flavor/authoring reference. It must never be drawn
+    # into a RANDOM spawn (encountergen enemies, namegen walk-ons): doing so
+    # produced the "charles taze russell, Jewish" combat NPC (2026-06-01
+    # playtest). Explicit ``--archetype`` requests may still target it. Opt-in;
+    # default archetypes remain freely spawnable.
+    named_individual: bool = False
+
+
+def spawnable_archetypes(archetypes: list[NpcArchetype]) -> list[NpcArchetype]:
+    """Archetypes eligible for RANDOM NPC/encounter generation.
+
+    Excludes :attr:`NpcArchetype.named_individual` templates — specific real
+    people / unique figures that must only be summoned by explicit request,
+    never by ``rng.choice``. Callers that random-pick should fail loud when
+    this returns empty rather than silently falling back to the full list.
+    """
+    return [a for a in archetypes if not a.named_individual]
 
 
 class IdentityCapture(BaseModel):

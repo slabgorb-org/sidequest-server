@@ -32,6 +32,7 @@ from sidequest.genre import (
 from sidequest.genre.archetype import ResolutionSource, resolve_archetype
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 from sidequest.genre.models.archetype_funnels import ArchetypeFunnels
+from sidequest.genre.models.character import spawnable_archetypes
 from sidequest.genre.models.npc_traits import NpcTrait
 from sidequest.genre.names import build_from_culture
 from sidequest.genre.names.generator import has_stem_collision
@@ -301,7 +302,15 @@ def legacy_axis_fallback(
             )
             sys.exit(1)
     else:
-        archetype = rng.choice(pack.archetypes)
+        spawnable = spawnable_archetypes(pack.archetypes)
+        if not spawnable:
+            print(
+                f"sidequest-namegen: no spawnable archetypes for genre '{args.genre}' "
+                "— all archetypes are named_individual (specific people)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        archetype = rng.choice(spawnable)
 
     return (
         args.jungian or "",
@@ -599,7 +608,16 @@ def generate_npc(
             None,
         )
     if archetype is None:
-        archetype = rng.choice(effective_archetypes)
+        spawnable = spawnable_archetypes(effective_archetypes)
+        if not spawnable:
+            print(
+                _empty_pool_message(
+                    "spawnable archetypes", "archetypes.yaml", args.genre, args.world
+                ),
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        archetype = rng.choice(spawnable)
 
     generator = build_from_culture(culture, corpus_dir, rng, fallback_dirs=corpus_fallbacks)
     name = ""

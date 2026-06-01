@@ -100,6 +100,37 @@ class EntityStore(BaseModel):
         ]
         return sorted(ids)
 
+    def requeue_dimension_mismatched(self, current_dim: int) -> int:
+        """Flip ``embedding_pending`` back to ``True`` for every card whose stored
+        embedding dimension differs from ``current_dim``.
+
+        Mirrors :meth:`LoreStore.requeue_dimension_mismatched` (ADR-118 §D5,
+        Story 75-4 forward-flag). Guards against the silent-orphan failure where a
+        daemon model upgrade (MiniLM-384 → -768) leaves every pre-upgrade card
+        scoring 0.0 against every query because :func:`cosine_similarity` returns
+        0.0 on length mismatch. Without this re-queue, ``update_embedding``
+        permanently clears the pending flag with no log, span, or GM-panel signal.
+
+        Returns the number of cards re-queued so the caller can emit the
+        ``retrieval.dimension_mismatch_count`` OTEL attribute. Called from
+        :func:`sidequest.game.retrieval_orchestration.retrieve_turn_context` before
+        the similarity query; the next worker pass re-embeds the re-queued cards on
+        the current model. A non-positive ``current_dim`` is a no-op (a zero-length
+        embedding from the daemon must not trigger a cascade wipe of the index).
+        """
+        if current_dim <= 0:
+            return 0
+        count = 0
+        for card in self.cards.values():
+            if card.embedding is None:
+                continue
+            if len(card.embedding) != current_dim:
+                card.embedding = None
+                card.embedding_pending = True
+                card.embedding_retry_count = 0
+                count += 1
+        return count
+
     def update_embedding(self, card_id: str, embedding: list[float]) -> None:
         """Attach an embedding to an existing card, clearing the pending flag and
         resetting the retry count.

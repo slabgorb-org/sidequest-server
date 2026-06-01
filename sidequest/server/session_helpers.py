@@ -31,6 +31,7 @@ from sidequest.game.npc_scene import (
     is_npc_in_scene,
 )
 from sidequest.game.projection.envelope import MessageEnvelope
+from sidequest.game.retrieval_orchestration import RetrievedEntities, render_entity_section
 from sidequest.game.session import (
     GameSnapshot,
     PartyPeer,
@@ -748,6 +749,7 @@ def _build_turn_context(
     *,
     opening_directive: str | None = None,
     lore_context: str | None = None,
+    entity_retrieval: RetrievedEntities | None = None,
     room: SessionRoom | None = None,
 ) -> TurnContext:
     """Assemble :class:`TurnContext` for one narration turn (Slice H).
@@ -1124,6 +1126,27 @@ def _build_turn_context(
         recent_body_mentions = list(sess.recent_body_mentions)
         quest_anchors = list(snapshot.quest_anchors)
 
+    # Story 75-5 (ADR-118 §D4): render the universal-retrieval fill into typed
+    # Valley blocks. Only non-empty tiers render — an empty tier stays None so
+    # orchestrator registers no section (zero-byte-leak). The floor is NOT
+    # rendered here; it rides ``npc_working_set`` already (no double-injection).
+    retrieved_entity_npcs: str | None = None
+    retrieved_entity_locations: str | None = None
+    retrieved_entity_factions: str | None = None
+    if entity_retrieval is not None:
+        if entity_retrieval.retrieved_npcs:
+            retrieved_entity_npcs = render_entity_section(
+                "retrieved_npcs", entity_retrieval.retrieved_npcs
+            )
+        if entity_retrieval.retrieved_locations:
+            retrieved_entity_locations = render_entity_section(
+                "retrieved_locations", entity_retrieval.retrieved_locations
+            )
+        if entity_retrieval.retrieved_factions:
+            retrieved_entity_factions = render_entity_section(
+                "retrieved_factions", entity_retrieval.retrieved_factions
+            )
+
     return TurnContext(
         in_combat=in_combat,
         in_chase=in_chase,
@@ -1194,6 +1217,9 @@ def _build_turn_context(
         opening_directive=opening_directive,
         world_context=sd.world_context,
         lore_context=lore_context,
+        retrieved_entity_npcs=retrieved_entity_npcs,
+        retrieved_entity_locations=retrieved_entity_locations,
+        retrieved_entity_factions=retrieved_entity_factions,
         lethality_policy=sd.genre_pack.lethality_policy,
         pc_cores_by_player=pc_cores_by_player,
         npc_cores_by_name=npc_cores_by_name,

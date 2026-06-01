@@ -492,10 +492,13 @@ class PlayerActionHandler:
 
         with timings.phase("lore_retrieval"):
             lore_context = await session._retrieve_lore_for_turn(sd, action)
+        with timings.phase("entity_retrieval"):
+            entity_retrieval = await session._retrieve_entities_for_turn(sd, action)
         with timings.phase("turn_context_build"):
             turn_context = _build_turn_context(
                 sd,
                 lore_context=lore_context,
+                entity_retrieval=entity_retrieval,
                 room=session._room,
             )
         # Attach the handler-entry timer so `_execute_narration_turn`

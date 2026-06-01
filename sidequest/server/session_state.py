@@ -29,6 +29,7 @@ from sidequest.agents.orchestrator import Orchestrator
 from sidequest.audio.interpreter import AudioInterpreter
 from sidequest.audio.library_backend import LibraryBackend
 from sidequest.game.builder import CharacterBuilder
+from sidequest.game.entity_store import EntityStore
 from sidequest.game.history_chapter import HistoryChapter
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.pg.dungeon import PgDungeonRepository
@@ -236,6 +237,12 @@ class _SessionData:
     # the player's backstory decisions. Rust parity: Arc<Mutex<LoreStore>>
     # on app state — Python single-player keeps it on the session.
     lore_store: LoreStore = field(default_factory=LoreStore)
+    # Entity store (Story 75-4 / 75-5, ADR-118 universal retrieval). The typed
+    # sibling of ``lore_store`` — holds NPC / location / faction EntityCards that
+    # per-turn floor+fill retrieval (``retrieve_turn_context``) queries for the
+    # semantic fill. Population / reproject of the index is the 75-6 sync hook;
+    # 75-5 only queries it. Round-trips through the save like ``lore_store``.
+    entity_store: EntityStore = field(default_factory=EntityStore)
     # Audio DJ — per-session LibraryBackend so ThemeRotator cooldowns
     # persist across turns within a session. None when the genre pack
     # has no resolvable audio directory on disk (e.g. a pack defining

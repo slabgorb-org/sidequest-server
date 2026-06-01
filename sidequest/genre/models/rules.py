@@ -1008,6 +1008,17 @@ class RulesConfig(BaseModel):
     # default "HP" / "Vitality". None ⇒ the UI falls back to "HP" (mechanical
     # packs are unaffected). The mechanic is unchanged; only the label moves.
     survivability_pool_label: str | None = None
+    # Playtest 2026-06-01 (blackthorn_moor): does this pack have combat
+    # encounters? The Monster Manual pre-generates B/X-style combat enemies
+    # (HP, Strike/Power-Strike abilities, hostile disposition) and injects them
+    # into ``snapshot.npcs`` every turn. A social, Composure-only pack
+    # (``tea_and_murder``) has no combat — encountergen falls back to humanoid
+    # "enemies" built from the pack's social ``allowed_classes``, seeding
+    # drawing-room guests as ``disposition=-20`` combatants. ``False`` suppresses
+    # both Monster-Manual encounter *seeding* (pregen) and encounter *injection*
+    # (monster_manual_inject). ``True`` (default) leaves every combat pack
+    # unchanged. Declared explicitly per No Silent Fallbacks (extra="forbid").
+    combat_encounters: bool = True
     # Per-pack character-sheet vocabulary. Keys are the canonical chargen
     # field names (``name``, ``race``, ``class``, ``personality``,
     # ``pronouns``, ``stats``, ``mutation``, ``affinity``, ``rig``,

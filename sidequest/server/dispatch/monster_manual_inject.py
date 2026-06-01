@@ -301,8 +301,23 @@ def inject(
     if manual is None:
         return 0
 
+    # Social, Composure-only packs (combat_encounters=False) have no combat —
+    # never inject combat-encounter enemies (hostile -20 NPCs carrying B/X HP
+    # and Strike abilities) into a drawing-room mystery. This gate is
+    # defense-in-depth alongside the seed-side skip (pregen): a Manual cached to
+    # disk before the flag landed still holds combat encounters, so the
+    # injection seam must suppress them too (playtest 2026-06-01, blackthorn_moor).
+    # Absent pack/rules (test stubs) default to combat-enabled = the model
+    # default, preserving legacy behavior.
+    rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
+    combat_encounters = getattr(rules, "combat_encounters", True)
+
     human_patches = _npc_patches_for_available_humans(manual, current_location)
-    creature_patches = _npc_patches_for_encounters(manual, in_combat, current_location)
+    creature_patches = (
+        _npc_patches_for_encounters(manual, in_combat, current_location)
+        if combat_encounters
+        else []
+    )
     all_patches = human_patches + creature_patches
 
     available_npcs = len(manual.available_npcs())
@@ -326,6 +341,7 @@ def inject(
             "creatures_injected": len(creature_patches),
             "patches_with_location": patches_with_location,
             "in_combat": bool(in_combat),
+            "combat_encounters": bool(combat_encounters),
             "location": current_location or "",
         },
     ):

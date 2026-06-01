@@ -499,7 +499,19 @@ class WorldBuilder:
         existing: Npc | None = next((n for n in snap.npcs if n.core.name == npc_data.name), None)
         if existing is not None:
             if npc_data.disposition is not None:
+                before = int(existing.disposition)
                 existing.disposition = int(npc_data.disposition)
+                after = int(existing.disposition)
+                # ADR-136 (site 4/4): a chapter that moves an already-known
+                # NPC's standing is a relationship beat. The new-NPC branch
+                # below sets a baseline (no shift), so it records nothing.
+                # Zero-delta no-ops are dropped by the seam's guard.
+                existing.record_disposition_beat(
+                    turn=snap.turn_manager.interaction,
+                    delta=after - before,
+                    reason="world_chapter_upsert",
+                    location=npc_data.location or existing.location,
+                )
             if npc_data.description:
                 existing.core.description = npc_data.description
             if npc_data.location:

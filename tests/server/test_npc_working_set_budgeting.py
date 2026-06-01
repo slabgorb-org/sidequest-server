@@ -441,3 +441,84 @@ def test_budgeting_wired_into_build_turn_context(otel_capture) -> None:
         f"{SPAN_NPC_WORKING_SET!r} must fire during the real _build_turn_context "
         "path (OTEL wiring proof, not a source-text grep)"
     )
+
+
+# ===========================================================================
+# Rework (Reviewer HIGH finding 2026-06-01) — early-turn never-seen boundary
+# ===========================================================================
+#
+# interaction starts at 1 (TurnManager.interaction default), so for turns 1-2
+# the recency threshold (current_turn - window) is <= 0. The buggy condition
+# `last_seen_turn >= threshold` then misclassifies a never-seen NPC
+# (last_seen_turn=0, the unset sentinel) as scene-present and injects it at
+# full detail — defeating the budgeting at session start and violating the
+# never-seen-> off-stage invariant (No Silent Fallbacks). These pin the fix.
+
+
+def test_never_seen_npc_off_stage_at_session_start() -> None:
+    """current_turn=1 → threshold=-1. A never-seen NPC (last_seen_turn=0) must
+    still be off-stage (compact), NOT floored full. Fails against the
+    `last_seen_turn >= threshold` condition until the never-seen sentinel is
+    guarded.
+    """
+    from sidequest.agents.npc_context import build_npc_working_set
+
+    fresh = _npc("Newcomer", 0)  # never cited — unset sentinel
+    snap = _snap(current_turn=1, npcs=[fresh], pool=[])
+
+    ws = build_npc_working_set(snap, current_turn=1, player_referenced_npcs=set(), recency_window=2)
+
+    assert "Newcomer" not in _names(ws.full_profiles), (
+        "a never-seen NPC (last_seen_turn=0) must be off-stage even at turn 1 "
+        f"(threshold <= 0); got full={_names(ws.full_profiles)}"
+    )
+    assert "Newcomer" in set(ws.compact_names), (
+        "never-seen NPC should collapse to a compact name in no-reference mode"
+    )
+
+
+def test_never_seen_npc_off_stage_at_turn_two() -> None:
+    """current_turn=2 → threshold=0. The never-seen sentinel (0) satisfies
+    `0 >= 0` in the buggy impl. It must be off-stage, not full.
+    """
+    from sidequest.agents.npc_context import build_npc_working_set
+
+    fresh = _npc("Newcomer", 0)
+    snap = _snap(current_turn=2, npcs=[fresh], pool=[])
+
+    ws = build_npc_working_set(snap, current_turn=2, player_referenced_npcs=set(), recency_window=2)
+
+    assert "Newcomer" not in _names(ws.full_profiles), (
+        f"never-seen NPC must be off-stage at turn 2 (threshold=0); got full={_names(ws.full_profiles)}"
+    )
+    assert "Newcomer" in set(ws.compact_names)
+
+
+def test_genuinely_recent_npc_still_full_at_early_turn() -> None:
+    """Guard against over-correction: at an early turn, NPCs actually seen on a
+    recent turn must STAY full — only the never-seen sentinel drops off-stage.
+
+    current_turn=2, window=2 (threshold=0): an NPC seen this turn (2) and one
+    seen last turn (1) are both scene-present (full); the never-seen NPC (0) is
+    off-stage. This fails against the buggy impl (which floors the never-seen
+    NPC too) AND would fail an over-aggressive fix that drops legitimately
+    recent early-turn NPCs.
+    """
+    from sidequest.agents.npc_context import build_npc_working_set
+
+    seen_now = _npc("Now", 2)  # seen this turn
+    seen_prev = _npc("Prev", 1)  # seen last turn — still within the window
+    fresh = _npc("Fresh", 0)  # never seen
+    snap = _snap(current_turn=2, npcs=[seen_now, seen_prev, fresh], pool=[])
+
+    ws = build_npc_working_set(
+        snap, current_turn=2, player_referenced_npcs={"Now"}, recency_window=2
+    )
+
+    assert _names(ws.full_profiles) == {"Now", "Prev"}, (
+        "genuinely-recent NPCs must stay full at early turns; the never-seen NPC "
+        f"must not; got full={_names(ws.full_profiles)}"
+    )
+    assert "Fresh" in _names(ws.brief_entries), (
+        "the never-seen NPC must drop to the off-stage (brief, referenced-mode) tier"
+    )

@@ -190,6 +190,17 @@ def _format_chip_label(value: str) -> str:
     return " ".join(part.capitalize() for part in str(value).replace("_", " ").split())
 
 
+def poi_image_key(pack: str, world: str, slug: str) -> str:
+    """Canonical R2 object key for a POI landscape image.
+
+    Single source of truth shared by the presenter's ``<img src>`` (here) and
+    the Story 65-8 manifest gate in ``reference_renderer``. They MUST agree on
+    this format — if they drift, the gate would pass on a key the src never
+    requests (or vice versa), silently breaking image emission.
+    """
+    return f"genre_packs/{pack}/worlds/{world}/assets/poi/{slug}.png"
+
+
 def _poi_image_html(*, slug: str, name: str, ctx: PresenterContext) -> str:
     """Story 63-8: an R2 landscape ``<img>`` for a location card, or "".
 
@@ -204,7 +215,7 @@ def _poi_image_html(*, slug: str, name: str, ctx: PresenterContext) -> str:
             pass
         return ""
     if slug in ctx.poi_image_slugs:
-        src = resolve_asset_url(f"genre_packs/{ctx.pack}/worlds/{ctx.world}/assets/poi/{slug}.png")
+        src = resolve_asset_url(poi_image_key(ctx.pack, ctx.world, slug))
         with reference_poi_image_resolved_span(pack=ctx.pack, world=ctx.world, slug=slug):
             pass
         # Escape the accent: it lands in a style= attribute and, while theme.yaml is

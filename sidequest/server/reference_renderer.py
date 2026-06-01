@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from functools import lru_cache
 from html import escape
 from pathlib import Path
 
@@ -48,6 +49,7 @@ import yaml
 from sidequest.server.reference_presenters import (
     PresenterContext,
     lookup_presenter,
+    poi_image_key,
 )
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import (
@@ -65,6 +67,7 @@ from sidequest.server.reference_visibility import Visibility, classify
 from sidequest.telemetry.spans.reference import (
     reference_devnote_suppressed_span,
     reference_hero_unbound_span,
+    reference_manifest_loaded_span,
     reference_presenter_error_span,
     reference_toc_missing_span,
     reference_unknown_field_span,
@@ -1124,6 +1127,73 @@ def load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
     return frozenset(slugs)
 
 
+@lru_cache(maxsize=8)
+def load_r2_manifest_keys(manifest_path: Path) -> frozenset[str]:
+    """Story 65-8: the set of R2 object keys recorded in ``r2_manifest.json``
+    (the Story 65-7 existence oracle).
+
+    Used to gate POI ``<img>`` emission on the lore page so an authored-but-not-
+    rendered POI never produces a broken image. Loaded once per process and
+    cached per path (the manifest is static between deploys).
+
+    Fails loud — never returns a silently-empty set on error (No Silent
+    Fallbacks): an absent file raises ``FileNotFoundError``; malformed JSON or a
+    wrong-shape manifest (not a list, or an entry missing ``key``) raises
+    ``ValueError``.
+    """
+    with manifest_path.open(encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        raise ValueError(
+            f"r2_manifest.json: expected a JSON array of entries, got "
+            f"{type(data).__name__}: {manifest_path}"
+        )
+    keys: set[str] = set()
+    for entry in data:
+        if not isinstance(entry, dict) or "key" not in entry:
+            raise ValueError(f"r2_manifest.json: malformed entry (missing 'key'): {manifest_path}")
+        keys.add(str(entry["key"]))
+    return frozenset(keys)
+
+
+def _gate_poi_slugs_on_manifest(
+    authored_slugs: frozenset[str],
+    *,
+    pack: str,
+    world: str,
+    pack_dir: Path,
+) -> frozenset[str]:
+    """Story 65-8: filter authored POI slugs to those whose R2 landscape image
+    is actually present in ``r2_manifest.json``. Authored-but-not-on-R2 POIs
+    render text-only — no broken ``<img>``.
+
+    The manifest is required only when the world authors POIs; a POI-less lore
+    page never consults it (so the manifest is not a hard dependency of every
+    render). For a POI-bearing world, an absent/malformed manifest is a loud
+    failure surfaced by :func:`load_r2_manifest_keys`. The manifest lives at the
+    content root — ``pack_dir.parent.parent`` (prod:
+    ``sidequest-content/r2_manifest.json``).
+
+    Emits one ``reference_manifest_loaded`` span per render so the GM/dev panel
+    can confirm the gate consulted a real oracle.
+    """
+    if not authored_slugs:
+        return frozenset()
+    manifest_path = pack_dir.parent.parent / "r2_manifest.json"
+    manifest_keys = load_r2_manifest_keys(manifest_path)
+    world_prefix = f"genre_packs/{pack}/worlds/{world}/assets/poi/"
+    world_key_count = sum(1 for key in manifest_keys if key.startswith(world_prefix))
+    with reference_manifest_loaded_span(
+        path=str(manifest_path),
+        entry_count=len(manifest_keys),
+        world_key_count=world_key_count,
+    ):
+        pass
+    return frozenset(
+        slug for slug in authored_slugs if poi_image_key(pack, world, slug) in manifest_keys
+    )
+
+
 def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -> str:
     """Build the /reference/lore/<pack>/<world> HTML document.
 
@@ -1141,13 +1211,22 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
     theme = load_reference_theme(pack_dir)
     hero_html = _build_hero(pack=pack, world=world, world_dir=world_dir)
 
+    # Story 65-8: gate authored POI slugs on R2 existence (r2_manifest.json) so
+    # authored-but-not-rendered POIs render text-only instead of a broken <img>.
+    gated_poi_slugs = _gate_poi_slugs_on_manifest(
+        load_poi_image_slugs(world_dir),
+        pack=pack,
+        world=world,
+        pack_dir=pack_dir,
+    )
+
     world_rendered = _file_renders_by_stem(
         LORE_WORLD_FILES,
         world_dir,
         pack=pack,
         world=world,
         theme=theme,
-        poi_image_slugs=load_poi_image_slugs(world_dir),
+        poi_image_slugs=gated_poi_slugs,
     )
 
     body, kept_toc = _wrap_sections_by_toc(pack, world_rendered)

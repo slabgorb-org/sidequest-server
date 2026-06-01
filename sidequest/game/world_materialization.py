@@ -45,6 +45,7 @@ from sidequest.game.history_chapter import (
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import NarrativeEntry, Npc, TropeState
 from sidequest.genre.models.authored_npc import AuthoredNpc
+from sidequest.genre.models.ocean import OceanProfile
 
 
 def _auto_description(race: str, char_class: str) -> str:
@@ -878,7 +879,11 @@ def preload_authored_npcs(
             build=None,
             height=None,
             distinguishing_features=list(authored_npc.distinguishing_features),
-            ocean=authored_npc.ocean,
+            ocean=(
+                OceanProfile.from_authored(authored_npc.ocean).model_dump()
+                if authored_npc.ocean
+                else None
+            ),
             resolution_tier="spawn",
             non_transactional_interactions=0,
             jungian_id=None,

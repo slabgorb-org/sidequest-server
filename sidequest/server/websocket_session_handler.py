@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, cast
 from opentelemetry import trace
 
 if TYPE_CHECKING:
+    from sidequest.game.retrieval_orchestration import RetrievedEntities
     from sidequest.handlers.base import MessageHandler
     from sidequest.server.session_room import RoomRegistry, SessionRoom
 
@@ -775,18 +776,16 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     _dungeon_palette = (
                         _lookahead_handle.palette if _lookahead_handle is not None else None
                     )
-                    _dispatch_package, _bank_result = (
-                        await execute_intent_router_pre_narrator_pass(
-                            intent_router=_intent_router,
-                            snapshot=snapshot,
-                            pack=sd.genre_pack,
-                            action=action,
-                            player_name=_acting_player_name,
-                            additional_player_names=_additional_player_names or None,
-                            dungeon_store=_dungeon_store,
-                            palette=_dungeon_palette,
-                            lookahead_handle=_lookahead_handle,
-                        )
+                    _dispatch_package, _bank_result = await execute_intent_router_pre_narrator_pass(
+                        intent_router=_intent_router,
+                        snapshot=snapshot,
+                        pack=sd.genre_pack,
+                        action=action,
+                        player_name=_acting_player_name,
+                        additional_player_names=_additional_player_names or None,
+                        dungeon_store=_dungeon_store,
+                        palette=_dungeon_palette,
+                        lookahead_handle=_lookahead_handle,
                     )
                 except IntentRouterFailure as exc:
                     if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):
@@ -2474,10 +2473,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             )
 
         lore_context = await self._retrieve_lore_for_turn(sd, action)
+        entity_retrieval = await self._retrieve_entities_for_turn(sd, action)
         turn_context = _build_turn_context(
             sd,
             opening_directive=sd.opening_directive,
             lore_context=lore_context,
+            entity_retrieval=entity_retrieval,
             room=self._room,
         )
 
@@ -2957,6 +2958,23 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         from sidequest.server.dispatch import lore_embed
 
         return await lore_embed.retrieve_for_turn(self, sd, action)
+
+    async def _retrieve_entities_for_turn(self, sd: _SessionData, action: str) -> RetrievedEntities:
+        """Pre-turn universal entity retrieval (ADR-118 §D4, Story 75-5).
+
+        The typed sibling of :meth:`_retrieve_lore_for_turn`: assembles the floor
+        (scene-present NPCs) and the semantic fill (NPC/location/faction cards)
+        under a per-turn token budget, sanitizing retrieved content at the
+        choke-point and emitting the ``retrieval.universal`` span. Never raises.
+        """
+        from sidequest.game.retrieval_orchestration import retrieve_turn_context
+
+        return await retrieve_turn_context(
+            sd.entity_store,
+            sd.snapshot,
+            action,
+            current_turn=sd.snapshot.turn_manager.interaction,
+        )
 
     def _dispatch_embed_worker(self, sd: _SessionData) -> None:
         """Post-turn embed worker dispatch. Delegates to ``lore_embed.dispatch_worker``."""

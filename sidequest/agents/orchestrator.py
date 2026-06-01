@@ -767,6 +767,17 @@ class TurnContext:
     # returns a non-empty ``<lore>`` block).
     lore_context: str | None = None
 
+    # Retrieved entity fill (Valley zone) — Story 75-5, ADR-118 §D4. The
+    # semantic top-k NPC/location/faction cards from the universal index,
+    # pre-rendered into typed blocks by ``_build_turn_context`` from
+    # :func:`sidequest.game.retrieval_orchestration.retrieve_turn_context`.
+    # Each is ``None`` when that type retrieved nothing, so no empty section is
+    # registered (zero-byte-leak). The scene-present floor is NOT carried here —
+    # it already reaches the prompt via ``npc_working_set`` (no double-injection).
+    retrieved_entity_npcs: str | None = None
+    retrieved_entity_locations: str | None = None
+    retrieved_entity_factions: str | None = None
+
     # Group B (Local DM decomposer) — session handler populates before calling
     # run_narration_turn. Consumed by build_narrator_prompt to register the
     # narrator_directives PromptSection. Default None = decomposer did not run.
@@ -2122,6 +2133,27 @@ class Orchestrator:
                     SectionCategory.State,
                 ),
             )
+
+        # Retrieved entity fill (Valley zone) — Story 75-5, ADR-118 §D4. Typed
+        # NPC/location/faction sections from the universal index, registered only
+        # when non-empty (zero-byte-leak — an empty type is ``None`` and registers
+        # nothing). Sibling of the lore block above; the scene-present floor is
+        # NOT registered here (it rides ``npc_working_set``, no double-injection).
+        for section_name, section_body in (
+            ("retrieved_npcs", context.retrieved_entity_npcs),
+            ("retrieved_locations", context.retrieved_entity_locations),
+            ("retrieved_factions", context.retrieved_entity_factions),
+        ):
+            if section_body:
+                registry.register_section(
+                    agent_name,
+                    PromptSection.new(
+                        section_name,
+                        section_body,
+                        AttentionZone.Valley,
+                        SectionCategory.State,
+                    ),
+                )
 
         # Magic context (Valley zone) — injected when a world has magic.yaml loaded.
         # Tells the narrator which plugins are active, what the hard_limits are,

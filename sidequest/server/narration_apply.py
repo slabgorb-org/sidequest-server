@@ -1517,6 +1517,38 @@ def _resolve_invented_naming_context(
     return None, None, None, True
 
 
+def _comma_flip_name(name: str) -> str | None:
+    """Flip a single ``"Surname, Given"`` dossier-register name into natural
+    ``"Given Surname"`` order. Returns ``None`` when there isn't exactly one
+    comma with non-empty parts on both sides — the transform is deterministic
+    and reversible, so it only fires on the unambiguous inversion register
+    (e.g. the ``space_opera/coyote_star`` Hegemonic
+    ``"{family_name}, {given_name}"`` pattern). Anything else is left alone to
+    avoid false-positive identity merges.
+    """
+    parts = name.split(",")
+    if len(parts) != 2:
+        return None
+    surname, given = parts[0].strip(), parts[1].strip()
+    if not surname or not given:
+        return None
+    return f"{given} {surname}"
+
+
+def _npc_name_match_keys(name: str) -> set[str]:
+    """Casefolded match keys for an NPC name: the name itself plus its
+    comma-flipped variant (when one exists). Two names reconcile to the same
+    identity when their key sets intersect — so ``"Gilligan, Denis"`` matches a
+    natural-order mention ``"Denis Gilligan"`` instead of minting a phantom
+    duplicate (playtest 2026-06-01 ADR-072 split-identity repro).
+    """
+    keys = {name.casefold()}
+    flipped = _comma_flip_name(name)
+    if flipped is not None:
+        keys.add(flipped.casefold())
+    return keys
+
+
 def _apply_npc_mentions(
     *,
     snapshot: GameSnapshot,
@@ -1604,13 +1636,27 @@ def _apply_npc_mentions(
             continue
 
         name_key = mention.name.casefold()
+        # Comma-inversion-aware match keys (playtest 2026-06-01): reconcile a
+        # natural-order mention against a comma-inverted stored name (and vice
+        # versa) so an already-rostered NPC is matched, not duplicated.
+        mention_keys = _npc_name_match_keys(mention.name)
 
-        # Step 1: existing Npc shadows everything else.
+        # Step 1: existing Npc shadows everything else. Prefer an exact match;
+        # only fall back to comma-normalized reconciliation when no exact one
+        # exists (so an exact hit later in the roster is never lost to an
+        # earlier comma-variant).
         npc_hit: Npc | None = None
+        npc_match_form = "exact"
         for npc in snapshot.npcs:
             if npc.core.name.casefold() == name_key:
                 npc_hit = npc
                 break
+        if npc_hit is None:
+            for npc in snapshot.npcs:
+                if _npc_name_match_keys(npc.core.name) & mention_keys:
+                    npc_hit = npc
+                    npc_match_form = "comma_normalized"
+                    break
         if npc_hit is not None:
             # ``Npc`` has no string ``role`` field (only the archetype-id
             # ``npc_role_id``, which is not narrator-cited prose). Pass
@@ -1637,10 +1683,15 @@ def _apply_npc_mentions(
                 match_strategy="npcs_hit",
                 pool_origin=npc_hit.pool_origin,
                 turn_number=turn_num,
+                match_form=npc_match_form,
+                matched_name=npc_hit.core.name,
             ):
                 logger.info(
-                    "npc.referenced name=%r match=npcs_hit pool_origin=%r turn=%d",
+                    "npc.referenced name=%r match=npcs_hit form=%s matched=%r "
+                    "pool_origin=%r turn=%d",
                     mention.name,
+                    npc_match_form,
+                    npc_hit.core.name,
                     npc_hit.pool_origin,
                     turn_num,
                 )
@@ -1685,12 +1736,20 @@ def _apply_npc_mentions(
                         pass
             continue
 
-        # Step 2: pool member match.
+        # Step 2: pool member match. Exact first, comma-normalized fallback
+        # (same precedence as Step 1).
         pool_hit: NpcPoolMember | None = None
+        pool_match_form = "exact"
         for member in snapshot.npc_pool:
             if member.name.casefold() == name_key:
                 pool_hit = member
                 break
+        if pool_hit is None:
+            for member in snapshot.npc_pool:
+                if _npc_name_match_keys(member.name) & mention_keys:
+                    pool_hit = member
+                    pool_match_form = "comma_normalized"
+                    break
         if pool_hit is not None:
             # Story 72-7: narrator drift is authoritative for narrator-sourced
             # identities — a later mention that disagrees overwrites the
@@ -1736,10 +1795,12 @@ def _apply_npc_mentions(
                 match_strategy="pool_hit",
                 pool_origin=pool_hit.name,
                 turn_number=turn_num,
+                match_form=pool_match_form,
             ):
                 logger.info(
-                    "npc.referenced name=%r match=pool_hit turn=%d",
+                    "npc.referenced name=%r match=pool_hit form=%s turn=%d",
                     mention.name,
+                    pool_match_form,
                     turn_num,
                 )
             continue

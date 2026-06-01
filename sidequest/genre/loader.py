@@ -146,6 +146,41 @@ def _load_yaml_raw_optional(path: Path) -> Any | None:
     return _load_yaml_raw(path)
 
 
+def _parse_char_creation_scenes(raw: Any | None, *, path: Path) -> list[CharCreationScene]:
+    """Validate and parse a ``char_creation.yaml`` payload into scenes.
+
+    Contract (see ``server/dispatch/char_creation_resolve.py``): a world's
+    char_creation list REPLACES the genre's wholesale — there is no per-scene
+    merge, and ``inherits_scenes_from_genre_pack`` is **not** a supported key.
+    So the on-disk shape is a BARE LIST of scene mappings.
+
+    - ``None`` (absent or empty file) → ``[]``. For a world this means "inherit
+      the genre's scenes"; for the genre it means "no chargen scenes".
+    - a ``list`` → parsed scenes.
+    - anything else (a mapping such as the unsupported
+      ``inherits_scenes_from_genre_pack`` wrapper, or a scalar) → **fail loud**.
+
+    The old code silently coerced any non-list to ``[]``, which let a
+    mapping-shaped world file degrade to genre scenes with no signal — a No
+    Silent Fallbacks violation (the_real_mccoy desert-chargen leak, 2026-06-01).
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise GenreLoadError(
+            path=path,
+            detail=(
+                f"char_creation.yaml must be a bare list of chargen scenes, got "
+                f"{type(raw).__name__}. A world's char_creation list REPLACES the "
+                "genre's wholesale — there is no per-scene merge, and "
+                "'inherits_scenes_from_genre_pack' is not a supported key. Provide "
+                "the complete ordered scene list (origins first), or omit the file "
+                "to inherit the genre's scenes."
+            ),
+        )
+    return [CharCreationScene.model_validate(c) for c in raw]
+
+
 def _load_text_optional(path: Path) -> str | None:
     """Read a text file (UTF-8) if it exists.
 
@@ -1007,11 +1042,9 @@ def _load_single_world(
         npcs_list_raw = npcs_raw.get("npcs", []) if isinstance(npcs_raw, dict) else []
         authored_npcs = [AuthoredNpc.model_validate(n) for n in npcs_list_raw]
 
-    char_creation_raw = _load_yaml_raw_optional(world_path / "char_creation.yaml")
-    char_creation: list[CharCreationScene] = (
-        [CharCreationScene.model_validate(c) for c in char_creation_raw]
-        if isinstance(char_creation_raw, list)
-        else []
+    char_creation_path = world_path / "char_creation.yaml"
+    char_creation: list[CharCreationScene] = _parse_char_creation_scenes(
+        _load_yaml_raw_optional(char_creation_path), path=char_creation_path
     )
 
     # === World-tier rigs.yaml — OPTIONAL ===
@@ -1199,11 +1232,9 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         if isinstance(archetypes_raw, list)
         else []
     )
-    char_creation_raw = _load_yaml_raw(path / "char_creation.yaml")
-    char_creation: list[CharCreationScene] = (
-        [CharCreationScene.model_validate(c) for c in char_creation_raw]
-        if isinstance(char_creation_raw, list)
-        else []
+    char_creation_path = path / "char_creation.yaml"
+    char_creation: list[CharCreationScene] = _parse_char_creation_scenes(
+        _load_yaml_raw(char_creation_path), path=char_creation_path
     )
     # Pack-level visual_style is optional (2026-05-29 directive — visual
     # prompts live at world level). Absent → None; the daemon resolves style

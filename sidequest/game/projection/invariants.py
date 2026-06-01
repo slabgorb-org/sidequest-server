@@ -4,15 +4,20 @@ Runs before GenreRuleStage in the ComposedFilter. Can short-circuit with
 a terminal decision (include=True with canonical payload, or include=False).
 
 Invariants shipped in this stage:
-    - GM sees canonical (Task 5).
     - Targeted-by-field — DICE_REQUEST / etc.'s `to` field restricts
       recipients (Task 6).
     - Visibility-gated — SECRET_NOTE / NARRATION_SEGMENT carry their
       recipient set in ``_visibility.visible_to`` and the exclusion
       decision is structural here, not a genre rule (ADR-105 B1).
-    - Self-authored — PLAYER_ACTION / DICE_THROW echo to author + GM
+    - Self-authored — PLAYER_ACTION / DICE_THROW echo to author only
       (Task 7).
-    - GM-only kind — THINKING is never routed to players (Task 8).
+    - Player-excluded kind — THINKING is never routed to players; the
+      narrator receives it server-side, not via projection (Task 8).
+
+There is no GM seat. SideQuest's thesis is *the narrator is the GM; every
+human is a player* — the narrator reads canonical state server-side and is
+not a projection recipient at all. The former ``gm_sees_all`` short-circuit
+(an always-false dead axis ported from VTT convention) was deleted in 71-35.
 
 ADR-105 B1 — why secret-routing is a CoreInvariant, not a genre rule:
 a security boundary must not depend on a pack remembering to add
@@ -44,7 +49,6 @@ logger = logging.getLogger(__name__)
 
 # Kinds whose canonical payload carries a `to` field naming the recipient(s).
 # The `to` value may be a single player_id string OR a list[str] of player_ids.
-# GM is always an implicit recipient (added by the GM invariant above).
 #
 # NOTE (ADR-105 B1): SECRET_NOTE was removed from this map — it has no
 # ``to`` field by design (``SecretNotePayload`` carries
@@ -69,8 +73,7 @@ VISIBILITY_GATED_KINDS: frozenset[str] = frozenset(
 )
 
 # Kinds that echo back to the player who authored them (via
-# payload.author_player_id). GM is implicit recipient. Non-author,
-# non-GM players do not see these.
+# payload.author_player_id). Non-author players do not see these.
 SELF_AUTHORED_KINDS: frozenset[str] = frozenset(
     {
         "PLAYER_ACTION",
@@ -80,8 +83,9 @@ SELF_AUTHORED_KINDS: frozenset[str] = frozenset(
     }
 )
 
-# Kinds never routed to non-GM players. GM gets them via the GM invariant.
-GM_ONLY_KINDS: frozenset[str] = frozenset({"THINKING"})
+# Kinds never routed to players. The narrator receives them server-side
+# (not via projection) — there is no GM seat in the recipient set.
+PLAYER_EXCLUDED_KINDS: frozenset[str] = frozenset({"THINKING"})
 
 
 @dataclass(frozen=True)
@@ -119,15 +123,7 @@ class CoreInvariantStage:
         tx: SaveTransaction | None = None,
         event_seq: int | None = None,
     ) -> InvariantOutcome:
-        # 1. GM sees canonical — always.
-        if view.is_gm(player_id):
-            return InvariantOutcome(
-                terminal=True,
-                decision=FilterDecision(include=True, payload_json=envelope.payload_json),
-                source="invariant:gm_sees_all",
-            )
-
-        # 2. Targeted-by-field: kinds that declare a recipient in their payload.
+        # 1. Targeted-by-field: kinds that declare a recipient in their payload.
         if envelope.kind in TARGETED_KINDS:
             field_name = TARGETED_KINDS[envelope.kind]
             payload = json.loads(envelope.payload_json)
@@ -142,12 +138,11 @@ class CoreInvariantStage:
                 source="invariant:targeted",
             )
 
-        # 2b. Visibility-gated (ADR-105 B1): SECRET_NOTE / NARRATION_SEGMENT
+        # 1b. Visibility-gated (ADR-105 B1): SECRET_NOTE / NARRATION_SEGMENT
         #     carry their recipient set in ``_visibility.visible_to``. The
         #     *exclusion* decision is structural here so a pack cannot
         #     silently weaken the firewall by omitting a projection.yaml
-        #     rule. GM already short-circuited at branch 1 (canonical).
-        #     A secret kind with no/malformed visibility info FAILS CLOSED
+        #     rule. A secret kind with no/malformed visibility info FAILS CLOSED
         #     (include=False) — leaking is catastrophic, dropping a note is
         #     recoverable — and the watcher event flags it loudly so the
         #     GM panel sees a malformed secret rather than a silent leak.
@@ -176,7 +171,7 @@ class CoreInvariantStage:
                 source="invariant:visibility_gated",
             )
 
-        # 3. Self-authored: echo to author + GM only.
+        # 2. Self-authored: echo to author only.
         if envelope.kind in SELF_AUTHORED_KINDS:
             payload = json.loads(envelope.payload_json)
             author = payload.get("author_player_id")
@@ -190,8 +185,8 @@ class CoreInvariantStage:
                 source="invariant:self_echo",
             )
 
-        # 4. GM-only kinds: never route to players.
-        if envelope.kind in GM_ONLY_KINDS:
+        # 3. Player-excluded kinds: never route to players.
+        if envelope.kind in PLAYER_EXCLUDED_KINDS:
             return InvariantOutcome(
                 terminal=True,
                 decision=FilterDecision(include=False, payload_json=""),

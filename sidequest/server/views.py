@@ -112,21 +112,12 @@ def build_game_state_view(handler: WebSocketSessionHandler) -> SessionGameStateV
     co-located with the viewer. Per-item ownership is not yet tracked
     and stays at the conservative default.
 
-    **GM identity wiring (C1, still partial):**
-
-    - Solo sessions have no separate GM player by design; ``gm_player_id``
-      is correctly ``None`` there. ``CoreInvariantStage`` never
-      short-circuits on ``is_gm()`` for solo — which is the right
-      behavior, because in solo play the single player is the only
-      recipient and has no counterpart to be "GM" to.
-    - Multiplayer sessions *should* name a GM player (e.g. the session
-      creator or a designated seat) so that ``unless: is_gm()`` in
-      ``projection.yaml`` can exempt them. That wiring lives downstream
-      of MP-02 seating — ``SessionRoom`` does not yet carry a GM seat
-      designation, so we still fall through to ``None`` for multiplayer
-      with a logged warning. Genre packs that ship ``unless: is_gm()``
-      rules today will mask the GM identically to a regular player
-      (the safe direction: over-redact rather than leak).
+    **No GM seat (71-35):** SideQuest's thesis is *the narrator is the
+    GM; every human is a player*. The narrator reads canonical state
+    server-side and is not a projection recipient at all, so there is no
+    ``is_gm()`` predicate, no ``gm_player_id``, and no GM short-circuit in
+    the firewall — it stands on player-identity predicates alone
+    (is_self / is_owner_of / in_same_zone / visible_to / in_same_party).
 
     **Player-character mapping:** ``Character`` does not yet carry a
     ``player_id`` attribute, so the session's active player_id
@@ -138,35 +129,11 @@ def build_game_state_view(handler: WebSocketSessionHandler) -> SessionGameStateV
     that depend on ``character_of()`` evaluate to ``False`` (the
     masked direction).
     """
-    from sidequest.game.persistence import GameMode  # noqa: PLC0415 — break import cycle
     from sidequest.game.projection.view import SessionGameStateView
 
     sd = handler._session_data
     if sd is None:
-        return SessionGameStateView(gm_player_id=None, player_id_to_character={})
-
-    # Solo: no human GM. None is correct; CoreInvariantStage's
-    # gm-sees-all branch never fires for the single player.
-    gm_player_id: str | None = None
-    if (
-        sd.mode is not None
-        and sd.mode != GameMode.SOLO
-        and not getattr(handler, "_gm_wiring_warned", False)
-    ):
-        # Multiplayer: GM seat assignment not yet plumbed through
-        # SessionRoom. Log one warning per build so GM-panel users
-        # can see that ``unless: is_gm()`` rules are currently
-        # over-masking the GM in multiplayer sessions.
-        logger.warning(
-            "projection.gm_identity_unwired slug=%s mode=%s — "
-            "multiplayer sessions do not yet carry a GM-seat "
-            "designation; `unless: is_gm()` rules will mask the "
-            "GM like any other player until MP-02 GM seating "
-            "lands.",
-            sd.game_slug,
-            sd.mode,
-        )
-        handler._gm_wiring_warned = True
+        return SessionGameStateView(player_id_to_character={})
 
     snapshot = sd.snapshot
 
@@ -260,7 +227,6 @@ def build_game_state_view(handler: WebSocketSessionHandler) -> SessionGameStateV
             hidden_characters.add(name)
 
     return SessionGameStateView(
-        gm_player_id=gm_player_id,
         player_id_to_character=mapping,
         character_zones=character_zones,
         hidden_characters=hidden_characters,

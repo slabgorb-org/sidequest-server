@@ -528,25 +528,7 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
             lines.append("- " + " ".join(parts))
 
         for npc in npcs:
-            parts = [npc.core.name]
-            tags = []
-            if npc.pronouns:
-                tags.append(npc.pronouns)
-            if tags:
-                parts.append(f"({', '.join(tags)})")
-            if npc.appearance:
-                parts.append(f"— {npc.appearance}")
-            if npc.last_seen_location:
-                parts.append(f"[last seen: {npc.last_seen_location}]")
-            # Coarsened disposition stance — the "emotional perception is
-            # POV" layer the closing instruction references. Story 50-12:
-            # without this the narrator sees who exists but not how they
-            # feel, forcing a per-NPC query_npc round-trip. The raw
-            # disposition.value integer is world-state-agent-only and MUST
-            # NOT reach this always-on narrator section (ADR-104/105
-            # perception firewall) — emit only the qualitative band.
-            parts.append(f"[attitude: {npc.disposition.attitude().value}]")
-            lines.append("- " + " ".join(parts))
+            lines.append(self._full_npc_line(npc))
 
         lines.append(
             "Use these exact pronouns and roles. Physical identity is "
@@ -562,6 +544,29 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
                 SectionCategory.State,
             ),
         )
+
+    def _full_npc_line(self, npc: Npc) -> str:
+        """Full-detail roster line for a stateful NPC — name, pronouns,
+        appearance, last-seen location, and the coarsened attitude band.
+
+        Shared by the legacy roster and the Story 75-2 budgeted full tier so
+        the format stays in sync. The ADR-104/105 perception firewall is
+        load-bearing here: only the qualitative ``attitude`` band reaches this
+        always-on narrator section — never the raw ``disposition.value``
+        integer, which is world-state-agent-only (Story 50-12).
+        """
+        parts = [npc.core.name]
+        tags: list[str] = []
+        if npc.pronouns:
+            tags.append(npc.pronouns)
+        if tags:
+            parts.append(f"({', '.join(tags)})")
+        if npc.appearance:
+            parts.append(f"— {npc.appearance}")
+        if npc.last_seen_location:
+            parts.append(f"[last seen: {npc.last_seen_location}]")
+        parts.append(f"[attitude: {npc.disposition.attitude().value}]")
+        return "- " + " ".join(parts)
 
     def _register_budgeted_npc_roster(
         self,
@@ -588,18 +593,7 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         lines = ["## KNOWN NPCS — Canonical Identity (do not contradict)"]
 
         for npc in working_set.full_profiles:
-            parts = [npc.core.name]
-            tags = []
-            if npc.pronouns:
-                tags.append(npc.pronouns)
-            if tags:
-                parts.append(f"({', '.join(tags)})")
-            if npc.appearance:
-                parts.append(f"— {npc.appearance}")
-            if npc.last_seen_location:
-                parts.append(f"[last seen: {npc.last_seen_location}]")
-            parts.append(f"[attitude: {npc.disposition.attitude().value}]")
-            lines.append("- " + " ".join(parts))
+            lines.append(self._full_npc_line(npc))
 
         for entry in working_set.brief_entries:
             core = getattr(entry, "core", None)

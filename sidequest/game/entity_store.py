@@ -48,6 +48,51 @@ class EntityStore(BaseModel):
             raise DuplicateEntityId(f"duplicate id: {card.id}")
         self.cards[card.id] = card
 
+    def upsert(self, card: EntityCard) -> bool:
+        """Insert or refresh a card by id; return ``True`` if the store changed.
+
+        The reproject-safe sibling of :meth:`add` (Story 75-6, ADR-118 §D2).
+        Where ``add`` raises on a duplicate id, ``upsert`` is the per-turn write
+        path the dirty-flag reproject uses: an entity re-projected with the same
+        stable id (``npc:borin``) must not crash the turn.
+
+        - **New id** → insert the card; return ``True``.
+        - **Same id, identical ``content``** → no-op; the stored card (and its
+          embedding) is left untouched so an unchanged cast does not churn the
+          index; return ``False``.
+        - **Same id, changed ``content``** → replace with the fresh projection
+          and re-arm ``embedding_pending`` so the worker re-embeds the changed
+          cast on its next pass; return ``True``.
+
+        ``content`` is the equality key because the card embeds exactly that
+        string — two projections with identical content embed to the identical
+        vector, so re-embedding them would be pure churn (the projection
+        determinism 75-4 guarantees is what makes this safe).
+        """
+        existing = self.cards.get(card.id)
+        if existing is None:
+            self.cards[card.id] = card
+            return True
+        if existing.content == card.content:
+            return False
+        # Content changed — replace and re-arm for re-embedding. The fresh card
+        # already carries embedding_pending=True from the projector; set it
+        # explicitly so the contract does not depend on the caller's construction.
+        card.embedding_pending = True
+        self.cards[card.id] = card
+        return True
+
+    def mark_embedding_failed(self, card_id: str) -> int:
+        """Increment the retry counter for a card whose embed dispatch failed
+        transiently. Returns the new count.
+
+        Does not flip ``embedding_pending`` — the card stays queued so the next
+        worker pass re-tries. Mirrors :meth:`LoreStore.mark_embedding_failed`.
+        """
+        card = self.cards[card_id]
+        card.embedding_retry_count += 1
+        return card.embedding_retry_count
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------

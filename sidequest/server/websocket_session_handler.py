@@ -1254,9 +1254,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 # Rust lore_sync accumulate-and-persist loop).
                 self._accrete_lore_for_turn(sd)
 
-                # Story 37-33: embed pending lore fragments in the background so
-                # the next turn's RAG retrieval finds them. Fire-and-forget — the
-                # turn returns immediately; embeds populate during reading time.
+                # Story 75-6: reproject this turn's mutated entities into the
+                # universal-retrieval index BEFORE dispatching the embed worker,
+                # so reprojected cards (embedding_pending=True) are in the queue
+                # and get embedded this turn — keeping retrieval keyed on the
+                # current cast (ADR-118 §D2 dirty-flag reproject).
+                self._sync_entity_cards_for_turn(sd)
+
+                # Story 37-33 / 75-6: embed pending lore fragments AND reprojected
+                # entity cards in the background so the next turn's retrieval finds
+                # them. Fire-and-forget — the turn returns immediately; embeds
+                # populate during reading time.
                 self._dispatch_embed_worker(sd)
 
                 narration_text = result.narration or "(The world holds its breath...)"
@@ -2987,6 +2995,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         from sidequest.server.dispatch import lore_accretion
 
         lore_accretion.accrete_for_turn(self, sd)
+
+    def _sync_entity_cards_for_turn(self, sd: _SessionData) -> None:
+        """Post-turn entity-card sync. Delegates to ``entity_sync.sync_for_turn`` (75-6)."""
+        from sidequest.server.dispatch import entity_sync
+
+        entity_sync.sync_for_turn(self, sd)
 
     async def _run_embed_worker(
         self, sd: _SessionData, pending_count: int, turn_number: int

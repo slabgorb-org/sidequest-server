@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from sidequest.game.entity_card import EntityCard
+
 # Reuse the live cosine ranking (ADR-118 D3 / Don't Reinvent).
 from sidequest.game.lore_store import cosine_similarity
-
-from sidequest.game.entity_card import EntityCard
 
 
 class DuplicateEntityId(Exception):

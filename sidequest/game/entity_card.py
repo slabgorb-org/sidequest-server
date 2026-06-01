@@ -37,6 +37,19 @@ class EntityType(StrEnum):
     FACTION = "faction"
 
 
+# Card-id namespace per entity type. ADR-118 §D3 ids are ``npc:borin``,
+# ``loc:black_hart``, ``faction:tide_syndicate`` — note ``location`` abbreviates
+# to ``loc`` in the id while the ``entity_type`` field stays ``"location"``.
+# Centralized here so every projector and ``EntityCard.new`` share one
+# convention. ``StrEnum`` keys hash equal to their string values, so a plain
+# ``"location"`` lookup also resolves.
+_ID_NAMESPACE: dict[str, str] = {
+    EntityType.NPC: "npc",
+    EntityType.LOCATION: "loc",
+    EntityType.FACTION: "faction",
+}
+
+
 # ---------------------------------------------------------------------------
 # OTEL attribute names (ADR-118 §D5) — DEFINED here, EMITTED by 75-5/75-7.
 # Pinning the strings now keeps the emitters consistent and lets 75-4 tests
@@ -113,14 +126,16 @@ class EntityCard(BaseModel):
         """Build a card with a stable namespaced id and a computed token
         estimate.
 
-        ``id`` is ``f"{entity_type}:{entity_id}"`` (e.g. ``"npc:borin"``). The
-        token estimate is always derived from ``content`` (never caller-supplied)
-        using the same math as ``LoreFragment``. Cards start
-        ``embedding_pending=True`` so the worker picks them up on the next pass.
+        ``id`` is ``f"{namespace}:{entity_id}"`` where the namespace comes from
+        ``_ID_NAMESPACE`` (e.g. ``"npc:borin"``, ``"loc:black_hart"``). The token
+        estimate is always derived from ``content`` (never caller-supplied) using
+        the same math as ``LoreFragment``. Cards start ``embedding_pending=True``
+        so the worker picks them up on the next pass.
         """
         type_str = str(entity_type)
+        namespace = _ID_NAMESPACE.get(entity_type, type_str)
         return cls(
-            id=f"{type_str}:{entity_id}",
+            id=f"{namespace}:{entity_id}",
             entity_type=type_str,
             entity_ref=entity_ref if entity_ref is not None else entity_id,
             content=content,
@@ -201,12 +216,9 @@ def project_location_card(
     if linked_npcs:
         segments.append("NPCs: " + ", ".join(linked_npcs))
     content = " — ".join(seg for seg in segments if seg)
-    # Per ADR-118 §D3 + spec AC-2: location IDs use "loc:" prefix, not "location:"
-    return EntityCard(
-        id=f"loc:{location_id}",
-        entity_type="location",
+    return EntityCard.new(
+        EntityType.LOCATION,
+        location_id,
+        content,
         entity_ref=location_id,
-        content=content,
-        token_estimate=_estimate_tokens(content),
-        metadata={},
     )

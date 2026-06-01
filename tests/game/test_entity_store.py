@@ -16,21 +16,17 @@ from __future__ import annotations
 
 import pytest
 
-from sidequest.game.lore_store import cosine_similarity
-
-from sidequest.game.entity_card import (  # noqa: E402  (module under construction)
+from sidequest.game.entity_card import (
     EntityCard,
     EntityType,
     project_faction_card,
     project_location_card,
     project_npc_card,
 )
-from sidequest.game.entity_store import (  # noqa: E402
-    DuplicateEntityId,
-    EntityStore,
-)
-from sidequest.game.npc_pool import NpcPoolMember  # noqa: E402
-from sidequest.genre.models.lore import Faction  # noqa: E402
+from sidequest.game.entity_store import DuplicateEntityId, EntityStore
+from sidequest.game.lore_store import cosine_similarity
+from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.genre.models.lore import Faction
 
 
 def _card(entity_type: str, entity_id: str, content: str = "some content") -> EntityCard:
@@ -96,9 +92,7 @@ class TestEntityStoreSimilarity:
         ranked = store.query_by_similarity([1.0, 0.0, 0.0], top_k=2)
         assert ranked[0][1].id == "npc:near"
         # the ordering must agree with the shared cosine function
-        assert ranked[0][0] == pytest.approx(
-            cosine_similarity([1.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        )
+        assert ranked[0][0] == pytest.approx(cosine_similarity([1.0, 0.0, 0.0], [1.0, 0.0, 0.0]))
 
     def test_similarity_can_filter_by_type(self) -> None:
         """AC-3: a type-scoped semantic query (cf. ``query_by_category``)."""
@@ -225,12 +219,8 @@ class TestUniversalIndexWiring:
             "npc:borin",
             "npc:skarl",
         }
-        assert [c.id for c in store.query_by_type(EntityType.FACTION)] == [
-            "faction:tide_syndicate"
-        ]
-        assert [c.id for c in store.query_by_type(EntityType.LOCATION)] == [
-            "loc:black_hart"
-        ]
+        assert [c.id for c in store.query_by_type(EntityType.FACTION)] == ["faction:tide_syndicate"]
+        assert [c.id for c in store.query_by_type(EntityType.LOCATION)] == ["loc:black_hart"]
 
         # --- embedding-worker drain reaches every projected card ---
         assert set(store.pending_embedding_ids()) == {
@@ -243,7 +233,5 @@ class TestUniversalIndexWiring:
         # --- after the worker writes back, similarity retrieval is live ---
         store.update_embedding("npc:borin", [1.0, 0.0])
         store.update_embedding("npc:skarl", [0.0, 1.0])
-        ranked = store.query_by_similarity(
-            [1.0, 0.0], top_k=1, entity_type=EntityType.NPC
-        )
+        ranked = store.query_by_similarity([1.0, 0.0], top_k=1, entity_type=EntityType.NPC)
         assert ranked[0][1].id == "npc:borin"

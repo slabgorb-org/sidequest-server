@@ -18,21 +18,19 @@ sibling of ``LoreFragment`` and MUST share the embedding-worker contract and the
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
-from sidequest.game.lore_store import _estimate_tokens
-
-# The module under construction (does not exist yet → RED).
-from sidequest.game.entity_card import (  # noqa: E402
+from sidequest.game.disposition import Attitude, Disposition
+from sidequest.game.entity_card import (
     EntityCard,
     EntityType,
     project_faction_card,
     project_location_card,
     project_npc_card,
 )
-from sidequest.game.npc_pool import NpcPoolMember  # noqa: E402
-from sidequest.game.disposition import Attitude, Disposition  # noqa: E402
-from sidequest.genre.models.lore import Faction  # noqa: E402
-
+from sidequest.game.lore_store import _estimate_tokens
+from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.genre.models.lore import Faction
 
 # ---------------------------------------------------------------------------
 # AC-1 — EntityCard model
@@ -100,7 +98,7 @@ class TestEntityCardModel:
 
     def test_extra_fields_forbidden(self) -> None:
         """Mirror LoreFragment's ``extra='forbid'`` — typo-proof the model."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             EntityCard(
                 id="npc:x",
                 entity_type="npc",
@@ -186,16 +184,12 @@ class TestFactionProjector:
         assert "hostile" in card.content
 
     def test_id_namespaced_and_stable(self) -> None:
-        faction = Faction(
-            name="Tide Syndicate", summary="s", description="d", disposition=""
-        )
+        faction = Faction(name="Tide Syndicate", summary="s", description="d", disposition="")
         card = project_faction_card(faction)
         assert card.id == "faction:tide_syndicate"
 
     def test_deterministic(self) -> None:
-        faction = Faction(
-            name="Tide Syndicate", summary="s", description="d", disposition=""
-        )
+        faction = Faction(name="Tide Syndicate", summary="s", description="d", disposition="")
         assert project_faction_card(faction).content == project_faction_card(faction).content
 
 
@@ -232,6 +226,4 @@ class TestLocationProjector:
         """No Silent Fallbacks: a location with no projectable text must fail
         loud, not emit an empty card."""
         with pytest.raises(ValueError):
-            project_location_card(
-                location_id="void", name="", description="   "
-            )
+            project_location_card(location_id="void", name="", description="   ")

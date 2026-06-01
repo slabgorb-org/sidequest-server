@@ -72,3 +72,56 @@ def test_emit_skipped_when_no_npcs():
     sent = []
     _maybe_emit_relationships(handler, snapshot=_Snap([]), emit_fn=lambda m, k: sent.append(m))
     assert sent == []
+
+
+def test_emitted_message_carries_claims_never_secrets():
+    """End-to-end claims firewall: mystery secrets (Fact + Suspicion) must never
+    reach the emitted RELATIONSHIPS message; only Claims cross the wire.
+
+    Drives the real production emitter path
+    (``_maybe_emit_relationships`` → ``build_relationship_entries`` →
+    ``claims_to_party``). The Fact and Suspicion both carry "SECRET" and must be
+    dropped; the Claim must survive. Asserting no "SECRET" in any claim text means
+    this test would FAIL if the firewall were bypassed.
+    """
+    from sidequest.game.belief_state import (
+        BeliefClaim,
+        BeliefFact,
+        BeliefSourceToldBy,
+        BeliefSuspicion,
+    )
+
+    npc = _npc("Tabitha")
+    npc.disposition = Disposition(24)
+    npc.belief_state.beliefs.extend(
+        [
+            BeliefFact(
+                subject="murder",
+                content="SECRET: the butler did it",
+                source=BeliefSourceToldBy(by="self"),
+            ),
+            BeliefSuspicion.make(
+                subject="motive",
+                content="SECRET: she stood to inherit",
+                turn_learned=0,
+                source=BeliefSourceToldBy(by="self"),
+                confidence=0.7,
+            ),
+            BeliefClaim(
+                subject="alibi",
+                content="I was in the garden",
+                source=BeliefSourceToldBy(by="Tabitha"),
+                believed=True,
+            ),
+        ]
+    )
+    sent = []
+    handler = _Handler()
+    _maybe_emit_relationships(
+        handler, snapshot=_Snap([npc]), emit_fn=lambda m, k: sent.append(m)
+    )
+
+    entry = sent[0].payload.entries[0]
+    claim_texts = [c.text for c in entry.claims]
+    assert "I was in the garden" in claim_texts
+    assert not any("SECRET" in t for t in claim_texts)

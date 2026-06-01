@@ -1,0 +1,13 @@
+locations:
+  - id: harbor-light
+    name: Harbor Light
+    region: drowned_coast
+    type: lighthouse
+    environment: storm-lashed headland
+    description: A beacon over the reef; its keeper has not been seen in weeks.
+  - id: sunken-vault
+    name: The Sunken Vault
+    region: drowned_coast
+    type: ruin
+    environment: tidal undercroft
+    description: A counting-house swallowed by the spring tides.

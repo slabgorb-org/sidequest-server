@@ -314,6 +314,19 @@ def test_ship_combat_resolves_on_hull_depletion_vs_ship_ac(otel_capture):
     assert hull_core.armor_class == _SHIP_AC
     assert hull_core.hp.current == _SHIP_HP
 
+    # The enemy ship fires back each round. ship_combat authors no ship-tier
+    # ``opponent_damage`` (unlike personal combat's 1d6), so the reprisal borrows
+    # the player's strike beat — ``broadside`` is 2d6, which clears the player's
+    # 10 HP roughly 1-in-6 (P(2d6>=10)). When it does, the player is downed and
+    # the fight resolves ``opponent_victory`` on round 1, before the kill salvo —
+    # the source of this test's flake. This test proves HULL depletion resolves
+    # ``player_victory``, NOT player survivability, so harden the player against
+    # the reprisal to keep the encounter active through both salvos. (The
+    # reprisal-deals-real-damage behavior is exercised by Test 3.)
+    pc_core = snap.find_creature_core("Vance")
+    assert pc_core is not None, "player core must be reachable to harden against reprisal"
+    pc_core.hp.current = pc_core.hp.max = 999
+
     # ── Hull ablates, attack rolls vs ship AC ──
     hull_before = hull_core.hp.current
     outcome, _ = _throw(

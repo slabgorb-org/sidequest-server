@@ -31,7 +31,6 @@ from sidequest.game.lore_embedding import embed_pending_fragments
 from sidequest.game.lore_store import LoreSource
 from sidequest.protocol.models import FactCategory
 
-
 # ---------------------------------------------------------------------------
 # Deterministic daemon stand-in (mirrors test_lore_rag_wiring._WiringFakeClient)
 # ---------------------------------------------------------------------------

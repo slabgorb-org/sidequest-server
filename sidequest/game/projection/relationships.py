@@ -69,8 +69,8 @@ def build_relationship_entries(snapshot: Any) -> list[RelationshipEntry]:
                 last_seen_turn=npc.last_seen_turn,
                 last_seen_location=npc.last_seen_location,
                 beats=beats,
-                personality_read=None,
-                ocean=None,
+                personality_read=personality_read(npc.ocean),
+                ocean=npc.ocean,
                 claims=[],
             )
         )

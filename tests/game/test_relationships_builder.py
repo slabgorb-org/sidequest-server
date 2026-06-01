@@ -121,3 +121,26 @@ def test_personality_read_flat_profile_is_balanced():
         }
     )
     assert read is not None and "even-keeled" in read.lower()
+
+
+def test_build_entries_populates_ocean_and_read():
+    npc = _npc("Tabitha")
+    npc.disposition = Disposition(24)
+    npc.ocean = {
+        "openness": 5.0,
+        "conscientiousness": 7.0,
+        "extraversion": 9.0,
+        "agreeableness": 1.0,
+        "neuroticism": 4.0,
+    }
+    e = build_relationship_entries(_snapshot_with([npc]))[0]
+    assert e.ocean == npc.ocean
+    assert e.personality_read is not None and "outgoing" in e.personality_read.lower()
+
+
+def test_build_entries_no_ocean_keeps_none():
+    npc = _npc("Stranger")
+    assert npc.ocean is None
+    e = build_relationship_entries(_snapshot_with([npc]))[0]
+    assert e.ocean is None
+    assert e.personality_read is None

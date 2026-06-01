@@ -379,7 +379,8 @@ def test_melee_resolves_on_hp_depletion_with_otel(otel_capture):
     )
 
     resolved_sources = [
-        (s.attributes or {}).get("source", "") for s in _spans_named(otel_capture, "encounter.resolved")
+        (s.attributes or {}).get("source", "")
+        for s in _spans_named(otel_capture, "encounter.resolved")
     ]
     assert "hp_depletion" in resolved_sources, (
         "encounter.resolved with source='hp_depletion' must fire on the HP-to-0 kill "
@@ -411,9 +412,6 @@ def test_ranged_shoot_still_routes_to_combat_after_melee_reroute():
 
     # Firefight keeps its ranged bank intact.
     combat_ids = {
-        b.id
-        for c in pack.rules.confrontations
-        if c.confrontation_type == "combat"
-        for b in c.beats
+        b.id for c in pack.rules.confrontations if c.confrontation_type == "combat" for b in c.beats
     }
     assert "shoot" in combat_ids, "Firefight must retain its ranged 'shoot' beat"

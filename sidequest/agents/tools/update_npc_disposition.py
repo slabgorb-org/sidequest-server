@@ -120,7 +120,7 @@ async def update_npc_disposition(args: UpdateNpcDispositionArgs, ctx: ToolContex
     # ADR-136: persist the why behind this narrator-declared shift. turn +
     # location are not passed to the tool; read them from the snapshot. delta is
     # the EFFECTIVE clamped change (after_value - before_value), not args.delta.
-    turn_num = int(getattr(snapshot.turn_manager, "interaction", 0) or 0)
+    turn_num = snapshot.turn_manager.interaction
     location = snapshot.party_location(perspective=args.perspective_pc or None)
     npc.record_disposition_beat(
         turn=turn_num,

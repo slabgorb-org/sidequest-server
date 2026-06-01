@@ -327,6 +327,56 @@ async def test_otel_perspective_pc_empty_string_when_none(otel_capture) -> None:
     assert attrs.get("tool.disposition.axis") == "general"
 
 
+async def test_records_disposition_beat_with_reason_and_location() -> None:
+    """ADR-136 site 2: the tool persists a disposition beat (the *why*).
+
+    Drives the REAL registered handler through the existing fixture, reloads via
+    the store, and asserts the reloaded NPC's last beat carries the effective
+    (post-clamp) delta, the reason passed in, and the resolved party location.
+    Fails if the ``record_disposition_beat`` call is removed from the handler.
+    """
+    snap = _build_snapshot(npcs=[_npc("Bart", disposition=0)])
+    # Give the party a consensus location so party_location() resolves non-None.
+    snap.player_seats = {"seat-1": "Bart-PC"}
+    snap.character_locations = {"Bart-PC": "Tavern"}
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    r = await _call(
+        {"npc_id": "Bart", "delta": 12, "reason": "shared a meal"},
+        ctx,
+    )
+    assert r.status is ToolResultStatus.OK
+
+    reloaded = store.load()
+    assert reloaded is not None
+    bart = next(n for n in reloaded.snapshot.npcs if n.core.name == "Bart")
+    assert bart.disposition_log, "no disposition beat persisted"
+    beat = bart.disposition_log[-1]
+    assert beat.delta == 12  # effective post-clamp change (0 → 12)
+    assert beat.reason == "shared a meal"
+    assert beat.location == "Tavern"
+    assert beat.turn == 1  # snapshot.turn_manager.interaction
+
+
+async def test_clamped_beat_records_effective_delta() -> None:
+    """The beat delta is the EFFECTIVE clamped change, not the requested delta."""
+    snap = _build_snapshot(npcs=[_npc("Bart", disposition=95)])
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    r = await _call({"npc_id": "Bart", "delta": 999, "reason": "miracle"}, ctx)
+    assert r.status is ToolResultStatus.OK
+
+    reloaded = store.load()
+    assert reloaded is not None
+    bart = next(n for n in reloaded.snapshot.npcs if n.core.name == "Bart")
+    assert bart.disposition.value == 100
+    beat = bart.disposition_log[-1]
+    # Requested 999, but clamped 95 → 100 means the beat records +5.
+    assert beat.delta == 5
+
+
 async def test_parallel_update_runs_sequentially() -> None:
     """Concurrent dispatches for the same session share a WRITE lock.
     Both deltas must land cleanly (no torn read-modify-write)."""

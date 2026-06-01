@@ -361,8 +361,9 @@ def test_melee_resolves_on_hp_depletion_with_otel(otel_capture):
     # ── OTEL proof (span-capture, never a source grep) ──
     initiated = _spans_named(otel_capture, "encounter.confrontation_initiated")
     assert any((s.attributes or {}).get("encounter_type") == _MELEE_TYPE for s in initiated), (
-        "encounter.confrontation_initiated must fire with encounter_type='melee' so the "
-        f"GM panel sees the melee engine engage; got {[dict(s.attributes or {}) for s in initiated]}"
+        "encounter.confrontation_initiated must fire with encounter_type='melee' "
+        "so the GM panel sees melee engine engage; "
+        f"got {[dict(s.attributes or {}) for s in initiated]}"
     )
 
     beat_applied = _spans_named(otel_capture, "encounter.beat_applied")

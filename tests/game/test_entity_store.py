@@ -1,10 +1,9 @@
-"""RED-phase tests for Story 75-4 — typed ``EntityStore`` generalization.
+"""Tests for Story 75-4 — typed ``EntityStore`` generalization.
 
 Generalizes the live ``LoreStore`` machinery (add / query / cosine similarity /
 embedding-worker contract) to a universal index typed by ``entity_type``
-(ADR-118 §D3). Imports from ``sidequest.game.entity_store`` and
-``sidequest.game.entity_card``, which do not exist yet — RED is a clean
-``ModuleNotFoundError`` until Dev (GREEN) creates them.
+(ADR-118 §D3), over ``sidequest.game.entity_store`` and
+``sidequest.game.entity_card``.
 
 Includes the project-mandated wiring test (server CLAUDE.md: *Every Test Suite
 Needs a Wiring Test*) — a fixture-driven behavior test that projects real
@@ -69,7 +68,7 @@ class TestEntityStoreAddAndType:
         store.add(EntityCard.new(EntityType.NPC, "borin", content="x" * 40))
         store.add(EntityCard.new(EntityType.NPC, "skarl", content="x" * 40))
         assert len(store) == 2
-        assert store.total_tokens == 20  # 10 + 10
+        assert store.total_tokens() == 20  # 10 + 10
 
 
 # ---------------------------------------------------------------------------

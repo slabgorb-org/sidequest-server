@@ -116,9 +116,13 @@ class EntityStore(BaseModel):
     # Accessors
     # ------------------------------------------------------------------
 
-    @property
     def total_tokens(self) -> int:
-        """Sum of ``token_estimate`` across all cards (budget accounting)."""
+        """Sum of ``token_estimate`` across all cards (budget accounting).
+
+        A method, not a property, to match the sibling ``LoreStore.total_tokens``
+        call convention — a caller switching between the two stores gets the same
+        ``.total_tokens()`` shape (ADR-118 D3 *Don't Reinvent*).
+        """
         return sum(card.token_estimate for card in self.cards.values())
 
     def __len__(self) -> int:

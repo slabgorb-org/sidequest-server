@@ -1,9 +1,8 @@
-"""RED-phase tests for Story 75-4 — ``EntityCard`` model + per-type projectors.
+"""Tests for Story 75-4 — ``EntityCard`` model + per-type projectors.
 
 Foundation slice of the ADR-118 universal retrieval layer. These tests pin the
-card model and the NPC / location / faction projectors. They import from
-``sidequest.game.entity_card``, which does not exist yet — RED is a clean
-``ModuleNotFoundError`` until Dev (GREEN) creates the module.
+card model and the NPC / location / faction projectors against
+``sidequest.game.entity_card``.
 
 Contract sources (in spec-authority order):
 - ``.session/75-4-session.md`` (canonical technical approach + ACs)

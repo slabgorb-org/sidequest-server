@@ -86,8 +86,14 @@ def build_npc_working_set(
     off_stage: list[Npc | NpcPoolMember] = []
 
     # Stateful NPCs carry recency — classify the floor by last_seen_turn.
+    # ``last_seen_turn == 0`` is the unset sentinel (interaction starts at 1 and
+    # only increments, so 0 means "never cited"). Guard it explicitly: at
+    # session start the threshold goes <= 0, and without this guard a never-seen
+    # NPC would satisfy ``>= threshold`` and be floored full — defeating the
+    # budgeting at turns 1-2 and violating No Silent Fallbacks. Never-seen NPCs
+    # are off-stage regardless of the threshold.
     for npc in snapshot.npcs:
-        if npc.last_seen_turn >= threshold:
+        if npc.last_seen_turn > 0 and npc.last_seen_turn >= threshold:
             full_profiles.append(npc)
         else:
             off_stage.append(npc)

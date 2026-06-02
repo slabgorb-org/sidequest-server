@@ -37,6 +37,7 @@ Project rule coverage (CLAUDE.md / SOUL):
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -46,8 +47,17 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from sidequest.game.political_state import PoliticalState
 from sidequest.game.scenario_state import ScenarioState
 from sidequest.game.session import GameSnapshot
+from sidequest.genre.models.premises import (
+    BlocAwakening,
+    BlocDef,
+    PremiseClaim,
+    PremiseCollapse,
+    PremiseDef,
+    PremiseDrain,
+)
 from sidequest.protocol.dispatch import (
     DispatchPackage,
     PlayerDispatch,
@@ -132,6 +142,56 @@ def _all_dispatch_subsystems(package: DispatchPackage) -> list[str]:
     for ca in package.cross_player:
         out.extend(d.subsystem for d in ca.dispatch)
     return out
+
+
+# --- witnessed_act fixtures (mirror the scenario_clue builders above) -------
+# witnessed_act keys off snapshot.political_state (the wry_whimsy premise/bloc
+# layer) the way scenario_clue keys off snapshot.scenario_state. A hydrated
+# snapshot needs a PoliticalState built from a world carrying premises + blocs.
+
+
+def _oz_political_state() -> PoliticalState:
+    """Minimal hydrated PoliticalState (the Oz premise/bloc layer), matching the
+    fixture in tests/agents/test_witnessed_act_subsystem.py."""
+    humbug = PremiseDef(
+        premise_id="humbug",
+        authority="the_wizard",
+        claim=PremiseClaim(subject="the_wizard", proposition="great and terrible"),
+        belief_reserve=90,
+        propped_by=["munchkins"],
+        drained_by=[PremiseDrain(act="expose", belief_delta=40)],
+        collapse=PremiseCollapse(threshold=20, outcome="He flees."),
+    )
+    munchkins = BlocDef(
+        bloc_id="munchkins",
+        defiance=5,
+        grants_belief_to=["humbug"],
+        awakening_acts=[BlocAwakening(act="rally", defiance_delta=10)],
+        tipping_threshold=70,
+        tipped_outcome="Revolt.",
+    )
+    world = SimpleNamespace(premises=[humbug], blocs=[munchkins])
+    state = PoliticalState.from_world(world)
+    assert state is not None  # a world with premises+blocs always hydrates
+    return state
+
+
+def _political_snapshot(*, political_state: PoliticalState | None) -> GameSnapshot:
+    snap = GameSnapshot(
+        genre_slug="wry_whimsy",
+        world_slug="oz",
+        player_seats={"player:Alice": "Alice"},
+    )
+    snap.political_state = political_state
+    return snap
+
+
+def _witnessed_act_dispatch(*, key: str = "k-wa-1") -> SubsystemDispatch:
+    return _dispatch(
+        subsystem="witnessed_act",
+        params={"act_id": "expose", "witnesses": ["Dorothy"]},
+        idempotency_key=key,
+    )
 
 
 # ===========================================================================
@@ -240,6 +300,104 @@ def test_gate_emits_no_span_when_nothing_gated() -> None:
     tracer, exporter = _fresh_tracer_and_exporter()
     package = _package_with(_scenario_clue_dispatch())
     snap = _snapshot(scenario_state=ScenarioState())
+
+    run_dispatch_precondition_gate(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if s.name == "intent_router.dispatch.gated"]
+    assert spans == []
+
+
+# ===========================================================================
+# witnessed_act precondition (Story 59-29 — co-located from
+# test_witnessed_act_subsystem.py so the gate's coverage lives in one place).
+#
+# witnessed_act is structurally inert when snapshot.political_state is None
+# (the world ships no wry_whimsy premise/bloc layer), exactly as scenario_clue
+# is inert when scenario_state is None. These mirror the scenario_clue blocks
+# above, keying off political_state instead.
+# ===========================================================================
+
+
+def test_witnessed_act_dropped_when_political_state_none() -> None:
+    """No premise/bloc layer → witnessed_act is structurally inert → dropped,
+    and a GatedDispatch records the reason for the span layer."""
+    from sidequest.agents.dispatch_precondition_gate import gate_inert_dispatches
+
+    package = _package_with(_witnessed_act_dispatch())
+    snap = _political_snapshot(political_state=None)
+
+    filtered, gated = gate_inert_dispatches(package=package, snapshot=snap)
+
+    assert _all_dispatch_subsystems(filtered) == [], (
+        "witnessed_act must be removed from the package when political_state is "
+        f"None; got {_all_dispatch_subsystems(filtered)}"
+    )
+    assert len(gated) == 1
+    assert gated[0].subsystem == "witnessed_act"
+    assert gated[0].idempotency_key == "k-wa-1"
+    assert "political_state is None" in gated[0].reason
+
+
+def test_witnessed_act_kept_when_political_state_present() -> None:
+    """A hydrated premise/bloc world → witnessed_act passes through untouched,
+    nothing gated. The watcher's genuine-mismatch detection stays intact."""
+    from sidequest.agents.dispatch_precondition_gate import gate_inert_dispatches
+
+    package = _package_with(_witnessed_act_dispatch())
+    snap = _political_snapshot(political_state=_oz_political_state())
+
+    filtered, gated = gate_inert_dispatches(package=package, snapshot=snap)
+
+    assert _all_dispatch_subsystems(filtered) == ["witnessed_act"]
+    assert gated == []
+
+
+def test_witnessed_act_dropped_but_sibling_dispatch_preserved() -> None:
+    """Selective filtering: a turn that dispatches witnessed_act AND npc_agency
+    into a no-political-state world drops only the inert witnessed_act; the
+    npc_agency dispatch (no precondition) survives the package rebuild."""
+    from sidequest.agents.dispatch_precondition_gate import gate_inert_dispatches
+
+    package = _package_with(
+        _witnessed_act_dispatch(key="k-wa-1"),
+        _dispatch(subsystem="npc_agency", params={"npc_name": "Dorothy"}, idempotency_key="k-npc"),
+    )
+    snap = _political_snapshot(political_state=None)
+
+    filtered, gated = gate_inert_dispatches(package=package, snapshot=snap)
+
+    assert _all_dispatch_subsystems(filtered) == ["npc_agency"]
+    assert [g.subsystem for g in gated] == ["witnessed_act"]
+
+
+def test_gate_emits_one_witnessed_act_gated_span_per_drop() -> None:
+    """Each dropped witnessed_act dispatch emits a loud
+    intent_router.dispatch.gated span so the GM panel sees the skip."""
+    from sidequest.agents.dispatch_precondition_gate import run_dispatch_precondition_gate
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_witnessed_act_dispatch())
+    snap = _political_snapshot(political_state=None)
+
+    filtered = run_dispatch_precondition_gate(package=package, snapshot=snap, tracer=tracer)
+
+    assert _all_dispatch_subsystems(filtered) == []
+    spans = [s for s in exporter.get_finished_spans() if s.name == "intent_router.dispatch.gated"]
+    assert len(spans) == 1, (
+        f"expected exactly 1 gated span, got {[s.name for s in exporter.get_finished_spans()]}"
+    )
+    attrs = dict(spans[0].attributes or {})
+    assert attrs.get("subsystem") == "witnessed_act"
+    assert "political_state is None" in str(attrs.get("reason", ""))
+
+
+def test_gate_emits_no_span_for_witnessed_act_when_political_state_present() -> None:
+    """Quiet turn: premise/bloc world present → zero gated spans (no false skip)."""
+    from sidequest.agents.dispatch_precondition_gate import run_dispatch_precondition_gate
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_witnessed_act_dispatch())
+    snap = _political_snapshot(political_state=_oz_political_state())
 
     run_dispatch_precondition_gate(package=package, snapshot=snap, tracer=tracer)
 

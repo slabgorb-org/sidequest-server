@@ -142,9 +142,11 @@ async def test_dispatch_worker_spawns_on_entity_only_turn(session_handler_factor
 
     ``dispatch_worker`` MUST spawn the background embed task when a turn
     reprojects an entity card but accretes NO lore — the "entity-only turn".
-    The 75-6 hardening widened the dispatch gate from ``if not lore_pending``
-    to ``if not lore_pending and not entity_pending``. If that ``entity_pending``
-    arm is ever reverted, entity cards left ``embedding_pending=True`` would
+    The 75-6 hardening widened the dispatch gate from ``if not pending``
+    to ``if not pending and not entity_pending`` (the ``pending`` /
+    ``entity_pending`` locals in ``lore_embed.dispatch_worker``). If that
+    ``entity_pending`` arm is ever reverted, entity cards left
+    ``embedding_pending=True`` would
     never be drained by ``run_worker`` and would stay invisible to
     ``query_by_similarity`` — a silent retrieval-coverage regression with no
     crash to flag it. This test pins the behavior so the revert fails loudly.
@@ -172,9 +174,11 @@ async def test_dispatch_worker_spawns_on_entity_only_turn(session_handler_factor
     entity_sync.sync_for_turn(handler, sd)
 
     # Precondition — exactly the state the 75-6 gate exists to catch: the entity
-    # arm has pending work, the lore arm is empty, nothing dispatched yet.
-    assert sd.entity_store.pending_embedding_ids(max_retries=3), (
-        "fixture must leave an entity card pending embedding"
+    # arm has pending work, the lore arm is empty, nothing dispatched yet. Pin the
+    # specific seeded card (not a bare truthy check) so a fixture that projects the
+    # wrong card — or zero cards — can't masquerade as the entity-only state.
+    assert "npc:borin" in sd.entity_store.pending_embedding_ids(max_retries=3), (
+        "fixture must leave the seeded Borin entity card pending embedding"
     )
     assert sd.lore_store.pending_embedding_ids(max_retries=3) == [], (
         "fixture must leave NO lore pending — this is the entity-only path"
@@ -192,7 +196,11 @@ async def test_dispatch_worker_spawns_on_entity_only_turn(session_handler_factor
     )
 
     # Drain the fire-and-forget worker deterministically, without coupling the
-    # assertion above to daemon availability inside run_worker.
+    # assertion above to daemon availability inside run_worker. Suppressing
+    # CancelledError is safe here: we cancelled the task ourselves, and only
+    # *after* the load-bearing assertion above already passed — the task's
+    # outcome is irrelevant at this point; we await it solely so the event loop
+    # settles the cancellation and leaves no dangling task for sibling tests.
     sd.embed_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await sd.embed_task

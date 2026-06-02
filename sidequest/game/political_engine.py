@@ -61,15 +61,22 @@ def apply_witnessed_act(
        (not the clamped actual drain) into its propping blocs — so a
        near-depleted premise still triggers full coupling.
     2. Awaken every bloc whose ``awakening_acts`` includes ``act_id``.
-    3. Final pass: fire ``collapsed`` for any premise at/under its collapse
-       threshold and ``tipped`` for any bloc at/over its tipping threshold
-       (a single pass so coupling-induced crossings are not missed).
+    3. Final pass: fire ``collapsed`` / ``tipped`` ONLY for dials this act
+       actually moved this turn (tracked in ``touched_this_turn``) and that are
+       now at/past threshold — a single pass so coupling-induced crossings are
+       not missed. A dial sitting at/past threshold *at rest* that this act
+       never touched does NOT fire (Story 59-28): otherwise a world authoring a
+       bloc at/above its tipping threshold would tip on the first unrelated act.
 
     Callers must validate that ``witnesses`` is non-empty — the "no witness
     moves nothing" rule (spec §5) is enforced at the dispatch layer, not here.
     """
     events: list[PoliticalEvent] = []
     witnesses = list(witnesses)
+    # (kind, id) pairs whose dial this act actually moved this turn. The final
+    # threshold pass only checks these — a dial already past threshold at rest,
+    # untouched by this act, must not re-fire collapse/tip (Story 59-28).
+    touched_this_turn: set[tuple[str, str]] = set()
 
     def _record(effect: str, kind: str, tid: str, delta: int, new_value: int) -> None:
         state.ledger.append(
@@ -97,6 +104,7 @@ def apply_witnessed_act(
         pstate.belief_reserve = _clamp(before - drain.belief_delta)
         applied = pstate.belief_reserve - before  # negative
         if applied:
+            touched_this_turn.add(("premise", pdef.premise_id))
             events.append(
                 PoliticalEvent(
                     "drained", "premise", pdef.premise_id, applied, pstate.belief_reserve
@@ -116,6 +124,7 @@ def apply_witnessed_act(
                 bstate.defiance = _clamp(defiance_before + coupled)
                 defiance_applied = bstate.defiance - defiance_before
                 if defiance_applied:
+                    touched_this_turn.add(("bloc", bloc_id))
                     events.append(
                         PoliticalEvent(
                             "coupled", "bloc", bloc_id, defiance_applied, bstate.defiance
@@ -135,6 +144,7 @@ def apply_witnessed_act(
         bstate.defiance = _clamp(before + awk.defiance_delta)
         applied = bstate.defiance - before
         if applied:
+            touched_this_turn.add(("bloc", bdef.bloc_id))
             events.append(
                 PoliticalEvent("awakened", "bloc", bdef.bloc_id, applied, bstate.defiance)
             )
@@ -144,6 +154,8 @@ def apply_witnessed_act(
     premise_by_id = {p.premise_id: p for p in premises}
     bloc_by_id = {b.bloc_id: b for b in blocs}
     for pid, pstate in state.premises.items():
+        if ("premise", pid) not in touched_this_turn:
+            continue  # untouched this turn — at-rest dials do not re-fire (59-28)
         pdef = premise_by_id.get(pid)
         if pdef is None or pstate.collapsed:
             continue
@@ -156,6 +168,8 @@ def apply_witnessed_act(
             )
             _record("collapsed", "premise", pid, 0, pstate.belief_reserve)
     for bid, bstate in state.blocs.items():
+        if ("bloc", bid) not in touched_this_turn:
+            continue  # untouched this turn — at-rest dials do not re-fire (59-28)
         bdef = bloc_by_id.get(bid)
         if bdef is None or bstate.tipped:
             continue

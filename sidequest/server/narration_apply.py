@@ -30,6 +30,7 @@ from sidequest.game.dogfight_shot import (
     frame_hp_resolver,
     resolve_dogfight_shots,
 )
+from sidequest.game.item_catalog_resolution import resolve_gained_item_dict
 from sidequest.game.morale import (
     MoraleOutcome,
     OpponentSideState,
@@ -3041,7 +3042,49 @@ def _apply_narration_result_to_snapshot(
                         round_number,
                     )
 
-            item_dict = _narrator_item_dict(entry)
+            # Resolve against the authored catalog first: a gained item whose
+            # name/id matches a CatalogItem lands with the authored id +
+            # mechanical fields (damage/mitigation/armor_class), so a gained
+            # weapon/armor is combat-live instead of an inert narrator mint.
+            # No match → bare mint (prior behaviour). Each decision fires an
+            # OTEL event (the lie-detector: did this gained item bind to
+            # authored mechanics, or was it improvised flavor?).
+            catalog = (
+                pack.inventory.item_catalog
+                if (pack is not None and pack.inventory is not None)
+                else None
+            )
+            resolved = resolve_gained_item_dict(entry, catalog)
+            if resolved is not None:
+                item_dict = resolved
+                _watcher_publish(
+                    "item_gain.catalog_resolved",
+                    {
+                        "name": item_dict["name"],
+                        "catalog_id": item_dict["id"],
+                        "category": item_dict.get("category", ""),
+                        "has_damage": "damage" in item_dict,
+                        "genre": snapshot.genre_slug,
+                        "world": snapshot.world_slug,
+                        "player_name": narrating_name,
+                        "turn_number": turn_num,
+                    },
+                    component="inventory",
+                )
+            else:
+                item_dict = _narrator_item_dict(entry)
+                _watcher_publish(
+                    "item_gain.narrator_minted",
+                    {
+                        "name": item_dict["name"],
+                        "category": item_dict.get("category", ""),
+                        "genre": snapshot.genre_slug,
+                        "world": snapshot.world_slug,
+                        "player_name": narrating_name,
+                        "turn_number": turn_num,
+                    },
+                    component="inventory",
+                )
             recipient_char = resolve_item_recipient(
                 snapshot,
                 entry,

@@ -69,6 +69,7 @@ from sidequest.protocol.messages import (
 from sidequest.server import views
 from sidequest.server.dispatch.chargen_loadout import apply_starting_loadout
 from sidequest.server.dispatch.chargen_summary import render_confirmation_summary
+from sidequest.server.dispatch.premise_bind import bind_political_state
 from sidequest.server.dispatch.scenario_bind import bind_scenario
 from sidequest.server.magic_init import init_magic_state_for_session
 from sidequest.server.session_helpers import (
@@ -878,6 +879,16 @@ class CharGenMixin:
                 _, active_pack = bind_result
                 sd.active_scenario = active_pack
 
+            # Political substrate hydration (wry_whimsy, Plan 2). No-op unless
+            # the active world declares premises/blocs; sets snapshot.political_state
+            # so the witnessed_act subsystem stops being inert.
+            bind_political_state(
+                sd.genre_pack,
+                sd.snapshot,
+                genre_slug=sd.genre_slug,
+                world_slug=sd.world_slug,
+            )
+
             world = sd.genre_pack.worlds.get(sd.world_slug)
 
             # Region init (Story 37-31). Runs for every world with
@@ -1061,6 +1072,18 @@ class CharGenMixin:
                 if bind_result is not None:
                     _, active_pack = bind_result
                     sd.active_scenario = active_pack
+            # Political substrate hydration (wry_whimsy, Plan 2). No-op unless
+            # the active world declares premises/blocs; sets snapshot.political_state
+            # so the witnessed_act subsystem stops being inert. Guard mirrors the
+            # adjacent bind_scenario guard: a rejoiner must NOT overwrite live
+            # belief/defiance dials with the authored initial values.
+            if sd.snapshot.political_state is None:
+                bind_political_state(
+                    sd.genre_pack,
+                    sd.snapshot,
+                    genre_slug=sd.genre_slug,
+                    world_slug=sd.world_slug,
+                )
             span.add_event(
                 "character_creation.mp_world_reused",
                 {

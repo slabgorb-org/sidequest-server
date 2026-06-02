@@ -50,6 +50,7 @@ from sidequest.genre.models.rigs_world import ChassisInstanceConfig
 from sidequest.genre.models.rules import RulesConfig, SavingThrowsTable
 from sidequest.genre.models.scenario import ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
+from sidequest.genre.models.premises import BlocDef, PremiseDef, WitnessedActArchetype
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.visibility import VisibilityBaseline
 from sidequest.genre.models.world import CartographyConfig, WorldConfig
@@ -167,6 +168,15 @@ class World(BaseModel):
     world's scenarios; an empty dict means "this world has no mystery," a valid
     authored choice, not a misconfiguration.
     """
+    premises: list[PremiseDef] = Field(default_factory=list)
+    """World-tier political illusions (``worlds/<slug>/premises.yaml``), spec
+    2026-06-02 wry_whimsy substrate. Empty list when the world authors none — a
+    valid authoring choice (a world with no humbug to topple), NOT a fallback to
+    any genre default. Content-tier only in Plan 1; Plan 2 hydrates the live
+    ``PremiseState`` dials from these."""
+    blocs: list[BlocDef] = Field(default_factory=list)
+    """World-tier populations the outsider can move (``worlds/<slug>/premises.yaml``).
+    Empty list when the world authors none."""
     client_theme_css: str | None = None
     """Raw contents of ``worlds/<slug>/client_theme.css`` if present.
 
@@ -195,6 +205,10 @@ class GenrePack(BaseModel):
     lore: Lore | None = None
     theme: GenreTheme | None = None
     archetypes: list[NpcArchetype] = Field(default_factory=list)
+    witnessed_acts: list[WitnessedActArchetype] = Field(default_factory=list)
+    """Genre-tier witnessed-act vocabulary (``witnessed_acts.yaml``), spec
+    2026-06-02. The act archetypes a world's premises/blocs bind by id. Empty
+    list when the pack ships no political layer (mechanics-in-genre per ADR-120)."""
     char_creation: list[CharCreationScene] = Field(default_factory=list)
     # Optional per the 2026-05-29 directive: all visual prompts live at world
     # level (each world ships its own visual_style.yaml). A pack-level

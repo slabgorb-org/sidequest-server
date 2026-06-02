@@ -79,6 +79,7 @@ from .opening import *  # noqa: F401, F403
 from .orchestrator import *  # noqa: F401, F403
 from .persistence import *  # noqa: F401, F403
 from .pregen import *  # noqa: F401, F403
+from .premise import *  # noqa: F401, F403
 from .projection import *  # noqa: F401, F403
 from .prompt import *  # noqa: F401, F403
 from .rag import *  # noqa: F401, F403

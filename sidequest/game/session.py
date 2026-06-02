@@ -45,6 +45,7 @@ from sidequest.game.resource_pool import (
     UnknownResource,
     mint_threshold_lore,
 )
+from sidequest.game.political_state import PoliticalState
 from sidequest.game.scenario_state import ScenarioState
 from sidequest.game.trope_time_skip import TimeSkipBeatEvent
 from sidequest.game.turn import TurnManager
@@ -802,6 +803,13 @@ class GameSnapshot(BaseModel):
     # clue availability) and accusation evaluation defer to a later
     # slice — the runtime holder is live now.
     scenario_state: ScenarioState | None = None
+
+    # Political substrate (wry_whimsy, Plan 2). Hydrated at chargen-confirm
+    # when the active world declares premises/blocs (spec 2026-06-02); None
+    # when the world ships no political layer — a valid authoring choice, the
+    # precondition-gate signal that makes witnessed_act inert. Old saves
+    # deserialize to None (model_config extra="ignore").
+    political_state: PoliticalState | None = None
 
     # P3-deferred: room-graph navigation (story 19-2)
     discovered_rooms: list[str] = Field(default_factory=list)

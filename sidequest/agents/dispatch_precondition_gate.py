@@ -75,8 +75,15 @@ def _scenario_clue_precondition_unmet(snapshot: GameSnapshot) -> str | None:
     return None
 
 
+def _witnessed_act_precondition_unmet(snapshot: GameSnapshot) -> str | None:
+    if snapshot.political_state is None:
+        return "snapshot.political_state is None (world ships no wry_whimsy premise/bloc layer)"
+    return None
+
+
 _INERT_PRECONDITIONS: dict[str, Callable[[GameSnapshot], str | None]] = {
     "scenario_clue": _scenario_clue_precondition_unmet,
+    "witnessed_act": _witnessed_act_precondition_unmet,
 }
 
 

@@ -24,11 +24,16 @@ Registered handlers (post-Story 59-6):
   - ``distinctive_detail_hint`` → ``run_distinctive_detail`` — narrator
     directive naming a referent by a distinctive detail.
   - ``npc_agency`` → ``run_npc_agency`` — NPC disposition update.
+  - ``movement`` → ``run_movement_dispatch`` — room-graph / location
+    movement on the canonical snapshot.
+  - ``witnessed_act`` → ``run_witnessed_act_dispatch`` — wry_whimsy
+    political substrate (Plan 2): applies a publicly-witnessed act to the
+    live ``PoliticalState`` belief/defiance dials, injects the ADR-053
+    witness contradiction, and emits the premise/bloc OTEL spans.
 
-All six subsystems are live on the turn path as of story 59-7. The
-Intent Router's system prompt names them as valid dispatch types and
-the dispatch engagement watcher (story 59-3) has engagement witnesses
-for each.
+All eight subsystems are live on the turn path. The Intent Router's
+system prompt names them as valid dispatch types and the dispatch
+engagement watcher (story 59-3) has engagement witnesses for each.
 """
 
 from __future__ import annotations
@@ -167,6 +172,7 @@ def _register_defaults() -> None:
     from sidequest.agents.subsystems.npc_agency import run_npc_agency
     from sidequest.agents.subsystems.reflect_absence import run_reflect_absence
     from sidequest.agents.subsystems.scenario_clue import run_scenario_clue_dispatch
+    from sidequest.agents.subsystems.witnessed_act import run_witnessed_act_dispatch
 
     # Unregister-then-register to keep this import idempotent across test reloads.
     for name, fn in (
@@ -177,6 +183,7 @@ def _register_defaults() -> None:
         ("distinctive_detail_hint", run_distinctive_detail),
         ("npc_agency", run_npc_agency),
         ("movement", run_movement_dispatch),
+        ("witnessed_act", run_witnessed_act_dispatch),
     ):
         _REGISTRY.pop(name, None)
         _REGISTRY[name] = fn

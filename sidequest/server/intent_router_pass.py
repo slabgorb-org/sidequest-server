@@ -46,6 +46,7 @@ from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.spans.intent_router import (
     intent_router_confrontation_vocabulary_span,
+    intent_router_witnessed_act_vocabulary_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,30 @@ def _build_state_summary(
                 genre_slug=snapshot.genre_slug or "",
             ):
                 pass
+
+    # Witnessed-act vocabulary + witness candidate set (wry_whimsy political
+    # substrate, Plan 2b). Double-gated: the pack must declare witnessed-act
+    # archetypes AND the world must have hydrated a political layer
+    # (snapshot.political_state). The second gate keeps us from prompting the
+    # model to emit a dispatch the precondition gate would immediately drop —
+    # and keeps every non-political genre's router prompt free of this noise.
+    if (
+        pack is not None
+        and getattr(pack, "witnessed_acts", None)
+        and snapshot.political_state is not None
+    ):
+        summary["witnessed_act_vocabulary"] = [
+            {"id": a.id, "label": a.label, "description": a.description}
+            for a in pack.witnessed_acts
+        ]
+        present = _present_npc_names(snapshot)
+        summary["present_npcs"] = present
+        with intent_router_witnessed_act_vocabulary_span(
+            act_count=len(pack.witnessed_acts),
+            present_npc_count=len(present),
+            genre_slug=snapshot.genre_slug or "",
+        ):
+            pass
 
     return summary
 

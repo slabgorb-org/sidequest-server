@@ -134,3 +134,65 @@ def test_dispatch_worker_delegate_calls_module_function(
     handler._dispatch_embed_worker(sd)
 
     assert captured == [(handler, sd)]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_worker_spawns_on_entity_only_turn(session_handler_factory) -> None:
+    """Story 75-6 regression guard (ADR-118 §D2 silent-revert risk).
+
+    ``dispatch_worker`` MUST spawn the background embed task when a turn
+    reprojects an entity card but accretes NO lore — the "entity-only turn".
+    The 75-6 hardening widened the dispatch gate from ``if not lore_pending``
+    to ``if not lore_pending and not entity_pending``. If that ``entity_pending``
+    arm is ever reverted, entity cards left ``embedding_pending=True`` would
+    never be drained by ``run_worker`` and would stay invisible to
+    ``query_by_similarity`` — a silent retrieval-coverage regression with no
+    crash to flag it. This test pins the behavior so the revert fails loudly.
+    """
+    import asyncio
+    import contextlib
+
+    from sidequest.game.disposition import Disposition
+    from sidequest.game.npc_pool import NpcPoolMember
+    from sidequest.server.dispatch import entity_sync, lore_embed
+
+    sd, handler = session_handler_factory(genre="caverns_and_claudes")
+
+    # Build the entity-only turn: a seed pool member projected into the entity
+    # store (embedding_pending=True via sync_for_turn), with NO lore accreted.
+    sd.snapshot.npc_pool.append(
+        NpcPoolMember(
+            name="Borin",
+            role="smith",
+            pronouns="they/them",
+            drawn_from="world_authored",
+            disposition=Disposition(0),
+        )
+    )
+    entity_sync.sync_for_turn(handler, sd)
+
+    # Precondition — exactly the state the 75-6 gate exists to catch: the entity
+    # arm has pending work, the lore arm is empty, nothing dispatched yet.
+    assert sd.entity_store.pending_embedding_ids(max_retries=3), (
+        "fixture must leave an entity card pending embedding"
+    )
+    assert sd.lore_store.pending_embedding_ids(max_retries=3) == [], (
+        "fixture must leave NO lore pending — this is the entity-only path"
+    )
+    assert sd.embed_task is None
+
+    lore_embed.dispatch_worker(handler, sd)
+
+    # The gate must fire on entity_pending alone. A revert to lore-only gating
+    # leaves embed_task unset → entity cards never embed.
+    assert isinstance(sd.embed_task, asyncio.Task), (
+        "dispatch_worker must spawn the embed task on an entity-only turn; "
+        "a revert to lore-only gating would leave embed_task unset and entity "
+        "cards permanently unembedded (ADR-118 §D2 silent-revert guard)"
+    )
+
+    # Drain the fire-and-forget worker deterministically, without coupling the
+    # assertion above to daemon availability inside run_worker.
+    sd.embed_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await sd.embed_task

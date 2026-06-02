@@ -125,3 +125,82 @@ def test_coupling_can_tip_a_propping_bloc():
     )
     # coupled += floor(40*0.5)=20 → 89 ≥ 70
     assert state.blocs["munchkins"].tipped is True
+
+
+# --- 59-28: touched-this-turn guard on the collapse/tip threshold pass ---------
+#
+# The final threshold pass must only fire collapse/tip for dials this act actually
+# moved (or pushed across the line). A dial sitting at/over threshold AT REST, that
+# this turn's act never touches, must NOT fire — otherwise a world that authors a
+# bloc at/above its tipping_threshold tips on the first unrelated witnessed act.
+
+
+def _winkies(defiance=70):
+    # A second bloc NOT propped by humbug (so coupling never reaches it) and awakened
+    # only by an unrelated act — the at-rest, untouched control bloc.
+    return BlocDef(
+        bloc_id="winkies",
+        defiance=defiance,
+        grants_belief_to=[],
+        awakening_acts=[BlocAwakening(act="storm_castle", defiance_delta=10)],
+        tipping_threshold=70,
+        tipped_outcome="The Winkies rise.",
+    )
+
+
+def test_unrelated_act_does_not_tip_bloc_already_at_threshold():
+    # Bloc pre-seeded AT its tipping_threshold (70 ≥ 70) at rest. An act that does not
+    # drain humbug, couple munchkins, or awaken munchkins must leave it un-tipped.
+    state = _state(defiance=70)
+    events = apply_witnessed_act(
+        state=state, premises=[_humbug()], blocs=[_munchkins(defiance=70)],
+        act_id="not_an_act", witnesses=["Dorothy"], turn=1,
+    )
+    assert not any(e.effect == "tipped" for e in events)
+    assert state.blocs["munchkins"].tipped is False
+    assert not any(le.effect == "tipped" for le in state.ledger)
+
+
+def test_unrelated_act_does_not_collapse_premise_already_at_threshold():
+    # Premise pre-seeded AT its collapse threshold (20 ≤ 20) at rest. An unrelated act
+    # must not collapse it — the dial did not move this turn.
+    state = _state(reserve=20)
+    events = apply_witnessed_act(
+        state=state, premises=[_humbug()], blocs=[_munchkins()],
+        act_id="not_an_act", witnesses=["Dorothy"], turn=1,
+    )
+    assert not any(e.effect == "collapsed" for e in events)
+    assert state.premises["humbug"].collapsed is False
+    assert not any(le.effect == "collapsed" for le in state.ledger)
+
+
+def test_touched_bloc_tips_while_at_rest_bloc_does_not_in_same_call():
+    # The guard must be act-scoped, not global. In ONE call: munchkins is awakened
+    # (60 + 15 = 75, crosses 70 → tips) while winkies sits at 70 at rest, untouched
+    # by this act (rally awakens munchkins, not winkies; winkies is unpropped so no
+    # coupling reaches it). Only the touched bloc may tip.
+    state = PoliticalState(
+        premises={"humbug": PremiseState(premise_id="humbug", belief_reserve=90)},
+        blocs={
+            "munchkins": BlocState(bloc_id="munchkins", defiance=60),
+            "winkies": BlocState(bloc_id="winkies", defiance=70),
+        },
+        ledger=[],
+    )
+    events = apply_witnessed_act(
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins(defiance=60, awaken_delta=15), _winkies(defiance=70)],
+        act_id="rally",
+        witnesses=["Dorothy"],
+        turn=1,
+    )
+    # Touched bloc crosses the line → tips.
+    assert state.blocs["munchkins"].tipped is True
+    # At-rest, untouched bloc must NOT tip even though 70 ≥ 70.
+    assert state.blocs["winkies"].tipped is False
+    tipped_ids = {e.target_id for e in events if e.effect == "tipped"}
+    assert tipped_ids == {"munchkins"}
+    assert not any(
+        le.effect == "tipped" and le.target_id == "winkies" for le in state.ledger
+    )

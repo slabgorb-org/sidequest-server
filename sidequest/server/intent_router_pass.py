@@ -40,11 +40,14 @@ from sidequest.agents.dispatch_precondition_gate import (
 )
 from sidequest.agents.intent_router import IntentRouter
 from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch_bank
+from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.spans.intent_router import (
     intent_router_confrontation_vocabulary_span,
+    intent_router_witnessed_act_classified_span,
+    intent_router_witnessed_act_vocabulary_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +76,40 @@ def build_intent_router_for_session() -> IntentRouter:
     from sidequest.agents.llm_factory import build_intent_router_llm
 
     return IntentRouter(llm=build_intent_router_llm())
+
+
+def _present_npc_names(snapshot: GameSnapshot) -> list[str]:
+    """Return the names of NPCs the player's action could be witnessed by.
+
+    The witness candidate set for ``witnessed_act`` classification (spec §5: an
+    act with no witness moves nothing). Reuses the canonical scene-membership
+    predicate (``sidequest/game/npc_scene.py``) — the SAME one the narrator's
+    scene projection trusts — so "present" means here what it means everywhere
+    else in the system (no parallel, divergent definition). Scene id is the
+    party's consensus location; an unresolved location (pre-chargen / party
+    split) yields an empty set unless an unresolved encounter anchors actors.
+    """
+    current_room = snapshot.party_location()
+    encounter = getattr(snapshot, "encounter", None)
+    names: list[str] = []
+    for npc in snapshot.npcs or []:
+        if is_npc_in_scene(npc, current_room=current_room, encounter=encounter):
+            names.append(npc.core.name)
+    return names
+
+
+def _witnessed_act_ids(package: DispatchPackage) -> list[str]:
+    """Collect the act_ids of every witnessed_act dispatch in the package."""
+    ids: list[str] = []
+    for pd in package.per_player:
+        for d in pd.dispatch:
+            if d.subsystem == "witnessed_act":
+                ids.append(str((d.params or {}).get("act_id", "")))
+    for ca in package.cross_player:
+        for d in ca.dispatch:
+            if d.subsystem == "witnessed_act":
+                ids.append(str((d.params or {}).get("act_id", "")))
+    return ids
 
 
 def _build_state_summary(
@@ -123,6 +160,30 @@ def _build_state_summary(
             ):
                 pass
 
+    # Witnessed-act vocabulary + witness candidate set (wry_whimsy political
+    # substrate, Plan 2b). Double-gated: the pack must declare witnessed-act
+    # archetypes AND the world must have hydrated a political layer
+    # (snapshot.political_state). The second gate keeps us from prompting the
+    # model to emit a dispatch the precondition gate would immediately drop —
+    # and keeps every non-political genre's router prompt free of this noise.
+    if (
+        pack is not None
+        and getattr(pack, "witnessed_acts", None)
+        and snapshot.political_state is not None
+    ):
+        summary["witnessed_act_vocabulary"] = [
+            {"id": a.id, "label": a.label, "description": a.description}
+            for a in pack.witnessed_acts
+        ]
+        present = _present_npc_names(snapshot)
+        summary["present_npcs"] = present
+        with intent_router_witnessed_act_vocabulary_span(
+            act_count=len(pack.witnessed_acts),
+            present_npc_count=len(present),
+            genre_slug=snapshot.genre_slug or "",
+        ):
+            pass
+
     return summary
 
 
@@ -165,6 +226,20 @@ async def execute_intent_router_pre_narrator_pass(
         action=action,
         state_summary=state_summary,
     )
+
+    # Classification-result observability (Plan 2b): only when the vocabulary
+    # was surfaced this turn (a political world) — so the GM panel can see the
+    # router's front-door decision, "classified as witnessed_act:X" vs "had the
+    # vocabulary and declined". Fires before the gates so it reflects the raw
+    # router output, not the post-gate package.
+    if "witnessed_act_vocabulary" in state_summary:
+        act_ids = _witnessed_act_ids(package)
+        with intent_router_witnessed_act_classified_span(
+            emitted=len(act_ids),
+            act_ids=",".join(act_ids),
+            genre_slug=snapshot.genre_slug or "",
+        ):
+            pass
 
     # Unregistered-subsystem gate (Story 71-27): drop dispatches whose
     # ``subsystem`` names no registered handler — the canonical case is the

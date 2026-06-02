@@ -222,6 +222,81 @@ def intent_router_confrontation_vocabulary_span(
         yield span
 
 
+SPAN_INTENT_ROUTER_WITNESSED_ACT_VOCABULARY = "intent_router.witnessed_act_vocabulary"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_WITNESSED_ACT_VOCABULARY] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.witnessed_act_vocabulary",
+        "act_count": (span.attributes or {}).get("act_count", 0),
+        "present_npc_count": (span.attributes or {}).get("present_npc_count", 0),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_witnessed_act_vocabulary_span(
+    *,
+    act_count: int,
+    present_npc_count: int,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires when the witnessed-act vocabulary + present-NPC witness set is
+    injected into the router's state summary (wry_whimsy political worlds only).
+
+    The GM-panel record that the acts were surfaced — the precondition for the
+    router being able to classify an action as a witnessed act at all."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_WITNESSED_ACT_VOCABULARY,
+        {
+            "act_count": act_count,
+            "present_npc_count": present_npc_count,
+            "genre_slug": genre_slug,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+SPAN_INTENT_ROUTER_WITNESSED_ACT_CLASSIFIED = "intent_router.witnessed_act_classified"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_WITNESSED_ACT_CLASSIFIED] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.witnessed_act_classified",
+        "emitted": (span.attributes or {}).get("emitted", 0),
+        "act_ids": (span.attributes or {}).get("act_ids", ""),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_witnessed_act_classified_span(
+    *,
+    emitted: int,
+    act_ids: str,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires after ``decompose`` in a political world where the vocabulary was
+    surfaced. ``emitted`` is the count of ``witnessed_act`` dispatches the router
+    produced this turn (0 = it had the vocabulary and judged the action NOT a
+    witnessed act). The GM-panel lie-detector for the front door: distinguishes
+    "router classified this as witnessed_act:X" from "router declined to emit"."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_WITNESSED_ACT_CLASSIFIED,
+        {"emitted": emitted, "act_ids": act_ids, "genre_slug": genre_slug, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 @contextmanager
 def intent_router_decompose_span(
     *,

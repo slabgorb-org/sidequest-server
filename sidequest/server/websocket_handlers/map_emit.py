@@ -392,6 +392,7 @@ def _maybe_emit_location_description(
     prose: str = ""
     terrain: str | None = None
     entities: list[LocationEntity] = []
+    region_name: str | None = None
     sourced = False
 
     # Path 1: per-room YAML via load_room_payload.
@@ -422,6 +423,7 @@ def _maybe_emit_location_description(
         prose = room_payload.settlement_description or ""
         terrain = room_payload.room_type
         entities = room_payload.entities
+        region_name = room_payload.room_name or None
         sourced = True
     except RoomNotFoundError:
         # Fall back to cartography region lookup (region-mode worlds).
@@ -435,6 +437,7 @@ def _maybe_emit_location_description(
             prose = getattr(region, "description", "") or ""
             terrain = getattr(region, "terrain", None)
             entities = getattr(region, "entities", [])
+            region_name = getattr(region, "name", None) or None
             sourced = True
     except Exception as exc:  # noqa: BLE001 — must not crash a turn
         logger.warning(
@@ -574,6 +577,7 @@ def _maybe_emit_location_description(
 
     payload = LocationDescriptionPayload(
         region_id=room_id,
+        region_name=region_name,
         prose=effective_prose,
         terrain=terrain,
         entities=entities,

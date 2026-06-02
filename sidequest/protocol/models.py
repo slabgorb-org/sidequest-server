@@ -632,6 +632,13 @@ class LocationDescriptionPayload(BaseModel):
     model_config = {"extra": "forbid"}
 
     region_id: str = Field(min_length=1)
+    # Authored human-readable display name for the region/room header. The
+    # source is the cartography ``Region.name`` (region-mode worlds) or the
+    # room YAML ``name``/``room_name`` (room-graph worlds). ``region_id`` stays
+    # the snake_case key used for the lore deep-link; ``region_name`` is what
+    # the player reads. None on old snapshots / sources with no authored name,
+    # in which case the UI falls back to rendering ``region_id``.
+    region_name: str | None = None
     prose: str
     terrain: str | None = None
     entities: list[LocationEntity] = Field(default_factory=list)

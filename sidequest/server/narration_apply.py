@@ -2733,34 +2733,76 @@ def _apply_narration_result_to_snapshot(
             active_encounter = snapshot.encounter
             if active_encounter is not None and not active_encounter.resolved:
                 abandoned_type = active_encounter.encounter_type
+                # A location change at/after a met win threshold is the natural
+                # CONSEQUENCE of winning, not an abandonment — escape/movement
+                # encounters win precisely BY leaving the scene. If a non-beat
+                # momentum path advanced the dial to threshold without running
+                # apply_beat's victory check (sq-playtest 2026-06-02
+                # wry_whimsy/oz: escape dial 8/8 yet total_beats_fired=0),
+                # resolve on the met win condition so the player keeps victory
+                # credit instead of being recorded as having walked away. Only
+                # a genuinely-unfinished encounter (no threshold met) abandons.
+                won_outcome = active_encounter.dial_threshold_outcome()
                 active_encounter.resolved = True
-                active_encounter.outcome = "abandoned_on_location_change"
-                logger.info(
-                    "encounter.deactivated_on_location_change "
-                    "encounter_type=%s old_location=%r new_location=%r player=%s",
-                    abandoned_type,
-                    old_loc,
-                    result.location,
-                    player_name,
-                )
-                # OTEL lie-detector (CLAUDE.md OTEL principle): the GM
-                # panel must see the deactivation fire so Sebastien can
-                # verify the engine — not the narrator's prose — is the
-                # reason the dial cleared. Without this span the
-                # subsystem is silent and a regression where the
-                # encounter stays active is invisible until the next
-                # playtest.
-                _watcher_publish(
-                    "confrontation_deactivated_on_location_change",
-                    {
-                        "encounter_type": abandoned_type,
-                        "old_location": old_loc,
-                        "new_location": result.location,
-                        "player_name": player_name,
-                        "turn_number": snapshot.turn_manager.interaction,
-                    },
-                    component="confrontation",
-                )
+                if won_outcome is not None:
+                    from sidequest.game.encounter import EncounterPhase as _EncounterPhase
+
+                    active_encounter.outcome = won_outcome
+                    active_encounter.structured_phase = _EncounterPhase.Resolution
+                    logger.info(
+                        "encounter.resolved_on_location_change "
+                        "encounter_type=%s outcome=%s old_location=%r "
+                        "new_location=%r player=%s",
+                        abandoned_type,
+                        won_outcome,
+                        old_loc,
+                        result.location,
+                        player_name,
+                    )
+                    # OTEL lie-detector (CLAUDE.md OTEL principle): the GM panel
+                    # must see that the scene-boundary resolved the encounter as
+                    # a WIN on its met dial — not as an abandonment — so a
+                    # regression that loses the victory credit is visible.
+                    _watcher_publish(
+                        "confrontation_resolved_on_location_change",
+                        {
+                            "encounter_type": abandoned_type,
+                            "outcome": won_outcome,
+                            "old_location": old_loc,
+                            "new_location": result.location,
+                            "player_name": player_name,
+                            "turn_number": snapshot.turn_manager.interaction,
+                        },
+                        component="confrontation",
+                    )
+                else:
+                    active_encounter.outcome = "abandoned_on_location_change"
+                    logger.info(
+                        "encounter.deactivated_on_location_change "
+                        "encounter_type=%s old_location=%r new_location=%r player=%s",
+                        abandoned_type,
+                        old_loc,
+                        result.location,
+                        player_name,
+                    )
+                    # OTEL lie-detector (CLAUDE.md OTEL principle): the GM
+                    # panel must see the deactivation fire so Sebastien can
+                    # verify the engine — not the narrator's prose — is the
+                    # reason the dial cleared. Without this span the
+                    # subsystem is silent and a regression where the
+                    # encounter stays active is invisible until the next
+                    # playtest.
+                    _watcher_publish(
+                        "confrontation_deactivated_on_location_change",
+                        {
+                            "encounter_type": abandoned_type,
+                            "old_location": old_loc,
+                            "new_location": result.location,
+                            "player_name": player_name,
+                            "turn_number": snapshot.turn_manager.interaction,
+                        },
+                        component="confrontation",
+                    )
 
     if result.quest_updates:
         # Span emission replaces the prior direct ``_watcher_publish`` —

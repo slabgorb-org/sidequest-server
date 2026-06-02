@@ -113,6 +113,97 @@ def test_location_change_resolves_active_encounter_as_abandoned(
     assert snap.encounter.encounter_type == "negotiation"
 
 
+def _attach_won_escape(snapshot) -> StructuredEncounter:
+    """A dial_threshold escape whose PLAYER dial has already reached threshold
+    (8/8) but which a non-beat momentum path left unresolved (sq-playtest
+    2026-06-02: total_beats_fired=0, so apply_beat's victory check never ran).
+    resolved=False so the location-change path still inspects it."""
+    encounter = StructuredEncounter(
+        encounter_type="escape",
+        win_condition="dial_threshold",
+        player_metric=EncounterMetric(name="distance", current=8, starting=0, threshold=8),
+        opponent_metric=EncounterMetric(name="pursuit", current=1, starting=0, threshold=8),
+        actors=[
+            EncounterActor(name="Linus", role="protagonist", side="player"),
+            EncounterActor(name="The Poppy Field", role="pursuer", side="opponent"),
+        ],
+    )
+    snapshot.encounter = encounter
+    return encounter
+
+
+def test_location_change_at_win_threshold_resolves_as_victory_not_abandoned(
+    snapshot_with_pack,
+    character_named_sam,
+):
+    """sq-playtest 2026-06-02 (wry_whimsy/oz). The player's escape dial reached
+    8/8 (win threshold MET) but a non-beat momentum path left the encounter
+    unresolved (total_beats_fired=0). On the SAME turn the narrator advanced
+    location — the natural consequence of escaping. The location-change handler
+    must resolve the encounter on its met win condition (player_victory), NOT
+    abandoned_on_location_change. Pre-fix the player won the escape but the
+    sheet recorded 'abandoned', silently losing the victory credit."""
+    snap, pack = snapshot_with_pack
+    snap.character_locations["Linus"] = "The Yellow Brick Road — The Poppy Field"
+    snap.characters.append(character_named_sam)
+    encounter = _attach_won_escape(snap)
+    assert encounter.resolved is False
+
+    result = NarrationTurnResult(
+        narration="Linus bursts onto the clean bricks beyond the poppies.",
+        location="The Yellow Brick Road — Beyond the Poppy Field",
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        player_name="Linus",
+        room=room_for(snapshot=snap),
+    )
+
+    assert snap.encounter is not None
+    assert snap.encounter.resolved is True
+    assert snap.encounter.outcome == "player_victory", (
+        "an encounter whose player dial met threshold (8/8) at the moment of a "
+        "location change is a WIN (the escape succeeded) — not an abandonment. "
+        f"got outcome={snap.encounter.outcome!r}"
+    )
+
+
+def test_location_change_below_win_threshold_still_abandons(
+    snapshot_with_pack,
+    character_named_sam,
+):
+    """Guard: a genuinely-unfinished encounter (no dial at threshold) still
+    abandons on a location change. The victory shortcut must NOT swallow the
+    abandonment path for mid-race encounters (the original 2026-04-30 bug)."""
+    snap, pack = snapshot_with_pack
+    snap.character_locations["Linus"] = "The Yellow Brick Road — The Poppy Field"
+    snap.characters.append(character_named_sam)
+    encounter = _attach_won_escape(snap)
+    encounter.player_metric.current = 3  # mid-race, threshold not met
+    assert encounter.resolved is False
+
+    result = NarrationTurnResult(
+        narration="Linus stumbles off down a side path, the poppies behind him.",
+        location="The Yellow Brick Road — A Forgotten Lane",
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        player_name="Linus",
+        room=room_for(snapshot=snap),
+    )
+
+    assert snap.encounter is not None
+    assert snap.encounter.resolved is True
+    assert snap.encounter.outcome == "abandoned_on_location_change", (
+        "a mid-race encounter (no dial at threshold) must still abandon on a "
+        f"location change; got outcome={snap.encounter.outcome!r}"
+    )
+
+
 def test_no_location_change_leaves_active_encounter_alone(
     snapshot_with_pack,
     character_named_sam,

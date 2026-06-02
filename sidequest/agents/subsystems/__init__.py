@@ -167,6 +167,7 @@ def get_registered() -> dict[str, SubsystemCallable]:
 def _register_defaults() -> None:
     from sidequest.agents.subsystems.confrontation import run_confrontation_dispatch
     from sidequest.agents.subsystems.distinctive_detail import run_distinctive_detail
+    from sidequest.agents.subsystems.equip import run_equip_dispatch
     from sidequest.agents.subsystems.magic_working import run_magic_working_dispatch
     from sidequest.agents.subsystems.movement import run_movement_dispatch
     from sidequest.agents.subsystems.npc_agency import run_npc_agency
@@ -184,6 +185,7 @@ def _register_defaults() -> None:
         ("npc_agency", run_npc_agency),
         ("movement", run_movement_dispatch),
         ("witnessed_act", run_witnessed_act_dispatch),
+        ("equip", run_equip_dispatch),
     ):
         _REGISTRY.pop(name, None)
         _REGISTRY[name] = fn

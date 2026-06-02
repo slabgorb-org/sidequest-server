@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
 from .span import Span
@@ -98,6 +99,112 @@ SPAN_ROUTES[SPAN_ITEM_RESOURCE_DEPLETED] = SpanRoute(
         "actor": (span.attributes or {}).get("actor", ""),
     },
 )
+
+
+# ---------------------------------------------------------------------------
+# NL-equip (ADR-113 / Zork-Problem) — the IntentRouter classifies a "lace on /
+# wear / draw / take off" action into an ``equip`` dispatch; the engine flips
+# the item's ``equipped`` flag deterministically. ``equip.resolved`` (INFO)
+# fires when an item is resolved + flipped; ``equip.unresolved`` (ERROR) when
+# the named item / acting PC can't be resolved (fail-loud, never a silent
+# no-op). The GM panel reads these as proof an equip engaged the engine vs.
+# the narrator merely describing the PC putting something on.
+# ---------------------------------------------------------------------------
+
+SPAN_EQUIP_RESOLVED = "equip.resolved"
+SPAN_ROUTES[SPAN_EQUIP_RESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="inventory",
+    extract=lambda span: {
+        "field": "inventory",
+        "op": "equip.resolved",
+        "pc_name": (span.attributes or {}).get("pc_name", ""),
+        "item_id": (span.attributes or {}).get("item_id", ""),
+        "item_name": (span.attributes or {}).get("item_name", ""),
+        "action": (span.attributes or {}).get("action", ""),
+        "equipped_before": (span.attributes or {}).get("equipped_before"),
+        "equipped_after": (span.attributes or {}).get("equipped_after"),
+        "changed": (span.attributes or {}).get("changed", False),
+        "matched_by": (span.attributes or {}).get("matched_by", ""),
+    },
+)
+
+SPAN_EQUIP_UNRESOLVED = "equip.unresolved"
+SPAN_ROUTES[SPAN_EQUIP_UNRESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="inventory",
+    extract=lambda span: {
+        "field": "inventory",
+        "op": "equip.unresolved",
+        "pc_name": (span.attributes or {}).get("pc_name", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+        "requested_item": (span.attributes or {}).get("requested_item", ""),
+        "action": (span.attributes or {}).get("action", ""),
+    },
+)
+
+
+@contextmanager
+def equip_resolved_span(
+    *,
+    pc_name: str,
+    item_id: str,
+    item_name: str,
+    action: str,
+    equipped_before: bool,
+    equipped_after: bool,
+    changed: bool,
+    matched_by: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """One span per resolved equip/unequip — the item was found in the acting
+    PC's inventory and its ``equipped`` flag set to ``equipped_after``.
+    ``changed`` is False on an idempotent re-equip (already in target state)."""
+    with Span.open(
+        SPAN_EQUIP_RESOLVED,
+        {
+            "pc_name": pc_name,
+            "item_id": item_id,
+            "item_name": item_name,
+            "action": action,
+            "equipped_before": equipped_before,
+            "equipped_after": equipped_after,
+            "changed": changed,
+            "matched_by": matched_by,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def equip_unresolved_span(
+    *,
+    pc_name: str,
+    reason: str,
+    requested_item: str,
+    action: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fail-loud equip span: the named item or acting PC could not be resolved
+    (``item_not_found`` / ``no_character`` / ``no_item_named``). ERROR status
+    so the GM panel surfaces it as a failure, never a silent stay-as-is."""
+    with Span.open(
+        SPAN_EQUIP_UNRESOLVED,
+        {
+            "pc_name": pc_name,
+            "reason": reason,
+            "requested_item": requested_item,
+            "action": action,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        span.set_status(Status(StatusCode.ERROR, reason))
+        yield span
 
 
 @contextmanager

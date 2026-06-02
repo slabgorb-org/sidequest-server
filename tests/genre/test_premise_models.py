@@ -91,3 +91,14 @@ def test_premises_file_defaults_to_empty_lists():
     f = PremisesFile()
     assert f.premises == []
     assert f.blocs == []
+
+
+def test_models_are_exported_from_package_root():
+    # Wiring: types must be importable from the package root like every other model.
+    from sidequest.genre.models import (  # noqa: F401
+        BlocDef,
+        PremiseDef,
+        PremisesFile,
+        WitnessedActArchetype,
+        WitnessedActsFile,
+    )

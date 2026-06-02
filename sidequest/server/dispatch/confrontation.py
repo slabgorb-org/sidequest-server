@@ -411,6 +411,7 @@ def make_confrontation_frame_supplier(
     from sidequest.protocol.messages import ConfrontationPayload
     from sidequest.telemetry.spans.encounter import (
         confrontation_recipient_unresolved_span,
+        confrontation_unfiltered_delivery_span,
     )
 
     def _frame_for(player_id: str) -> ConfrontationPayload | None:
@@ -420,9 +421,24 @@ def make_confrontation_frame_supplier(
             player_id=player_id,
         )
         if recipient_pc is None:
-            # (None, actor) ⇒ seated PC whose class won't resolve: fail loud,
-            # never the union. (None, None) ⇒ unseated/lobby socket: silent.
-            if recipient_actor is not None:
+            # (None, None) ⇒ unseated/lobby socket: deliver nothing, silently.
+            if recipient_actor is None:
+                return None
+            # (None, actor) ⇒ a SEATED PC with no resolved ClassDef. Two cases:
+            #   • Pack declares NO classes at all (``genre_pack.classes`` empty).
+            #     The loader explicitly permits classes.yaml-less packs
+            #     (loader.py:_validate_class_filter_refs early-returns when
+            #     ``not classes``), so there is simply nothing to class-filter:
+            #     the seated PC gets the unfiltered beat UNION. This is NOT a
+            #     silent fallback — a no-classes pack legitimately has no
+            #     per-class beat restriction, so the union IS the correct
+            #     projection (sq-playtest 2026-06-02 wry_whimsy/oz: the escape
+            #     confrontation was invisible in solo because every seat was
+            #     suppressed here).
+            #   • Pack HAS classes but this PC's class is not among them
+            #     (genuine config drift, e.g. a save referencing a removed
+            #     class) → fail LOUD and deliver nothing, never the union.
+            if genre_pack.classes:
                 with confrontation_recipient_unresolved_span(
                     player_id=player_id,
                     actor=recipient_actor,
@@ -430,7 +446,17 @@ def make_confrontation_frame_supplier(
                     confrontation_type=encounter.encounter_type,
                 ):
                     pass
-            return None
+                return None
+            # No-classes pack: deliver the unfiltered union. Emit the
+            # GM-panel lie-detector span (its absence on a no-classes turn would
+            # mean the frame was dropped) and fall through with recipient_pc=None
+            # so build_confrontation_payload emits the union below.
+            with confrontation_unfiltered_delivery_span(
+                player_id=player_id,
+                actor=recipient_actor,
+                confrontation_type=encounter.encounter_type,
+            ):
+                pass
         # WWN arm (Task 5): build_confrontation_payload now derives the
         # recipient's SpellcastingState internally from ``core_resolver`` +
         # ``recipient_actor_name`` (centralized so the yield path and any

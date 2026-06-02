@@ -471,6 +471,144 @@ async def test_solo_fighter_emitter_never_sees_other_class_beats(
 
 
 # ---------------------------------------------------------------------------
+# sq-playtest 2026-06-02 (wry_whimsy/oz): packs that ship NO classes.yaml
+# (genre_pack.classes == []) must still surface confrontations. The loader
+# explicitly permits classes.yaml-less packs (loader.py:_validate_class_filter_refs
+# early-returns when `not classes`), so a seated PC in such a pack has no ClassDef
+# to match — but that is NOT config drift, it is "this pack does no class
+# filtering". The seated PC must receive the unfiltered beat UNION, not be
+# suppressed (which left the escape confrontation invisible in solo wry_whimsy).
+# ---------------------------------------------------------------------------
+
+
+def _classless_escape_cdef() -> ConfrontationDef:
+    """An escape cdef whose beats carry NO class_filter — the shape a
+    classes.yaml-less pack (wry_whimsy) ships. Per-class filtering is a no-op."""
+    return ConfrontationDef(
+        type="escape",
+        label="Escape / Not-Getting-Caught",
+        category="movement",
+        player_metric=MetricDef(name="distance", starting=0, threshold=8),
+        opponent_metric=MetricDef(name="pursuit", starting=0, threshold=8),
+        beats=[
+            _beat("bolt", stat="NERVE"),
+            _beat("blend_in", stat="WIT"),
+            _beat("catch_your_breath", stat="HEART"),
+            _beat("go_to_ground", stat="WIT"),
+        ],
+    )
+
+
+def _inject_classless_pack(sd) -> None:
+    """Make the in-memory pack look like wry_whimsy: NO classes, one escape
+    cdef whose beats are not class-gated."""
+    sd.genre_pack.classes = []
+    sd.genre_pack.rules.confrontations = [_classless_escape_cdef()]
+
+
+def _install_live_escape_encounter(sd, player_names: list[str]) -> None:
+    actors = [EncounterActor(name=n, role="protagonist", side="player") for n in player_names]
+    actors.append(EncounterActor(name="The Poppy Field", role="pursuer", side="opponent"))
+    sd.snapshot.encounter = StructuredEncounter(
+        encounter_type="escape",
+        player_metric=EncounterMetric(name="distance", current=0, starting=0, threshold=8),
+        opponent_metric=EncounterMetric(name="pursuit", current=0, starting=0, threshold=8),
+        beat=0,
+        structured_phase=EncounterPhase.Setup,
+        secondary_stats=None,
+        actors=actors,
+        outcome=None,
+        resolved=False,
+        mood_override="tension",
+        narrator_hints=[],
+    )
+
+
+def _escape_mock() -> AsyncMock:
+    return AsyncMock(
+        return_value=NarrationTurnResult(
+            narration="Susan pushes through the poppies as the field drags at her.",
+            confrontation="escape",
+            npcs_present=[NpcMention(name="The Poppy Field", side="opponent", role="hostile")],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_solo_pc_in_classless_pack_receives_unfiltered_confrontation_frame(
+    session_handler_factory,
+    otel_capture,
+) -> None:
+    """sq-playtest 2026-06-02 (wry_whimsy/oz). A pack with NO classes.yaml
+    (genre_pack.classes == []) must still surface confrontations. A solo PC
+    seated in such a pack receives EXACTLY ONE CONFRONTATION frame carrying the
+    full (unfiltered) beat union — class-filtering is a no-op when the pack
+    declares no classes.
+
+    Pre-fix: ``resolve_recipient_pc`` returned ``(None, pc_name)`` for every
+    seated PC (no ClassDef to match on the empty class list), and the supplier
+    treated that as config drift → suppressed the frame → the escape
+    confrontation was invisible in solo wry_whimsy (the headline playtest bug).
+    """
+    from tests.server.conftest import span_attrs_by_name
+
+    sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    sd.player_id = "susan"
+    sd.player_name = "Susan"
+    sd.mode = GameMode.MULTIPLAYER
+    sd.game_slug = _SLUG + "-classless"
+    _wire_production_emit(handler, sd.game_slug)
+    _inject_classless_pack(sd)
+    _seat(sd, [("susan", "Susan", "Curious Child")])
+    _install_live_escape_encounter(sd, ["Susan"])
+    queues = _connect_room(handler, sd.game_slug, ["susan"])
+    handler._socket_id = "sock-susan"
+
+    sd.orchestrator.run_narration_turn = _escape_mock()
+
+    from sidequest.server.session_handler import _build_turn_context
+
+    await handler._execute_narration_turn(
+        sd, "I push through the poppies.", _build_turn_context(sd)
+    )
+
+    frames = _drain_confrontations(queues["susan"])
+    assert len(frames) == 1, (
+        f"a solo PC in a classes.yaml-less pack must receive exactly one CONFRONTATION "
+        f"frame; got {len(frames)} (pre-fix: 0 — suppressed as false config drift)."
+    )
+    ids = _beat_ids(frames[0])
+    assert ids == {"bolt", "blend_in", "catch_your_breath", "go_to_ground"}, (
+        f"the frame must carry the full unfiltered beat union for a no-classes pack; "
+        f"got {sorted(ids)}"
+    )
+    # A no-classes pack is NOT an unresolved-recipient error: the fail-loud span
+    # must NOT fire for the seated solo PC (that span is reserved for the genuine
+    # drift case — pack HAS classes but the PC's class is not among them).
+    unresolved = span_attrs_by_name(otel_capture, "confrontation.recipient_unresolved")
+    assert not any(
+        a.get("player_id") == "susan" or a.get("actor") == "Susan" for a in unresolved
+    ), (
+        "a seated PC in a classes.yaml-less pack must NOT emit "
+        "confrontation.recipient_unresolved — that span is for real config drift, "
+        "not for a pack that legitimately declares no classes."
+    )
+    # OTEL lie-detector (CLAUDE.md OTEL principle): the no-classes union delivery
+    # MUST emit confrontation.unfiltered_delivery so the GM panel can confirm the
+    # path engaged. Its absence on this turn would mean a regression silently
+    # dropped the frame again.
+    unfiltered = span_attrs_by_name(otel_capture, "confrontation.unfiltered_delivery")
+    assert any(
+        a.get("player_id") == "susan" and a.get("confrontation_type") == "escape"
+        for a in unfiltered
+    ), (
+        "a seated PC in a classes.yaml-less pack must emit "
+        "confrontation.unfiltered_delivery (GM-panel evidence the union was "
+        f"delivered, not suppressed); got spans={unfiltered}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # AC3 — OTEL wiring: the class-filter span fires once per connected recipient.
 # ---------------------------------------------------------------------------
 

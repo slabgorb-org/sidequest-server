@@ -356,6 +356,27 @@ SPAN_ROUTES[SPAN_CONFRONTATION_RECIPIENT_UNRESOLVED] = SpanRoute(
     },
 )
 
+# sq-playtest 2026-06-02 (wry_whimsy/oz): a SEATED PC in a classes.yaml-less pack
+# (``genre_pack.classes`` empty) receives the unfiltered beat UNION because there
+# is nothing to class-filter. This span is the GM-panel lie-detector for that
+# path: its PRESENCE proves the confrontation was delivered (not suppressed) for
+# a no-classes pack; its ABSENCE on a no-classes confrontation turn means the
+# frame was dropped. Distinct from confrontation.beat_filter (fires only when a
+# class IS resolved) and confrontation.recipient_unresolved (the ERROR span for a
+# pack that HAS classes but cannot resolve this PC's class).
+SPAN_CONFRONTATION_UNFILTERED_DELIVERY = "confrontation.unfiltered_delivery"
+SPAN_ROUTES[SPAN_CONFRONTATION_UNFILTERED_DELIVERY] = SpanRoute(
+    event_type="state_transition",
+    component="confrontation",
+    extract=lambda span: {
+        "field": "confrontation.unfiltered_delivery",
+        "player_id": (span.attributes or {}).get("player_id", ""),
+        "actor": (span.attributes or {}).get("actor", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+        "confrontation_type": (span.attributes or {}).get("confrontation_type", ""),
+    },
+)
+
 
 @contextmanager
 def confrontation_recipient_unresolved_span(
@@ -376,6 +397,36 @@ def confrontation_recipient_unresolved_span(
         {"player_id": player_id, "actor": actor, "reason": reason, **attrs},
     ) as span:
         span.set_status(Status(StatusCode.ERROR, reason))
+        yield span
+
+
+@contextmanager
+def confrontation_unfiltered_delivery_span(
+    *,
+    player_id: str,
+    actor: str,
+    confrontation_type: str,
+    reason: str = "pack_declares_no_classes",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open the ``confrontation.unfiltered_delivery`` span for a seated PC who
+    receives the unfiltered beat UNION because the pack declares no classes
+    (``genre_pack.classes`` empty) — class-filtering is a no-op. NOT an error
+    (unlike ``confrontation.recipient_unresolved``): a classes.yaml-less pack
+    legitimately has no per-class beat restriction, so the union IS the correct
+    projection. The span exists so the GM panel can confirm the no-classes
+    delivery path engaged (sq-playtest 2026-06-02 wry_whimsy/oz)."""
+    with Span.open(
+        SPAN_CONFRONTATION_UNFILTERED_DELIVERY,
+        {
+            "player_id": player_id,
+            "actor": actor,
+            "reason": reason,
+            "confrontation_type": confrontation_type,
+            **attrs,
+        },
+    ) as span:
         yield span
 
 

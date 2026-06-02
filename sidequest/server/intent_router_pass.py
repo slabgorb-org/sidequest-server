@@ -40,6 +40,7 @@ from sidequest.agents.dispatch_precondition_gate import (
 )
 from sidequest.agents.intent_router import IntentRouter
 from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch_bank
+from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
@@ -73,6 +74,26 @@ def build_intent_router_for_session() -> IntentRouter:
     from sidequest.agents.llm_factory import build_intent_router_llm
 
     return IntentRouter(llm=build_intent_router_llm())
+
+
+def _present_npc_names(snapshot: GameSnapshot) -> list[str]:
+    """Return the names of NPCs the player's action could be witnessed by.
+
+    The witness candidate set for ``witnessed_act`` classification (spec §5: an
+    act with no witness moves nothing). Reuses the canonical scene-membership
+    predicate (``sidequest/game/npc_scene.py``) — the SAME one the narrator's
+    scene projection trusts — so "present" means here what it means everywhere
+    else in the system (no parallel, divergent definition). Scene id is the
+    party's consensus location; an unresolved location (pre-chargen / party
+    split) yields an empty set unless an unresolved encounter anchors actors.
+    """
+    current_room = snapshot.party_location()
+    encounter = getattr(snapshot, "encounter", None)
+    names: list[str] = []
+    for npc in snapshot.npcs or []:
+        if is_npc_in_scene(npc, current_room=current_room, encounter=encounter):
+            names.append(npc.core.name)
+    return names
 
 
 def _build_state_summary(

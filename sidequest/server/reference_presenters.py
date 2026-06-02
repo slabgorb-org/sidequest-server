@@ -391,7 +391,11 @@ def present_lore_cast(
         return ""
     return (
         '<section id="cast">'
-        '<h2 class="ref-section__title">Cast</h2>'
+        # Bare <h2> matches the generic section-heading convention
+        # (reference_renderer.py:340); avoids an undefined themed class that
+        # would violate the chrome contract (no `.ref-section__title` in the
+        # served CSS bundle). Story 65-9 verify (simplify-quality).
+        "<h2>Cast</h2>"
         '<div class="ref-card-grid">' + "".join(cards) + "</div></section>"
     )
 

@@ -2616,6 +2616,61 @@ def _apply_narration_result_to_snapshot(
                     # not the epithet heading — map_emit filters
                     # discovered_regions to node ids.
                     snapshot.discovered_regions.append(known_region_id)
+                # sq-playtest 2026-06-02 (wry_whimsy/oz): advance current_region
+                # to the region the narrator's heading names. In a region-mode
+                # world the narrator reliably emits result.location (the scene
+                # heading) but does NOT reliably emit the explicit
+                # apply_world_patch(current_region=...) the cartography
+                # RegionProjection asks for — so current_region froze at the
+                # init region (stuck at munchkin_country three regions deep) and
+                # the Location panel never refreshed (LOCATION_DESCRIPTION
+                # re-emits only on a region change). Deriving it from the
+                # already-resolved cartography region id is engine-deterministic
+                # (no LLM compliance needed) and fires ONLY on a real region
+                # match — a sub-area heading like "The Emerald City — The Throne
+                # Room" resolves to the_emerald_city, so it never over-advances.
+                # Gated to region-mode worlds: room-graph (dungeon) worlds manage
+                # current_region via the room graph / frontier hook.
+                from sidequest.genre.models.world import NavigationMode
+
+                _region_world_obj = (
+                    pack.worlds.get(world) if (pack is not None and world is not None) else None
+                )
+                _region_cart = (
+                    getattr(_region_world_obj, "cartography", None)
+                    if _region_world_obj is not None
+                    else None
+                )
+                _is_region_mode_world = (
+                    _region_cart is not None
+                    and getattr(_region_cart, "navigation_mode", None) == NavigationMode.region
+                )
+                if _is_region_mode_world and snapshot.current_region != known_region_id:
+                    _prior_region = snapshot.current_region
+                    snapshot.current_region = known_region_id
+                    snapshot.pc_regions[player_name] = known_region_id
+                    logger.info(
+                        "region.current_region_advanced old=%r new=%r player=%s "
+                        "caller=narration_apply.location_update",
+                        _prior_region,
+                        known_region_id,
+                        player_name,
+                    )
+                    # OTEL lie-detector (CLAUDE.md OTEL principle): the GM panel
+                    # must see the engine advance current_region so a regression
+                    # back to the frozen-Location-panel state is visible — and so
+                    # "the narrator moved the party" can be told from "the engine
+                    # tracked it".
+                    _watcher_publish(
+                        "region_current_advanced",
+                        {
+                            "old_region": _prior_region or "",
+                            "new_region": known_region_id,
+                            "player_name": player_name,
+                            "turn_number": snapshot.turn_manager.interaction,
+                        },
+                        component="location",
+                    )
                 if known_region_id != result.location:
                     with region_entry_canonicalized_dedup_span(
                         entry=result.location,

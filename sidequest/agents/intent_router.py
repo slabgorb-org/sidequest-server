@@ -162,6 +162,23 @@ For each player action:
          graph. Describe WHICH exit by exit_descriptor only; the engine
          resolves it.
        - reflect_absence: player addresses someone/something not present.
+       - witnessed_act: the player commits an EARNED, PUBLIC act that
+         contradicts a belief-powered authority or shows a cowed population
+         that defiance survives (pull the curtain on a humbug, name the trick
+         to the authority's face, break a forbidden rule and walk away unharmed,
+         help a population take a first collective refusal). params={
+           "act_id": "<one of game_state.witnessed_act_vocabulary[].id>",
+           "witnesses": ["<names drawn ONLY from game_state.present_npcs>"]
+         }.
+         Emit this ONLY when game_state.witnessed_act_vocabulary is present.
+         The act_id MUST be one of the listed vocabulary ids — never invent an
+         act. witnesses are the people who PERCEIVE the act; populate it only
+         from game_state.present_npcs. An act with NO witness moves nothing
+         (exposing a humbug in an empty room changes nothing): if no one present
+         perceives it, emit an empty witnesses list and a LOW confidence. Do not
+         invent a witness who is not in present_npcs. Reshaping a society is
+         earned — score confidence honestly; a low score degrades to a narrator
+         hint instead of moving the political dials.
      Every dispatch carries a per-dispatch confidence (0.0-1.0): how certain you
      are that THIS specific mechanical engagement is what the player intended.
      Score the confidence for each dispatch honestly — a high score fires the

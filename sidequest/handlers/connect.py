@@ -1498,6 +1498,32 @@ class ConnectHandler:
                 )
                 if cart_map_msg is not None:
                     bootstrap_msgs.append(cart_map_msg)
+                    # sq-playtest 2026-06-02 (wry_whimsy/oz): region-mode worlds
+                    # froze the Location panel on a tab reload. The per-turn
+                    # region-change branch re-fires LOCATION_DESCRIPTION
+                    # (websocket_session_handler region-mode emit), but the
+                    # connect/resume path emitted none → reloading mid-region
+                    # showed "Gathering your bearings…" until the next move.
+                    # Mirror the per-turn region-mode emit on resume
+                    # (actor=None, room_id_override=current_region) so the
+                    # resuming client paints the panel from the saved region.
+                    # Reuses the single emit helper — room YAML → cartography
+                    # fallback + the location_description.emitted lie-detector
+                    # span (CLAUDE.md OTEL principle). Gated on cart_map_msg
+                    # (region-mode cartography present) + a saved current_region.
+                    if snapshot is not None and snapshot.current_region:
+                        from sidequest.server.websocket_handlers.map_emit import (
+                            _maybe_emit_location_description,
+                        )
+
+                        _maybe_emit_location_description(
+                            session,
+                            sd=session._session_data,
+                            snapshot=snapshot,
+                            actor=None,
+                            emit_fn=lambda msg, _label: bootstrap_msgs.append(msg),
+                            room_id_override=snapshot.current_region,
+                        )
                 # Story 67-2: seal-presence reconcile. A dropped
                 # ACTION_REVEAL{submitted}/TURN_STATUS{submitted} frame can
                 # strand a reconnecting peer at "Adam Composing…" forever (the

@@ -122,7 +122,10 @@ def create_reference_router() -> APIRouter:
         world_dir = _resolve_world_dir(pack_dir, world)
         try:
             html = assemble_lore_page(pack, world, pack_dir, world_dir)
-        except (ValueError, MissingThemeFieldError) as exc:
+        except (ValueError, FileNotFoundError, MissingThemeFieldError) as exc:
+            # FileNotFoundError: a feature-bearing world (POIs or Cast) whose
+            # r2_manifest.json is absent — fail loud (500), never a silently
+            # image-free page (Story 65-9 AC2, No Silent Fallbacks).
             _LOG.exception("reference lore page: render failed for %s/%s", pack, world)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return HTMLResponse(content=html)

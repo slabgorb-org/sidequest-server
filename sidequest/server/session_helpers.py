@@ -85,6 +85,14 @@ _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
     "genie_wishes",
     "achievement_tracker",
     "narrative_log",
+    # political_state (wry_whimsy, Plan 2). Stripped from the narrator
+    # state-summary payload: the narrator learns what moved via the
+    # witnessed_act subsystem's must_narrate directive, not from the raw
+    # dials, and the ledger grows one entry per witnessed act (unbounded by
+    # construction). DROP affects only the narrator payload — the dials
+    # persist in the save and feed the engine + the future UI Standing panel
+    # (Plan 4), which may promote this to a bounded _PHASE_C projection.
+    "political_state",
 )
 
 # Story 61-5 / ADR-110 architecture gate — fields that DO ride into

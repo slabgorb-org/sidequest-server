@@ -35,6 +35,7 @@ from sidequest.game.creature_core import (
     HpPool,
     Inventory,
 )
+from sidequest.game.disposition import CHAPTER_BEAT_REASON
 from sidequest.game.history_chapter import (
     ChapterCharacter,
     ChapterNpc,
@@ -44,6 +45,7 @@ from sidequest.game.history_chapter import (
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import NarrativeEntry, Npc, TropeState
 from sidequest.genre.models.authored_npc import AuthoredNpc
+from sidequest.genre.models.ocean import OceanProfile
 
 
 def _auto_description(race: str, char_class: str) -> str:
@@ -499,7 +501,19 @@ class WorldBuilder:
         existing: Npc | None = next((n for n in snap.npcs if n.core.name == npc_data.name), None)
         if existing is not None:
             if npc_data.disposition is not None:
+                before = int(existing.disposition)
                 existing.disposition = int(npc_data.disposition)
+                after = int(existing.disposition)
+                # ADR-136 (site 4/4): a chapter that moves an already-known
+                # NPC's standing is a relationship beat. The new-NPC branch
+                # below sets a baseline (no shift), so it records nothing.
+                # Zero-delta no-ops are dropped by the seam's guard.
+                existing.record_disposition_beat(
+                    turn=snap.turn_manager.interaction,
+                    delta=after - before,
+                    reason=CHAPTER_BEAT_REASON,
+                    location=npc_data.location or existing.location,
+                )
             if npc_data.description:
                 existing.core.description = npc_data.description
             if npc_data.location:
@@ -865,7 +879,11 @@ def preload_authored_npcs(
             build=None,
             height=None,
             distinguishing_features=list(authored_npc.distinguishing_features),
-            ocean=authored_npc.ocean,
+            ocean=(
+                OceanProfile.from_authored(authored_npc.ocean).model_dump()
+                if authored_npc.ocean
+                else None
+            ),
             resolution_tier="spawn",
             non_transactional_interactions=0,
             jungian_id=None,

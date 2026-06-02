@@ -246,10 +246,14 @@ def test_message_type_complete_count() -> None:
     Client rolls in the 3D overlay and submits settled faces; server resolves
     via dispatch_check and broadcasts DiceRequest + DiceResult. Intentional
     addition; bumped 52 → 53.
+    ADR-136 added RELATIONSHIPS — the player-facing relationship roster snapshot.
+    Emitted reactively when the relationship set changes (disposition shift, NPC
+    promoted, claim recorded), not every turn. Intentional addition; bumped
+    53 → 54.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 53
+    assert len(MessageType) == 54
 
 
 # ===========================================================================

@@ -36,7 +36,7 @@ from sidequest.game.morale import (
     OpponentState,
     maybe_check_morale,
 )
-from sidequest.game.npc_development import develop_npc_on_engagement
+from sidequest.game.npc_development import ENGAGEMENT_BEAT_REASON, develop_npc_on_engagement
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.region_validation import (
     canonicalize_region_name,
@@ -1734,6 +1734,13 @@ def _apply_npc_mentions(
                         },
                     ):
                         pass
+                    # ADR-136: persist the why behind this shift.
+                    npc_hit.record_disposition_beat(
+                        turn=turn_num,
+                        delta=tick.disposition_delta,
+                        reason=ENGAGEMENT_BEAT_REASON,
+                        location=actor_loc,
+                    )
             continue
 
         # Step 2: pool member match. Exact first, comma-normalized fallback

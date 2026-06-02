@@ -43,6 +43,10 @@ ESTABLISHED_AT = 8
 # the ``Disposition`` constructor, which clamps to +-100 — no unbounded growth.
 DISPOSITION_DRIFT_PER_ENGAGEMENT = 2
 
+# Label for the engagement-tick disposition beat (ADR-136). The interest tick
+# is a small warm drift from continued player attention (ADR-014/ADR-020).
+ENGAGEMENT_BEAT_REASON = "warmed by your continued attention"
+
 
 def tier_for_interactions(interactions: int) -> str:
     """Map an interest count to its resolution tier (monotonic, named ladder)."""

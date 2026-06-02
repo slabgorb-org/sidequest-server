@@ -152,6 +152,9 @@ from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
     _maybe_emit_location_overlay_changed,
     _maybe_emit_tactical_grid,
 )
+from sidequest.server.websocket_handlers.relationships_emit import (  # noqa: E402
+    _maybe_emit_relationships,
+)
 
 
 class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
@@ -1960,6 +1963,19 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     _maybe_emit_dungeon_map(
                         self,
                         sd=sd,
+                        snapshot=snapshot,
+                        emit_fn=_emit_shared_world_frame,
+                    )
+                    # ADR-136: relationship roster rides the same per-turn /
+                    # resume cadence as the dungeon-map projection above — NOT
+                    # gated on a location/region change, because a disposition
+                    # shift (the common case) happens mid-scene without moving
+                    # the party. The emitter is internally change-gated on the
+                    # roster signature, so an unchanged roster is a no-op and a
+                    # resume re-fires a fresh roster on the next turn. Transient
+                    # broadcast (_emit_shared_world_frame), never event-sourced.
+                    _maybe_emit_relationships(
+                        self,
                         snapshot=snapshot,
                         emit_fn=_emit_shared_world_frame,
                     )

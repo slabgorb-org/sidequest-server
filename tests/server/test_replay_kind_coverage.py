@@ -280,3 +280,45 @@ async def test_reconnect_against_save_with_encounter_kinds_does_not_crash(
     # Encounter kinds must be skipped, not surfaced as protocol messages.
     assert "ENCOUNTER_STARTED" not in types
     assert "ENCOUNTER_TAG_CREATED" not in types
+
+
+# ---------------------------------------------------------------------------
+# ADR-136 Task 11: RELATIONSHIPS is transient (broadcast via
+# _emit_shared_world_frame, never _emit_event) — like LOCATION_DESCRIPTION it
+# must never be written to the events table, so reconnect replay must never
+# reconstruct it. This drives the REAL reconnect path against a real save and
+# asserts the journal replays cleanly with no RELATIONSHIPS frame surfaced.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reconnect_does_not_replay_transient_relationships(
+    seeded_game_with_encounter_journal: Path,
+) -> None:
+    """A normal reconnect surfaces durable kinds (NARRATION) but never a
+    RELATIONSHIPS frame — that roster is transient and re-broadcast on the next
+    turn, not replayed from the events table. Proves the prior crash gap
+    (RELATIONSHIPS mapped but branchless) is closed: no opaque ValueError and
+    no stray replayed roster."""
+    handler = _make_handler(seeded_game_with_encounter_journal)
+    msg = SessionEventMessage(
+        type="SESSION_EVENT",
+        player_id="alice",
+        payload=SessionEventPayload(
+            event="connect",
+            game_slug=_SLUG,
+            last_seen_seq=0,  # Force full replay
+        ),
+    )
+
+    # The crash gap manifested as a raised ValueError out of handle_message
+    # (the replay walker hitting a mapped-but-branchless RELATIONSHIPS row).
+    # Reaching this line without raising is the primary assertion.
+    outbound = await handler.handle_message(msg)
+
+    types = [getattr(m, "type", None) for m in outbound]
+    assert "SESSION_EVENT" in types, f"SESSION_EVENT(connected) missing from outbound: {types}"
+    # RELATIONSHIPS is transient — never persisted, never replayed from the
+    # events table. A reconnect re-broadcasts a fresh roster on the next turn
+    # instead (the turn-loop emitter wired in this task).
+    assert "RELATIONSHIPS" not in types

@@ -24,7 +24,12 @@ from sidequest.game.creature_core import (
     Inventory,
     hp_pool_from_hp,
 )
-from sidequest.game.disposition import Disposition
+from sidequest.game.disposition import (
+    DISPOSITION_LOG_CAP,
+    PATCH_BEAT_REASON,
+    Disposition,
+    DispositionBeat,
+)
 from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.history_chapter import HistoryChapter
 from sidequest.game.lore_store import LoreStore
@@ -182,6 +187,10 @@ class Npc(BaseModel):
     # Gossip + accusation logic defer to a later slice; the data model
     # and mutation surface are live.
     belief_state: BeliefState = Field(default_factory=BeliefState)
+    # Disposition beat-log (ADR-136): bounded ring buffer of the delta + reason
+    # behind each disposition shift, appended via record_disposition_beat at
+    # every mutation site. Trend is derived from this, not stored.
+    disposition_log: list[DispositionBeat] = Field(default_factory=list)
     # P2-deferred: ResolutionTier (NPC enrichment system)
     resolution_tier: str = "spawn"
     non_transactional_interactions: int = 0
@@ -210,6 +219,42 @@ class Npc(BaseModel):
 
     def name(self) -> str:
         return self.core.name
+
+    def record_disposition_beat(
+        self,
+        *,
+        turn: int,
+        delta: int,
+        reason: str,
+        location: str | None,
+    ) -> None:
+        """Append a disposition beat and trim to the cap.
+
+        Zero-delta shifts earn no beat — a relationship beat is the *why* a
+        standing moved, and nothing moved. Emits ``relationship.beat_recorded``
+        so the GM panel can verify the history is engine-written, not narrator-
+        improvised (ADR-136 / CLAUDE.md OTEL principle).
+        """
+        if delta == 0:
+            return
+        from sidequest.telemetry.spans import SPAN_RELATIONSHIP_BEAT_RECORDED, Span
+
+        self.disposition_log.append(
+            DispositionBeat(turn=turn, delta=delta, reason=reason, location=location)
+        )
+        if len(self.disposition_log) > DISPOSITION_LOG_CAP:
+            del self.disposition_log[: len(self.disposition_log) - DISPOSITION_LOG_CAP]
+        with Span.open(
+            SPAN_RELATIONSHIP_BEAT_RECORDED,
+            {
+                "npc_name": self.core.name,
+                "delta": int(delta),
+                "reason": reason,
+                "turn": int(turn),
+                "log_size": len(self.disposition_log),
+            },
+        ):
+            pass
 
 
 class Companion(BaseModel):
@@ -1444,6 +1489,16 @@ class GameSnapshot(BaseModel):
                             },
                         ):
                             pass
+                        # ADR-136: persist the shift. Patch deltas carry no
+                        # narrator reason; use the neutral label. Effective delta
+                        # (after - before) respects the ±100 clamp so a clamped
+                        # no-op records nothing.
+                        npc.record_disposition_beat(
+                            turn=self.turn_manager.interaction,
+                            delta=after - before,
+                            reason=PATCH_BEAT_REASON,
+                            location=self.party_location(),
+                        )
         if patch.npcs_present is not None:
             for npc_patch in patch.npcs_present:
                 existing = next((n for n in self.npcs if n.core.name == npc_patch.name), None)

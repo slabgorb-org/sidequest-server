@@ -124,6 +124,17 @@ from sidequest.genre.models.pack import (
     RecommendedPlayers,
     World,
 )
+from sidequest.genre.models.premises import (
+    BlocAwakening,
+    BlocDef,
+    PremiseClaim,
+    PremiseCollapse,
+    PremiseDef,
+    PremiseDrain,
+    PremisesFile,
+    WitnessedActArchetype,
+    WitnessedActsFile,
+)
 from sidequest.genre.models.progression import (
     Ability,
     Affinity,
@@ -396,6 +407,16 @@ __all__ = [
     "PassiveProgression",
     "TropeDefinition",
     "TropeEscalation",
+    # premises (wry_whimsy political substrate)
+    "BlocAwakening",
+    "BlocDef",
+    "PremiseClaim",
+    "PremiseCollapse",
+    "PremiseDef",
+    "PremiseDrain",
+    "PremisesFile",
+    "WitnessedActArchetype",
+    "WitnessedActsFile",
     # world
     "CartographyConfig",
     "GraphEdge",

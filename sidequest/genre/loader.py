@@ -56,6 +56,7 @@ from sidequest.genre.models.pack import (
     PortraitManifestEntry,
     World,
 )
+from sidequest.genre.models.premises import PremisesFile, WitnessedActsFile
 from sidequest.genre.models.progression import ProgressionConfig
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldConfig
 from sidequest.genre.models.rules import RulesConfig
@@ -64,6 +65,7 @@ from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.world import CartographyConfig, NavigationMode, WorldConfig
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
+from sidequest.genre.premise_validate import validate_premises
 from sidequest.genre.resolve import resolve_trope_inheritance
 
 # ---------------------------------------------------------------------------
@@ -891,6 +893,7 @@ def _load_single_world(
     genre_root: Path,
     *,
     genre_theme: GenreTheme | None = None,
+    valid_act_ids: frozenset[str] = frozenset(),
 ) -> World | None:
     """Load a single world from its directory.
 
@@ -1116,6 +1119,23 @@ def _load_single_world(
         world_path, "scenarios", _load_single_scenario
     )
 
+    # === World-tier premises.yaml — OPTIONAL (spec 2026-06-02) ===
+    # The world's political illusions and the blocs that prop them. Absent file
+    # → no political layer (a valid authoring choice, NOT a fallback). When
+    # present, cross-references are validated fail-loud against this world's
+    # authored NPCs and the genre-tier witnessed-act vocabulary.
+    premises_file = _load_yaml_optional(world_path / "premises.yaml", PremisesFile)
+    world_premises = list(premises_file.premises) if premises_file is not None else []
+    world_blocs = list(premises_file.blocs) if premises_file is not None else []
+    if premises_file is not None:
+        validate_premises(
+            premises=world_premises,
+            blocs=world_blocs,
+            authored_npc_ids={npc.id for npc in authored_npcs},
+            valid_act_ids=valid_act_ids,
+            world_slug=world_path.name,
+        )
+
     return World(
         config=config,
         lore=lore,
@@ -1138,6 +1158,8 @@ def _load_single_world(
         magic_register=magic_register,
         items=items,
         scenarios=world_scenarios,
+        premises=world_premises,
+        blocs=world_blocs,
         client_theme_css=client_theme_css,
     )
 
@@ -1373,10 +1395,23 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         base_archetypes = _load_yaml_optional(content_root / "archetypes_base.yaml", BaseArchetypes)
         npc_traits = _load_yaml_optional(content_root / "npc_traits.yaml", NpcTraitsDatabase)
 
+    # Genre-tier witnessed-act vocabulary (spec 2026-06-02). OPTIONAL — packs
+    # without a political layer omit the file. World premises/blocs validate
+    # their act bindings against these ids.
+    witnessed_acts_file = _load_yaml_optional(path / "witnessed_acts.yaml", WitnessedActsFile)
+    genre_witnessed_acts = (
+        list(witnessed_acts_file.witnessed_acts) if witnessed_acts_file is not None else []
+    )
+    valid_act_ids = frozenset(a.id for a in genre_witnessed_acts)
+
     # Load worlds and scenarios from subdirectories.
     # _load_single_world returns None for worlds with draft: true — filter them out.
     worlds_raw: dict[str, World | None] = _load_subdirectories(
-        path, "worlds", lambda p: _load_single_world(p, genre_tropes, path, genre_theme=theme)
+        path,
+        "worlds",
+        lambda p: _load_single_world(
+            p, genre_tropes, path, genre_theme=theme, valid_act_ids=valid_act_ids
+        ),
     )
     worlds: dict[str, World] = {slug: w for slug, w in worlds_raw.items() if w is not None}
 
@@ -1449,6 +1484,7 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         lore=lore,
         theme=theme,
         archetypes=archetypes,
+        witnessed_acts=genre_witnessed_acts,
         char_creation=char_creation,
         visual_style=visual_style,
         progression=progression,

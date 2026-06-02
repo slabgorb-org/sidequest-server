@@ -41,6 +41,11 @@ def validate_premises(
     premise_ids = {p.premise_id for p in premises}
     bloc_ids = {b.bloc_id for b in blocs}
 
+    if len(premise_ids) != len(premises):
+        raise GenreValidationError(f"[{world_slug}] duplicate premise_id among premises")
+    if len(bloc_ids) != len(blocs):
+        raise GenreValidationError(f"[{world_slug}] duplicate bloc_id among blocs")
+
     for p in premises:
         if p.authority not in npc_ids:
             raise GenreValidationError(

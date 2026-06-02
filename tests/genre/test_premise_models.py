@@ -102,3 +102,15 @@ def test_models_are_exported_from_package_root():
         WitnessedActArchetype,
         WitnessedActsFile,
     )
+
+
+def test_belief_delta_upper_bound():
+    with pytest.raises(ValidationError):
+        PremiseDrain(act="a", belief_delta=101)
+
+
+def test_defiance_delta_must_be_positive_and_bounded():
+    with pytest.raises(ValidationError):
+        BlocAwakening(act="a", defiance_delta=0)
+    with pytest.raises(ValidationError):
+        BlocAwakening(act="a", defiance_delta=101)

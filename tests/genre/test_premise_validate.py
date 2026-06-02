@@ -119,3 +119,25 @@ def test_empty_content_is_valid():
         valid_act_ids=set(),
         world_slug="oz",
     )  # no raise — a world with no politics is a valid authoring choice
+
+
+def test_duplicate_premise_id_fails():
+    with pytest.raises(GenreValidationError, match="duplicate"):
+        validate_premises(
+            premises=[_premise(), _premise()],
+            blocs=[_bloc()],
+            authored_npc_ids=_NPCS,
+            valid_act_ids=_ACTS,
+            world_slug="oz",
+        )
+
+
+def test_duplicate_bloc_id_fails():
+    with pytest.raises(GenreValidationError, match="duplicate"):
+        validate_premises(
+            premises=[_premise()],
+            blocs=[_bloc(), _bloc()],
+            authored_npc_ids=_NPCS,
+            valid_act_ids=_ACTS,
+            world_slug="oz",
+        )

@@ -56,6 +56,7 @@ from sidequest.genre.models.pack import (
     PortraitManifestEntry,
     World,
 )
+from sidequest.genre.models.premises import PremisesFile, WitnessedActsFile
 from sidequest.genre.models.progression import ProgressionConfig
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldConfig
 from sidequest.genre.models.rules import RulesConfig
@@ -64,7 +65,6 @@ from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.world import CartographyConfig, NavigationMode, WorldConfig
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
-from sidequest.genre.models.premises import PremisesFile, WitnessedActsFile
 from sidequest.genre.premise_validate import validate_premises
 from sidequest.genre.resolve import resolve_trope_inheritance
 

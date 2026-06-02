@@ -45,12 +45,12 @@ from sidequest.genre.models.narrative import (
 )
 from sidequest.genre.models.npc_traits import NpcTraitsDatabase
 from sidequest.genre.models.ocean import DramaThresholds
+from sidequest.genre.models.premises import BlocDef, PremiseDef, WitnessedActArchetype
 from sidequest.genre.models.progression import ProgressionConfig
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig
 from sidequest.genre.models.rules import RulesConfig, SavingThrowsTable
 from sidequest.genre.models.scenario import ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
-from sidequest.genre.models.premises import BlocDef, PremiseDef, WitnessedActArchetype
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.visibility import VisibilityBaseline
 from sidequest.genre.models.world import CartographyConfig, WorldConfig

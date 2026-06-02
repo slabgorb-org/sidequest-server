@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from sidequest.genre.error import GenreValidationError, GenreLoadError
+from sidequest.genre.error import GenreLoadError, GenreValidationError
 from sidequest.genre.loader import load_genre_pack
 
 # Resolve the live content repo relative to this test file.

@@ -46,6 +46,7 @@ from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.spans.intent_router import (
     intent_router_confrontation_vocabulary_span,
+    intent_router_witnessed_act_classified_span,
     intent_router_witnessed_act_vocabulary_span,
 )
 
@@ -95,6 +96,20 @@ def _present_npc_names(snapshot: GameSnapshot) -> list[str]:
         if is_npc_in_scene(npc, current_room=current_room, encounter=encounter):
             names.append(npc.core.name)
     return names
+
+
+def _witnessed_act_ids(package: DispatchPackage) -> list[str]:
+    """Collect the act_ids of every witnessed_act dispatch in the package."""
+    ids: list[str] = []
+    for pd in package.per_player:
+        for d in pd.dispatch:
+            if d.subsystem == "witnessed_act":
+                ids.append(str((d.params or {}).get("act_id", "")))
+    for ca in package.cross_player:
+        for d in ca.dispatch:
+            if d.subsystem == "witnessed_act":
+                ids.append(str((d.params or {}).get("act_id", "")))
+    return ids
 
 
 def _build_state_summary(
@@ -211,6 +226,20 @@ async def execute_intent_router_pre_narrator_pass(
         action=action,
         state_summary=state_summary,
     )
+
+    # Classification-result observability (Plan 2b): only when the vocabulary
+    # was surfaced this turn (a political world) — so the GM panel can see the
+    # router's front-door decision, "classified as witnessed_act:X" vs "had the
+    # vocabulary and declined". Fires before the gates so it reflects the raw
+    # router output, not the post-gate package.
+    if "witnessed_act_vocabulary" in state_summary:
+        act_ids = _witnessed_act_ids(package)
+        with intent_router_witnessed_act_classified_span(
+            emitted=len(act_ids),
+            act_ids=",".join(act_ids),
+            genre_slug=snapshot.genre_slug or "",
+        ):
+            pass
 
     # Unregistered-subsystem gate (Story 71-27): drop dispatches whose
     # ``subsystem`` names no registered handler — the canonical case is the

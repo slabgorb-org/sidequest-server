@@ -36,10 +36,12 @@ Contract pinned by these tests (drives Dev; NOT yet implemented):
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 
 from sidequest.server.asset_urls import resolve_asset_url
 
@@ -49,7 +51,7 @@ from tests.server.conftest import span_attrs_by_name
 SPAN_MANIFEST_LOADED = "sidequest.reference.manifest_loaded"
 
 
-def _entry(key: str) -> dict:
+def _entry(key: str) -> dict[str, object]:
     """A well-formed r2_manifest.json entry with the 65-7 schema."""
     return {
         "key": key,
@@ -185,9 +187,7 @@ _GATED_WORLD = "poi_gated_fixture"
 
 
 @pytest.fixture
-def gated_client():
-    from fastapi.testclient import TestClient
-
+def gated_client() -> Iterator[TestClient]:
     from sidequest.server.app import create_app
 
     app = create_app(genre_pack_search_paths=[FIXTURE_ROOT])

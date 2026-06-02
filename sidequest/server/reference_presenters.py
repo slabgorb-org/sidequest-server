@@ -18,9 +18,14 @@ import yaml
 from sidequest.server.asset_urls import resolve_asset_url
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import ReferenceTheme
+from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import (
     reference_poi_image_not_found_span,
     reference_poi_image_resolved_span,
+)
+from sidequest.telemetry.spans.scrapbook import (
+    scrapbook_npc_portrait_not_found_span,
+    scrapbook_npc_portrait_resolved_span,
 )
 
 KeyPath = tuple[str, ...]
@@ -191,14 +196,35 @@ def _format_chip_label(value: str) -> str:
 
 
 def poi_image_key(pack: str, world: str, slug: str) -> str:
-    """Canonical R2 object key for a POI landscape image.
+    """Canonical **raw R2 object key** for a POI landscape image.
 
     Single source of truth shared by the presenter's ``<img src>`` (here) and
     the Story 65-8 manifest gate in ``reference_renderer``. They MUST agree on
     this format — if they drift, the gate would pass on a key the src never
     requests (or vice versa), silently breaking image emission.
+
+    Returns a raw R2 key, NOT a URL: the gate compares it **directly** against
+    ``r2_manifest.json`` keys (do not wrap), while the presenter wraps it in
+    ``resolve_asset_url`` to build the ``src``. Wrapping on the gate side would
+    never match a raw manifest key.
     """
     return f"genre_packs/{pack}/worlds/{world}/assets/poi/{slug}.png"
+
+
+def portrait_image_key(pack: str, world: str, slug: str) -> str:
+    """Canonical **raw R2 object key** for an NPC portrait image (Story 65-9).
+
+    Portrait analog of :func:`poi_image_key`. Returns the **world-scoped** key
+    that the portrait render script writes and that Story 65-6's
+    ``_resolve_npc_portrait_url`` already constructs — so the Cast section's
+    ``<img src>`` and the 65-9 manifest gate agree by construction. ``slug`` is
+    ``slugify_player_name(name)`` (the daemon-mirroring rule), so URL == filename.
+
+    Like ``poi_image_key`` this is a raw key: the gate compares it directly to
+    ``r2_manifest.json`` (no wrap); the presenter wraps it in
+    ``resolve_asset_url`` for the ``src``.
+    """
+    return f"genre_packs/{pack}/worlds/{world}/assets/portraits/{slug}.png"
 
 
 def _poi_image_html(*, slug: str, name: str, ctx: PresenterContext) -> str:
@@ -278,6 +304,100 @@ def present_lore_geography(node: object, ctx: PresenterContext) -> str:
 PRESENTERS[("lore", ("geography",))] = present_lore_geography
 # Pack/world-tier locations.yaml — activated via file-root dispatch (Task 10).
 PRESENTERS[("locations", ())] = present_lore_geography
+
+
+def _cast_portrait_img_html(
+    *,
+    slug: str,
+    name: str,
+    pack: str,
+    world: str,
+    portrait_image_slugs: frozenset[str],
+    theme: ReferenceTheme,
+) -> str:
+    """Story 65-9: a world-scoped portrait ``<img>`` for a Cast card, or "".
+
+    Emits the image iff the NPC's ``slug`` is in ``portrait_image_slugs`` (the
+    R2-manifest existence gate). Reuses the Story 65-6 portrait span family so a
+    present-vs-absent portrait is observable per NPC (the GM/dev panel can tell
+    "authored & on R2" from "authored, not on R2"). Returns "" (text-only card)
+    when the portrait is not on R2 — a spanned, observable skip, not a silent
+    fallback."""
+    if slug in portrait_image_slugs:
+        src = resolve_asset_url(portrait_image_key(pack, world, slug))
+        with scrapbook_npc_portrait_resolved_span(
+            npc_name=name, genre=pack, world=world, slug=slug
+        ):
+            pass
+        # Escape the accent: it lands in a style= attribute and the renderer's
+        # invariant is to escape every interpolation (mirrors _poi_image_html).
+        accent = escape(theme.palette_accent)
+        return (
+            f'<img class="ref-card__portrait" src="{escape(src)}" alt="{escape(name)}" '
+            f'loading="lazy" style="width:100%;border:2px solid {accent};'
+            f'box-shadow:0 2px 8px {accent}33;" />'
+        )
+    with scrapbook_npc_portrait_not_found_span(npc_name=name, genre=pack, world=world, slug=slug):
+        pass
+    return ""
+
+
+def present_lore_cast(
+    entries: list[dict],
+    *,
+    pack: str,
+    world: str,
+    theme: ReferenceTheme,
+    portrait_image_slugs: frozenset[str],
+) -> str:
+    """Story 65-9: the public **Cast** section — named NPCs from
+    ``portrait_manifest.yaml`` (the public projection; keeper-only ``npcs.yaml``
+    is never read).
+
+    Each authored NPC renders an ``<article id="cast-{slug}">`` card with name,
+    role, and appearance, where ``slug = slugify_player_name(name)``. A portrait
+    ``<img>`` is attached iff the NPC's world-scoped portrait is present on R2
+    (``portrait_image_slugs`` — the gated set); authored-but-not-on-R2 NPCs
+    render text-only, never a broken image (the portrait analog of the 65-8 POI
+    gate). Returns "" when no NPC is authored, so the caller omits the section."""
+    cards: list[str] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        slug = slugify_player_name(name)
+        role = str(item.get("role", "")).strip()
+        appearance = str(item.get("appearance", "")).strip()
+        img_html = _cast_portrait_img_html(
+            slug=slug,
+            name=name,
+            pack=pack,
+            world=world,
+            portrait_image_slugs=portrait_image_slugs,
+            theme=theme,
+        )
+        cards.append(
+            f'<article class="ref-card" id="cast-{escape(slug)}">'
+            '<div class="ref-card__kicker">Cast</div>'
+            f'<h3 class="ref-card__title">{escape(name)}</h3>'
+            + img_html
+            + (f'<div class="ref-card__summary">{escape(role)}</div>' if role else "")
+            + (f'<p class="ref-card__body">{escape(appearance)}</p>' if appearance else "")
+            + "</article>"
+        )
+    if not cards:
+        return ""
+    return (
+        '<section id="cast">'
+        # Bare <h2> matches the generic section-heading convention
+        # (reference_renderer.py:340); avoids an undefined themed class that
+        # would violate the chrome contract (no `.ref-section__title` in the
+        # served CSS bundle). Story 65-9 verify (simplify-quality).
+        "<h2>Cast</h2>"
+        '<div class="ref-card-grid">' + "".join(cards) + "</div></section>"
+    )
 
 
 def present_world_meta(node: object, ctx: PresenterContext) -> str:

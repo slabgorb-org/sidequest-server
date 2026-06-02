@@ -50,6 +50,8 @@ from sidequest.server.reference_presenters import (
     PresenterContext,
     lookup_presenter,
     poi_image_key,
+    portrait_image_key,
+    present_lore_cast,
 )
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import (
@@ -64,6 +66,7 @@ from sidequest.server.reference_theme import (
     load_reference_theme,
 )
 from sidequest.server.reference_visibility import Visibility, classify
+from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import (
     reference_devnote_suppressed_span,
     reference_hero_unbound_span,
@@ -1130,11 +1133,20 @@ def load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
 @lru_cache(maxsize=8)
 def load_r2_manifest_keys(manifest_path: Path) -> frozenset[str]:
     """Story 65-8: the set of R2 object keys recorded in ``r2_manifest.json``
-    (the Story 65-7 existence oracle).
+    (the Story 65-7 existence oracle). Story 65-9 reuses it for portrait keys.
 
-    Used to gate POI ``<img>`` emission on the lore page so an authored-but-not-
-    rendered POI never produces a broken image. Loaded once per process and
-    cached per path (the manifest is static between deploys).
+    Used to gate POI and Cast-portrait ``<img>`` emission on the lore page so an
+    authored-but-not-rendered asset never produces a broken image.
+
+    **Caching / staleness (runbook):** ``@lru_cache(maxsize=8)`` keyed by the
+    manifest ``Path`` — the result is computed once per distinct path and held
+    for the process (up to 8 paths, then LRU-evicted). There is **no TTL and no
+    mtime check**: a manifest regenerated after an asset upload is NOT picked up
+    until the server restarts (or the cache is cleared via
+    ``load_r2_manifest_keys.cache_clear()``). This is safe-failing — a just-
+    rendered asset missing from a stale cached manifest renders text-only, never
+    broken — but operators must restart the server after regenerating
+    ``r2_manifest.json`` for new art to appear on the reference page.
 
     Fails loud — never returns a silently-empty set on error (No Silent
     Fallbacks): an absent file raises ``FileNotFoundError``; malformed JSON or a
@@ -1174,8 +1186,9 @@ def _gate_poi_slugs_on_manifest(
     content root — ``pack_dir.parent.parent`` (prod:
     ``sidequest-content/r2_manifest.json``).
 
-    Emits one ``reference_manifest_loaded`` span per render so the GM/dev panel
-    can confirm the gate consulted a real oracle.
+    Emits one ``reference_manifest_loaded`` span per render **when the world
+    authors POIs** — a POI-less world short-circuits and emits no span, so the
+    span count tracks feature-bearing renders, not every render.
     """
     if not authored_slugs:
         return frozenset()
@@ -1192,6 +1205,92 @@ def _gate_poi_slugs_on_manifest(
     return frozenset(
         slug for slug in authored_slugs if poi_image_key(pack, world, slug) in manifest_keys
     )
+
+
+def load_cast_entries(world_dir: Path) -> list[dict]:
+    """Story 65-9: the public Cast projection — characters from
+    ``portrait_manifest.yaml`` (the same file Story 65-6 reads for scene-time
+    portraits). Returns ``[]`` when the world authors no manifest, so the caller
+    omits the Cast section. Keeper-only ``npcs.yaml`` is never read here.
+
+    Mirrors the genre loader's shape tolerance: a top-level ``{characters: [...]}``
+    mapping or a bare list; non-dict items are dropped.
+    """
+    path = world_dir / "portrait_manifest.yaml"
+    if not path.exists():
+        return []
+    try:
+        with path.open(encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"portrait_manifest.yaml: malformed YAML: {exc}") from exc
+    if isinstance(data, dict):
+        chars = data.get("characters", [])
+    elif isinstance(data, list):
+        chars = data
+    else:
+        chars = []
+    return [c for c in chars if isinstance(c, dict)]
+
+
+def _gate_cast_slugs_on_manifest(
+    authored_slugs: frozenset[str],
+    *,
+    pack: str,
+    world: str,
+    pack_dir: Path,
+) -> frozenset[str]:
+    """Story 65-9: filter authored Cast portrait slugs to those whose R2 portrait
+    image is present in ``r2_manifest.json``. Authored-but-not-on-R2 NPCs render
+    text-only — no broken ``<img>``. Portrait analog of
+    :func:`_gate_poi_slugs_on_manifest`; same loaded-once manifest, same
+    ``pack_dir.parent.parent`` discovery, same loud-failure contract.
+
+    Emits one ``reference_manifest_loaded`` span when the world authors cast
+    NPCs; a cast-less world short-circuits and emits no span.
+    """
+    if not authored_slugs:
+        return frozenset()
+    manifest_path = pack_dir.parent.parent / "r2_manifest.json"
+    manifest_keys = load_r2_manifest_keys(manifest_path)
+    world_prefix = f"genre_packs/{pack}/worlds/{world}/assets/portraits/"
+    world_key_count = sum(1 for key in manifest_keys if key.startswith(world_prefix))
+    with reference_manifest_loaded_span(
+        path=str(manifest_path),
+        entry_count=len(manifest_keys),
+        world_key_count=world_key_count,
+    ):
+        pass
+    return frozenset(
+        slug for slug in authored_slugs if portrait_image_key(pack, world, slug) in manifest_keys
+    )
+
+
+_ROMAN_NUMERALS: tuple[tuple[int, str], ...] = (
+    (100, "C"),
+    (90, "XC"),
+    (50, "L"),
+    (40, "XL"),
+    (10, "X"),
+    (9, "IX"),
+    (5, "V"),
+    (4, "IV"),
+    (1, "I"),
+)
+
+
+def _int_to_roman(n: int) -> str:
+    """A TOC ordinal as a Roman numeral (matches DEFAULT_TOC/PACK_TOC ``num``).
+
+    Used to number a dynamically-appended section (Story 65-9 Cast) so its TOC
+    entry carries the ``num`` field ``_build_toc`` requires. Bounded by realistic
+    section counts (well under the ``C`` ceiling)."""
+    out: list[str] = []
+    for value, symbol in _ROMAN_NUMERALS:
+        while n >= value:
+            out.append(symbol)
+            n -= value
+    return "".join(out)
 
 
 def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -> str:
@@ -1230,6 +1329,36 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
     )
 
     body, kept_toc = _wrap_sections_by_toc(pack, world_rendered)
+
+    # Story 65-9: public Cast section from portrait_manifest.yaml, with portrait
+    # <img>s gated on R2 existence (the portrait analog of the POI gate above).
+    cast_entries = load_cast_entries(world_dir)
+    if cast_entries:
+        authored_portrait_slugs = frozenset(
+            slugify_player_name(str(e.get("name", "")))
+            for e in cast_entries
+            if str(e.get("name", "")).strip()
+        )
+        gated_portrait_slugs = _gate_cast_slugs_on_manifest(
+            authored_portrait_slugs,
+            pack=pack,
+            world=world,
+            pack_dir=pack_dir,
+        )
+        cast_html = present_lore_cast(
+            cast_entries,
+            pack=pack,
+            world=world,
+            theme=theme,
+            portrait_image_slugs=gated_portrait_slugs,
+        )
+        if cast_html:
+            body += cast_html
+            kept_toc = [
+                *kept_toc,
+                {"num": _int_to_roman(len(kept_toc) + 1), "id": "cast", "label": "Cast"},
+            ]
+
     return _wrap_document(
         title=f"{pack} / {world} — Lore",
         body=body,

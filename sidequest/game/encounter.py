@@ -239,3 +239,25 @@ class StructuredEncounter(BaseModel):
         self.resolved = True
         self.structured_phase = EncounterPhase.Resolution
         self.outcome = f"resolved_by_trope:{trope_id}"
+
+    def dial_threshold_outcome(self) -> str | None:
+        """Return the victory outcome if a dial-threshold win condition is
+        already met, else ``None``.
+
+        Mirrors the canonical crossing check in
+        ``sidequest.game.beat_kinds.apply_beat`` (player dial first, then
+        opponent — "first crossing wins") so a met threshold resolves
+        consistently whether it was crossed via a beat OR via a non-beat
+        momentum path (sq-playtest 2026-06-02 wry_whimsy/oz: an escape dial
+        reached 8/8 with ``total_beats_fired == 0``, so apply_beat's check
+        never ran and the encounter stayed unresolved). Only ``dial_threshold``
+        encounters resolve here — ``hp_depletion`` and ``table_showdown`` have
+        their own resolution channels and return ``None``.
+        """
+        if self.win_condition != "dial_threshold":
+            return None
+        if self.player_metric.current >= self.player_metric.threshold:
+            return "player_victory"
+        if self.opponent_metric.current >= self.opponent_metric.threshold:
+            return "opponent_victory"
+        return None

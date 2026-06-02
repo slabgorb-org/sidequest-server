@@ -33,6 +33,15 @@ from .span import Span
 SPAN_MOVEMENT_RESOLVED = "movement.resolved"
 SPAN_MOVEMENT_UNRESOLVED = "movement.unresolved"
 
+# A region-mode world (cartography navigation_mode == region, e.g.
+# wry_whimsy/oz) has NO procedural DungeonStore by design — travel is
+# resolved by the narration_apply heading→region path (#577), not this
+# procedural-dungeon navigator. ``movement.region_mode`` (INFO, NON-error)
+# fires when the movement subsystem recognizes the mode and defers cleanly,
+# so the GM panel shows movement engaged-and-deferred instead of a false
+# ERROR (``movement.unresolved`` reason=no_dungeon_store) on every move.
+SPAN_MOVEMENT_REGION_MODE = "movement.region_mode"
+
 # Story 71-15 (ADR-055): per-transition trope progression on room-graph
 # traversal. The single per-turn trope advance is done by the trope engine
 # (tick_tropes); this span correlates that progression with the movement
@@ -80,6 +89,20 @@ SPAN_ROUTES[SPAN_MOVEMENT_UNRESOLVED] = SpanRoute(
         "intent.direction": _attr("intent.direction")(s),
         "intent.exit_descriptor": _attr("intent.exit_descriptor")(s),
         "available_exits": _attr("available_exits")(s),
+    },
+)
+
+SPAN_ROUTES[SPAN_MOVEMENT_REGION_MODE] = SpanRoute(
+    event_type="state_transition",
+    component="movement",
+    extract=lambda s: {
+        "field": "pc_regions",
+        "op": "movement.region_mode",
+        "pc_name": _attr("pc_name")(s),
+        "from_region": _attr("from_region")(s),
+        "world_slug": _attr("world_slug")(s),
+        "intent.direction": _attr("intent.direction")(s),
+        "intent.exit_descriptor": _attr("intent.exit_descriptor")(s),
     },
 )
 
@@ -156,6 +179,34 @@ def movement_unresolved_span(
 
 
 @contextmanager
+def movement_region_mode_span(
+    *,
+    pc_name: str,
+    from_region: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open the ``movement.region_mode`` INFO span for one PC's move in a
+    cartography region-mode world. The procedural-dungeon navigator does NOT
+    own travel in region-mode worlds (no DungeonStore by design); the
+    narration_apply heading→region path resolves it. This span records that
+    the movement subsystem recognized the mode and deferred cleanly — and,
+    unlike ``movement.unresolved``, it carries NO ERROR status, so the GM
+    panel reads movement as engaged-and-deferred rather than failing on every
+    move. The handler writes ``intent.*`` + ``world_slug``."""
+    with Span.open(
+        SPAN_MOVEMENT_REGION_MODE,
+        {
+            "pc_name": pc_name,
+            "from_region": from_region,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
 def room_transition_tick_span(
     *,
     advanced_tropes: list[str],
@@ -183,9 +234,11 @@ def room_transition_tick_span(
 
 
 __all__ = [
+    "SPAN_MOVEMENT_REGION_MODE",
     "SPAN_MOVEMENT_RESOLVED",
     "SPAN_MOVEMENT_UNRESOLVED",
     "SPAN_ROOM_TRANSITION_TICK",
+    "movement_region_mode_span",
     "movement_resolved_span",
     "movement_unresolved_span",
     "room_transition_tick_span",

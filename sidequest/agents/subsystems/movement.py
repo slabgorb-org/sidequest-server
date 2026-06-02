@@ -33,13 +33,19 @@ from sidequest.dungeon.region_graph.model import RegionGraph
 from sidequest.dungeon.region_projection import RegionExit, project_region
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
 from sidequest.game.session import GameSnapshot, WorldStatePatch
+from sidequest.genre.models.world import NavigationMode
 from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch, VisibilityTag
-from sidequest.telemetry.spans import movement_resolved_span, movement_unresolved_span
+from sidequest.telemetry.spans import (
+    movement_region_mode_span,
+    movement_resolved_span,
+    movement_unresolved_span,
+)
 
 if TYPE_CHECKING:
     from sidequest.dungeon.lookahead_worker import LookaheadWorkerHandle
     from sidequest.dungeon.persistence import DungeonStore
     from sidequest.dungeon.themes import ThemePalette
+    from sidequest.genre.models.pack import GenrePack
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +80,29 @@ def _tokens(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z]+", (text or "").lower())}
 
 
+def _is_region_mode_world(*, pack: GenrePack | None, world_slug: str) -> bool:
+    """True iff the active world's cartography is region-mode.
+
+    Region-mode worlds (``cartography.navigation_mode == region``) do not use
+    the procedural-dungeon navigator — they carry no ``DungeonStore`` and
+    resolve travel via the narration_apply heading→region path. Returns False
+    (→ caller fails loud on ``no_dungeon_store``, never a silent skip) when the
+    pack, world, or cartography is absent or undeterminable. Mirrors the
+    ``getattr`` cartography probe used by ``narration_apply`` (#577) and
+    ``project_cartography_region`` so the discriminator stays single-shaped.
+    """
+    if pack is None or not world_slug:
+        return False
+    worlds = getattr(pack, "worlds", None)
+    if worlds is None:
+        return False
+    world_obj = worlds.get(world_slug)
+    cart = getattr(world_obj, "cartography", None)
+    if cart is None:
+        return False
+    return getattr(cart, "navigation_mode", None) == NavigationMode.region
+
+
 async def run_movement_dispatch(
     dispatch: SubsystemDispatch,
     *,
@@ -82,6 +111,7 @@ async def run_movement_dispatch(
     dungeon_store: DungeonStore | None = None,
     palette: ThemePalette | None = None,
     lookahead_handle: LookaheadWorkerHandle | None = None,
+    pack: GenrePack | None = None,
 ) -> SubsystemOutput:
     """Resolve a coarse movement intent against the real graph and advance
     THIS PC's region (per-PC, §Q5 split-party — no party token).
@@ -93,6 +123,42 @@ async def run_movement_dispatch(
     """
     direction = str(dispatch.params.get("direction", "") or "")
     exit_descriptor = str(dispatch.params.get("exit_descriptor", "") or "")
+
+    # --- Region-mode worlds do not use this procedural-dungeon navigator. ---
+    # This handler traverses a RegionGraph loaded from a DungeonStore (the
+    # procedural megadungeon / room-graph path). A cartography region-mode
+    # world (navigation_mode == region, e.g. wry_whimsy/oz) has NO dungeon
+    # store by design — travel is resolved deterministically by the
+    # narration_apply heading→region path (sq-playtest 2026-06-02 #577), not
+    # here. Treating its (expected) missing store as ``no_dungeon_store`` fired
+    # an ERROR span on every move (the GM panel showed movement 7 events / 7
+    # errors in oz) — a dungeon assumption leaking into region-mode. Recognize
+    # the mode and step aside cleanly with an observable, NON-error
+    # ``movement.region_mode`` span. This is NOT a silent fallback: a
+    # room_graph world that is genuinely missing its store still fails loud on
+    # ``no_dungeon_store`` below, and an undeterminable pack/world (pack=None)
+    # also falls through to fail-loud rather than silently deferring.
+    if _is_region_mode_world(pack=pack, world_slug=snapshot.world_slug):
+        from_region = snapshot.region_for(perspective=player_name) or ""
+        with movement_region_mode_span(
+            pc_name=player_name,
+            from_region=from_region,
+        ) as span:
+            span.set_attribute("intent.direction", direction)
+            span.set_attribute("intent.exit_descriptor", exit_descriptor)
+            span.set_attribute("world_slug", snapshot.world_slug)
+        logger.debug(
+            "movement.region_mode pc=%s world=%s direction=%s descriptor=%r "
+            "(deferred to narration_apply heading→region path)",
+            player_name,
+            snapshot.world_slug,
+            direction,
+            exit_descriptor,
+        )
+        # No patch: the heading→region path owns the advance. No directive:
+        # the narrator resolves the move in prose. No error: this is the
+        # expected navigation mode, not a failure.
+        return SubsystemOutput(data={"resolved_via": "region_mode_deferred"})
 
     # --- §Q1 step 1: no dungeon_store → non-procedural world, fail loud. ---
     # palette is threaded from the SAME lookahead handle as dungeon_store, so

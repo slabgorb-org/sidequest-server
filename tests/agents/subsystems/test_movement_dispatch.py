@@ -17,12 +17,14 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 
 import sidequest.telemetry.spans as spans_module
 from sidequest.agents.subsystems import SubsystemOutput, get_registered, run_dispatch_bank
 from sidequest.agents.subsystems.movement import run_movement_dispatch
 from sidequest.dungeon.region_graph.model import RegionEdge, RegionGraph, RegionNode
 from sidequest.game.session import GameSnapshot
+from sidequest.genre.models.world import NavigationMode
 from sidequest.protocol.dispatch import (
     DispatchPackage,
     PlayerDispatch,
@@ -106,6 +108,13 @@ def _snapshot(pc_regions: dict[str, str], seats: dict[str, str], **kw) -> GameSn
         player_seats=dict(seats),
         **kw,
     )
+
+
+def _pack_with_world(world_slug: str, mode: NavigationMode):
+    """Duck-typed GenrePack stand-in (content-free): the movement handler's
+    region-mode gate reads only ``pack.worlds[slug].cartography.navigation_mode``."""
+    world = types.SimpleNamespace(cartography=types.SimpleNamespace(navigation_mode=mode))
+    return types.SimpleNamespace(worlds={world_slug: world})
 
 
 def _dispatch(
@@ -467,6 +476,72 @@ def test_no_dungeon_store_fail_loud(capture_spans):
 
 
 # ---------------------------------------------------------------------------
+# 10a — region-mode world has no DungeonStore by design → clean defer, not an
+#        error (sq-playtest 2026-06-02: movement 7 events / 7 errors in oz).
+# ---------------------------------------------------------------------------
+
+
+def test_region_mode_world_defers_cleanly(capture_spans):
+    # A cartography region-mode world (the wry_whimsy/oz family) carries NO
+    # dungeon store — travel is resolved by the narration_apply heading→region
+    # path (#577), not this procedural-dungeon navigator. The handler must
+    # recognize the mode and step aside with a non-error movement.region_mode
+    # span, NOT fire movement.unresolved/no_dungeon_store on every move.
+    pack = _pack_with_world("beneath_sunden", NavigationMode.region)
+    snap = _snapshot({"Susan": "munchkin_country"}, {"s1": "Susan"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(direction="toward_exit", exit_descriptor="the green streets"),
+            snapshot=snap,
+            player_name="Susan",
+            dungeon_store=None,
+            palette=None,
+            pack=pack,
+        )
+    )
+    # Clean defer: no error, no narrator surface directive, no patch.
+    assert "error" not in out.data
+    assert out.data["resolved_via"] == "region_mode_deferred"
+    assert out.directives == []
+    assert snap.pc_regions["Susan"] == "munchkin_country"  # handler applied no patch
+    # Observable, NON-error span (the GM-panel de-noise vs. movement.unresolved).
+    region_mode = _spans_named(capture_spans, "movement.region_mode")
+    assert len(region_mode) == 1
+    assert region_mode[0].attributes["pc_name"] == "Susan"
+    assert region_mode[0].attributes["from_region"] == "munchkin_country"
+    assert region_mode[0].attributes["world_slug"] == "beneath_sunden"
+    assert region_mode[0].status.status_code != StatusCode.ERROR
+    # The dungeon-assumption error must NOT fire for a region-mode world.
+    assert not _spans_named(capture_spans, "movement.unresolved")
+
+
+# ---------------------------------------------------------------------------
+# 10b — the defer must NOT over-broaden: a room_graph world genuinely missing
+#        its store is real config drift and STILL fails loud (No Silent
+#        Fallbacks).
+# ---------------------------------------------------------------------------
+
+
+def test_room_graph_world_no_store_still_fails_loud(capture_spans):
+    pack = _pack_with_world("beneath_sunden", NavigationMode.room_graph)
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(direction="deeper"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=None,
+            palette=_FakePalette(),
+            pack=pack,
+        )
+    )
+    assert out.data["error"] == "no_dungeon_store"
+    assert not _spans_named(capture_spans, "movement.region_mode")
+    unresolved = _spans_named(capture_spans, "movement.unresolved")
+    assert unresolved[0].attributes["reason"] == "no_dungeon_store"
+
+
+# ---------------------------------------------------------------------------
 # 11 — seated PC missing pc_regions entry → fail loud (no_pc_region).
 # ---------------------------------------------------------------------------
 
@@ -697,6 +772,50 @@ def test_wiring_bank_invokes_movement(capture_spans):
     # The bank invoked run_movement_dispatch → Rux advanced.
     assert snap.pc_regions["Rux"] == "b"
     assert _spans_named(capture_spans, "movement.resolved")
+
+
+# ---------------------------------------------------------------------------
+# 22a — wiring: the bank signature-filters ``pack`` from context into the
+#        movement handler, so a region-mode world defers end-to-end (no
+#        no_dungeon_store error through the real bank, the way the
+#        intent_router_pass context delivers it).
+# ---------------------------------------------------------------------------
+
+
+def test_wiring_bank_region_mode_defers(capture_spans):
+    pack = _pack_with_world("beneath_sunden", NavigationMode.region)
+    snap = _snapshot({"Susan": "munchkin_country"}, {"s1": "Susan"})
+    package = DispatchPackage(
+        turn_id="t1",
+        per_player=[
+            PlayerDispatch(
+                player_id="Susan",
+                raw_action="head down the green streets toward the palace",
+                dispatch=[_dispatch(direction="toward_exit")],
+            )
+        ],
+        confidence_global=0.9,
+    )
+    _run(
+        run_dispatch_bank(
+            package,
+            context={
+                "snapshot": snap,
+                "player_name": "Susan",
+                # Region-mode worlds thread no dungeon_store/palette; pack is
+                # the discriminator. Bank signature-filters all of these.
+                "dungeon_store": None,
+                "palette": None,
+                "pack": pack,
+                "npcs_present": [],
+            },
+        )
+    )
+    # The bank reached run_movement_dispatch with pack → clean region-mode
+    # defer, no dungeon-assumption error.
+    assert snap.pc_regions["Susan"] == "munchkin_country"
+    assert _spans_named(capture_spans, "movement.region_mode")
+    assert not _spans_named(capture_spans, "movement.unresolved")
 
 
 # ---------------------------------------------------------------------------

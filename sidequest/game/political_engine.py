@@ -10,10 +10,14 @@ causal math unit-testable in isolation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
+from sidequest.game.belief_state import BeliefFact, BeliefSourceWitnessed
 from sidequest.game.political_state import BeliefLedgerEntry, PoliticalState
 from sidequest.genre.models.premises import BlocDef, PremiseDef
+
+if TYPE_CHECKING:
+    from sidequest.game.session import Npc
 
 PoliticalEffect = Literal["drained", "coupled", "awakened", "collapsed", "tipped"]
 TargetKind = Literal["premise", "bloc"]
@@ -163,3 +167,38 @@ def apply_witnessed_act(
             _record("tipped", "bloc", bid, 0, bstate.defiance)
 
     return events
+
+
+def inject_witnessed_contradiction(
+    *,
+    npcs: list[Npc],
+    witnesses: list[str],
+    premise: PremiseDef,
+    turn: int,
+) -> int:
+    """Inject a contradicting ``BeliefFact`` (Witnessed source) into each witness
+    NPC's ``belief_state``, reusing the ADR-053 layer so the existing GossipEngine
+    can later propagate it (spec §5/§9). Returns the count of NPCs updated.
+
+    Matches witnesses by ``npc.core.name``. We do NOT touch the authoritative
+    ``belief_reserve`` dial here — that is the engine's job; this only seeds the
+    propositional belief layer so the contradiction can spread and so the GM
+    panel sees the per-NPC belief mutation (belief_state.belief_added fires
+    inside add_belief).
+    """
+    witness_set = set(witnesses)
+    updated = 0
+    for npc in npcs:
+        if npc.core.name in witness_set:
+            npc.belief_state.add_belief(
+                BeliefFact(
+                    subject=premise.claim.subject,
+                    # Prefix marks this as a contradiction seed (ADR-053); verbatim
+                    # gossip propagation of it is evaluated in later plans, not here.
+                    content=f"witnessed contradiction of: {premise.claim.proposition}",
+                    turn_learned=turn,
+                    source=BeliefSourceWitnessed(),
+                )
+            )
+            updated += 1
+    return updated

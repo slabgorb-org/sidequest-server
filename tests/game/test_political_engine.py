@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sidequest.game.political_engine import COUPLING_FRACTION, apply_witnessed_act
+from sidequest.game.political_state import BlocState, PoliticalState, PremiseState
 from sidequest.genre.models.premises import (
     BlocAwakening,
     BlocDef,
@@ -10,8 +12,6 @@ from sidequest.genre.models.premises import (
     PremiseDef,
     PremiseDrain,
 )
-from sidequest.game.political_engine import COUPLING_FRACTION, apply_witnessed_act
-from sidequest.game.political_state import BlocState, PoliticalState, PremiseState
 
 
 def _humbug():

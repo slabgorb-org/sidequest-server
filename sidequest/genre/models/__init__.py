@@ -124,6 +124,17 @@ from sidequest.genre.models.pack import (
     RecommendedPlayers,
     World,
 )
+from sidequest.genre.models.premises import (
+    BlocAwakening,
+    BlocDef,
+    PremiseClaim,
+    PremiseCollapse,
+    PremiseDef,
+    PremiseDrain,
+    PremisesFile,
+    WitnessedActArchetype,
+    WitnessedActsFile,
+)
 from sidequest.genre.models.progression import (
     Ability,
     Affinity,
@@ -189,17 +200,6 @@ from sidequest.genre.models.tropes import (
     PassiveProgression,
     TropeDefinition,
     TropeEscalation,
-)
-from sidequest.genre.models.premises import (
-    BlocAwakening,
-    BlocDef,
-    PremiseClaim,
-    PremiseCollapse,
-    PremiseDef,
-    PremiseDrain,
-    PremisesFile,
-    WitnessedActArchetype,
-    WitnessedActsFile,
 )
 from sidequest.genre.models.world import (
     CartographyConfig,

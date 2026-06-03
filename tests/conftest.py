@@ -214,7 +214,13 @@ _CAVERNS_SUNDEN_DEPRECATED_TESTS = frozenset(
         "magic/test_e2e_cnc_memorization.py",
         "magic/test_state.py",
         "protocol/test_models.py",
-        "server/dispatch/test_pregen.py",
+        # 72-15: server/dispatch/test_pregen.py was re-pointed off the deprecated
+        # caverns_sunden world. Its ~16 seed_manual unit tests are world-agnostic
+        # (they monkeypatch load_genre_pack), and its one e2e now binds the
+        # dedicated test fixture pack (test_genre/flickering_reach), not a live
+        # world. pregen is a LIVE subsystem, so its coverage must run (CLAUDE.md:
+        # no skipping tests for live subsystems). Removed from this skip set
+        # deliberately and visibly, per this block's reversible-with-reason contract.
         "server/test_adr105_b1_secret_invariant_wiring.py",
         "server/test_chargen_arrange_dispatch.py",
         "server/test_chargen_dispatch.py",

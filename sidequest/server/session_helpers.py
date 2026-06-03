@@ -40,6 +40,7 @@ from sidequest.game.shared_world_delta import (
     build_shared_world_delta,
     merge_shared_delta_into_snapshot,
 )
+from sidequest.genre.models.ocean import DramaThresholds
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.protocol.messages import (
@@ -59,6 +60,7 @@ from sidequest.telemetry.spans import (
     npc_recurring_presence_missed_span,
     npc_reinvented_span,
     orchestrator_notorious_party_gate_span,
+    pacing_hint_span,
     prompt_game_state_bytes_span,
     room_state_injected_span,
 )
@@ -1155,7 +1157,27 @@ def _build_turn_context(
                 "retrieved_factions", entity_retrieval.retrieved_factions
             )
 
+    # Story 81-3 (ADR-025): derive the pacing hint from the per-session
+    # TensionTracker (the 81-2 producer on _SessionData) using the genre's
+    # DramaThresholds, then stamp it onto TurnContext so the orchestrator's
+    # [PACING] injection (the `if context.pacing_hint is not None` guard) finally
+    # fires. ``drama_thresholds`` is None when the pack ships no pacing.yaml
+    # (e.g. caverns_and_claudes) — DramaThresholds()'s own defaults are the
+    # model's documented absent-pacing behavior, not a silent fallback. The span
+    # is the GM-panel lie detector: it records the hint the narrator received so
+    # the dev can confirm it tracks real tension state (OTEL Observability).
+    pacing_thresholds = sd.genre_pack.drama_thresholds or DramaThresholds()
+    pacing_hint = sd.tension_tracker.pacing_hint(pacing_thresholds)
+    with pacing_hint_span(
+        drama_weight=pacing_hint.drama_weight,
+        target_sentences=pacing_hint.target_sentences,
+        delivery_mode=str(pacing_hint.delivery_mode),
+        escalation_present=pacing_hint.escalation_beat is not None,
+    ):
+        pass
+
     return TurnContext(
+        pacing_hint=pacing_hint,
         in_combat=in_combat,
         in_chase=in_chase,
         in_encounter=in_encounter,

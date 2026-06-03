@@ -43,7 +43,7 @@ from sidequest.game.history_chapter import (
     HistoryChapter,
 )
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.session import NarrativeEntry, Npc, TropeState
+from sidequest.game.session import NarrativeEntry, Npc, TropeState, upsert_quest_status
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.ocean import OceanProfile
 
@@ -278,7 +278,8 @@ class WorldBuilder:
             self._apply_npc(snap, npc_data)
 
         for quest_name, status in chapter.quests.items():
-            snap.quest_log[quest_name] = status
+            # Story 77-2: status-only upsert under the widened QuestEntry type.
+            upsert_quest_status(snap.quest_log, quest_name, status)
 
         for entry in chapter.lore:
             if entry not in snap.lore_established:

@@ -157,7 +157,9 @@ class TestDispatchSeamWritesDurableRecord:
         )
         # Turn-marker — interaction is bumped during the turn, so the
         # entry references the post-bump value.
-        entry = sd.snapshot.quest_log["trope_extraction_panic"]
+        # Story 77-2: quest_log values are QuestEntry; the handshake records the
+        # turn marker in the status field.
+        entry = sd.snapshot.quest_log["trope_extraction_panic"].status
         assert str(sd.snapshot.turn_manager.interaction) in entry, (
             "quest_log entry must reference the interaction count so "
             "the next narrator can anchor the resolution in time; got "

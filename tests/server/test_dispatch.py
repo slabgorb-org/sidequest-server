@@ -72,7 +72,9 @@ def test_apply_quest_updates():
 
     _apply_narration_result_to_snapshot(snapshot, result, "player", room=room_for(snapshot))
 
-    assert snapshot.quest_log["find_crystal"] == "active"
+    # Story 77-2: quest_log values are QuestEntry; the legacy status-only lane
+    # coerces into a status-bearing entry.
+    assert snapshot.quest_log["find_crystal"].status == "active"
 
 
 def test_apply_lore_established_no_duplicates():

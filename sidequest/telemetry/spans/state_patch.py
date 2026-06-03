@@ -61,6 +61,49 @@ SPAN_ROUTES[SPAN_QUEST_SEEDED_AT_CREATION] = SpanRoute(
         "deferred": (span.attributes or {}).get("deferred", False),
     },
 )
+# Story 77-2 (ADR-137 §OTEL) — typed quest/stakes tool spans. The GM panel is
+# the lie-detector for the campaign-spine substrate: each routes to a
+# state_transition event the WatcherSpanProcessor re-emits, exactly like
+# SPAN_QUEST_UPDATE above. quest.updated is the successor to SPAN_QUEST_UPDATE
+# (the old span may co-fire until 77-4 cuts the legacy quest_updates lane).
+SPAN_QUEST_CREATED = "quest.created"
+SPAN_ROUTES[SPAN_QUEST_CREATED] = SpanRoute(
+    event_type="state_transition",
+    component="quest_log",
+    extract=lambda span: {
+        "field": "quest_log",
+        "op": "created",
+        "quest_id": (span.attributes or {}).get("quest_id", ""),
+        "title": (span.attributes or {}).get("title", ""),
+        "source": (span.attributes or {}).get("source", ""),
+        "anchor_count": (span.attributes or {}).get("anchor_count", 0),
+    },
+)
+SPAN_QUEST_UPDATED = "quest.updated"
+SPAN_ROUTES[SPAN_QUEST_UPDATED] = SpanRoute(
+    event_type="state_transition",
+    component="quest_log",
+    extract=lambda span: {
+        "field": "quest_log",
+        "op": "updated",
+        "quest_id": (span.attributes or {}).get("quest_id", ""),
+        "old_status": (span.attributes or {}).get("old_status", ""),
+        "new_status": (span.attributes or {}).get("new_status", ""),
+    },
+)
+SPAN_STAKES_SET = "stakes.set"
+SPAN_ROUTES[SPAN_STAKES_SET] = SpanRoute(
+    event_type="state_transition",
+    component="active_stakes",
+    extract=lambda span: {
+        "field": "active_stakes",
+        "op": "set",
+        "length": (span.attributes or {}).get("length", 0),
+        "source": (span.attributes or {}).get("source", ""),
+        "is_fresh": (span.attributes or {}).get("is_fresh", False),
+    },
+)
+
 SPAN_GAME_HANDSHAKE_DELTA_APPLIED = "game.handshake.delta_applied"
 SPAN_ROUTES[SPAN_GAME_HANDSHAKE_DELTA_APPLIED] = SpanRoute(
     event_type="state_transition",
@@ -142,6 +185,80 @@ def quest_update_span(
     }
     with Span.open(SPAN_QUEST_UPDATE, attributes, tracer_override=_tracer) as span:
         yield span
+
+
+def quest_created_span(
+    *,
+    quest_id: str,
+    title: str,
+    source: str,
+    anchor_count: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit the Story 77-2 ``quest.created`` span (point event, opens+closes).
+
+    Fired when ``record_quest`` mints a NEW quest. ``source`` is
+    ``creation|narrator``; ``anchor_count`` is the number of anchors written
+    by this call (0 or 1 in v1).
+    """
+    attributes: dict[str, Any] = {
+        "quest_id": quest_id,
+        "title": title,
+        "source": source,
+        "anchor_count": anchor_count,
+        **attrs,
+    }
+    with Span.open(SPAN_QUEST_CREATED, attributes, tracer_override=_tracer):
+        pass
+
+
+def quest_updated_span(
+    *,
+    quest_id: str,
+    old_status: str,
+    new_status: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit the Story 77-2 ``quest.updated`` span (point event, opens+closes).
+
+    Fired when ``record_quest`` changes the status of an EXISTING quest. The
+    behavioural successor to the legacy ``SPAN_QUEST_UPDATE`` span.
+    """
+    attributes: dict[str, Any] = {
+        "quest_id": quest_id,
+        "old_status": old_status,
+        "new_status": new_status,
+        **attrs,
+    }
+    with Span.open(SPAN_QUEST_UPDATED, attributes, tracer_override=_tracer):
+        pass
+
+
+def stakes_set_span(
+    *,
+    length: int,
+    source: str,
+    is_fresh: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit the Story 77-2 ``stakes.set`` span (point event, opens+closes).
+
+    Fired when ``set_stakes`` writes/appends ``active_stakes``. ``is_fresh`` is
+    True when the call takes the field from empty to populated (establishment),
+    False when it evolves already-present stakes — the GM-panel signal that the
+    spine's stakes substrate stopped being empty (the oz turn-13 failure).
+    """
+    attributes: dict[str, Any] = {
+        "length": length,
+        "source": source,
+        "is_fresh": is_fresh,
+        **attrs,
+    }
+    with Span.open(SPAN_STAKES_SET, attributes, tracer_override=_tracer):
+        pass
 
 
 def quest_seeded_at_creation_span(

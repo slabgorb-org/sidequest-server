@@ -46,10 +46,12 @@ from sidequest.game.region_validation import (
 )
 from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.session import (
+    _ACTIVE_STAKES_GUARDRAIL,  # re-exported; canonical home is session.py (Story 77-2)
     ContainerState,
     GameSnapshot,
     Npc,
     RoomState,
+    upsert_quest_status,
 )
 from sidequest.game.table.types import TableCommit
 from sidequest.genre.models.pack import GenrePack
@@ -2895,7 +2897,9 @@ def _apply_narration_result_to_snapshot(
             turn_number=snapshot.turn_manager.interaction,
         ):
             for quest_id, status in result.quest_updates.items():
-                snapshot.quest_log[quest_id] = status
+                # Story 77-2: legacy status-only lane under the widened
+                # QuestEntry type (77-4 retires this onto record_quest).
+                upsert_quest_status(snapshot.quest_log, quest_id, status)
             logger.info(
                 "state.quest_update count=%d player=%s",
                 len(result.quest_updates),
@@ -5903,9 +5907,7 @@ def _resolve_opposed_check_branch(
     from sidequest.server.dispatch.encounter_lifecycle import _stamp_encounter_presence
     from sidequest.telemetry.spans import npc_edge_published_span
 
-    opp_npc = next(
-        (n for n in snapshot.npcs if n.core.name == opponent_actor.name), None
-    )
+    opp_npc = next((n for n in snapshot.npcs if n.core.name == opponent_actor.name), None)
     if opp_npc is not None:
         # Same location accessor the prose path and the combat seams use; ``None``
         # when the seat has no resolved location, in which case the primitive
@@ -5942,10 +5944,9 @@ def _resolve_opposed_check_branch(
 # Story 45-20 — trope resolution handshake.
 # ---------------------------------------------------------------------------
 
-# Guardrail length for ``active_stakes`` so runaway growth does not pollute
-# the next narrator's state_summary prompt. The field is reflected verbatim
-# into the prompt JSON; ~1024 chars is the soft cap.
-_ACTIVE_STAKES_GUARDRAIL = 1024
+# ``_ACTIVE_STAKES_GUARDRAIL`` (the ~1024-char soft cap for ``active_stakes``)
+# moved to sidequest.game.session in Story 77-2 to break an import cycle; it is
+# imported at the top of this module and re-exported here for callers/tests.
 
 
 def _handshake_resolved_tropes(
@@ -6027,7 +6028,9 @@ def _handshake_resolved_tropes(
             turn_number=interaction,
         ):
             for key, status_text in fresh_writes.items():
-                snapshot.quest_log[key] = status_text
+                # Story 77-2: trope-resolution status-only entry under the
+                # widened QuestEntry type.
+                upsert_quest_status(snapshot.quest_log, key, status_text)
             logger.info(
                 "trope.resolution_handshake fresh_writes=%d player=%s turn=%d",
                 len(fresh_writes),

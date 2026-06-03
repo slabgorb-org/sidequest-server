@@ -90,7 +90,9 @@ async def test_quest_updates_emit_state_transition_via_span_route(
     # 4. The snapshot must have been mutated (the span context wraps the
     #    mutation; if the helper short-circuits, the assertion below fails
     #    and the test catches it before checking events).
-    assert snapshot.quest_log == {"deal_with_vex": "active"}
+    # Story 77-2: quest_log values are QuestEntry; the legacy status-only lane
+    # coerces into a status-bearing entry.
+    assert snapshot.quest_log["deal_with_vex"].status == "active"
 
     # 5. The typed event must have arrived via SPAN_ROUTES, not via a
     #    direct publish_event from narration_apply.

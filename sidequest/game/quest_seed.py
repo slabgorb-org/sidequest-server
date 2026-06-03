@@ -23,7 +23,7 @@ is story 77-3).
 from __future__ import annotations
 
 from sidequest.game.character import Character
-from sidequest.game.session import GameSnapshot
+from sidequest.game.session import GameSnapshot, QuestEntry
 from sidequest.telemetry.spans import quest_seeded_at_creation_span
 
 # Stable ids for the single creation-time seed entry. One quest, one anchor —
@@ -77,7 +77,11 @@ def seed_quest_spine(snapshot: GameSnapshot, character: Character) -> None:
         )
         return
 
-    snapshot.quest_log[_SEED_QUEST_ID] = f"Active: {source}"
+    # Story 77-2: quest_log is now dict[str, QuestEntry]. The drive both names
+    # the spine (title) and is its objective at creation; status starts active.
+    snapshot.quest_log[_SEED_QUEST_ID] = QuestEntry(
+        title=source, objective=source, status="active", anchor_id=_SEED_ANCHOR_ID
+    )
     if _SEED_ANCHOR_ID not in snapshot.quest_anchors:
         snapshot.quest_anchors.append(_SEED_ANCHOR_ID)
     snapshot.active_stakes = source

@@ -22,7 +22,7 @@ top-level prefix raises in local mode. CDN mode tolerates anything (the
 from __future__ import annotations
 
 import os
-from typing import Final
+from typing import Final, Literal
 
 from sidequest.telemetry.spans.asset_url import asset_url_resolved_span
 
@@ -44,7 +44,7 @@ def _local_path_for(relative: str) -> str:
     )
 
 
-def resolve_asset_url(relative_path: str, *, scope: str = "pack") -> str:
+def resolve_asset_url(relative_path: str, *, scope: Literal["pack", "shared"] = "pack") -> str:
     """Convert a content-relative path to the URL the UI should fetch.
 
     ``scope`` is forensic-only (``"pack"`` | ``"shared"``) — it is recorded on

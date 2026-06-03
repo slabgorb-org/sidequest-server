@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Literal
 
 from opentelemetry import trace
 
@@ -24,7 +24,7 @@ def asset_url_resolved_span(
     relative_path: str,
     base_url: str,
     mode: str,
-    scope: str = "pack",
+    scope: Literal["pack", "shared"] = "pack",
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:

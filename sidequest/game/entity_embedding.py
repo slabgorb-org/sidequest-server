@@ -126,7 +126,7 @@ async def embed_pending_entity_cards(
                     "entity_embedding.worker text_too_large card=%s content_bytes=%d error=%s",
                     card_id,
                     content_bytes,
-                    exc,
+                    type(exc).__name__,
                 )
                 continue
             store.update_embedding(card_id, response["embedding"])

@@ -118,6 +118,9 @@ def test_seed_manual_emits_otel_with_world_culture_source(monkeypatch, tmp_path)
     assert attrs.get("cultures_source") == "world"
     assert attrs.get("world") == "perseus"
     assert attrs.get("culture_count") == 1
+    # 72-11: the new pre-seed truth attribute is present and correct in the
+    # under-old-cap (1-culture) case too, not only the >=5-culture test.
+    assert attrs.get("effective_culture_count") == 1
 
 
 # ===========================================================================
@@ -237,7 +240,7 @@ def test_seed_manual_span_reports_effective_and_seeded_culture_counts(monkeypatc
     world both read 5. RED today: effective_culture_count is absent and the seeded
     count reports the post-cap 4."""
     pack = _world_pack(_COYOTE_CULTURES, world="coyote_star")
-    _install_capture(monkeypatch, pack)
+    captured = _install_capture(monkeypatch, pack)
 
     exporter = _local_span_exporter(monkeypatch)
 
@@ -257,9 +260,13 @@ def test_seed_manual_span_reports_effective_and_seeded_culture_counts(monkeypatc
     # And all 5 were seeded — the post-cap 4 is the bug.
     assert attrs.get("culture_count") == 5
     assert attrs.get("cultures_source") == "world"
+    # Cross-check the span's seeded count against the real seed attempts: 5
+    # cultures × 3 NPCs = 15. Guards the "counted but never seeded" path — the
+    # span could read culture_count=5 while the loop produced no NPCs.
+    assert len(captured) == 5 * pregen.NPCS_PER_CULTURE
 
 
-def test_max_cultures_constant_is_removed(monkeypatch) -> None:
+def test_max_cultures_constant_is_removed() -> None:
     """AC2 (dead-code removal): the MAX_CULTURES cap constant must be DELETED, not
     bumped — its existence is the bug. Reflection tripwire (runtime attribute, not a
     source-text grep, per CLAUDE.md 'No Source-Text Wiring Tests'). RED today: the

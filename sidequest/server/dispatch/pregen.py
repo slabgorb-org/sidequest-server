@@ -190,8 +190,9 @@ def seed_manual(
 ) -> None:
     """Seed a :class:`MonsterManual` with NPCs and encounters from the tool CLIs.
 
-    Examines the genre pack's cultures and generates 3 NPCs per culture
-    (up to 4 cultures, max 12 NPCs). Generates 2 encounter blocks at
+    Examines the genre pack's cultures and generates 3 NPCs per culture for
+    **all** of the world's declared cultures (no cap — story 72-11; a world
+    declaring N cultures seeds N × 3 NPCs). Generates 2 encounter blocks at
     tier 1 and tier 2. When ``world`` is set, encountergen reads
     ``worlds/{world}/creatures.yaml`` for creature definitions; otherwise
     falls back to humanoid NPCs from rules.yaml.

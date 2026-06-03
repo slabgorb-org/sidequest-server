@@ -80,8 +80,16 @@ async def run_worker(
     sd: _SessionData,
     pending_count: int,
     turn_number: int,
+    entity_pending_count: int = 0,
 ) -> None:
-    """Background embed worker — never raises, always emits telemetry."""
+    """Background embed worker — never raises, always emits telemetry.
+
+    ``entity_pending_count`` is the entity-queue depth captured at dispatch
+    time (Story 76-5). Surfacing it on the ``completed`` event lets the GM
+    panel distinguish an entity-only turn (``pending_at_dispatch=0`` but
+    ``entity_pending>0``) from a truly-empty one — without it the panel reads
+    both as ``pending_at_dispatch=0`` with no entity-queue signal.
+    """
     try:
         result = await embed_pending_fragments(sd.lore_store)
     except Exception as exc:  # noqa: BLE001 — worker cannot crash the loop
@@ -105,6 +113,7 @@ async def run_worker(
             "field": "lore_embedding",
             "op": "completed",
             "pending_at_dispatch": pending_count,
+            "entity_pending": entity_pending_count,
             "turn_number": turn_number,
             **result.as_dict(),
         },
@@ -163,6 +172,12 @@ def dispatch_worker(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
     tracer = trace.get_tracer("sidequest.server.session_handler")
     previous = sd.embed_task
     if previous is not None and not previous.done():
+        # Story 76-5: surface the entity-queue depth on the skip so the GM
+        # panel can tell an entity-only turn (entity_pending>0) from a
+        # truly-empty one — the same signal the ``completed`` event now
+        # carries. Sourced from the entity store's pending count (the same
+        # call the dispatch gate below uses).
+        entity_pending_at_skip = len(sd.entity_store.pending_embedding_ids(max_retries=3))
         # Emit a span for the skip so the GM panel's OTEL audit trail
         # shows it alongside the worker's own ``lore_embedding.worker``
         # span. Watcher event stays as well for the live state_transition
@@ -170,6 +185,7 @@ def dispatch_worker(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
         with tracer.start_as_current_span("lore_embedding.dispatch_skipped") as skip_span:
             skip_span.set_attribute("lore.skip_reason", "worker_still_running")
             skip_span.set_attribute("lore.turn_number", sd.snapshot.turn_manager.interaction)
+            skip_span.set_attribute("lore.entity_pending", entity_pending_at_skip)
         _watcher_publish(
             "state_transition",
             {
@@ -177,6 +193,7 @@ def dispatch_worker(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
                 "op": "skipped",
                 "reason": "worker_still_running",
                 "turn_number": sd.snapshot.turn_manager.interaction,
+                "entity_pending": entity_pending_at_skip,
             },
             component="lore",
         )
@@ -189,4 +206,6 @@ def dispatch_worker(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
     if not pending and not entity_pending:
         return
     turn_number = sd.snapshot.turn_manager.interaction
-    sd.embed_task = asyncio.create_task(run_worker(handler, sd, len(pending), turn_number))
+    sd.embed_task = asyncio.create_task(
+        run_worker(handler, sd, len(pending), turn_number, len(entity_pending))
+    )

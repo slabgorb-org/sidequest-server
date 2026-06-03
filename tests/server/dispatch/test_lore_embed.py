@@ -204,3 +204,120 @@ async def test_dispatch_worker_spawns_on_entity_only_turn(session_handler_factor
     sd.embed_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await sd.embed_task
+
+
+@pytest.mark.asyncio
+async def test_run_worker_completed_event_surfaces_entity_pending(
+    monkeypatch, session_handler_factory
+) -> None:
+    """Story 76-5 — the ``completed`` lore_embed event must carry
+    ``entity_pending`` so the GM panel can tell an entity-only turn
+    (``pending_at_dispatch=0`` but ``entity_pending>0``) from a
+    truly-empty one. Without it both read as ``pending_at_dispatch=0``
+    with no entity-queue signal (OTEL Observability Principle — the GM
+    panel is the lie detector)."""
+    from sidequest.server.dispatch import lore_embed
+
+    sd, handler = session_handler_factory()
+
+    async def _no_lore(*args, **kwargs):
+        class _Result:
+            def as_dict(self):
+                return {"embedded": 0}
+
+        return _Result()
+
+    async def _no_entities(*args, **kwargs):
+        class _Result:
+            def as_dict(self):
+                return {"embedded": 0}
+
+        return _Result()
+
+    monkeypatch.setattr(lore_embed, "embed_pending_fragments", _no_lore)
+    monkeypatch.setattr(lore_embed, "embed_pending_entity_cards", _no_entities)
+
+    captured: list[tuple] = []
+
+    def _capture(event_kind, payload, component=None, severity=None):
+        captured.append((event_kind, payload, component, severity))
+
+    monkeypatch.setattr(lore_embed, "_watcher_publish", _capture)
+
+    # Entity-only turn: no lore pending (pending_count=0), 3 entities queued.
+    await lore_embed.run_worker(handler, sd, 0, 17, entity_pending_count=3)
+
+    completed = [
+        payload
+        for (_kind, payload, _component, _sev) in captured
+        if payload.get("field") == "lore_embedding" and payload.get("op") == "completed"
+    ]
+    assert len(completed) == 1, "exactly one lore_embedding.completed event expected"
+    event = completed[0]
+    assert event["pending_at_dispatch"] == 0, "entity-only turn: no lore pending"
+    assert "entity_pending" in event, (
+        "completed event must surface entity_pending so an entity-only turn "
+        "carries a visible entity-queue signal (Story 76-5)"
+    )
+    assert event["entity_pending"] == 3
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skipped_event_surfaces_entity_pending(
+    monkeypatch, session_handler_factory
+) -> None:
+    """Story 76-5 — the ``dispatch_skipped`` event must carry
+    ``entity_pending`` too, so a skip that lands on an entity-only turn
+    still exposes the entity-queue depth to the GM panel."""
+    import asyncio
+    import contextlib
+
+    from sidequest.game.disposition import Disposition
+    from sidequest.game.npc_pool import NpcPoolMember
+    from sidequest.server.dispatch import entity_sync, lore_embed
+
+    sd, handler = session_handler_factory(genre="caverns_and_claudes")
+
+    # Seed an entity-only queue so the skip path has a non-zero entity_pending.
+    sd.snapshot.npc_pool.append(
+        NpcPoolMember(
+            name="Borin",
+            role="smith",
+            pronouns="they/them",
+            drawn_from="world_authored",
+            disposition=Disposition(0),
+        )
+    )
+    entity_sync.sync_for_turn(handler, sd)
+    assert "npc:borin" in sd.entity_store.pending_embedding_ids(max_retries=3)
+
+    # Force the double-dispatch gate: a still-running previous worker.
+    async def _never() -> None:
+        await asyncio.sleep(3600)
+
+    sd.embed_task = asyncio.create_task(_never())
+
+    captured: list[tuple] = []
+
+    def _capture(event_kind, payload, component=None, severity=None):
+        captured.append((event_kind, payload, component, severity))
+
+    monkeypatch.setattr(lore_embed, "_watcher_publish", _capture)
+
+    lore_embed.dispatch_worker(handler, sd)
+
+    skipped = [
+        payload
+        for (_kind, payload, _component, _sev) in captured
+        if payload.get("field") == "lore_embedding" and payload.get("op") == "skipped"
+    ]
+    assert len(skipped) == 1, "exactly one lore_embedding.skipped event expected"
+    event = skipped[0]
+    assert "entity_pending" in event, (
+        "dispatch_skipped event must surface entity_pending (Story 76-5)"
+    )
+    assert event["entity_pending"] == 1, "the one seeded Borin card is pending at skip"
+
+    sd.embed_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await sd.embed_task

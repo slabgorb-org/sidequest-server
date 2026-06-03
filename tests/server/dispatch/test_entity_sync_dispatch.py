@@ -127,6 +127,7 @@ def test_resync_unchanged_roster_reports_skipped(session_handler_factory, monkey
 
     events = [c for c in captured if c[1].get("field") == "entity_sync"]
     assert len(events) == 1
+    assert events[0][1]["op"] == "synced"
     assert events[0][1]["outcome"] == "skipped"
     assert events[0][1]["reprojected"] == 0
     assert sd.entity_store.cards["npc:borin"].embedding_pending is False

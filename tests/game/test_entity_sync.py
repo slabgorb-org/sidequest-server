@@ -230,7 +230,7 @@ class TestSyncEntityCards:
 
         assert result.reprojected == 1
         assert result.failed == 1
-        assert any("   " == ref or ref.strip() == "" for ref in result.failed_refs)
+        assert result.failed_refs == ["   "]
         assert result.outcome == "partial"
         # The good card landed; no stub card was minted for the bad one.
         assert [c.id for c in store.query_by_type(EntityType.NPC)] == ["npc:borin"]
@@ -294,7 +294,7 @@ async def test_synced_card_is_embeddable_and_then_retrievable() -> None:
 
     result = await embed_pending_entity_cards(store, client=_FakeClient([1.0, 0.0]))
 
-    assert result.embedded >= 1
+    assert result.embedded == 1
     assert store.cards["npc:borin"].embedding_pending is False
     hits = store.query_by_similarity([1.0, 0.0], top_k=5)
     assert "npc:borin" in [card.id for _score, card in hits]

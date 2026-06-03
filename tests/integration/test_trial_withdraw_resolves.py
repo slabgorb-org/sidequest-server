@@ -59,7 +59,16 @@ pytestmark = pytest.mark.skipif(
     reason="tea_and_murder content pack not available",
 )
 
-_ALL_TIERS = [RollOutcome.Fail, RollOutcome.CritFail, RollOutcome.Tie, RollOutcome.Success]
+# Every outcome tier a d20 can land — INCLUDING CritSuccess, the one tier with
+# distinct push semantics (DEFAULT_DELTAS grants a "Clean Exit" fleeting tag on
+# a CritSuccess push). A voluntary withdraw must resolve on ALL of them.
+_ALL_TIERS = [
+    RollOutcome.Fail,
+    RollOutcome.CritFail,
+    RollOutcome.Tie,
+    RollOutcome.Success,
+    RollOutcome.CritSuccess,
+]
 # The four social confrontations that must each offer a voluntary exit (AC-3).
 _SOCIAL_CONFRONTATIONS = ["trial", "social_duel", "negotiation", "scandal"]
 
@@ -91,12 +100,15 @@ def _resolution_beat(ctype: str):
 
 def _trial_encounter() -> StructuredEncounter:
     """A deadlocked trial — both conviction dials at 0, both sides seated. The
-    voluntary withdraw must break this deadlock the way the playtest never could."""
+    voluntary withdraw must break this deadlock the way the playtest never could.
+
+    Thresholds are 7 to match the shipped opposed_check calibration (ADR-093,
+    enforced by tests/genre/test_confrontation_calibration.py)."""
     return StructuredEncounter(
         encounter_type="trial",
         win_condition="dial_threshold",
-        player_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=8),
-        opponent_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=8),
+        player_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
+        opponent_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
         actors=[
             EncounterActor(name="Inspector Pryce", role="participant", side="player"),
             EncounterActor(name="Crown Prosecutor", role="participant", side="opponent"),
@@ -149,9 +161,18 @@ def test_every_social_confrontation_offers_a_voluntary_exit(ctype: str):
     """AC-3 (cross-confrontation invariant): trial, social_duel, negotiation, and
     scandal must each expose a ``resolution: true`` beat so no player is ever
     soft-locked. RED: only ``trial`` is missing one — the other three were fixed
-    by 73-1 / 59-8 and this guards against regressing them."""
+    by 73-1 / 59-8 and this guards against regressing them.
+
+    `_resolution_beat` raises if no `resolution: true` beat exists (the soft-lock
+    condition). The assertion below is NOT a re-check of that flag — it pins the
+    *shape* of the resolver: a voluntary exit is a ``push`` beat (the declarative
+    forfeit pattern shared by withdraw_case/concede/walk_away/weather_it), not an
+    incidental angle/strike beat that happened to carry the flag."""
     beat = _resolution_beat(ctype)
-    assert beat.resolution is True
+    assert beat.kind == "push", (
+        f"{ctype}'s voluntary-exit beat {beat.id!r} should be a push-kind forfeit, "
+        f"got kind={beat.kind!r}"
+    )
 
 
 # ── AC-4: a voluntary withdraw is neutral, not a punitive defeat ──────────────
@@ -168,10 +189,10 @@ def test_trial_withdraw_outcome_is_neutral_resolution_not_a_victory():
     beat = _resolution_beat("trial")
     result = apply_beat(enc, enc.actors[0], beat, RollOutcome.Fail, turn=3)
     assert result.resolved is True
+    # The exact-string pin IS the not-a-victory guarantee: an outcome of
+    # opponent_victory/player_victory would fail this equality. (No separate
+    # `not in (victory tuple)` check — it would be vacuous once this passes.)
     assert enc.outcome == f"resolution_beat:{beat.id}"
-    assert enc.outcome not in ("opponent_victory", "player_victory"), (
-        "a voluntary withdraw must not be scored as a combat victory/defeat"
-    )
     assert enc.structured_phase == EncounterPhase.Resolution
 
 
@@ -193,21 +214,24 @@ def test_trial_concede_emits_encounter_resolved_span(monkeypatch, otel_capture):
     snap.encounter = StructuredEncounter(
         encounter_type="trial",
         win_condition="dial_threshold",
-        player_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=8),
-        opponent_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=8),
+        player_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
+        opponent_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
         structured_phase=EncounterPhase.Setup,
+        # Both actors carry Nerve (the withdraw_case stat_check) so the opposed
+        # modifier resolves from each character's own sheet, not a fallthrough to
+        # the cdef default — the test stays self-contained.
         actors=[
             EncounterActor(
                 name="Inspector Pryce",
                 role="participant",
                 side="player",
-                per_actor_state={"stats": {"Cunning": 12, "Passion": 12}},
+                per_actor_state={"stats": {"Cunning": 12, "Passion": 12, "Nerve": 12}},
             ),
             EncounterActor(
                 name="Crown Prosecutor",
                 role="participant",
                 side="opponent",
-                per_actor_state={"stats": {"Cunning": 12, "Passion": 12}},
+                per_actor_state={"stats": {"Cunning": 12, "Passion": 12, "Nerve": 12}},
             ),
         ],
     )
@@ -237,15 +261,32 @@ def test_trial_concede_emits_encounter_resolved_span(monkeypatch, otel_capture):
         room=room_for(snap),
     )
 
-    resolved_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == SPAN_ENCOUNTER_RESOLVED
+    # Pin the span to THIS trial concede — a bare "some encounter.resolved span
+    # fired" assertion could green on a span leaked from a fixture teardown or a
+    # different encounter. Require encounter_type == "trial".
+    trial_resolved_spans = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == SPAN_ENCOUNTER_RESOLVED
+        and (s.attributes or {}).get("encounter_type") == "trial"
     ]
-    assert resolved_spans, (
-        "conceding the trial must fire the encounter.resolved lie-detector span — "
-        "its absence is the soft-lock signature from the 67-10 playtest"
+    assert trial_resolved_spans, (
+        "conceding the trial must fire the encounter.resolved lie-detector span FOR "
+        "the trial encounter — its absence is the soft-lock signature from the "
+        "67-10 playtest"
     )
-    # Panel teardown proxy: the encounter is resolved (or cleared) in state.
-    assert snap.encounter is None or snap.encounter.resolved is True, (
+
+    # Panel-teardown proxy: the encounter must be RESOLVED in state (not merely
+    # present-and-unresolved, and not silently dropped). No `is None` escape arm —
+    # narration-apply mutates the encounter in place, so `is None` would only mask
+    # a future regression that clears the encounter without resolving it (exactly
+    # the soft-lock this story closes).
+    assert snap.encounter is not None, "the trial encounter must not be dropped from state"
+    assert snap.encounter.resolved is True, (
         "after a committed concede the confrontation must be resolved so the panel "
         "tears down and the input unlocks"
+    )
+    assert snap.encounter.outcome == f"resolution_beat:{beat.id}", (
+        "the concede must record a voluntary resolution_beat outcome, not a "
+        f"victory/defeat; got {snap.encounter.outcome!r}"
     )

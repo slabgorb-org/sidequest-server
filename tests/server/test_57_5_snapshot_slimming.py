@@ -419,7 +419,9 @@ def test_anchor_preserved_quest_log_when_populated() -> None:
         "Mission anchor stripped: ``quest_log`` is absent from "
         "state_summary despite the fixture seeding two quests."
     )
-    assert payload["quest_log"].get("main") == "Find the lost vault.", (
+    # Story 77-2: quest_log values are structured QuestEntry now; the legacy
+    # string seed coerces into the status field.
+    assert payload["quest_log"].get("main", {}).get("status") == "Find the lost vault.", (
         "Mission anchor corrupted: ``quest_log['main']`` does not match "
         "the seeded value — the field is present but the content is "
         "wrong."

@@ -34,6 +34,7 @@ from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.history_chapter import HistoryChapter
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.game.political_state import PoliticalState
 from sidequest.game.resolution_signal import ResolutionSignal
 from sidequest.game.resource_pool import (
     NotVoluntary,
@@ -45,7 +46,6 @@ from sidequest.game.resource_pool import (
     UnknownResource,
     mint_threshold_lore,
 )
-from sidequest.game.political_state import PoliticalState
 from sidequest.game.scenario_state import ScenarioState
 from sidequest.game.trope_time_skip import TimeSkipBeatEvent
 from sidequest.game.turn import TurnManager
@@ -418,6 +418,52 @@ class DiscoveredFact(BaseModel):
     fact: dict  # KnownFact as dict — avoid circular import
 
 
+# Guardrail length for ``active_stakes`` so runaway growth does not pollute the
+# next narrator's state_summary prompt (~1024 chars soft cap). Canonical home is
+# this pure-data module (Story 77-2): the set_stakes tool reuses it without
+# importing the heavy narration_apply module, which would form an import cycle
+# (tools -> narration_apply -> session_helpers -> orchestrator -> tools).
+# narration_apply re-exports it for backward compatibility.
+_ACTIVE_STAKES_GUARDRAIL = 1024
+
+
+class QuestEntry(BaseModel):
+    """A structured campaign-spine quest (ADR-137 / Story 77-2).
+
+    Replaces the pre-77-2 ``quest_log: dict[str, str]`` (id -> status-string)
+    with id -> structured entry: title + objective + status + optional anchor.
+    Legacy string values (from pre-77-2 saves, the 77-1 seed, the trope
+    handshake, and the legacy ``quest_updates`` lane) are coerced into a
+    QuestEntry carrying that string as its ``status`` by ``_coerce_quest_log``,
+    wired as a ``mode="before"`` validator on every field typed
+    ``dict[str, QuestEntry]`` — so old saves load instead of failing loud.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    title: str = ""
+    objective: str = ""
+    status: str = "active"
+    anchor_id: str | None = None
+
+
+def _coerce_quest_log(value: object) -> object:
+    """Coerce a quest_log mapping's values to QuestEntry-validatable shapes.
+
+    Backward-compat for the type widening (Story 77-2): a legacy ``str`` value
+    becomes ``QuestEntry(status=<str>)`` (preserving the only datum the old
+    shape carried); QuestEntry instances and plain dicts pass through for
+    pydantic to validate. Non-dict input passes through untouched so pydantic
+    raises its normal error.
+    """
+    if not isinstance(value, dict):
+        return value
+    out: dict[object, object] = {}
+    for key, val in value.items():
+        out[key] = QuestEntry(status=val) if isinstance(val, str) else val
+    return out
+
+
 class WorldStatePatch(BaseModel):
     """Patch for world-level state (location, atmosphere, quests, regions).
 
@@ -430,8 +476,17 @@ class WorldStatePatch(BaseModel):
     location: str | None = None
     time_of_day: str | None = None
     atmosphere: str | None = None
-    quest_log: dict[str, str] | None = None
+    # Story 77-2: widened from dict[str, str] to structured QuestEntry. The
+    # legacy ``quest_updates`` lane (still dict[str, str], retired in 77-4)
+    # is coerced in the apply path, not here.
+    quest_log: dict[str, QuestEntry] | None = None
     quest_updates: dict[str, str] | None = None
+
+    @field_validator("quest_log", mode="before")
+    @classmethod
+    def _migrate_quest_log(cls, v: object) -> object:
+        return _coerce_quest_log(v)
+
     notes: list[str] | None = None
     current_region: str | None = None
     # Movement subsystem §Q2 — per-PC region delta {player_name: region_id}.
@@ -668,7 +723,17 @@ class GameSnapshot(BaseModel):
     # ``location`` field removed; use ``party_location(...)`` accessor
     # or ``character_locations[name]`` for the per-PC source of truth.
     time_of_day: str = ""
-    quest_log: dict[str, str] = Field(default_factory=dict)
+    # Story 77-2 (ADR-137): widened from dict[str, str] to structured
+    # QuestEntry. Legacy string values from pre-77-2 saves are coerced on load
+    # by ``_migrate_quest_log`` (No Silent Fallbacks: old saves migrate, never
+    # fail loud).
+    quest_log: dict[str, QuestEntry] = Field(default_factory=dict)
+
+    @field_validator("quest_log", mode="before")
+    @classmethod
+    def _migrate_quest_log(cls, v: object) -> object:
+        return _coerce_quest_log(v)
+
     notes: list[str] = Field(default_factory=list)
     narrative_log: list[NarrativeEntry] = Field(default_factory=list)
 
@@ -1283,7 +1348,15 @@ class GameSnapshot(BaseModel):
         if patch.quest_log is not None:
             self.quest_log = patch.quest_log
         if patch.quest_updates is not None:
-            self.quest_log.update(patch.quest_updates)
+            # Legacy status-only lane (dict[str, str], retired in 77-4). Coerce
+            # into the widened QuestEntry type: update an existing quest's
+            # status in place, or mint a status-only entry. Story 77-2.
+            for quest_id, status in patch.quest_updates.items():
+                existing = self.quest_log.get(quest_id)
+                if existing is not None:
+                    existing.status = status
+                else:
+                    self.quest_log[quest_id] = QuestEntry(status=status)
         if patch.notes is not None:
             self.notes = patch.notes
         if patch.pc_region is not None:

@@ -115,7 +115,11 @@ def test_populated_drive_stakes_are_derived_from_the_drive() -> None:
 
     seed_quest_spine(snap, char)
 
-    seeded_text = " ".join([snap.active_stakes, *snap.quest_log.values()]).lower()
+    # Story 77-2: quest_log values are QuestEntry now — pull their text fields.
+    quest_text = [
+        f"{e.title} {e.objective} {e.status}" for e in snap.quest_log.values()
+    ]
+    seeded_text = " ".join([snap.active_stakes, *quest_text]).lower()
     assert "kansas" in seeded_text, (
         "seeded spine must reference the PC's drive, not a generic placeholder"
     )

@@ -127,12 +127,20 @@ class StateSnapshot:
         )
 
 
+def _json_default(o: object) -> object:
+    """Encode nested pydantic models (e.g. QuestEntry values in quest_log,
+    Story 77-2) so json.dumps doesn't raise and silently blank the field."""
+    if hasattr(o, "model_dump"):
+        return o.model_dump()  # type: ignore[attr-defined]
+    raise TypeError(f"not JSON-serializable: {type(o).__name__}")
+
+
 def _to_json(value: object) -> str:
     """Serialize to JSON for snapshot comparison. Returns "" on error."""
     try:
         if hasattr(value, "model_dump"):
             return json.dumps(value.model_dump())  # type: ignore[attr-defined]
-        return json.dumps(value)
+        return json.dumps(value, default=_json_default)
     except Exception:
         return ""
 

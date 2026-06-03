@@ -203,7 +203,9 @@ async def test_orchestrator_routes_narration_through_sdk(
     # WWN content wiring (Plan 3) added the narrator-triggered WWN mechanics as
     # WRITE tools mirroring adjust_system_strain: commit_effort (31st),
     # veterans_luck (32nd), long_rest (33rd). 33.
-    assert len(sent_tools) == len(default_registry.list_names()) == 33
+    # Story 77-2 (ADR-137) added typed quest/stakes tools: record_quest (34th),
+    # set_stakes (35th). 35.
+    assert len(sent_tools) == len(default_registry.list_names()) == 35
 
     # 3. The result carries the SDK's text.
     assert result.narration == fake_response_text

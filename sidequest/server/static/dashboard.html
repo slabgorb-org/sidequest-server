@@ -662,7 +662,12 @@ function renderState() {
   if (quests.length) {
     html += '<div class="card"><div class="card-title">Quest Log</div>';
     quests.forEach(([name, desc]) => {
-      html += `<div style="font-size:11px;margin-bottom:4px"><span style="color:var(--green);font-weight:bold">${esc(name)}</span> — ${esc(desc)}</div>`;
+      // Story 77-2: quest_log values are structured QuestEntry now
+      // ({title,objective,status,anchor_id}); tolerate the legacy string too.
+      const label = (desc && typeof desc === 'object')
+        ? [desc.title, desc.objective, desc.status].filter(Boolean).join(' — ')
+        : desc;
+      html += `<div style="font-size:11px;margin-bottom:4px"><span style="color:var(--green);font-weight:bold">${esc(name)}</span> — ${esc(label)}</div>`;
     });
     html += '</div>';
   }

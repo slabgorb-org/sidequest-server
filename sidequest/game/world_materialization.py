@@ -43,7 +43,7 @@ from sidequest.game.history_chapter import (
     HistoryChapter,
 )
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.session import NarrativeEntry, Npc, TropeState
+from sidequest.game.session import NarrativeEntry, Npc, QuestEntry, TropeState
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.ocean import OceanProfile
 
@@ -278,7 +278,12 @@ class WorldBuilder:
             self._apply_npc(snap, npc_data)
 
         for quest_name, status in chapter.quests.items():
-            snap.quest_log[quest_name] = status
+            # Story 77-2: quest_log values are QuestEntry now.
+            existing = snap.quest_log.get(quest_name)
+            if existing is not None:
+                existing.status = status
+            else:
+                snap.quest_log[quest_name] = QuestEntry(status=status)
 
         for entry in chapter.lore:
             if entry not in snap.lore_established:

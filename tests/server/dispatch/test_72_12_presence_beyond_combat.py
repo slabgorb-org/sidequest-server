@@ -237,9 +237,18 @@ def test_opposed_check_presence_stamp_rides_npc_edge_published_span(
         "opposed_check presence stamp never emitted a npc.edge_published span; "
         f"finished spans={[s.name for s in otel_capture.get_finished_spans()]!r}"
     )
+    # ``npc_edge_published_span`` stores the NPC name under ``npc_name`` (not
+    # ``name``) — filter on the real key and fail loud if no span matches the
+    # opponent, rather than silently falling back to "any edge span".
     stamped = [
-        s for s in edge_spans if (dict(s.attributes or {})).get("name") == _OPPONENT
-    ] or edge_spans
+        s for s in edge_spans if (dict(s.attributes or {})).get("npc_name") == _OPPONENT
+    ]
+    assert stamped, (
+        "no npc.edge_published span carried npc_name=={!r}; emitted npc_names={!r}".format(
+            _OPPONENT,
+            [dict(s.attributes or {}).get("npc_name") for s in edge_spans],
+        )
+    )
     attrs = dict(stamped[0].attributes or {})
     assert attrs.get("last_seen_turn") == 5, (
         f"span missing/incorrect last_seen_turn presence stamp; attrs={sorted(attrs)!r}"
@@ -285,13 +294,25 @@ def test_participant_joined_stamps_presence_on_seating() -> None:
     Driven through ``instantiate_encounter_from_trigger`` for the NON-combat
     ``social_duel`` (``cdef.category != "combat"``), so the 72-8 combat-edge
     seams are gated OFF — the only possible stamp source is the new
-    participant_joined seam. This is the wiring guard for seam 2."""
+    participant_joined seam. This is the wiring guard for seam 2.
+
+    NB on the location fixture: the location-FALLBACK seating path
+    (``_npc_fallback_at_location``) can only seat an NPC whose
+    ``last_seen_location`` ALREADY equals the player's location — that is how the
+    fallback finds it. So an NPC seated this way is co-located BY CONSTRUCTION
+    and its ``last_seen_location`` cannot differ before/after; the discriminating
+    proof for THIS path is the TURN advance (``_STALE_TURN`` → 6). The
+    location-WRITE proof (prior location ≠ player location) lives in
+    ``test_participant_joined_router_named_stamps_location`` (router-named path,
+    where co-location is not required) and in the opposed_check AC1 test."""
     snap = GameSnapshot(
         genre_slug="tea_and_murder",
         world_slug="glenross",
         turn_manager=TurnManager(interaction=6),
     )
     snap.character_locations[_PLAYER] = _HALL
+    # Co-located at _HALL: required for the location-fallback to seat this NPC
+    # (see docstring). The turn is stale (2) so the turn advance is the real proof.
     npc = _make_opponent_npc(location=_HALL, turn=_STALE_TURN)
     snap.npcs.append(npc)
 
@@ -308,6 +329,8 @@ def test_participant_joined_stamps_presence_on_seating() -> None:
         "an NPC seated as a participant is PRESENT; its last_seen_turn must advance "
         f"to the seating turn (6), got {npc.last_seen_turn}"
     )
+    # Co-location invariant (not the write-proof — see docstring + router-named test):
+    # a location-fallback-seated NPC is necessarily already at the player's location.
     assert npc.last_seen_location == _HALL
 
 
@@ -315,7 +338,12 @@ def test_participant_joined_stamp_rides_participant_joined_span(otel_capture) ->
     """AC4 — the participant_joined presence stamp is surfaced as
     ``last_seen_turn`` / ``last_seen_location`` attributes on the
     ``participant.joined`` span itself, distinct from the side/source attributes
-    already present (GM-panel lie-detector)."""
+    already present (GM-panel lie-detector).
+
+    Location fixture co-located at _HALL (same fallback-seating constraint as AC3:
+    a location-fallback NPC is already at the player's location). The TURN
+    (``_STALE_TURN`` → 6) is the discriminating span proof here; the
+    location-write proof lives in the router-named test."""
     snap = GameSnapshot(
         genre_slug="tea_and_murder",
         world_slug="glenross",
@@ -381,4 +409,39 @@ def test_participant_joined_no_resolved_location_stamps_turn_not_location() -> N
     assert npc.last_seen_location == _STALE_LOC, (
         "an unresolved location must NOT clobber the prior last_seen_location; "
         f"got {npc.last_seen_location!r}"
+    )
+
+
+def test_participant_joined_router_named_stamps_location() -> None:
+    """AC3 variant — closes the 2×2 (seating-source × location-resolved) matrix:
+    a ROUTER-NAMED opponent (``npcs_present=[NpcMention(...)]``, not location
+    fallback) WITH a resolved player location must stamp BOTH last_seen_turn and
+    last_seen_location. Guards against a bug where the router-named seating path
+    resolves party_location before the NPC roster is consulted, or skips the
+    location write that the location-fallback path performs."""
+    snap = GameSnapshot(
+        genre_slug="tea_and_murder",
+        world_slug="glenross",
+        turn_manager=TurnManager(interaction=7),
+    )
+    snap.character_locations[_PLAYER] = _HALL
+    # Prior location differs from the player's hall so the assertion proves the write.
+    npc = _make_opponent_npc(location=_STALE_LOC, turn=_STALE_TURN)
+    snap.npcs.append(npc)
+
+    instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=_pack(),
+        encounter_type="social_duel",
+        player_name=_PLAYER,
+        npcs_present=[NpcMention(name=_OPPONENT, side="opponent")],  # router-named Other.
+        genre_slug="tea_and_murder",
+    )
+
+    assert npc.last_seen_turn == 7, (
+        f"router-named seated NPC must advance last_seen_turn to 7; got {npc.last_seen_turn}"
+    )
+    assert npc.last_seen_location == _HALL, (
+        "router-named seating with a resolved player location must stamp "
+        f"last_seen_location=_HALL; got {npc.last_seen_location!r}"
     )

@@ -17,9 +17,9 @@ arithmetic the engine needs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from sidequest.protocol.dice import RollOutcome
 
@@ -54,6 +54,121 @@ class ResolvedDeltas:
     grants_fleeting_tag: str | None = None
     tag_backfire: bool = False
     resolution: bool = False
+
+
+# Closed set of beat-impact categories (Story 73-4). The UI mirrors this as a
+# TypeScript union (ConfrontationOverlay.tsx ``BeatEffect``); keeping both as a
+# fixed enumeration means a renamed/typo'd category fails type-check on both
+# sides instead of silently producing a dead ``beat-impact-${effect}`` class.
+BeatEffect = Literal["advance", "setback", "resolution", "tag", "backfire", "inert"]
+
+
+@dataclass(frozen=True)
+class BeatImpact:
+    """Player-facing semantic readout of one resolved beat (Story 73-4).
+
+    The dial math is correct but illegible: a ``push`` CritSuccess intentionally
+    moves no dial (``own=0``/``opponent=0``, ``resolution=True``, fleeting
+    "Clean Exit"), and a mechanics-first player (Sebastien / Jade) reads the 0 as
+    a broken roll. This descriptor classifies the *resolved* deltas into a single
+    ``effect`` category plus a human-legible ``summary`` so the UI can render
+    "clean exit, by design" instead of a bare 0.
+
+    Single source of truth for kind+tier semantics (SOUL: "legible in
+    player-facing surfaces"). NOT a dev/OTEL artifact — the existing
+    ``beat_no_op`` / ``beat_applied`` watcher emits cover the dev side.
+
+    ``effect`` is one of: ``advance`` (a dial moved in the actor's favor),
+    ``setback`` (a dial moved against the actor), ``resolution`` (the beat ends
+    the confrontation, no dial change by design), ``tag`` (a scene tag was
+    granted, no dial change by design), ``backfire`` (an angle rebounded), or
+    ``inert`` (the beat landed but nothing happened — a genuine Fail).
+    """
+
+    effect: BeatEffect
+    dial_moved: bool
+    summary: str
+    own: int = 0
+    opponent: int = 0
+    resolution: bool = False
+    tag: str | None = None
+
+
+def describe_beat_impact(
+    deltas: ResolvedDeltas,
+    *,
+    kind: BeatKind,
+    outcome: RollOutcome,
+) -> BeatImpact:
+    """Classify *resolved* deltas into a legible :class:`BeatImpact` (Story 73-4).
+
+    Reads the resolved deltas (so per-tier overrides are honored — an override
+    that adds a dial move to a normally-no-move tier reads as a move, not "no
+    dial by design"). ``kind``/``outcome`` enrich the summary text only.
+
+    Effect precedence — a fixed order, because the DEFAULT_DELTAS tiers never
+    carry two effects but a per-tier ``override`` CAN (e.g. a backfire plus a
+    dial penalty). When two are present the dial move wins, deterministically:
+    favorable dial move → ``advance``; unfavorable dial move → ``setback``;
+    backfire → ``backfire``; resolution → ``resolution``; tag granted → ``tag``;
+    else → ``inert``.
+    """
+    own = deltas.own
+    opponent = deltas.opponent
+    dial_moved = own != 0 or opponent != 0
+    tag = deltas.grants_tag or deltas.grants_fleeting_tag
+
+    # Favorable: you advanced your own dial OR drained the opponent's (negative
+    # opponent delta). Unfavorable: your dial slipped OR theirs rose against you.
+    favorable = own > 0 or opponent < 0
+    unfavorable = own < 0 or opponent > 0
+
+    effect: BeatEffect
+    if favorable:
+        effect = "advance"
+        detail = []
+        if own > 0:
+            detail.append(f"+{own} to your edge")
+        if opponent < 0:
+            detail.append(f"{opponent} to their edge")
+        summary = "; ".join(detail) or "Your edge advances"
+        if tag:
+            summary = f"{summary} ({tag})"
+    elif unfavorable:
+        effect = "setback"
+        if own < 0:
+            summary = f"Setback — your edge slips ({own})"
+        else:
+            summary = f"Setback — their edge rises (+{opponent})"
+    elif deltas.tag_backfire:
+        effect = "backfire"
+        summary = (
+            f"Backfire — your angle rebounds ({tag})"
+            if tag
+            else "Backfire — your angle rebounds onto you"
+        )
+    elif deltas.resolution:
+        effect = "resolution"
+        if tag:
+            summary = f"{tag} — resolves the confrontation (no dial change by design)"
+        else:
+            summary = "Resolves the confrontation (no dial change by design)"
+    elif tag:
+        effect = "tag"
+        summary = f"Sets up a scene tag: {tag} (no dial change by design)"
+    else:
+        effect = "inert"
+        summary = "No change — the beat landed but moved nothing"
+
+    return BeatImpact(
+        effect=effect,
+        dial_moved=dial_moved,
+        summary=summary,
+        own=own,
+        opponent=opponent,
+        resolution=deltas.resolution,
+        tag=tag,
+    )
 
 
 # Per-kind default delta tables. ``b`` is the beat's ``base``; the lambdas
@@ -239,6 +354,9 @@ class ApplyResult:
     deltas: ResolvedDeltas | None
     resolved: bool
     skipped_reason: str | None = None
+    # Player-facing legibility descriptor (Story 73-4). None only when the beat
+    # was skipped (no deltas resolved).
+    impact: BeatImpact | None = None
 
 
 def _phase_for_beat(beat: int) -> EncounterPhase:
@@ -417,6 +535,19 @@ def apply_beat(
         overrides=overrides,
         target_tag=getattr(beat, "target_tag", None),
     )
+
+    # Story 73-4 — derive + stamp the player-facing legibility descriptor. Stored
+    # per-side so an opposed_check opponent beat (applied later this turn) can't
+    # clobber the player's readout. Derived from the *nominal* resolved deltas.
+    # CAVEAT (hp_depletion): for win_condition="hp_depletion" the dial application
+    # below is suppressed (the dials are inert HP placeholders), so the descriptor
+    # can report effect="advance"/dial_moved=True for a beat whose dial never
+    # actually moved on-screen. That mode renders HP bars, not this dial-impact
+    # panel (out of scope for 73-4 / dial confrontations) — but a future story
+    # surfacing last_beat_impact under hp_depletion must read the HP channel, not
+    # these nominal dial deltas. See Delivery Findings (Dev) for the follow-up.
+    impact = describe_beat_impact(deltas, kind=beat.kind, outcome=outcome)
+    enc.last_beat_impacts[actor.side] = asdict(impact)
 
     own_metric = enc.player_metric if actor.side == "player" else enc.opponent_metric
     other_metric = enc.opponent_metric if actor.side == "player" else enc.player_metric
@@ -892,4 +1023,4 @@ def apply_beat(
         enc.structured_phase = EncounterPhase.Resolution
         resolved = True
 
-    return ApplyResult(deltas=deltas, resolved=resolved, skipped_reason=None)
+    return ApplyResult(deltas=deltas, resolved=resolved, skipped_reason=None, impact=impact)

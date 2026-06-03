@@ -196,6 +196,14 @@ class StructuredEncounter(BaseModel):
     # without a None guard. See sidequest/game/taunt.py and spec §8.
     taunt: TauntState = Field(default_factory=TauntState)
 
+    # Story 73-4 — player-facing beat-kind impact descriptor, keyed by actor
+    # side ("player"/"opponent"). apply_beat stamps the serialized BeatImpact for
+    # the acting side each beat; per-side so an opposed_check opponent beat can't
+    # clobber the player's readout. build_confrontation_payload surfaces the
+    # player-side entry so a no-dial-move CritSuccess reads as intended (clean
+    # exit, by design) instead of a bare 0. Ephemeral (rebuilt each beat).
+    last_beat_impacts: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
     # Story 54-7 / ADR-109: per-encounter location overlay. When set,
     # bound_room_id names the region/room whose manifest and prose the
     # overlay contributes to. Read-time merge in

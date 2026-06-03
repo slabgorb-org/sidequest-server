@@ -803,6 +803,15 @@ class ConfrontationPayload(ProtocolBase):
     win_condition: str | None = None
     player_hp: dict[str, int] | None = None
     opponent_hp: dict[str, int] | None = None
+    # Story 73-4: player-facing beat-kind impact descriptor for the last beat the
+    # PLAYER resolved — server-derived in beat_kinds.describe_beat_impact and
+    # surfaced by build_confrontation_payload. MUST be a declared field: this
+    # model is extra="forbid", so an undeclared key raises at
+    # ConfrontationPayload(**payload_dict) and crashes the broadcast. Shape:
+    # {"effect": str, "dial_moved": bool, "summary": str, "own": int,
+    #  "opponent": int, "resolution": bool, "tag": str|None}. Absent (None) on
+    # legacy payloads / before any beat — keeps the payload shape additive.
+    last_beat_impact: dict[str, Any] | None = None
     # Pingpong 2026-04-26 S2-BUG: required so ``_emit_event`` can fan out
     # CONFRONTATION frames to peer sockets (its recipient-rebuild path
     # injects the EventLog seq alongside the filtered payload). Mirrors

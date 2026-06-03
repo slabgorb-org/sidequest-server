@@ -266,6 +266,16 @@ def build_confrontation_payload(
             {"name": e.token_id, "roll": e.value} for e in encounter.initiative
         ]
 
+    # Story 73-4 — surface the PLAYER-side beat-kind impact descriptor so the
+    # overlay can explain a no-dial-move CritSuccess (clean exit / tag grant, by
+    # design) instead of rendering a bare 0 that reads as a broken roll
+    # (Sebastien/Jade legibility). Additive + player-focused, mirroring the
+    # win_condition/player_hp legibility keys above; absent when no beat has been
+    # applied yet (fresh encounter / table types).
+    player_impact = encounter.last_beat_impacts.get("player")
+    if player_impact is not None:
+        payload["last_beat_impact"] = player_impact
+
     return payload
 
 

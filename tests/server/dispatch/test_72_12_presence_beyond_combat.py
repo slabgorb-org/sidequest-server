@@ -249,6 +249,11 @@ def test_opposed_check_presence_stamp_rides_npc_edge_published_span(
             [dict(s.attributes or {}).get("npc_name") for s in edge_spans],
         )
     )
+    # Exactly one stamp per turn — a double-emit would let a stale second span
+    # hide behind stamped[0].
+    assert len(stamped) == 1, (
+        f"expected exactly 1 npc.edge_published for {_OPPONENT!r}, got {len(stamped)}"
+    )
     attrs = dict(stamped[0].attributes or {})
     assert attrs.get("last_seen_turn") == 5, (
         f"span missing/incorrect last_seen_turn presence stamp; attrs={sorted(attrs)!r}"
@@ -329,9 +334,14 @@ def test_participant_joined_stamps_presence_on_seating() -> None:
         "an NPC seated as a participant is PRESENT; its last_seen_turn must advance "
         f"to the seating turn (6), got {npc.last_seen_turn}"
     )
-    # Co-location invariant (not the write-proof — see docstring + router-named test):
-    # a location-fallback-seated NPC is necessarily already at the player's location.
-    assert npc.last_seen_location == _HALL
+    # Co-location INVARIANT (not the write-proof — the location-write proof lives in
+    # test_participant_joined_router_named_stamps_location): a location-fallback-seated
+    # NPC is necessarily already at the player's location, so this guards only that the
+    # stamp does not CLOBBER an already-correct value.
+    assert npc.last_seen_location == _HALL, (
+        "co-location invariant: location-fallback seating must not clobber the "
+        f"already-correct last_seen_location; got {npc.last_seen_location!r}"
+    )
 
 
 def test_participant_joined_stamp_rides_participant_joined_span(otel_capture) -> None:
@@ -412,20 +422,25 @@ def test_participant_joined_no_resolved_location_stamps_turn_not_location() -> N
     )
 
 
-def test_participant_joined_router_named_stamps_location() -> None:
-    """AC3 variant — closes the 2×2 (seating-source × location-resolved) matrix:
+def test_participant_joined_router_named_stamps_location(otel_capture) -> None:
+    """AC3/AC4 variant — closes the 2×2 (seating-source × location-resolved) matrix
+    on BOTH the object AND the span layer:
     a ROUTER-NAMED opponent (``npcs_present=[NpcMention(...)]``, not location
     fallback) WITH a resolved player location must stamp BOTH last_seen_turn and
-    last_seen_location. Guards against a bug where the router-named seating path
-    resolves party_location before the NPC roster is consulted, or skips the
-    location write that the location-fallback path performs."""
+    last_seen_location — and surface the WRITTEN location on the
+    ``participant.joined`` span. Because the NPC starts at ``_STALE_LOC`` (≠ the
+    player's hall), both the object assertion AND the span assertion are
+    discriminating: a missing/stale location write fails. This is the span-layer
+    location proof the co-located AC4 fixture cannot give (AC4 proves the span
+    carries the discriminating TURN; this test proves it carries the
+    discriminating LOCATION)."""
     snap = GameSnapshot(
         genre_slug="tea_and_murder",
         world_slug="glenross",
         turn_manager=TurnManager(interaction=7),
     )
     snap.character_locations[_PLAYER] = _HALL
-    # Prior location differs from the player's hall so the assertion proves the write.
+    # Prior location differs from the player's hall so the assertions prove the write.
     npc = _make_opponent_npc(location=_STALE_LOC, turn=_STALE_TURN)
     snap.npcs.append(npc)
 
@@ -438,10 +453,30 @@ def test_participant_joined_router_named_stamps_location() -> None:
         genre_slug="tea_and_murder",
     )
 
+    # Object layer.
     assert npc.last_seen_turn == 7, (
         f"router-named seated NPC must advance last_seen_turn to 7; got {npc.last_seen_turn}"
     )
     assert npc.last_seen_location == _HALL, (
         "router-named seating with a resolved player location must stamp "
         f"last_seen_location=_HALL; got {npc.last_seen_location!r}"
+    )
+
+    # Span layer (OTEL lie-detector) — discriminating because the NPC started at
+    # _STALE_LOC, so the span carrying _HALL proves the WRITTEN value reached it.
+    joined = [
+        s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"
+    ]
+    iain = [s for s in joined if (dict(s.attributes or {})).get("name") == _OPPONENT]
+    assert iain, (
+        "no participant.joined span for the router-named opponent; "
+        f"names={[dict(s.attributes or {}).get('name') for s in joined]!r}"
+    )
+    attrs = dict(iain[0].attributes or {})
+    assert attrs.get("last_seen_turn") == 7, (
+        f"router-named participant.joined span wrong last_seen_turn; attrs={sorted(attrs)!r}"
+    )
+    assert attrs.get("last_seen_location") == _HALL, (
+        "router-named participant.joined span must carry the WRITTEN "
+        f"last_seen_location=_HALL (NPC started at _STALE_LOC); attrs={sorted(attrs)!r}"
     )

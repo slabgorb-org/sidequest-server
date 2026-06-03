@@ -49,6 +49,7 @@ from sidequest.game.session import (
 from sidequest.game.shared_world_delta import (
     build_shared_world_delta,
 )
+from sidequest.game.tension_tracker import RoundResult
 from sidequest.game.world_materialization import (
     recompute_arc_history,
     should_recompute_arc,
@@ -132,6 +133,70 @@ def perspective_character_name(sd) -> str:
     bound yet, preserving prior behavior.
     """
     return sd.snapshot.player_seats.get(sd.player_id, sd.player_name)
+
+
+def _drive_session_tension_tracker(
+    sd: _SessionData,
+    snapshot: GameSnapshot,
+    *,
+    encounter_resolved_this_turn: bool,
+) -> None:
+    """Feed the per-session :class:`TensionTracker` one observation per turn.
+
+    ADR-024 producer wiring (story 81-2). The narrator improvises pacing on
+    *every* turn, so the dual-track signal must update every turn — not only on
+    combat turns — which is why this is driven here in the handler (a quiet turn
+    is a Boring observation) rather than buried in the LLM-gated narration-apply
+    path. ``observe()`` records the action event, ages the spike, AND emits the
+    ``tension:round_observed`` watcher event the GM panel reads (the only
+    emitting path — we reuse it rather than add a parallel telemetry channel).
+
+    Honest mapping from resolved turn state to the tracker's inputs:
+
+    - **stakes track** — the acting player's real HP ratio via ``update_stakes``.
+    - **action track + drama** — ``observe()`` classifies the turn from real
+      encounter signals: a combatant defeated *this* turn is a dramatic kill;
+      the lowest seated combatant HP ratio drives NearMiss; otherwise a quiet
+      turn ramps the gambler's Boring streak.
+
+    Per-turn HP-delta ``damage_events`` are intentionally NOT synthesized (no
+    start/end HP capture this story) — the relative-magnitude math is covered by
+    the tracker's own unit tests; see the Dev deviation. Every read is
+    None/zero-guarded so the drive can never raise on the hot path.
+    """
+    tracker = sd.tension_tracker
+
+    # Stakes track from the acting player's real HP, when seated with a pool.
+    pc = snapshot.find_creature_core(sd.player_name)
+    if pc is not None and pc.hp.max > 0:
+        tracker.update_stakes(pc.hp.current, pc.hp.max)
+
+    killed: str | None = None
+    lowest_hp_ratio: float | None = None
+    enc = snapshot.encounter
+    if enc is not None:
+        ratios = [
+            core.hp.current / core.hp.max
+            for actor in enc.actors
+            if (core := snapshot.find_creature_core(actor.name)) is not None and core.hp.max > 0
+        ]
+        if ratios:
+            lowest_hp_ratio = min(ratios)
+        # A side defeated *this* turn is a dramatic kill (real resolution). The
+        # this-turn nuance keeps the spike from re-firing while a resolved
+        # encounter lingers. Empty string still counts as a kill in classify.
+        if encounter_resolved_this_turn and enc.outcome in (
+            "player_victory",
+            "opponent_victory",
+        ):
+            defeated_side = "opponent" if enc.outcome == "player_victory" else "player"
+            killed = next((a.name for a in enc.actors if a.side == defeated_side), "")
+
+    tracker.observe(
+        RoundResult(round=snapshot.turn_manager.interaction),
+        killed=killed,
+        lowest_hp_ratio=lowest_hp_ratio,
+    )
 
 
 # --- Extracted handler helpers (moved to websocket_handlers/) -------------
@@ -2227,6 +2292,16 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         submitted = True
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("turn_record.assemble_failed: %s", exc)
+
+                # ADR-024 / story 81-2: feed the per-session TensionTracker one
+                # observation per turn so the dual-track pacing signal accumulates
+                # across the session and the tension:round_observed watcher event
+                # fires every turn (the GM-panel pacing lie-detector).
+                _drive_session_tension_tracker(
+                    sd,
+                    snapshot,
+                    encounter_resolved_this_turn=encounter_resolved_this_turn,
+                )
 
                 # Per-turn game_state_snapshot for the dashboard State tab
                 # (playtest 2026-04-30 #1C). Pre-fix it fired only at connect, so

@@ -38,6 +38,7 @@ from sidequest.game.pg.telemetry import PgTelemetrySink
 from sidequest.game.repository import DungeonRepository, SaveRepository, TelemetrySink
 from sidequest.game.session import GameSnapshot
 from sidequest.game.shared_world_delta import SharedWorldDelta
+from sidequest.game.tension_tracker import TensionTracker
 from sidequest.game.weather import WeatherState
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.scenario import ScenarioPack
@@ -243,6 +244,15 @@ class _SessionData:
     # semantic fill. Population / reproject of the index is the 75-6 sync hook;
     # 75-5 only queries it. Round-trips through the save like ``lore_store``.
     entity_store: EntityStore = field(default_factory=EntityStore)
+    # Dual-track tension model (ADR-024, story 81-2). Per-session producer:
+    # driven once per turn from ``_execute_narration_turn`` so the action and
+    # stakes tracks accumulate across the session and the
+    # ``tension:round_observed`` watcher event fires on every turn (the GM-panel
+    # pacing signal). In-memory only — resets on reload for v1, mirroring the
+    # ``entity_store`` default_factory precedent. Story 81-3 consumes
+    # ``tension_tracker.pacing_hint(thresholds)`` to drive the ``[PACING]``
+    # narrator injection; this story only constructs and feeds it.
+    tension_tracker: TensionTracker = field(default_factory=TensionTracker)
     # Audio DJ — per-session LibraryBackend so ThemeRotator cooldowns
     # persist across turns within a session. None when the genre pack
     # has no resolvable audio directory on disk (e.g. a pack defining

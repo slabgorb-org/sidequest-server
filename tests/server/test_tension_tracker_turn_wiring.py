@@ -194,12 +194,14 @@ async def test_tracker_is_per_session_and_accumulates_across_turns(
     )
 
     tracker_before = sd.tension_tracker
-    turn_context = _build_turn_context_for_test(sd)
 
-    await handler._execute_narration_turn(sd, "I wait.", turn_context)
+    # A fresh TurnContext per turn — production builds one per turn (its
+    # PhaseTimings finalizes at turn end), so reusing one across turns is
+    # unrealistic and trips "PhaseTimings already finalized".
+    await handler._execute_narration_turn(sd, "I wait.", _build_turn_context_for_test(sd))
     streak_after_turn_1 = sd.tension_tracker.boring_streak()
 
-    await handler._execute_narration_turn(sd, "I keep waiting.", turn_context)
+    await handler._execute_narration_turn(sd, "I keep waiting.", _build_turn_context_for_test(sd))
     streak_after_turn_2 = sd.tension_tracker.boring_streak()
 
     # Same instance across turns — created once per session, not per turn.

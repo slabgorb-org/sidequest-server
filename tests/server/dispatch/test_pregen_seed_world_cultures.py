@@ -65,6 +65,18 @@ def _manual() -> MonsterManual:
     return MonsterManual(genre="space_opera", world="perseus")
 
 
+def _local_span_exporter(monkeypatch) -> InMemorySpanExporter:
+    """Route ``Span.open`` through an in-memory exporter so a test can read the
+    emitted ``pregen.seed_manual`` attributes."""
+    from sidequest.telemetry import spans as spans_module
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(spans_module, "tracer", lambda: provider.get_tracer("test"))
+    return exporter
+
+
 def test_seed_manual_requests_world_cultures_not_genre(monkeypatch, tmp_path) -> None:
     captured = _install_spies(monkeypatch)
 
@@ -88,13 +100,7 @@ def test_seed_manual_requests_world_cultures_not_genre(monkeypatch, tmp_path) ->
 def test_seed_manual_emits_otel_with_world_culture_source(monkeypatch, tmp_path) -> None:
     _install_spies(monkeypatch)
 
-    from sidequest.telemetry import spans as spans_module
-
-    provider = TracerProvider()
-    exporter = InMemorySpanExporter()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    local_tracer = provider.get_tracer("test")
-    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
+    exporter = _local_span_exporter(monkeypatch)
 
     pregen.seed_manual(
         genre_packs_path=tmp_path,
@@ -233,13 +239,7 @@ def test_seed_manual_span_reports_effective_and_seeded_culture_counts(monkeypatc
     pack = _world_pack(_COYOTE_CULTURES, world="coyote_star")
     _install_capture(monkeypatch, pack)
 
-    from sidequest.telemetry import spans as spans_module
-
-    provider = TracerProvider()
-    exporter = InMemorySpanExporter()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    local_tracer = provider.get_tracer("test")
-    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
+    exporter = _local_span_exporter(monkeypatch)
 
     pregen.seed_manual(
         genre_packs_path=tmp_path,

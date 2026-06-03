@@ -38,6 +38,28 @@ SPAN_ROUTES[SPAN_QUEST_UPDATE] = SpanRoute(
         "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
 )
+# Story 77-1 (ADR-137 Option A) — seed-at-creation quest spine span.
+# Fires once at session creation when the chargen PC's drive/calling is
+# materialized into quest_log + quest_anchors + active_stakes. On an empty
+# drive AND calling (the prose-pack case, e.g. wry_whimsy) it STILL fires,
+# carrying severity="warning" so the GM panel sees the seed ran with nothing to
+# seed from — never a silent skip (CLAUDE.md "No Silent Fallbacks"). This is
+# the ONLY span this story adds; quest.created / quest.updated /
+# quest.anchor.added / stakes.set belong to 77-2 / 77-3.
+SPAN_QUEST_SEEDED_AT_CREATION = "quest.seeded_at_creation"
+SPAN_ROUTES[SPAN_QUEST_SEEDED_AT_CREATION] = SpanRoute(
+    event_type="state_transition",
+    component="quest_log",
+    extract=lambda span: {
+        "field": "quest_spine",
+        "op": "seeded_at_creation",
+        "quest_id": (span.attributes or {}).get("quest_id", ""),
+        "anchor_id": (span.attributes or {}).get("anchor_id", ""),
+        "source_drive": (span.attributes or {}).get("source_drive", ""),
+        "has_stakes": (span.attributes or {}).get("has_stakes", False),
+        "severity": (span.attributes or {}).get("severity", "info"),
+    },
+)
 SPAN_GAME_HANDSHAKE_DELTA_APPLIED = "game.handshake.delta_applied"
 SPAN_ROUTES[SPAN_GAME_HANDSHAKE_DELTA_APPLIED] = SpanRoute(
     event_type="state_transition",

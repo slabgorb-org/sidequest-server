@@ -37,11 +37,11 @@ import pytest
 
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.session import GameSnapshot
 
 # Import under test — RED: the module does not exist yet, so collection fails
 # loudly until Dev creates sidequest/game/quest_seed.py.
 from sidequest.game.quest_seed import seed_quest_spine
+from sidequest.game.session import GameSnapshot
 
 SPAN_NAME = "quest.seeded_at_creation"
 
@@ -51,7 +51,9 @@ SPAN_NAME = "quest.seeded_at_creation"
 # ---------------------------------------------------------------------------
 
 
-def _make_character(*, drive: str = "", calling_label: str = "", name: str = "Dorothy") -> Character:
+def _make_character(
+    *, drive: str = "", calling_label: str = "", name: str = "Dorothy"
+) -> Character:
     """A minimally-valid PC. ``backstory`` cannot be blank (Character validator)."""
     return Character(
         core=CreatureCore(name=name, description="A traveler far from home", personality="curious"),
@@ -80,7 +82,7 @@ def _only_span(otel_capture, name: str):
 
 
 def test_seeded_at_creation_span_constant_is_exported_and_routed() -> None:
-    from sidequest.telemetry.spans import SPAN_ROUTES, SPAN_QUEST_SEEDED_AT_CREATION
+    from sidequest.telemetry.spans import SPAN_QUEST_SEEDED_AT_CREATION, SPAN_ROUTES
 
     assert SPAN_QUEST_SEEDED_AT_CREATION == SPAN_NAME
     assert SPAN_QUEST_SEEDED_AT_CREATION in SPAN_ROUTES, (
@@ -210,7 +212,9 @@ def test_empty_drive_path_is_never_silent(otel_capture) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("forbidden", ["quest.created", "quest.updated", "quest.anchor.added", "stakes.set"])
+@pytest.mark.parametrize(
+    "forbidden", ["quest.created", "quest.updated", "quest.anchor.added", "stakes.set"]
+)
 def test_seed_does_not_emit_out_of_scope_spans(otel_capture, forbidden: str) -> None:
     snap = GameSnapshot()
     seed_quest_spine(snap, _make_character(drive="Get home to Kansas"))

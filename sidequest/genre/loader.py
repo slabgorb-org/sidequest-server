@@ -1632,14 +1632,10 @@ def _resolve_audio_urls(audio: AudioConfig, *, genre_slug: str) -> None:
     ``tests/genre/test_audio_url_resolution.py`` (per CLAUDE.md "Verify
     Wiring").
     """
-    from sidequest.server.asset_urls import resolve_asset_url
+    from sidequest.genre.audio_paths import resolve_audio_relpath
 
     def _fix(rel: str) -> str:
-        if not rel:
-            return rel
-        if rel.startswith(("http://", "https://", "/")):
-            return rel  # already resolved (e.g. test fixtures)
-        return resolve_asset_url(f"genre_packs/{genre_slug}/{rel}")
+        return resolve_audio_relpath(rel, genre_slug=genre_slug)
 
     for tracks in audio.mood_tracks.values():
         for track in tracks:

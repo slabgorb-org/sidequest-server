@@ -779,6 +779,25 @@ def instantiate_encounter_from_trigger(
     if current is not None and not current.resolved:
         return None
 
+    # Story 73-5: suppress the re-fired ``encounter.confrontation_initiated``
+    # span on a confrontation's RESOLUTION turn. When the prior encounter is
+    # resolved but is STILL the same ``encounter_type`` sitting on the snapshot
+    # (the just-resolved confrontation hasn't been torn down yet), a re-dispatch
+    # this turn is the same confrontation resolving — not a new one. The router
+    # re-emits ``confrontation`` for the same type on the resolution turn
+    # (e.g. social_duel concede), and the unguarded path below would rebuild a
+    # fresh encounter and re-fire the cosmetic "initiated" span, showing the GM
+    # panel a fresh confrontation on a turn that is actually resolving.
+    #
+    # Return None (the same no-op contract as the active-encounter branch
+    # above) so no new encounter is built and no span fires. A GENUINELY new
+    # confrontation only reaches here once the resolved encounter is torn down
+    # (``snapshot.encounter is None`` ⇒ the first branch's guard passes), or
+    # when it is a DIFFERENT ``encounter_type`` (a resolved fight replaced by a
+    # distinct confrontation) — both still fire the span below.
+    if current is not None and current.resolved and current.encounter_type == encounter_type:
+        return None
+
     defs = pack.rules.confrontations if pack.rules else []
     cdef = find_confrontation_def(defs, encounter_type)
     if cdef is None:

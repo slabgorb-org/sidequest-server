@@ -59,7 +59,14 @@ def test_instantiate_unknown_type_raises(cac_pack) -> None:
 
 
 def test_instantiate_replaces_resolved_encounter(cac_pack) -> None:
-    """A resolved prior encounter does not block a new one."""
+    """A resolved prior encounter does not block a genuinely-new one.
+
+    Story 73-5 refined the resolution-turn guard: a resolved prior of the SAME
+    ``encounter_type`` is treated as that confrontation's resolution turn and
+    no-ops (see ``test_resolution_turn_same_type_suppresses_initiated_span``).
+    A resolved prior of a DIFFERENT type is a genuinely-new confrontation and
+    must still replace it — that is what this test pins.
+    """
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.encounter import EncounterActor, EncounterMetric
     from sidequest.server.dispatch.encounter_lifecycle import (
@@ -67,11 +74,13 @@ def test_instantiate_replaces_resolved_encounter(cac_pack) -> None:
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    # Prior confrontation is a RESOLVED negotiation — a different type than the
+    # incoming combat, so the new combat is genuinely new and must replace it.
     prior = StructuredEncounter(
-        encounter_type="combat",
+        encounter_type="negotiation",
         player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
         opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
-        actors=[EncounterActor(name="old", role="combatant", side="player")],
+        actors=[EncounterActor(name="old", role="participant", side="player")],
     )
     prior.resolved = True
     snap.encounter = prior
@@ -89,6 +98,96 @@ def test_instantiate_replaces_resolved_encounter(cac_pack) -> None:
     )
     assert snap.encounter is enc
     assert enc is not prior
+
+
+def test_resolution_turn_same_type_suppresses_initiated_span(cac_pack) -> None:
+    """Story 73-5: ``encounter.confrontation_initiated`` fires exactly once per
+    confrontation — on first initiation — and is NOT re-emitted on the
+    resolution turn of the SAME confrontation.
+
+    Symptom (epic 73): when a confrontation reaches its resolution turn the
+    router re-dispatches the same ``encounter_type``; because the prior
+    encounter is now ``resolved`` the old guard let a duplicate through,
+    re-firing the cosmetic "initiated" span so the GM panel showed a fresh
+    confrontation on a turn that was actually resolving.
+
+    This is the OTEL lie-detector invariant: the GM panel's "initiated" signal
+    must reflect reality (one initiation per confrontation).
+    """
+    import opentelemetry.trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from sidequest.agents.orchestrator import NpcMention
+    from sidequest.server.dispatch.encounter_lifecycle import (
+        instantiate_encounter_from_trigger,
+    )
+    from sidequest.telemetry.setup import init_tracer
+
+    init_tracer()
+    provider = otel_trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
+    exporter = InMemorySpanExporter()
+    processor = SimpleSpanProcessor(exporter)
+    provider.add_span_processor(processor)
+
+    try:
+        snap = GameSnapshot(genre_slug="caverns_and_claudes")
+        snap.character_locations["Rux"] = "Cavern Mouth"
+
+        # Turn 1 — initiation. The span fires exactly once here.
+        enc = instantiate_encounter_from_trigger(
+            snapshot=snap,
+            pack=cac_pack,
+            encounter_type="combat",
+            player_name="Rux",
+            npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
+            genre_slug="caverns_and_claudes",
+        )
+        assert enc is not None
+        spans_after_init = [
+            s.name
+            for s in exporter.get_finished_spans()
+            if s.name == "encounter.confrontation_initiated"
+        ]
+        assert len(spans_after_init) == 1, (
+            "initiation must fire encounter.confrontation_initiated exactly "
+            f"once; got {len(spans_after_init)}"
+        )
+
+        # Resolution turn — the same confrontation is now resolved and the
+        # router re-dispatches the same encounter_type. Must NOT rebuild and
+        # must NOT re-fire the initiated span.
+        snap.encounter.resolved = True
+        result = instantiate_encounter_from_trigger(
+            snapshot=snap,
+            pack=cac_pack,
+            encounter_type="combat",
+            player_name="Rux",
+            npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
+            genre_slug="caverns_and_claudes",
+        )
+        assert result is None, (
+            "a same-type re-dispatch on the resolution turn must no-op "
+            "(no new encounter), not rebuild the confrontation"
+        )
+        assert snap.encounter is enc, "the resolved encounter must stay on the snapshot untouched"
+
+        init_spans = [
+            s.name
+            for s in exporter.get_finished_spans()
+            if s.name == "encounter.confrontation_initiated"
+        ]
+        assert len(init_spans) == 1, (
+            "encounter.confrontation_initiated must fire EXACTLY ONCE per "
+            "confrontation — it must be absent on the resolution turn of the "
+            f"same confrontation; got {len(init_spans)} total emissions"
+        )
+    finally:
+        processor.shutdown()
 
 
 def test_instantiate_active_encounter_is_noop(cac_pack) -> None:

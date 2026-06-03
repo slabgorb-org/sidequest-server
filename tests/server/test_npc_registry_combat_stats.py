@@ -190,7 +190,10 @@ def test_combat_handshake_publishes_edge_for_explicit_npcs_present(combat_snapsh
         )
     )
     trigger_encounter(
-        snap, pack, "combat", "Orin",
+        snap,
+        pack,
+        "combat",
+        "Orin",
         npcs_present=[
             NpcMention(name="Goblin", side="opponent", role="hostile"),
         ],
@@ -287,23 +290,35 @@ def test_handshake_still_registers_actors_after_edge_publish(combat_snapshot):
 # ---------------------------------------------------------------------------
 
 
-def test_helper_is_called_from_production_handshake_path():
-    """CLAUDE.md "Verify Wiring": the helper must be reachable from the
-    production encounter init, not just the test path. ``import`` + a quick
-    grep proves the seam exists; the integration test above proves it fires.
-    """
-    from sidequest.server.dispatch import encounter_lifecycle
+def test_edge_publish_helper_is_wired_into_production_handshake(combat_snapshot, otel_capture):
+    """CLAUDE.md "Verify Wiring": prove the edge-publish helper is reachable
+    from the *production* encounter-init entrypoint, not merely defined.
 
-    assert hasattr(encounter_lifecycle, "_publish_combat_edge_to_npcs"), (
-        "edge-publish helper missing from production module"
-    )
-    src = Path(encounter_lifecycle.__file__).read_text(encoding="utf-8")
-    assert "_publish_combat_edge_to_npcs(" in src, (
-        "helper is defined but never called — wiring regression"
-    )
-    # Single-call invariant: only the handshake call site exercises it.
-    # Future seams (post-damage sync, on-resolution kill) should add their
-    # own focused tests rather than silently piggy-backing.
-    assert src.count("_publish_combat_edge_to_npcs(") >= 2, (
-        "helper must be both defined AND called (def + call = >=2)"
+    Behavioral proof instead of a source-text grep (CLAUDE.md "No Source-Text
+    Wiring Tests"): ``trigger_encounter`` drives the real production lifecycle
+    function ``instantiate_encounter_from_trigger``. If that path calls
+    ``_publish_combat_edge_to_npcs`` the helper emits its ``npc.edge_published``
+    span tagged ``source="encounter_handshake"``. No span ⇒ the call site was
+    removed and the seam is dead. This survives the harmless refactors that the
+    old occurrence-count assertion broke on, and fails on real wiring breakage.
+
+    Distinct from ``test_otel_span_emitted_on_npc_edge_publish`` (AC3), which
+    asserts the span's *payload* (current/max values); this test asserts only
+    that the production entrypoint *reaches* the helper at all.
+    """
+    snap, pack = combat_snapshot
+
+    trigger_encounter(snap, pack, "combat", "Orin", npcs_present=[])
+
+    publish_spans = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == "npc.edge_published"
+        and (s.attributes or {}).get("source") == "encounter_handshake"
+    ]
+    assert publish_spans, (
+        "no npc.edge_published span tagged source=encounter_handshake after "
+        "driving the production encounter-init path — "
+        "_publish_combat_edge_to_npcs is no longer called from "
+        "instantiate_encounter_from_trigger (wiring regression)"
     )

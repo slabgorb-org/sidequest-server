@@ -219,6 +219,51 @@ async def test_slug_connect_emits_theme_css(seeded_game: Path):
 
 
 @pytest.mark.asyncio
+async def test_slug_connect_rewrites_font_urls_to_cdn(
+    seeded_game: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Font (and asset) url()s in the genre CSS are routed through the
+    asset_urls seam before the theme_css event is emitted, so the browser
+    pulls fonts from R2 (CDN) — never from the raw /genre/ mount and never
+    from fonts.googleapis.com.
+
+    This is the wiring guard for the rewrite_theme_css_asset_urls integration
+    in connect.py: loader reads the pack CSS, connect rewrites it, UI receives
+    cdn URLs. Default (no SIDEQUEST_ASSET_BASE_URL) = CDN mode.
+    """
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    handler = _make_handler(seeded_game, [_CONTENT_SEARCH_PATH])
+    msg = SessionEventMessage(
+        type="SESSION_EVENT",
+        player_id="alice",
+        payload=SessionEventPayload(event="connect", game_slug=_SLUG),
+    )
+    outbound = await handler.handle_message(msg)
+
+    theme_msgs = [
+        m
+        for m in outbound
+        if getattr(m, "type", None) == "SESSION_EVENT"
+        and getattr(getattr(m, "payload", None), "event", None) == "theme_css"
+    ]
+    assert theme_msgs, "no theme_css event emitted"
+    css = theme_msgs[0].payload.css
+
+    # No Google Fonts anywhere — the genre pack must self-host.
+    assert "fonts.googleapis.com" not in css, (
+        "genre CSS still references Google Fonts after rewrite"
+    )
+    # caverns_and_claudes ships at least one self-hosted @font-face; after the
+    # rewrite its src must point at the CDN, not the raw /genre/ mount.
+    assert "https://cdn.slabgorb.com/genre_packs/assets/fonts/" in css, (
+        "expected font url() rewritten to the CDN asset seam"
+    )
+    assert "url('/genre/assets/fonts/" not in css and "url(/genre/assets/fonts/" not in css, (
+        "raw /genre/ font mount survived the rewrite"
+    )
+
+
+@pytest.mark.asyncio
 async def test_connect_by_unknown_slug_errors(seeded_game: Path):
     handler = _make_handler(seeded_game, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(

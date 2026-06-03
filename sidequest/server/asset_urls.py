@@ -22,6 +22,7 @@ top-level prefix raises in local mode. CDN mode tolerates anything (the
 from __future__ import annotations
 
 import os
+import re
 from typing import Final
 
 from sidequest.telemetry.spans.asset_url import asset_url_resolved_span
@@ -65,3 +66,39 @@ def resolve_asset_url(relative_path: str) -> str:
     with asset_url_resolved_span(relative_path=rel, base_url=base or "", mode=mode):
         pass
     return url
+
+
+# Matches a CSS url() token, capturing the (optional) quote char and the inner
+# path. Only genre-pack-relative paths are rewritten; everything else (data:,
+# absolute http(s), unrelated relative paths) is left byte-for-byte intact.
+_CSS_URL_RE: Final[re.Pattern[str]] = re.compile(
+    r"""url\(\s*(?P<q>['"]?)(?P<path>[^'")]+)(?P=q)\s*\)"""
+)
+
+
+def rewrite_theme_css_asset_urls(css: str) -> str:
+    """Resolve genre-pack-relative ``url()``s in injected theme CSS.
+
+    Genre ``client_theme.css`` authors font (and other asset) ``url()``s as
+    either the local-mount form ``/genre/...`` or the content-relative form
+    ``genre_packs/...``. Routing them through :func:`resolve_asset_url` makes
+    them honor the same single seam as images/audio — absolute CDN in prod,
+    ``/genre/...`` in offline-local mode — instead of being served raw off the
+    UI origin (where the CDN bytes never reach R2).
+
+    Foreign ``url()``s (``data:``, absolute ``http(s)://``, or relative paths
+    that are not genre-pack assets) are left untouched.
+    """
+
+    def _replace(m: re.Match[str]) -> str:
+        quote = m.group("q")
+        path = m.group("path").strip()
+        if path.startswith("/genre/"):
+            key = "genre_packs/" + path[len("/genre/") :]
+        elif path.startswith("genre_packs/"):
+            key = path
+        else:
+            return m.group(0)  # not a genre asset — leave intact
+        return f"url({quote}{resolve_asset_url(key)}{quote})"
+
+    return _CSS_URL_RE.sub(_replace, css)

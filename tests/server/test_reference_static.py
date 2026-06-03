@@ -78,6 +78,24 @@ def test_static_theme_css_contains_token_vocabulary(tmp_path):
     assert "--font-body" in r.text
 
 
+def test_static_theme_css_self_hosts_fonts_from_r2(tmp_path):
+    """The reference-page stylesheet must self-host its fonts from R2 — no
+    fonts.googleapis.com. Killing the Google @import without replacing it with
+    @font-face would silently drop every display/body face to a serif fallback,
+    so assert both: zero Google AND the CDN @font-face set is present."""
+    _seed_pack(tmp_path)
+    client = _build_app(tmp_path)
+    r = client.get("/reference/static/theme.css")
+    assert r.status_code == 200
+    assert "fonts.googleapis.com" not in r.text, "reference CSS still uses Google Fonts"
+    assert "@font-face" in r.text, "reference CSS dropped its fonts entirely"
+    assert "https://cdn.slabgorb.com/genre_packs/assets/fonts/" in r.text, (
+        "reference @font-face must source faces from the R2 CDN"
+    )
+    # The folio body face (--folio-font-body: EB Garamond) must actually load.
+    assert "EBGaramond" in r.text
+
+
 def test_static_styles_css_contains_structural_rules(tmp_path):
     """styles.css must contain layout/structural rules so the page renders.
     An empty styles.css would mean the bundle copy was nuked."""

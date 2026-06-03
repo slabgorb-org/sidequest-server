@@ -60,6 +60,17 @@ SPAN_REFERENCE_MANIFEST_LOADED = "sidequest.reference.manifest_loaded"
 # key so it never reaches the player-/author-facing reference HTML.
 SPAN_REFERENCE_DEVNOTE_SUPPRESSED = "sidequest.reference.devnote_suppressed"
 
+# Lore-page Map section spans (Story 65-11). The Map section renders a
+# server-side SVG node-link graph from cartography.yaml. Four decisions are
+# observable so the GM/dev panel can confirm the graph was built from real
+# cartography rather than improvised: the render summary (node/edge/pin counts),
+# the per-pin portrait gate (resolved vs not-found, dedicated reference-namespaced
+# spans rather than the scene-time scrapbook family), and a dropped dangling edge.
+SPAN_REFERENCE_MAP_RENDERED = "sidequest.reference.map_rendered"
+SPAN_REFERENCE_MAP_PIN_RESOLVED = "sidequest.reference.map_pin_resolved"
+SPAN_REFERENCE_MAP_PIN_NOT_FOUND = "sidequest.reference.map_pin_not_found"
+SPAN_REFERENCE_MAP_DANGLING_EDGE = "sidequest.reference.map_dangling_edge"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_REFERENCE_URL_ATTACHED,
@@ -75,6 +86,10 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_POI_IMAGE_NOT_FOUND,
         SPAN_REFERENCE_MANIFEST_LOADED,
         SPAN_REFERENCE_DEVNOTE_SUPPRESSED,
+        SPAN_REFERENCE_MAP_RENDERED,
+        SPAN_REFERENCE_MAP_PIN_RESOLVED,
+        SPAN_REFERENCE_MAP_PIN_NOT_FOUND,
+        SPAN_REFERENCE_MAP_DANGLING_EDGE,
     }
 )
 
@@ -408,6 +423,91 @@ def reference_manifest_loaded_span(
             "reference.manifest_path": path,
             "reference.manifest_entry_count": entry_count,
             "reference.world_key_count": world_key_count,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- Lore-page Map section spans (Story 65-11) ---
+
+
+@contextmanager
+def reference_map_rendered_span(
+    *,
+    node_count: int,
+    edge_count: int,
+    npc_pin_count: int,
+    resolved_pin_count: int,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired once per lore render that builds a Map section. Carries the
+    graph census (nodes, de-duplicated edges, npc pins, and how many of those
+    pins resolved a portrait on R2) so the GM/dev panel can confirm the SVG was
+    built from real cartography rather than improvised."""
+    with Span.open(
+        SPAN_REFERENCE_MAP_RENDERED,
+        {
+            "reference.map_node_count": node_count,
+            "reference.map_edge_count": edge_count,
+            "reference.map_npc_pin_count": npc_pin_count,
+            "reference.map_resolved_pin_count": resolved_pin_count,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_map_pin_resolved_span(
+    *,
+    slug: str,
+    region: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when a map npc pin's world-scoped portrait key IS in
+    r2_manifest.json, so the pin renders its portrait image."""
+    with Span.open(
+        SPAN_REFERENCE_MAP_PIN_RESOLVED,
+        {"slug": slug, "reference.map_region": region},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_map_pin_not_found_span(
+    *,
+    slug: str,
+    region: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when a map npc pin's portrait is NOT on R2, so the pin renders
+    a non-image marker (never a broken <img>). The span proves the gate ran."""
+    with Span.open(
+        SPAN_REFERENCE_MAP_PIN_NOT_FOUND,
+        {"slug": slug, "reference.map_region": region},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_map_dangling_edge_span(
+    *,
+    source_region: str,
+    dangling_region: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """WARN — fired when a region's ``adjacent`` list names a region id that does
+    not exist in cartography.regions. The edge is dropped (not drawn) and this
+    span names the bad reference so the gap is fail-visible, not silent."""
+    with Span.open(
+        SPAN_REFERENCE_MAP_DANGLING_EDGE,
+        {
+            "reference.map_source_region": source_region,
+            "reference.map_dangling_region": dangling_region,
+            "reference.level": "WARN",
         },
         tracer_override=_tracer,
     ) as span:

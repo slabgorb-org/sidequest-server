@@ -1,0 +1,12 @@
+world_name: Map Escape Fixture
+starting_region: reef
+navigation_mode: region
+
+# Single region whose NAME contains HTML-special characters. The Map renderer
+# must escape these when emitting the SVG node label (Python rule #11 / CWE-79).
+regions:
+  reef:
+    name: 'Reef <flag> & "Bones"'
+    summary: A region whose name must be HTML-escaped in the SVG.
+    description: One node, no adjacency, no entities — escaping check only.
+    adjacent: []

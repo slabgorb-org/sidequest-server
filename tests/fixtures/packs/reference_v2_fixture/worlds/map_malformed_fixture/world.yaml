@@ -1,0 +1,6 @@
+name: map_malformed_fixture
+description: >-
+  Story 65-11 AC1 (fail loud). This world has a cartography.yaml that is
+  malformed YAML. Loading it for the Map section must fail LOUD (HTTP 500),
+  never a silently map-less 200 (No Silent Fallbacks). Mirrors the cast/poi
+  gate's absent-manifest -> 500 contract.

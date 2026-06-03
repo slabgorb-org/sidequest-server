@@ -301,3 +301,29 @@
     font-family: monospace;
     font-size: 0.85rem;
 }
+
+/* --- Lore Map section (Story 65-11) — server-rendered SVG node-link graph --- */
+.ref-map {
+    margin: 1.5rem 0;
+}
+.ref-map__svg {
+    width: 100%;
+    height: auto;
+    max-height: 70vh;
+    border: 1px solid var(--ref-color-primary);
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.04);
+}
+.ref-map__edge {
+    stroke: var(--ref-color-primary);
+    stroke-width: 1.5;
+    opacity: 0.6;
+}
+.ref-map__node {
+    fill: var(--ref-color-accent);
+    font-family: var(--ref-font-display);
+    font-size: 0.85rem;
+}
+.ref-map__pin {
+    fill: var(--ref-color-primary);
+}

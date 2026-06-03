@@ -124,3 +124,36 @@ def test_rewrite_handles_quote_styles(monkeypatch: pytest.MonkeyPatch) -> None:
     out = asset_urls.rewrite_theme_css_asset_urls(css)
     assert 'url("https://cdn.slabgorb.com/genre_packs/assets/fonts/A.woff2")' in out
     assert "url(https://cdn.slabgorb.com/genre_packs/assets/fonts/B.woff2)" in out
+
+
+def test_resolve_asset_url_defaults_scope_pack(
+    monkeypatch: pytest.MonkeyPatch, otel_capture
+) -> None:
+    from tests.server.conftest import span_attrs_by_name
+
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    url = asset_urls.resolve_asset_url("genre_packs/cav/audio/music/combat.ogg")
+    assert url == "https://cdn.slabgorb.com/genre_packs/cav/audio/music/combat.ogg"
+    attrs = span_attrs_by_name(otel_capture, "server.asset_url.resolved")
+    assert len(attrs) == 1
+    assert attrs[0]["asset.scope"] == "pack"
+
+
+def test_resolve_asset_url_accepts_shared_scope(
+    monkeypatch: pytest.MonkeyPatch, otel_capture
+) -> None:
+    # scope is forensic-only; it must not change the URL, only the span.
+    from tests.server.conftest import span_attrs_by_name
+
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    url = asset_urls.resolve_asset_url(
+        "genre_packs/assets/audio/classical_pd/Satie - Gymnopedie No.1.ogg",
+        scope="shared",
+    )
+    assert url == (
+        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/"
+        "Satie - Gymnopedie No.1.ogg"
+    )
+    attrs = span_attrs_by_name(otel_capture, "server.asset_url.resolved")
+    assert len(attrs) == 1
+    assert attrs[0]["asset.scope"] == "shared"

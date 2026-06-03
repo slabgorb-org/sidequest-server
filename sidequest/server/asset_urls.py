@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Final
+from typing import Final, Literal
 
 from sidequest.telemetry.spans.asset_url import asset_url_resolved_span
 
@@ -45,8 +45,13 @@ def _local_path_for(relative: str) -> str:
     )
 
 
-def resolve_asset_url(relative_path: str) -> str:
+def resolve_asset_url(relative_path: str, *, scope: Literal["pack", "shared"] = "pack") -> str:
     """Convert a content-relative path to the URL the UI should fetch.
+
+    ``scope`` is forensic-only (``"pack"`` | ``"shared"``) — it is recorded on
+    the OTEL span so a playtest can confirm whether a track resolved from a
+    pack-local path or the shared public-domain bucket.  It never changes the
+    URL.
 
     Examples (default config):
       "genre_packs/cav/audio/music/combat.ogg"
@@ -63,7 +68,9 @@ def resolve_asset_url(relative_path: str) -> str:
         url = f"{base.rstrip('/')}/{rel}"
         mode = "cdn"
 
-    with asset_url_resolved_span(relative_path=rel, base_url=base or "", mode=mode):
+    with asset_url_resolved_span(
+        relative_path=rel, base_url=base or "", mode=mode, scope=scope
+    ):
         pass
     return url
 

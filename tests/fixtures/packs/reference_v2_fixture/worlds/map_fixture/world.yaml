@@ -1,0 +1,18 @@
+name: map_fixture
+description: >-
+  Isolated test world for story 65-11 — the lore-page Map section (a
+  server-rendered SVG node-link graph from cartography.yaml). Four regions form
+  a small graph with one reciprocal adjacency (harbor_light <-> drowned_coast,
+  which must de-duplicate to a single edge) and one DANGLING adjacency
+  (the_deeps -> sunken_ghost, a region id that does not exist, which must be
+  skipped and emit a WARN span). Two regions carry npc-binding entities: Vivian
+  Harbormaster (harbor_light) whose world-scoped portrait key IS in
+  tests/fixtures/r2_manifest.json (resolved pin, gets an <img>), and Thessaly
+  Dunmore (drowned_coast) whose portrait is NOT on R2 (text/marker pin, no
+  <img>). A flavor_only entity (a drowned bell) and a location_feature entity
+  (the salt scales) must NOT render as pins — only npc bindings pin.
+
+  Fixture invariant for AC5 (binding.ref -> portrait slug): each npc entity is
+  authored so that slugify_player_name(label) == binding.ref == the r2 portrait
+  slug, so the pin gates correctly whether Dev resolves the slug from the
+  entity label or from binding.ref. Dev must pick one path and document it.

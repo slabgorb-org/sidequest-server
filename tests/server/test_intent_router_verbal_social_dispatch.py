@@ -38,10 +38,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from opentelemetry import trace as otel_trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.agents.intent_router import IntentRouter
 from sidequest.game.session import GameSnapshot
@@ -92,20 +88,9 @@ def wry_whimsy_pack():
     return load_genre_pack(_WRY_WHIMSY)
 
 
-@pytest.fixture
-def otel_capture():
-    from sidequest.telemetry.setup import init_tracer
-
-    init_tracer()
-    provider = otel_trace.get_tracer_provider()
-    assert isinstance(provider, TracerProvider)
-    exporter = InMemorySpanExporter()
-    processor = SimpleSpanProcessor(exporter)
-    provider.add_span_processor(processor)
-    try:
-        yield exporter
-    finally:
-        processor.shutdown()
+# ``otel_capture`` is provided by tests/server/conftest.py — it installs the
+# in-memory exporter with the processor-accumulation reset (Story 45-36) that a
+# local redefinition would omit. Inherit it rather than duplicate it.
 
 
 def _wry_snapshot() -> GameSnapshot:
@@ -255,8 +240,11 @@ async def test_dispatched_social_confrontation_survives_gates_and_emits_span(
 ) -> None:
     """AC1(OTEL)/AC5 wiring guard: when the router emits a ``persuasion``
     confrontation, it survives the gates (subsystem ``confrontation`` is
-    registered, the type is valid) and the ``intent_router.decompose`` span
-    fires on the verbal-only turn — the GM-panel evidence AC1 asks for."""
+    registered, the type is valid), the ``intent_router.decompose`` span fires
+    on the verbal-only turn (the GM-panel evidence AC1 asks for), AND the bank
+    instantiates the encounter on the snapshot — the AC5 regression literal:
+    a committed verbal demand engages a confrontation, NOT prose-only with
+    confrontation=None."""
 
     class _PersuasionLLM:
         async def emit_tool(self, **_kw):
@@ -284,4 +272,16 @@ async def test_dispatched_social_confrontation_survives_gates_and_emits_span(
     assert decompose_spans, "intent_router.decompose span must fire on a verbal turn"
     assert decompose_spans[-1].attributes["dispatch_count"] >= 1, (
         "the verbal turn dispatched a confrontation — dispatch_count must be >= 1"
+    )
+
+    # AC5 literal: the bank engaged the confrontation on the snapshot — an
+    # encounter is present (the verbal demand became a real mechanical contest),
+    # not prose-only with confrontation=None.
+    assert snap.encounter is not None, (
+        "a dispatched verbal confrontation must instantiate snapshot.encounter "
+        "(AC5: engages a confrontation, not prose-only with confrontation=None)"
+    )
+    assert snap.encounter.encounter_type == "persuasion", (
+        "the instantiated encounter must be the dispatched social type, not a "
+        f"movement/escape fallback; got {snap.encounter.encounter_type!r}"
     )

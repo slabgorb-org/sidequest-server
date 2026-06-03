@@ -530,7 +530,7 @@ def reference_map_dangling_edge_span(
 # --- Lore-page Cast portrait-gate spans (Story 65-13) ---
 
 
-def _portrait_attrs(*, slug: str, pack: str, world: str) -> dict[str, str]:
+def _portrait_attrs(*, slug: str, pack: str, world: str) -> dict[str, Any]:
     return {"slug": slug, "reference.pack": pack, "reference.world": world}
 
 

@@ -209,9 +209,11 @@ def resolve_wealth_tier(gold: int, tiers: list[WealthTier]) -> WealthTier | None
     ``max_gold`` that is ``None`` (uncapped) or ``>= gold``. A balance exactly
     on a boundary (``gold == max_gold``) belongs to *that* tier, not the next
     one up. Negative balances (debt) clamp to the floor tier rather than
-    falling through the bottom. Returns ``None`` when no tiers are authored —
-    No Silent Fallbacks: never fabricate a tier the content author didn't
-    declare; the player UI then shows the bare number.
+    falling through the bottom; a balance above every finite cap clamps to the
+    richest (last) authored tier. Returns ``None`` only when no tiers are
+    authored — No Silent Fallbacks: never fabricate a tier the content author
+    didn't declare; the player UI then shows the bare number. (The over-cap
+    clamp returns an *authored* tier, so it is not fabrication.)
 
     Tiers are consulted in authored order, which the packs author ascending by
     cap (``mutant_wasteland``/``road_warrior``), so the first match is the

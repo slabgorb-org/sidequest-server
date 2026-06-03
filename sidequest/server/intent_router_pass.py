@@ -134,9 +134,24 @@ def _build_state_summary(
 
     Story 59-10: when ``pack`` is provided, appends a compact
     ``confrontation_types`` projection so the Haiku router knows the
-    valid type names for the current genre pack. Haiku classifies
-    player intent through language understanding — the projection
-    provides the closed enum of available types, not verb lists.
+    valid type names for the current genre pack.
+
+    Story 59-27: the projection now also carries each type's authored
+    ``intent_verbs``. 59-10 shipped a ``{type, category}``-only projection
+    on the theory that Haiku's language understanding would bridge prose to
+    a type from the name + category alone. The wry_whimsy/oz playtest
+    (2026-06-02) disproved it: across a full session only ``escape``
+    (movement) ever fired and only after physical escalation — the verbal
+    types (``persuasion``/``audience``/``wit_duel``/``wonder_shock``) NEVER
+    dispatched, because the shared ``CONFRONTATION_TRIGGER_CORE`` recognition
+    rules name social-trigger TYPES from other packs (negotiation/trial/
+    auction/social_duel/scandal) and a category alone ("social") is too thin
+    a signal to route "convince me he's worth the walk" to ``persuasion``.
+    The authored verbs ARE the lexical bridge — emitting them gives the
+    router a per-type vocabulary to match natural verbal prose against. The
+    cost is modest (a handful of words per type) and follows
+    "Cost Scales with Drama": routing the mechanical spine is exactly where
+    the extra tokens belong.
     """
     summary = snapshot.model_dump(
         mode="json",
@@ -147,16 +162,32 @@ def _build_state_summary(
     if pack is not None:
         confrontation_defs = pack.rules.confrontations if pack.rules else []
         if confrontation_defs:
-            summary["confrontation_types"] = [
-                {
+            projection: list[dict[str, Any]] = []
+            verb_count = 0
+            for cdef in confrontation_defs:
+                entry: dict[str, Any] = {
                     "type": cdef.confrontation_type,
                     "category": cdef.category,
                 }
-                for cdef in confrontation_defs
-            ]
+                # The lexical bridge (Story 59-27): the authored verbs let the
+                # router match natural prose to a type. Omit the key entirely
+                # for a type that declares none, rather than emitting an empty
+                # list (keeps the projection compact and honest about what the
+                # pack authored).
+                if cdef.intent_verbs:
+                    entry["intent_verbs"] = list(cdef.intent_verbs)
+                    verb_count += len(cdef.intent_verbs)
+                projection.append(entry)
+            summary["confrontation_types"] = projection
             with intent_router_confrontation_vocabulary_span(
                 type_count=len(confrontation_defs),
                 genre_slug=snapshot.genre_slug or "",
+                # GM-panel evidence the verbal vocabulary actually reached the
+                # router this turn (Story 59-27): a zero here on a social pack
+                # means the lexical bridge is missing and verbal confrontations
+                # will silently fail to route, exactly the regression this fix
+                # closes.
+                verb_count=verb_count,
             ):
                 pass
 

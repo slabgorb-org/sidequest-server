@@ -4,7 +4,24 @@
    Packs included here: heavy_metal (rugged), space_opera (terminal).
    ═════════════════════════════════════════════════════════════════════ */
 
-@import url("https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=Noto+Sans+Symbols+2&family=Orbitron:wght@400;500;600;700;800&family=Pirata+One&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&family=Special+Elite&family=Source+Sans+3:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Oswald:wght@300;400;500;600;700&display=swap");
+/* Self-hosted faces — served from R2 (cdn.slabgorb.com). No external font CDN.
+   The reference page is served from the server origin; these are cross-origin
+   to R2, which is covered by the bucket CORS policy (GET/HEAD allow-origin). */
+@font-face { font-family: "EB Garamond"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/EBGaramond-Regular.woff2") format("woff2"); font-style: normal; font-display: swap; }
+@font-face { font-family: "EB Garamond"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/EBGaramond-Italic.woff2") format("woff2"); font-style: italic; font-display: swap; }
+@font-face { font-family: "IM Fell English"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/IMFellEnglish-Regular.woff2") format("woff2"); font-style: normal; font-display: swap; }
+@font-face { font-family: "IM Fell English"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/IMFellEnglish-Italic.woff2") format("woff2"); font-style: italic; font-display: swap; }
+@font-face { font-family: "Noto Sans Symbols 2"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/NotoSansSymbols2-Regular.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Orbitron"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/Orbitron-Regular.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Pirata One"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/PirataOne-Regular.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Playfair Display"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/PlayfairDisplay-Regular.woff2") format("woff2"); font-style: normal; font-display: swap; }
+@font-face { font-family: "Playfair Display"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/PlayfairDisplay-Italic.woff2") format("woff2"); font-style: italic; font-display: swap; }
+@font-face { font-family: "Rajdhani"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/Rajdhani-Regular.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Share Tech Mono"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/ShareTechMono-Regular.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Special Elite"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/SpecialElite-Regular.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Source Sans 3"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/SourceSans3-Regular.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Oswald"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/Oswald-Regular.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Cinzel"; src: url("https://cdn.slabgorb.com/genre_packs/assets/fonts/Cinzel-Regular.woff2") format("woff2"); font-display: swap; }
 
 /* ─── Base shell (Folio + archetype structural fonts) ──────────────── */
 :root {

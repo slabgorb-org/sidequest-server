@@ -48,6 +48,84 @@ def test_unknown_top_level_in_local_mode_raises(monkeypatch: pytest.MonkeyPatch)
         asset_urls.resolve_asset_url("randomthing/foo.ogg")
 
 
+# ---- rewrite_theme_css_asset_urls -----------------------------------------
+# Genre client_theme.css ships font (and other asset) url()s as either the
+# local-mount form (/genre/...) or the content-relative form (genre_packs/...).
+# The server runs the injected theme CSS through this rewriter so those url()s
+# resolve through the same asset seam as images/audio: absolute CDN in prod,
+# /genre/... in offline-local mode.
+
+CSS_FONT_FACE = (
+    "@font-face{font-family:'Orbitron';"
+    "src:url('/genre/assets/fonts/Orbitron-Regular.woff2') format('woff2');"
+    "font-display:swap;}"
+)
+
+
+def test_rewrite_genre_mount_url_to_cdn(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    out = asset_urls.rewrite_theme_css_asset_urls(CSS_FONT_FACE)
+    assert (
+        "url('https://cdn.slabgorb.com/genre_packs/assets/fonts/Orbitron-Regular.woff2')"
+        in out
+    )
+    assert "/genre/assets/fonts" not in out
+    # Surrounding CSS is preserved untouched.
+    assert out.startswith("@font-face{font-family:'Orbitron';")
+    assert "format('woff2')" in out
+
+
+def test_rewrite_content_relative_url_to_cdn(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    css = "src:url('genre_packs/assets/fonts/Cinzel-Regular.woff2') format('woff2');"
+    out = asset_urls.rewrite_theme_css_asset_urls(css)
+    assert (
+        "url('https://cdn.slabgorb.com/genre_packs/assets/fonts/Cinzel-Regular.woff2')"
+        in out
+    )
+
+
+@pytest.mark.parametrize("value", ["", "local"])
+def test_rewrite_local_mode_keeps_genre_mount(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", value)
+    out = asset_urls.rewrite_theme_css_asset_urls(CSS_FONT_FACE)
+    assert "url('/genre/assets/fonts/Orbitron-Regular.woff2')" in out
+    assert "cdn.slabgorb.com" not in out
+
+
+def test_rewrite_local_mode_normalises_content_relative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
+    css = "src:url(genre_packs/assets/fonts/Cinzel-Regular.woff2);"
+    out = asset_urls.rewrite_theme_css_asset_urls(css)
+    assert "url(/genre/assets/fonts/Cinzel-Regular.woff2)" in out
+
+
+def test_rewrite_leaves_foreign_urls_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    css = (
+        "a{background:url(data:image/png;base64,AAAA)}"
+        "b{background:url('https://example.com/x.png')}"
+        "c{background:url(/textures/dice/x.jpg)}"
+    )
+    out = asset_urls.rewrite_theme_css_asset_urls(css)
+    assert out == css
+
+
+def test_rewrite_handles_quote_styles(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    css = (
+        'a{src:url("/genre/assets/fonts/A.woff2")}'
+        "b{src:url(/genre/assets/fonts/B.woff2)}"
+    )
+    out = asset_urls.rewrite_theme_css_asset_urls(css)
+    assert 'url("https://cdn.slabgorb.com/genre_packs/assets/fonts/A.woff2")' in out
+    assert "url(https://cdn.slabgorb.com/genre_packs/assets/fonts/B.woff2)" in out
+
+
 def test_resolve_asset_url_defaults_scope_pack(
     monkeypatch: pytest.MonkeyPatch, otel_capture
 ) -> None:

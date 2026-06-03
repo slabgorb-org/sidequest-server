@@ -44,6 +44,7 @@ from sidequest.protocol.messages import (
 )
 from sidequest.protocol.types import NonBlankString
 from sidequest.server import views
+from sidequest.server.asset_urls import rewrite_theme_css_asset_urls
 from sidequest.server.dispatch.char_creation_resolve import resolve_char_creation_scenes
 from sidequest.server.dispatch.culture_context import resolve_culture_reference
 from sidequest.server.image_pacing import ImagePacingThrottle
@@ -1101,7 +1102,13 @@ class ConnectHandler:
             world_obj = genre_pack.worlds.get(row.world_slug) if genre_pack else None
             world_css = world_obj.client_theme_css if world_obj is not None else None
             genre_css = genre_pack.client_theme_css if genre_pack else None
-            theme_css_payload = world_css if world_css else genre_css
+            raw_theme_css = world_css if world_css else genre_css
+            # Route font (and other asset) url()s through the asset_urls seam so
+            # the browser pulls them from R2 (CDN) instead of the raw /genre/
+            # mount — absolute CDN in prod, /genre/... in offline-local mode.
+            theme_css_payload = (
+                rewrite_theme_css_asset_urls(raw_theme_css) if raw_theme_css else raw_theme_css
+            )
             theme_source = "world" if world_css else ("genre" if genre_css else "none")
             if theme_css_payload:
                 theme_msg = SessionEventMessage(

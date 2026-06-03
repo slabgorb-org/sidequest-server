@@ -7,7 +7,6 @@ from pathlib import Path
 from sidequest.audio.library_backend import LibraryBackend
 from sidequest.audio.models import AudioCue, AudioLane
 from sidequest.protocol.messages import AudioCuePayload
-from sidequest.server.asset_urls import resolve_asset_url
 
 
 def build_audio_cue_payload(
@@ -60,7 +59,9 @@ def build_audio_cue_payload(
             return relative
         if genre_slug is None:
             return relative
-        return resolve_asset_url(f"genre_packs/{genre_slug}/{relative}")
+        from sidequest.genre.audio_paths import resolve_audio_relpath
+
+        return resolve_audio_relpath(relative, genre_slug=genre_slug)
 
     for cue in cues:
         if cue.lane == AudioLane.MUSIC and cue.mood is not None:

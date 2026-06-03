@@ -107,6 +107,13 @@ def _build_pack(tmp_path: Path) -> tuple[Path, Path, Path]:
     world_dir = pack_dir / "worlds" / "test_world"
     world_dir.mkdir(parents=True)
     _touch_all(world_dir, world.get("required_files", []), world.get("required_dirs", []))
+    # World lore must seed a non-empty LoreStore (epic-74 story 74-3): the
+    # schema-driven touch above leaves lore.yaml empty, which the validator's
+    # seedable-lore rule rejects. Write minimal seedable content.
+    (world_dir / "lore.yaml").write_text(
+        "world_name: Test World\nhistory: A minimal but seedable world history.\n",
+        encoding="utf-8",
+    )
 
     return schema_path, pack_dir, world_dir
 

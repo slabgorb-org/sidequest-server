@@ -887,6 +887,69 @@ def _emit_world_flavor_loaded(field: str, *, world_slug: str, source: Path) -> N
     )
 
 
+def _world_lore_seedable_count(lore: WorldLore) -> int:
+    """Count the LoreStore fragments a world's ``lore.yaml`` will seed.
+
+    Mirrors the seedable fields read by ``seed_lore_from_world``
+    (history / geography / cosmology / factions). Inlined rather than importing
+    ``game.lore_seeding`` — the genre layer must not depend on the game layer
+    (dependency graph, server CLAUDE.md). Keep in sync with that seeder.
+    """
+    return (
+        int(bool(lore.history))
+        + int(bool(lore.geography))
+        + int(bool(lore.cosmology))
+        + len(lore.factions)
+    )
+
+
+def _require_seedable_world_lore(lore: WorldLore, world_path: Path) -> int:
+    """Return the world's seedable lore-fragment count, or raise.
+
+    Epic 74 (story 74-3): lore is world-only and authoritative — genre lore is
+    no longer seeded. A world whose lore.yaml carries no SEEDABLE content
+    (history/geography/cosmology/factions all empty — e.g. prose stranded under
+    non-seedable extra keys) would leave the narrator's LoreStore empty. Raise
+    ``GenreLoadError`` naming the world (No Silent Fallbacks; mirrors the
+    visibility_baseline / lethality_policy required-surface guards).
+    """
+    count = _world_lore_seedable_count(lore)
+    if count == 0:
+        raise GenreLoadError(
+            path=world_path / "lore.yaml",
+            detail=(
+                f"world {world_path.name!r} has no seedable lore — lore.yaml must "
+                "populate at least one of history / geography / cosmology / "
+                "factions (content under other keys is not seeded into the "
+                "LoreStore). An empty world LoreStore is forbidden."
+            ),
+        )
+    return count
+
+
+def _emit_world_lore_loaded(*, world_slug: str, source: Path, fragment_count: int) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier lore load.
+
+    Epic 74: lore is world-only and authoritative. The load fires a span —
+    mirroring the ``world_items`` and ``world_theme``/``world_audio`` spans — so
+    the GM panel can prove the world LoreStore was fed from world-tier lore
+    rather than the narrator improvising from a deleted genre default.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_lore",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "lore_fragment_count": fragment_count,
+            "source": str(source / "lore.yaml"),
+        },
+        component="genre",
+    )
+
+
 def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
@@ -927,6 +990,18 @@ def _load_single_world(
     if config.draft:
         return None
     lore: WorldLore = _load_yaml(world_path / "lore.yaml", WorldLore)
+    # Epic 74 (story 74-3): lore is world-only and authoritative — genre lore is
+    # no longer seeded. A world whose lore.yaml carries no SEEDABLE content
+    # (history/geography/cosmology/factions all empty — e.g. prose stranded under
+    # non-seedable extra keys) would leave the narrator's LoreStore empty. Fail
+    # loud at load, naming the world (No Silent Fallbacks; mirrors the
+    # visibility_baseline / lethality_policy required-surface guards). Emit a
+    # state_transition span so the GM panel can prove the world-tier lore load
+    # fired.
+    _lore_fragment_count = _require_seedable_world_lore(lore, world_path)
+    _emit_world_lore_loaded(
+        world_slug=world_path.name, source=world_path, fragment_count=_lore_fragment_count
+    )
 
     cartography: CartographyConfig = _load_cartography(world_path / "cartography.yaml")
 

@@ -24,6 +24,7 @@ def asset_url_resolved_span(
     relative_path: str,
     base_url: str,
     mode: str,
+    scope: str = "pack",
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
@@ -33,6 +34,7 @@ def asset_url_resolved_span(
             "asset.relative_path": relative_path,
             "asset.base_url": base_url,
             "asset.mode": mode,
+            "asset.scope": scope,
             **attrs,
         },
         tracer_override=_tracer,

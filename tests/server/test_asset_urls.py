@@ -46,3 +46,25 @@ def test_unknown_top_level_in_local_mode_raises(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
     with pytest.raises(ValueError, match="unknown asset prefix"):
         asset_urls.resolve_asset_url("randomthing/foo.ogg")
+
+
+from sidequest.server.asset_urls import resolve_asset_url
+
+
+def test_resolve_asset_url_defaults_scope_pack(monkeypatch):
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    url = resolve_asset_url("genre_packs/cav/audio/music/combat.ogg")
+    assert url == "https://cdn.slabgorb.com/genre_packs/cav/audio/music/combat.ogg"
+
+
+def test_resolve_asset_url_accepts_shared_scope(monkeypatch):
+    # scope is forensic-only; it must not change the URL, only the span.
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    url = resolve_asset_url(
+        "genre_packs/assets/audio/classical_pd/Satie - Gymnopedie No.1.ogg",
+        scope="shared",
+    )
+    assert url == (
+        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/"
+        "Satie - Gymnopedie No.1.ogg"
+    )

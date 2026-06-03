@@ -120,16 +120,11 @@ def _make_result(
     )
 
 
-class _UnavailableDaemon:
-    """``DaemonClient`` stand-in whose ``is_available()`` is False — drives
-    ``retrieve_turn_context`` to the deterministic ``query_failed`` outcome
-    (fast, no socket) for the real-chain wiring/span tests."""
-
-    def is_available(self) -> bool:
-        return False
-
-    async def embed(self, text: str) -> dict[str, Any]:  # pragma: no cover - never reached
-        raise RuntimeError("embed should not be called when is_available() is False")
+# NOTE: no local "daemon unavailable" stub — the autouse ``_mock_daemon_client``
+# guard in tests/server/conftest.py already patches
+# ``retrieval_orchestration.DaemonClient`` to an always-unavailable stub, so the
+# real-chain wiring/span tests below degrade deterministically to ``query_failed``
+# (fast, no socket) with no per-test patch.
 
 
 def _capture_publish(monkeypatch, module) -> list[tuple]:
@@ -528,7 +523,7 @@ async def test_narration_turn_survives_emit_failure(session_handler_factory, mon
 
 @pytest.mark.asyncio
 async def test_event_reaches_watcher_hub_subscriber_via_handler(
-    session_handler_factory, monkeypatch
+    session_handler_factory,
 ) -> None:
     """AC-7 (CLAUDE.md "Every Test Suite Needs a Wiring Test"): driving the real
     handler delegate ``_retrieve_entities_for_turn`` (the live seam at
@@ -543,12 +538,8 @@ async def test_event_reaches_watcher_hub_subscriber_via_handler(
     publish_event → watcher_hub → subscriber."""
     from sidequest.telemetry import watcher_hub as wh_module
 
-    # Force the real orchestrator down its deterministic degraded path.
-    monkeypatch.setattr(
-        "sidequest.game.retrieval_orchestration.DaemonClient",
-        lambda *a, **kw: _UnavailableDaemon(),
-    )
-
+    # The orchestrator runs its deterministic degraded path via the autouse
+    # ``_mock_daemon_client`` guard (daemon unavailable → query_failed).
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
     sd.snapshot.turn_manager.interaction = 2
 
@@ -609,13 +600,9 @@ async def test_wrapper_does_not_double_emit_the_universal_span(
 
     from sidequest.server.dispatch import universal_retrieval
 
-    # Force the real retrieve_turn_context down a deterministic path (it still
-    # emits its span). Daemon unavailable → query_failed, span fires once.
-    monkeypatch.setattr(
-        "sidequest.game.retrieval_orchestration.DaemonClient",
-        lambda *a, **kw: _UnavailableDaemon(),
-    )
-
+    # The real retrieve_turn_context runs its deterministic degraded path (it
+    # still emits its span) via the autouse ``_mock_daemon_client`` guard: daemon
+    # unavailable → query_failed, span fires once.
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))

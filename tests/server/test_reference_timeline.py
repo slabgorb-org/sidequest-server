@@ -72,6 +72,7 @@ _SORTED_WORLD = "timeline_sorted_fixture"  # uniform years -> sorted; 4 legends,
 _EMPTY_WORLD = "timeline_empty_fixture"  # no legends.yaml -> no Timeline section
 _MALFORMED_WORLD = "timeline_malformed_fixture"  # extra-key legend -> typed loader 500
 _ESCAPE_WORLD = "timeline_escape_fixture"  # era with HTML-special chars
+_DIR_WORLD = "timeline_dir_fixture"  # per-file legends/ DIRECTORY form (the dominant real form)
 _CAST_WORLD = "cast_gated_fixture"  # regression: has a Cast section, no legends
 
 # Authored order of the mixed world (must be preserved — dialects not uniformly
@@ -223,6 +224,23 @@ def test_undated_entry_is_grouped_and_dated_entries_are_not(gated_client: TestCl
     assert len(_temporal_values(section)) == 4, (
         f"exactly the four dated legends carry data-temporal: {_temporal_values(section)}"
     )
+
+
+def test_directory_form_legends_render_a_timeline(gated_client: TestClient) -> None:
+    """AC1/AC2 for the per-file ``legends/`` DIRECTORY authoring form — the
+    dominant real form (five_points, evropi, franchise_nations, … author legends
+    as a directory with NO flat legends.yaml). The Timeline must render for this
+    form exactly as for the flat form: both legends become entries, and the dated
+    one's era renders verbatim. Pins the spec-check Major: ``load_legends`` must
+    read the directory form, not only the flat file."""
+    resp = gated_client.get(f"/reference/lore/{_PACK}/{_DIR_WORLD}")
+    assert resp.status_code == 200, resp.text
+    section = _timeline_section(resp.text)
+    slugs = set(_entry_slugs(section))
+    assert slugs == {slugify_player_name("The Charter"), slugify_player_name("The Drift")}, (
+        f"both directory-form legends must render as entries: {slugs}"
+    )
+    assert "1500" in section, "the dated directory-form legend's era must render verbatim"
 
 
 # ---------------------------------------------------------------------------

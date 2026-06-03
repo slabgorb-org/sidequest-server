@@ -31,7 +31,7 @@ from pathlib import Path
 
 import yaml
 
-from sidequest.genre.loader import _load_legends_flexible
+from sidequest.genre.loader import _load_legends_flexible, _load_yaml_raw
 from sidequest.genre.models.legends import Legend
 from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import reference_timeline_rendered_span
@@ -55,14 +55,30 @@ class _Entry:
 
 
 def load_legends(world_dir: Path) -> list[Legend]:
-    """Load ``world_dir/legends.yaml`` into typed ``Legend`` records.
+    """Load the world's legends into typed ``Legend`` records.
+
+    Handles BOTH authoring forms the genre loader accepts (see
+    ``genre/loader.py:_load_single_world`` lines ~1037-1048), because real worlds
+    use both — and the dominant form is the per-file directory:
+
+    - a per-file ``legends/`` **directory** (one legend per ``*.yaml``; the form
+      used by five_points, evropi, franchise_nations, … — most live worlds), or
+    - a flat ``legends.yaml`` (``Vec<Legend>`` or a ``{legends: [...]}`` map).
 
     Returns ``[]`` when the world authors no legends (the Timeline section is
     purely additive — a world without legends renders unchanged). Fails **loud**
-    on a malformed file (No Silent Fallbacks): ``_load_legends_flexible`` raises
-    ``GenreLoadError`` for a shape the ``Legend`` model rejects, which the lore
-    route surfaces as HTTP 500 rather than a silently timeline-less page.
+    on a malformed file (No Silent Fallbacks): ``Legend`` validation raises for a
+    shape the model rejects, which the lore route surfaces as HTTP 500 rather
+    than a silently timeline-less page.
     """
+    legends_dir = world_dir / "legends"
+    if legends_dir.is_dir():
+        files = [
+            f
+            for f in sorted(legends_dir.glob("*.yaml"))
+            if f.name not in ("_meta.yaml", ".gitkeep")
+        ]
+        return [Legend.model_validate(_load_yaml_raw(f)) for f in files]
     legends, _raw = _load_legends_flexible(world_dir / "legends.yaml")
     return legends
 

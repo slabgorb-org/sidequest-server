@@ -105,6 +105,7 @@ from .world import *  # noqa: F401, F403
 from .world_grounding import *  # noqa: F401, F403
 from .world_grounding import (  # noqa: F401
     emit_demographics_injected_span,
+    emit_weather_absent_span,
     emit_weather_proposed_span,
     emit_weather_used_span,
 )

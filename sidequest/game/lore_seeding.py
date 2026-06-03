@@ -7,8 +7,8 @@ builder, which is discarded immediately after confirmation.
 
 Epic 74: lore is **world-only**. The genre tier is mechanics-only and
 genre lore is no longer seeded into the store (``seed_world_lore`` seeds
-world lore exclusively). ``seed_lore_from_genre_pack`` survives as a
-guarded utility but is not called on the live seeding path.
+world lore exclusively). The genre-pack seeder was removed in story 74-4
+once it had zero production callers (dead code is worse than no code).
 
 Fragment id formats:
 
@@ -48,71 +48,6 @@ def _try_add(store: LoreStore, fragment: LoreFragment) -> bool:
     except DuplicateLoreId:
         return False
     return True
-
-
-def seed_lore_from_genre_pack(store: LoreStore, pack: GenrePack) -> int:
-    """Seed ``store`` with fragments derived from ``pack.lore``.
-
-    Returns the number of fragments successfully added (duplicates
-    skipped). Epic 74: ``pack.lore`` is optional at the genre tier — a pack
-    with no genre lore seeds nothing (the world tier is authoritative). Not
-    called by ``seed_world_lore`` anymore (lore is world-only) but retained
-    as a utility for any caller holding a genre-lore-bearing pack.
-    """
-    count = 0
-
-    if pack.lore is None:
-        return 0
-
-    if pack.lore.history and _try_add(
-        store,
-        LoreFragment.new(
-            id="lore_genre_history",
-            category=LoreCategory.History,
-            content=pack.lore.history,
-            source=LoreSource.GenrePack,
-        ),
-    ):
-        count += 1
-
-    if pack.lore.geography and _try_add(
-        store,
-        LoreFragment.new(
-            id="lore_genre_geography",
-            category=LoreCategory.Geography,
-            content=pack.lore.geography,
-            source=LoreSource.GenrePack,
-        ),
-    ):
-        count += 1
-
-    if pack.lore.cosmology and _try_add(
-        store,
-        LoreFragment.new(
-            id="lore_genre_cosmology",
-            # Cosmology fragments bucket into the History category.
-            category=LoreCategory.History,
-            content=pack.lore.cosmology,
-            source=LoreSource.GenrePack,
-        ),
-    ):
-        count += 1
-
-    for faction in pack.lore.factions:
-        slug = faction.name.lower().replace(" ", "_")
-        if _try_add(
-            store,
-            LoreFragment.new(
-                id=f"lore_genre_faction_{slug}",
-                category=LoreCategory.Faction,
-                content=f"{faction.name}: {faction.description}",
-                source=LoreSource.GenrePack,
-                metadata={"faction_name": faction.name},
-            ),
-        ):
-            count += 1
-
-    return count
 
 
 def seed_lore_from_world(store: LoreStore, world_lore: WorldLore, world_slug: str) -> int:
@@ -175,8 +110,7 @@ def seed_lore_from_world(store: LoreStore, world_lore: WorldLore, world_slug: st
             store,
             LoreFragment.new(
                 id=f"lore_world_{slug}_cosmology",
-                # Cosmology fragments bucket into the History category
-                # (matches seed_lore_from_genre_pack precedent).
+                # Cosmology fragments bucket into the History category.
                 category=LoreCategory.History,
                 content=world_lore.cosmology,
                 source=LoreSource.GenrePack,
@@ -473,7 +407,6 @@ __all__ = [
     "ArcSeedResult",
     "seed_lore_from_arc_promotion",
     "seed_lore_from_char_creation",
-    "seed_lore_from_genre_pack",
     "seed_lore_from_world",
     "seed_world_lore",
 ]

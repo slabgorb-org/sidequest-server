@@ -1077,6 +1077,23 @@ def _load_single_world(
     world_theme: Any = _load_yaml_raw_optional(world_path / "theme.yaml")
     world_audio: Any = _load_yaml_raw_optional(world_path / "audio.yaml")
 
+    # Shape guard (story 74-4): theme/audio are loaded RAW, so a non-mapping
+    # document (a YAML list or bare scalar) would otherwise flow into World(...)
+    # and surface an OPAQUE pydantic ValidationError that names neither the file
+    # nor the world. Fail loud and world-scoped here instead — mirroring the
+    # fail-loud shape guard in _parse_char_creation_scenes. Absence (None) stays
+    # valid: the genre tier is the transitional fallback (No Silent Fallbacks
+    # applies to wrong SHAPE, not to a legitimately-absent override).
+    for _flavor_file, _flavor_value in (("theme.yaml", world_theme), ("audio.yaml", world_audio)):
+        if _flavor_value is not None and not isinstance(_flavor_value, dict):
+            raise GenreLoadError(
+                path=world_path / _flavor_file,
+                detail=(
+                    f"expected a mapping (world {_flavor_file} is loaded as a dict), "
+                    f"got {type(_flavor_value).__name__}"
+                ),
+            )
+
     for field_name, value in (
         ("world_theme", world_theme),
         ("world_audio", world_audio),

@@ -136,6 +136,17 @@ async def get_world_grounding(
             world_id=ctx.world_id,
             perspective_pc=ctx.perspective_pc,
         )
+    elif "weather" in args.include and ctx.weather_state is None:
+        # Story 74-4: weather requested but the world has none wired. Fire the
+        # absence companion to weather_used so the GM panel distinguishes "no
+        # weather by design" from "weather subsystem broke". Mutually exclusive
+        # with weather_used — exactly one fires per weather-requested call.
+        from sidequest.telemetry.spans import emit_weather_absent_span
+
+        emit_weather_absent_span(
+            world_id=ctx.world_id,
+            perspective_pc=ctx.perspective_pc,
+        )
 
     if "demographics" in args.include and ctx.world_demographics is not None:
         from sidequest.telemetry.spans import emit_demographics_injected_span

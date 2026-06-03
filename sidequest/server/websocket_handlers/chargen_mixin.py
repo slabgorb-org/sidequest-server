@@ -1114,25 +1114,22 @@ class CharGenMixin:
             )
 
         # Pingpong 2026-04-30 ("Lore RAG returns empty_query_or_store
-        # for all 4 PCs every turn — no genre lore reaching narration"):
-        # the genre pack's ``Lore`` corpus and the world's ``WorldLore``
-        # were never seeded into the per-session lore store — only
-        # chargen-choice fragments via ``seed_lore_from_char_creation``.
-        # Result: every ``lore_embedding.retrieve`` came back with
+        # for all 4 PCs every turn — no lore reaching narration"): the
+        # world's ``WorldLore`` was never seeded into the per-session
+        # lore store — only chargen-choice fragments via
+        # ``seed_lore_from_char_creation``. Result: every
+        # ``lore_embedding.retrieve`` came back with
         # ``store_size=0 outcome=empty_query_or_store`` and the narrator
-        # composed every turn with zero hits from the genre lore corpus.
-        # Pure wiring fix: ``seed_lore_from_genre_pack`` already existed
-        # (sidequest/game/lore_seeding.py:46) and was unit-tested but
-        # had zero production callers — exactly the
-        # "Don't Reinvent — Wire Up What Exists" gap CLAUDE.md warns
-        # about. Added a sibling ``seed_lore_from_world`` to cover the
-        # world-level lore.yaml (overrides the genre pack's defaults
-        # for that specific world; e.g. ``coyote_star`` has its own
-        # history/geography/factions distinct from ``space_opera``'s).
-        # Both run BEFORE ``seed_lore_from_char_creation`` so the
-        # genre/world fragments land first; chargen choices layer on
-        # top with ``Character`` category so they're scoped distinctly
-        # in the LoreStore index. Idempotent: re-seeding on a reconnect
+        # composed every turn with zero hits from the lore corpus.
+        # Fix: ``seed_world_lore`` seeds the world-level lore.yaml
+        # (e.g. ``coyote_star`` has its own history/geography/factions
+        # distinct from ``space_opera``'s). Epic 74 made lore world-only;
+        # the genre-tier seeder was removed in story 74-4, so
+        # ``seed_world_lore`` reports ``genre_fragments_added=0`` always.
+        # It runs BEFORE ``seed_lore_from_char_creation`` so the world
+        # fragments land first; chargen choices layer on top with
+        # ``Character`` category so they're scoped distinctly in the
+        # LoreStore index. Idempotent: re-seeding on a reconnect
         # silently skips duplicate ids (``DuplicateLoreId`` guard).
         # OTEL lie-detector: per the user's pingpong note request, expose
         # ``lore.store_loaded count=N world=X`` so the GM panel can
@@ -1396,9 +1393,7 @@ class CharGenMixin:
                 # stays on room.broadcast, which carries the
                 # broadcast.recipient_dropped watcher/WARNING for players in
                 # _connected with no outbound queue (No Silent Fallbacks).
-                self._room.broadcast(
-                    party_status_msg, exclude_socket_id=self._socket_id
-                )
+                self._room.broadcast(party_status_msg, exclude_socket_id=self._socket_id)
             span.add_event(
                 "session.start.character_snapshot_emitted",
                 {

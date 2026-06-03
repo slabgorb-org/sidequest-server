@@ -72,15 +72,20 @@ def _run_audit(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_audit_live_tree_exits_zero_after_corpus_expansion() -> None:
-    """After the AC3 corpus expansion lands, no FAIL rows on the live tree.
+    """After the corpus/shared fallback fix lands, the live tree audit exits rc=0.
 
-    Today (pre-fix) this test fails because latin/polynesian/georgian
-    are all THIN — but THIN is exit 0, not exit 1. The exit-code
-    contract is: FAIL only blocks CI. So this test passes pre-fix as
-    long as no corpus is below FAIL_BELOW_WORDS=200, which is true.
+    Pre-fix this test failed because the audit exited rc=1: the trio
+    (latin/polynesian/georgian) resolved as MISSING — the audit could not
+    find them without the corpus/shared fallback the runtime resolver uses.
+    (An earlier note here claimed the pre-fix mode was THIN at exit 0; that
+    was wrong — MISSING counts toward the rc=1 gate alongside FAIL, while
+    THIN only warns at exit 0. See ``_classify`` + the ``has_fail`` gate in
+    ``scripts/audit_namegen_corpora.py``.)
 
-    The post-fix value of this test: it gates against a regression
-    where someone replaces a corpus with a stub. Pin the contract now.
+    The post-fix value of this test: returncode is the CI gate — FAIL and
+    MISSING both block (exit 1), THIN warns at exit 0. It pins the contract
+    that the live tree resolves every consumed corpus, gating against a
+    regression where someone deletes or stubs one.
     """
     result = _run_audit()
     assert result.returncode == 0, (
@@ -313,13 +318,27 @@ def test_audit_synthetic_fail_corpus_exits_one(tmp_path: Path) -> None:
 
 
 def test_audit_synthetic_ample_corpus_exits_zero(tmp_path: Path) -> None:
-    """A 1500-word corpus → exit code 0 + OK row in the report."""
+    """A 1500-word corpus → exit code 0 AND an OK-classified row in the report.
+
+    The earlier form asserted rc=0 + name-present but never that the corpus
+    was *classified* OK — so a regression that flattened every status to OK,
+    or one that dropped an ample corpus into THIN/FAIL while still exiting 0,
+    would pass silently. Pin the OK marker co-located on the synth.txt row
+    (mirroring the co-location pattern in
+    ``test_audit_surfaces_consumption_by_culture``).
+    """
     _build_synthetic_pack(tmp_path, corpus_word_count=1500)
 
     result = _run_audit("--path", str(tmp_path / "genre_packs"))
 
     assert result.returncode == 0
-    assert "synth.txt" in result.stdout
+    out = result.stdout
+    assert "synth.txt" in out
+    ok_rows = [line for line in out.splitlines() if "synth.txt" in line and "OK" in line]
+    assert ok_rows, (
+        f"1500-word synth.txt must be classified OK on its report row, not "
+        f"merely present in the report. stdout:\n{out}"
+    )
 
 
 def test_audit_synthetic_thin_corpus_exits_zero_with_thin_marker(

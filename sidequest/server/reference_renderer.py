@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Collection
 from functools import lru_cache
 from html import escape
 from pathlib import Path
@@ -76,6 +77,8 @@ from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import (
     reference_devnote_suppressed_span,
     reference_hero_unbound_span,
+    reference_lore_assembled_span,
+    reference_lore_section_orphaned_span,
     reference_manifest_loaded_span,
     reference_presenter_error_span,
     reference_toc_missing_span,
@@ -1310,6 +1313,72 @@ def _int_to_roman(n: int) -> str:
     return "".join(out)
 
 
+# The closed set of dynamically-appended lore sections (Story 65-9/65-11/65-12).
+# Used to derive ``lore_dynamic_sections`` for the assembly span (Story 65-10).
+_DYNAMIC_SECTION_IDS = ("cast", "map", "timeline")
+
+
+def _append_dynamic_section(
+    body: str,
+    kept_toc: list[dict[str, str]],
+    *,
+    section_id: str,
+    label: str,
+    html: str,
+) -> tuple[str, list[dict[str, str]]]:
+    """Append one dynamically-synthesized section + its TOC entry (Story 65-10).
+
+    Unifies the three near-identical Cast/Map/Timeline append blocks: append the
+    section HTML to ``body`` and append a numbered TOC entry (Roman numeral from
+    the running TOC length) for ``section_id``. ``html`` must be non-empty — the
+    caller guards on "did the presenter actually render anything".
+    """
+    return (
+        body + html,
+        [
+            *kept_toc,
+            {"num": _int_to_roman(len(kept_toc) + 1), "id": section_id, "label": label},
+        ],
+    )
+
+
+def emit_lore_assembled_span(
+    *,
+    pack: str,
+    world: str,
+    toc_entries: list[dict[str, str]],
+    anchor_ids: Collection[str],
+) -> bool:
+    """Record the composed lore-page TOC and check TOC<->section parity (65-10).
+
+    Fires one ``sidequest.reference.lore_assembled`` span carrying the composed
+    section ids, count, which dynamic sections registered, and ``parity_ok``.
+    For every composed TOC id with no matching anchor in ``anchor_ids`` (a
+    dangling nav link), fires one ``sidequest.reference.lore_section_orphaned``
+    WARN span naming it — the server-side analog of the client bad-anchor banner.
+
+    Returns ``parity_ok`` (``True`` iff every composed TOC id is anchored).
+    """
+    anchors = set(anchor_ids)
+    section_ids = [entry["id"] for entry in toc_entries]
+    missing = [sid for sid in section_ids if sid not in anchors]
+    parity_ok = not missing
+    dynamic = [sid for sid in section_ids if sid in _DYNAMIC_SECTION_IDS]
+
+    with reference_lore_assembled_span(
+        pack=pack,
+        world=world,
+        section_ids="/".join(section_ids),
+        section_count=len(section_ids),
+        dynamic_sections="/".join(dynamic),
+        parity_ok=parity_ok,
+    ):
+        for sid in missing:
+            with reference_lore_section_orphaned_span(pack=pack, world=world, section_id=sid):
+                pass
+    return parity_ok
+
+
 def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -> str:
     """Build the /reference/lore/<pack>/<world> HTML document.
 
@@ -1370,11 +1439,9 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
             portrait_image_slugs=gated_portrait_slugs,
         )
         if cast_html:
-            body += cast_html
-            kept_toc = [
-                *kept_toc,
-                {"num": _int_to_roman(len(kept_toc) + 1), "id": "cast", "label": "Cast"},
-            ]
+            body, kept_toc = _append_dynamic_section(
+                body, kept_toc, section_id="cast", label="Cast", html=cast_html
+            )
 
     # Story 65-11: public Map section — a server-rendered SVG node-link graph from
     # cartography.yaml, with npc-binding entity portraits gated on R2 the same way
@@ -1400,11 +1467,9 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
             portrait_on_r2_slugs=gated_map_slugs,
         )
         if map_html:
-            body += map_html
-            kept_toc = [
-                *kept_toc,
-                {"num": _int_to_roman(len(kept_toc) + 1), "id": "map", "label": "Map"},
-            ]
+            body, kept_toc = _append_dynamic_section(
+                body, kept_toc, section_id="map", label="Map", html=map_html
+            )
 
     # Story 65-12: public world Timeline section — a world-historical spine from
     # the world's legends with an honest conditional sort (dated entries sorted
@@ -1417,11 +1482,18 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
             history_prose=load_lore_history(world_dir),
         )
         if timeline_html:
-            body += timeline_html
-            kept_toc = [
-                *kept_toc,
-                {"num": _int_to_roman(len(kept_toc) + 1), "id": "timeline", "label": "Timeline"},
-            ]
+            body, kept_toc = _append_dynamic_section(
+                body, kept_toc, section_id="timeline", label="Timeline", html=timeline_html
+            )
+
+    # Story 65-10: record the composed TOC + check TOC<->section parity once per
+    # render, using the same anchor set _wrap_document ships to the client banner.
+    emit_lore_assembled_span(
+        pack=pack,
+        world=world,
+        toc_entries=kept_toc,
+        anchor_ids=_collect_anchor_ids(hero_html + body),
+    )
 
     return _wrap_document(
         title=f"{pack} / {world} — Lore",

@@ -1,0 +1,65 @@
+world_name: Map Fixture
+starting_region: harbor_light
+navigation_mode: region
+map_style: A test chart. Prose only — no coordinates anywhere in cartography.
+
+regions:
+
+  harbor_light:
+    name: Harbor Light
+    summary: The lantern-town where travelers come ashore.
+    description: >-
+      The starting region. Adjacent to the drowned coast (which lists it back —
+      a reciprocal edge that must de-duplicate) and to the deeps.
+    adjacent:
+      - drowned_coast
+      - the_deeps
+    entities:
+      - id: vivian
+        label: Vivian Harbormaster
+        tier: real_object
+        binding:
+          kind: npc
+          ref: vivian_harbormaster
+
+  drowned_coast:
+    name: Drowned Coast
+    summary: A flooded shoreline of tide-ledgers and salt.
+    description: >-
+      Lists harbor_light back as adjacent — the reciprocal half of the edge.
+    adjacent:
+      - harbor_light
+    entities:
+      - id: thessaly
+        label: Thessaly Dunmore
+        tier: real_object
+        binding:
+          kind: npc
+          ref: thessaly_dunmore
+
+  the_deeps:
+    name: The Deeps
+    summary: The dark water past the shelf.
+    description: >-
+      Adjacent to tide_market and to sunken_ghost — the latter is a DANGLING
+      reference (no such region), which must be skipped with a WARN span.
+    adjacent:
+      - tide_market
+      - sunken_ghost
+    entities:
+      - id: drowned_bell
+        label: a drowned bell
+        tier: flavor_only
+
+  tide_market:
+    name: Tide Market
+    summary: The salt-market at the tideline.
+    description: A leaf region with no onward adjacency.
+    adjacent: []
+    entities:
+      - id: salt_scales
+        label: the salt scales
+        tier: real_object
+        binding:
+          kind: location_feature
+          ref: tide_salt_scales

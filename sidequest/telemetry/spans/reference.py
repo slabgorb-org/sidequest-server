@@ -90,6 +90,18 @@ SPAN_REFERENCE_PORTRAIT_NOT_FOUND = "sidequest.reference.portrait_not_found"
 # a chronology it could not actually compute (the No-Silent-Fallbacks analog).
 SPAN_REFERENCE_TIMELINE_RENDERED = "sidequest.reference.timeline_rendered"
 
+# Lore-page TOC/section assembly spans (Story 65-10). Every sub-feature (POI, Map,
+# Cast, Timeline) emits its own render span, but the TOC/section COMPOSITION that
+# stitches them — base sections plus the dynamically-appended Cast/Map/Timeline —
+# emitted nothing. ``lore_assembled`` fires once per lore render carrying the
+# composed section ids, which dynamic sections registered, and whether every TOC
+# entry has a matching body anchor (parity). ``lore_section_orphaned`` is the
+# server-side analog of the client ``ref-bad-anchor`` banner: a WARN per composed
+# TOC id that has no matching anchor in the body, so a dangling nav link surfaces
+# in OTEL instead of only in the browser (No Silent Fallbacks).
+SPAN_REFERENCE_LORE_ASSEMBLED = "sidequest.reference.lore_assembled"
+SPAN_REFERENCE_LORE_SECTION_ORPHANED = "sidequest.reference.lore_section_orphaned"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_REFERENCE_URL_ATTACHED,
@@ -112,6 +124,8 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_PORTRAIT_RESOLVED,
         SPAN_REFERENCE_PORTRAIT_NOT_FOUND,
         SPAN_REFERENCE_TIMELINE_RENDERED,
+        SPAN_REFERENCE_LORE_ASSEMBLED,
+        SPAN_REFERENCE_LORE_SECTION_ORPHANED,
     }
 )
 
@@ -605,6 +619,67 @@ def reference_timeline_rendered_span(
             "reference.timeline_entry_count": entry_count,
             "reference.timeline_undated_count": undated_count,
             "reference.timeline_sort_mode": sort_mode,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- Lore-page TOC/section assembly spans (Story 65-10) ---
+
+
+@contextmanager
+def reference_lore_assembled_span(
+    *,
+    pack: str,
+    world: str,
+    section_ids: str,
+    section_count: int,
+    dynamic_sections: str,
+    parity_ok: bool,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired once per lore render, recording the composed TOC.
+
+    Carries the composed section ids (``"/"``-joined, in composed order), the
+    section count, which dynamic sections registered this render (``"/"``-joined
+    subset of cast/map/timeline, ``""`` when none), and whether every composed
+    TOC id has a matching body anchor (``parity_ok``). The page-level record the
+    per-feature spans (map_rendered, timeline_rendered, …) never provided."""
+    with Span.open(
+        SPAN_REFERENCE_LORE_ASSEMBLED,
+        {
+            "reference.pack": pack,
+            "reference.world": world,
+            "reference.lore_section_ids": section_ids,
+            "reference.lore_section_count": section_count,
+            "reference.lore_dynamic_sections": dynamic_sections,
+            "reference.lore_parity_ok": parity_ok,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_lore_section_orphaned_span(
+    *,
+    pack: str,
+    world: str,
+    section_id: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """WARN — fired per composed TOC id that has no matching anchor in the rendered
+    body (a dangling nav link). The server-side analog of the client
+    ``ref-bad-anchor`` banner: drift surfaces in OTEL, not only in the browser
+    (SOUL "No Silent Fallbacks")."""
+    with Span.open(
+        SPAN_REFERENCE_LORE_SECTION_ORPHANED,
+        {
+            "reference.pack": pack,
+            "reference.world": world,
+            "reference.section_id": section_id,
+            "reference.level": "WARN",
         },
         tracer_override=_tracer,
     ) as span:

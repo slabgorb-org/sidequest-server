@@ -39,6 +39,7 @@ regression (route back to SM as a blocking Delivery Finding), not an unimplement
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -47,6 +48,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.agents.orchestrator import Orchestrator
+from sidequest.agents.prompt_framework.core import PromptRegistry
 from sidequest.agents.prompt_framework.types import AttentionZone
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.entity_card import EntityCard, EntityType
@@ -143,17 +145,22 @@ def _make_orchestrator() -> Orchestrator:
     return Orchestrator()
 
 
-def _valley_section_names(registry, agent_name: str) -> set[str]:
+def _valley_section_names(registry: PromptRegistry, agent_name: str) -> set[str]:
     return {s.name for s in registry.get_sections(agent_name, zone=AttentionZone.Valley)}
 
 
-def _retrieval_span(exporter: InMemorySpanExporter):
+def _retrieval_span_attrs(exporter: InMemorySpanExporter) -> Mapping[str, Any]:
+    """Return the single ``retrieval.universal`` span's attributes (asserts exactly
+    one span fired, and that it carries attributes — so callers read a narrowed,
+    non-Optional mapping)."""
     spans = [s for s in exporter.get_finished_spans() if s.name == "retrieval.universal"]
     assert len(spans) == 1, (
         f"exactly one retrieval.universal span per turn; got {len(spans)} "
         f"(all spans: {[s.name for s in exporter.get_finished_spans()]})"
     )
-    return spans[0]
+    attrs = spans[0].attributes
+    assert attrs is not None, "retrieval.universal span must carry attributes"
+    return attrs
 
 
 # ===========================================================================
@@ -183,8 +190,8 @@ async def test_production_delegate_reaches_orchestrator_and_fires_span(
 
     assert isinstance(result, RetrievedEntities)
     assert result.outcome == "query_failed"
-    span = _retrieval_span(exporter)
-    assert span.attributes.get("retrieval.outcome") == "query_failed"
+    attrs = _retrieval_span_attrs(exporter)
+    assert attrs.get("retrieval.outcome") == "query_failed"
 
 
 # ===========================================================================
@@ -260,10 +267,10 @@ async def test_capstone_span_attributes_reflect_successful_fill(
     result = await handler._retrieve_entities_for_turn(sd, "listen for gossip")
 
     assert result.outcome == "success"
-    span = _retrieval_span(exporter)
-    assert span.attributes.get("retrieval.outcome") == "success"
-    assert span.attributes.get("retrieval.npc_count") == 1
-    assert span.attributes.get("retrieval.fill_selected_count") == 1
+    attrs = _retrieval_span_attrs(exporter)
+    assert attrs.get("retrieval.outcome") == "success"
+    assert attrs.get("retrieval.npc_count") == 1
+    assert attrs.get("retrieval.fill_selected_count") == 1
 
 
 # ===========================================================================

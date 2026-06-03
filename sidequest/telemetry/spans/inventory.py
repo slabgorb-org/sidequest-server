@@ -79,6 +79,64 @@ def inventory_narrator_extracted_span(
 
 
 # ---------------------------------------------------------------------------
+# Story 82-8 (ADR-021 track 3) — wealth-tier resolution. Fires once per
+# player-facing inventory projection when a character's gold balance resolves
+# against the pack's authored ``progression.wealth_tiers``. The GM panel reads
+# it as proof the wealth tier was engine-resolved (e.g. "stocked") rather than
+# the narrator improvising a wealth descriptor. No span fires when the pack
+# authors no tiers — there is nothing to resolve, and a fired span would be a
+# lie of a resolution that never happened.
+# ---------------------------------------------------------------------------
+
+SPAN_INVENTORY_WEALTH_TIER = "inventory.wealth_tier"
+SPAN_ROUTES[SPAN_INVENTORY_WEALTH_TIER] = SpanRoute(
+    event_type="state_transition",
+    component="inventory",
+    extract=lambda span: {
+        "field": "inventory.wealth_tier",
+        "player_name": (span.attributes or {}).get("player_name", ""),
+        "gold": (span.attributes or {}).get("gold", 0),
+        "label": (span.attributes or {}).get("label", ""),
+        "tier_index": (span.attributes or {}).get("tier_index", -1),
+        "currency_name": (span.attributes or {}).get("currency_name", ""),
+    },
+)
+
+
+@contextmanager
+def inventory_wealth_tier_span(
+    *,
+    player_name: str,
+    gold: int,
+    label: str,
+    tier_index: int,
+    currency_name: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """One span per wealth-tier resolution on the player-facing inventory.
+
+    ``tier_index`` is the resolved tier's position in the authored ladder
+    (0 = poorest), ``label`` the tier's display label, ``gold`` the balance
+    that resolved it. ``currency_name`` is the genre's currency noun for
+    context (the GM panel shows "credits"/"Salvage"/"gold").
+    """
+    with Span.open(
+        SPAN_INVENTORY_WEALTH_TIER,
+        {
+            "player_name": player_name,
+            "gold": int(gold),
+            "label": label,
+            "tier_index": int(tier_index),
+            "currency_name": currency_name,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# ---------------------------------------------------------------------------
 # Story 71-15 (ADR-055) — movement-consumed resource depletion.
 # Fires once per item burned on a room-graph transition (torch model). The
 # GM panel reads it as proof the dungeon clock is ablating resources rather

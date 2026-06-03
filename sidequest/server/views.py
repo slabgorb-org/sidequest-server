@@ -397,6 +397,30 @@ def party_member_from_character(
     if sd.genre_pack.inventory is not None and sd.genre_pack.inventory.currency is not None:
         currency_name = sd.genre_pack.inventory.currency.name
 
+    # Wealth tier (ADR-021 track 3): resolve the gold balance against the
+    # pack's authored ``progression.wealth_tiers`` into a player-facing label,
+    # and emit an OTEL span so the GM panel can confirm the tier was
+    # engine-resolved rather than narrator-improvised. No tiers authored →
+    # None label and no span (No Silent Fallbacks — show the bare number).
+    from sidequest.genre.models.progression import resolve_wealth_tier
+    from sidequest.telemetry.spans import inventory_wealth_tier_span
+
+    wealth_tiers = sd.genre_pack.progression.wealth_tiers
+    gold = character.core.inventory.gold
+    wealth_tier_label: str | None = None
+    resolved_tier = resolve_wealth_tier(gold, wealth_tiers)
+    if resolved_tier is not None:
+        wealth_tier_label = resolved_tier.label
+        tier_index = next(i for i, t in enumerate(wealth_tiers) if t is resolved_tier)
+        with inventory_wealth_tier_span(
+            player_name=player_name,
+            gold=gold,
+            label=resolved_tier.label,
+            tier_index=tier_index,
+            currency_name=currency_name or "",
+        ):
+            pass
+
     inventory_payload = InventoryPayload(
         items=[
             InventoryItem(
@@ -412,6 +436,7 @@ def party_member_from_character(
         ],
         gold=character.core.inventory.gold,
         currency_name=currency_name,
+        wealth_tier_label=wealth_tier_label,
     )
 
     location_nbs: NonBlankString | None = None

@@ -18,6 +18,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from sidequest.agents.orchestrator import ActionRewrite, NarrationTurnResult
+from sidequest.game.encounter import (
+    EncounterActor,
+    EncounterMetric,
+    StructuredEncounter,
+)
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import load_genre_pack
 
@@ -140,10 +145,19 @@ def test_active_encounter_short_circuits_validator(pack, monkeypatch) -> None:
     import sidequest.telemetry.spans as spans_mod
 
     snap = _snapshot()
-    # Use a real StructuredEncounter if convenient, or MagicMock that
-    # answers `resolved=False`. The validator only reads truthiness +
-    # `.resolved`, so a stub is fine.
-    snap.encounter = MagicMock(resolved=False)
+    # A real, live (unresolved) StructuredEncounter. The validator short-circuits
+    # on any live encounter; using a real one (rather than a bare MagicMock) keeps
+    # the stub faithful to the per-turn opponent-yield sweep (Story 59-31,
+    # `_resolve_if_no_opponent_remains`), which calls `opponent_yield_outcome()` —
+    # a real encounter with a still-active opponent answers `None`, so the sweep
+    # leaves the encounter alone. (A bare MagicMock returns a truthy mock there and
+    # would spuriously trigger opponent-yield resolution.)
+    snap.encounter = StructuredEncounter(
+        encounter_type="standoff",
+        player_metric=EncounterMetric(name="resolve", threshold=10),
+        opponent_metric=EncounterMetric(name="menace", threshold=10),
+        actors=[EncounterActor(name="Bandit", role="foe", side="opponent")],
+    )
     result = _result(intent="strike the bandit", confrontation=None)
     room = MagicMock()
     spans: list[dict] = []

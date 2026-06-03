@@ -38,8 +38,8 @@ def _minimal_pack(root: Path) -> Path:
     """Create a minimal genre-pack directory at ``root`` that satisfies ALL
     required files and dirs from the real pack_schema.yaml.
 
-    Required files (18):
-        pack.yaml, theme.yaml, archetypes.yaml, tropes.yaml, lore.yaml,
+    Required files (17):
+        pack.yaml, theme.yaml, archetypes.yaml, tropes.yaml,
         visual_style.yaml, audio.yaml, rules.yaml, cultures.yaml,
         char_creation.yaml, inventory.yaml, lethality_policy.yaml,
         power_tiers.yaml, progression.yaml, prompts.yaml, axes.yaml,
@@ -54,7 +54,8 @@ def _minimal_pack(root: Path) -> Path:
         "theme.yaml",
         "archetypes.yaml",
         "tropes.yaml",
-        "lore.yaml",
+        # lore.yaml is forbidden at the genre tier (epic-74 story 74-3) — do NOT
+        # create one here or the validator flags it.
         "visual_style.yaml",
         "audio.yaml",
         "rules.yaml",
@@ -119,6 +120,13 @@ def _minimal_world(world_dir: Path) -> Path:
         fpath.touch()
     for dname in required_dirs:
         (world_dir / dname).mkdir(parents=True, exist_ok=True)
+    # World lore must seed a non-empty LoreStore (epic-74 story 74-3): an empty
+    # touch fails the validator's seedable-lore rule, so write minimal seedable
+    # content instead.
+    (world_dir / "lore.yaml").write_text(
+        "world_name: Test World\nhistory: A minimal but seedable world history.\n",
+        encoding="utf-8",
+    )
     return world_dir
 
 
@@ -271,9 +279,7 @@ class TestPresenceGate:
             f"genre cultures.yaml must be optional; got: {errors}"
         )
 
-    def test_incomplete_waiver_demotes_named_missing_file_to_warning(
-        self, tmp_path: Path
-    ) -> None:
+    def test_incomplete_waiver_demotes_named_missing_file_to_warning(self, tmp_path: Path) -> None:
         """A NON-draft world may waive a specific loader-optional required artifact.
 
         ``incomplete_files`` in world.yaml demotes ONLY the named missing file to
@@ -290,9 +296,7 @@ class TestPresenceGate:
         # Make it live (non-draft) and waive tropes.yaml + the legends dir, then
         # actually remove those artifacts so the waiver has something to absorb.
         (world_dir / "world.yaml").write_text(
-            "draft: false\n"
-            "incomplete_files:\n  - tropes.yaml\n"
-            "incomplete_dirs:\n  - legends\n",
+            "draft: false\nincomplete_files:\n  - tropes.yaml\nincomplete_dirs:\n  - legends\n",
             encoding="utf-8",
         )
         (world_dir / "tropes.yaml").unlink()

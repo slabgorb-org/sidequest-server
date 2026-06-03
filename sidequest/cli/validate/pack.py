@@ -427,9 +427,7 @@ def _validate_history_trope_refs(
     return errors
 
 
-def _validate_legend_trope_refs(
-    legends_dir: Path, resolved_ids: set[str], label: str
-) -> list[str]:
+def _validate_legend_trope_refs(legends_dir: Path, resolved_ids: set[str], label: str) -> list[str]:
     """AC1 — every id in a legend's ``related_tropes`` must resolve against the
     resolved trope set. Absent legends/ dir contributes nothing."""
     if not legends_dir.is_dir():
@@ -600,6 +598,50 @@ def _validate_archetype_constraints_crossref(pack_dir: Path, label: str) -> list
 
 
 # ---------------------------------------------------------------------------
+# Epic 74 — lore is world-only and must be non-empty (story 74-3)
+# ---------------------------------------------------------------------------
+
+
+def _validate_world_lore_seedable(world_dir: Path, label: str) -> list[str]:
+    """A world's ``lore.yaml`` must seed at least one LoreStore fragment.
+
+    Epic 74: lore is world-only and authoritative; genre lore is no longer
+    seeded. The narrator's ``seed_lore_from_world`` only reads
+    ``history`` / ``geography`` / ``cosmology`` (non-empty strings) and
+    ``factions`` (a non-empty list) — content under any OTHER key is silently
+    ignored. A world whose lore.yaml carries only non-seedable keys would leave
+    the narrator's LoreStore empty (No Silent Fallbacks). Absence of the file is
+    handled by the structural required-files check, not here.
+
+    Mirrors the load-time guard in ``genre.loader._world_lore_seedable_count`` —
+    kept here as a raw-YAML check so the validator stays free of the loader
+    import graph (story 64-6).
+    """
+    lore_path = world_dir / "lore.yaml"
+    if not lore_path.is_file():
+        return []
+    data, read_err = _read_yaml(lore_path, label)
+    if read_err is not None:
+        return [read_err]
+    if not isinstance(data, dict):
+        return [f"{label}: lore.yaml is not a mapping"]
+    has_text = any(
+        isinstance(data.get(k), str) and data.get(k, "").strip()
+        for k in ("history", "geography", "cosmology")
+    )
+    factions = data.get("factions")
+    has_factions = isinstance(factions, list) and len(factions) > 0
+    if not (has_text or has_factions):
+        return [
+            f"{label}: lore.yaml has no seedable lore — it must populate at least "
+            "one of history / geography / cosmology (non-empty string) or factions "
+            "(non-empty list). Content under other keys is NOT seeded into the "
+            "narrator's LoreStore; an empty world LoreStore is forbidden (Epic 74)."
+        ]
+    return []
+
+
+# ---------------------------------------------------------------------------
 # World-level validation
 # ---------------------------------------------------------------------------
 
@@ -717,6 +759,9 @@ def _validate_world(
     )
     content_errors.extend(_validate_portrait_manifest(world_dir / "portrait_manifest.yaml", label))
 
+    # Epic 74 (story 74-3) — world lore must seed a non-empty LoreStore.
+    content_errors.extend(_validate_world_lore_seedable(world_dir, label))
+
     # Cross-reference content lint (story 64-5) — world tier.
     resolved_trope_ids = genre_trope_ids | _collect_trope_ids(world_dir / "tropes.yaml")
     content_errors.extend(
@@ -802,6 +847,15 @@ def validate_pack_structure(pack_dir: Path, schema_path: Path) -> tuple[list[str
     all_errors.extend(
         _check_extensions(pack_dir, extensions_declared, genre_extensions_schema, label)
     )
+
+    # Epic 74 (story 74-3): lore is world-only — a genre-tier lore.yaml is
+    # forbidden (the genre tier is mechanics-only). Flag it loudly rather than
+    # letting it fall through to a soft orphan warning.
+    if (pack_dir / "lore.yaml").is_file():
+        all_errors.append(
+            f"{label}: genre-tier lore.yaml is forbidden (Epic 74: lore is "
+            "world-only). Move its content into worlds/<world>/lore.yaml."
+        )
 
     # Content validation: parse present, schema-known genre-tier files.
     all_errors.extend(_validate_list_of_model(pack_dir / "archetypes.yaml", NpcArchetype, label))

@@ -56,7 +56,9 @@ _REAL_CONTENT = Path(__file__).resolve().parents[4] / "sidequest-content"
 _REAL_SCHEMA = _REAL_CONTENT / "pack_schema.yaml"
 _REAL_BASE = _REAL_CONTENT / "archetypes_base.yaml"
 _REAL_GENRE_PACKS = _REAL_CONTENT / "genre_packs"
-_REAL_BONE_CRYPT = _REAL_CONTENT / "genre_packs" / "caverns_and_claudes" / "themes" / "bone_crypt.yaml"
+_REAL_BONE_CRYPT = (
+    _REAL_CONTENT / "genre_packs" / "caverns_and_claudes" / "themes" / "bone_crypt.yaml"
+)
 
 
 def _require(path: Path) -> None:
@@ -107,6 +109,13 @@ def _build_pack(tmp_path: Path) -> tuple[Path, Path, Path]:
     world_dir = pack_dir / "worlds" / "test_world"
     world_dir.mkdir(parents=True)
     _touch_all(world_dir, world.get("required_files", []), world.get("required_dirs", []))
+    # World lore must seed a non-empty LoreStore (epic-74 story 74-3): the
+    # schema-driven touch above leaves lore.yaml empty, which the validator's
+    # seedable-lore rule rejects. Write minimal seedable content.
+    (world_dir / "lore.yaml").write_text(
+        "world_name: Test World\nhistory: A minimal but seedable world history.\n",
+        encoding="utf-8",
+    )
 
     return schema_path, pack_dir, world_dir
 
@@ -227,7 +236,11 @@ class TestTropeIdMembership:
         # legends/ is a required world dir (created empty by the builder); add a file.
         _write_yaml(
             world_dir / "legends" / "the_phantom.yaml",
-            {"name": "The Phantom", "summary": "A ghost story.", "related_tropes": ["phantom_trope"]},
+            {
+                "name": "The Phantom",
+                "summary": "A ghost story.",
+                "related_tropes": ["phantom_trope"],
+            },
         )
 
         errors, _ = validate_pack_structure(pack_dir, schema_path)
@@ -347,7 +360,9 @@ class TestArchetypeConstraintsCrossRef:
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
         offenders = [e for e in errors if "villain" in e]
-        assert offenders, f"Expected an ERROR naming the non-canonical jungian 'villain', got: {errors}"
+        assert offenders, (
+            f"Expected an ERROR naming the non-canonical jungian 'villain', got: {errors}"
+        )
         assert any("archetype_constraints.yaml" in e for e in offenders), (
             f"Error must name the file (archetype_constraints.yaml), got: {offenders}"
         )

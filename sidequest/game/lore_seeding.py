@@ -136,41 +136,53 @@ def seed_lore_from_world(store: LoreStore, world_lore: WorldLore, world_slug: st
     count = 0
     slug = world_slug.strip().lower().replace(" ", "_") or "unknown_world"
 
-    if world_lore.history and _try_add(
-        store,
-        LoreFragment.new(
-            id=f"lore_world_{slug}_history",
-            category=LoreCategory.History,
-            content=world_lore.history,
-            source=LoreSource.GenrePack,
-            metadata={"world_slug": world_slug},
-        ),
+    if (
+        world_lore.history
+        and world_lore.history.strip()
+        and _try_add(
+            store,
+            LoreFragment.new(
+                id=f"lore_world_{slug}_history",
+                category=LoreCategory.History,
+                content=world_lore.history,
+                source=LoreSource.GenrePack,
+                metadata={"world_slug": world_slug},
+            ),
+        )
     ):
         count += 1
 
-    if world_lore.geography and _try_add(
-        store,
-        LoreFragment.new(
-            id=f"lore_world_{slug}_geography",
-            category=LoreCategory.Geography,
-            content=world_lore.geography,
-            source=LoreSource.GenrePack,
-            metadata={"world_slug": world_slug},
-        ),
+    if (
+        world_lore.geography
+        and world_lore.geography.strip()
+        and _try_add(
+            store,
+            LoreFragment.new(
+                id=f"lore_world_{slug}_geography",
+                category=LoreCategory.Geography,
+                content=world_lore.geography,
+                source=LoreSource.GenrePack,
+                metadata={"world_slug": world_slug},
+            ),
+        )
     ):
         count += 1
 
-    if world_lore.cosmology and _try_add(
-        store,
-        LoreFragment.new(
-            id=f"lore_world_{slug}_cosmology",
-            # Cosmology fragments bucket into the History category
-            # (matches seed_lore_from_genre_pack precedent).
-            category=LoreCategory.History,
-            content=world_lore.cosmology,
-            source=LoreSource.GenrePack,
-            metadata={"world_slug": world_slug},
-        ),
+    if (
+        world_lore.cosmology
+        and world_lore.cosmology.strip()
+        and _try_add(
+            store,
+            LoreFragment.new(
+                id=f"lore_world_{slug}_cosmology",
+                # Cosmology fragments bucket into the History category
+                # (matches seed_lore_from_genre_pack precedent).
+                category=LoreCategory.History,
+                content=world_lore.cosmology,
+                source=LoreSource.GenrePack,
+                metadata={"world_slug": world_slug},
+            ),
+        )
     ):
         count += 1
 

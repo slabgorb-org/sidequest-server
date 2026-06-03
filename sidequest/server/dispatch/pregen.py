@@ -45,9 +45,6 @@ logger = logging.getLogger(__name__)
 NPCS_PER_CULTURE = 3
 """How many NPCs to generate per culture during seeding (Rust parity)."""
 
-MAX_CULTURES = 4
-"""Cap on cultures sampled per genre (Rust parity: ``.take(4)``)."""
-
 DEFAULT_NPC_FALLBACK_COUNT = NPCS_PER_CULTURE * 3
 """When a pack has no cultures, generate this many faction-less NPCs."""
 
@@ -214,6 +211,7 @@ def seed_manual(
 
     cultures: list[str] = []
     cultures_source = "none"
+    effective_culture_count = 0
     constraints: ArchetypeConstraints | None = None
     if pack is not None:
         # World-over-genre resolution (the SAME rule namegen uses): a world
@@ -222,7 +220,12 @@ def seed_manual(
         # generator that validates against the WORLD set, so perseus_cloud
         # seeding failed every time and seeded 0 NPCs (session 894).
         effective, cultures_source = pack.effective_cultures(world)
-        cultures = [c.name for c in effective[:MAX_CULTURES]]
+        # Seed ALL the world's cultures — no cap. The world author's declared
+        # culture list is the bound (72-11): the old ``[:MAX_CULTURES]`` (=4)
+        # slice silently dropped any culture past the fourth, so coyote_star's
+        # fifth culture (voidborn) never seeded an NPC.
+        effective_culture_count = len(effective)
+        cultures = [c.name for c in effective]
         constraints = pack.archetype_constraints
 
     # ── NPCs: 3 per culture (Rust parity) ─────────────────────
@@ -320,6 +323,11 @@ def seed_manual(
             "genre": genre,
             "world": world or "",
             "cultures_source": cultures_source,
+            # ``effective_culture_count`` is the world's TRUE culture count
+            # (pre-seed); ``culture_count`` is how many were actually seeded.
+            # They diverge only if a culture was dropped — so any silent
+            # truncation is visible on the GM panel instead of invisible (72-11).
+            "effective_culture_count": effective_culture_count,
             "culture_count": len(cultures),
             "npcs_before": npcs_before,
             "npcs_after": npcs_after,

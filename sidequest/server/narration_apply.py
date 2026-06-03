@@ -50,8 +50,8 @@ from sidequest.game.session import (
     ContainerState,
     GameSnapshot,
     Npc,
-    QuestEntry,
     RoomState,
+    upsert_quest_status,
 )
 from sidequest.game.table.types import TableCommit
 from sidequest.genre.models.pack import GenrePack
@@ -2897,14 +2897,9 @@ def _apply_narration_result_to_snapshot(
             turn_number=snapshot.turn_manager.interaction,
         ):
             for quest_id, status in result.quest_updates.items():
-                # Story 77-2: quest_log values are QuestEntry now. Legacy
-                # status-only lane — update status in place or mint a
-                # status-only entry. (77-4 retires this lane onto record_quest.)
-                existing = snapshot.quest_log.get(quest_id)
-                if existing is not None:
-                    existing.status = status
-                else:
-                    snapshot.quest_log[quest_id] = QuestEntry(status=status)
+                # Story 77-2: legacy status-only lane under the widened
+                # QuestEntry type (77-4 retires this onto record_quest).
+                upsert_quest_status(snapshot.quest_log, quest_id, status)
             logger.info(
                 "state.quest_update count=%d player=%s",
                 len(result.quest_updates),
@@ -6033,13 +6028,9 @@ def _handshake_resolved_tropes(
             turn_number=interaction,
         ):
             for key, status_text in fresh_writes.items():
-                # Story 77-2: quest_log values are QuestEntry. The handshake
-                # records a trope-resolution status-only entry.
-                existing = snapshot.quest_log.get(key)
-                if existing is not None:
-                    existing.status = status_text
-                else:
-                    snapshot.quest_log[key] = QuestEntry(status=status_text)
+                # Story 77-2: trope-resolution status-only entry under the
+                # widened QuestEntry type.
+                upsert_quest_status(snapshot.quest_log, key, status_text)
             logger.info(
                 "trope.resolution_handshake fresh_writes=%d player=%s turn=%d",
                 len(fresh_writes),

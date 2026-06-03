@@ -464,6 +464,24 @@ def _coerce_quest_log(value: object) -> object:
     return out
 
 
+def upsert_quest_status(quest_log: dict[str, QuestEntry], quest_id: str, status: str) -> None:
+    """Set an existing quest's status in place, or mint a status-only QuestEntry.
+
+    The status-only upsert idiom shared by every legacy/status-string writer
+    under the widened ``quest_log`` type (Story 77-2): the ``quest_updates``
+    apply path, the live ``quest_updates`` narration writer, the trope-resolution
+    handshake, and world-materialization chapter quests. Centralised so the
+    widened-type contract (never assign a bare ``str`` into ``quest_log``) lives
+    in one place. ``record_quest`` does NOT use this — it writes full
+    title+objective entries, not status-only.
+    """
+    existing = quest_log.get(quest_id)
+    if existing is not None:
+        existing.status = status
+    else:
+        quest_log[quest_id] = QuestEntry(status=status)
+
+
 class WorldStatePatch(BaseModel):
     """Patch for world-level state (location, atmosphere, quests, regions).
 
@@ -1349,14 +1367,9 @@ class GameSnapshot(BaseModel):
             self.quest_log = patch.quest_log
         if patch.quest_updates is not None:
             # Legacy status-only lane (dict[str, str], retired in 77-4). Coerce
-            # into the widened QuestEntry type: update an existing quest's
-            # status in place, or mint a status-only entry. Story 77-2.
+            # into the widened QuestEntry type. Story 77-2.
             for quest_id, status in patch.quest_updates.items():
-                existing = self.quest_log.get(quest_id)
-                if existing is not None:
-                    existing.status = status
-                else:
-                    self.quest_log[quest_id] = QuestEntry(status=status)
+                upsert_quest_status(self.quest_log, quest_id, status)
         if patch.notes is not None:
             self.notes = patch.notes
         if patch.pc_region is not None:

@@ -22,10 +22,8 @@ from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import (
     reference_poi_image_not_found_span,
     reference_poi_image_resolved_span,
-)
-from sidequest.telemetry.spans.scrapbook import (
-    scrapbook_npc_portrait_not_found_span,
-    scrapbook_npc_portrait_resolved_span,
+    reference_portrait_not_found_span,
+    reference_portrait_resolved_span,
 )
 
 KeyPath = tuple[str, ...]
@@ -318,16 +316,16 @@ def _cast_portrait_img_html(
     """Story 65-9: a world-scoped portrait ``<img>`` for a Cast card, or "".
 
     Emits the image iff the NPC's ``slug`` is in ``portrait_image_slugs`` (the
-    R2-manifest existence gate). Reuses the Story 65-6 portrait span family so a
-    present-vs-absent portrait is observable per NPC (the GM/dev panel can tell
-    "authored & on R2" from "authored, not on R2"). Returns "" (text-only card)
-    when the portrait is not on R2 — a spanned, observable skip, not a silent
-    fallback."""
+    R2-manifest existence gate). Story 65-13 migrates the per-NPC observability off
+    the scene-time ``scrapbook.npc_portrait_*`` family onto dedicated reference-
+    namespaced spans (``sidequest.reference.portrait_{resolved,not_found}``) — the
+    portrait analog of the 65-11 map-pin spans. On the reference page "not_found"
+    means *authored-but-not-on-R2*, distinct from the scrapbook family's "not
+    authored at all" (ad-hoc scene NPC). Returns "" (text-only card) when the
+    portrait is not on R2 — a spanned, observable skip, not a silent fallback."""
     if slug in portrait_image_slugs:
         src = resolve_asset_url(portrait_image_key(pack, world, slug))
-        with scrapbook_npc_portrait_resolved_span(
-            npc_name=name, genre=pack, world=world, slug=slug
-        ):
+        with reference_portrait_resolved_span(slug=slug, pack=pack, world=world):
             pass
         # Escape the accent: it lands in a style= attribute and the renderer's
         # invariant is to escape every interpolation (mirrors _poi_image_html).
@@ -337,7 +335,7 @@ def _cast_portrait_img_html(
             f'loading="lazy" style="width:100%;border:2px solid {accent};'
             f'box-shadow:0 2px 8px {accent}33;" />'
         )
-    with scrapbook_npc_portrait_not_found_span(npc_name=name, genre=pack, world=world, slug=slug):
+    with reference_portrait_not_found_span(slug=slug, pack=pack, world=world):
         pass
     return ""
 

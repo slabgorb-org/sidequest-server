@@ -89,6 +89,15 @@ SEMANTIC_ALLOWLIST: set[str] = {
     # file section to read the `id="file-…"` attribute instead — more
     # brittle than a stable class marker. Semantic-only by design.
     "file",
+    # `<img class="ref-card__poi">` / `<img class="ref-card__portrait">` are the
+    # manifest-gated landscape (65-8) and Cast-portrait (65-9) images. Both are
+    # inline-styled `<img>` elements (width/border/box-shadow set from the per-pack
+    # theme accent), deliberately NOT styled by the CSS bundle — the class is a
+    # stable hook for tests/tooling, not a styling target. Story 65-13 allowlists
+    # them so the contract validates them rather than leaving them an unguarded
+    # blind spot. If a future story moves their styling into the bundle, drop these.
+    "ref-card__poi",
+    "ref-card__portrait",
 }
 
 
@@ -294,6 +303,145 @@ def test_renderer_does_not_emit_legacy_contents_rail_class(tmp_path: Path) -> No
             f'`<aside class="toc-sticky"><nav class="toc">…</nav></aside>` '
             f'wrapped inside `<div class="layout">`.'
         )
+
+
+def _seed_cast_and_poi_content_root(tmp_path: Path) -> tuple[Path, Path]:
+    """Story 65-13 CHROME. Build a *content-root-structured* fixture so the lore
+    render emits BOTH manifest-gated image classes (``ref-card__poi`` and
+    ``ref-card__portrait``) and the R2-manifest gate resolves a real oracle.
+
+    The pack lives at ``<root>/genre_packs/space_opera`` so the gate's
+    ``pack_dir.parent.parent / "r2_manifest.json"`` discovery lands on
+    ``<root>/r2_manifest.json`` (inside ``tmp_path``) — unlike
+    ``_seed_space_opera_pack``, whose pack-at-tmp-root layout would push the
+    manifest path *outside* ``tmp_path``. Authors one POI and one NPC, both with
+    their world-scoped keys present in the manifest, so both ``<img>`` branches
+    fire and their classes are emitted for the chrome contract to validate.
+
+    Returns ``(pack_dir, world_dir)``."""
+    import json
+
+    from sidequest.server.reference_presenters import (
+        poi_image_key,
+        portrait_image_key,
+    )
+    from sidequest.server.utils import slugify_player_name
+
+    pack = "space_opera"
+    world = "coyote_star"
+    poi_slug = "harbor-light"
+    npc_name = "Vivian Harbormaster"
+    npc_slug = slugify_player_name(npc_name)
+
+    pack_dir = tmp_path / "genre_packs" / pack
+    world_dir = pack_dir / "worlds" / world
+    world_dir.mkdir(parents=True)
+
+    (pack_dir / "theme.yaml").write_text(_FIXTURE_THEME_YAML)
+    (pack_dir / "rules.yaml").write_text("core: vector-and-trust\n")
+
+    (world_dir / "world.yaml").write_text("name: Coyote Star\n")
+    (world_dir / "lore.yaml").write_text(
+        "world_name: Coyote Star\n"
+        "epigraph: Out here the only law that travels faster than light is grief.\n"
+    )
+    (world_dir / "locations.yaml").write_text(
+        "locations:\n"
+        f"  - id: {poi_slug}\n"
+        "    name: Harbor Light\n"
+        "    region: drowned_coast\n"
+        "    type: lighthouse\n"
+        "    environment: storm-lashed headland\n"
+        "    description: A beacon over the reef.\n"
+    )
+    (world_dir / "history.yaml").write_text(
+        "chapters:\n"
+        "  - label: The Spring Tides\n"
+        "    description: A chapter authoring one on-R2 POI.\n"
+        "    points_of_interest:\n"
+        f"      - name: Harbor Light\n"
+        f"        slug: {poi_slug}\n"
+        "        region: drowned_coast\n"
+        "        type: lighthouse\n"
+        "        description: An authored POI whose image IS on R2.\n"
+    )
+    (world_dir / "portrait_manifest.yaml").write_text(
+        "characters:\n"
+        f"  - name: {npc_name}\n"
+        "    role: Keeper of the tide-ledgers\n"
+        "    appearance: A weather-creased woman in oilskins.\n"
+    )
+
+    # r2_manifest.json at the content root — both world-scoped keys present so
+    # both image <img> branches gate IN and emit their classes.
+    manifest = [
+        {
+            "key": poi_image_key(pack, world, poi_slug),
+            "md5": "0" * 32,
+            "size_bytes": 1,
+            "uploaded_at": "2026-06-03T00:00:00Z",
+            "source": "r2_bucket_scan",
+        },
+        {
+            "key": portrait_image_key(pack, world, npc_slug),
+            "md5": "0" * 32,
+            "size_bytes": 1,
+            "uploaded_at": "2026-06-03T00:00:00Z",
+            "source": "r2_bucket_scan",
+        },
+    ]
+    (tmp_path / "r2_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return pack_dir, world_dir
+
+
+def test_cast_and_poi_image_classes_pass_chrome_contract(tmp_path: Path) -> None:
+    """Story 65-13 CHROME — close the pre-existing blind spot.
+
+    The keystone test (``test_every_emitted_class_has_matching_css_rule``) seeds
+    a world with NO portrait_manifest.yaml and no on-R2 POI, so the two manifest-
+    gated image classes (``ref-card__poi``, ``ref-card__portrait``) are NEVER
+    emitted — and therefore never validated against the served CSS bundle. Both
+    are emitted as inline-styled ``<img>`` elements with no matching CSS rule, so
+    if either drifts (e.g. someone adds a class the bundle is expected to style)
+    the keystone never catches it.
+
+    This test renders a cast+POI-bearing world (manifest-gated images actually
+    fire), then applies the SAME chrome contract the keystone uses: every emitted
+    class must appear as ``.{cls}`` in the served CSS OR be in
+    ``SEMANTIC_ALLOWLIST``.
+
+    RED today: ``ref-card__portrait`` and ``ref-card__poi`` are emitted but are
+    neither in the CSS bundle nor the allowlist. Dev resolves them (allowlist
+    with a one-line inline-styled-image justification, per the contract's
+    option 3) so a future drift in these classes is caught."""
+    from sidequest.server.reference_renderer import assemble_lore_page
+
+    pack_dir, world_dir = _seed_cast_and_poi_content_root(tmp_path)
+    lore_html = assemble_lore_page("space_opera", "coyote_star", pack_dir, world_dir)
+    emitted = _extract_emitted_classes(lore_html)
+
+    # Guard: the fixture must actually exercise both image branches, else the
+    # contract assertion below is vacuous.
+    assert "ref-card__poi" in emitted, (
+        "fixture did not emit ref-card__poi — POI image gate did not fire "
+        "(check history.yaml slug / r2_manifest key)"
+    )
+    assert "ref-card__portrait" in emitted, (
+        "fixture did not emit ref-card__portrait — portrait gate did not fire "
+        "(check portrait_manifest.yaml / r2_manifest key)"
+    )
+
+    css_text = _served_css_text()
+    unmatched = sorted(
+        cls for cls in emitted if cls not in SEMANTIC_ALLOWLIST and f".{cls}" not in css_text
+    )
+    assert not unmatched, (
+        f"Cast+POI lore render emits {len(unmatched)} class name(s) with no "
+        f"matching CSS selector and no SEMANTIC_ALLOWLIST entry: {unmatched}.\n"
+        f"The manifest-gated image classes (ref-card__poi, ref-card__portrait) "
+        f"are inline-styled <img> elements with no bundle rule — add them to "
+        f"SEMANTIC_ALLOWLIST with a one-line justification (contract option 3)."
+    )
 
 
 def test_semantic_allowlist_stays_small() -> None:

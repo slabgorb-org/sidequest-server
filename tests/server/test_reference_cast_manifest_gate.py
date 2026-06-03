@@ -57,6 +57,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.server.asset_urls import resolve_asset_url
 from sidequest.server.utils import slugify_player_name
@@ -65,8 +66,20 @@ from sidequest.server.utils import slugify_player_name
 from tests.server.conftest import span_attrs_by_name
 
 SPAN_MANIFEST_LOADED = "sidequest.reference.manifest_loaded"
-SPAN_PORTRAIT_RESOLVED = "scrapbook.npc_portrait_resolved"
-SPAN_PORTRAIT_NOT_FOUND = "scrapbook.npc_portrait_not_found"
+# Story 65-13 AC8: the reference Cast gate emits its OWN reference-namespaced
+# portrait spans (mirroring the 65-11 map-pin spans) instead of reusing the
+# scene-time scrapbook portrait family. On the reference page a "not_found"
+# means *authored-but-not-on-R2* — a different fact than the scrapbook
+# family's "not authored at all" (ad-hoc scene NPC), so the docstrings on
+# the scrapbook spans (scrapbook.py:133,152) describe a semantic the
+# reference render does not have. These are the new spans Dev must add +
+# migrate the presenter onto.
+SPAN_REF_PORTRAIT_RESOLVED = "sidequest.reference.portrait_resolved"
+SPAN_REF_PORTRAIT_NOT_FOUND = "sidequest.reference.portrait_not_found"
+# The scene-time scrapbook spans the reference render must NO LONGER emit
+# (they belong to the 65-6 scene-invocation path, not the reference page).
+SPAN_SCENE_PORTRAIT_RESOLVED = "scrapbook.npc_portrait_resolved"
+SPAN_SCENE_PORTRAIT_NOT_FOUND = "scrapbook.npc_portrait_not_found"
 
 FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "packs"
 FIXTURE_MANIFEST = Path(__file__).parent.parent / "fixtures" / "r2_manifest.json"
@@ -138,6 +151,11 @@ def test_load_manifest_entry_missing_key_raises_loudly(tmp_path: Path) -> None:
     malformed-JSON, and wrong-top-level-shape."""
     from sidequest.server.reference_renderer import load_r2_manifest_keys
 
+    # Story 65-13: the @lru_cache on load_r2_manifest_keys is keyed by Path; a
+    # prior test that loaded a same-named tmp manifest could otherwise return a
+    # stale cached set. Clear it so this assertion exercises the real read.
+    load_r2_manifest_keys.cache_clear()
+
     p = tmp_path / "r2_manifest.json"
     p.write_text(
         json.dumps(
@@ -148,8 +166,65 @@ def test_load_manifest_entry_missing_key_raises_loudly(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError):
+    # Story 65-13: pin the *reason* — a bare ValueError could mask an unrelated
+    # failure (e.g. wrong-top-level-shape). The message must name the missing key.
+    with pytest.raises(ValueError, match=r"missing 'key'"):
         load_r2_manifest_keys(p)
+
+
+# ---------------------------------------------------------------------------
+# Story 65-13 EDGE — load_cast_entries guards a non-list `characters:` value
+# ---------------------------------------------------------------------------
+
+
+def test_load_cast_entries_non_list_characters_raises_loudly(tmp_path: Path) -> None:
+    """Story 65-13 EDGE. A ``portrait_manifest.yaml`` whose top-level
+    ``characters:`` is a scalar (e.g. ``characters: 42``) is malformed first-
+    party authoring. ``load_cast_entries`` must fail **loud** with a
+    ``ValueError`` (No Silent Fallbacks) rather than letting the downstream
+    ``[c for c in chars ...]`` blow up with an uncaught ``TypeError`` (an
+    unclean — though still loud — 500).
+
+    RED today: ``chars = data.get("characters", [])`` is fed straight into a
+    comprehension, so a non-iterable raises ``TypeError`` (not ``ValueError``)
+    and a non-dict iterable (e.g. a string) silently mis-parses per character."""
+    from sidequest.server.reference_renderer import load_cast_entries
+
+    world = tmp_path / "world"
+    world.mkdir()
+    (world / "portrait_manifest.yaml").write_text("characters: 42\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_cast_entries(world)
+
+
+# ---------------------------------------------------------------------------
+# Story 65-13 TEST — graceful path: a world with no portrait_manifest.yaml
+# ---------------------------------------------------------------------------
+
+
+def test_load_cast_entries_returns_empty_when_manifest_absent(tmp_path: Path) -> None:
+    """Story 65-13. A feature-less world (no ``portrait_manifest.yaml``) yields
+    an empty cast list — the graceful no-feature path that lets the caller omit
+    the Cast section. This codepath shipped in 65-9 but was never covered."""
+    from sidequest.server.reference_renderer import load_cast_entries
+
+    world = tmp_path / "world"
+    world.mkdir()
+    assert not (world / "portrait_manifest.yaml").exists(), "guard: no manifest authored"
+
+    assert load_cast_entries(world) == []
+
+
+def test_world_without_cast_renders_no_cast_section(gated_client: TestClient) -> None:
+    """Story 65-13 (graceful path, route level). A POI-bearing but cast-less
+    world renders 200 with NO Cast section — ``load_cast_entries`` returns ``[]``
+    and ``assemble_lore_page`` omits the section entirely. ``poi_gated_fixture``
+    authors POIs but no ``portrait_manifest.yaml``."""
+    resp = gated_client.get(f"/reference/lore/{_PACK}/poi_gated_fixture")
+    assert resp.status_code == 200, resp.text
+    assert '<section id="cast">' not in resp.text, "cast-less world must omit the Cast section"
+    assert 'id="cast-' not in resp.text, "cast-less world must emit no Cast cards"
 
 
 # ---------------------------------------------------------------------------
@@ -197,24 +272,88 @@ def test_cast_section_renders_both_npcs(gated_client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cast_portrait_decisions_emit_spans(gated_client, otel_capture) -> None:
-    """Per-NPC observability (OTEL principle): the present NPC fires a
-    ``scrapbook.npc_portrait_resolved`` span and the absent one fires
-    ``scrapbook.npc_portrait_not_found`` — both keyed by slug — so the GM/dev
-    panel can distinguish 'authored & on R2' from 'authored, not on R2' rather
-    than trusting the renderer. RED today: no Cast render, no spans."""
+def test_cast_portrait_decisions_emit_spans(
+    gated_client: TestClient, otel_capture: InMemorySpanExporter
+) -> None:
+    """Story 65-13 AC8 + complement rigor. Per-NPC observability (OTEL
+    principle): the present NPC fires a ``sidequest.reference.portrait_resolved``
+    span and the absent one fires ``sidequest.reference.portrait_not_found`` —
+    both keyed by slug — so the GM/dev panel can distinguish 'authored & on R2'
+    from 'authored, not on R2'.
+
+    65-13 migrates these off the scene-time ``scrapbook.npc_portrait_*`` family
+    (whose docstrings describe scene-invocation ref attachment, a semantic the
+    reference page does not have) onto dedicated reference-namespaced spans, the
+    same move 65-11 made for map pins.
+
+    The **complement** assertions are the 65-13 rigor add: without them the span
+    test passes even for an always-resolve gate (it would emit a resolved span
+    for *both* NPCs). Asserting the absent slug is NOT in the resolved set and
+    the present slug is NOT in the not-found set means the span test *alone*
+    distinguishes a correct gate from a broken one.
+
+    RED today: the presenter emits the scrapbook spans, and the
+    ``sidequest.reference.portrait_*`` spans do not exist yet."""
     resp = gated_client.get(f"/reference/lore/{_PACK}/{_CAST_WORLD}")
     assert resp.status_code == 200, resp.text
 
-    resolved = span_attrs_by_name(otel_capture, SPAN_PORTRAIT_RESOLVED)
-    not_found = span_attrs_by_name(otel_capture, SPAN_PORTRAIT_NOT_FOUND)
+    resolved_slugs = {
+        a.get("slug") for a in span_attrs_by_name(otel_capture, SPAN_REF_PORTRAIT_RESOLVED)
+    }
+    not_found_slugs = {
+        a.get("slug") for a in span_attrs_by_name(otel_capture, SPAN_REF_PORTRAIT_NOT_FOUND)
+    }
 
-    assert _PRESENT_SLUG in {a.get("slug") for a in resolved}, (
-        "present NPC must fire a portrait_resolved span"
+    assert _PRESENT_SLUG in resolved_slugs, (
+        "present NPC must fire a reference portrait_resolved span"
     )
-    assert _ABSENT_SLUG in {a.get("slug") for a in not_found}, (
-        "absent NPC must fire a portrait_not_found span"
+    assert _ABSENT_SLUG in not_found_slugs, (
+        "absent NPC must fire a reference portrait_not_found span"
     )
+
+    # Complement: a correct gate must NOT resolve the absent NPC, nor mark the
+    # present NPC not-found. An always-resolve gate would fail exactly here.
+    assert _ABSENT_SLUG not in resolved_slugs, (
+        "absent NPC must NOT fire a portrait_resolved span (always-resolve gate)"
+    )
+    assert _PRESENT_SLUG not in not_found_slugs, (
+        "present NPC must NOT fire a portrait_not_found span (never-resolve gate)"
+    )
+
+
+def test_cast_render_does_not_emit_scene_scrapbook_spans(
+    gated_client: TestClient, otel_capture: InMemorySpanExporter
+) -> None:
+    """Story 65-13 (DOC span-semantics / AC8 migration proof). The reference
+    Cast render must emit NEITHER ``scrapbook.npc_portrait_resolved`` NOR
+    ``scrapbook.npc_portrait_not_found`` — those belong to the 65-6 scene-
+    invocation path, whose docstrings describe attaching a portrait_url to a
+    scrapbook ref (no scrapbook ref exists on the reference page). Reusing them
+    here is the misleading-semantics finding 65-13 closes.
+
+    RED today: ``_cast_portrait_img_html`` opens the scrapbook spans."""
+    resp = gated_client.get(f"/reference/lore/{_PACK}/{_CAST_WORLD}")
+    assert resp.status_code == 200, resp.text
+
+    assert not span_attrs_by_name(otel_capture, SPAN_SCENE_PORTRAIT_RESOLVED), (
+        "reference Cast render must not emit the scene-time scrapbook resolved span"
+    )
+    assert not span_attrs_by_name(otel_capture, SPAN_SCENE_PORTRAIT_NOT_FOUND), (
+        "reference Cast render must not emit the scene-time scrapbook not_found span"
+    )
+
+
+def test_reference_portrait_spans_are_registered() -> None:
+    """Wiring: the new reference portrait spans must be registered in the span
+    routing table (``FLAT_ONLY_SPANS``) so the GM/dev panel's ``agent_span_close``
+    fan-out actually surfaces them — defining the contextmanager is not enough.
+    Mirrors how the 65-11 map-pin spans are registered.
+
+    RED today: the constants do not exist."""
+    from sidequest.telemetry.spans._core import FLAT_ONLY_SPANS
+
+    assert SPAN_REF_PORTRAIT_RESOLVED in FLAT_ONLY_SPANS
+    assert SPAN_REF_PORTRAIT_NOT_FOUND in FLAT_ONLY_SPANS
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +362,7 @@ def test_cast_portrait_decisions_emit_spans(gated_client, otel_capture) -> None:
 
 
 def test_cast_render_fires_manifest_loaded_span_with_exact_count(
-    gated_client, otel_capture
+    gated_client: TestClient, otel_capture: InMemorySpanExporter
 ) -> None:
     """The ``manifest_loaded`` span carries the EXACT number of entries in the
     fixture manifest (== N, not >= 1). If the gate had read prod's manifest the
@@ -257,10 +396,17 @@ def test_absent_manifest_on_cast_world_returns_500(tmp_path: Path) -> None:
     ``FileNotFoundError`` into a clean 500 (the route handler today only catches
     ``ValueError``/``MissingThemeFieldError``)."""
     from sidequest.server.app import create_app
+    from sidequest.server.reference_renderer import load_r2_manifest_keys
+
+    # The gate's manifest is @lru_cache'd by Path. This test reads the SAME path
+    # twice (absent, then present), so clear the cache up front and between the
+    # two phases to defeat cross-phase and cross-test cached state.
+    load_r2_manifest_keys.cache_clear()
 
     search_root = tmp_path / "packs"
     shutil.copytree(FIXTURE_ROOT / _PACK, search_root / _PACK)
-    assert not (tmp_path / "r2_manifest.json").exists(), "guard: no manifest two levels up"
+    manifest_path = tmp_path / "r2_manifest.json"  # pack_dir.parent.parent / r2_manifest.json
+    assert not manifest_path.exists(), "guard: no manifest two levels up"
 
     app = create_app(genre_pack_search_paths=[search_root])
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -269,4 +415,19 @@ def test_absent_manifest_on_cast_world_returns_500(tmp_path: Path) -> None:
     assert resp.status_code == 500, (
         f"absent manifest must fail loud (500), not a silent image-free page; got "
         f"{resp.status_code}"
+    )
+
+    # Manifest-specificity: the SAME fixture render succeeds (200) once the
+    # manifest exists two levels up. This proves the 500 above is caused by the
+    # absent manifest specifically — not a catch-all 500 from a broken fixture
+    # pack that would fail regardless.
+    load_r2_manifest_keys.cache_clear()
+    shutil.copy(FIXTURE_MANIFEST, manifest_path)
+    app_ok = create_app(genre_pack_search_paths=[search_root])
+    with TestClient(app_ok, raise_server_exceptions=False) as client_ok:
+        resp_ok = client_ok.get(f"/reference/lore/{_PACK}/{_CAST_WORLD}")
+
+    assert resp_ok.status_code == 200, (
+        f"same fixture + present manifest must render 200 — proving the 500 is "
+        f"manifest-specific, not a broken fixture; got {resp_ok.status_code}: {resp_ok.text}"
     )

@@ -1214,8 +1214,14 @@ def load_cast_entries(world_dir: Path) -> list[dict]:
     portraits). Returns ``[]`` when the world authors no manifest, so the caller
     omits the Cast section. Keeper-only ``npcs.yaml`` is never read here.
 
-    Mirrors the genre loader's shape tolerance: a top-level ``{characters: [...]}``
-    mapping or a bare list; non-dict items are dropped.
+    Accepts either of the two top-level shapes the genre loader also tolerates: a
+    ``{characters: [...]}`` mapping or a bare list. That two-shape tolerance is the
+    only behavior shared with the genre loader — unlike the genre loader's
+    ``_load_portrait_manifest`` (which ``model_validate``s each entry and would
+    *raise* on a non-dict), the non-dict-item drop below is local to this function.
+    A non-list ``characters:`` value is malformed first-party authoring and fails
+    loud with a ``ValueError`` (No Silent Fallbacks), never an uncaught
+    ``TypeError`` from iterating a scalar (Story 65-13).
     """
     path = world_dir / "portrait_manifest.yaml"
     if not path.exists():
@@ -1231,6 +1237,11 @@ def load_cast_entries(world_dir: Path) -> list[dict]:
         chars = data
     else:
         chars = []
+    if not isinstance(chars, list):
+        raise ValueError(
+            f"portrait_manifest.yaml: 'characters' must be a list, got "
+            f"{type(chars).__name__}: {path}"
+        )
     return [c for c in chars if isinstance(c, dict)]
 
 

@@ -1234,14 +1234,26 @@ def _build_turn_context(
         npcs=list(snapshot.npcs),
         # Story 75-2: budgeted working-set selection (the floor of ADR-118's
         # universal retrieval). Scene-present NPCs render full, off-stage
-        # collapse to compact — bounding prompt cost without eviction. The
-        # ``player_referenced_npcs`` toggle (brief vs compact for off-stage) is
-        # deferred to a real reference signal in 75-5; v1 passes None (compact
-        # off-stage), which never drops the present-scene floor.
-        npc_working_set=build_npc_working_set(
-            snapshot,
-            current_turn=snapshot.turn_manager.interaction,
-            player_referenced_npcs=None,
+        # collapse to compact — bounding prompt cost without eviction.
+        #
+        # Story 75-10: consume the floor already computed by the retrieval
+        # delegate (``retrieve_turn_context``), which built it with the real
+        # per-turn ``player_referenced_npcs`` signal derived from the player's
+        # action — so off-stage NPCs the player named render BRIEF, not compact.
+        # This also removes a double-computation (the floor was built once
+        # upstream and again here). The recompute path survives only for
+        # legacy/fixture callers that pass no ``entity_retrieval`` (dice-replay /
+        # error turns, unit tests) — those carry no fresh player reference, so
+        # ``None`` (compact off-stage) is correct; the present-scene floor holds
+        # in both paths.
+        npc_working_set=(
+            entity_retrieval.floor
+            if entity_retrieval is not None
+            else build_npc_working_set(
+                snapshot,
+                current_turn=snapshot.turn_manager.interaction,
+                player_referenced_npcs=None,
+            )
         ),
         party_peers=party_peers,
         opening_directive=opening_directive,

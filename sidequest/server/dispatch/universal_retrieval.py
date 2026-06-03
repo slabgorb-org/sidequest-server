@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from sidequest.agents.npc_context import player_referenced_npcs_from_action
 from sidequest.game.retrieval_orchestration import (
     RetrievedEntities,
     retrieve_turn_context,
@@ -61,6 +62,11 @@ async def retrieve_for_turn(
         sd.snapshot,
         action,
         current_turn=sd.snapshot.turn_manager.interaction,
+        # Story 75-10: derive the per-turn reference signal from the player's
+        # action so off-stage NPCs the player named render BRIEF (name+role) in
+        # the floor instead of COMPACT (name only). The action text already lives
+        # here — no separate extractor needed.
+        player_referenced_npcs=player_referenced_npcs_from_action(sd.snapshot, action),
     )
 
     # Observing the turn must never crash the turn: a publish failure is logged

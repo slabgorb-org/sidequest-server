@@ -117,9 +117,7 @@ async def test_referenced_offstage_npc_carried_brief_in_retrieval_floor(
     so the floor is built with ``None`` and Joran collapses to ``compact_names``.
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
-    _seed_roster(
-        sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[]
-    )
+    _seed_roster(sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[])
 
     result = await handler._retrieve_entities_for_turn(sd, "I go looking for Joran the smith.")
 
@@ -177,9 +175,7 @@ async def test_referenced_offstage_npc_renders_brief_in_turn_context(
     even if the retrieval floor were correct.
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
-    _seed_roster(
-        sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[]
-    )
+    _seed_roster(sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[])
 
     result = await handler._retrieve_entities_for_turn(sd, "Where can I find Joran?")
     context = _build_turn_context(sd, entity_retrieval=result)
@@ -247,9 +243,7 @@ async def test_working_set_span_records_reference_on_production_path(
     recompute.
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
-    _seed_roster(
-        sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[]
-    )
+    _seed_roster(sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[])
 
     result = await handler._retrieve_entities_for_turn(sd, "I track down Joran the smith.")
     _build_turn_context(sd, entity_retrieval=result)
@@ -284,9 +278,7 @@ async def test_unreferenced_offstage_npc_stays_compact(
     (Green on develop — a regression guard for the new wiring.)
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
-    _seed_roster(
-        sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[]
-    )
+    _seed_roster(sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[])
 
     result = await handler._retrieve_entities_for_turn(sd, "I climb the north stairs alone.")
     ws = _build_turn_context(sd, entity_retrieval=result).npc_working_set
@@ -314,9 +306,7 @@ async def test_reference_match_is_case_insensitive(session_handler_factory) -> N
     RED on develop (no signal at all).
     """
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
-    _seed_roster(
-        sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[]
-    )
+    _seed_roster(sd, present=[_present_npc("Borin")], offstage=[_offstage_npc("Joran")], pool=[])
 
     result = await handler._retrieve_entities_for_turn(sd, "i need to talk to joran right now")
     ws = _build_turn_context(sd, entity_retrieval=result).npc_working_set

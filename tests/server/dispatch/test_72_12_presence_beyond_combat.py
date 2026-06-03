@@ -383,6 +383,9 @@ def test_participant_joined_stamp_rides_participant_joined_span(otel_capture) ->
         "no participant.joined span for the seated NPC opponent; "
         f"names={[dict(s.attributes or {}).get('name') for s in joined]!r}"
     )
+    assert len(iain) == 1, (
+        f"expected exactly 1 participant.joined span for {_OPPONENT!r}, got {len(iain)}"
+    )
     attrs = dict(iain[0].attributes or {})
     assert attrs.get("last_seen_turn") == 6, (
         f"participant.joined span missing/incorrect last_seen_turn; attrs={sorted(attrs)!r}"
@@ -471,6 +474,9 @@ def test_participant_joined_router_named_stamps_location(otel_capture) -> None:
     assert iain, (
         "no participant.joined span for the router-named opponent; "
         f"names={[dict(s.attributes or {}).get('name') for s in joined]!r}"
+    )
+    assert len(iain) == 1, (
+        f"expected exactly 1 participant.joined span for {_OPPONENT!r}, got {len(iain)}"
     )
     attrs = dict(iain[0].attributes or {})
     assert attrs.get("last_seen_turn") == 7, (

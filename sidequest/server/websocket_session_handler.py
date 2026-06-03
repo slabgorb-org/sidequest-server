@@ -2984,21 +2984,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         return await lore_embed.retrieve_for_turn(self, sd, action)
 
     async def _retrieve_entities_for_turn(self, sd: _SessionData, action: str) -> RetrievedEntities:
-        """Pre-turn universal entity retrieval (ADR-118 §D4, Story 75-5).
+        """Pre-turn universal entity retrieval (ADR-118 §D4/§D5, Stories 75-5/75-7).
 
-        The typed sibling of :meth:`_retrieve_lore_for_turn`: assembles the floor
-        (scene-present NPCs) and the semantic fill (NPC/location/faction cards)
-        under a per-turn token budget, sanitizing retrieved content at the
-        choke-point and emitting the ``retrieval.universal`` span. Never raises.
+        Delegates to ``universal_retrieval.retrieve_for_turn``: the typed sibling
+        of :meth:`_retrieve_lore_for_turn` assembles the floor (scene-present
+        NPCs) and the semantic fill under a per-turn token budget, sanitizing
+        retrieved content at the choke-point, emitting the ``retrieval.universal``
+        span, AND (75-7) publishing the decision as a watcher event so it reaches
+        the GM panel. Never raises.
         """
-        from sidequest.game.retrieval_orchestration import retrieve_turn_context
+        from sidequest.server.dispatch import universal_retrieval
 
-        return await retrieve_turn_context(
-            sd.entity_store,
-            sd.snapshot,
-            action,
-            current_turn=sd.snapshot.turn_manager.interaction,
-        )
+        return await universal_retrieval.retrieve_for_turn(self, sd, action)
 
     def _dispatch_embed_worker(self, sd: _SessionData) -> None:
         """Post-turn embed worker dispatch. Delegates to ``lore_embed.dispatch_worker``."""

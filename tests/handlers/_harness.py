@@ -123,6 +123,13 @@ class _StubSession:
     async def _retrieve_lore_for_turn(self, sd: _SessionData, action: str) -> str:
         return ""
 
+    async def _retrieve_entities_for_turn(self, sd: _SessionData, action: str) -> None:
+        # Sibling of the lore stub: ``PlayerActionHandler.handle`` calls this
+        # (player_action.py:496) and passes the result to ``_build_turn_context``,
+        # which no-ops on ``None``. Pre-existing harness gap — the stub mirrored
+        # ``_retrieve_lore_for_turn`` but not the entity sibling 75-5 added.
+        return None
+
     async def _execute_narration_turn(
         self, sd: _SessionData, action: str, turn_context: Any
     ) -> list[Any]:

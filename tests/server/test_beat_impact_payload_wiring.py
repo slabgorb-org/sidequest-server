@@ -25,6 +25,7 @@ from sidequest.game.encounter import (
 )
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef, MetricDef
 from sidequest.protocol.dice import RollOutcome
+from sidequest.protocol.messages import ConfrontationPayload
 from sidequest.server.dispatch.confrontation import build_confrontation_payload
 
 
@@ -124,3 +125,31 @@ def test_dial_moving_beat_still_advances_metric_and_carries_impact():
     assert payload["player_metric"]["current"] == before + 2  # dial still moves
     assert payload["last_beat_impact"]["effect"] == "advance"
     assert payload["last_beat_impact"]["dial_moved"] is True
+
+
+def test_impact_survives_the_protocol_boundary():
+    # CRITICAL wiring (spec-check, the White Queen): the production broadcast does
+    # ConfrontationPayload(**build_confrontation_payload(...)). That model is
+    # extra="forbid", so last_beat_impact MUST be a declared field or the wrap
+    # raises ValidationError and crashes the confrontation broadcast on every
+    # beat-resolution turn. Prove the descriptor round-trips through the real
+    # protocol model, not just that the builder dict carries the key.
+    enc = _enc()
+    apply_beat(enc, enc.find_actor("Pryce"), _push_beat(), RollOutcome.CritSuccess)
+    payload_dict = build_confrontation_payload(
+        encounter=enc, cdef=_cdef(), genre_slug="tea_and_murder"
+    )
+    model = ConfrontationPayload(**payload_dict)  # must NOT raise
+    assert model.last_beat_impact is not None
+    assert model.last_beat_impact["effect"] == "resolution"
+    assert model.last_beat_impact["tag"] == "Clean Exit"
+
+
+def test_protocol_boundary_clean_when_no_impact():
+    # The additive field must also round-trip as None on a fresh encounter.
+    enc = _enc()
+    payload_dict = build_confrontation_payload(
+        encounter=enc, cdef=_cdef(), genre_slug="tea_and_murder"
+    )
+    model = ConfrontationPayload(**payload_dict)
+    assert model.last_beat_impact is None

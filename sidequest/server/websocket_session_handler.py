@@ -161,8 +161,11 @@ def _drive_session_tension_tracker(
 
     Per-turn HP-delta ``damage_events`` are intentionally NOT synthesized (no
     start/end HP capture this story) — the relative-magnitude math is covered by
-    the tracker's own unit tests; see the Dev deviation. Every read is
-    None/zero-guarded so the drive can never raise on the hot path.
+    the tracker's own unit tests; see the Dev deviation. Input reads are
+    None/zero-guarded so the tracker is never called with invalid args (e.g.
+    ``update_stakes`` with ``max_hp <= 0``); the single call site additionally
+    wraps this in try/except so a watcher-hub hiccup can't crash the turn
+    (ADR-006 graceful degradation).
     """
     tracker = sd.tension_tracker
 
@@ -2296,12 +2299,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 # ADR-024 / story 81-2: feed the per-session TensionTracker one
                 # observation per turn so the dual-track pacing signal accumulates
                 # across the session and the tension:round_observed watcher event
-                # fires every turn (the GM-panel pacing lie-detector).
-                _drive_session_tension_tracker(
-                    sd,
-                    snapshot,
-                    encounter_resolved_this_turn=encounter_resolved_this_turn,
-                )
+                # fires every turn (the GM-panel pacing lie-detector). Guarded like
+                # the sibling per-turn watcher emits below — a tension/watcher
+                # hiccup must never crash the turn (ADR-006 graceful degradation).
+                try:
+                    _drive_session_tension_tracker(
+                        sd,
+                        snapshot,
+                        encounter_resolved_this_turn=encounter_resolved_this_turn,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("tension_tracker.drive_failed: %s", exc)
 
                 # Per-turn game_state_snapshot for the dashboard State tab
                 # (playtest 2026-04-30 #1C). Pre-fix it fired only at connect, so

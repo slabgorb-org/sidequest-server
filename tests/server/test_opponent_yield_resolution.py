@@ -270,8 +270,10 @@ def test_genuinely_unfinished_encounter_not_resolved_as_yield_same_turn() -> Non
 
     enc = snap.encounter
     assert enc is not None
-    assert enc.outcome != "opponent_yielded", (
-        "no opponent has yielded — the sweep must not record a victory"
+    assert enc.outcome is None, (
+        "no opponent has yielded — the sweep must record NO outcome (not "
+        "opponent_yielded, not opponent_withdrew, not any victory label); "
+        f"got outcome={enc.outcome!r}"
     )
     assert enc.resolved is False
 
@@ -386,7 +388,9 @@ def test_location_change_emits_yield_trigger(
 ) -> None:
     """The location-change opponent-yield resolution fires the confrontation
     event with trigger='opponent_yield_on_location_change' (distinct from the
-    same-turn sweep trigger), reusing the #576 emit site."""
+    same-turn sweep trigger). This is the new ``elif yield_outcome`` branch
+    introduced by 59-31 — distinct from (not a reuse of) the #576 dial-win
+    ``confrontation_resolved_on_location_change`` emit."""
     snap, pack = snapshot_with_pack
     snap.character_locations["Dorothy"] = "The Yellow Brick Road — The Crossing"
     snap.characters.append(character_named_sam)
@@ -474,3 +478,65 @@ def test_opponent_yield_stamps_pending_resolution_signal() -> None:
     assert "The Cowardly Lion" in sig.yielded_actors, (
         f"the signal must name the yielded opponent(s); got {sig.yielded_actors!r}"
     )
+    # 49-5 reads the full signal — pin the metric snapshot so a transposed or
+    # empty construction can't slip through (_encounter() defaults: standoff,
+    # player_current=2, opponent_current=1).
+    assert sig.encounter_type == "standoff"
+    assert sig.final_player_metric == 2
+    assert sig.final_opponent_metric == 1
+
+
+# ── WIRING TEST (CLAUDE.md "Every Test Suite Needs a Wiring Test") ────────────
+# Every other test in this file monkeypatches `_watcher_publish` and/or hand-
+# builds the snapshot. This one proves the opponent-yield resolution is wired
+# end-to-end: driven from the real per-turn production entry
+# (`_apply_narration_result_to_snapshot` with a real SessionRoom) and emitting
+# through the REAL telemetry bridge (`publish_event` → OTEL synthetic span under
+# SIDEQUEST_WATCHER_AS_SPANS=1, captured by the global-provider `otel_capture`
+# exporter) — NO `_watcher_publish` stub. If the sweep call site were removed
+# from the pipeline, or the watcher→OTEL bridge broke, this test fails where the
+# stubbed tests would not. Uses CLAUDE.md "No Source-Text Wiring Tests" path 1
+# (OTEL span assertion driven through the real flow).
+
+
+def test_opponent_yield_resolution_wired_through_real_telemetry_pipeline(
+    monkeypatch,
+    otel_capture,
+) -> None:
+    monkeypatch.setenv("SIDEQUEST_WATCHER_AS_SPANS", "1")
+
+    snap = GameSnapshot(genre_slug="wry_whimsy", world_slug="oz")
+    snap.encounter = _encounter(opponents=[_lion(withdrawn=True)])
+
+    # Real per-turn production entry + real SessionRoom — no stubbed watcher.
+    _apply_narration_result_to_snapshot(
+        snap,
+        NarrationTurnResult(
+            narration="The Lion backs away, tail between his legs.", beat_selections=[]
+        ),
+        player_name="Dorothy",
+        room=room_for(snap),
+    )
+
+    # 1) The engine resolved through the real pipeline.
+    enc = snap.encounter
+    assert enc is not None
+    assert enc.resolved is True
+    assert enc.outcome == "opponent_yielded"
+
+    # 2) The lie-detector span reached the REAL OTEL pipeline (not a monkeypatch).
+    yield_spans = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == "watcher.confrontation_resolved_on_opponent_yield"
+    ]
+    assert len(yield_spans) == 1, (
+        "the opponent-yield resolution must emit exactly one "
+        "watcher.confrontation_resolved_on_opponent_yield span through the real "
+        f"publish_event→OTEL bridge; got {[s.name for s in otel_capture.get_finished_spans()]}"
+    )
+    attrs = dict(yield_spans[0].attributes or {})
+    assert attrs.get("watcher.component") == "confrontation"
+    assert attrs.get("field.resolution_label") == "opponent_yielded"
+    assert attrs.get("field.outcome") == "player_victory"
+    assert attrs.get("field.trigger") == "opponent_yield_sweep"

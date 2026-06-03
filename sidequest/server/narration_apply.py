@@ -2796,8 +2796,11 @@ def _apply_narration_result_to_snapshot(
                 # apply_beat's victory check (sq-playtest 2026-06-02
                 # wry_whimsy/oz: escape dial 8/8 yet total_beats_fired=0),
                 # resolve on the met win condition so the player keeps victory
-                # credit instead of being recorded as having walked away. Only
-                # a genuinely-unfinished encounter (no threshold met) abandons.
+                # credit instead of being recorded as having walked away. Since
+                # Story 59-31 this is a three-way branch: dial win → victory,
+                # opponent yield → victory (opponent_yielded), and only a
+                # genuinely-unfinished encounter (no threshold met AND no
+                # opponent yield) falls through to abandoned_on_location_change.
                 won_outcome = active_encounter.dial_threshold_outcome()
                 yield_outcome = active_encounter.opponent_yield_outcome()
                 active_encounter.resolved = True
@@ -4565,10 +4568,13 @@ def _resolve_if_no_opponent_remains(snapshot: GameSnapshot) -> None:
     opponent ``withdrawn``, OR ``opponents_disposition`` is a yield disposition
     (``surrendered``/``routed``) — resolve it as a player victory. A
     confrontation ends when there is no longer a live Other, not only when a
-    dial reaches threshold. Emits ``participant.left`` per withdrawn opponent so
-    the GM panel sees WHY the encounter ended, then routes through
-    ``_resolve_opponent_yield`` for the ``opponent_yielded``/player_victory
-    outcome, the resolution-signal stamp, and the confrontation OTEL event.
+    dial reaches threshold. Emits ``participant.left`` per actor carrying the
+    ``withdrawn`` flag; when the yield came ONLY via ``opponents_disposition``
+    (surrender/rout with no per-actor ``withdrawn``) the loop produces no spans
+    — in that case the WHY is conveyed entirely by the downstream
+    ``confrontation_resolved_on_opponent_yield`` event. Either way it routes
+    through ``_resolve_opponent_yield`` for the ``opponent_yielded``/
+    player_victory outcome, the resolution-signal stamp, and that OTEL event.
 
     Supersedes the prior ``opponent_withdrew`` label (Story 59-31): a yielded
     opponent is a player VICTORY, never the player-side ``yielded`` (loss) nor a

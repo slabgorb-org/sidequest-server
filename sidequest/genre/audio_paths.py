@@ -21,7 +21,8 @@ SHARED_PREFIX = "assets/"
 def resolve_audio_relpath(rel: str, *, genre_slug: str) -> str:
     """Resolve an audio.yaml relative path to a full asset URL.
 
-    Absolute URLs and server-absolute paths pass through untouched.
+    Absolute URLs (``http://``, ``https://``) and server-absolute paths
+    (``/...``) pass through untouched.
     """
     if not rel:
         return rel

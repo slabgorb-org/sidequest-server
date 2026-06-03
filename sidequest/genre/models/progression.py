@@ -202,6 +202,31 @@ class WealthTier(BaseModel):
     description: str = ""
 
 
+def resolve_wealth_tier(gold: int, tiers: list[WealthTier]) -> WealthTier | None:
+    """Map a gold/credits balance to its authored wealth tier (ADR-021 track 3).
+
+    Returns the first tier whose cap still contains ``gold`` — the lowest
+    ``max_gold`` that is ``None`` (uncapped) or ``>= gold``. A balance exactly
+    on a boundary (``gold == max_gold``) belongs to *that* tier, not the next
+    one up. Negative balances (debt) clamp to the floor tier rather than
+    falling through the bottom. Returns ``None`` when no tiers are authored —
+    No Silent Fallbacks: never fabricate a tier the content author didn't
+    declare; the player UI then shows the bare number.
+
+    Tiers are consulted in authored order, which the packs author ascending by
+    cap (``mutant_wasteland``/``road_warrior``), so the first match is the
+    tightest containing tier.
+    """
+    if not tiers:
+        return None
+    for tier in tiers:
+        if tier.max_gold is None or gold <= tier.max_gold:
+            return tier
+    # All tiers have finite caps and gold exceeds every one — clamp to the
+    # richest authored tier rather than returning None.
+    return tiers[-1]
+
+
 class ProgressionConfig(BaseModel):
     """Character progression configuration.
 

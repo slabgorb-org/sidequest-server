@@ -359,6 +359,12 @@ class InventoryPayload(ProtocolBase):
     ``None`` when the genre pack doesn't declare one — UI falls back to
     a neutral default rather than hardcoding "gold" (which leaks fantasy
     tone into space/cyberpunk/etc. packs)."""
+    wealth_tier_label: str | None = None
+    """Player-facing wealth tier (ADR-021 track 3) — the ``gold`` balance
+    resolved against the pack's ``progression.wealth_tiers`` (e.g. "stocked",
+    "convoy legend"). ``None`` when the pack authors no wealth tiers; the UI
+    then shows the bare number. Mechanics-first legibility: wealth reads as a
+    tier, not just a count."""
 
 
 # ---------------------------------------------------------------------------

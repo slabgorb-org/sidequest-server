@@ -41,6 +41,7 @@ from sidequest.genre.loader import (
     _emit_world_lore_loaded,
     _require_seedable_world_lore,
     _world_lore_seedable_count,
+    load_genre_pack,
 )
 from sidequest.genre.models.lore import Faction, WorldLore
 
@@ -152,7 +153,8 @@ class TestValidatorWorldLoreRule:
         (tmp_path / "lore.yaml").write_text(
             "world_name: X\nsetting: lots of prose\nthemes: [a, b]\n", encoding="utf-8"
         )
-        assert _validate_world_lore_seedable(tmp_path, "world 'x'")
+        errors = _validate_world_lore_seedable(tmp_path, "world 'x'")
+        assert errors and "seedable lore" in errors[0]
 
     def test_history_passes(self, tmp_path: Path) -> None:
         (tmp_path / "lore.yaml").write_text(
@@ -169,7 +171,8 @@ class TestValidatorWorldLoreRule:
 
     def test_whitespace_only_history_flagged(self, tmp_path: Path) -> None:
         (tmp_path / "lore.yaml").write_text('world_name: X\nhistory: "   "\n', encoding="utf-8")
-        assert _validate_world_lore_seedable(tmp_path, "world 'x'")
+        errors = _validate_world_lore_seedable(tmp_path, "world 'x'")
+        assert errors and "seedable lore" in errors[0]
 
     def test_absent_file_is_not_this_rules_concern(self, tmp_path: Path) -> None:
         # Missing lore.yaml is the structural required-files check's job, not this one.
@@ -190,6 +193,35 @@ class TestValidatorGenreLoreForbidden:
         assert any("genre-tier lore.yaml is forbidden" in e for e in errors), (
             f"expected the genre-lore-forbidden error; got: {errors}"
         )
+
+
+# --------------------------------------------------------------------------- #
+# Guard WIRING — the load-time guard fires through the real load_genre_pack path
+# (synthetic fixture pack, not real content). Falsifies the guard's wiring into
+# _load_single_world: if the _require_seedable_world_lore call were removed, this
+# test fails (per CLAUDE.md "Every Test Suite Needs a Wiring Test").
+# --------------------------------------------------------------------------- #
+
+
+def test_load_genre_pack_raises_on_empty_world_lore(minimal_pack_factory, tmp_path: Path) -> None:
+    pack = minimal_pack_factory(tmp_path)
+    world_lore_files = list((pack.path / "worlds").glob("*/lore.yaml"))
+    assert world_lore_files, "fixture pack must ship at least one world lore.yaml"
+    # Strand all content under a non-seedable key so the world seeds zero fragments.
+    for lore_path in world_lore_files:
+        lore_path.write_text(
+            "world_name: Ghost Town\nsetting: prose stranded under a non-seedable key\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(GenreLoadError) as exc_info:
+        load_genre_pack(pack.path)
+
+    msg = str(exc_info.value)
+    assert "lore" in msg.lower(), "loud-fail must name the missing surface"
+    assert any(p.parent.name in msg for p in world_lore_files), (
+        "loud-fail must be world-scoped (name the empty-lore world)"
+    )
 
 
 # --------------------------------------------------------------------------- #

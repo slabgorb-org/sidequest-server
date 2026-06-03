@@ -891,14 +891,22 @@ def _world_lore_seedable_count(lore: WorldLore) -> int:
     """Count the LoreStore fragments a world's ``lore.yaml`` will seed.
 
     Mirrors the seedable fields read by ``seed_lore_from_world``
-    (history / geography / cosmology / factions). Inlined rather than importing
-    ``game.lore_seeding`` — the genre layer must not depend on the game layer
-    (dependency graph, server CLAUDE.md). Keep in sync with that seeder.
+    (history / geography / cosmology / factions). A text field counts only when
+    it is non-empty AFTER stripping — a whitespace-only string seeds a junk
+    fragment and is treated as empty here, matching both the validator
+    (``validate/pack._validate_world_lore_seedable``, which ``.strip()``s) and
+    the stripped guards in ``seed_lore_from_world``. Inlined rather than
+    importing ``game.lore_seeding`` — the genre layer must not depend on the
+    game layer (dependency graph, server CLAUDE.md). Keep in sync with that seeder.
     """
+
+    def _seedable_text(value: str | None) -> bool:
+        return bool(value and value.strip())
+
     return (
-        int(bool(lore.history))
-        + int(bool(lore.geography))
-        + int(bool(lore.cosmology))
+        int(_seedable_text(lore.history))
+        + int(_seedable_text(lore.geography))
+        + int(_seedable_text(lore.cosmology))
         + len(lore.factions)
     )
 

@@ -1,0 +1,5 @@
+name: timeline_empty_fixture
+description: >-
+  A world with NO legends.yaml (and no cartography) for story 65-12 AC1. The
+  lore page must render HTTP 200 with NO Timeline section at all — the section
+  is purely additive and must not appear when the world authors no legends.

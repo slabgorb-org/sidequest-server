@@ -82,6 +82,14 @@ SPAN_REFERENCE_MAP_DANGLING_EDGE = "sidequest.reference.map_dangling_edge"
 SPAN_REFERENCE_PORTRAIT_RESOLVED = "sidequest.reference.portrait_resolved"
 SPAN_REFERENCE_PORTRAIT_NOT_FOUND = "sidequest.reference.portrait_not_found"
 
+# Lore-page Timeline section span (Story 65-12). The Timeline section renders a
+# world-historical spine from the world's legends, ordered by an HONEST
+# conditional sort: dated entries sort ascending ONLY when every one exposes a
+# uniformly-parseable key (else authored order is preserved). The render summary
+# records which mode fired so the GM/dev panel can confirm the page never claimed
+# a chronology it could not actually compute (the No-Silent-Fallbacks analog).
+SPAN_REFERENCE_TIMELINE_RENDERED = "sidequest.reference.timeline_rendered"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_REFERENCE_URL_ATTACHED,
@@ -103,6 +111,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_MAP_DANGLING_EDGE,
         SPAN_REFERENCE_PORTRAIT_RESOLVED,
         SPAN_REFERENCE_PORTRAIT_NOT_FOUND,
+        SPAN_REFERENCE_TIMELINE_RENDERED,
     }
 )
 
@@ -568,6 +577,35 @@ def reference_portrait_not_found_span(
     with Span.open(
         SPAN_REFERENCE_PORTRAIT_NOT_FOUND,
         _portrait_attrs(slug=slug, pack=pack, world=world),
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- Lore-page Timeline section span (Story 65-12) ---
+
+
+@contextmanager
+def reference_timeline_rendered_span(
+    *,
+    entry_count: int,
+    undated_count: int,
+    sort_mode: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired once per lore render that builds a Timeline section. Carries
+    the entry census (total legend entries, how many are undated) and the
+    ``sort_mode`` (``"sorted"`` when every dated entry was uniformly parseable
+    and the spine was sorted ascending, else ``"authored_order"``). The mode is
+    the lie-detector: the page records whether it computed a chronology or fell
+    back to authored order rather than fabricating one."""
+    with Span.open(
+        SPAN_REFERENCE_TIMELINE_RENDERED,
+        {
+            "reference.timeline_entry_count": entry_count,
+            "reference.timeline_undated_count": undated_count,
+            "reference.timeline_sort_mode": sort_mode,
+        },
         tracer_override=_tracer,
     ) as span:
         yield span

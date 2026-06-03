@@ -1,0 +1,16 @@
+# Authored OUT of order on purpose (1804, undated, 1612, 1666). All dated
+# entries are clean years -> uniformly parseable -> sort_mode "sorted":
+#   dated ascending -> The Founding (1612), The Great Fire (1666),
+#   The Second Charter (1804); then the undated tail -> The Hollow Year.
+legends:
+  - name: The Second Charter
+    era: "1804"
+    description: The charter that bound the second age.
+  - name: The Hollow Year
+    description: A year the records skip entirely; no date survives.
+  - name: The Founding
+    era: "1612"
+    description: The first stones of the capital were laid.
+  - name: The Great Fire
+    era: "1666"
+    description: The old city burned and was rebuilt in stone.

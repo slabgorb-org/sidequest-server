@@ -66,6 +66,11 @@ from sidequest.server.reference_theme import (
     ReferenceTheme,
     load_reference_theme,
 )
+from sidequest.server.reference_timeline import (
+    load_legends,
+    load_lore_history,
+    present_lore_timeline,
+)
 from sidequest.server.reference_visibility import Visibility, classify
 from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import (
@@ -1399,6 +1404,23 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
             kept_toc = [
                 *kept_toc,
                 {"num": _int_to_roman(len(kept_toc) + 1), "id": "map", "label": "Map"},
+            ]
+
+    # Story 65-12: public world Timeline section — a world-historical spine from
+    # the world's legends with an honest conditional sort (dated entries sorted
+    # ascending only when uniformly parseable, else authored order). Reuses the
+    # typed legend loader; emits no images, so no manifest gate is needed.
+    legends = load_legends(world_dir)
+    if legends:
+        timeline_html = present_lore_timeline(
+            legends,
+            history_prose=load_lore_history(world_dir),
+        )
+        if timeline_html:
+            body += timeline_html
+            kept_toc = [
+                *kept_toc,
+                {"num": _int_to_roman(len(kept_toc) + 1), "id": "timeline", "label": "Timeline"},
             ]
 
     return _wrap_document(

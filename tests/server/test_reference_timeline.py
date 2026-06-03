@@ -78,12 +78,23 @@ _CAST_WORLD = "cast_gated_fixture"  # regression: has a Cast section, no legends
 # parseable). The Nameless Age is the lone undated entry (tail).
 _MIXED_AUTHORED = [
     slugify_player_name(n)
-    for n in ("The Cataclysm", "The Mesh Launch", "The Second Rising", "The Bowery Wake", "The Nameless Age")
+    for n in (
+        "The Cataclysm",
+        "The Mesh Launch",
+        "The Second Rising",
+        "The Bowery Wake",
+        "The Nameless Age",
+    )
 ]
 _MIXED_UNDATED = slugify_player_name("The Nameless Age")
 
 # The mixed world's four dialect strings — each must render VERBATIM in a chip.
-_DIALECTS = ("-11540", "15 years ago", "early Second Rising", "shot February 25, 1855, buried March 11")
+_DIALECTS = (
+    "-11540",
+    "15 years ago",
+    "early Second Rising",
+    "shot February 25, 1855, buried March 11",
+)
 
 # Sorted world: authored OUT of order (1804, undated, 1612, 1666). A correct
 # ascending sort of the dated entries + undated-to-tail yields this order.
@@ -189,7 +200,9 @@ def test_every_legend_is_an_entry(gated_client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
     slugs = _entry_slugs(_timeline_section(resp.text))
     assert len(slugs) == 5, f"expected 5 timeline entries, got {len(slugs)}: {slugs}"
-    assert set(slugs) == set(_MIXED_AUTHORED), f"entry slugs must match the legends exactly: {slugs}"
+    assert set(slugs) == set(_MIXED_AUTHORED), (
+        f"entry slugs must match the legends exactly: {slugs}"
+    )
 
 
 def test_undated_entry_is_grouped_and_dated_entries_are_not(gated_client: TestClient) -> None:
@@ -200,7 +213,9 @@ def test_undated_entry_is_grouped_and_dated_entries_are_not(gated_client: TestCl
     assert resp.status_code == 200, resp.text
     section = _timeline_section(resp.text)
     group_idx = section.find('data-timeline-group="undated"')
-    assert group_idx != -1, "an undated legend must be placed in a data-timeline-group=\"undated\" group"
+    assert group_idx != -1, (
+        'an undated legend must be placed in a data-timeline-group="undated" group'
+    )
     # The undated entry appears after the undated-group marker.
     undated_pos = section.find(f'data-timeline-entry="{_MIXED_UNDATED}"')
     assert undated_pos > group_idx, "the undated legend must sit inside the undated group"
@@ -272,7 +287,9 @@ def test_history_preamble_present_when_lore_history_authored(gated_client: TestC
     assert resp.status_code == 200, resp.text
     section = _timeline_section(resp.text)
     assert "ref-timeline__preamble" in section, "history prose must render as a timeline preamble"
-    assert "TIMELINE_PREAMBLE_TOKEN" in section, "the preamble must carry the authored history prose"
+    assert "TIMELINE_PREAMBLE_TOKEN" in section, (
+        "the preamble must carry the authored history prose"
+    )
 
 
 def test_no_preamble_when_lore_history_absent(gated_client: TestClient) -> None:
@@ -312,7 +329,10 @@ def test_timeline_span_sort_mode_complement(gated_client: TestClient, otel_captu
     always-authored gate (which would never sort the clean years)."""
     gated_client.get(f"/reference/lore/{_PACK}/{_SORTED_WORLD}")
     gated_client.get(f"/reference/lore/{_PACK}/{_MIXED_WORLD}")
-    modes = {a.get("reference.timeline_sort_mode") for a in span_attrs_by_name(otel_capture, SPAN_TIMELINE_RENDERED)}
+    modes = {
+        a.get("reference.timeline_sort_mode")
+        for a in span_attrs_by_name(otel_capture, SPAN_TIMELINE_RENDERED)
+    }
     assert modes == {"sorted", "authored_order"}, (
         f"the two worlds must report complementary sort modes, got: {modes}"
     )
@@ -332,14 +352,18 @@ def test_timeline_excludes_campaign_chapter_spoilers(gated_client: TestClient) -
     assert resp.status_code == 200, resp.text
     section = _timeline_section(resp.text)
     assert "SPOILER_" not in section, "no campaign-chapter spoiler token may leak into the timeline"
-    assert "session_range" not in section, "campaign session ranges must not appear in the world timeline"
+    assert "session_range" not in section, (
+        "campaign session ranges must not appear in the world timeline"
+    )
 
 
 def test_no_query_param_changes_timeline_section(gated_client: TestClient) -> None:
     """ADR-135 D1: the page renders one fixed public projection. An ``?audience``
     query param must not change the Timeline section at all."""
     plain = _timeline_section(gated_client.get(f"/reference/lore/{_PACK}/{_MIXED_WORLD}").text)
-    gm = _timeline_section(gated_client.get(f"/reference/lore/{_PACK}/{_MIXED_WORLD}?audience=gm").text)
+    gm = _timeline_section(
+        gated_client.get(f"/reference/lore/{_PACK}/{_MIXED_WORLD}?audience=gm").text
+    )
     assert plain == gm, "no query param may change the timeline projection"
 
 

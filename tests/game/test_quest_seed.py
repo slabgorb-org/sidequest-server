@@ -222,3 +222,64 @@ def test_seed_does_not_emit_out_of_scope_spans(otel_capture, forbidden: str) -> 
     assert _spans_named(otel_capture, forbidden) == [], (
         f"{forbidden} belongs to story 77-2/77-3, not the creation-time seed"
     )
+
+
+# ---------------------------------------------------------------------------
+# Rework (Review RT1, HIGH finding): fill-not-clobber. The chargen seam runs
+# AFTER materialize_from_genre_pack, which sets snapshot.active_stakes from the
+# FRESH opening chapter (world_materialization.py:315-316) — live on ~10 worlds
+# incl. flickering_reach (history.yaml:107) and annees_folles. The seed must
+# FILL an empty spine, never OVERWRITE a world-authored one. When a spine is
+# already authored (active_stakes non-empty), the seed defers: preserves the
+# authored stakes, creates no seed quest/anchor, and still emits one
+# non-warning span (defer is observable, never silent).
+# ---------------------------------------------------------------------------
+
+_AUTHORED_STAKES = "The blood-debt comes due at dusk, and the well runs dry by dawn."
+
+
+def test_world_authored_active_stakes_is_not_clobbered() -> None:
+    """A world's opening chapter already set active_stakes; a PC with a drive
+    must NOT overwrite it with a generic drive/calling string."""
+    snap = GameSnapshot()
+    snap.active_stakes = _AUTHORED_STAKES  # as materialize_from_genre_pack would
+    char = _make_character(drive="Get home to Kansas")
+
+    seed_quest_spine(snap, char)
+
+    assert snap.active_stakes == _AUTHORED_STAKES, (
+        "seed must not clobber world-authored active_stakes (Diamonds and Coal)"
+    )
+
+
+def test_authored_spine_skips_seed_quest_and_anchor() -> None:
+    """When the world already authored a spine (active_stakes set), the seed
+    defers entirely — it does not graft a competing seed quest/anchor on top."""
+    snap = GameSnapshot()
+    snap.active_stakes = _AUTHORED_STAKES
+    char = _make_character(drive="Get home to Kansas")
+
+    seed_quest_spine(snap, char)
+
+    assert "seed_drive" not in snap.quest_log, "must not add a seed quest over an authored spine"
+    assert "seed_drive_anchor" not in snap.quest_anchors, "must not add a seed anchor over an authored spine"
+
+
+def test_defer_path_emits_one_non_warning_span(otel_capture) -> None:
+    """Deferring to an authored spine is a success, not a failure: emit exactly
+    one quest.seeded_at_creation span, non-warning, never a silent skip."""
+    snap = GameSnapshot()
+    snap.active_stakes = _AUTHORED_STAKES
+    char = _make_character(drive="Get home to Kansas")
+
+    seed_quest_spine(snap, char)
+
+    span = _only_span(otel_capture, SPAN_NAME)
+    attrs = dict(span.attributes or {})
+    assert attrs.get("severity") != "warning", (
+        "an authored spine is not an empty-seed failure — must not warn"
+    )
+    # Defer is distinguishable on the GM panel: a spine exists (has_stakes True)
+    # but the seed did not originate it from the drive (source_drive empty).
+    assert attrs.get("has_stakes") is True
+    assert attrs.get("source_drive") == ""

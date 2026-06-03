@@ -112,3 +112,158 @@ def test_seed_manual_emits_otel_with_world_culture_source(monkeypatch, tmp_path)
     assert attrs.get("cultures_source") == "world"
     assert attrs.get("world") == "perseus"
     assert attrs.get("culture_count") == 1
+
+
+# ===========================================================================
+# Story 72-11: MAX_CULTURES=4 cap silently drops world cultures.
+#
+# pregen.seed_manual sliced the resolved culture list `effective[:MAX_CULTURES]`
+# (MAX_CULTURES=4, a Rust-port artifact), so any world declaring >4 cultures had
+# its tail silently dropped from the seeded roster. coyote_star's 5th culture
+# (voidborn) never seeded an NPC. The fix: seed ALL effective cultures, delete the
+# constant, and make the pregen.seed_manual span report the world's true culture
+# count so this silent drop is never invisible again.
+#
+# These tests use a coyote_star-SHAPED stub (5 declared world cultures, voidborn
+# last) rather than the real coyote_star pack: per Story 71-31, coyote_star's live
+# culture resolution is mid-migration (world cultures are currently visual-only and
+# fall back to the genre set), so coupling here would be fragile. The bug is in
+# pregen.py's cap, not in content — the stub pins the mechanism deterministically.
+# The real coyote_star culture inventory is governed by tests/genre/
+# test_71_31_space_opera_culture_doctrine.py.
+# ===========================================================================
+
+# coyote_star's five world cultures, voidborn declared LAST so the [:4] cap drops it.
+_COYOTE_CULTURES = ["broken_drift", "free_miners", "hegemonic", "tsveri", "voidborn"]
+
+
+def _world_pack(culture_names: list[str], *, world: str) -> GenrePack:
+    """A pack whose named world declares ``culture_names`` (world-over-genre)."""
+    return GenrePack.model_construct(
+        cultures=[_culture("GenreOnly")],
+        archetypes=[NpcArchetype.model_construct(name="Soldier")],
+        worlds={world: World.model_construct(cultures=[_culture(n) for n in culture_names], archetypes=[])},
+        archetype_constraints=None,
+    )
+
+
+def _install_capture(monkeypatch, pack: GenrePack) -> list[str | None]:
+    """Spy _generate_npc so we capture the culture requested for each NPC seed."""
+    captured: list[str | None] = []
+    monkeypatch.setattr(pregen, "load_genre_pack", lambda _dir: pack)
+
+    def _spy_generate_npc(genre_packs_path, genre, *, culture, axes, world):  # noqa: ANN001, ARG001
+        captured.append(culture)
+        return None
+
+    monkeypatch.setattr(pregen, "_generate_npc", _spy_generate_npc)
+    monkeypatch.setattr(pregen, "_generate_encounter", lambda *a, **k: None)
+    monkeypatch.setattr(MonsterManual, "save", lambda self: None)
+    return captured
+
+
+def test_seed_manual_seeds_all_five_world_cultures_uncapped(monkeypatch, tmp_path) -> None:
+    """AC1/AC4: a 5-culture world seeds ALL five (5 × NPCS_PER_CULTURE), voidborn
+    included. RED today: the [:MAX_CULTURES] cap keeps the first 4 and drops the
+    5th, so voidborn never seeds and only 12 NPCs are requested."""
+    pack = _world_pack(_COYOTE_CULTURES, world="coyote_star")
+    captured = _install_capture(monkeypatch, pack)
+
+    pregen.seed_manual(
+        genre_packs_path=tmp_path,
+        genre="space_opera",
+        world="coyote_star",
+        manual=MonsterManual(genre="space_opera", world="coyote_star"),
+        rng=random.Random(0),
+    )
+
+    # 5 cultures × 3 NPCs each = 15 seed requests, none dropped.
+    assert len(captured) == 5 * pregen.NPCS_PER_CULTURE
+    assert set(captured) == set(_COYOTE_CULTURES)
+    # The load-bearing assertion: the culture the cap silently dropped IS seeded.
+    assert "voidborn" in captured
+    assert captured.count("voidborn") == pregen.NPCS_PER_CULTURE
+
+
+def test_seed_manual_does_not_cap_at_five_either(monkeypatch, tmp_path) -> None:
+    """AC2 (anti-cheat): the fix must seed the WORLD's full culture count, not a
+    new hardcoded ceiling. A 6-culture world seeds all six. RED today: capped to 4.
+    This kills the 'just bump MAX_CULTURES to 5' non-fix."""
+    six = [*_COYOTE_CULTURES, "synthetics"]
+    pack = _world_pack(six, world="coyote_star")
+    captured = _install_capture(monkeypatch, pack)
+
+    pregen.seed_manual(
+        genre_packs_path=tmp_path,
+        genre="space_opera",
+        world="coyote_star",
+        manual=MonsterManual(genre="space_opera", world="coyote_star"),
+        rng=random.Random(0),
+    )
+
+    assert len(captured) == 6 * pregen.NPCS_PER_CULTURE
+    assert set(captured) == set(six)
+
+
+def test_seed_manual_two_cultures_under_cap_unaffected(monkeypatch, tmp_path) -> None:
+    """AC5 (no regression): a world under the old cap still seeds exactly its
+    cultures — 2 × NPCS_PER_CULTURE. Green now and after the fix; guards against a
+    fix that over-expands or reorders the common under-threshold case."""
+    pack = _world_pack(["tsveri", "free_miners"], world="coyote_star")
+    captured = _install_capture(monkeypatch, pack)
+
+    pregen.seed_manual(
+        genre_packs_path=tmp_path,
+        genre="space_opera",
+        world="coyote_star",
+        manual=MonsterManual(genre="space_opera", world="coyote_star"),
+        rng=random.Random(0),
+    )
+
+    assert len(captured) == 2 * pregen.NPCS_PER_CULTURE
+    assert set(captured) == {"tsveri", "free_miners"}
+
+
+def test_seed_manual_span_reports_effective_and_seeded_culture_counts(monkeypatch, tmp_path) -> None:
+    """AC3 (OTEL lie-detector, load-bearing): the pregen.seed_manual span exposes
+    the world's TRUE culture count (effective_culture_count) alongside the seeded
+    count, so a silent truncation is observable on the GM panel. For a 5-culture
+    world both read 5. RED today: effective_culture_count is absent and the seeded
+    count reports the post-cap 4."""
+    pack = _world_pack(_COYOTE_CULTURES, world="coyote_star")
+    _install_capture(monkeypatch, pack)
+
+    from sidequest.telemetry import spans as spans_module
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    local_tracer = provider.get_tracer("test")
+    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
+
+    pregen.seed_manual(
+        genre_packs_path=tmp_path,
+        genre="space_opera",
+        world="coyote_star",
+        manual=MonsterManual(genre="space_opera", world="coyote_star"),
+        rng=random.Random(0),
+    )
+
+    spans = [s for s in exporter.get_finished_spans() if s.name == "pregen.seed_manual"]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes or {})
+    # The world declares 5 cultures — the span must say so (pre-seed truth).
+    assert attrs.get("effective_culture_count") == 5
+    # And all 5 were seeded — the post-cap 4 is the bug.
+    assert attrs.get("culture_count") == 5
+    assert attrs.get("cultures_source") == "world"
+
+
+def test_max_cultures_constant_is_removed(monkeypatch) -> None:
+    """AC2 (dead-code removal): the MAX_CULTURES cap constant must be DELETED, not
+    bumped — its existence is the bug. Reflection tripwire (runtime attribute, not a
+    source-text grep, per CLAUDE.md 'No Source-Text Wiring Tests'). RED today: the
+    module still defines MAX_CULTURES = 4."""
+    assert not hasattr(pregen, "MAX_CULTURES"), (
+        "pregen.MAX_CULTURES must be removed, not raised — the cap itself is the defect"
+    )

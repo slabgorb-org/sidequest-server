@@ -21,10 +21,15 @@ resolved — No Silent Fallbacks) and surface the stamped values on the existing
 ``npc.edge_published`` OTEL span so the GM-panel lie-detector can confirm
 presence-stamping fired.
 
-AC2 ("prose-mention stamping still fires — no regression") is guarded by the
-untouched prose path's existing coverage in
-``tests/server/test_npc_pool_narration_apply.py::test_cite_known_npc_updates_last_seen_on_npc``.
-The "present AND prose-mentioned same turn ⇒ one consistent stamp" edge case is
+AC2 ("prose-mention stamping still fires — no regression") is guarded for the
+prose path's TRUTHY-location branch by the untouched prose-path coverage in
+``tests/server/test_npc_pool_narration_apply.py::test_cite_known_npc_updates_last_seen_on_npc``
+— that test sets ``character_locations`` so a location resolves, so it covers the
+location-overwrite branch only; it does NOT exercise the prose path's no-location
+branch. The *presence* path's own no-location branch (the symmetric "advance the
+turn, never stamp a bogus location" case this story adds) is covered locally by
+``test_presence_no_resolved_location_stamps_turn_not_location`` below. The
+"present AND prose-mentioned same turn ⇒ one consistent stamp" edge case is
 exercised below by driving BOTH paths against the same NPC on the same turn.
 """
 
@@ -42,6 +47,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from sidequest.agents.orchestrator import NpcMention
+from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import EncounterActor, EncounterMetric
 from sidequest.game.session import GameSnapshot, Npc
@@ -52,6 +58,7 @@ from sidequest.server.dispatch.encounter_lifecycle import (
     _seed_combat_hp_depletion_to_npcs,
 )
 from sidequest.server.narration_apply import _apply_npc_mentions
+from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 from tests._helpers.trigger_encounter import trigger_encounter
 
 _FIXTURE_PACK = Path(__file__).resolve().parents[2] / "fixtures" / "packs" / "test_genre"
@@ -321,4 +328,193 @@ def test_present_and_prose_mentioned_same_turn_one_consistent_stamp() -> None:
     assert npc.last_seen_location == "Mawdeep Caverns", (
         "both paths resolve the acting PC's location identically; final stamp "
         f"must be consistent, got {npc.last_seen_location!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC1/AC2 — hp_depletion PRODUCTION-PATH wiring test (real space_opera pack)
+# ---------------------------------------------------------------------------
+#
+# ``test_hp_depletion_seam_stamps_presence`` (above) calls
+# ``_seed_combat_hp_depletion_to_npcs`` DIRECTLY with a ``types.SimpleNamespace``
+# cdef — it bypasses ``instantiate_encounter_from_trigger`` and the real
+# ``ConfrontationDef`` accessors, so it proves the seam stamps but NOT that the
+# hp_depletion dispatch gate (``encounter_lifecycle`` win_condition branch ~1216,
+# threading ``acting_character_name=player_name``) actually reaches it. These
+# tests close that wiring gap ("Every Test Suite Needs a Wiring Test"): they
+# drive the authored ``space_opera`` combat (``win_condition: hp_depletion``)
+# end-to-end through ``trigger_encounter`` → ``instantiate_encounter_from_trigger``
+# and assert the opponent ``Npc`` is presence-stamped through production —
+# INCLUDING the CREATE branch where the opponent has no backing ``Npc`` before
+# instantiation. Loading the real pack here is the sanctioned exception to "tests
+# don't point at content" (same rationale as
+# ``tests/server/test_space_opera_swn_combat_e2e.py``): the point is proving the
+# real seating + dispatch path, not a synthetic fixture.
+
+# Full SWN-flavor stat block (mirrors test_space_opera_swn_combat_e2e) so the
+# instantiation seam can roll 1d8+DEX initiative without KeyError after seeding.
+_SWN_STATS = {
+    "Physique": 12,
+    "Reflex": 12,
+    "Will": 10,
+    "Intellect": 12,
+    "Resolve": 12,
+    "Cunning": 12,
+}
+
+
+def _has_real_content() -> bool:
+    return GENRE_PACKS_DIR.is_dir()
+
+
+def _space_opera_pack():
+    try:
+        return load_genre_pack(find_pack_path("space_opera"))
+    except PackNotFound:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+
+def _spacer(name: str) -> Character:
+    """A player Character with a backing core + SWN stats so the instantiation
+    seam can resolve DEX for initiative (the hp_depletion gate runs
+    ``_roll_and_persist_initiative`` after seeding the opponent)."""
+    return Character(
+        core=CreatureCore(
+            name=name,
+            description="Station-side spacer.",
+            personality="steady",
+            inventory=Inventory(),
+            hp=HpPool(current=10, max=10, base_max=10),
+        ),
+        char_class="Soldier",
+        race="Coreworlder",
+        backstory="Ex-Hegemonic infantry.",
+        stats=dict(_SWN_STATS),
+    )
+
+
+def _opponent_npc(snap: GameSnapshot, name: str) -> Npc | None:
+    return next((n for n in snap.npcs if n.core.name == name), None)
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_hp_depletion_presence_stamp_production_path_create_branch() -> None:
+    """AC1+AC2 (CREATE branch): driving a real ``space_opera`` hp_depletion combat
+    through ``instantiate_encounter_from_trigger`` presence-stamps the opponent
+    ``Npc`` the seam CREATES (the opponent had no backing ``Npc`` before
+    instantiation). This is the production wiring guard the direct-seam unit test
+    above cannot provide."""
+    pack = _space_opera_pack()
+    snap = GameSnapshot(
+        genre_slug="space_opera",
+        world_slug="coyote_star",
+        turn_manager=TurnManager(interaction=6),
+    )
+    snap.character_locations["Vesh"] = "Docking Ring"
+    snap.characters.append(_spacer("Vesh"))
+    # CREATE branch precondition: no backing Npc for this opponent yet.
+    assert _opponent_npc(snap, "Corsair") is None
+
+    trigger_encounter(
+        snap,
+        pack,
+        "combat",
+        "Vesh",
+        npcs_present=[NpcMention(name="Corsair", side="opponent")],
+    )
+
+    opponent = _opponent_npc(snap, "Corsair")
+    assert opponent is not None, (
+        "the hp_depletion seam must CREATE a backing Npc for a router-named "
+        "opponent (create branch) when none exists"
+    )
+    assert opponent.last_seen_turn == 6, (
+        "presence stamp must advance last_seen_turn to the encounter turn through "
+        f"the production dispatch gate; got {opponent.last_seen_turn}"
+    )
+    assert opponent.last_seen_location == "Docking Ring", (
+        "presence stamp must set last_seen_location to the acting PC's resolved "
+        f"location; got {opponent.last_seen_location!r}"
+    )
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_hp_depletion_presence_stamp_production_path_existing_branch() -> None:
+    """AC1 (OVERWRITE branch): the same production path refreshes a PRE-EXISTING
+    opponent ``Npc`` with stale recency in place (no duplicate) when it is seated
+    through ``instantiate_encounter_from_trigger``."""
+    pack = _space_opera_pack()
+    snap = GameSnapshot(
+        genre_slug="space_opera",
+        world_slug="coyote_star",
+        turn_manager=TurnManager(interaction=8),
+    )
+    snap.character_locations["Vesh"] = "Docking Ring"
+    snap.characters.append(_spacer("Vesh"))
+    stale = _make_npc("Corsair", location="Old Hold", turn=2)
+    snap.npcs.append(stale)
+
+    trigger_encounter(
+        snap,
+        pack,
+        "combat",
+        "Vesh",
+        npcs_present=[NpcMention(name="Corsair", side="opponent")],
+    )
+
+    corsairs = [n for n in snap.npcs if n.core.name == "Corsair"]
+    assert len(corsairs) == 1, (
+        f"opponent must be matched + refreshed in place, not duplicated; got {len(corsairs)}"
+    )
+    assert stale.last_seen_turn == 8, (
+        "the production path must advance the existing opponent's last_seen_turn "
+        f"to the encounter turn; got {stale.last_seen_turn}"
+    )
+    assert stale.last_seen_location == "Docking Ring", (
+        "the production path must refresh the existing opponent's stale location; "
+        f"got {stale.last_seen_location!r}"
+    )
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_hp_depletion_production_path_stamp_rides_npc_edge_published_span(otel_capture) -> None:
+    """The hp_depletion production path surfaces the presence stamp on the existing
+    ``npc.edge_published`` span (GM-panel lie-detector), tagged ``created=True`` for
+    the freshly-materialized opponent — the hp_depletion analog of the dial-path
+    span proof above."""
+    pack = _space_opera_pack()
+    snap = GameSnapshot(
+        genre_slug="space_opera",
+        world_slug="coyote_star",
+        turn_manager=TurnManager(interaction=6),
+    )
+    snap.character_locations["Vesh"] = "Docking Ring"
+    snap.characters.append(_spacer("Vesh"))
+
+    trigger_encounter(
+        snap,
+        pack,
+        "combat",
+        "Vesh",
+        npcs_present=[NpcMention(name="Corsair", side="opponent")],
+    )
+
+    edge_spans = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == "npc.edge_published" and (s.attributes or {}).get("npc_name") == "Corsair"
+    ]
+    assert edge_spans, (
+        "npc.edge_published span never fired for the seeded opponent; "
+        f"finished={[s.name for s in otel_capture.get_finished_spans()]!r}"
+    )
+    attrs = dict(edge_spans[0].attributes or {})
+    assert attrs.get("created") is True, (
+        f"the materialized opponent must be tagged created=True; attrs={sorted(attrs)!r}"
+    )
+    assert attrs.get("last_seen_turn") == 6, (
+        f"span missing/incorrect last_seen_turn presence stamp; attrs={sorted(attrs)!r}"
+    )
+    assert attrs.get("last_seen_location") == "Docking Ring", (
+        f"span missing/incorrect last_seen_location presence stamp; attrs={sorted(attrs)!r}"
     )

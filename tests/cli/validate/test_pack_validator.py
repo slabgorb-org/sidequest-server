@@ -279,9 +279,7 @@ class TestPresenceGate:
             f"genre cultures.yaml must be optional; got: {errors}"
         )
 
-    def test_incomplete_waiver_demotes_named_missing_file_to_warning(
-        self, tmp_path: Path
-    ) -> None:
+    def test_incomplete_waiver_demotes_named_missing_file_to_warning(self, tmp_path: Path) -> None:
         """A NON-draft world may waive a specific loader-optional required artifact.
 
         ``incomplete_files`` in world.yaml demotes ONLY the named missing file to
@@ -298,9 +296,7 @@ class TestPresenceGate:
         # Make it live (non-draft) and waive tropes.yaml + the legends dir, then
         # actually remove those artifacts so the waiver has something to absorb.
         (world_dir / "world.yaml").write_text(
-            "draft: false\n"
-            "incomplete_files:\n  - tropes.yaml\n"
-            "incomplete_dirs:\n  - legends\n",
+            "draft: false\nincomplete_files:\n  - tropes.yaml\nincomplete_dirs:\n  - legends\n",
             encoding="utf-8",
         )
         (world_dir / "tropes.yaml").unlink()

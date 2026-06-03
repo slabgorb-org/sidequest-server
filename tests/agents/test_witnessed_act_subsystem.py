@@ -8,7 +8,10 @@ import pytest
 
 from sidequest.agents.subsystems import get_registered
 from sidequest.agents.subsystems.witnessed_act import run_witnessed_act_dispatch
-from sidequest.agents.dispatch_precondition_gate import _INERT_PRECONDITIONS
+from sidequest.game.belief_state import BeliefState
+from sidequest.game.creature_core import CreatureCore, HpPool
+from sidequest.game.political_state import PoliticalState
+from sidequest.game.session import GameSnapshot, Npc
 from sidequest.genre.models.premises import (
     BlocAwakening,
     BlocDef,
@@ -17,10 +20,6 @@ from sidequest.genre.models.premises import (
     PremiseDef,
     PremiseDrain,
 )
-from sidequest.game.belief_state import BeliefState
-from sidequest.game.creature_core import CreatureCore, HpPool
-from sidequest.game.political_state import PoliticalState
-from sidequest.game.session import GameSnapshot, Npc
 from sidequest.protocol.dispatch import SubsystemDispatch
 
 
@@ -48,16 +47,21 @@ def _dispatch(params):
 
 def _pack():
     humbug = PremiseDef(
-        premise_id="humbug", authority="the_wizard",
+        premise_id="humbug",
+        authority="the_wizard",
         claim=PremiseClaim(subject="the_wizard", proposition="great and terrible"),
-        belief_reserve=90, propped_by=["munchkins"],
+        belief_reserve=90,
+        propped_by=["munchkins"],
         drained_by=[PremiseDrain(act="expose", belief_delta=40)],
         collapse=PremiseCollapse(threshold=20, outcome="He flees."),
     )
     munchkins = BlocDef(
-        bloc_id="munchkins", defiance=5, grants_belief_to=["humbug"],
+        bloc_id="munchkins",
+        defiance=5,
+        grants_belief_to=["humbug"],
         awakening_acts=[BlocAwakening(act="rally", defiance_delta=10)],
-        tipping_threshold=70, tipped_outcome="Revolt.",
+        tipping_threshold=70,
+        tipped_outcome="Revolt.",
     )
     return SimpleNamespace(worlds={"oz": SimpleNamespace(premises=[humbug], blocs=[munchkins])})
 
@@ -74,11 +78,9 @@ def test_registered_in_bank():
     assert "witnessed_act" in get_registered()
 
 
-def test_precondition_inert_without_political_state():
-    pred = _INERT_PRECONDITIONS["witnessed_act"]
-    assert pred(GameSnapshot()) is not None  # no political_state → inert reason
-    snap = _snapshot()
-    assert pred(snap) is None  # hydrated → not inert
+# NOTE: the witnessed_act precondition (political_state-None → inert) is covered
+# at the gate level in tests/agents/test_dispatch_precondition_gate.py (Story
+# 59-29 co-location), alongside the sibling scenario_clue precondition tests.
 
 
 @pytest.mark.asyncio
@@ -86,7 +88,10 @@ async def test_handler_drains_injects_and_returns_directive():
     snap = _snapshot()
     out = await run_witnessed_act_dispatch(
         _dispatch({"act_id": "expose", "witnesses": ["Dorothy"]}),
-        snapshot=snap, pack=_pack(), player_name="Dorothy", npcs=snap.npcs,
+        snapshot=snap,
+        pack=_pack(),
+        player_name="Dorothy",
+        npcs=snap.npcs,
     )
     assert snap.political_state.premises["humbug"].belief_reserve == 50
     assert snap.political_state.blocs["munchkins"].defiance == 25  # 5 + floor(40*0.5)
@@ -106,7 +111,10 @@ async def test_no_witness_moves_nothing():
     snap = _snapshot()
     out = await run_witnessed_act_dispatch(
         _dispatch({"act_id": "expose", "witnesses": []}),
-        snapshot=snap, pack=_pack(), player_name="Dorothy", npcs=snap.npcs,
+        snapshot=snap,
+        pack=_pack(),
+        player_name="Dorothy",
+        npcs=snap.npcs,
     )
     assert snap.political_state.premises["humbug"].belief_reserve == 90  # unmoved
     assert out.data.get("error") == "no_witness"
@@ -118,5 +126,8 @@ async def test_missing_act_id_raises():
     with pytest.raises(ValueError, match="act_id"):
         await run_witnessed_act_dispatch(
             _dispatch({"witnesses": ["Dorothy"]}),
-            snapshot=snap, pack=_pack(), player_name="Dorothy", npcs=snap.npcs,
+            snapshot=snap,
+            pack=_pack(),
+            player_name="Dorothy",
+            npcs=snap.npcs,
         )

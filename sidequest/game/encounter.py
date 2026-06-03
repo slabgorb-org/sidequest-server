@@ -261,3 +261,34 @@ class StructuredEncounter(BaseModel):
         if self.opponent_metric.current >= self.opponent_metric.threshold:
             return "opponent_victory"
         return None
+
+    def opponent_yield_outcome(self) -> str | None:
+        """Return ``"player_victory"`` if the OPPONENT side has yielded, else
+        ``None``.
+
+        Sibling to ``dial_threshold_outcome`` (Story 59-31): a yielded opponent
+        is a player VICTORY, distinct from a dial win, from the player-side
+        ``yielded`` (a loss), and from ``abandoned_on_location_change`` (a
+        genuine walk-away). The engine confirms the yield from existing actor /
+        disposition state the narrator already sets — it is engine-checked, not
+        pure-LLM-compliance (CLAUDE.md: the GM panel is the lie detector).
+
+        An opponent has yielded iff there ARE opponent-side actors (ADR-116 — a
+        confrontation requires an Other) AND either every opponent actor is
+        ``withdrawn`` OR ``opponents_disposition`` is a yield disposition
+        (``surrendered`` / ``routed``, set by the B/X morale path without
+        necessarily flipping each actor's ``withdrawn``). Unlike
+        ``dial_threshold_outcome`` this is NOT gated to ``dial_threshold`` — a
+        monster surrendering mid-combat is just as much a player victory.
+
+        A PLAYER-side withdrawal never triggers this (that is the player-side
+        ``yielded`` loss path) — this checks ``side == "opponent"`` only.
+        """
+        opponents = [a for a in self.actors if a.side == "opponent"]
+        if not opponents:
+            return None
+        all_withdrawn = all(a.withdrawn for a in opponents)
+        disposition_yield = self.opponents_disposition in ("surrendered", "routed")
+        if all_withdrawn or disposition_yield:
+            return "player_victory"
+        return None

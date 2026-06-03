@@ -18,7 +18,7 @@ from pydantic import ValidationError
 if TYPE_CHECKING:
     from sidequest.agents.orchestrator import BeatSelection
     from sidequest.game.character import Character
-    from sidequest.game.encounter import EncounterActor, EncounterPhase
+    from sidequest.game.encounter import EncounterActor, EncounterPhase, StructuredEncounter
     from sidequest.genre.names.generator import NameGenerator
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
@@ -2799,6 +2799,7 @@ def _apply_narration_result_to_snapshot(
                 # credit instead of being recorded as having walked away. Only
                 # a genuinely-unfinished encounter (no threshold met) abandons.
                 won_outcome = active_encounter.dial_threshold_outcome()
+                yield_outcome = active_encounter.opponent_yield_outcome()
                 active_encounter.resolved = True
                 if won_outcome is not None:
                     from sidequest.game.encounter import EncounterPhase as _EncounterPhase
@@ -2830,6 +2831,27 @@ def _apply_narration_result_to_snapshot(
                             "turn_number": snapshot.turn_manager.interaction,
                         },
                         component="confrontation",
+                    )
+                elif yield_outcome is not None:
+                    # sq-playtest 2026-06-02 wry_whimsy/oz (Story 59-31): the
+                    # opponent (the Cowardly Lion) backed down with no dial
+                    # threshold met. Walking on from a cowed opponent is a player
+                    # VICTORY, not a walk-away — resolve opponent_yielded before
+                    # falling to abandoned. #576 explicitly punted this residual
+                    # (no-threshold-met opponent yield) to Story 59-31.
+                    logger.info(
+                        "encounter.resolved_on_location_change_opponent_yield "
+                        "encounter_type=%s old_location=%r new_location=%r player=%s",
+                        abandoned_type,
+                        old_loc,
+                        result.location,
+                        player_name,
+                    )
+                    _resolve_opponent_yield(
+                        snapshot,
+                        active_encounter,
+                        trigger="opponent_yield_on_location_change",
+                        turn_number=snapshot.turn_manager.interaction,
                     )
                 else:
                     active_encounter.outcome = "abandoned_on_location_change"
@@ -4480,25 +4502,92 @@ def _resolve_dial_threshold_and_phase(snapshot: GameSnapshot) -> None:
         )
 
 
-def _resolve_if_no_opponent_remains(snapshot: GameSnapshot) -> None:
-    """ADR-116 §4 — end-on-no-Other (mirror of the player-side yield resolver
-    in ``server/dispatch/yield_action.py``).
+def _resolve_opponent_yield(
+    snapshot: GameSnapshot,
+    enc: StructuredEncounter,
+    *,
+    trigger: str,
+    turn_number: int,
+) -> None:
+    """Resolve a confrontation as a player VICTORY because the OPPONENT yielded
+    (Story 59-31). Shared by the post-turn sweep and the location-change
+    boundary so both record the same engine-checked outcome.
 
-    If an active confrontation has seated opponents but none remain live (all
-    ``withdrawn``), resolve it — a confrontation ends when there is no longer
-    an Other, not only when a dial reaches threshold. Emits ``participant.left``
-    per departed opponent so the GM panel sees WHY the encounter ended.
+    Records ``enc.outcome = "opponent_yielded"`` — the narrative-precise label,
+    sibling to the player-side ``yielded`` (a loss) — which RESOLVES AS
+    ``player_victory`` for reward/credit (the OTEL ``outcome`` attr). Stamps
+    ``pending_resolution_signal`` (cheap, correct — matches the dial-threshold
+    sweep) so a future 49-5 [ENCOUNTER RESOLVED] revival narrates the close for
+    free. Emits a ``component="confrontation"`` watcher event so Keith can
+    confirm on the GM panel that the ENGINE — not the narrator's prose —
+    recorded the victory (CLAUDE.md OTEL principle).
     """
     from sidequest.game.encounter import EncounterPhase
+    from sidequest.game.resolution_signal import ResolutionSignal
+
+    opponents = [a for a in enc.actors if a.side == "opponent"]
+    withdrawn_names = [a.name for a in opponents if a.withdrawn]
+    # Prefer the actually-withdrawn opponents; fall back to all opponents when
+    # the yield came via opponents_disposition (surrender/rout) without
+    # per-actor withdrawn flags.
+    yielded_opponents = withdrawn_names or [a.name for a in opponents]
+
+    enc.resolved = True
+    enc.outcome = "opponent_yielded"
+    enc.structured_phase = EncounterPhase.Resolution
+    snapshot.pending_resolution_signal = ResolutionSignal(
+        encounter_type=enc.encounter_type,
+        outcome="opponent_yielded",
+        final_player_metric=enc.player_metric.current,
+        final_opponent_metric=enc.opponent_metric.current,
+        yielded_actors=tuple(yielded_opponents),
+        edge_refreshed=0,
+    )
+    _watcher_publish(
+        "confrontation_resolved_on_opponent_yield",
+        {
+            "encounter_type": enc.encounter_type,
+            "outcome": "player_victory",
+            "resolution_label": "opponent_yielded",
+            "trigger": trigger,
+            "yielded_opponents": yielded_opponents,
+            "opponents_disposition": enc.opponents_disposition,
+            "turn_number": turn_number,
+        },
+        component="confrontation",
+    )
+
+
+def _resolve_if_no_opponent_remains(snapshot: GameSnapshot) -> None:
+    """ADR-116 §4 — end-on-no-Other, recorded as an opponent YIELD (Story 59-31).
+
+    If an active confrontation has seated opponents who have yielded — every
+    opponent ``withdrawn``, OR ``opponents_disposition`` is a yield disposition
+    (``surrendered``/``routed``) — resolve it as a player victory. A
+    confrontation ends when there is no longer a live Other, not only when a
+    dial reaches threshold. Emits ``participant.left`` per withdrawn opponent so
+    the GM panel sees WHY the encounter ended, then routes through
+    ``_resolve_opponent_yield`` for the ``opponent_yielded``/player_victory
+    outcome, the resolution-signal stamp, and the confrontation OTEL event.
+
+    Supersedes the prior ``opponent_withdrew`` label (Story 59-31): a yielded
+    opponent is a player VICTORY, never the player-side ``yielded`` (loss) nor a
+    bare withdrawal with no credit.
+    """
     from sidequest.telemetry.spans import participant_left_span
 
     enc = getattr(snapshot, "encounter", None)
     if enc is None or enc.resolved:
         return
+    # No Other → nothing to resolve here (ADR-116). Cheap early-out before the
+    # yield check so a confrontation with no seated opponent never reaches the
+    # victory path.
     opponents = [a for a in enc.actors if a.side == "opponent"]
-    if not opponents or any(not a.withdrawn for a in opponents):
+    if not opponents:
         return
-    for opp in opponents:
+    if enc.opponent_yield_outcome() is None:
+        return
+    for opp in (a for a in opponents if a.withdrawn):
         with participant_left_span(
             encounter_type=enc.encounter_type,
             name=opp.name,
@@ -4506,9 +4595,12 @@ def _resolve_if_no_opponent_remains(snapshot: GameSnapshot) -> None:
             reason="withdrawn",
         ):
             pass
-    enc.resolved = True
-    enc.outcome = "opponent_withdrew"
-    enc.structured_phase = EncounterPhase.Resolution
+    _resolve_opponent_yield(
+        snapshot,
+        enc,
+        trigger="opponent_yield_sweep",
+        turn_number=snapshot.turn_manager.interaction,
+    )
 
 
 def _apply_companion_changes(

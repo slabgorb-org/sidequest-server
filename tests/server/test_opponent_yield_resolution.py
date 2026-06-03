@@ -37,7 +37,8 @@ RED-state expectation (before 59-31 ships):
 
 from __future__ import annotations
 
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -51,7 +52,6 @@ from sidequest.game.session import GameSnapshot
 from sidequest.server import narration_apply
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 from tests._helpers.session_room import room_for
-
 
 # ── fixtures / builders ─────────────────────────────────────────────────────
 
@@ -78,7 +78,10 @@ def _encounter(
         opponent_metric=EncounterMetric(
             name="menace", current=opponent_current, starting=0, threshold=threshold
         ),
-        actors=[*(players or [EncounterActor(name="Dorothy", role="lead", side="player")]), *opponents],
+        actors=[
+            *(players or [EncounterActor(name="Dorothy", role="lead", side="player")]),
+            *opponents,
+        ],
     )
     if opponents_disposition is not None:
         enc.opponents_disposition = opponents_disposition
@@ -141,9 +144,7 @@ def test_opponents_disposition_surrendered_returns_player_victory() -> None:
     """The B/X morale path sets ``opponents_disposition='surrendered'`` without
     necessarily flipping each actor's ``withdrawn``. A surrendered opponent is a
     player victory regardless of the per-actor flag."""
-    enc = _encounter(
-        opponents=[_lion(withdrawn=False)], opponents_disposition="surrendered"
-    )
+    enc = _encounter(opponents=[_lion(withdrawn=False)], opponents_disposition="surrendered")
     assert enc.opponent_yield_outcome() == "player_victory"
 
 
@@ -212,7 +213,9 @@ def test_opponent_yield_resolves_same_turn_without_location_change() -> None:
 
     _apply_narration_result_to_snapshot(
         snap,
-        NarrationTurnResult(narration="The Lion's tail droops; he backs away whimpering.", beat_selections=[]),
+        NarrationTurnResult(
+            narration="The Lion's tail droops; he backs away whimpering.", beat_selections=[]
+        ),
         player_name="Dorothy",
         room=room_for(snap),
     )
@@ -238,7 +241,9 @@ def test_opponent_surrender_disposition_resolves_same_turn() -> None:
 
     _apply_narration_result_to_snapshot(
         snap,
-        NarrationTurnResult(narration="The Lion throws up his paws in surrender.", beat_selections=[]),
+        NarrationTurnResult(
+            narration="The Lion throws up his paws in surrender.", beat_selections=[]
+        ),
         player_name="Dorothy",
         room=room_for(snap),
     )
@@ -321,7 +326,9 @@ def test_no_yield_event_when_opponent_still_active(
 
     _apply_narration_result_to_snapshot(
         snap,
-        NarrationTurnResult(narration="The Lion paces, still blocking the road.", beat_selections=[]),
+        NarrationTurnResult(
+            narration="The Lion paces, still blocking the road.", beat_selections=[]
+        ),
         player_name="Dorothy",
         room=room_for(snap),
     )

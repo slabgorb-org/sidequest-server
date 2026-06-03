@@ -179,6 +179,18 @@ For each player action:
          invent a witness who is not in present_npcs. Reshaping a society is
          earned — score confidence honestly; a low score degrades to a narrator
          hint instead of moving the political dials.
+       - equip: the player puts on, wears, dons, laces on, straps on, draws, or
+         wields a carried item, OR takes off / removes / sheathes one. params={
+           "item": "<the item as the player named it — a name or id of an item
+                    the character already carries>",
+           "action": "<one of: equip | unequip>"
+         }.
+         Emit equip ONLY for genuinely wearing/wielding or removing a carried
+         item (lace on the shoes, draw the sword, don the cloak, take off the
+         armor) — NOT for using/consuming an item, picking one up, or dropping
+         it. action defaults to equip; use unequip for take-off/remove/sheathe.
+         The item MUST be one the character already carries; name it as the
+         player named it and the engine resolves it against the inventory.
      Every dispatch carries a per-dispatch confidence (0.0-1.0): how certain you
      are that THIS specific mechanical engagement is what the player intended.
      Score the confidence for each dispatch honestly — a high score fires the

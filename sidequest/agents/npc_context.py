@@ -24,6 +24,7 @@ considered-vs-selected counts per tier.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from sidequest.game.npc_pool import NpcPoolMember
@@ -56,6 +57,34 @@ def _name_of(entry: Npc | NpcPoolMember) -> str:
     if isinstance(entry, Npc):
         return entry.core.name
     return entry.name
+
+
+def player_referenced_npcs_from_action(snapshot: GameSnapshot, action_text: str) -> set[str]:
+    """Names from the roster the player referenced in ``action_text`` this turn.
+
+    The brief-vs-compact toggle of :func:`build_npc_working_set` (ADR-118 §D4,
+    story 75-10): when the player names any roster NPC, the off-stage tier renders
+    BRIEF (name+role) instead of COMPACT (name only). The roster source is the
+    full cast — stateful ``snapshot.npcs`` AND identity-only ``snapshot.npc_pool``
+    — since a player can name either.
+
+    Matching is case-insensitive and word-bounded (``\\b``): a name must occur as
+    a whole word, so "Art" is not matched inside "start". A naive substring match
+    would inflate the brief tier the budgeted floor exists to bound. Returns the
+    matched names; the caller passes the set to ``build_npc_working_set``, which
+    only reads its truthiness (any reference → brief mode for the whole off-stage
+    tier — this is a turn-level signal, not per-entity promotion).
+    """
+    if not action_text or not action_text.strip():
+        return set()
+    referenced: set[str] = set()
+    for entry in (*snapshot.npcs, *snapshot.npc_pool):
+        name = _name_of(entry).strip()
+        if not name:
+            continue
+        if re.search(rf"\b{re.escape(name)}\b", action_text, re.IGNORECASE):
+            referenced.add(name)
+    return referenced
 
 
 def build_npc_working_set(

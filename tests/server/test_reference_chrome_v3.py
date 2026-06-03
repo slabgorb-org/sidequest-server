@@ -84,7 +84,7 @@ def _seed_world(pack_dir: Path, world_name: str = "coyote_star") -> Path:
         f"world_name: {world_name.replace('_', ' ').title()}\n"
         "epigraph: A quiet valley where nothing has happened for a hundred years.\n"
     )
-    (world / "legends.yaml").write_text("- name: the-grey-pilgrim\n  origin: unknown\n")
+    (world / "legends.yaml").write_text("- name: the-grey-pilgrim\n  summary: unknown\n")
     return world
 
 

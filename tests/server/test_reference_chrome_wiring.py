@@ -146,8 +146,22 @@ def _seed_space_opera_world(pack_dir: Path) -> Path:
     (world / "lore.yaml").write_text(
         "world_name: Coyote Star\n"
         "epigraph: Out here the only law that travels faster than light is grief.\n"
+        "history: The belt was settled, then abandoned, then settled again.\n"
     )
-    (world / "legends.yaml").write_text("- name: the-long-burn\n  origin: pre-collapse\n")
+    # Story 65-12: a legend with a clean-year era (-> a dated entry + era chip)
+    # AND an undated legend (-> the undated group), plus the lore.history above
+    # (-> the timeline preamble), so the keystone class-vs-CSS test validates the
+    # full ref-timeline class set (ref-timeline, __preamble, __list, __entry,
+    # __era, __name, __summary, __undated) — closing the chrome blind spot for
+    # the timeline feature the same way the cartography above closes it for the map.
+    (world / "legends.yaml").write_text(
+        "legends:\n"
+        "  - name: The Long Burn\n"
+        "    era: '2387'\n"
+        "    description: The fusion plants went critical across the belt.\n"
+        "  - name: The Nameless Drift\n"
+        "    description: A loss so old the colony kept no record of it.\n"
+    )
     (world / "locations.yaml").write_text("- name: the-broken-needle\n  district: belt\n")
     # Story 65-11: a pin-free cartography so the Map section renders and its
     # CSS classes (ref-map, ref-map__svg, ref-map__edge, ref-map__node) are

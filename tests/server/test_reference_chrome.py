@@ -48,7 +48,7 @@ def _seed_world(pack_dir: Path, world_name: str, *, with_lore: bool = True) -> P
             f"world_name: {world_name.title()}\n"
             f"epigraph: A quiet valley where nothing has happened for a hundred years.\n"
         )
-    (world / "legends.yaml").write_text("- name: the-grey-pilgrim\n  origin: unknown\n")
+    (world / "legends.yaml").write_text("- name: the-grey-pilgrim\n  summary: unknown\n")
     # Story 63-10: cultures render on the lore page from the WORLD tier
     # (LORE_WORLD_FILES); pack-tier flavor is no longer merged. Seed at the
     # world tier so the culture-anchor namespacing invariant still exercises.

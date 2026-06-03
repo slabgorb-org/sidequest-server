@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from sidequest.protocol.dice import RollOutcome
 
@@ -56,6 +56,13 @@ class ResolvedDeltas:
     resolution: bool = False
 
 
+# Closed set of beat-impact categories (Story 73-4). The UI mirrors this as a
+# TypeScript union (ConfrontationOverlay.tsx ``BeatEffect``); keeping both as a
+# fixed enumeration means a renamed/typo'd category fails type-check on both
+# sides instead of silently producing a dead ``beat-impact-${effect}`` class.
+BeatEffect = Literal["advance", "setback", "resolution", "tag", "backfire", "inert"]
+
+
 @dataclass(frozen=True)
 class BeatImpact:
     """Player-facing semantic readout of one resolved beat (Story 73-4).
@@ -78,7 +85,7 @@ class BeatImpact:
     ``inert`` (the beat landed but nothing happened — a genuine Fail).
     """
 
-    effect: str
+    effect: BeatEffect
     dial_moved: bool
     summary: str
     own: int = 0
@@ -99,7 +106,9 @@ def describe_beat_impact(
     that adds a dial move to a normally-no-move tier reads as a move, not "no
     dial by design"). ``kind``/``outcome`` enrich the summary text only.
 
-    Effect precedence (a tier never carries two, but the order is fixed):
+    Effect precedence — a fixed order, because the DEFAULT_DELTAS tiers never
+    carry two effects but a per-tier ``override`` CAN (e.g. a backfire plus a
+    dial penalty). When two are present the dial move wins, deterministically:
     favorable dial move → ``advance``; unfavorable dial move → ``setback``;
     backfire → ``backfire``; resolution → ``resolution``; tag granted → ``tag``;
     else → ``inert``.
@@ -114,6 +123,7 @@ def describe_beat_impact(
     favorable = own > 0 or opponent < 0
     unfavorable = own < 0 or opponent > 0
 
+    effect: BeatEffect
     if favorable:
         effect = "advance"
         detail = []
@@ -528,8 +538,14 @@ def apply_beat(
 
     # Story 73-4 — derive + stamp the player-facing legibility descriptor. Stored
     # per-side so an opposed_check opponent beat (applied later this turn) can't
-    # clobber the player's readout. Pure derivation from the resolved deltas, so
-    # it is correct regardless of any dial-application suppression below.
+    # clobber the player's readout. Derived from the *nominal* resolved deltas.
+    # CAVEAT (hp_depletion): for win_condition="hp_depletion" the dial application
+    # below is suppressed (the dials are inert HP placeholders), so the descriptor
+    # can report effect="advance"/dial_moved=True for a beat whose dial never
+    # actually moved on-screen. That mode renders HP bars, not this dial-impact
+    # panel (out of scope for 73-4 / dial confrontations) — but a future story
+    # surfacing last_beat_impact under hp_depletion must read the HP channel, not
+    # these nominal dial deltas. See Delivery Findings (Dev) for the follow-up.
     impact = describe_beat_impact(deltas, kind=beat.kind, outcome=outcome)
     enc.last_beat_impacts[actor.side] = asdict(impact)
 

@@ -227,7 +227,9 @@ def test_fail_tier_is_inert_with_nonempty_summary():
     )
     assert impact.effect == "inert"
     assert impact.dial_moved is False
-    assert impact.summary  # even "nothing happened" is explained, not blank
+    # The inert summary must actually convey "nothing changed" — not just be
+    # non-empty (a wrong-but-non-empty string would pass a bare truthy check).
+    assert "no change" in impact.summary.lower()
 
 
 # ── Edge: classifier reads RESOLVED deltas, not the kind's nominal default ──

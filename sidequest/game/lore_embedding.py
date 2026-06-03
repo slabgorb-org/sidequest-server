@@ -227,7 +227,7 @@ async def embed_pending_fragments(
                     "lore_embedding.worker text_too_large fragment=%s content_bytes=%d error=%s",
                     frag_id,
                     len(frag.content.encode("utf-8")),
-                    exc,
+                    type(exc).__name__,
                 )
                 continue
 

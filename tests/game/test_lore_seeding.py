@@ -1,9 +1,9 @@
 """Tests for ``sidequest.game.lore_seeding`` — Story 2.3 Slice F.
 
 Covers ``seed_lore_from_char_creation`` fragment shape + id format
-(Rust parity) and ``seed_lore_from_genre_pack`` against a real loaded
-pack — no synthetic GenrePack fixtures, since the aggregate root is
-wide and the seeding helpers only read ``pack.lore``.
+(Rust parity) and ``seed_lore_from_world`` against a real loaded pack.
+The genre-pack seeder was removed in story 74-4 (lore is world-only,
+epic 74), so there is no genre-tier seed left to exercise here.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import pytest
 
 from sidequest.game.lore_seeding import (
     seed_lore_from_char_creation,
-    seed_lore_from_genre_pack,
     seed_lore_from_world,
 )
 from sidequest.game.lore_store import (
@@ -130,7 +129,9 @@ class TestSeedFromCharCreation:
 
 
 # ---------------------------------------------------------------------------
-# seed_lore_from_genre_pack — real caverns pack
+# Shared caverns_pack fixture (used by the world-seed tests below). The
+# genre-pack seeder (and its tests) were removed in story 74-4 — lore is
+# world-only (epic 74), so there is no longer a genre-tier seed to exercise.
 # ---------------------------------------------------------------------------
 
 
@@ -140,48 +141,6 @@ def caverns_pack() -> GenrePack:
     if not path.is_dir():
         pytest.skip(f"content pack not found at {path}")
     return load_genre_pack(path)
-
-
-@pytest.mark.skip(
-    reason="Epic 74 (story 74-3) deletes genre-tier lore.yaml from every live "
-    "pack; these tests exercise seed_lore_from_genre_pack against the REAL "
-    "caverns genre lore, which no longer exists, so they would assert against an "
-    "empty seed. Content-pointing tests are architecturally wrong here — convert "
-    "to a synthetic genre-lore fixture. Tracked in story 74-5."
-)
-class TestSeedFromGenrePack:
-    def test_adds_history_geography_cosmology_and_factions(self, caverns_pack: GenrePack) -> None:
-        store = LoreStore()
-        added = seed_lore_from_genre_pack(store, caverns_pack)
-        # caverns has non-empty history/geography/cosmology + multiple factions.
-        assert added >= 3
-        assert "lore_genre_history" in store.fragments
-        assert "lore_genre_geography" in store.fragments
-        assert "lore_genre_cosmology" in store.fragments
-
-    def test_cosmology_bucketed_as_history(self, caverns_pack: GenrePack) -> None:
-        store = LoreStore()
-        seed_lore_from_genre_pack(store, caverns_pack)
-        cosmology = store.fragments["lore_genre_cosmology"]
-        # Rust bucket cosmology → History (seeding.rs line 47).
-        assert cosmology.category == LoreCategory.History
-
-    def test_faction_fragment_carries_name_metadata(self, caverns_pack: GenrePack) -> None:
-        store = LoreStore()
-        seed_lore_from_genre_pack(store, caverns_pack)
-        faction_frags = store.query_by_category(LoreCategory.Faction)
-        if not faction_frags:
-            pytest.skip("pack has no factions")
-        frag = faction_frags[0]
-        assert "faction_name" in frag.metadata
-        assert frag.metadata["faction_name"]
-
-    def test_idempotent_second_call_adds_nothing(self, caverns_pack: GenrePack) -> None:
-        store = LoreStore()
-        first = seed_lore_from_genre_pack(store, caverns_pack)
-        second = seed_lore_from_genre_pack(store, caverns_pack)
-        assert first > 0
-        assert second == 0
 
 
 # ---------------------------------------------------------------------------
@@ -227,35 +186,6 @@ class TestSeedFromWorld:
                 "so future cross-world queries can filter by world without "
                 "re-parsing the fragment id."
             )
-
-    @pytest.mark.skip(
-        reason="Genre lore deleted in epic 74 (story 74-3): seed_lore_from_genre_pack "
-        "now returns 0 for every live pack, so this genre<->world id-collision "
-        "contract needs a synthetic genre-lore fixture rather than the real "
-        "caverns pack. Tracked in story 74-5."
-    )
-    def test_world_seed_does_not_collide_with_genre_seed(self, caverns_pack: GenrePack) -> None:
-        """Wiring contract: in production both seeders run against the
-        same store. The genre seeder uses ``lore_genre_*`` ids; the
-        world seeder uses ``lore_world_<slug>_*``. They must NOT
-        collide on shared topics like 'history' — pre-fix the bug
-        report would suggest both were silent, but a future regression
-        could collide ids and silently drop world lore as a duplicate.
-        """
-        worlds = caverns_pack.worlds
-        if not worlds:
-            pytest.skip("caverns pack has no worlds")
-        world_slug, world = next(iter(worlds.items()))
-        store = LoreStore()
-        genre_added = seed_lore_from_genre_pack(store, caverns_pack)
-        world_added = seed_lore_from_world(store, world.lore, world_slug)
-        # If world has ANY populated field, total must equal sum (no
-        # silent dedup against the genre layer).
-        assert genre_added >= 1
-        assert len(store) == genre_added + world_added, (
-            "Genre and world seed ids must not collide — len(store) must "
-            "equal the sum of fragments_added across both seeders."
-        )
 
     def test_unicode_or_uppercase_world_slug_does_not_break_id(self) -> None:
         from sidequest.genre.models.lore import Faction, WorldLore

@@ -26,7 +26,6 @@ from sidequest.game import lore_seeding
 from sidequest.game.lore_store import LoreStore
 from sidequest.genre.loader import load_genre_pack
 
-
 # --------------------------------------------------------------------------- #
 # RED — the dead seeder is removed from the module API
 # --------------------------------------------------------------------------- #
@@ -71,7 +70,6 @@ def test_seed_world_lore_seeds_world_lore_and_zero_genre(
 
     assert genre_added == 0, "epic 74: genre lore is never seeded (world-only)"
     assert world_added > 0, (
-        "the surviving world-lore seeder must still populate the store from "
-        "the world's lore.yaml"
+        "the surviving world-lore seeder must still populate the store from the world's lore.yaml"
     )
     assert len(store) == world_added

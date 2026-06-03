@@ -46,9 +46,7 @@ def _first_world_dir(pack_path: Path) -> Path:
 # --------------------------------------------------------------------------- #
 
 
-def test_non_dict_world_theme_raises_genre_load_error(
-    minimal_pack_factory, tmp_path: Path
-) -> None:
+def test_non_dict_world_theme_raises_genre_load_error(minimal_pack_factory, tmp_path: Path) -> None:
     """A YAML *list* is a valid document but the wrong SHAPE for a theme file."""
     pack = minimal_pack_factory(tmp_path)
     world = _first_world_dir(pack.path)
@@ -62,9 +60,7 @@ def test_non_dict_world_theme_raises_genre_load_error(
     assert world.name in msg, f"loud-fail must be world-scoped; got: {msg!r}"
 
 
-def test_scalar_world_theme_raises_genre_load_error(
-    minimal_pack_factory, tmp_path: Path
-) -> None:
+def test_scalar_world_theme_raises_genre_load_error(minimal_pack_factory, tmp_path: Path) -> None:
     """A bare scalar (string) theme.yaml is also the wrong shape."""
     pack = minimal_pack_factory(tmp_path)
     world = _first_world_dir(pack.path)
@@ -75,9 +71,7 @@ def test_scalar_world_theme_raises_genre_load_error(
     assert "theme.yaml" in str(exc_info.value)
 
 
-def test_non_dict_world_audio_raises_genre_load_error(
-    minimal_pack_factory, tmp_path: Path
-) -> None:
+def test_non_dict_world_audio_raises_genre_load_error(minimal_pack_factory, tmp_path: Path) -> None:
     """The same shape guard applies to ``audio.yaml`` (also loaded raw)."""
     pack = minimal_pack_factory(tmp_path)
     world = _first_world_dir(pack.path)
@@ -114,9 +108,7 @@ def test_dict_world_theme_loads(minimal_pack_factory, tmp_path: Path) -> None:
     assert world_obj.theme["palette"] == "midnight"
 
 
-def test_absent_world_theme_audio_still_loads(
-    minimal_pack_factory, tmp_path: Path
-) -> None:
+def test_absent_world_theme_audio_still_loads(minimal_pack_factory, tmp_path: Path) -> None:
     """No theme.yaml / audio.yaml authored → valid (genre fallback for theme,
     ``None`` for audio). The guard must NOT turn 'absent' into an error — an
     over-eager guard would itself violate the transitional fallback contract.

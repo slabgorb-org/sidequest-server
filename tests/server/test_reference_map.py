@@ -45,7 +45,6 @@ source-text wiring tests):
 from __future__ import annotations
 
 import re
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -113,9 +112,9 @@ def _map_section(html: str) -> str:
     """
     marker = 'id="map"'
     idx = html.find(marker)
-    assert idx != -1, "no Map section (id=\"map\") in the rendered lore page"
+    assert idx != -1, 'no Map section (id="map") in the rendered lore page'
     start = html.rfind("<section", 0, idx)
-    assert start != -1, 'Map section marker not inside a <section> element'
+    assert start != -1, "Map section marker not inside a <section> element"
     end = html.index("</section>", idx)
     return html[start:end]
 

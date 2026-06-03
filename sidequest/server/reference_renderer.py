@@ -46,6 +46,7 @@ from pathlib import Path
 
 import yaml
 
+from sidequest.server.reference_map import load_cartography_config, present_lore_map
 from sidequest.server.reference_presenters import (
     PresenterContext,
     lookup_presenter,
@@ -1357,6 +1358,36 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
             kept_toc = [
                 *kept_toc,
                 {"num": _int_to_roman(len(kept_toc) + 1), "id": "cast", "label": "Cast"},
+            ]
+
+    # Story 65-11: public Map section — a server-rendered SVG node-link graph from
+    # cartography.yaml, with npc-binding entity portraits gated on R2 the same way
+    # the Cast portraits above are gated (reusing _gate_cast_slugs_on_manifest).
+    cartography = load_cartography_config(world_dir)
+    if cartography is not None and cartography.regions:
+        map_npc_slugs = frozenset(
+            slugify_player_name(ent.label)
+            for region in cartography.regions.values()
+            for ent in region.entities
+            if ent.binding is not None and ent.binding.kind == "npc" and ent.label.strip()
+        )
+        gated_map_slugs = _gate_cast_slugs_on_manifest(
+            map_npc_slugs,
+            pack=pack,
+            world=world,
+            pack_dir=pack_dir,
+        )
+        map_html = present_lore_map(
+            cartography,
+            pack=pack,
+            world=world,
+            portrait_on_r2_slugs=gated_map_slugs,
+        )
+        if map_html:
+            body += map_html
+            kept_toc = [
+                *kept_toc,
+                {"num": _int_to_roman(len(kept_toc) + 1), "id": "map", "label": "Map"},
             ]
 
     return _wrap_document(

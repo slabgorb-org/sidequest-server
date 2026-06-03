@@ -140,6 +140,26 @@ def _seed_space_opera_world(pack_dir: Path) -> Path:
     )
     (world / "legends.yaml").write_text("- name: the-long-burn\n  origin: pre-collapse\n")
     (world / "locations.yaml").write_text("- name: the-broken-needle\n  district: belt\n")
+    # Story 65-11: a pin-free cartography so the Map section renders and its
+    # CSS classes (ref-map, ref-map__svg, ref-map__edge, ref-map__node) are
+    # validated by the keystone class-vs-CSS test — closing the chrome blind
+    # spot for the map feature (no npc entities -> no R2 manifest gate needed).
+    (world / "cartography.yaml").write_text(
+        "world_name: Coyote Star\n"
+        "starting_region: the_belt\n"
+        "navigation_mode: region\n"
+        "regions:\n"
+        "  the_belt:\n"
+        "    name: The Belt\n"
+        "    summary: Mining rocks.\n"
+        "    description: The asteroid belt.\n"
+        "    adjacent: [the_core]\n"
+        "  the_core:\n"
+        "    name: The Core\n"
+        "    summary: Inner worlds.\n"
+        "    description: The core systems.\n"
+        "    adjacent: [the_belt]\n"
+    )
     return world
 
 

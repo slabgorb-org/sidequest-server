@@ -262,7 +262,9 @@ def test_authored_spine_skips_seed_quest_and_anchor() -> None:
     seed_quest_spine(snap, char)
 
     assert "seed_drive" not in snap.quest_log, "must not add a seed quest over an authored spine"
-    assert "seed_drive_anchor" not in snap.quest_anchors, "must not add a seed anchor over an authored spine"
+    assert "seed_drive_anchor" not in snap.quest_anchors, (
+        "must not add a seed anchor over an authored spine"
+    )
 
 
 def test_defer_path_emits_one_non_warning_span(otel_capture) -> None:

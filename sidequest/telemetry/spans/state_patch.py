@@ -58,6 +58,7 @@ SPAN_ROUTES[SPAN_QUEST_SEEDED_AT_CREATION] = SpanRoute(
         "source_drive": (span.attributes or {}).get("source_drive", ""),
         "has_stakes": (span.attributes or {}).get("has_stakes", False),
         "severity": (span.attributes or {}).get("severity", "info"),
+        "deferred": (span.attributes or {}).get("deferred", False),
     },
 )
 SPAN_GAME_HANDSHAKE_DELTA_APPLIED = "game.handshake.delta_applied"
@@ -141,3 +142,37 @@ def quest_update_span(
     }
     with Span.open(SPAN_QUEST_UPDATE, attributes, tracer_override=_tracer) as span:
         yield span
+
+
+def quest_seeded_at_creation_span(
+    *,
+    quest_id: str,
+    anchor_id: str,
+    source_drive: str,
+    has_stakes: bool,
+    severity: str,
+    deferred: bool = False,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit the Story 77-1 seed-at-creation span (point event, opens+closes).
+
+    Three GM-panel-distinguishable cases:
+    - real seed: ``severity="info"``, ids set, ``source_drive`` = the PC drive.
+    - empty drive AND calling: ``severity="warning"``, ids empty, ``has_stakes``
+      False — the loud tell that nothing could be seeded (No Silent Fallbacks).
+    - deferred to a world-authored spine: ``severity="info"``, ``deferred=True``,
+      ids empty, ``source_drive`` empty, ``has_stakes`` True — the seed found an
+      authored ``active_stakes`` and preserved it rather than clobbering it.
+    """
+    attributes: dict[str, Any] = {
+        "quest_id": quest_id,
+        "anchor_id": anchor_id,
+        "source_drive": source_drive,
+        "has_stakes": has_stakes,
+        "severity": severity,
+        "deferred": deferred,
+        **attrs,
+    }
+    with Span.open(SPAN_QUEST_SEEDED_AT_CREATION, attributes, tracer_override=_tracer):
+        pass

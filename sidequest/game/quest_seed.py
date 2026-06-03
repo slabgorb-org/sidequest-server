@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from sidequest.game.character import Character
 from sidequest.game.session import GameSnapshot
-from sidequest.telemetry.spans import SPAN_QUEST_SEEDED_AT_CREATION, Span
+from sidequest.telemetry.spans import quest_seeded_at_creation_span
 
 # Stable ids for the single creation-time seed entry. One quest, one anchor —
 # a quiet town walk does not mint a quest (SOUL "Cost Scales with Drama"); the
@@ -37,28 +37,44 @@ def seed_quest_spine(snapshot: GameSnapshot, character: Character) -> None:
     """Seed ``quest_log`` + ``quest_anchors`` + ``active_stakes`` from the PC's
     drive/calling at creation. Mutates ``snapshot`` in place.
 
-    Emits exactly one ``quest.seeded_at_creation`` span — ``severity="info"``
-    with the seeded ids on a real seed, ``severity="warning"`` with empty ids
-    on an empty drive AND calling (no fabrication).
+    Fill, don't clobber: this runs after ``materialize_from_genre_pack``, which
+    sets ``active_stakes`` from the world's FRESH opening chapter (live on
+    flickering_reach, annees_folles, ...). If a spine is already authored, the
+    seed DEFERS — it preserves the authored stakes and adds no competing seed
+    quest/anchor. Otherwise it seeds from the drive, or (empty drive AND
+    calling) degrades loudly. Emits exactly one ``quest.seeded_at_creation``
+    span on every path — never a silent skip (CLAUDE.md "No Silent Fallbacks").
     """
+    # Fill, don't clobber (Review RT1): a world-authored spine wins. The
+    # presence of authored ``active_stakes`` is the "spine already exists"
+    # signal; defer to it rather than overwriting deliberate authored content
+    # (SOUL "Diamonds and Coal" / "Crunch in Genre, Flavor in World"). Still
+    # emit the span so the defer is visible on the GM panel.
+    if snapshot.active_stakes.strip():
+        quest_seeded_at_creation_span(
+            quest_id="",
+            anchor_id="",
+            source_drive="",
+            has_stakes=True,
+            severity="info",
+            deferred=True,
+        )
+        return
+
     source = (character.drive or "").strip() or (character.calling_label or "").strip()
 
     if not source:
-        # No drive and no calling to seed from. Degrade LOUDLY — emit the span
-        # with a warning severity so the GM panel sees the empty seed, but do
-        # NOT invent a quest (that would be a silent fallback masking the
-        # content/chargen gap story 77-2 covers).
-        with Span.open(
-            SPAN_QUEST_SEEDED_AT_CREATION,
-            {
-                "quest_id": "",
-                "anchor_id": "",
-                "source_drive": "",
-                "has_stakes": False,
-                "severity": "warning",
-            },
-        ):
-            pass
+        # No authored spine, and no drive/calling to seed from. Degrade LOUDLY
+        # so the GM panel sees the empty seed, but do NOT invent a quest (that
+        # would be a silent fallback masking the content/chargen gap story 77-2
+        # covers).
+        quest_seeded_at_creation_span(
+            quest_id="",
+            anchor_id="",
+            source_drive="",
+            has_stakes=False,
+            severity="warning",
+        )
         return
 
     snapshot.quest_log[_SEED_QUEST_ID] = f"Active: {source}"
@@ -66,14 +82,10 @@ def seed_quest_spine(snapshot: GameSnapshot, character: Character) -> None:
         snapshot.quest_anchors.append(_SEED_ANCHOR_ID)
     snapshot.active_stakes = source
 
-    with Span.open(
-        SPAN_QUEST_SEEDED_AT_CREATION,
-        {
-            "quest_id": _SEED_QUEST_ID,
-            "anchor_id": _SEED_ANCHOR_ID,
-            "source_drive": source,
-            "has_stakes": True,
-            "severity": "info",
-        },
-    ):
-        pass
+    quest_seeded_at_creation_span(
+        quest_id=_SEED_QUEST_ID,
+        anchor_id=_SEED_ANCHOR_ID,
+        source_drive=source,
+        has_stakes=True,
+        severity="info",
+    )

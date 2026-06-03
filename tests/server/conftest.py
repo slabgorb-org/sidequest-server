@@ -164,6 +164,16 @@ def _mock_daemon_client(monkeypatch):
         "sidequest.game.lore_embedding.DaemonClient",
         lambda *a, **kw: _UnavailableDaemonClient(),
     )
+    # Universal retrieval (ADR-118 §D4) constructs its own DaemonClient inline in
+    # retrieve_turn_context when none is injected. Cover that construction site too
+    # so the "no test talks to the real daemon" guarantee holds for the entity-
+    # retrieval path — a turn that runs retrieval degrades deterministically to the
+    # query_failed outcome rather than attempting socket I/O. Success-path tests
+    # that want a working fake patch this same symbol in the test body (LIFO shadow).
+    monkeypatch.setattr(
+        "sidequest.game.retrieval_orchestration.DaemonClient",
+        lambda *a, **kw: _UnavailableDaemonClient(),
+    )
 
 
 # ---------------------------------------------------------------------------

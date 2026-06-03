@@ -83,16 +83,11 @@ class _FakeDaemon:
         return {"embedding": list(self._vector)}
 
 
-class _UnavailableDaemon:
-    """``DaemonClient`` stand-in whose ``is_available()`` is False — drives the
-    real orchestrator to the deterministic ``query_failed`` outcome (fast, no
-    socket) for pure reachability/span proofs."""
-
-    def is_available(self) -> bool:
-        return False
-
-    async def embed(self, text: str) -> dict[str, Any]:  # pragma: no cover - never reached
-        raise RuntimeError("embed must not be called when is_available() is False")
+# NOTE: the deterministic "daemon unavailable → query_failed" path needs no
+# local stub — the autouse ``_mock_daemon_client`` guard in tests/server/conftest.py
+# already patches ``retrieval_orchestration.DaemonClient`` to an always-unavailable
+# stub. Success-path tests below patch that same symbol to ``_FakeDaemon`` (LIFO
+# shadow) when they want a working fill.
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +171,8 @@ async def test_production_delegate_reaches_orchestrator_and_fires_span(
     """Driving the live ``_retrieve_entities_for_turn`` delegate runs the real
     75-5 orchestrator and emits the ``retrieval.universal`` span. Daemon forced
     down → deterministic ``query_failed`` (the wiring proven is identical for any
-    outcome: handler → dispatch → retrieve_turn_context → span)."""
-    monkeypatch.setattr(
-        "sidequest.game.retrieval_orchestration.DaemonClient",
-        lambda *a, **kw: _UnavailableDaemon(),
-    )
+    outcome: handler → dispatch → retrieve_turn_context → span). The autouse
+    conftest guard supplies the always-unavailable daemon."""
     exporter = _install_span_exporter(monkeypatch)
 
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
@@ -356,18 +348,14 @@ async def test_floor_npc_not_double_injected_into_fill(
 
 @pytest.mark.asyncio
 async def test_event_reaches_watcher_hub_via_production_delegate(
-    session_handler_factory, monkeypatch
+    session_handler_factory,
 ) -> None:
     """Completes the capstone triangle: the same production delegate that fires the
     span and injects the Valley section also delivers a ``retrieval``-component
     watcher event to a real ``watcher_hub`` subscriber — so the GM panel sees the
-    retrieval engaged. Behaviour-driven (real subscriber), not source-grep."""
+    retrieval engaged. Behaviour-driven (real subscriber), not source-grep.
+    The autouse conftest guard supplies the always-unavailable daemon."""
     from sidequest.telemetry import watcher_hub as wh_module
-
-    monkeypatch.setattr(
-        "sidequest.game.retrieval_orchestration.DaemonClient",
-        lambda *a, **kw: _UnavailableDaemon(),
-    )
 
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
     sd.snapshot.turn_manager.interaction = 2

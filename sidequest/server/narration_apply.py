@@ -5890,6 +5890,51 @@ def _resolve_opposed_check_branch(
             encounter_resolved = True
             break
 
+    # Story 72-12: presence stamp — the opposed_check opponent was a SEATED
+    # participant this turn (it rolled its own d20 against the player), even
+    # when the narrator never name-dropped it in ``npcs_present`` prose. 72-8
+    # closed this gap for the COMBAT seams only (gated behind
+    # ``cdef.category == "combat"`` in encounter_lifecycle); a social duellist
+    # seated via ``opposed_check`` went un-stamped and 72-6's last-seen prune
+    # would read an actively-duelling NPC as stale. Reuse 72-8's shared stamp
+    # primitive + the ``npc.edge_published`` span family — NOT the whole
+    # ``_publish_combat_edge_to_npcs``, which would overwrite the social
+    # opponent's ``core.hp`` from the dial (a combat-only side effect).
+    from sidequest.server.dispatch.encounter_lifecycle import _stamp_encounter_presence
+    from sidequest.telemetry.spans import npc_edge_published_span
+
+    opp_npc = next(
+        (n for n in snapshot.npcs if n.core.name == opponent_actor.name), None
+    )
+    if opp_npc is not None:
+        # Same location accessor the prose path and the combat seams use; ``None``
+        # when the seat has no resolved location, in which case the primitive
+        # stamps the turn only and freezes the location (No Silent Fallbacks).
+        actor_loc = snapshot.party_location(perspective=player_actor.name)
+        _stamp_encounter_presence(opp_npc, turn=turn, location=actor_loc)
+        # GM-panel pool view: invert the (ascending) opponent dial into a
+        # descending "current > 0 = still in the duel" read, the same convention
+        # the dial combat seam uses. Fall back to the NPC's own pool only when
+        # the encounter carries no opponent metric.
+        _om = encounter.opponent_metric
+        _thresh = int(getattr(_om, "threshold", 0) or 0) if _om is not None else 0
+        if _thresh > 0:
+            _span_max = _thresh
+            _span_current = max(1, _thresh - int(getattr(_om, "current", 0) or 0))
+        else:
+            _span_max = opp_npc.core.hp.max
+            _span_current = opp_npc.core.hp.current
+        with npc_edge_published_span(
+            npc_name=opp_npc.core.name,
+            current=_span_current,
+            max=_span_max,
+            source="opposed_check",
+            turn_number=turn,
+            last_seen_turn=opp_npc.last_seen_turn,
+            last_seen_location=opp_npc.last_seen_location or "",
+        ):
+            pass
+
     return _OpposedBranchOutcome(encounter_resolved=encounter_resolved)
 
 

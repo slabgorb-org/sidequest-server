@@ -1056,12 +1056,36 @@ def instantiate_encounter_from_trigger(
         # answer "why is this pursuer here?" (router-named vs sourced from the
         # location roster). Point-in-time span; ``: pass`` like the other
         # guard spans above.
+        #
+        # Story 72-12 ("presence means presence"): seating an NPC IS presence,
+        # so stamp recency on every seated actor that resolves to a roster Npc —
+        # not only combat opponents. 72-8 stamped just the combat seams below
+        # (gated behind ``cdef.category == "combat"``), leaving non-combat
+        # participants (a social duellist, an ally joining a parley) un-stamped
+        # while demonstrably present. The stamp rides this same participant.joined
+        # span so the GM panel sees it alongside the seating event. Combat
+        # opponents are re-stamped by the 72-8 seams below with the SAME turn +
+        # location, so the value stays consistent (no double-advance).
+        _seat_turn = (
+            snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
+        )
+        _seat_loc = snapshot.party_location(perspective=player_name)
+        _npc_by_name = {n.core.name: n for n in snapshot.npcs}
         for actor in actors:
+            _seated_npc = _npc_by_name.get(actor.name)
+            _stamp_attrs: dict[str, object] = {}
+            if _seated_npc is not None:
+                _stamp_encounter_presence(_seated_npc, turn=_seat_turn, location=_seat_loc)
+                _stamp_attrs = {
+                    "last_seen_turn": _seated_npc.last_seen_turn,
+                    "last_seen_location": _seated_npc.last_seen_location or "",
+                }
             with participant_joined_span(
                 encounter_type=encounter_type,
                 name=actor.name,
                 side=actor.side,
                 source="seat" if actor.side == "player" else seating_source,
+                **_stamp_attrs,
             ):
                 pass
 

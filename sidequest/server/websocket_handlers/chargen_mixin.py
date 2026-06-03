@@ -43,6 +43,7 @@ from sidequest.game.lore_seeding import (
     seed_lore_from_char_creation,
     seed_world_lore,
 )
+from sidequest.game.quest_seed import seed_quest_spine
 from sidequest.game.region_init import RegionInitError, init_region_location
 from sidequest.game.room_movement import (
     RoomGraphInitError,
@@ -788,6 +789,13 @@ class CharGenMixin:
             # Discard the "Adventurer" placeholder the fresh chapter may
             # author — the chargen-built character owns that slot.
             materialized.characters = [character]
+            # Story 77-1 (ADR-137 Option A): seed the campaign spine —
+            # quest_log + quest_anchors + active_stakes — from the chargen
+            # PC's drive/calling so the session starts with a non-empty
+            # mechanical spine from turn 1 instead of narrator improvisation.
+            # Emits quest.seeded_at_creation (severity="warning" on an empty
+            # drive, e.g. prose packs) so the GM panel sees the seed engage.
+            seed_quest_spine(materialized, character)
             # Wave 2B (story 45-48): the chapter's location was previously
             # written to the materialized snapshot's ``location`` field;
             # that field is gone. Backfill the now-attached PC's

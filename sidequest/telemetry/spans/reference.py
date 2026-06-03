@@ -71,6 +71,17 @@ SPAN_REFERENCE_MAP_PIN_RESOLVED = "sidequest.reference.map_pin_resolved"
 SPAN_REFERENCE_MAP_PIN_NOT_FOUND = "sidequest.reference.map_pin_not_found"
 SPAN_REFERENCE_MAP_DANGLING_EDGE = "sidequest.reference.map_dangling_edge"
 
+# Lore-page Cast section portrait-gate spans (Story 65-13). Dedicated, reference-
+# namespaced spans for the Cast portrait gate — the portrait analog of the map-pin
+# spans above and a migration off the scene-time scrapbook.npc_portrait_* family
+# (whose docstrings describe attaching a portrait_url to a scrapbook ref on scene
+# invocation — a semantic the reference page does not have). On the reference page,
+# "not_found" means *authored-but-not-on-R2*, a distinct fact from the scrapbook
+# family's "not authored at all" (ad-hoc scene NPC). Both outcomes are observable so
+# the GM/dev panel can tell "authored & on R2" from "authored, not on R2".
+SPAN_REFERENCE_PORTRAIT_RESOLVED = "sidequest.reference.portrait_resolved"
+SPAN_REFERENCE_PORTRAIT_NOT_FOUND = "sidequest.reference.portrait_not_found"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_REFERENCE_URL_ATTACHED,
@@ -90,6 +101,8 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_MAP_PIN_RESOLVED,
         SPAN_REFERENCE_MAP_PIN_NOT_FOUND,
         SPAN_REFERENCE_MAP_DANGLING_EDGE,
+        SPAN_REFERENCE_PORTRAIT_RESOLVED,
+        SPAN_REFERENCE_PORTRAIT_NOT_FOUND,
     }
 )
 
@@ -509,6 +522,52 @@ def reference_map_dangling_edge_span(
             "reference.map_dangling_region": dangling_region,
             "reference.level": "WARN",
         },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# --- Lore-page Cast portrait-gate spans (Story 65-13) ---
+
+
+def _portrait_attrs(*, slug: str, pack: str, world: str) -> dict[str, str]:
+    return {"slug": slug, "reference.pack": pack, "reference.world": world}
+
+
+@contextmanager
+def reference_portrait_resolved_span(
+    *,
+    slug: str,
+    pack: str,
+    world: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when a Cast NPC's world-scoped portrait key IS in
+    r2_manifest.json, so the Cast card renders its R2 portrait ``<img>``."""
+    with Span.open(
+        SPAN_REFERENCE_PORTRAIT_RESOLVED,
+        _portrait_attrs(slug=slug, pack=pack, world=world),
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_portrait_not_found_span(
+    *,
+    slug: str,
+    pack: str,
+    world: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired when a Cast NPC is authored in portrait_manifest.yaml but her
+    portrait is NOT on R2, so the card renders text-only (never a broken ``<img>``).
+    Distinct from the scene-time ``scrapbook.npc_portrait_not_found`` ("not authored
+    at all"): here the NPC IS authored, just not yet rendered. The span proves the
+    gate ran."""
+    with Span.open(
+        SPAN_REFERENCE_PORTRAIT_NOT_FOUND,
+        _portrait_attrs(slug=slug, pack=pack, world=world),
         tracer_override=_tracer,
     ) as span:
         yield span

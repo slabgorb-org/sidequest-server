@@ -89,6 +89,15 @@ SEMANTIC_ALLOWLIST: set[str] = {
     # file section to read the `id="file-…"` attribute instead — more
     # brittle than a stable class marker. Semantic-only by design.
     "file",
+    # `<img class="ref-card__poi">` / `<img class="ref-card__portrait">` are the
+    # manifest-gated landscape (65-8) and Cast-portrait (65-9) images. Both are
+    # inline-styled `<img>` elements (width/border/box-shadow set from the per-pack
+    # theme accent), deliberately NOT styled by the CSS bundle — the class is a
+    # stable hook for tests/tooling, not a styling target. Story 65-13 allowlists
+    # them so the contract validates them rather than leaving them an unguarded
+    # blind spot. If a future story moves their styling into the bundle, drop these.
+    "ref-card__poi",
+    "ref-card__portrait",
 }
 
 

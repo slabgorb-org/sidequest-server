@@ -297,11 +297,19 @@ def test_cast_portrait_decisions_emit_spans(
     resp = gated_client.get(f"/reference/lore/{_PACK}/{_CAST_WORLD}")
     assert resp.status_code == 200, resp.text
 
-    resolved_slugs = {a.get("slug") for a in span_attrs_by_name(otel_capture, SPAN_REF_PORTRAIT_RESOLVED)}
-    not_found_slugs = {a.get("slug") for a in span_attrs_by_name(otel_capture, SPAN_REF_PORTRAIT_NOT_FOUND)}
+    resolved_slugs = {
+        a.get("slug") for a in span_attrs_by_name(otel_capture, SPAN_REF_PORTRAIT_RESOLVED)
+    }
+    not_found_slugs = {
+        a.get("slug") for a in span_attrs_by_name(otel_capture, SPAN_REF_PORTRAIT_NOT_FOUND)
+    }
 
-    assert _PRESENT_SLUG in resolved_slugs, "present NPC must fire a reference portrait_resolved span"
-    assert _ABSENT_SLUG in not_found_slugs, "absent NPC must fire a reference portrait_not_found span"
+    assert _PRESENT_SLUG in resolved_slugs, (
+        "present NPC must fire a reference portrait_resolved span"
+    )
+    assert _ABSENT_SLUG in not_found_slugs, (
+        "absent NPC must fire a reference portrait_not_found span"
+    )
 
     # Complement: a correct gate must NOT resolve the absent NPC, nor mark the
     # present NPC not-found. An always-resolve gate would fail exactly here.

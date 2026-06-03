@@ -38,6 +38,33 @@ CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genr
 SPAN_NAME = "quest.seeded_at_creation"
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, truncated per
+    test. The seed seam only runs on the first-commit (materialize) path; a
+    fresh DB guarantees each run is a first-commit, not a slug-resume that
+    accumulates characters and skips the seed. (Pattern mirrors
+    ``tests/server/test_event_log_wiring.py::_pg_isolation``.)
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 @pytest.fixture
 def handler(tmp_path: Path) -> WebSocketSessionHandler:
     if not (CONTENT_ROOT / "caverns_and_claudes").is_dir():

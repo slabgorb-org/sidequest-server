@@ -27,6 +27,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from psycopg_pool import ConnectionPool
+from pydantic import ValidationError
 
 from sidequest.game.lore_store import LoreFragment
 from sidequest.game.pg._conn import session_tx
@@ -129,14 +130,26 @@ class PgLoreStore:
                     exc,
                 )
                 metadata = {}
-            fragments.append(
-                LoreFragment.new(
-                    id=frag_id,
-                    category=category,
-                    content=content,
-                    source=source,
-                    turn_created=turn_created,
-                    metadata={str(k): str(v) for k, v in metadata.items()},
+            try:
+                fragments.append(
+                    LoreFragment.new(
+                        id=frag_id,
+                        category=category,
+                        content=content,
+                        source=source,
+                        turn_created=turn_created,
+                        metadata={str(k): str(v) for k, v in metadata.items()},
+                    )
                 )
-            )
+            except (ValueError, ValidationError) as exc:
+                # Loud-skip a corrupt row (e.g. blank content the LoreFragment
+                # validator rejects). One bad row must NOT abort the whole resume
+                # — re-hydrate the rest (ADR-124 loud-skip fold). The valid
+                # fragments are what matter for retrieval grounding.
+                logger.error(
+                    "lore.load_fragment_corrupt session_id=%s id=%s error=%s — skipping row",
+                    self._sid,
+                    frag_id,
+                    exc,
+                )
         return fragments

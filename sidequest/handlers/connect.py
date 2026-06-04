@@ -954,18 +954,35 @@ class ConnectHandler:
                 # Re-hydrated fragments carry embedding_pending=True so the
                 # per-turn embed worker re-embeds them. Runs before the world
                 # re-seed so the lore_store_loaded emit's total reflects both.
-                _rehydrated = _pg_repository.load_lore_fragments()
+                # Guarded (Story 75-15 rework): a lore-load failure must DEGRADE
+                # to the world-only re-seed below, never drop the reconnecting
+                # player (ADR-006 graceful degradation). Loud log + watcher event.
                 _rehydrated_count = 0
-                for _frag in _rehydrated:
-                    if _frag.id not in _resume_sd.lore_store.fragments:
-                        _resume_sd.lore_store.add(_frag)
-                        _rehydrated_count += 1
-                logger.info(
-                    "lore.rehydrated_on_resume slug=%s persisted_fragments=%d added=%d",
-                    slug,
-                    len(_rehydrated),
-                    _rehydrated_count,
-                )
+                try:
+                    _rehydrated = _pg_repository.load_lore_fragments()
+                    for _frag in _rehydrated:
+                        if _frag.id not in _resume_sd.lore_store.fragments:
+                            _resume_sd.lore_store.add(_frag)
+                            _rehydrated_count += 1
+                    logger.info(
+                        "lore.rehydrated_on_resume slug=%s persisted_fragments=%d added=%d",
+                        slug,
+                        len(_rehydrated),
+                        _rehydrated_count,
+                    )
+                except Exception as exc:  # noqa: BLE001 — lore load must not drop the resume
+                    logger.error(
+                        "lore.rehydrate_failed slug=%s error=%s — degrading to world-only reseed",
+                        slug,
+                        exc,
+                    )
+                    _watcher_publish(
+                        "lore_rehydrate_failed",
+                        {"slug": slug, "player_id": player_id, "error": str(exc)},
+                        component="rag",
+                        severity="error",
+                    )
+                _resume_rehydrated_count = _rehydrated_count
                 genre_lore_added, world_lore_added = _seed_world_lore_on_resume(
                     lore_store=_resume_sd.lore_store,
                     genre_pack=genre_pack,
@@ -978,6 +995,10 @@ class ConnectHandler:
                             "player_id": player_id,
                             "slug": slug,
                             "reason": "slug_resume_reseed",
+                            # Story 75-15 (AC5): surface how many fragments were
+                            # re-hydrated from Postgres vs world-reseeded so the GM
+                            # panel can read persisted-vs-reseeded directly.
+                            "rehydrated_fragments": _resume_rehydrated_count,
                             **kw,
                         },
                         component="rag",

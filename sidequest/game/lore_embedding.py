@@ -384,8 +384,12 @@ async def retrieve_lore_context(
         # embedding is the degenerate / hash-fallback smell — cosine scores 0.0
         # against every fragment, indistinguishable from "nothing relevant".
         # Surface it loudly and bail rather than masking a broken embedder.
-        query_magnitude = math.sqrt(sum(float(v) * float(v) for v in query_embedding))
-        if query_magnitude == 0.0:
+        # `math.isfinite` guard catches NaN/Inf elements too — `== 0.0` alone
+        # would NOT (NaN != 0.0), letting a corrupt embedding poison the cosine
+        # math + peak_similarity. Treat non-finite and zero-magnitude alike.
+        sum_sq = math.fsum(float(v) * float(v) for v in query_embedding)
+        query_magnitude = math.sqrt(sum_sq) if math.isfinite(sum_sq) else float("nan")
+        if not math.isfinite(query_magnitude) or query_magnitude == 0.0:
             span.set_attribute("lore.outcome", "degenerate_embedding")
             logger.warning(
                 "lore_embedding.retrieve degenerate_embedding model=%s query_len=%d",

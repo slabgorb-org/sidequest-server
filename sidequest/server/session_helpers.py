@@ -53,6 +53,7 @@ from sidequest.protocol.messages import (
 )
 from sidequest.protocol.types import NonBlankString
 from sidequest.telemetry.spans import (
+    cartography_map_emitted_span,
     npc_auto_mint_skipped_span,
     npc_auto_minted_from_prose_span,
     npc_observation_gate_promoted_span,
@@ -1413,10 +1414,25 @@ def _build_cartography_map_message(
     world_slug: str | None,
     current_location: str | None,
     player_id: str = "",
+    discovered_regions: list[str] | None = None,
 ) -> CartographyMapMessage | None:
     """Build a MAP_UPDATE message from cartography region data.
 
     Returns None when the pack has no region-mode cartography.
+
+    ``discovered_regions`` is the PC's visited-region list (from
+    ``snapshot.discovered_regions``). Each entry that is a REAL region
+    slug in this world's cartography becomes an ``{id, name}`` entry in
+    ``payload.explored`` so the client (``MapOverlay.tsx``) can highlight
+    visited-but-not-current regions. Entries that are NOT valid region
+    slugs are dropped — ``discovered_regions`` is known to be polluted
+    with scene titles (ping-pong #329, e.g. ``"A Field of Blue Flowers,
+    Munchkin Country"``), so filtering to ``regions`` doubles as a
+    cleanup. This is a legitimate filter (we emit exactly the valid
+    visited regions; the dropped count is recorded in the
+    ``cartography.map_emitted`` OTEL span), NOT a silent fallback. The
+    default ``None`` preserves an empty ``explored`` for existing
+    callers/tests.
     """
     if pack is None or not world_slug or not current_location:
         return None
@@ -1452,19 +1468,39 @@ def _build_cartography_map_message(
             }
         )
 
-    return CartographyMapMessage(
-        payload=CartographyMapPayload(
-            current_location=current_location,
-            region=world_slug,
-            cartography={
-                "navigation_mode": str(nav_mode) if nav_mode else "region",
-                "starting_region": getattr(cart, "starting_region", ""),
-                "regions": region_dict,
-                "routes": routes_list,
-            },
-        ),
-        player_id=player_id,
-    )
+    # Visited-region overlay: keep only valid region slugs (drops the
+    # scene-title pollution), de-duplicate while preserving first-seen
+    # order. The client reads ``id`` (falls back to ``name``) for the
+    # visited set; emit both.
+    incoming = discovered_regions or []
+    explored: list[dict] = []
+    _seen: set[str] = set()
+    for rid in incoming:
+        if rid in regions and rid not in _seen:
+            _seen.add(rid)
+            explored.append({"id": rid, "name": regions[rid].name})
+
+    with cartography_map_emitted_span(
+        current_location=current_location,
+        world_slug=world_slug,
+        visited_count=len(explored),
+        discovered_total=len(incoming),
+        dropped_count=len(incoming) - len(explored),
+    ):
+        return CartographyMapMessage(
+            payload=CartographyMapPayload(
+                current_location=current_location,
+                region=world_slug,
+                explored=explored,
+                cartography={
+                    "navigation_mode": str(nav_mode) if nav_mode else "region",
+                    "starting_region": getattr(cart, "starting_region", ""),
+                    "regions": region_dict,
+                    "routes": routes_list,
+                },
+            ),
+            player_id=player_id,
+        )
 
 
 def _sfx_ids_from_genre(genre_pack: GenrePack) -> list[str]:

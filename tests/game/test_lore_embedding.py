@@ -252,6 +252,9 @@ def test_embed_worker_result_as_dict_shape() -> None:
         "failed_text_too_large": 1,
         "skipped_daemon_unavailable": False,
         "skipped_empty_queue": False,
+        # Story 75-15: embedding_model surfaces which model embedded the corpus
+        # (None until the first successful daemon reply this run).
+        "embedding_model": None,
     }
 
 

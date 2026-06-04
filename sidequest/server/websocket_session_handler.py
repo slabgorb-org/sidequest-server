@@ -562,6 +562,24 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 # the canonical store after a lost save would make the loss permanent.
                 self.last_save_failure = exc
 
+            # Story 75-15: persist the lore_store on disconnect — the in-memory
+            # store is not part of the snapshot, so the save above does not cover
+            # it. ISOLATED in its own try/except: a lore-only failure must NOT set
+            # last_save_failure (that gates close_store on the canonical snapshot
+            # save, which is a strictly more important write).
+            try:
+                self._session_data.repository.save_lore_fragments(
+                    self._session_data.lore_store
+                )
+            except Exception as exc:  # noqa: BLE001 — lore persist must not block teardown
+                logger.error("lore.disconnect_persist_failed error=%s", exc)
+                _watcher_publish(
+                    "lore_persist_failed",
+                    {"scope": "disconnect", "error": str(exc)},
+                    component="rag",
+                    severity="error",
+                )
+
             # Story 45-31: post-session render diagnostic — JSON snapshot of the
             # render worker's lifetime for later diagnosis. Best-effort; must
             # never raise back to the WebSocket layer.
@@ -1307,6 +1325,33 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         )
                     except Exception as exc:
                         logger.error("session.persist_failed error=%s", exc)
+
+                    # Story 75-15: lore write-through to Postgres (lore_fragments)
+                    # so creation-seed + runtime-accreted fragments survive resume.
+                    # The in-memory lore_store is NOT part of the snapshot, so the
+                    # save above does not cover it. ISOLATED in its own try/except
+                    # AFTER the snapshot+narrative writes: lore is the least-critical
+                    # post-turn side-effect and must never suppress the durable
+                    # narrative_log (75-1 review standard: wrap+log+OTEL-fail+continue).
+                    try:
+                        lore_written = sd.repository.save_lore_fragments(sd.lore_store)
+                        logger.info(
+                            "lore.persisted turn=%s fragments=%s",
+                            snapshot.turn_manager.interaction,
+                            lore_written,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — lore persist must not crash the turn
+                        logger.error("lore.persist_failed error=%s", exc)
+                        _watcher_publish(
+                            "lore_persist_failed",
+                            {
+                                "scope": "turn",
+                                "turn": snapshot.turn_manager.interaction,
+                                "error": str(exc),
+                            },
+                            component="rag",
+                            severity="error",
+                        )
 
                 # Story 45-11 — turn_manager.round invariant lie-detector.
                 # Emit on EVERY tick (invariant holding or not) so the GM panel

@@ -112,28 +112,35 @@ def test_renders_gated_poi_as_landscape_card_with_image(fake_theme: ReferenceThe
     assert f'src="{expected_src}"' in html
 
 
-def test_underscore_slug_is_hyphenated_by_the_gate_membership_check(
+def test_presenter_keys_cards_on_the_slugify_anchor_form(
     fake_theme: ReferenceTheme,
 ) -> None:
-    """Documents the SEPARATE upstream bug: the presenter slugifies the authored
-    POI slug (munchkin_country -> munchkin-country) for the gate-membership check
-    and the R2 key, but the real R2 asset key is underscore (munchkin_country.png).
-    So an underscore gate value does NOT match and the landscape is suppressed —
-    the load-bearing reason oz renders 0 POI images even with this section. When
-    the slug-normalization is fixed upstream this test should be revisited."""
+    """Presenter-level invariant (revisited for Story 71-38). The presenter keys
+    each card on ``slugify(authored_slug)`` (the hyphen anchor form), so a caller
+    that hands it a *raw underscore* gate value gets no card — the slugified poi
+    slug (munchkin-country) is not in the underscore set (munchkin_country).
+
+    Pre-71-38 this exact mismatch reached production: ``load_poi_image_slugs``
+    slugified the gate set to a hyphen while the R2 key stayed underscore, so the
+    section was empty for every underscore-slug world (oz: 12 POIs suppressed).
+    Story 71-38 decouples those two forms UPSTREAM (the gate now compares the
+    verbatim underscore key against R2, see the end-to-end tests below), so the
+    presenter no longer receives a form-mismatched set in production. This test
+    now pins only the presenter's own keying rule — it stays GREEN through the
+    fix because the presenter contract (anchor = slugify) is intentionally
+    UNTOUCHED by 71-38."""
     html = present_renderable_landscapes(
         [_poi("The Munchkin Country", "munchkin_country")],
         pack="wry_whimsy",
         world="oz",
         theme=fake_theme,
-        # The actual R2/manifest form (underscore) — what _gate_poi_slugs would
-        # need to retain. Today load_poi_image_slugs slugifies to a hyphen, so
-        # this never matches and the section is empty for oz.
+        # A raw underscore gate value: the presenter slugifies the poi slug to a
+        # hyphen for the membership check, so this underscore value does not match.
         poi_image_slugs=frozenset({"munchkin_country"}),
     )
     assert html == "", (
-        "underscore gate value does not match slugify(munchkin_country) "
-        "= munchkin-country — the upstream normalization mismatch"
+        "presenter keys cards on slugify(munchkin_country) = munchkin-country; "
+        "a raw underscore gate value does not match — the anchor form is slugify"
     )
 
 
@@ -198,3 +205,86 @@ def test_landscape_section_omits_ungated_poi(client) -> None:
     resp = client.get(f"/reference/lore/{_PACK}/{_WORLD}")
     assert resp.status_code == 200, resp.text
     assert 'id="landscape-sunken-vault"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Story 71-38 — decouple the R2-object-key slug (verbatim, underscore) from the
+# HTML-anchor slug (slugify, hyphen). The load-bearing repro: an UNDERSCORE-slug
+# world whose r2_manifest.json holds the verbatim underscore key. Pre-71-38 the
+# gate slugifies the authored slug to a hyphen, builds a hyphen R2 key, never
+# matches the underscore manifest key → 0 POI <img> (the oz / 12-munchkin bug).
+# ---------------------------------------------------------------------------
+
+# This fixture world mirrors oz: history.yaml authors `munchkin_country`
+# (underscore); its landscape lives on R2 under the verbatim underscore key
+# `.../poi/munchkin_country.png` (added to tests/fixtures/r2_manifest.json).
+_UNDERSCORE_WORLD = "poi_underscore_fixture"
+_UNDERSCORE_WORLD_DIR = FIXTURE_ROOT / _PACK / "worlds" / _UNDERSCORE_WORLD
+
+
+def test_underscore_slug_world_renders_poi_with_verbatim_r2_src(client) -> None:
+    """LOAD-BEARING REPRO (AC2 + AC3 both-forms pin): an underscore-slug POI
+    whose verbatim R2 key is on R2 renders a landscape card. The two slug forms
+    are decoupled and pinned together so the fix can never silently re-couple:
+
+      * R2 object key / <img src> = the VERBATIM authored slug (underscore):
+        .../poi/munchkin_country.png — the key that is actually on R2.
+      * HTML card id / deep-link anchor = slugify(authored slug) (hyphen):
+        id="landscape-munchkin-country".
+
+    Pre-71-38 the gate slugifies to a hyphen, the hyphen R2 key never matches
+    the underscore manifest key, gated_poi_slugs is empty, and NONE of these
+    three assertions hold (no section, no card, no img) — RED."""
+    resp = client.get(f"/reference/lore/{_PACK}/{_UNDERSCORE_WORLD}")
+    assert resp.status_code == 200, resp.text
+    html = resp.text
+
+    assert "Renderable Landscapes" in html, "underscore-slug world must gain the section"
+    # Anchor / card id keeps the hyphen (slugify) form — the conventional,
+    # blast-radius-bearing deep-link id (Story 63-6).
+    assert 'id="landscape-munchkin-country"' in html, "card id must use the slugify (hyphen) anchor"
+    # The <img src> must address the VERBATIM underscore R2 key — the asset that
+    # actually exists. A hyphen src here (munchkin-country.png) is a 404 and the
+    # gate-only half-fix; assert the underscore key to force the full decouple.
+    verbatim_src = resolve_asset_url(
+        f"genre_packs/{_PACK}/worlds/{_UNDERSCORE_WORLD}/assets/poi/munchkin_country.png"
+    )
+    assert f'src="{verbatim_src}"' in html, "the on-R2 underscore POI must surface its verbatim-key img"
+    # Defense against silent re-couple: the hyphen R2 key must NOT be the src.
+    hyphen_src = resolve_asset_url(
+        f"genre_packs/{_PACK}/worlds/{_UNDERSCORE_WORLD}/assets/poi/munchkin-country.png"
+    )
+    assert f'src="{hyphen_src}"' not in html, "the hyphen R2 key is the bug — it must never be the src"
+
+
+def test_underscore_world_omits_poi_not_on_r2(client) -> None:
+    """The fix is a DECOUPLE, not a 'render every authored POI'. emerald_void is
+    authored (underscore slug) but absent from r2_manifest.json → no landscape
+    card. Guards against a fix that drops the R2-existence gate entirely."""
+    resp = client.get(f"/reference/lore/{_PACK}/{_UNDERSCORE_WORLD}")
+    assert resp.status_code == 200, resp.text
+    assert 'id="landscape-emerald-void"' not in resp.text, "ungated underscore POI must stay omitted"
+
+
+def test_underscore_region_deep_link_still_resolves_via_hyphen_anchor() -> None:
+    """DEEP-LINK REGRESSION GUARD (AC3): the production consumer in map_emit.py
+    feeds ``load_poi_image_slugs(world_dir)`` straight into
+    ``reference_url_for_region``, which matches ``slugify(region_id)`` against
+    that set. The decouple MUST keep the hyphen (slugify) form reachable on this
+    path — a naive 'make load_poi_image_slugs return verbatim underscore slugs'
+    fix would make ``slugify('munchkin_country') == 'munchkin-country'`` miss the
+    underscore set and silently break every region-header deep-link.
+
+    This guard is GREEN today and must STAY green through the fix."""
+    from sidequest.server.reference_anchors import reference_url_for_region
+    from sidequest.server.reference_renderer import load_poi_image_slugs
+
+    known_location_slugs = load_poi_image_slugs(_UNDERSCORE_WORLD_DIR)
+    url = reference_url_for_region(
+        pack=_PACK,
+        world=_UNDERSCORE_WORLD,
+        region_id="munchkin_country",
+        known_location_slugs=known_location_slugs,
+    )
+    assert url is not None, "an authored underscore region must keep its lore-page deep-link"
+    assert url.endswith("#location-munchkin-country"), "deep-link anchor stays the slugify (hyphen) form"

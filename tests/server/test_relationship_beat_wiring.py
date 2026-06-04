@@ -98,6 +98,7 @@ def test_real_shift_then_emit_carries_beat(capture_spans):
     """A recorded beat fires relationship.beat_recorded AND reaches the message."""
     npc = _npc("Teague")
     npc.disposition = Disposition(8)
+    npc.last_seen_turn = 4
     npc.record_disposition_beat(turn=4, delta=2, reason="shared a drink", location="bar")
 
     assert any(s.name == "relationship.beat_recorded" for s in capture_spans.spans)

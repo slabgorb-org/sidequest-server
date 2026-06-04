@@ -1,0 +1,12 @@
+name: cast_ratification_fixture
+description: >-
+  Isolated test world for Story 75-13 — the ADR-138 §D4 ratification gate on the
+  ADR-135 reference Cast projection. Two NPCs are authored in
+  portrait_manifest.yaml: Marrow Quill is ratified (no observation_pending flag —
+  the design-default for authored content) and MUST render in the public Cast
+  section; Hollow Bessom carries observation_pending: true — an unratified phantom
+  the Story 49-6 gate may purge — and MUST be withheld from the public reference
+  page, exactly as 75-12 withholds it from the ADR-118 retrieval index. The
+  pending entry is a DEFENSIVE construction: authored manifest content never sets
+  the flag in practice (the safe-by-design invariant), but the gate must consult
+  is_projectable() so both projection surfaces enforce one rule.

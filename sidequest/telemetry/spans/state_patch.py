@@ -98,7 +98,10 @@ SPAN_ROUTES[SPAN_QUEST_UPDATED] = SpanRoute(
 # carries a ``quest_updates`` key is auto-forwarded to record_quest update-mode
 # semantics (the status LANDS in quest_log via upsert_quest_status) and this
 # loud, GM-visible span fires so the panel can see a stale-contract emit
-# happened — never a silent drop. ``quest_ids_json`` carries the forwarded ids.
+# happened — never a silent drop. This span is the guard's lie-detector, so its
+# counts must NOT lie: ``quest_ids_json`` + ``updates_count`` carry only the
+# items that ACTUALLY forwarded (str status), and ``skipped_count`` carries the
+# items dropped (non-str status, or a non-dict value) so every drop is visible.
 SPAN_QUEST_UPDATES_LEGACY_EMITTED = "quest.updates.legacy_emitted"
 SPAN_ROUTES[SPAN_QUEST_UPDATES_LEGACY_EMITTED] = SpanRoute(
     event_type="state_transition",
@@ -108,6 +111,7 @@ SPAN_ROUTES[SPAN_QUEST_UPDATES_LEGACY_EMITTED] = SpanRoute(
         "op": "legacy_updates_auto_forwarded",
         "quest_ids": (span.attributes or {}).get("quest_ids_json", "[]"),
         "updates_count": (span.attributes or {}).get("updates_count", 0),
+        "skipped_count": (span.attributes or {}).get("skipped_count", 0),
         "player_name": (span.attributes or {}).get("player_name", ""),
         "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
@@ -261,6 +265,7 @@ def quest_updates_legacy_emitted_span(
     *,
     quest_ids: list[str],
     updates_count: int,
+    skipped_count: int = 0,
     player_name: str,
     turn_number: int,
     _tracer: trace.Tracer | None = None,
@@ -269,14 +274,19 @@ def quest_updates_legacy_emitted_span(
     """Emit the Story 77-4 ``quest.updates.legacy_emitted`` span (point event).
 
     Fired by the narration-apply auto-forward guard when a narrator game_patch
-    still carries a retired ``quest_updates`` key. The status update is NOT
-    dropped — it is forwarded into ``quest_log`` via ``upsert_quest_status`` —
-    and this loud span makes the stale-contract emit visible to the GM panel
-    (No Silent Fallbacks). ``quest_ids`` is JSON-encoded (OTEL drops list values).
+    still carries a retired ``quest_updates`` key. Items with a string status are
+    forwarded into ``quest_log`` via ``upsert_quest_status`` — never dropped — and
+    this loud span makes the stale-contract emit visible to the GM panel (No
+    Silent Fallbacks). As the guard's lie-detector, its counts must reflect
+    reality: ``quest_ids`` + ``updates_count`` are the items that ACTUALLY
+    forwarded; ``skipped_count`` is the items dropped (non-str status, or a
+    non-dict ``quest_updates`` value) so every drop is observable. ``quest_ids``
+    is JSON-encoded (OTEL drops list values).
     """
     attributes: dict[str, Any] = {
-        "quest_ids_json": _json.dumps(list(quest_ids), sort_keys=True),
+        "quest_ids_json": _json.dumps(quest_ids),
         "updates_count": updates_count,
+        "skipped_count": skipped_count,
         "player_name": player_name,
         "turn_number": turn_number,
         **attrs,

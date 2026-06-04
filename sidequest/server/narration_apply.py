@@ -2895,29 +2895,65 @@ def _apply_narration_result_to_snapshot(
     # path no longer emits the key (it was dropped from extraction + the typed
     # NarrationTurnResult field). But a stale narrator can still put a
     # ``quest_updates`` key on the RAW game_patch. No Silent Fallbacks: rather
-    # than drop it (status lost) or raise (a live turn crashes), auto-forward it
-    # to record_quest update-mode semantics (``upsert_quest_status`` — the same
-    # status-only mechanism record_quest update-mode uses) and fire the loud,
-    # GM-visible ``quest.updates.legacy_emitted`` span. The legacy
-    # ``SPAN_QUEST_UPDATE`` no longer fires from this path; ``quest.updated`` is
-    # the successor for the clean record_quest path.
-    _legacy_quest_updates = result.game_patch_dict.get("quest_updates")
-    if isinstance(_legacy_quest_updates, dict) and _legacy_quest_updates:
-        for quest_id, status in _legacy_quest_updates.items():
-            if isinstance(quest_id, str) and isinstance(status, str):
-                upsert_quest_status(snapshot.quest_log, quest_id, status)
-        quest_updates_legacy_emitted_span(
-            quest_ids=[k for k in _legacy_quest_updates if isinstance(k, str)],
-            updates_count=len(_legacy_quest_updates),
-            player_name=player_name,
-            turn_number=snapshot.turn_manager.interaction,
-        )
-        logger.warning(
-            "state.quest_updates.legacy_emitted count=%d player=%s — narrator "
-            "emitted a retired quest_updates key; auto-forwarded to quest_log",
-            len(_legacy_quest_updates),
-            player_name,
-        )
+    # than drop it (status lost) or raise (a live turn crashes), auto-forward
+    # the valid (string-status) items to record_quest update-mode semantics
+    # (``upsert_quest_status`` — the same status-only mechanism record_quest
+    # update-mode uses) and fire the loud, GM-visible
+    # ``quest.updates.legacy_emitted`` span. The legacy ``SPAN_QUEST_UPDATE`` no
+    # longer fires from this path; ``quest.updated`` is the successor for the
+    # clean record_quest path.
+    #
+    # The span is this guard's lie-detector, so its counts must reflect what
+    # ACTUALLY landed: ``updates_count``/``quest_ids`` are the forwarded items,
+    # ``skipped_count`` is the dropped ones (non-str status, or a non-dict
+    # value). Gate on key PRESENCE — an absent key is the normal clean path and
+    # must stay silent — but a present non-dict value still emits an observable
+    # signal (never silent, never raises).
+    if "quest_updates" in result.game_patch_dict:
+        _legacy_quest_updates = result.game_patch_dict["quest_updates"]
+        if isinstance(_legacy_quest_updates, dict):
+            _forwarded_ids: list[str] = []
+            _skipped = 0
+            for quest_id, status in _legacy_quest_updates.items():
+                if isinstance(quest_id, str) and isinstance(status, str):
+                    upsert_quest_status(snapshot.quest_log, quest_id, status)
+                    _forwarded_ids.append(quest_id)
+                else:
+                    _skipped += 1
+            # Empty dict → nothing forwarded, nothing dropped → benign no-op.
+            if _forwarded_ids or _skipped:
+                quest_updates_legacy_emitted_span(
+                    quest_ids=_forwarded_ids,
+                    updates_count=len(_forwarded_ids),
+                    skipped_count=_skipped,
+                    player_name=player_name,
+                    turn_number=snapshot.turn_manager.interaction,
+                )
+                logger.warning(
+                    "state.quest_updates.legacy_emitted forwarded=%d skipped=%d "
+                    "player=%s — narrator emitted a retired quest_updates key; "
+                    "valid items auto-forwarded to quest_log",
+                    len(_forwarded_ids),
+                    _skipped,
+                    player_name,
+                )
+        else:
+            # Non-dict value (list/str/number/None) — nothing can forward, but
+            # the malformed stale emit must stay observable, never silent.
+            quest_updates_legacy_emitted_span(
+                quest_ids=[],
+                updates_count=0,
+                skipped_count=1,
+                player_name=player_name,
+                turn_number=snapshot.turn_manager.interaction,
+            )
+            logger.warning(
+                "state.quest_updates.legacy_emitted malformed player=%s — narrator "
+                "emitted a retired quest_updates key with a non-dict value (%s); "
+                "nothing forwarded",
+                player_name,
+                type(_legacy_quest_updates).__name__,
+            )
 
     # Inventory — apply narrator items_gained/items_lost/items_discarded/
     # items_consumed on the rolling player's character. Playtest 2026-04-24

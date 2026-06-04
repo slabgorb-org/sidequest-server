@@ -99,6 +99,7 @@ def describe_beat_impact(
     *,
     kind: BeatKind,
     outcome: RollOutcome,
+    hp_depletion_suppressed: bool = False,
 ) -> BeatImpact:
     """Classify *resolved* deltas into a legible :class:`BeatImpact` (Story 73-4).
 
@@ -112,9 +113,26 @@ def describe_beat_impact(
     favorable dial move → ``advance``; unfavorable dial move → ``setback``;
     backfire → ``backfire``; resolution → ``resolution``; tag granted → ``tag``;
     else → ``inert``.
+
+    Story 73-8 — ``hp_depletion_suppressed``: under
+    ``win_condition="hp_depletion"`` ``apply_beat`` suppresses the dial mutation
+    (the dials are inert HP placeholders; the move lands on the HP channel). The
+    honest dial classification is then "no dial motion", so zero the dial deltas:
+    the favorable/unfavorable branches fall through to ``inert``, ``dial_moved``
+    is ``False``, and the surfaced ``own``/``opponent`` numbers (shipped to the UI
+    by 73-7) don't read as a phantom dial gain. Tag, resolution, and backfire are
+    not dial motion and still fire (read from ``deltas``).
     """
     own = deltas.own
     opponent = deltas.opponent
+    # A nominal dial move that suppression zeroed means the move actually landed on
+    # the HP channel — distinct from a genuine miss (no nominal delta at all), where
+    # "moved nothing" stays the honest summary. Captured before zeroing so the inert
+    # branch can tell the two apart (Story 73-8 follow-up).
+    suppressed_dial_move = hp_depletion_suppressed and (own != 0 or opponent != 0)
+    if hp_depletion_suppressed:
+        own = 0
+        opponent = 0
     dial_moved = own != 0 or opponent != 0
     tag = deltas.grants_tag or deltas.grants_fleeting_tag
 
@@ -156,6 +174,12 @@ def describe_beat_impact(
     elif tag:
         effect = "tag"
         summary = f"Sets up a scene tag: {tag} (no dial change by design)"
+    elif suppressed_dial_move:
+        # Story 73-8 — the dial was held (hp_depletion), but the beat DID resolve:
+        # the move landed on the HP channel, so "moved nothing" would itself be a
+        # small lie. The genuine-miss branch below keeps "moved nothing".
+        effect = "inert"
+        summary = "Dial held — HP channel resolved this beat"
     else:
         effect = "inert"
         summary = "No change — the beat landed but moved nothing"
@@ -546,7 +570,15 @@ def apply_beat(
     # panel (out of scope for 73-4 / dial confrontations) — but a future story
     # surfacing last_beat_impact under hp_depletion must read the HP channel, not
     # these nominal dial deltas. See Delivery Findings (Dev) for the follow-up.
-    impact = describe_beat_impact(deltas, kind=beat.kind, outcome=outcome)
+    # Story 73-8 — that follow-up: pass the hp_depletion flag so the descriptor
+    # stamps a truthful "no dial motion" (inert/tag/resolution) instead of a
+    # phantom advance/dial_moved=True for the suppressed dial below.
+    impact = describe_beat_impact(
+        deltas,
+        kind=beat.kind,
+        outcome=outcome,
+        hp_depletion_suppressed=enc.win_condition == "hp_depletion",
+    )
     enc.last_beat_impacts[actor.side] = asdict(impact)
 
     own_metric = enc.player_metric if actor.side == "player" else enc.opponent_metric

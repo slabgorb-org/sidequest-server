@@ -67,6 +67,14 @@ _ID_NAMESPACE: dict[str, str] = {
 SPAN_CARD_REPROJECT_COUNT = "card_reproject_count"
 SPAN_STALE_CARD_COUNT = "stale_card_count"
 
+# ADR-138 §D6 — the defensive-eviction span. A card stranded on a now-unprojectable
+# entity is evicted loud, never served stale (No Silent Fallbacks). The span name is
+# the ADR literal; ``reason`` is pinned to ``unprojectable`` to leave room for other
+# eviction causes without colliding the schema. Emitted by the dispatch tier
+# (:mod:`sidequest.server.dispatch.entity_sync`), one span per evicted card.
+SPAN_ENTITY_CARD_EVICTED = "entity_card.evicted"
+ENTITY_CARD_EVICTED_REASON_UNPROJECTABLE = "unprojectable"
+
 UNIVERSAL_RETRIEVAL_SPAN_ATTRS: frozenset[str] = frozenset(
     {
         "retrieval.budget_total",
@@ -176,6 +184,19 @@ def _slug(name: str) -> str:
     if not name.strip():
         raise ValueError("entity name must not be blank or whitespace-only")
     return name.strip().casefold().replace(" ", "_")
+
+
+def npc_card_id(name: str) -> str:
+    """The stable card id an NPC named ``name`` projects to (``npc:<slug>``).
+
+    Single source of the NPC id convention, shared by :func:`project_npc_card`
+    (which builds the same id via ``EntityCard.new``) and the ADR-138 §D5
+    defensive-eviction lookup, which must compute the would-be card id for a
+    now-unprojectable member *without* projecting it. Raises ``ValueError`` on a
+    blank name (via :func:`_slug`) — a blank-named phantom could never have
+    produced a card, so the eviction caller treats that as "nothing to evict".
+    """
+    return f"{_ID_NAMESPACE[EntityType.NPC]}:{_slug(name)}"
 
 
 def project_npc_card(npc: NpcPoolMember | Npc) -> EntityCard:

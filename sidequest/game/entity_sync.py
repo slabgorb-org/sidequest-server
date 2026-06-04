@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from sidequest.game.entity_card import (
     EntityCard,
+    npc_card_id,
     project_faction_card,
     project_location_card,
     project_npc_card,
@@ -68,8 +69,16 @@ class EntitySyncResult:
     the stored card (no churn); ``failed`` counts entities the projector
     rejected. ``skipped_unratified`` counts pool members withheld from the index
     by the ADR-138 §D2 ratification gate (``observation_pending`` phantoms) — a
-    deliberate, observable withholding, distinct from ``failed`` (§D6). ``outcome``
-    is derived so the watcher/span telemetry can never contradict the counts.
+    deliberate, observable withholding, distinct from ``failed`` (§D6). ``evicted``
+    counts the ADR-138 §D5 *defensive* evictions: cards stranded in the store on a
+    member that is no longer projectable (a ratified member re-marked pending after
+    its card was already indexed — the durable store outliving a mutable gate flag).
+    Normally 0 (the gate withholds pending members *before* they are ever indexed,
+    so purge needs no eviction); a non-zero count is an invariant-violation signal
+    the GM panel must see (§D6 ``entity_card.evicted``). ``evicted_ids`` records
+    which cards were removed so the dispatch tier emits one span per eviction.
+    ``outcome`` is derived so the watcher/span telemetry can never contradict the
+    counts.
 
     The three per-type counters (``npc_count``/``location_count``/
     ``faction_count``) are honest reproject tallies per entity type, mirroring
@@ -86,11 +95,13 @@ class EntitySyncResult:
     unchanged: int = 0
     failed: int = 0
     skipped_unratified: int = 0
+    evicted: int = 0
     npc_count: int = 0
     location_count: int = 0
     faction_count: int = 0
     failed_refs: list[str] = field(default_factory=list)
     card_ids: list[str] = field(default_factory=list)
+    evicted_ids: list[str] = field(default_factory=list)
 
     @property
     def outcome(self) -> str:
@@ -195,6 +206,27 @@ def sync_entity_cards(
         # floor still shows the member via ``build_npc_working_set``.
         if not is_projectable(member):
             result.skipped_unratified += 1
+            # ADR-138 §D5 — defensive eviction. The skip above keeps a *newly*
+            # pending member out of the index, but the EntityStore is durable
+            # session state: a member ratified on an earlier turn already has a
+            # card here, and a later code path can re-mark it ``observation_pending``
+            # (the mutable 49-6 gate outliving the persisted card). That strands a
+            # card on a now-unprojectable member — it would keep resurfacing as a
+            # "recalled" NPC the world has un-committed. Evict it; never serve it
+            # stale (No Silent Fallbacks). A promoted stateful ``Npc`` sharing this
+            # id legitimately owns the card (promotion is the world's commitment),
+            # so guard against evicting *its* fresh projection.
+            try:
+                stranded_id = npc_card_id(member.name)
+            except ValueError:
+                # Blank-named phantom — could never have produced a card; nothing
+                # to evict (and never indexed, so no invariant violation).
+                continue
+            if stranded_id in covered_ids or member.name in covered_origins:
+                continue  # a projectable stateful Npc owns this id — not stranded
+            if store.discard(stranded_id):
+                result.evicted += 1
+                result.evicted_ids.append(stranded_id)
             continue
         try:
             card = project_npc_card(member)

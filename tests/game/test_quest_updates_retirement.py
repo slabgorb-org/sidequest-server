@@ -1,28 +1,47 @@
-"""Story 77-4 RED (NARROW scope) — retire the dead WorldStatePatch.quest_updates lane.
+"""Story 77-4 RED (ATOMIC BROAD) — retire the legacy quest_updates lane end-to-end.
 
-SM ruling (session 77-4): this file is the NARROW excision — removing the
-``WorldStatePatch.quest_updates`` field (session.py:501) and its apply-branch
-coercion (session.py:1381-1385). That field is DEAD in production: nothing
-constructs ``WorldStatePatch(quest_updates=...)`` (the apply_world_patch escape
-hatch does not expose it; every other producer passes other fields), and the
-only reader is the apply-branch coercion. Removing it is a zero-behavior
-dead-code excision, valid regardless of the still-pending BROAD ruling
-(retiring the separate LIVE ``NarrationTurnResult.quest_updates`` lane → record_quest).
+Keith ruled ATOMIC BROAD: the complete ADR-137 AC-3 retirement in one story.
+The narrow dead-field excision folds in as a subset. Surface under test:
 
-These tests fail NOW for the right reason (the field still exists, so the
-construction is accepted and the field is present in model_fields) and pass
-once the field is excised and ``extra="forbid"`` rejects the key.
+NARROW subset (dead WorldStatePatch.quest_updates field):
+- A1 construction rejected by extra="forbid"; A2 load-path rejected;
+  A3 field absent from model_fields; A4 apply path has no dangling reader.
 
-NOT in scope here (held for the BROAD ruling): NarrationTurnResult.quest_updates,
-the narration_apply writer, SPAN_QUEST_UPDATE, websocket telemetry.
+BROAD lane retirement:
+- B  NarrationTurnResult.quest_updates field removed (extraction lane cut).
+- C  apply_world_patch escape-hatch allowlist drops /active_stakes (set_stakes is
+     the typed home now); /quest_log and /quest_updates stay rejected.
+- D  NO-SILENT-FALLBACKS auto-forward guard: a narrator game_patch still carrying a
+     ``quest_updates`` key is AUTO-FORWARDED to record_quest update-mode semantics
+     (the status update LANDS in quest_log — never silently dropped) AND fires the
+     loud GM-visible span ``quest.updates.legacy_emitted``; the legacy ``quest_update``
+     span no longer fires; the turn never raises.
+- E  atomicity guard: the status-only successor mechanism (upsert_quest_status, used by
+     both record_quest update-mode and the auto-forward) is intact BEFORE the lane is cut.
+
+RED honesty: the typed fields still exist today, so A1/A2 (DID NOT RAISE), A3/B
+(field present), D (no auto-forward, no span), and C (/active_stakes still allowlisted)
+all fail now for the right reason. A4 and E are green guards.
+
+Held / GREEN-only (Dev), noted not tested here: narrator game_patch prompt contract
+drops quest_updates (server-side agents/), websocket_session_handler telemetry update,
+SPAN_QUEST_UPDATE constant teardown. The behavioral contracts above force those edits
+(removing the typed field breaks any leftover reader loudly).
 """
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from pydantic import ValidationError
 
-from sidequest.game.session import GameSnapshot, WorldStatePatch
+from sidequest.game.session import (
+    GameSnapshot,
+    QuestEntry,
+    WorldStatePatch,
+    upsert_quest_status,
+)
 
 
 def _has_extra_forbidden_on(errors: list[dict], field: str) -> bool:
@@ -78,3 +97,104 @@ def test_apply_world_patch_unrelated_patch_has_no_dangling_quest_updates_reader(
     snap.apply_world_patch(WorldStatePatch(atmosphere="tense"))
     assert snap.atmosphere == "tense"
     assert snap.quest_log == {}
+
+
+# ---------------------------------------------------------------------------
+# BROAD — B: NarrationTurnResult.quest_updates field removed (extraction lane cut)
+# ---------------------------------------------------------------------------
+
+
+def test_narration_turn_result_has_no_quest_updates_field() -> None:
+    """BROAD: the live extraction lane is cut — NarrationTurnResult no longer
+    carries a quest_updates field (dataclass reflection tripwire, not source-grep).
+
+    Removing the field forces the 3 extraction sites (orchestrator.py:1258/3219/3549)
+    to stop populating it; any leftover populator fails loudly at construction."""
+    from sidequest.agents.orchestrator import NarrationTurnResult
+
+    names = {f.name for f in dataclasses.fields(NarrationTurnResult)}
+    assert "quest_updates" not in names
+    # game_patch_dict must remain — it's the raw lane the auto-forward guard reads.
+    assert "game_patch_dict" in names
+
+
+# ---------------------------------------------------------------------------
+# BROAD — C: apply_world_patch escape hatch drops /active_stakes
+# ---------------------------------------------------------------------------
+
+
+def test_apply_world_patch_allowlist_drops_quest_and_stakes_paths() -> None:
+    """BROAD (item 6): the escape-hatch allowlist no longer exposes /active_stakes
+    (set_stakes is the typed home post-77-2); /quest_log and /quest_updates stay
+    off it. The allowlist is the single source of truth that drives the recoverable
+    rejection at apply_world_patch.py:169 — inspecting it is a runtime-data check,
+    not a source-text assertion."""
+    from sidequest.agents.tools.apply_world_patch import _SUPPORTED_PATHS
+
+    assert "/active_stakes" not in _SUPPORTED_PATHS  # RED now: still allowlisted
+    assert "/quest_log" not in _SUPPORTED_PATHS
+    assert "/quest_updates" not in _SUPPORTED_PATHS
+    # The five non-quest/stakes string fields remain the escape hatch's job.
+    assert "/location" in _SUPPORTED_PATHS
+
+
+# ---------------------------------------------------------------------------
+# BROAD — D: NO-SILENT-FALLBACKS auto-forward guard (the ruled contract)
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_quest_updates_in_game_patch_auto_forwards_to_quest_log(otel_capture) -> None:
+    """BROAD (No-Silent-Fallbacks, the ruled contract): after the lane is cut, a
+    narrator game_patch that STILL carries a ``quest_updates`` key must NOT lose the
+    update. It is auto-forwarded to record_quest update-mode semantics — the status
+    lands in quest_log — and a loud, GM-visible ``quest.updates.legacy_emitted`` span
+    fires. The turn never raises (live-session safety).
+
+    RED now: the live writer reads the typed ``result.quest_updates`` (which we leave
+    unset), so nothing lands and no legacy_emitted span exists.
+    """
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from tests._helpers.session_room import room_for
+
+    snap = GameSnapshot(quest_log={})
+    result = NarrationTurnResult(
+        narration="The witch is vanquished.",
+        game_patch_dict={"quest_updates": {"q_witch": "resolved"}},
+    )
+
+    # Must not raise — graceful auto-forward, never crash a live turn.
+    _apply_narration_result_to_snapshot(snap, result, player_name="Sam", room=room_for(snap))
+
+    # 1) The update LANDED (not silently dropped) via record_quest update-mode semantics.
+    assert "q_witch" in snap.quest_log
+    assert snap.quest_log["q_witch"].status == "resolved"
+
+    spans = otel_capture.get_finished_spans()
+    # 2) Loud, GM-visible legacy signal fired.
+    legacy = [s for s in spans if s.name == "quest.updates.legacy_emitted"]
+    assert legacy, "quest.updates.legacy_emitted span did not fire"
+    # 3) The retired legacy span is gone — quest.updated is the sole successor.
+    assert not [s for s in spans if s.name == "quest_update"], (
+        "legacy SPAN_QUEST_UPDATE must no longer fire"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BROAD — E: atomicity guard — status-only successor mechanism intact pre-cut
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_quest_status_status_only_path_intact() -> None:
+    """BROAD (atomicity): the shared status-only mechanism that BOTH record_quest
+    update-mode AND the auto-forward route through must be intact before the lane is
+    cut — no zero-writer window. (Green guard; the full tool path is proven by
+    tests/agents/tools/test_record_quest.py::test_update_existing_quest_changes_status_and_fires_quest_updated,
+    which is DB-gated.)"""
+    log: dict[str, QuestEntry] = {}
+    upsert_quest_status(log, "q_witch", "active")
+    assert log["q_witch"].status == "active"
+    # Update-in-place on an existing quest (the status-only update case).
+    upsert_quest_status(log, "q_witch", "resolved")
+    assert log["q_witch"].status == "resolved"
+    assert len(log) == 1

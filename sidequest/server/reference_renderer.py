@@ -55,6 +55,7 @@ from sidequest.server.reference_presenters import (
     poi_image_key,
     portrait_image_key,
     present_lore_cast,
+    present_renderable_landscapes,
 )
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import (
@@ -1103,37 +1104,48 @@ def assemble_rules_page(pack: str, pack_dir: Path) -> str:
     )
 
 
-def load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
-    """Story 63-8: the set of location slugs that have a generated POI
-    landscape image.
+def load_points_of_interest(world_dir: Path) -> list[dict]:
+    """Every ``points_of_interest`` dict authored in ``history.yaml`` (under
+    ``chapters[]`` and/or top-level), in authored order.
 
-    The manifest is ``history.yaml`` ``points_of_interest[].slug`` (under
-    ``chapters[]`` and/or top-level). Slugs are ``slugify``-normalised so they
-    match the ``location-{slug}`` card ids the geography presenter emits — the
-    authored POI slug (often underscore-style) and the card slug (hyphenated)
-    both pass through ``slugify``."""
+    This is the single source shared by ``load_poi_image_slugs`` (which derives
+    the R2-gate slug set) and ``present_renderable_landscapes`` (which renders
+    the POIs as landscape cards). The POIs carry ``name``/``slug``/``region``/
+    ``type``/``description`` — the same shape the legacy geography presenter
+    wanted, but authored here in history.yaml, where every live world actually
+    puts them (no world ships a geography.yaml/locations.yaml)."""
     path = world_dir / "history.yaml"
     if not path.exists():
-        return frozenset()
+        return []
     try:
         with path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
     except yaml.YAMLError as exc:
         raise ValueError(f"history.yaml: malformed YAML: {exc}") from exc
     if not isinstance(data, dict):
-        return frozenset()
-    pois: list[object] = []
+        return []
+    pois: list[dict] = []
     chapters = data.get("chapters")
     if isinstance(chapters, list):
         for chapter in chapters:
             if isinstance(chapter, dict) and isinstance(chapter.get("points_of_interest"), list):
-                pois.extend(chapter["points_of_interest"])
+                pois.extend(p for p in chapter["points_of_interest"] if isinstance(p, dict))
     if isinstance(data.get("points_of_interest"), list):
-        pois.extend(data["points_of_interest"])
+        pois.extend(p for p in data["points_of_interest"] if isinstance(p, dict))
+    return pois
+
+
+def load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
+    """Story 63-8: the set of location slugs that have a generated POI
+    landscape image.
+
+    The manifest is ``history.yaml`` ``points_of_interest[].slug`` (under
+    ``chapters[]`` and/or top-level). Slugs are ``slugify``-normalised so they
+    match the card ids the POI presenters emit — the authored POI slug (often
+    underscore-style) and the card slug (hyphenated) both pass through
+    ``slugify``."""
     slugs: set[str] = set()
-    for poi in pois:
-        if not isinstance(poi, dict):
-            continue
+    for poi in load_points_of_interest(world_dir):
         raw = poi.get("slug") or poi.get("name")
         if raw and (normalised := slugify(str(raw))):
             slugs.add(normalised)
@@ -1472,6 +1484,31 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
         if map_html:
             body, kept_toc = _append_dynamic_section(
                 body, kept_toc, section_id="map", label="Map", html=map_html
+            )
+
+    # Renderable Landscapes — the world's history.yaml points_of_interest as a
+    # landscape gallery, images gated on R2 via the SAME slug set the legacy
+    # geography path used (gated_poi_slugs). This is the surface that actually
+    # surfaces POI landscapes on the lore page: present_lore_geography only fires
+    # for a geography.yaml/locations.yaml, which no live world authors, so POI
+    # art never rendered despite being authored in history.yaml + on R2. Sits by
+    # the Map section (both spatial) and self-omits when no POI art exists yet.
+    pois = load_points_of_interest(world_dir)
+    if pois:
+        landscapes_html = present_renderable_landscapes(
+            pois,
+            pack=pack,
+            world=world,
+            theme=theme,
+            poi_image_slugs=gated_poi_slugs,
+        )
+        if landscapes_html:
+            body, kept_toc = _append_dynamic_section(
+                body,
+                kept_toc,
+                section_id="landscapes",
+                label="Renderable Landscapes",
+                html=landscapes_html,
             )
 
     # Story 65-12: public world Timeline section — a world-historical spine from

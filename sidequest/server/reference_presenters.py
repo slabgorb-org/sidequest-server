@@ -304,6 +304,81 @@ PRESENTERS[("lore", ("geography",))] = present_lore_geography
 PRESENTERS[("locations", ())] = present_lore_geography
 
 
+def present_renderable_landscapes(
+    pois: list[dict],
+    *,
+    pack: str,
+    world: str | None,
+    theme: ReferenceTheme,
+    poi_image_slugs: frozenset[str],
+) -> str:
+    """The "Renderable Landscapes" gallery — the world's ``history.yaml``
+    ``points_of_interest[]`` rendered as landscape cards (image over name,
+    type/region chips, and description).
+
+    This is the surface that actually shows POI landscapes on the lore page.
+    The legacy ``present_lore_geography`` only fires for a ``geography.yaml`` /
+    ``locations.yaml`` file — which no live world authors — so its
+    ``_poi_image_html`` path never rendered in production even though every
+    world authors POIs (with landscape art on R2) in ``history.yaml``. This
+    presenter closes that gap by rendering the POIs where they actually live.
+
+    Only POIs whose slug is in ``poi_image_slugs`` (already R2-existence-gated by
+    the caller) are shown, so the section contains exactly the landscapes that
+    render — and is omitted entirely (returns "") when none do, e.g. a world
+    whose POI art has not been generated yet. Reuses the ``ref-geography`` /
+    ``ref-card`` / ``ref-card__poi`` markup so it inherits the existing card
+    styling and the lore-page lightbox (which targets ``img.ref-card__poi``)."""
+    if not pois:
+        return ""
+    # Build a context so the shared, R2-gated `_poi_image_html` (and its
+    # resolved/not_found spans) is reused verbatim rather than re-deriving the
+    # key + gate here.
+    ctx = PresenterContext(
+        pack=pack,
+        world=world,
+        file_stem="history",
+        key_path=("points_of_interest",),
+        theme=theme,
+        depth=0,
+        poi_image_slugs=poi_image_slugs,
+    )
+    cards: list[str] = []
+    for poi in pois:
+        if not isinstance(poi, dict):
+            continue
+        raw_slug = str(poi.get("slug") or poi.get("name") or "").strip()
+        slug = slugify(raw_slug)
+        # Gallery of *renderable* landscapes: skip POIs with no R2-gated image.
+        if not slug or slug not in poi_image_slugs:
+            continue
+        name = str(poi.get("name", "")).strip() or "Unnamed"
+        type_ = str(poi.get("type", "")).strip()
+        region = str(poi.get("region", "")).strip()
+        description = str(poi.get("description", "")).strip()
+        chips: list[str] = []
+        if type_:
+            chips.append(f'<span class="ref-chip">{escape(_format_chip_label(type_))}</span>')
+        if region:
+            chips.append(f'<span class="ref-chip">{escape(_format_chip_label(region))}</span>')
+        img_html = _poi_image_html(slug=slug, name=name, ctx=ctx)
+        cards.append(
+            f'<article class="ref-card" id="landscape-{slug}">'
+            '<div class="ref-card__kicker">Landscape</div>'
+            f'<h3 class="ref-card__title">{escape(name)}</h3>'
+            + img_html
+            + (f'<div class="ref-card__meta">{"".join(chips)}</div>' if chips else "")
+            + (f'<p class="ref-card__body">{escape(description)}</p>' if description else "")
+            + "</article>"
+        )
+    if not cards:
+        return ""
+    return (
+        '<section class="ref-geography">'
+        '<div class="ref-card-grid">' + "".join(cards) + "</div></section>"
+    )
+
+
 def _cast_portrait_img_html(
     *,
     slug: str,

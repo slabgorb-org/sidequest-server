@@ -47,6 +47,7 @@ from pathlib import Path
 
 import yaml
 
+from sidequest.game.npc_pool import NpcPoolMember, is_projectable
 from sidequest.server.reference_map import load_cartography_config, present_lore_map
 from sidequest.server.reference_presenters import (
     PresenterContext,
@@ -82,6 +83,7 @@ from sidequest.telemetry.spans.reference import (
     reference_lore_assembled_span,
     reference_lore_section_orphaned_span,
     reference_manifest_loaded_span,
+    reference_npc_unratified_skipped_span,
     reference_presenter_error_span,
     reference_toc_missing_span,
     reference_unknown_field_span,
@@ -1303,6 +1305,42 @@ def load_cast_entries(world_dir: Path) -> list[dict]:
     return [c for c in chars if isinstance(c, dict)]
 
 
+def _cast_entry_is_projectable(entry: dict) -> bool:
+    """ADR-138 §D4 ratification gate for a public Cast entry.
+
+    A ``portrait_manifest.yaml`` entry is projectable onto the public reference
+    page iff it is **ratified** — exactly the rule the ADR-118 retrieval index
+    applies (75-12). Reuses the 75-11 single-source predicate
+    (:func:`sidequest.game.npc_pool.is_projectable`) rather than re-deriving the
+    rule: the YAML dict is adapted to a minimal :class:`NpcPoolMember` carrying
+    only the gate-relevant fields (the manifest also carries author-facing keys
+    like ``role``/``appearance``/``id`` that ``NpcPoolMember`` forbids, so the
+    whole dict cannot be splatted in).
+
+    Authored manifest content is never auto-minted, so ``observation_pending`` is
+    ``False`` by design and this returns ``True`` in practice; the gate exists
+    defensively so a future unratified entry cannot leak a phantom onto a
+    player-facing page (No Silent Fallbacks — the skip is counted on an OTEL span,
+    never silently rendered).
+
+    The raw ``observation_pending`` value is handed to ``NpcPoolMember`` for
+    Pydantic coercion rather than pre-wrapped in ``bool()``: ``bool("false")`` is
+    ``True`` (every non-empty string is truthy), so a quoted-string authoring slip
+    (``observation_pending: "false"``) would otherwise *silently withhold a
+    ratified NPC*. Pydantic v2 coerces ``"false"``/``"true"``/``0``/``1`` to the
+    correct bool and raises loudly on unsalvageable input. An explicit ``null``
+    (Python ``None``) is coalesced to the ``False`` default — ``null`` means
+    "unset", identical to an absent key, and must render rather than raise a
+    ValidationError that would 500 the public page."""
+    raw_pending = entry.get("observation_pending", False)
+    member = NpcPoolMember(
+        name=str(entry.get("name", "")),
+        drawn_from="world_authored",
+        observation_pending=False if raw_pending is None else raw_pending,
+    )
+    return is_projectable(member)
+
+
 def _gate_cast_slugs_on_manifest(
     authored_slugs: frozenset[str],
     *,
@@ -1473,30 +1511,48 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
     # <img>s gated on R2 existence (the portrait analog of the POI gate above).
     cast_entries = load_cast_entries(world_dir)
     if cast_entries:
-        # Fix #4: gate on the SAME slug the presenter keys each card on —
-        # the entry's explicit `id`, else slugify(name). Deriving the gated set
-        # differently (e.g. always slugify(name)) would mismatch the per-card
-        # key and silently drop every portrait whose id != slugify(name).
-        authored_portrait_slugs = frozenset(
-            cast_portrait_slug(e) for e in cast_entries if str(e.get("name", "")).strip()
-        )
-        gated_portrait_slugs = _gate_cast_slugs_on_manifest(
-            authored_portrait_slugs,
+        # Story 75-13 (ADR-138 §D4): ratification gate. Withhold unratified
+        # (observation_pending) phantoms from the public Cast for the same reason
+        # 75-12 withholds them from the ADR-118 retrieval index — the world has
+        # not committed to them. is_projectable() (75-11) is the shared single
+        # source of truth. The count of withheld members is recorded on a
+        # per-render span (fires even when 0) so the skip is observable, never
+        # silent (No Silent Fallbacks); the count comes from the RAW authored
+        # entries, so an all-unratified world still records the withholding even
+        # though it renders no Cast section.
+        ratified_entries = [e for e in cast_entries if _cast_entry_is_projectable(e)]
+        with reference_npc_unratified_skipped_span(
             pack=pack,
             world=world,
-            pack_dir=pack_dir,
-        )
-        cast_html = present_lore_cast(
-            cast_entries,
-            pack=pack,
-            world=world,
-            theme=theme,
-            portrait_image_slugs=gated_portrait_slugs,
-        )
-        if cast_html:
-            body, kept_toc = _append_dynamic_section(
-                body, kept_toc, section_id="cast", label="Cast", html=cast_html
-            )
+            count=len(cast_entries) - len(ratified_entries),
+        ):
+            if ratified_entries:
+                # Fix #4: gate on the SAME slug the presenter keys each card on —
+                # the entry's explicit `id`, else slugify(name). Deriving the gated set
+                # differently (e.g. always slugify(name)) would mismatch the per-card
+                # key and silently drop every portrait whose id != slugify(name).
+                authored_portrait_slugs = frozenset(
+                    cast_portrait_slug(e)
+                    for e in ratified_entries
+                    if str(e.get("name", "")).strip()
+                )
+                gated_portrait_slugs = _gate_cast_slugs_on_manifest(
+                    authored_portrait_slugs,
+                    pack=pack,
+                    world=world,
+                    pack_dir=pack_dir,
+                )
+                cast_html = present_lore_cast(
+                    ratified_entries,
+                    pack=pack,
+                    world=world,
+                    theme=theme,
+                    portrait_image_slugs=gated_portrait_slugs,
+                )
+                if cast_html:
+                    body, kept_toc = _append_dynamic_section(
+                        body, kept_toc, section_id="cast", label="Cast", html=cast_html
+                    )
 
     # Story 65-11: public Map section — a server-rendered SVG node-link graph from
     # cartography.yaml, with npc-binding entity portraits gated on R2 the same way

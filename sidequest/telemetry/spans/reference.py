@@ -90,6 +90,15 @@ SPAN_REFERENCE_PORTRAIT_NOT_FOUND = "sidequest.reference.portrait_not_found"
 # a chronology it could not actually compute (the No-Silent-Fallbacks analog).
 SPAN_REFERENCE_TIMELINE_RENDERED = "sidequest.reference.timeline_rendered"
 
+# Lore-page Cast ratification-gate span (Story 75-13, ADR-138 §D4). The public
+# Cast section shares the ADR-138 ratification gate with the ADR-118 retrieval
+# index (75-12): an unratified, observation_pending phantom is withheld from the
+# page because the world has not committed to it. Fired once per render that has
+# authored Cast entries, carrying the count of withheld members (0 is valid). The
+# count is the lie-detector — it distinguishes "clean cast, gate ran" from "gate
+# never ran", and a non-zero count never silently drops an NPC.
+SPAN_REFERENCE_NPC_UNRATIFIED_SKIPPED = "sidequest.reference.npc_unratified_skipped"
+
 # Lore-page TOC/section assembly spans (Story 65-10). Every sub-feature (POI, Map,
 # Cast, Timeline) emits its own render span, but the TOC/section COMPOSITION that
 # stitches them — base sections plus the dynamically-appended Cast/Map/Timeline —
@@ -126,6 +135,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_TIMELINE_RENDERED,
         SPAN_REFERENCE_LORE_ASSEMBLED,
         SPAN_REFERENCE_LORE_SECTION_ORPHANED,
+        SPAN_REFERENCE_NPC_UNRATIFIED_SKIPPED,
     }
 )
 
@@ -655,6 +665,37 @@ def reference_lore_assembled_span(
             "reference.lore_section_count": section_count,
             "reference.lore_dynamic_sections": dynamic_sections,
             "reference.lore_parity_ok": parity_ok,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_npc_unratified_skipped_span(
+    *,
+    pack: str,
+    world: str,
+    count: int,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """INFO — fired once per lore render **iff** the world authors a non-empty
+    Cast (``cast_entries`` non-empty), ADR-138 §D4. A cast-less world (no
+    ``portrait_manifest.yaml`` / empty ``characters``) runs no Cast gate and emits
+    no span — consistent with the sibling ``reference.manifest_loaded``. Carries
+    ``reference.npc_unratified_skipped_count`` — the number of unratified
+    (``observation_pending``) phantoms withheld from the public Cast section, the
+    reference-page analog of 75-12's withholding from the ADR-118 retrieval index.
+    "Fires even when the count is 0" refers to the COUNT, not the render: a
+    ratified-only world (authored Cast, nothing withheld) still emits one span with
+    count 0 — the lie-detector that distinguishes a clean cast from a gate that
+    never engaged (CLAUDE.md OTEL principle, No Silent Fallbacks)."""
+    with Span.open(
+        SPAN_REFERENCE_NPC_UNRATIFIED_SKIPPED,
+        {
+            "reference.pack": pack,
+            "reference.world": world,
+            "reference.npc_unratified_skipped_count": count,
         },
         tracer_override=_tracer,
     ) as span:

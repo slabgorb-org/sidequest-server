@@ -88,9 +88,35 @@ def test_valid_regions_populate_explored_as_id_name() -> None:
     )
     explored = _explored_of(msg)
     assert explored == [
-        {"id": "munchkin_country", "name": "Munchkin Country"},
-        {"id": "emerald_city", "name": "The Emerald City"},
+        {
+            "id": "munchkin_country",
+            "name": "Munchkin Country",
+            "connections": ["yellow_brick_road"],
+        },
+        {
+            "id": "emerald_city",
+            "name": "The Emerald City",
+            "connections": ["yellow_brick_road"],
+        },
     ]
+
+
+def test_explored_carries_connections_from_adjacent() -> None:
+    """server #632: each explored entry carries ``connections`` sourced from
+    the region's ``adjacent`` list, so MapOverlay can draw node-graph edges.
+    Before this, region-mode explored entries had no ``connections`` field —
+    isolated nodes at best, and an unguarded ``for…of`` crashed the whole
+    GameBoard (ui #330)."""
+    msg = _build_cartography_map_message(
+        _oz_pack(),
+        "oz",
+        "munchkin_country",
+        discovered_regions=["yellow_brick_road"],
+    )
+    explored = _explored_of(msg)
+    assert len(explored) == 1
+    # yellow_brick_road borders both munchkin_country and emerald_city.
+    assert explored[0]["connections"] == ["munchkin_country", "emerald_city"]
 
 
 def test_scene_title_pollution_is_filtered_out() -> None:

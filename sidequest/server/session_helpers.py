@@ -1485,7 +1485,19 @@ def _build_cartography_map_message(
     for rid in incoming:
         if rid in regions and rid not in _seen:
             _seen.add(rid)
-            explored.append({"id": rid, "name": regions[rid].name})
+            explored.append(
+                {
+                    "id": rid,
+                    "name": regions[rid].name,
+                    # Node-graph edges: the region's adjacency list. MapOverlay
+                    # draws one edge per connection; region-mode worlds author
+                    # adjacency as ``adjacent`` in cartography.yaml, so without
+                    # this the explored payload arrived with no ``connections``
+                    # field — isolated nodes at best, a GameBoard crash at worst
+                    # (ui #330 unguarded ``for…of``). (server #632)
+                    "connections": list(getattr(regions[rid], "adjacent", [])),
+                }
+            )
 
     with cartography_map_emitted_span(
         current_location=current_location,

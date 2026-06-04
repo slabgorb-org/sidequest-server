@@ -133,18 +133,14 @@ def test_pending_member_withheld_from_index_but_present_in_floor(
     entity_sync.sync_for_turn(handler, sd)
 
     # FILL: withheld from the semantic index.
-    assert "npc:mira" not in {
-        c.id for c in sd.entity_store.query_by_type(EntityType.NPC)
-    }
+    assert "npc:mira" not in {c.id for c in sd.entity_store.query_by_type(EntityType.NPC)}
 
     # FLOOR: still in the budgeted working set the narrator reads.
     floor = build_npc_working_set(
         sd.snapshot,
         current_turn=sd.snapshot.turn_manager.interaction,
     )
-    floor_names = set(floor.compact_names) | {
-        _name(entry) for entry in floor.brief_entries
-    }
+    floor_names = set(floor.compact_names) | {_name(entry) for entry in floor.brief_entries}
     assert "Mira" in floor_names
 
 

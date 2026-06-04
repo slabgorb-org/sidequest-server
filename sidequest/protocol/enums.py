@@ -128,6 +128,12 @@ class MessageType(StrEnum):
     # this is it (do NOT revive MAP_UPDATE). The UI MapWidget routes this
     # through its Automapper region-graph path.
     DUNGEON_MAP = "DUNGEON_MAP"
+    # ADR-137 / Story 77-8: player-facing quest spine projection. The
+    # RELATIONSHIPS-snapshot analog for quests — carries quest_log +
+    # quest_anchors + active_stakes together, reactive on seed/record_quest/
+    # set_stakes. Transient broadcast (never event-sourced), consumed by the
+    # UI quest/objective panel (Story 77-5).
+    QUESTS = "QUESTS"
 
 
 class NarratorVerbosity(StrEnum):

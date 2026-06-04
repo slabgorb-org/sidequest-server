@@ -220,6 +220,9 @@ from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
     _maybe_emit_location_overlay_changed,
     _maybe_emit_tactical_grid,
 )
+from sidequest.server.websocket_handlers.quests_emit import (  # noqa: E402
+    _maybe_emit_quests,
+)
 from sidequest.server.websocket_handlers.relationships_emit import (  # noqa: E402
     _maybe_emit_relationships,
 )
@@ -2101,6 +2104,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     # resume re-fires a fresh roster on the next turn. Transient
                     # broadcast (_emit_shared_world_frame), never event-sourced.
                     _maybe_emit_relationships(
+                        self,
+                        snapshot=snapshot,
+                        emit_fn=_emit_shared_world_frame,
+                    )
+                    # ADR-137 / Story 77-8: quest spine roster rides the same
+                    # per-turn / resume cadence as the relationship roster above.
+                    # Internally change-gated on the spine signature (quests +
+                    # anchors + stakes), so an unchanged spine is a no-op and an
+                    # empty spine shows nothing. Transient broadcast
+                    # (_emit_shared_world_frame), never event-sourced — the UI
+                    # quest/objective panel (Story 77-5) consumes it.
+                    _maybe_emit_quests(
                         self,
                         snapshot=snapshot,
                         emit_fn=_emit_shared_world_frame,

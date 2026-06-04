@@ -847,6 +847,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     _dungeon_palette = (
                         _lookahead_handle.palette if _lookahead_handle is not None else None
                     )
+                    # Stamp the dispatch-bank/equip spans with the turn number
+                    # turn_complete WILL emit (interaction+1 for a player turn —
+                    # record_interaction() runs below, after this pass). Without
+                    # it the spans grid one column to the left and the GM panel
+                    # shows intent_router/inventory dark on the resolving turn
+                    # (off-by-one, DRIVER 2026-06-04).
+                    _dispatch_turn_number = intent_router_pass.effective_dispatch_turn_number(
+                        snapshot.turn_manager, is_opening_turn=is_opening_turn
+                    )
                     _dispatch_package, _bank_result = await execute_intent_router_pre_narrator_pass(
                         intent_router=_intent_router,
                         snapshot=snapshot,
@@ -858,6 +867,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         palette=_dungeon_palette,
                         lookahead_handle=_lookahead_handle,
                         phase_timings=timings,
+                        turn_number=_dispatch_turn_number,
                     )
                 except IntentRouterFailure as exc:
                     if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):

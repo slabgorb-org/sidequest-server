@@ -65,6 +65,7 @@ async def run_equip_dispatch(
     *,
     snapshot: GameSnapshot,
     player_name: str,
+    turn_number: int | None = None,
 ) -> SubsystemOutput:
     """Flip the ``equipped`` flag of the player-named item in THIS PC's
     inventory. Returns an empty-directives ``SubsystemOutput`` on success
@@ -78,8 +79,16 @@ async def run_equip_dispatch(
     target_equipped = action != "unequip"
 
     character = next((c for c in snapshot.characters if c.core.name == player_name), None)
-    _tm = getattr(snapshot, "turn_manager", None)
-    _turn_number: int = int(getattr(_tm, "interaction", 0)) if _tm is not None else 0
+    # Prefer the effective turn number the dispatch bank threads in (the value
+    # turn_complete will emit, == interaction+1 for a player turn); fall back to
+    # the snapshot's pre-increment interaction for direct callers that omit it.
+    # Reading interaction here alone produced the off-by-one that left the
+    # GM-panel inventory row dark on the resolving turn (DRIVER 2026-06-04).
+    if turn_number is not None:
+        _turn_number = int(turn_number)
+    else:
+        _tm = getattr(snapshot, "turn_manager", None)
+        _turn_number = int(getattr(_tm, "interaction", 0)) if _tm is not None else 0
 
     if character is None:
         # The acting PC has no seated character — a binding bug. Fail loud.

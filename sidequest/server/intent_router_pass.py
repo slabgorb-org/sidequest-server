@@ -256,6 +256,22 @@ def _normalize_per_player_ids(
         pd.player_id = seat_id
 
 
+def effective_dispatch_turn_number(turn_manager: Any, *, is_opening_turn: bool) -> int:
+    """The turn number the dispatch-bank spans should carry so they grid to the
+    same column as ``turn_complete``.
+
+    The pre-narrator dispatch bank runs BEFORE ``record_interaction()`` bumps the
+    counter, while ``turn_complete`` emits ``turn_id=interaction`` AFTER the bump.
+    A player turn runs ``record_interaction()`` (interaction+1), so its dispatch
+    spans must be stamped one ahead. The opening scene-set skips
+    ``record_interaction()`` (ADR-051), so its effective turn number is the
+    current interaction unchanged. Reading the raw interaction at dispatch time
+    left intent_router/inventory dark on the resolving turn (DRIVER 2026-06-04).
+    """
+    interaction = int(getattr(turn_manager, "interaction", 0)) if turn_manager is not None else 0
+    return interaction if is_opening_turn else interaction + 1
+
+
 async def execute_intent_router_pre_narrator_pass(
     *,
     intent_router: IntentRouter,
@@ -268,6 +284,7 @@ async def execute_intent_router_pre_narrator_pass(
     palette: Any | None = None,
     lookahead_handle: Any | None = None,
     phase_timings: PhaseTimings | None = None,
+    turn_number: int = 0,
 ) -> tuple[DispatchPackage, BankResult]:
     """Run the IntentRouter and dispatch bank pre-narrator.
 
@@ -381,6 +398,12 @@ async def execute_intent_router_pre_narrator_pass(
                 "dungeon_store": dungeon_store,
                 "palette": palette,
                 "lookahead_handle": lookahead_handle,
+                # Effective (post-record_interaction) turn number so the bank +
+                # equip spans grid to the same column turn_complete emits — see
+                # ``effective_dispatch_turn_number``. 0 (the default) means the
+                # caller did not thread it; the bank then falls back to the
+                # snapshot's interaction (preserves direct-caller behavior).
+                "turn_number": turn_number,
             },
         )
 
@@ -396,4 +419,8 @@ async def execute_intent_router_pre_narrator_pass(
     return package, bank_result
 
 
-__all__ = ["_normalize_per_player_ids", "execute_intent_router_pre_narrator_pass"]
+__all__ = [
+    "_normalize_per_player_ids",
+    "effective_dispatch_turn_number",
+    "execute_intent_router_pre_narrator_pass",
+]

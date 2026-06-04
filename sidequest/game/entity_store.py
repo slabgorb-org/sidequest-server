@@ -176,22 +176,43 @@ class EntityStore(BaseModel):
                 count += 1
         return count
 
-    def update_embedding(self, card_id: str, embedding: list[float]) -> None:
+    def update_embedding(
+        self,
+        card_id: str,
+        embedding: list[float],
+        *,
+        expected_dim: int | None = None,
+    ) -> bool:
         """Attach an embedding to an existing card, clearing the pending flag and
-        resetting the retry count.
+        resetting the retry count. Returns ``True`` on a successful write,
+        ``False`` when a dimension guard refuses it.
 
         Raises ``KeyError`` if the id is unknown — a silent no-op would hide a
         genuine worker bug (No Silent Fallbacks), matching ``LoreStore``. Raises
         ``ValueError`` on an empty embedding: an empty vector would clear the
         pending flag while leaving the card un-rankable (cosine 0.0 forever),
         stranding it silently.
+
+        ``expected_dim`` mirrors :meth:`LoreStore.update_embedding` (Story 76-3):
+        when set and the vector length does not match, the write is *refused*
+        (returns ``False``) so the card keeps its prior state and stays pending
+        for re-embedding on the next worker pass. This defends against the
+        retrieve/worker race where a mid-session daemon model-dim change
+        (MiniLM-384 → -768) would otherwise write a stale-dimension vector back
+        and clear the pending flag, orphaning the card (cosine 0.0 forever)
+        until :meth:`requeue_dimension_mismatched` self-heals it a turn later.
+        When ``expected_dim`` is ``None`` the write is unconditional — callers
+        that do not track a session dim keep the pre-76-3 behavior.
         """
         if not embedding:
             raise ValueError("embedding must not be empty")
+        if expected_dim is not None and len(embedding) != expected_dim:
+            return False
         card = self.cards[card_id]
         card.embedding = list(embedding)
         card.embedding_pending = False
         card.embedding_retry_count = 0
+        return True
 
     # ------------------------------------------------------------------
     # Accessors

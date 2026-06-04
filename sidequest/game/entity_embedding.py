@@ -73,6 +73,10 @@ async def embed_pending_entity_cards(
             pending = pending[: max(0, max_per_run)]
             span.set_attribute("entity.max_per_run", max_per_run)
 
+        # The first successful embed pins the session's expected dimension; a
+        # later embed returning a different-dim vector (daemon hot-reloaded its
+        # model mid-run) is refused at write-back, mirroring the lore worker.
+        expected_dim: int | None = None
         for card_id in pending:
             card = store.cards.get(card_id)
             if card is None:
@@ -129,7 +133,33 @@ async def embed_pending_entity_cards(
                     type(exc).__name__,
                 )
                 continue
-            store.update_embedding(card_id, response["embedding"])
+            embedding = response["embedding"]
+            if expected_dim is None:
+                expected_dim = len(embedding)
+            written = store.update_embedding(card_id, embedding, expected_dim=expected_dim)
+            if not written:
+                # Dim mismatch against the session's expected dim: the daemon
+                # switched models mid-run (or a retrieve-time requeue raced this
+                # embed). Keep the card pending and let the next worker pass
+                # re-fetch on the new dim — never write a stale-dim vector back.
+                result.failed_embed_error += 1
+                span.add_event(
+                    "embed_failed",
+                    {
+                        "card_id": card_id,
+                        "reason": "dim_mismatch_writeback_refused",
+                        "written_dim": len(embedding),
+                        "expected_dim": expected_dim,
+                    },
+                )
+                logger.warning(
+                    "entity_embedding.worker writeback_refused card=%s "
+                    "written_dim=%d expected_dim=%d",
+                    card_id,
+                    len(embedding),
+                    expected_dim,
+                )
+                continue
             result.embedded += 1
         span.set_attribute("entity.embedded", result.embedded)
         span.set_attribute("entity.failed", result.failed)

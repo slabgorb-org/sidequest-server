@@ -25,6 +25,7 @@ from sidequest.game.entity_card import (
     SPAN_STALE_CARD_COUNT,
 )
 from sidequest.game.entity_sync import LocationSyncView, sync_entity_cards
+from sidequest.game.location_view import get_location_prose
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 if TYPE_CHECKING:
@@ -56,33 +57,106 @@ def _collect_world_factions(sd: _SessionData) -> list[Faction]:
     return list(getattr(lore, "factions", None) or [])
 
 
-def _collect_location_views(sd: _SessionData) -> list[LocationSyncView]:
-    """Normalized location views for this turn (Story 76-7).
+def _resolve_region_view(
+    sd: _SessionData, region_id: str, *, source: str
+) -> LocationSyncView | None:
+    """Resolve one region's authored cartography prose into a normalized
+    :class:`LocationSyncView`, or ``None`` when the region carries no projectable
+    prose (Story 76-11).
 
-    Locations are diffuse across three sources (ADR-118 §D3). **v1 covers PG
-    ``location_promotions``** — the persisted, description-bearing Yes-And
-    locations, reachable via ``sd.repository.list_location_promotions`` per
-    discovered region. Room-graph rooms (``RoomState`` carries no prose) and
-    ``world_materialization`` outputs need the ``location_view`` authored-prose
-    resolution path and are deferred to a follow-up (see Dev deviation /
-    Delivery Finding). A promotion with no ``promoted_canon`` prose is skipped,
-    never minted as a stub card (No Silent Fallbacks). Collection never crashes a
-    turn: missing repository / region read errors degrade to an empty list."""
-    repository = getattr(sd, "repository", None)
-    if repository is None:
-        return []
-    regions = getattr(sd.snapshot, "discovered_regions", None) or []
+    Prose comes from the bound world's authored ``cartography.regions[region_id]``
+    merged with any live encounter overlay via ``location_view.get_location_prose``
+    — never synthesized. A region absent from cartography, or whose effective
+    prose is blank, is skipped (returns ``None``): No Silent Fallbacks / No
+    Stubbing — the projector's blank-description guard must never see a stub. The
+    ``source`` tag (``"room_graph"`` / ``"world_materialization"``) records the
+    provenance for GM-panel forensics. Defensive ``getattr`` reads keep a sweep
+    from crashing a turn on a partially-built session or a world without
+    cartography (e.g. duck-typed test sessions)."""
+    world_slug = getattr(sd, "world_slug", "") or ""
+    genre_pack = getattr(sd, "genre_pack", None)
+    if not world_slug or genre_pack is None:
+        return None
+    world = genre_pack.worlds.get(world_slug)
+    if world is None:
+        return None
+    cartography = getattr(world, "cartography", None)
+    regions = getattr(cartography, "regions", None) or {}
+    region = regions.get(region_id)
+    if region is None:
+        return None
+    authored = getattr(region, "description", "") or ""
+    prose = get_location_prose(
+        region_id=region_id, authored_description=authored, snapshot=sd.snapshot
+    )
+    if not prose.strip():
+        return None  # no projectable prose — skip, do not stub
+    name = getattr(region, "name", None) or region_id
+    return LocationSyncView(location_id=region_id, name=name, description=prose, source=source)
+
+
+def _collect_location_views(sd: _SessionData) -> tuple[list[LocationSyncView], int]:
+    """Normalized location views for this turn (Story 76-7 + 76-11).
+
+    Locations are diffuse across three sources (ADR-118 §D3), assembled here in
+    the dispatch consumer and returned with a per-collection ``failed`` count:
+
+    - **promotion** — PG ``location_promotions`` for the discovered regions, read
+      in ONE batched round-trip (76-11 perf fix; was one query per region, an
+      O(N)-per-turn cost the 76-7 Reviewer flagged).
+    - **room_graph** — each discovered region resolved to its authored cartography
+      prose via ``location_view`` (``RoomState`` itself carries no prose).
+    - **world_materialization** — each region a materialized history chapter
+      placed the party in (``snapshot.world_history`` is written only by
+      ``materialize_world``), likewise resolved to authored prose.
+
+    Precedence on a shared ``loc:<id>`` card id is first-source-wins (promotion →
+    room_graph → world_materialization); a region is never double-indexed. A
+    source that yields no projectable prose is skipped, never stubbed (No Silent
+    Fallbacks). Collection never crashes a turn: a failed promotion read degrades
+    to zero promotion views, surfaces a watcher event naming the dropped regions
+    (76-11 observability fix — the GM-panel lie-detector must see the
+    under-report), and is counted toward the returned ``failed`` total."""
     views: list[LocationSyncView] = []
-    for region_id in regions:
+    failed = 0
+    seen_ids: set[str] = set()
+
+    def _add(view: LocationSyncView | None) -> None:
+        if view is None:
+            return
+        card_id = f"loc:{view.location_id}"
+        if card_id in seen_ids:
+            return  # first source wins — never double-index a region
+        seen_ids.add(card_id)
+        views.append(view)
+
+    snapshot = sd.snapshot
+    regions = list(getattr(snapshot, "discovered_regions", None) or [])
+
+    # Source 1 (promotion) — ONE batched read for all discovered regions.
+    repository = getattr(sd, "repository", None)
+    if repository is not None and regions:
         try:
-            rows = repository.list_location_promotions(region_id=region_id)
-        except Exception:  # noqa: BLE001 — a bad region read must not cost the turn
-            logger.exception("entity_sync.location_read_failed region=%s", region_id)
-            continue
+            rows = repository.list_location_promotions(region_ids=regions)
+        except Exception as exc:  # noqa: BLE001 — a bad read must not cost the turn
+            logger.exception("entity_sync.location_read_failed regions=%s", regions)
+            failed += len(regions)
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "entity_sync",
+                    "op": "location_read_failed",
+                    "regions": regions,
+                    "error": type(exc).__name__,
+                },
+                component="retrieval",
+                severity="warning",
+            )
+            rows = []
         for row in rows or []:
             if not (row.promoted_canon or "").strip():
                 continue  # no projectable prose — skip, do not stub
-            views.append(
+            _add(
                 LocationSyncView(
                     location_id=row.entity_id,
                     name=row.label,
@@ -90,7 +164,19 @@ def _collect_location_views(sd: _SessionData) -> list[LocationSyncView]:
                     source="promotion",
                 )
             )
-    return views
+
+    # Source 2 (room_graph) — discovered regions resolved to authored prose.
+    for region_id in regions:
+        _add(_resolve_region_view(sd, region_id, source="room_graph"))
+
+    # Source 3 (world_materialization) — regions a materialized chapter placed
+    # the party in.
+    for chapter in getattr(snapshot, "world_history", None) or []:
+        location = getattr(chapter, "location", None)
+        if location:
+            _add(_resolve_region_view(sd, location, source="world_materialization"))
+
+    return views, failed
 
 
 def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
@@ -106,10 +192,13 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
 
     try:
         factions = _collect_world_factions(sd)
-        locations = _collect_location_views(sd)
+        locations, location_failed = _collect_location_views(sd)
         result = sync_entity_cards(
             sd.entity_store, snapshot, factions=factions, locations=locations
         )
+        # 76-11: a dropped promotion read is counted so the GM-panel sees the
+        # location under-report (it already published its own watcher event).
+        result.failed += location_failed
     except Exception as exc:  # noqa: BLE001 — sync must never crash a turn
         logger.exception("entity_sync.sweep_failed")
         _watcher_publish(

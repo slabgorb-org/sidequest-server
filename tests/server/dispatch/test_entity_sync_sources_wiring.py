@@ -318,8 +318,12 @@ class TestPromotionLocationFlowsEndToEnd:
             new_binding_kind=None,
             new_binding_ref=None,
         )
-        sd.repository.list_location_promotions = lambda *, region_id: (
-            [row] if region_id == "rusted_junction" else []
+        # 76-11: the promotion read is now batched (``region_ids=``). Accept both
+        # the legacy single-region and the batched call shapes.
+        sd.repository.list_location_promotions = lambda *, region_id=None, region_ids=None: (
+            [row]
+            if region_id == "rusted_junction" or (region_ids and "rusted_junction" in region_ids)
+            else []
         )
 
         dispatch_entity_sync.sync_for_turn(handler, sd)

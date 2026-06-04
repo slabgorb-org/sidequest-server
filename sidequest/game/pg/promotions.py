@@ -77,12 +77,30 @@ class PgPromotionStore:
         self._pool = pool
         self._sid = session_id
 
-    def list_location_promotions(self, *, region_id: str) -> list[PgLocationPromotionRow]:
-        """Return all promotion rows for ``(session_id, region_id)``.
+    def list_location_promotions(
+        self, *, region_id: str | None = None, region_ids: list[str] | None = None
+    ) -> list[PgLocationPromotionRow]:
+        """Return promotion rows for one region (``region_id``) or several
+        (``region_ids``) in a **single** query.
 
-        Ordered by ``promoted_at_turn ASC, entity_id ASC`` — mirrors
-        ``SqliteStore.list_location_promotions`` ordering exactly.
+        Exactly one selector must be supplied — passing both, or neither, raises
+        (No Silent Fallbacks). Both paths route through ``region_id = ANY(%s)`` so
+        the batched read (Story 76-11, one round-trip for all discovered regions)
+        and the single-region read (``location_view`` / ``location_resolver``)
+        share one SQL shape. Ordered by ``promoted_at_turn ASC, entity_id ASC`` —
+        mirrors ``SqliteStore.list_location_promotions`` ordering exactly; the
+        batched consumer regroups by ``region_id`` itself.
         """
+        if region_id is not None and region_ids is not None:
+            raise ValueError("pass region_id OR region_ids, not both")
+        if region_ids is not None:
+            targets = list(region_ids)
+        elif region_id is not None:
+            targets = [region_id]
+        else:
+            raise ValueError("list_location_promotions requires region_id or region_ids")
+        if not targets:
+            return []
         with self._pool.connection() as conn:
             rows = conn.execute(
                 """
@@ -91,10 +109,10 @@ class PgPromotionStore:
                        new_binding_kind, new_binding_ref
                   FROM location_promotions
                  WHERE session_id = %s
-                   AND region_id = %s
+                   AND region_id = ANY(%s)
                  ORDER BY promoted_at_turn ASC, entity_id ASC
                 """,
-                (self._sid, region_id),
+                (self._sid, targets),
             ).fetchall()
         return [
             PgLocationPromotionRow(

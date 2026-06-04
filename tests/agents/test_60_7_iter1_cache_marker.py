@@ -48,6 +48,7 @@ from sidequest.agents.tooling_protocol import (
     ToolUseBlock,
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 
 # --- SDK-shape fakes (mirror tests/agents/test_60_4_continuation_cache_breakpoint.py) ---
 
@@ -163,18 +164,6 @@ def _tools_one() -> list[ToolDefinition]:
             input_schema={"type": "object"},
         )
     ]
-
-
-class _FakeSocket:
-    """Minimal `_Sendable` for watcher_hub subscription. Collects every
-    published event so tests can assert delivery to the GM-panel transport
-    (not just `logger.warning`). Same pattern as 61-3 / 61-4 tests."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
 
 
 @pytest.fixture
@@ -308,9 +297,7 @@ def test_build_messages_payload_promotes_bare_string_content_to_block_list() -> 
     )
     block = content[0]
     assert isinstance(block, dict), f"promoted block must be a dict; got {block!r}"
-    assert block.get("type") == "text", (
-        f"promoted block must carry type='text'; got {block!r}"
-    )
+    assert block.get("type") == "text", f"promoted block must carry type='text'; got {block!r}"
     assert block.get("text") == "say something", (
         f"promoted block must preserve the original string; got text={block.get('text')!r}"
     )
@@ -568,7 +555,7 @@ async def test_both_writes_fired_event_emits_when_5m_and_1h_both_nonzero(
     this ever fires post-60-7, a regression of the same class is live.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # Synthesize the pre-60-7 steady-state shape: iter=1 writes ~17K at 5m
@@ -621,7 +608,7 @@ async def test_both_writes_fired_event_does_not_emit_when_only_one_tier_writes(
       (c) 5m-only: a 5m-configured client writing only to 5m
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # (a) 1h-only write
@@ -636,7 +623,9 @@ async def test_both_writes_fired_event_does_not_emit_when_only_one_tier_writes(
     )
 
     # (b) cache-read-only (both writes zero)
-    sdk_read = _Sdk(responses=[_end_turn("done", cache_write_5m=0, cache_write_1h=0, cache_read=11_988)])
+    sdk_read = _Sdk(
+        responses=[_end_turn("done", cache_write_5m=0, cache_write_1h=0, cache_read=11_988)]
+    )
     client_read = AnthropicSdkClient(sdk=sdk_read, cache_ttl="1h")
     await client_read.complete_with_tools(
         system_blocks=[CacheableBlock(text="rules", cache=True)],
@@ -682,7 +671,7 @@ async def test_both_writes_fired_event_emits_per_offending_iter_in_tool_loop(
     Expected: exactly one event from iter=1, none from iter=2.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(

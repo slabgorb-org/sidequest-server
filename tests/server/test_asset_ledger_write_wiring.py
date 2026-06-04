@@ -35,6 +35,7 @@ from sidequest.game.persistence import GameMode
 from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 from sidequest.server.session_room import RoomRegistry
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 
 
 @pytest.fixture
@@ -53,16 +54,8 @@ async def bound_hub() -> WatcherHub:
     return watcher_hub
 
 
-class _FakeSocket:
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-
-
-async def _capture(hub: WatcherHub) -> _FakeSocket:
-    sock = _FakeSocket()
+async def _capture(hub: WatcherHub) -> FakeSocket:
+    sock = FakeSocket()
     await hub.subscribe(sock)  # type: ignore[arg-type]
     return sock
 

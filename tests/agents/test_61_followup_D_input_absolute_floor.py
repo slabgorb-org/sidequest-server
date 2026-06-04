@@ -30,8 +30,8 @@ from sidequest.agents.anthropic_sdk_client import (
     AnthropicSdkClient,
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 from tests.agents.test_61_4_cost_runaway_alarm import (  # type: ignore[attr-defined]
-    _FakeSocket,
     _resp,
     _Sdk,
     _system_blocks,
@@ -94,7 +94,7 @@ async def test_input_absolute_fires_on_high_output_call(
     Exactly one event, ``trigger="input_absolute"``.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_resp(input_tokens=45_000, output_tokens=800)])
@@ -161,7 +161,7 @@ async def test_input_absolute_fires_on_first_call_regardless_of_baseline(
     visible even when the model is responsive.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_resp(input_tokens=60_000, output_tokens=1_000)])
@@ -217,7 +217,7 @@ async def test_io_fingerprint_outranks_input_absolute(
     priority order; the existing winner stays the winner.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 60K-in / 12-out trips io_fingerprint (60K > 2×12K warmup AND
@@ -257,7 +257,7 @@ async def test_input_absolute_outranks_cost_triggers(
     selects input_absolute (per story §B amended order).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 100K-in / 200-out: cost = $3/MTok×100K + $15/MTok×200 = $0.300 +
@@ -307,7 +307,7 @@ async def test_input_absolute_boundary_at_40000_strict(
     (strict), so 40_000 stays silent. Asserts both edges of the gate.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # Fresh client for each probe — easier than threading sock cleanup.

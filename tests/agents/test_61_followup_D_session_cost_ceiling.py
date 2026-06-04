@@ -38,8 +38,8 @@ from sidequest.agents.anthropic_sdk_client import (
     AnthropicSdkCostCeilingExceeded,
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 from tests.agents.test_61_4_cost_runaway_alarm import (  # type: ignore[attr-defined]
-    _FakeSocket,
     _resp,
     _Sdk,
     _system_blocks,
@@ -441,7 +441,7 @@ async def test_cost_ceiling_exceeded_watcher_event_shape(
     ceiling_usd, model.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_heavy_call(), _heavy_call(), _heavy_call()])
@@ -523,7 +523,7 @@ async def test_cost_running_total_fires_every_turn(
     trivial — one iter per call because we don't script tool_use).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_tiny_call(), _tiny_call(), _tiny_call()])
@@ -601,7 +601,7 @@ async def test_cost_running_total_does_not_fire_on_refused_call(
     running_total.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_heavy_call(), _heavy_call()])
@@ -676,7 +676,7 @@ async def test_session_id_none_bypasses_cumulative_tracker(
     not from $0.909 inherited via some global accumulator.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 3 heavy bypass calls (None) + 1 heavy real-session probe afterward.

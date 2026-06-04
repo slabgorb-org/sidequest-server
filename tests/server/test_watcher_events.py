@@ -36,21 +36,12 @@ from sidequest.telemetry.watcher_hub import (
     publish_event,
     watcher_hub,
 )
+from tests._helpers.doubles import FakeSocket
 from tests._helpers.session_room import room_for
 
 
-class _FakeSocket:
-    """Minimal WebSocket stand-in that records every broadcast."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-
-
-async def _capture(hub: WatcherHub) -> _FakeSocket:
-    sock = _FakeSocket()
+async def _capture(hub: WatcherHub) -> FakeSocket:
+    sock = FakeSocket()
     # cast away the type — our fake is structurally compatible
     await hub.subscribe(sock)  # type: ignore[arg-type]
     return sock
@@ -841,7 +832,7 @@ async def test_dead_subscribers_are_pruned(bound_hub: WatcherHub) -> None:
             raise RuntimeError("socket closed")
 
     dead = _DeadSocket()
-    good = _FakeSocket()
+    good = FakeSocket()
     await bound_hub.subscribe(dead)  # type: ignore[arg-type]
     await bound_hub.subscribe(good)  # type: ignore[arg-type]
     publish_event("state_transition", {"field": "location"})

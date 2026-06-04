@@ -42,9 +42,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sidequest.agents.claude_client import ClaudeClient
 from sidequest.agents.orchestrator import (
-    Orchestrator,
     TurnContext,
 )
 from sidequest.agents.prompt_framework.types import (
@@ -55,6 +53,7 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
+from tests._helpers.doubles import make_orchestrator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -96,11 +95,6 @@ def _orin() -> Character:
     return _make_character(
         "Orin", pronouns="they/them", race="Human", char_class="Fighter", level=3
     )
-
-
-def _make_orchestrator() -> Orchestrator:
-    client = MagicMock(spec=ClaudeClient)
-    return Orchestrator(client=client)
 
 
 def _make_mp_room(*, playing_count: int = 2):
@@ -351,7 +345,7 @@ def test_build_turn_context_solo_session_has_no_peers(sd_factory) -> None:
 
 
 async def _build_prompt_with_peers(peers):
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Blutka",
         genre="caverns_and_claudes",
@@ -382,7 +376,7 @@ async def test_party_peer_dossier_contains_canonical_pronouns():
     cls = _find_party_peer_cls()
     blutka_peer = cls.from_character(_blutka())
     # Build prompt from Orin's POV with Blutka as the peer.
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Orin",
         genre="caverns_and_claudes",
@@ -412,7 +406,7 @@ async def test_empty_party_peers_produces_no_dossier_section():
     section. Solo sessions are the common case and must pay nothing for
     this subsystem. Parallels the 37-44 npc_roster discipline.
     """
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Blutka",
         genre="caverns_and_claudes",
@@ -438,7 +432,7 @@ async def test_party_peer_section_uses_early_or_valley_zone():
     """
     cls = _find_party_peer_cls()
     orin_peer = cls.from_character(_orin())
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Blutka",
         genre="caverns_and_claudes",
@@ -469,7 +463,7 @@ async def test_party_peer_section_is_state_category():
     """Peer dossier is current-world-state, not genre/identity/format."""
     cls = _find_party_peer_cls()
     orin_peer = cls.from_character(_orin())
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Blutka",
         genre="caverns_and_claudes",
@@ -508,7 +502,7 @@ async def test_multiple_peers_all_rendered_with_their_pronouns():
             _make_character("Vessa", pronouns="she/her", race="Elf", char_class="Ranger")
         ),
     ]
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Felix",
         genre="caverns_and_claudes",
@@ -613,7 +607,7 @@ async def test_party_peer_injection_span_does_not_fire_on_empty_peers(caplog, mo
     """
     monkeypatch.setattr(logging.getLogger("sidequest"), "propagate", True)
 
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Blutka",
         genre="caverns_and_claudes",
@@ -659,7 +653,7 @@ async def test_wiring_sd_to_prompt_delivers_peer_identity(sd_factory):
         "survive into TurnContext.party_peers."
     )
 
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     _, registry = await orch.build_narrator_prompt("I glance at Blutka", ctx)
 
     agent_name = orch._narrator.name()

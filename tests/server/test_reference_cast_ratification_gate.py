@@ -171,6 +171,11 @@ def test_skip_span_fires_with_zero_count_when_nothing_withheld(
     spans = _skip_spans(otel_capture)
     assert len(spans) == 1, f"expected exactly one skip span, got {len(spans)}"
     assert spans[0].get(ATTR_SKIPPED_COUNT) == 0
+    # Rework (Reviewer [TEST]): pin pack/world on the zero-count span too, matching
+    # the count-one test — so a wrong world/pack on the span's call site is caught
+    # on the most-likely-to-be-emitted-wrong (zero) path, not only the withhold path.
+    assert spans[0].get("reference.pack") == _PACK
+    assert spans[0].get("reference.world") == _RATIFIED_ONLY_WORLD
 
 
 def test_skip_count_is_computed_from_raw_entries_not_survivors(
@@ -199,11 +204,14 @@ def test_skip_count_is_computed_from_raw_entries_not_survivors(
 # ---------------------------------------------------------------------------
 
 
-def test_skip_span_is_registered(otel_capture: InMemorySpanExporter) -> None:
+def test_skip_span_is_registered() -> None:
     """The span must be registered in ``FLAT_ONLY_SPANS`` so the GM/dev panel's
     ``agent_span_close`` fan-out surfaces it — defining the contextmanager is not
-    enough (mirrors the 65-13 portrait-span registration). RED today: the constant
-    does not exist."""
+    enough (mirrors the 65-13 portrait-span registration).
+
+    Rework (Reviewer [TEST]): dropped the unused ``otel_capture`` fixture param —
+    this is a pure set-membership check that emits no span, so taking the capture
+    fixture falsely implied span emission was being verified here."""
     from sidequest.telemetry.spans._core import FLAT_ONLY_SPANS
 
     assert SPAN_NPC_UNRATIFIED_SKIPPED in FLAT_ONLY_SPANS
@@ -229,3 +237,85 @@ def test_is_projectable_gates_on_observation_pending() -> None:
 
     assert is_projectable(ratified) is True
     assert is_projectable(phantom) is False
+
+
+# ---------------------------------------------------------------------------
+# Rework (Reviewer REJECT, [SILENT]/[EDGE]) — the adapter's OWN coercion path
+# ---------------------------------------------------------------------------
+# The route tests above prove the gate works on the YAML-native happy path
+# (observation_pending absent / true / false bool). They do NOT exercise the
+# `_cast_entry_is_projectable` adapter's value-coercion of a *mis-typed*
+# observation_pending — and that path was defective: `bool(entry.get(...))`
+# pre-empts Pydantic's bool coercion, so a quoted string `"false"` (an ordinary
+# YAML authoring slip, esp. for a homebrew author hand-editing a manifest) was
+# read as truthy → True → the ratified NPC silently withheld from the public
+# page. The fix passes the raw value to NpcPoolMember and lets Pydantic coerce
+# ("false"->False, "true"->True), coalescing only an explicit null to the unset
+# default. These unit tests pin that contract directly on the new adapter.
+
+
+def test_cast_entry_projectable_when_flag_absent() -> None:
+    """The design-default: authored content never sets the flag, so an entry with
+    no ``observation_pending`` key projects (renders). Must not raise on the
+    name-coercion path for a normal string name."""
+    from sidequest.server.reference_renderer import _cast_entry_is_projectable
+
+    assert _cast_entry_is_projectable({"name": "Marrow Quill"}) is True
+
+
+def test_cast_entry_withheld_when_flag_true_bool() -> None:
+    """A genuine phantom (``observation_pending: true`` YAML bool) is withheld."""
+    from sidequest.server.reference_renderer import _cast_entry_is_projectable
+
+    assert _cast_entry_is_projectable({"name": "X", "observation_pending": True}) is False
+
+
+def test_cast_entry_projectable_when_flag_false_bool() -> None:
+    """``observation_pending: false`` (YAML bool) means ratified → projects."""
+    from sidequest.server.reference_renderer import _cast_entry_is_projectable
+
+    assert _cast_entry_is_projectable({"name": "X", "observation_pending": False}) is True
+
+
+def test_cast_entry_projectable_when_flag_quoted_false_string() -> None:
+    """THE blocking-finding test (Reviewer [SILENT]/[EDGE]). A quoted string
+    ``observation_pending: "false"`` means NOT pending → the NPC must RENDER.
+
+    RED today: ``bool("false")`` is ``True``, so the adapter mis-reads it as a
+    phantom and silently withholds a ratified NPC. The fix (drop the ``bool()``
+    wrapper, let Pydantic coerce ``"false"`` -> ``False``) makes this project.
+    This is the exact silent-data-loss path a homebrew author would hit."""
+    from sidequest.server.reference_renderer import _cast_entry_is_projectable
+
+    assert _cast_entry_is_projectable({"name": "X", "observation_pending": "false"}) is True
+
+
+def test_cast_entry_withheld_when_flag_quoted_true_string() -> None:
+    """Complement: a quoted ``observation_pending: "true"`` still means pending →
+    withheld. Pins that the fix preserves the truthy-string-true semantics rather
+    than flipping all strings to projectable."""
+    from sidequest.server.reference_renderer import _cast_entry_is_projectable
+
+    assert _cast_entry_is_projectable({"name": "X", "observation_pending": "true"}) is False
+
+
+def test_cast_entry_projectable_when_flag_explicit_null() -> None:
+    """Regression guard for the fix (Reviewer [EDGE]). An explicit YAML ``null``
+    (Python ``None``) means unset → ratified → projects, exactly like an absent
+    key. This GUARDS against a naive ``bool()``-removal that would pass ``None``
+    straight into ``NpcPoolMember(observation_pending=None)`` and raise a
+    ValidationError (turning a render into a public-page 500). Currently GREEN —
+    the fix must keep it green by coalescing ``None`` to the ``False`` default."""
+    from sidequest.server.reference_renderer import _cast_entry_is_projectable
+
+    assert _cast_entry_is_projectable({"name": "X", "observation_pending": None}) is True
+
+
+def test_cast_entry_non_string_name_does_not_raise() -> None:
+    """The name-coercion path (``str(entry.get("name", ""))``) must tolerate a
+    mis-typed non-string name (YAML bare int) without raising — the ratification
+    gate decides projectability, name validation is not its job. Pins the existing
+    ``str()`` coercion stays in place through the fix."""
+    from sidequest.server.reference_renderer import _cast_entry_is_projectable
+
+    assert _cast_entry_is_projectable({"name": 42}) is True

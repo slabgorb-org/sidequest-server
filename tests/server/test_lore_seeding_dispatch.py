@@ -1,14 +1,17 @@
 """Lore-seeding integration — Story 2.3 Slice F.
 
-Drives chargen confirmation against caverns_and_claudes/grimvault and
-asserts:
+Drives a real chargen confirmation through ``WebSocketSessionHandler``
+against the in-repo synthetic ``test_genre`` / ``flickering_reach`` fixture
+pack (story 74-5: no real-pack coupling — the wiring proof is preserved
+because it still boots the production handler and dispatch path) and asserts:
 
 - ``sd.lore_store`` ends up non-empty after commit
-- fragments carry :class:`LoreSource.CharacterCreation` (not the genre
-  pack's generic lore — that's a later slice when the narrator boot
-  path picks up its own store)
-- ids match the Rust ``lore_char_creation_<scene_id>_<choice_index>``
-  format
+- char-creation fragments carry :class:`LoreSource.CharacterCreation` with
+  the Rust ``lore_char_creation_<scene_id>_<choice_index>`` id format
+- world-lore fragments carry :class:`LoreSource.GenrePack` with
+  ``lore_world_<slug>_*`` ids (``flickering_reach`` authors world lore, so
+  the world seeder fires at confirmation) and NO ``lore_genre_*`` fragments
+  appear (epic 74: lore is world-only)
 - OTEL emits ``lore.char_creation_seeded`` with the expected counts
 
 The seeding call fires BEFORE ``sd.builder = None`` so the scene list
@@ -41,7 +44,7 @@ from tests.server.conftest import (
     mock_claude_client_factory as _mock_claude_client_factory,
 )
 
-CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
+_FIXTURE_PACKS_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
 
 
 @pytest.fixture(autouse=True)
@@ -74,11 +77,9 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def handler(tmp_path: Path) -> WebSocketSessionHandler:
-    if not (CONTENT_ROOT / "caverns_and_claudes").is_dir():
-        pytest.skip("content pack not found")
     return WebSocketSessionHandler(
         claude_client_factory=_mock_claude_client_factory(),
-        genre_pack_search_paths=[CONTENT_ROOT],
+        genre_pack_search_paths=[_FIXTURE_PACKS_DIR],
         save_dir=tmp_path,
     )
 
@@ -133,7 +134,7 @@ def _events(exporter: InMemorySpanExporter, name: str) -> list:
 
 
 class TestLoreSeedingDispatch:
-    def test_grimvault_confirmation_seeds_lore_store(
+    def test_flickering_reach_confirmation_seeds_lore_store(
         self, handler: WebSocketSessionHandler
     ) -> None:
         async def body() -> None:
@@ -141,8 +142,8 @@ class TestLoreSeedingDispatch:
 
             slug = seed_slug_for_test(
                 handler._save_dir,
-                genre="caverns_and_claudes",
-                world="grimvault",
+                genre="test_genre",
+                world="flickering_reach",
             )
             attach_default_room_context(handler)
             await handler.handle_message(
@@ -164,19 +165,21 @@ class TestLoreSeedingDispatch:
             assert out[0].payload.phase == "complete"
 
             # Post-confirmation: lore store has fragments from every
-            # chargen scene's choices PLUS the genre pack's lore corpus
+            # chargen scene's choices PLUS the world's lore corpus
             # (history/geography/cosmology/factions) — added by the
-            # pingpong 2026-04-30 fix that wired ``seed_lore_from_genre_pack``
-            # and ``seed_lore_from_world`` into chargen-confirm. Pre-fix
-            # only ``seed_lore_from_char_creation`` ran, leaving the
-            # narrator's RAG retrieval to query an effectively-empty
-            # store and improvise lore on every turn.
+            # pingpong 2026-04-30 fix that wired ``seed_lore_from_world``
+            # into chargen-confirm. Pre-fix only ``seed_lore_from_char_creation``
+            # ran, leaving the narrator's RAG retrieval to query an
+            # effectively-empty store and improvise lore on every turn.
+            # (Epic 74: genre-tier lore is no longer seeded; ``flickering_reach``
+            # authors its own world lore, so the world seeder fires here.)
             assert not sd.lore_store.is_empty()
 
             # Partition: every fragment must carry one of the expected
             # source flags. Char-creation fragments still keep their
-            # ``lore_char_creation_`` id prefix; genre-pack fragments
-            # carry ``lore_genre_`` / ``lore_world_`` prefixes.
+            # ``lore_char_creation_`` id prefix; genre-pack fragments carry the
+            # ``lore_world_`` prefix (epic 74: genre-tier ``lore_genre_*`` ids
+            # are no longer produced, so that arm would be dead code).
             char_creation_frags = []
             genre_pack_frags = []
             for frag in sd.lore_store.fragments_iter():
@@ -184,11 +187,9 @@ class TestLoreSeedingDispatch:
                     assert frag.id.startswith("lore_char_creation_")
                     char_creation_frags.append(frag)
                 elif frag.source == LoreSource.GenrePack:
-                    assert frag.id.startswith("lore_genre_") or frag.id.startswith(
-                        "lore_world_",
-                    ), (
-                        f"Genre-pack fragment {frag.id!r} must use "
-                        "lore_genre_*/lore_world_* prefix; got %s" % frag.id
+                    assert frag.id.startswith("lore_world_"), (
+                        f"Genre-pack fragment {frag.id!r} must use the "
+                        "world-scoped lore_world_* prefix (epic 74: world-only lore)"
                     )
                     genre_pack_frags.append(frag)
                 else:
@@ -200,16 +201,22 @@ class TestLoreSeedingDispatch:
             # Char-creation lore still seeds at confirmation.
             assert len(char_creation_frags) > 0, (
                 "Char-creation seeder must add at least one fragment "
-                "(grimvault has populated chargen scenes)."
+                "(test_genre has populated chargen scenes)."
             )
-            # Epic 74 — lore is WORLD-ONLY. grimvault authors no world lore and
-            # genre lore is no longer seeded, so GenrePack-sourced fragments must
-            # be EMPTY here (an empty `all(...)` would be vacuously true — assert
-            # the count directly so this catches grimvault unexpectedly gaining
-            # world lore AND genre lore leaking in).
-            assert len(genre_pack_frags) == 0, (
-                "epic 74: grimvault has no world lore and genre lore is not seeded; "
-                f"GenrePack-sourced fragments must be empty, got {[f.id for f in genre_pack_frags]}"
+            # Epic 74 — lore is WORLD-ONLY. ``flickering_reach`` authors world
+            # lore, so the world seeder fires at confirmation: GenrePack-sourced
+            # fragments must be PRESENT and every one must use the world-scoped
+            # ``lore_world_flickering_reach_*`` id (never a genre-tier id).
+            assert len(genre_pack_frags) > 0, (
+                "epic 74: flickering_reach authors world lore, so the world "
+                "seeder must add at least one GenrePack-sourced fragment at "
+                "confirmation; got none"
+            )
+            assert all(
+                frag.id.startswith("lore_world_flickering_reach_") for frag in genre_pack_frags
+            ), (
+                "every GenrePack-sourced fragment must be world-scoped to "
+                f"flickering_reach; got {[f.id for f in genre_pack_frags]}"
             )
             assert not any(
                 frag.id.startswith("lore_genre_") for frag in sd.lore_store.fragments_iter()
@@ -230,8 +237,8 @@ class TestLoreSeedingDispatch:
 
             slug = seed_slug_for_test(
                 handler._save_dir,
-                genre="caverns_and_claudes",
-                world="grimvault",
+                genre="test_genre",
+                world="flickering_reach",
             )
             attach_default_room_context(handler)
             await handler.handle_message(
@@ -268,7 +275,7 @@ class TestLoreSeedingDispatch:
                 "ran AFTER char-creation, breaking the wiring order."
             )
             assert attrs["total_tokens"] == sd.lore_store.total_tokens()
-            assert attrs["genre"] == "caverns_and_claudes"
-            assert attrs["world"] == "grimvault"
+            assert attrs["genre"] == "test_genre"
+            assert attrs["world"] == "flickering_reach"
 
         asyncio.run(body())

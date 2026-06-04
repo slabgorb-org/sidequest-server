@@ -236,14 +236,16 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
         span.set_attribute("entity_sync.outcome", result.outcome)
         span.set_attribute("entity_sync.turn_number", interaction)
 
-    # ADR-138 §D6 — one observable span per defensive eviction, never a silent
-    # drop. The GM-panel lie-detector sees exactly which stranded cards were
-    # removed and why; an empty ``evicted_ids`` (the common case) emits nothing.
-    for card_id in result.evicted_ids:
-        with tracer.start_as_current_span(SPAN_ENTITY_CARD_EVICTED) as evict_span:
-            evict_span.set_attribute("reason", ENTITY_CARD_EVICTED_REASON_UNPROJECTABLE)
-            evict_span.set_attribute("entity_card.id", card_id)
-            evict_span.set_attribute("entity_sync.turn_number", interaction)
+        # ADR-138 §D6 — one observable span per defensive eviction, never a
+        # silent drop. Emitted INSIDE the sweep span's ``with`` block so each
+        # eviction span is a CHILD of ``accretion.entity_sync`` — a GM following
+        # a non-zero ``entity_sync.evicted`` attribute can trace straight to the
+        # per-card spans. An empty ``evicted_ids`` (the common case) emits nothing.
+        for card_id in result.evicted_ids:
+            with tracer.start_as_current_span(SPAN_ENTITY_CARD_EVICTED) as evict_span:
+                evict_span.set_attribute("reason", ENTITY_CARD_EVICTED_REASON_UNPROJECTABLE)
+                evict_span.set_attribute("entity_card.id", card_id)
+                evict_span.set_attribute("entity_sync.turn_number", interaction)
 
     _watcher_publish(
         "state_transition",

@@ -245,6 +245,14 @@ def sync_entity_cards(
         if card.id in covered_ids or member.name in covered_origins:
             continue
         _apply_typed_card(store, card, result, "npc_count")
+        # Record the ratified pool card so a later pool member whose name
+        # case-folds to the same ``npc:<slug>`` (a distinct entry that
+        # world_materialization's exact-string dedup let coexist) cannot trip
+        # the ADR-138 §D5 defensive eviction and discard this live card. The
+        # stateful-Npc loop does the same at its own ``_apply_typed_card``; the
+        # pool loop must mirror it or the eviction guard sees an empty set for
+        # pool-on-pool slug collisions.
+        covered_ids.add(card.id)
 
     # Factions (76-7) — the bound world's lore roster (world-tier flavor).
     for faction in factions:

@@ -131,6 +131,70 @@ class TestStrandedCardIsEvicted:
         assert result.evicted == 1
         assert result.evicted_ids == ["npc:borin"]
 
+    def test_multiple_stranded_cards_all_evicted(self) -> None:
+        """The n>1 path: two ratified members indexed, then both re-marked
+        pending in the same sweep. BOTH stranded cards are evicted and tallied —
+        proves the eviction loop does not stop after the first card."""
+        store = EntityStore()
+        borin = _ratified_member("Borin")
+        mira = _ratified_member("Mira")
+        sync_entity_cards(store, _Snapshot(pool=[borin, mira]))
+
+        borin.observation_pending = True
+        mira.observation_pending = True
+        result = sync_entity_cards(store, _Snapshot(pool=[borin, mira]))
+
+        assert "npc:borin" not in store.cards
+        assert "npc:mira" not in store.cards
+        assert result.evicted == 2
+        assert set(result.evicted_ids) == {"npc:borin", "npc:mira"}
+        assert result.skipped_unratified == 2
+
+
+class TestSlugCollisionDoesNotEvictRatifiedSibling:
+    """Regression for the intra-sweep slug-collision spurious-eviction bug
+    (Reviewer HIGH finding). Two *distinct* pool members whose names case-fold to
+    the same ``npc:<slug>`` can coexist (world_materialization dedupes pool
+    members by exact string, not casefold). A pending member must never evict the
+    card a ratified slug-twin legitimately owns this sweep — the eviction guard
+    relies on ratified pool cards being recorded in ``covered_ids``, mirroring the
+    stateful-Npc loop. Without that recording these tests evict the live card."""
+
+    def test_pending_member_does_not_evict_ratified_slug_twin(self) -> None:
+        """A ratified ``BORIN`` (already indexed on a prior sweep) and a pending
+        ``Borin`` (its case-fold twin) appear together. The ratified card must
+        survive — the pending twin is withheld, not licensed to delete a
+        committed sibling's card."""
+        store = EntityStore()
+        ratified = _ratified_member("BORIN")
+        # Prior sweep indexed the ratified member's card.
+        sync_entity_cards(store, _Snapshot(pool=[ratified]))
+        assert "npc:borin" in store.cards
+
+        # A distinct pending member case-folds to the SAME id this sweep.
+        pending_twin = _pending_member("Borin")
+        result = sync_entity_cards(store, _Snapshot(pool=[ratified, pending_twin]))
+
+        assert "npc:borin" in store.cards  # the committed sibling's card survives
+        assert result.evicted == 0
+        assert result.evicted_ids == []
+        # The phantom twin is still counted as withheld from the index.
+        assert result.skipped_unratified == 1
+
+    def test_slug_twin_guard_holds_regardless_of_pool_order(self) -> None:
+        """The guard must not depend on the pending twin appearing after the
+        ratified one in ``npc_pool`` — a fresh-store sweep with the pending twin
+        FIRST also retains the ratified card (the empty store means the early
+        discard is a no-op, and the ratified member re-indexes)."""
+        store = EntityStore()
+        pending_twin = _pending_member("Borin")
+        ratified = _ratified_member("BORIN")
+
+        result = sync_entity_cards(store, _Snapshot(pool=[pending_twin, ratified]))
+
+        assert "npc:borin" in store.cards
+        assert result.evicted == 0
+
 
 # ---------------------------------------------------------------------------
 # §D5 — the cases that must NOT evict (purge stays a non-event)

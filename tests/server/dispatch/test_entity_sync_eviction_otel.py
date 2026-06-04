@@ -60,6 +60,34 @@ def test_eviction_emits_entity_card_evicted_span(session_handler_factory, otel_c
     attrs = evict_spans[0]
     assert attrs["reason"] == "unprojectable"
     assert attrs["entity_card.id"] == "npc:borin"
+    # The eviction span carries the turn it fired on (GM-panel correlation).
+    assert attrs["entity_sync.turn_number"] == sd.snapshot.turn_manager.interaction
+
+    # The sweep span also carries the at-a-glance evicted count.
+    sweep_spans = span_attrs_by_name(otel_capture, "accretion.entity_sync")
+    assert any(s.get("entity_sync.evicted") == 1 for s in sweep_spans)
+
+
+def test_multiple_evictions_emit_one_span_each(session_handler_factory, otel_capture) -> None:
+    """The n>1 path end-to-end: two stranded cards each fire their own
+    ``entity_card.evicted`` span — proves the per-card span loop does not stop
+    after the first eviction."""
+    from sidequest.server.dispatch import entity_sync
+
+    sd, handler = session_handler_factory(genre="caverns_and_claudes")
+    borin = _seed_ratified(sd, "Borin")
+    mira = _seed_ratified(sd, "Mira")
+
+    entity_sync.sync_for_turn(handler, sd)  # index both (turn 1)
+
+    borin.observation_pending = True
+    mira.observation_pending = True
+    entity_sync.sync_for_turn(handler, sd)
+
+    evict_spans = span_attrs_by_name(otel_capture, "entity_card.evicted")
+    assert len(evict_spans) == 2
+    assert {s["entity_card.id"] for s in evict_spans} == {"npc:borin", "npc:mira"}
+    assert all(s["reason"] == "unprojectable" for s in evict_spans)
 
 
 def test_no_eviction_emits_no_span(session_handler_factory, otel_capture) -> None:
@@ -104,6 +132,6 @@ def test_eviction_count_in_watcher_payload(session_handler_factory, monkeypatch)
     entity_sync.sync_for_turn(handler, sd)
 
     events = [c for c in captured if c[1].get("field") == "entity_sync"]
-    assert len(events) == 1
+    assert len(events) == 1  # exactly one sweep event — no spurious second emit
     _kind, payload, _component, _severity = events[0]
     assert payload["evicted"] == 1

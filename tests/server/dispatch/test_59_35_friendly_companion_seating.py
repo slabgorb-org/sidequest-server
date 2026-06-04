@@ -63,9 +63,6 @@ from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
     find_confrontation_def,
 )
-from sidequest.server.dispatch.encounter_lifecycle import (
-    instantiate_encounter_from_trigger,
-)
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 from tests._helpers.trigger_encounter import trigger_encounter
 
@@ -199,7 +196,9 @@ def test_present_hostile_npc_not_friendly_seated():
     With ``npcs_present=[]`` the opponent fallback seats the hostile as an
     opponent; the friendly-seater must not also pull it onto the player side."""
     snap = _snap()
-    snap.npcs.append(_make_npc("Raider", disposition=_HOSTILE, role="hostile", last_seen_location=_LOC))
+    snap.npcs.append(
+        _make_npc("Raider", disposition=_HOSTILE, role="hostile", last_seen_location=_LOC)
+    )
     pack = _load_pack()
 
     trigger_encounter(snap, pack, "combat", _PC, npcs_present=[])
@@ -262,7 +261,9 @@ def test_friendly_ally_not_conscripted_as_opponent_when_room_sourced():
     teach the opponent fallback to skip FRIENDLY, or reclassify in the
     friendly-seater — this test pins the behaviour, not the mechanism.)"""
     snap = _snap()
-    snap.npcs.append(_make_npc("Raider", disposition=_HOSTILE, role="hostile", last_seen_location=_LOC))
+    snap.npcs.append(
+        _make_npc("Raider", disposition=_HOSTILE, role="hostile", last_seen_location=_LOC)
+    )
     snap.npcs.append(_make_npc("Mara", disposition=_FRIENDLY, last_seen_location=_LOC))
     pack = _load_pack()
 

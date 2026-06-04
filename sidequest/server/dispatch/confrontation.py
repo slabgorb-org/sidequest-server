@@ -276,6 +276,14 @@ def build_confrontation_payload(
     if player_impact is not None:
         payload["last_beat_impact"] = player_impact
 
+    # Story 73-7 — surface the OPPONENT-side beat-kind impact alongside the
+    # player's so mechanics-first players (Sebastien/Jade) can see both numeric
+    # deltas and stop reading a no-dial-move CritSuccess as an unfair outcome.
+    # Additive sibling to last_beat_impact; absent when the opponent hasn't acted.
+    opponent_impact = encounter.last_beat_impacts.get("opponent")
+    if opponent_impact is not None:
+        payload["opponent_last_beat_impact"] = opponent_impact
+
     return payload
 
 

@@ -812,6 +812,10 @@ class ConfrontationPayload(ProtocolBase):
     #  "opponent": int, "resolution": bool, "tag": str|None}. Absent (None) on
     # legacy payloads / before any beat — keeps the payload shape additive.
     last_beat_impact: dict[str, Any] | None = None
+    # Story 73-7 — opponent-side sibling of last_beat_impact. Same serialized
+    # BeatImpact shape; absent (None) when the opponent hasn't acted. Declared
+    # because the model is extra="forbid".
+    opponent_last_beat_impact: dict[str, Any] | None = None
     # Pingpong 2026-04-26 S2-BUG: required so ``_emit_event`` can fan out
     # CONFRONTATION frames to peer sockets (its recipient-rebuild path
     # injects the EventLog seq alongside the filtered payload). Mirrors

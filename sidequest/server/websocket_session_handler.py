@@ -31,7 +31,7 @@ from sidequest.agents.dispatch_engagement_watcher import (
     run_dispatch_engagement_watcher,
 )
 from sidequest.agents.intent_router import IntentRouterFailure
-from sidequest.agents.llm_factory import build_llm_client
+from sidequest.agents.llm_factory import _INTENT_ROUTER_MODEL, build_llm_client
 from sidequest.agents.orchestrator import TurnContext
 from sidequest.daemon_client import (
     DaemonClient,
@@ -114,6 +114,7 @@ from sidequest.telemetry.spans import (
     round_invariant_span,
     turn_span,
 )
+from sidequest.telemetry.spans.intent_router import intent_router_decompose_span
 from sidequest.telemetry.turn_record import PatchSummary, TurnRecord
 from sidequest.telemetry.validator import Validator
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -903,6 +904,26 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             len(action),
                             exc,
                         )
+                        # GM-panel coverage on the degrade path (Story 71-29):
+                        # decompose() raised before reaching its own
+                        # intent_router.decompose span, so the happy-path span
+                        # never fired. Mirror it here with dispatch_count=0 and
+                        # degraded=True so the routed intent_router.decompose
+                        # state_transition event still reaches the live GM
+                        # dashboard via WatcherSpanProcessor → hub.publish — the
+                        # SAME broadcast path the happy path uses, no
+                        # reimplementation. (This is a live-dashboard event, not
+                        # a durable turn_telemetry row: span routing broadcasts
+                        # through the hub, it does not call publish_event.)
+                        # Without this the GM panel sees NO decompose event on a
+                        # degraded turn and cannot tell a degrade from a turn
+                        # where the spine never ran.
+                        with intent_router_decompose_span(
+                            action_length=len(action),
+                            model=_INTENT_ROUTER_MODEL,
+                        ) as _degrade_span:
+                            _degrade_span.set_attribute("dispatch_count", 0)
+                            _degrade_span.set_attribute("degraded", True)
                         _dispatch_package = None
                         _bank_result = None
                     else:

@@ -299,6 +299,37 @@ async def test_intent_router_decompose_quiet_turn_empty_dispatch(
     assert pkg.cross_player == []
 
 
+@pytest.mark.asyncio
+async def test_intent_router_decompose_span_marks_degraded_false(
+    haiku_response_quiet_turn: dict, otel_capture
+) -> None:
+    """Story 71-29: the happy-path ``intent_router.decompose`` span carries
+    ``degraded=False``.
+
+    The degrade-path counterpart (in the websocket session handler) emits a
+    decompose span with ``degraded=True``; the GM panel reads this attribute to
+    distinguish a degraded turn from a real engagement. This pins the happy-path
+    value so the degrade marker is meaningful (and so a degrade assertion can
+    never be satisfied by a happy-path span)."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="I look around quietly.", state_summary={})
+
+    decompose_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.decompose"
+    ]
+    assert len(decompose_spans) == 1, (
+        f"expected exactly one intent_router.decompose span; got {len(decompose_spans)}"
+    )
+    attrs = dict(decompose_spans[0].attributes or {})
+    assert attrs.get("degraded") is False, (
+        f"happy-path decompose span must carry degraded=False; attrs={attrs}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC-4: Module docstring rewritten — DORMANT header REMOVED.
 # ---------------------------------------------------------------------------

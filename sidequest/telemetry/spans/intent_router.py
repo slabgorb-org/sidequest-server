@@ -53,6 +53,16 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_DECOMPOSE] = SpanRoute(
         "latency_ms": (span.attributes or {}).get("latency_ms", 0),
         "retry_count": (span.attributes or {}).get("retry_count", 0),
         "confidence_global": (span.attributes or {}).get("confidence_global", 0.0),
+        # Degrade-path marker (Story 71-29): True when this decompose span was
+        # emitted from the operator-opt-in degrade branch (decompose raised
+        # IntentRouterFailure and SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL let the
+        # turn continue with dispatch_package=None). The routed state_transition
+        # event reaches the live GM dashboard via WatcherSpanProcessor →
+        # hub.publish; without it the GM panel is blind on a degraded turn — it
+        # would see no intent_router.decompose event and could not tell a degraded
+        # turn from a turn where the spine never executed. (Span routing is a live
+        # hub broadcast, not a turn_telemetry write.)
+        "degraded": (span.attributes or {}).get("degraded", False),
     },
 )
 

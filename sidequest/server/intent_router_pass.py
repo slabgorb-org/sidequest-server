@@ -218,6 +218,43 @@ def _build_state_summary(
     return summary
 
 
+def _normalize_per_player_ids(
+    package: DispatchPackage, *, snapshot: GameSnapshot, player_name: str
+) -> None:
+    """Normalize each ``per_player`` entry's LLM-emitted ``player_id`` to the
+    real submitting seat id — Story 59-30 (Architect CRY-WOLF ruling).
+
+    The IntentRouter's ``per_player[].player_id`` is **purely LLM-emitted**:
+    ``decompose`` sees only ``(action, state_summary)`` and the model copies or
+    guesses a value with nothing constraining it. It is **unconsumed** on the
+    live bank/orchestrator path EXCEPT by the ``movement`` engagement witness,
+    which resolves ``player_id → character name`` via ``snapshot.player_seats``
+    to key its per-PC relocation read. An unresolvable id makes that witness
+    fire a ``dispatch_engagement.movement`` mismatch on **legitimately
+    relocated** moves — cry-wolf, strictly worse than no witness, poisoning the
+    GM-panel lie-detector.
+
+    The live decompose pass is **single-submitter**: ``player_name`` is THE
+    acting character (a ``player_seats`` *value*), so the submitting seat id is
+    the key mapping to it. ``prompt_redaction`` rebuilds ``PlayerDispatch`` via
+    ``model_copy`` and never branches on the value, so normalizing here flows
+    through cleanly.
+
+    No Silent Fallbacks: if ``player_name`` maps to no seat (pre-chargen
+    binding / solo with empty ``player_seats``) the LLM value is left untouched,
+    and the witness surfaces LOUD evidence downstream rather than guessing — the
+    genuine no-seat plumbing signal, NOT a relocation lie.
+    """
+    seat_id = next(
+        (pid for pid, name in snapshot.player_seats.items() if name == player_name),
+        None,
+    )
+    if seat_id is None:
+        return
+    for pd in package.per_player:
+        pd.player_id = seat_id
+
+
 async def execute_intent_router_pre_narrator_pass(
     *,
     intent_router: IntentRouter,
@@ -257,6 +294,12 @@ async def execute_intent_router_pre_narrator_pass(
         action=action,
         state_summary=state_summary,
     )
+
+    # Story 59-30 — normalize the LLM-emitted per_player player_id to the real
+    # submitting seat id BEFORE the gates/bank, so the normalized id rides into
+    # the package the caller assigns to ``turn_context.dispatch_package`` (the
+    # post-turn movement witness reads it). See ``_normalize_per_player_ids``.
+    _normalize_per_player_ids(package, snapshot=snapshot, player_name=player_name)
 
     # Classification-result observability (Plan 2b): only when the vocabulary
     # was surfaced this turn (a political world) — so the GM panel can see the
@@ -340,4 +383,4 @@ async def execute_intent_router_pre_narrator_pass(
     return package, bank_result
 
 
-__all__ = ["execute_intent_router_pre_narrator_pass"]
+__all__ = ["_normalize_per_player_ids", "execute_intent_router_pre_narrator_pass"]

@@ -208,8 +208,10 @@ class PgSaveRepository:
     # Location promotions
     # ------------------------------------------------------------------
 
-    def list_location_promotions(self, *, region_id: str) -> list[PgLocationPromotionRow]:
-        return self._promotions.list_location_promotions(region_id=region_id)
+    def list_location_promotions(
+        self, *, region_id: str | None = None, region_ids: list[str] | None = None
+    ) -> list[PgLocationPromotionRow]:
+        return self._promotions.list_location_promotions(region_id=region_id, region_ids=region_ids)
 
     def upsert_location_promotion(self, row: PgLocationPromotionRow) -> None:
         self._promotions.upsert_location_promotion(row)

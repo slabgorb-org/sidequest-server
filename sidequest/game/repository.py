@@ -148,7 +148,9 @@ class SaveRepository(Protocol):
     # Location promotions
     # ------------------------------------------------------------------
 
-    def list_location_promotions(self, *, region_id: str) -> list[PgLocationPromotionRow]: ...
+    def list_location_promotions(
+        self, *, region_id: str | None = None, region_ids: list[str] | None = None
+    ) -> list[PgLocationPromotionRow]: ...
 
     def upsert_location_promotion(self, row: PgLocationPromotionRow) -> None: ...
 

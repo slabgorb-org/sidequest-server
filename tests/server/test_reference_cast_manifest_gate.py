@@ -431,3 +431,84 @@ def test_absent_manifest_on_cast_world_returns_500(tmp_path: Path) -> None:
         f"same fixture + present manifest must render 200 — proving the 500 is "
         f"manifest-specific, not a broken fixture; got {resp_ok.status_code}: {resp_ok.text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Fix #4 — id-keyed gate end-to-end through assemble_lore_page
+# ---------------------------------------------------------------------------
+
+
+def _seed_id_keyed_cast_content_root(tmp_path: Path) -> tuple[Path, Path]:
+    """Content-root fixture (oz shape): a manifest entry with ``id`` (the slug-
+    shaped portrait key) distinct from ``name`` (the display heading), and the
+    id-derived R2 key present two levels up. Mirrors the chrome-wiring fixture's
+    pack-at-<root>/genre_packs layout so the gate's ``pack_dir.parent.parent /
+    r2_manifest.json`` discovery lands inside ``tmp_path``."""
+    from sidequest.server.reference_presenters import portrait_image_key
+
+    pack = "wry_whimsy"
+    world = "oz"
+    portrait_id = "witch_of_the_west"
+    display_name = "The Wicked Witch of the West"
+
+    pack_dir = tmp_path / "genre_packs" / pack
+    world_dir = pack_dir / "worlds" / world
+    world_dir.mkdir(parents=True)
+
+    (pack_dir / "theme.yaml").write_text(
+        "primary: '#5C7A4F'\n"
+        "accent: '#C9A96E'\n"
+        "background: '#F4EBDA'\n"
+        "archetype: parchment\n"
+        "web_font_family: Lora\n"
+        "display_font_family: Playfair Display\n"
+        "dinkus:\n"
+        "  glyph:\n"
+        "    light: '—'\n"
+        "    medium: '❧'\n"
+        "    heavy: '❧❧❧'\n"
+    )
+    (pack_dir / "rules.yaml").write_text("core: fairytale\n")
+    (world_dir / "world.yaml").write_text("name: Oz\n")
+    (world_dir / "lore.yaml").write_text("world_name: Oz\nepigraph: Pay no attention.\n")
+    (world_dir / "portrait_manifest.yaml").write_text(
+        "characters:\n"
+        f"  - id: {portrait_id}\n"
+        f"    name: {display_name}\n"
+        "    role: Tyrant of the Winkie Country\n"
+        "    appearance: A withered crone with one telescopic eye.\n"
+    )
+
+    manifest = [_entry(portrait_image_key(pack, world, portrait_id))]
+    (tmp_path / "r2_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return pack_dir, world_dir
+
+
+def test_id_keyed_cast_gate_resolves_portrait_and_heads_with_name(tmp_path: Path) -> None:
+    """Fix #4 end-to-end: with an ``id``-bearing entry, the R2-existence gate and
+    the per-card portrait key both derive from the ``id``, so the on-R2 portrait
+    resolves; the heading shows the display ``name`` (never the snake_case id).
+
+    If the gate still keyed on ``slugify(name)`` (= ``the_wicked_witch_of_the_west``)
+    it would NOT match the ``witch_of_the_west`` manifest key and the portrait
+    would be wrongly suppressed — so this proves gate/presenter agreement."""
+    from sidequest.server.reference_renderer import assemble_lore_page, load_r2_manifest_keys
+
+    load_r2_manifest_keys.cache_clear()
+    pack_dir, world_dir = _seed_id_keyed_cast_content_root(tmp_path)
+    html = assemble_lore_page("wry_whimsy", "oz", pack_dir, world_dir)
+
+    # Card anchored on the id; heading is the display name; id never the heading.
+    assert 'id="cast-witch_of_the_west"' in html
+    assert "The Wicked Witch of the West</h3>" in html
+    assert ">witch_of_the_west</h3>" not in html
+    # The on-R2 portrait resolved (gate agreed with the id-derived key).
+    expected = resolve_asset_url(portrait_key("wry_whimsy", "oz", "witch_of_the_west"))
+    assert f'src="{expected}"' in html
+
+
+def portrait_key(pack: str, world: str, slug: str) -> str:
+    """Local alias to keep the assertion above readable."""
+    from sidequest.server.reference_presenters import portrait_image_key
+
+    return portrait_image_key(pack, world, slug)

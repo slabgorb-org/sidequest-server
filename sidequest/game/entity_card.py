@@ -237,6 +237,7 @@ def project_location_card(
     location_id: str,
     name: str,
     description: str,
+    source: str | None = None,
     mechanical_properties: dict[str, str] | None = None,
     linked_npcs: list[str] | None = None,
 ) -> EntityCard:
@@ -244,9 +245,16 @@ def project_location_card(
 
     Locations are diffuse across the room graph, ``world_materialization``, and
     PG ``location_promotions`` (ADR-118 §D3 / §Consequences). The per-source
-    adaptation belongs to the 75-5 consumer; this projector takes the already-
-    normalized fields. A location with no projectable description fails loud —
-    no silent placeholder card.
+    adaptation belongs to the consumer (``dispatch.entity_sync``); this projector
+    takes the already-normalized fields. A location with no projectable
+    description fails loud — no silent placeholder card.
+
+    Story 76-7: ``source`` records WHICH diffuse source minted the card
+    (``"room_graph"`` / ``"world_materialization"`` / ``"promotion"``). It rides
+    in ``metadata["source"]`` — the existing card metadata channel, no new field
+    — so a promotion-sourced card is distinguishable from a room-graph one for
+    GM-panel forensics and tiered forgetting (ADR-118 amendment). The tag never
+    enters ``content``: provenance must not pollute the retrieval vector.
     """
     if not description.strip():
         raise ValueError("location description must not be blank or whitespace-only")
@@ -261,4 +269,5 @@ def project_location_card(
         location_id,
         content,
         entity_ref=location_id,
+        metadata={"source": source} if source is not None else None,
     )

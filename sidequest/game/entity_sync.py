@@ -24,14 +24,39 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from sidequest.game.entity_card import EntityCard, project_npc_card
+from sidequest.game.entity_card import (
+    EntityCard,
+    project_faction_card,
+    project_location_card,
+    project_npc_card,
+)
 from sidequest.game.entity_store import EntityStore
 from sidequest.game.npc_pool import is_projectable
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from sidequest.game.session import GameSnapshot
+    from sidequest.genre.models.lore import Faction
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LocationSyncView:
+    """A normalized, projectable view of one location (Story 76-7).
+
+    Locations are diffuse across the room graph, ``world_materialization``, and
+    PG ``location_promotions`` (ADR-118 §D3). The per-source adaptation lives in
+    the dispatch consumer (``dispatch.entity_sync``); ``sync_entity_cards`` takes
+    the already-normalized view so the pure sweep stays source-agnostic.
+    ``source`` is the provenance tag the projector records in card metadata.
+    """
+
+    location_id: str
+    name: str
+    description: str
+    source: str
 
 
 @dataclass
@@ -79,37 +104,60 @@ class EntitySyncResult:
         return "success"
 
 
-def _apply_npc_card(store: EntityStore, card: EntityCard, result: EntitySyncResult) -> None:
-    """Upsert one NPC card and update the reproject tallies. A content change
-    (or first insert) re-arms the card and counts a reproject; an unchanged card
-    is left untouched (embedding preserved)."""
+def _apply_typed_card(
+    store: EntityStore,
+    card: EntityCard,
+    result: EntitySyncResult,
+    count_field: str,
+) -> None:
+    """Upsert one card and update the reproject tallies + the per-type counter
+    named by ``count_field`` (``"npc_count"`` / ``"faction_count"`` /
+    ``"location_count"``). A content change (or first insert) re-arms the card
+    and counts a reproject; an unchanged card is left untouched (embedding
+    preserved). One helper for every type — the only per-type difference is
+    which honest counter advances."""
     if store.upsert(card):
         result.reprojected += 1
-        result.npc_count += 1
+        setattr(result, count_field, getattr(result, count_field) + 1)
         result.card_ids.append(card.id)
     else:
         result.unchanged += 1
 
 
-def sync_entity_cards(store: EntityStore, snapshot: GameSnapshot) -> EntitySyncResult:
-    """Project the snapshot's NPC cast into ``store``, upserting each card.
+def sync_entity_cards(
+    store: EntityStore,
+    snapshot: GameSnapshot,
+    *,
+    factions: Iterable[Faction] = (),
+    locations: Iterable[LocationSyncView] = (),
+) -> EntitySyncResult:
+    """Project the snapshot's cast — and (76-7) the bound world's factions and
+    the turn's locations — into ``store``, upserting each card.
 
-    Story 76-6: the cast is the union of two sources — the stateful
+    Story 76-6: the NPC cast is the union of two sources — the stateful
     ``snapshot.npcs`` (promoted / narrator-invented mechanical entities) and the
     identity-only ``snapshot.npc_pool``. A promoted ``Npc`` and the pool member
     it was promoted from share a card id (``npc:<slug>``); the **stateful entity
     takes precedence** (it carries the live mechanical state) and the pool member
     is skipped, so a promoted NPC is never double-indexed or double-counted.
 
+    Story 76-7: ``factions`` are the bound world's lore factions
+    (``World.lore.factions`` — world-tier flavor, SOUL "Crunch in the Genre,
+    Flavor in the World") and ``locations`` are pre-normalized
+    :class:`LocationSyncView`s the dispatch consumer assembled from the diffuse
+    location sources. Both are passed in (not read off the snapshot) because
+    neither lives on it. Per-type card ids are namespaced (``faction:``/``loc:``
+    vs ``npc:``) so they never collide in ``covered_ids``.
+
     Idempotent within a turn: an entity whose projected content matches the
     stored card is counted ``unchanged`` and left untouched (including its
     embedding). A content change (e.g. a disposition crossing an attitude band)
     replaces the stored card and re-arms it for re-embedding. An entity the
-    projector rejects (e.g. a blank-named pool member) is recorded in
-    ``failed_refs`` and counted — never minted as a stub card (No Silent
-    Fallbacks). A stateful ``Npc`` cannot be unprojectable: ``CreatureCore``
-    validates its name non-blank, so the projector's ``_slug`` guard never fires
-    for it.
+    projector rejects (e.g. a blank-named pool member, a description-less
+    location) is recorded in ``failed_refs`` and counted — never minted as a stub
+    card (No Silent Fallbacks). A stateful ``Npc`` cannot be unprojectable:
+    ``CreatureCore`` validates its name non-blank, so the projector's ``_slug``
+    guard never fires for it.
     """
     result = EntitySyncResult()
     covered_ids: set[str] = set()
@@ -131,7 +179,7 @@ def sync_entity_cards(store: EntityStore, snapshot: GameSnapshot) -> EntitySyncR
         covered_ids.add(card.id)
         if npc.pool_origin:
             covered_origins.add(npc.pool_origin)
-        _apply_npc_card(store, card, result)
+        _apply_typed_card(store, card, result, "npc_count")
 
     # Pool members second — skip any superseded by a stateful Npc (same card id,
     # or the pool member this Npc was promoted from).
@@ -164,5 +212,47 @@ def sync_entity_cards(store: EntityStore, snapshot: GameSnapshot) -> EntitySyncR
             continue
         if card.id in covered_ids or member.name in covered_origins:
             continue
-        _apply_npc_card(store, card, result)
+        _apply_typed_card(store, card, result, "npc_count")
+
+    # Factions (76-7) — the bound world's lore roster (world-tier flavor).
+    for faction in factions:
+        try:
+            card = project_faction_card(faction)
+        except (ValueError, ValidationError) as exc:
+            result.failed += 1
+            result.failed_refs.append(faction.name)
+            logger.warning(
+                "entity_sync.project_failed faction=%r error=%s",
+                faction.name,
+                exc,
+            )
+            continue
+        if card.id in covered_ids:
+            continue
+        covered_ids.add(card.id)
+        _apply_typed_card(store, card, result, "faction_count")
+
+    # Locations (76-7) — pre-normalized views from the diffuse sources.
+    for view in locations:
+        try:
+            card = project_location_card(
+                location_id=view.location_id,
+                name=view.name,
+                description=view.description,
+                source=view.source,
+            )
+        except (ValueError, ValidationError) as exc:
+            result.failed += 1
+            result.failed_refs.append(view.location_id)
+            logger.warning(
+                "entity_sync.project_failed location=%r error=%s",
+                view.location_id,
+                exc,
+            )
+            continue
+        if card.id in covered_ids:
+            continue
+        covered_ids.add(card.id)
+        _apply_typed_card(store, card, result, "location_count")
+
     return result

@@ -24,16 +24,73 @@ from sidequest.game.entity_card import (
     SPAN_CARD_REPROJECT_COUNT,
     SPAN_STALE_CARD_COUNT,
 )
-from sidequest.game.entity_sync import sync_entity_cards
+from sidequest.game.entity_sync import LocationSyncView, sync_entity_cards
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 if TYPE_CHECKING:
+    from sidequest.genre.models.lore import Faction
     from sidequest.server.websocket_session_handler import (
         WebSocketSessionHandler,
         _SessionData,
     )
 
 logger = logging.getLogger(__name__)
+
+
+def _collect_world_factions(sd: _SessionData) -> list[Faction]:
+    """The bound world's lore factions (Story 76-7) — world-tier flavor (SOUL
+    "Crunch in the Genre, Flavor in the World"; ADR-120). Sourced from
+    ``sd.genre_pack.worlds[sd.world_slug].lore.factions`` and nowhere else: with
+    no world bound (``world_slug == ""``) there is no world lore in scope, so
+    zero factions index — never a genre/global fallback (No Silent Fallbacks).
+    Defensive ``getattr`` reads keep an entity-sync sweep from crashing a turn on
+    a partially-built session."""
+    world_slug = getattr(sd, "world_slug", "") or ""
+    genre_pack = getattr(sd, "genre_pack", None)
+    if not world_slug or genre_pack is None:
+        return []
+    world = genre_pack.worlds.get(world_slug)
+    if world is None:
+        return []
+    lore = getattr(world, "lore", None)
+    return list(getattr(lore, "factions", None) or [])
+
+
+def _collect_location_views(sd: _SessionData) -> list[LocationSyncView]:
+    """Normalized location views for this turn (Story 76-7).
+
+    Locations are diffuse across three sources (ADR-118 §D3). **v1 covers PG
+    ``location_promotions``** — the persisted, description-bearing Yes-And
+    locations, reachable via ``sd.repository.list_location_promotions`` per
+    discovered region. Room-graph rooms (``RoomState`` carries no prose) and
+    ``world_materialization`` outputs need the ``location_view`` authored-prose
+    resolution path and are deferred to a follow-up (see Dev deviation /
+    Delivery Finding). A promotion with no ``promoted_canon`` prose is skipped,
+    never minted as a stub card (No Silent Fallbacks). Collection never crashes a
+    turn: missing repository / region read errors degrade to an empty list."""
+    repository = getattr(sd, "repository", None)
+    if repository is None:
+        return []
+    regions = getattr(sd.snapshot, "discovered_regions", None) or []
+    views: list[LocationSyncView] = []
+    for region_id in regions:
+        try:
+            rows = repository.list_location_promotions(region_id=region_id)
+        except Exception:  # noqa: BLE001 — a bad region read must not cost the turn
+            logger.exception("entity_sync.location_read_failed region=%s", region_id)
+            continue
+        for row in rows or []:
+            if not (row.promoted_canon or "").strip():
+                continue  # no projectable prose — skip, do not stub
+            views.append(
+                LocationSyncView(
+                    location_id=row.entity_id,
+                    name=row.label,
+                    description=row.promoted_canon,
+                    source="promotion",
+                )
+            )
+    return views
 
 
 def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
@@ -48,7 +105,11 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
     interaction = snapshot.turn_manager.interaction
 
     try:
-        result = sync_entity_cards(sd.entity_store, snapshot)
+        factions = _collect_world_factions(sd)
+        locations = _collect_location_views(sd)
+        result = sync_entity_cards(
+            sd.entity_store, snapshot, factions=factions, locations=locations
+        )
     except Exception as exc:  # noqa: BLE001 — sync must never crash a turn
         logger.exception("entity_sync.sweep_failed")
         _watcher_publish(
@@ -89,6 +150,8 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
             "failed": result.failed,
             "skipped_unratified": result.skipped_unratified,
             "npc_count": result.npc_count,
+            "faction_count": result.faction_count,
+            "location_count": result.location_count,
             "outcome": result.outcome,
             "turn_number": interaction,
         },

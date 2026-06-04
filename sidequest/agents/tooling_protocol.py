@@ -104,7 +104,7 @@ class ToolingLlmClient(Protocol):
         model: str,
         max_iterations: int = 8,
         max_tokens: int = 4096,
-        on_text_delta: Callable[[str], None] | None = None,
+        on_text_delta: Callable[[str], Awaitable[None] | None] | None = None,
         session_id: str | None = None,
     ) -> ToolingResult:
         """Drive one narrator turn through the tool-use loop.

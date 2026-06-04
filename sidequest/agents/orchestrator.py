@@ -123,6 +123,26 @@ def _content_digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
 
 
+def _room_is_solo(room: object) -> bool:
+    """Story 71-23: is this a solo session (<= 1 connected player)?
+
+    The room arrives typed as ``object`` (agents must not import the server's
+    SessionRoom — that would invert the layer dependency), so duck-type the
+    ``connected_player_ids()`` accessor. Returns True only when the room
+    affirmatively reports <= 1 connected player; if the count cannot be
+    determined, returns False so the SOLO-only delta-streaming gate fails
+    CLOSED (no raw fan-out into a possibly-multiplayer room — the safe default
+    for an ADR-104/105 firewall boundary, not a silent fallback that masks
+    config).
+    """
+    accessor = getattr(room, "connected_player_ids", None)
+    if not callable(accessor):
+        return False
+    ids = accessor()
+    # connected_player_ids() returns a list[str]; anything else → fail closed.
+    return isinstance(ids, list) and len(ids) <= 1
+
+
 def _section_rides_cache(name: str, zone_value: str) -> bool:
     """True iff a section's content lands in the cached ``system_blocks[0]``.
 
@@ -2886,16 +2906,19 @@ class Orchestrator:
         # Phase D Task 1: when the configured client is a tooling-capable
         # LLM (AnthropicSdkClient — the ADR-101 default), route through
         # complete_with_tools so the 26-tool registry is exposed to the
-        # model. This check MUST take precedence over the streaming flag:
-        # SDK streaming is Phase D Task 7 and is NOT yet implemented, and
-        # _run_narration_turn_streaming asserts the client is not a
-        # ToolingLlmClient. Letting SIDEQUEST_NARRATOR_STREAMING=1 win here
-        # routed the default backend into the streaming path and crashed
-        # every turn with AssertionError. The tooling client always takes
-        # the SDK path until Task 7 lands; streaming remains for non-tooling
-        # clients (claude -p ClaudeClient) only.
+        # model. This check MUST take precedence over the SIDEQUEST_NARRATOR_
+        # STREAMING flag: the legacy _run_narration_turn_streaming path is
+        # claude -p only and asserts the client is NOT a ToolingLlmClient, so
+        # letting the flag win here routed the default backend into it and
+        # crashed every turn with AssertionError. The tooling client always
+        # takes the SDK path; the flag-gated streaming path remains for
+        # non-tooling clients (claude -p ClaudeClient) only.
+        #
+        # Story 71-23: the SDK path now streams prose deltas natively (no flag)
+        # — _run_narration_turn_sdk fans NarrationDelta out via broadcast_delta
+        # when a live ``room`` is threaded through. ``room`` flows in below.
         if isinstance(self._client, ToolingLlmClient):
-            return await self._run_narration_turn_sdk(action, context)
+            return await self._run_narration_turn_sdk(action, context, room=room)
         if is_streaming_enabled():
             return await self._run_narration_turn_streaming(action, context, room=room)
         return await self._run_narration_turn_synchronous(action, context)
@@ -3733,6 +3756,8 @@ class Orchestrator:
         self,
         action: str,
         context: TurnContext,
+        *,
+        room: object | None = None,
     ) -> NarrationTurnResult:
         """SDK-backed narration path (Phase D Task 1).
 
@@ -3741,6 +3766,15 @@ class Orchestrator:
         ``complete_with_tools`` with the full 26-tool registry. The call is
         wrapped in a ``narration.turn`` cost-rollup span so the GM panel sees
         token totals, tool-call count, and model choice for the turn.
+
+        Story 71-23 (solo narration streaming): when ``room`` is provided, an
+        ``on_text_delta`` sink fans each streamed prose chunk out to the room as
+        an ephemeral ``NarrationDelta`` via ``broadcast_delta`` (stamped with
+        ``turn_id = str(turn_number)`` + a monotonic seq), so the player sees
+        prose fill in token-by-token before the canonical narration lands. The
+        ``narration.turn`` span carries ``delta_count`` so the GM panel can
+        confirm streaming engaged. ``room=None`` (no live session) skips fan-out
+        entirely — byte-identical to the pre-71-23 non-streaming path.
 
         Sidecar parsing (ADR-039) still runs against the resulting prose via
         ``_assemble_turn_result_sdk`` — but the hybrid split (Task E1.5-B)
@@ -3994,6 +4028,57 @@ class Orchestrator:
                 async def dispatch(block: ToolUseBlock) -> ToolResultBlock:
                     return await default_registry.dispatch(block, tool_ctx)
 
+                # Story 71-23: solo narration streaming. When a live SOLO room is
+                # present, fan each streamed prose chunk out as an ephemeral
+                # NarrationDelta so the player sees prose fill token-by-token
+                # before the canonical narration lands. turn_id mirrors the
+                # claude -p streaming path (str(turn_number)) so the UI reducer
+                # — which routes deltas by turn_id and the canonical NARRATION
+                # carries none — correlates them.
+                #
+                # SOLO-ONLY GATE (Reviewer F1): raw deltas are unfiltered,
+                # non-POV-swapped prose. The canonical path
+                # (websocket_session_handler.py: merged-MP author threading)
+                # treats this raw fan-out as a firewall+POV breach for
+                # ``len(connected) > 1`` and routes MP through projection +
+                # per-recipient POV-swap instead. Per-recipient MP delta
+                # streaming is out of scope (this story is solo). So stream ONLY
+                # when the room reports <= 1 connected player. room=None (no live
+                # session) also skips fan-out — byte-identical to pre-71-23.
+                import uuid
+
+                from sidequest.server.emitters import broadcast_delta
+
+                turn_id: str = (
+                    str(context.turn_number) if context.turn_number else str(uuid.uuid4())
+                )
+                seq = 0
+                delta_count = 0
+                stream_solo = room is not None and _room_is_solo(room)
+
+                async def _emit_delta(chunk: str) -> None:
+                    nonlocal seq, delta_count
+                    # Advance seq per attempt so ordering stays monotonic even if
+                    # a broadcast fails.
+                    current_seq = seq
+                    seq += 1
+                    try:
+                        await broadcast_delta(
+                            turn_id=turn_id, chunk=chunk, seq=current_seq, room=room
+                        )
+                    except Exception:
+                        # Reviewer F2: a dead / mid-detach socket (or any room-API
+                        # failure) must NOT abort the narrator turn. Log loud and
+                        # continue — the canonical NARRATION still lands.
+                        logger.warning(
+                            "sdk_stream.delta_broadcast_failed turn_id=%s seq=%d",
+                            turn_id,
+                            current_seq,
+                            exc_info=True,
+                        )
+                        return
+                    delta_count += 1
+
                 result = await self._client.complete_with_tools(
                     system_blocks=system_blocks,
                     messages=messages,
@@ -4007,7 +4092,15 @@ class Orchestrator:
                     # tracker cleanly; do NOT substitute the "adhoc"
                     # sentinel here.
                     session_id=context.session_id,
+                    # Story 71-23 — delta sink; wired ONLY for a live solo room
+                    # (None otherwise → SDK client takes the non-streaming path,
+                    # AC2 byte-identical; MP is handled by the canonical path).
+                    on_text_delta=_emit_delta if stream_solo else None,
                 )
+
+                # Story 71-23 — GM-panel lie-detector signal: how many prose
+                # deltas actually fanned out this turn (0 when room=None).
+                span.set_attribute("narration.turn.delta_count", delta_count)
 
                 # Cost-rollup attributes — names per cost.py docstring.
                 span.set_attribute("narration.turn.model_chosen", result.model)

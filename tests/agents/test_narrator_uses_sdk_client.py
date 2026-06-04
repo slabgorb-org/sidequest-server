@@ -256,7 +256,14 @@ async def test_tooling_client_takes_sdk_path_even_when_streaming_enabled(
 
     routed: list[str] = []
 
-    async def _spy_sdk(self: Orchestrator, action: str, context: TurnContext) -> str:
+    async def _spy_sdk(
+        self: Orchestrator,
+        action: str,
+        context: TurnContext,
+        *,
+        room: object | None = None,
+    ) -> str:
+        # Story 71-23: _run_narration_turn_sdk now accepts room for delta fan-out.
         routed.append("sdk")
         return "sentinel-sdk-result"
 

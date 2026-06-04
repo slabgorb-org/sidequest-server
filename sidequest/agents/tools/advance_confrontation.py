@@ -152,6 +152,25 @@ async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext
             recoverable=False,
         )
 
+    # Zombie-dial guard (road_warrior chase bug symptom #2, playtest 2026-06-04).
+    # A RESOLVED encounter's dial must never be silently nudged. The narrator kept
+    # calling advance_confrontation on an abandoned (resolved) chase, creeping the
+    # separation dial with zero mechanical backing — the exact "convincing
+    # narration, no engine" lie the OTEL principle exists to catch. Refuse loudly
+    # (recoverable: the turn proceeds on prose; the dead dial just doesn't move)
+    # and surface the refusal on the GM panel (No Silent Fallbacks).
+    if encounter.resolved:
+        ctx.otel_span.set_attribute("tool.confrontation.refused_resolved", True)
+        ctx.otel_span.set_attribute("tool.confrontation.encounter_type", encounter.encounter_type)
+        ctx.otel_span.set_attribute("tool.confrontation.outcome", encounter.outcome or "")
+        return ToolResult.error(
+            f"encounter {encounter.encounter_type!r} is already resolved "
+            f"(outcome={encounter.outcome!r}) — cannot advance a resolved "
+            "confrontation's dial. A resolved encounter is over; its dial is "
+            "frozen. If a new confrontation is starting, trigger it instead.",
+            recoverable=True,
+        )
+
     metric = encounter.player_metric if args.axis == "player" else encounter.opponent_metric
     value_before = metric.current
     metric.current = value_before + args.delta

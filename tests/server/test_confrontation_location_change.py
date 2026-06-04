@@ -113,6 +113,154 @@ def test_location_change_resolves_active_encounter_as_abandoned(
     assert snap.encounter.encounter_type == "negotiation"
 
 
+def _attach_active_chase(
+    snapshot, *, separation: int = 3, threshold: int = 7
+) -> StructuredEncounter:
+    """A road_warrior-style chase: category='movement', dial below threshold.
+
+    A chase is intrinsically continuous movement — the narrator advances the
+    scene location every turn (Kanjō Loop → Dunkelkurve → ...). The mobile
+    category is the discriminator the location-change handler uses to CONTINUE
+    the chase instead of abandoning it.
+    """
+    encounter = StructuredEncounter(
+        encounter_type="chase",
+        category="movement",
+        win_condition="dial_threshold",
+        player_metric=EncounterMetric(
+            name="separation", current=separation, starting=0, threshold=threshold
+        ),
+        opponent_metric=EncounterMetric(name="pursuit", current=0, starting=0, threshold=threshold),
+        actors=[
+            EncounterActor(name="Linus", role="driver", side="player"),
+            EncounterActor(
+                name="Bōsōzoku formation riders", role="pursuer", side="opponent"
+            ),
+        ],
+    )
+    snapshot.encounter = encounter
+    return encounter
+
+
+def test_mobile_chase_continues_below_threshold_across_location_change(
+    snapshot_with_pack,
+    character_named_sam,
+):
+    """road_warrior chase bug (DRIVER 2026-06-04). A chase (category=movement)
+    MOVES with the party — the narrator advances the scene location every turn
+    by design. A scene/location change must CONTINUE the chase, never abandon
+    it. Pre-fix the chase was flagged abandoned_on_location_change on its first
+    scene move, going invisible to the narrator (no beats offered) — the genre's
+    signature subsystem never mechanically fired.
+    """
+    snap, pack = snapshot_with_pack
+    snap.character_locations["Linus"] = "Kanjō Loop — Kannai Onramp"
+    snap.characters.append(character_named_sam)
+    encounter = _attach_active_chase(snap, separation=3)
+    assert encounter.resolved is False
+
+    result = NarrationTurnResult(
+        narration="Hornet threads the gap and drops into the tunnel mouth.",
+        location="Dunkelkurve — Inside the Tunnel",
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        player_name="Linus",
+        room=room_for(snapshot=snap),
+    )
+
+    assert snap.encounter is encounter
+    assert snap.encounter.resolved is False, (
+        "a chase (category=movement) below threshold MUST continue active "
+        "across a scene/location change — it moves WITH the party; abandoning "
+        "it on every scene move makes the chase structurally un-runnable "
+        f"(got resolved={snap.encounter.resolved}, outcome={snap.encounter.outcome!r})"
+    )
+    assert snap.encounter.outcome is None
+    assert snap.encounter.player_metric.current == 3, "dial preserved across the move"
+
+
+def test_mobile_escape_continues_below_threshold_across_location_change(
+    snapshot_with_pack,
+    character_named_sam,
+):
+    """The escape confrontation is also category=movement; same mobility rule.
+    A mid-race escape that moves to a new scene continues (you're still
+    fleeing) — it does not abandon. (Reaching threshold still resolves as
+    victory — see the won-escape test.)
+    """
+    snap, pack = snapshot_with_pack
+    snap.character_locations["Linus"] = "The Yellow Brick Road — The Poppy Field"
+    snap.characters.append(character_named_sam)
+    encounter = StructuredEncounter(
+        encounter_type="escape",
+        category="movement",
+        win_condition="dial_threshold",
+        player_metric=EncounterMetric(name="distance", current=3, starting=0, threshold=8),
+        opponent_metric=EncounterMetric(name="pursuit", current=1, starting=0, threshold=8),
+        actors=[
+            EncounterActor(name="Linus", role="protagonist", side="player"),
+            EncounterActor(name="The Poppy Field", role="pursuer", side="opponent"),
+        ],
+    )
+    snap.encounter = encounter
+
+    result = NarrationTurnResult(
+        narration="Linus stumbles onward, poppies still grasping.",
+        location="The Yellow Brick Road — A Forgotten Lane",
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        player_name="Linus",
+        room=room_for(snapshot=snap),
+    )
+
+    assert snap.encounter is encounter
+    assert snap.encounter.resolved is False, (
+        "a mid-race escape (movement) continues across a scene change — "
+        f"got resolved={snap.encounter.resolved}, outcome={snap.encounter.outcome!r}"
+    )
+    assert snap.encounter.outcome is None
+
+
+def test_mobile_chase_at_threshold_resolves_as_victory_not_continue(
+    snapshot_with_pack,
+    character_named_sam,
+):
+    """A chase whose player dial has REACHED threshold (separation 7/7) at the
+    moment of a location change is a WIN (the player broke away) — the
+    dial-threshold victory branch fires BEFORE the mobile-continue branch.
+    The mobile exemption must not swallow a met-threshold victory.
+    """
+    snap, pack = snapshot_with_pack
+    snap.character_locations["Linus"] = "Kanjō Loop — Kannai Onramp"
+    snap.characters.append(character_named_sam)
+    encounter = _attach_active_chase(snap, separation=7, threshold=7)
+
+    result = NarrationTurnResult(
+        narration="The pursuit dwindles to a smear of headlights in the mirror.",
+        location="Dunkelkurve — Beyond the Tunnel",
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        player_name="Linus",
+        room=room_for(snapshot=snap),
+    )
+
+    assert snap.encounter is encounter
+    assert snap.encounter.resolved is True
+    assert snap.encounter.outcome == "player_victory", (
+        "a chase at separation threshold (7/7) at a location change is a WIN, "
+        f"not a continue and not an abandon; got outcome={snap.encounter.outcome!r}"
+    )
+
+
 def _attach_won_escape(snapshot) -> StructuredEncounter:
     """A dial_threshold escape whose PLAYER dial has already reached threshold
     (8/8) but which a non-beat momentum path left unresolved (sq-playtest

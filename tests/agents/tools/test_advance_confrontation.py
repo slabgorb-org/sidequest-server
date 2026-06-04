@@ -244,6 +244,39 @@ async def test_advance_opponent_axis_negative_delta() -> None:
     assert reloaded.snapshot.encounter.opponent_metric.current == 3
 
 
+async def test_advance_confrontation_refuses_resolved_encounter() -> None:
+    """road_warrior chase bug symptom #2 (DRIVER 2026-06-04): the narrator kept
+    calling advance_confrontation on an ABANDONED (resolved) chase, creeping the
+    separation dial 0→2→5 with zero mechanical backing — the exact 'convincing
+    narration, no engine' lie the OTEL principle exists to catch. The tool must
+    refuse to mutate a resolved encounter: fail loud (recoverable), leave the
+    dial untouched, and emit tool.confrontation.refused_resolved so the GM panel
+    sees the refusal (No Silent Fallbacks).
+    """
+    enc = _encounter(player_current=2)
+    enc.resolved = True
+    enc.outcome = "abandoned_on_location_change"
+    snap = _build_snapshot(characters=[_character("Alice")], encounter=enc)
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call({"axis": "player", "delta": 3}, ctx)
+    assert r.status is ToolResultStatus.ERROR_RECOVERABLE, (
+        "advancing a resolved encounter's dial must fail loud (recoverable), "
+        f"got status={r.status}"
+    )
+    # The zombie dial must NOT move.
+    assert snap.encounter is not None
+    assert snap.encounter.player_metric.current == 2, (
+        "a resolved encounter's dial must stay frozen — the refused nudge "
+        f"silently moved it to {snap.encounter.player_metric.current}"
+    )
+    attrs = _otel_attrs(ctx)
+    assert attrs.get("tool.confrontation.refused_resolved") is True, (
+        "the GM panel must see the refusal via tool.confrontation.refused_resolved"
+    )
+
+
 async def test_confrontation_id_default_recorded_in_otel() -> None:
     """``confrontation_id=""`` is the default and is forwarded to OTEL."""
     snap = _build_snapshot(

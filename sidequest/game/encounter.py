@@ -154,6 +154,15 @@ class StructuredEncounter(BaseModel):
     # at init (encounter_lifecycle). String-literal (NOT the WinCondition enum) to avoid a
     # game->genre.models import cycle; the Literal still rejects typos at validation time.
     win_condition: Literal["dial_threshold", "hp_depletion", "table_showdown"] = "dial_threshold"
+    # Confrontation category ("combat" | "social" | "movement" | "hacking" | ...),
+    # stamped from ConfrontationDef.category at init (encounter_lifecycle), sibling
+    # to win_condition. Lets the engine answer "is this confrontation MOBILE?" — a
+    # chase/escape (category="movement") moves WITH the party, so a scene/location
+    # change CONTINUES it rather than abandoning it — without re-threading the
+    # GenrePack into narration_apply. Empty string for legacy saves predating this
+    # field and direct-construction tests that don't set it; callers that need the
+    # category for those fall back to a pack lookup (narration_apply._encounter_is_mobile).
+    category: str = ""
     # Free-for-all N-seat table (poker / auction). None for every non-table
     # confrontation — the dual dials go unused for table types; the resolver
     # reads table_state, not the metrics. See

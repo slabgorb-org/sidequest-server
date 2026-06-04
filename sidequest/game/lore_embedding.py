@@ -409,7 +409,12 @@ async def retrieve_lore_context(
                     "tokens_used": 0,
                     "min_similarity": float(min_similarity),
                     "outcome": "degenerate_embedding",
-                    "peak_similarity": 0.0,
+                    # Story 75-15 rework rt2 (Reviewer [EDGE]): None, not a
+                    # fabricated 0.0 — the magnitude guard fires before any cosine
+                    # is computed, so there is no measured peak. Matches the
+                    # empty-store branch; lets the panel tell "degenerate, nothing
+                    # computed" from "best candidate scored exactly 0.0".
+                    "peak_similarity": None,
                     "embedding_model": embedding_model,
                     "context_hint": (
                         query_text[:80] + "…" if len(query_text) > 80 else query_text

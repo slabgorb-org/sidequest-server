@@ -376,3 +376,151 @@ async def test_disconnect_persists_lore_fragments(tmp_path: Path) -> None:
     assert _INJECT_ID in ids, (
         f"cleanup()/disconnect must persist the in-memory lore_store; rows: {sorted(ids)}"
     )
+
+
+# ===========================================================================
+# REWORK round-trip 2 (Reviewer [TEST] findings) — the isolation/degradation
+# fixes are correct in production, but the OTEL emits and the disconnect
+# invariant that PROVE them are not test-locked. Per the OTEL Observability
+# Principle ("the GM panel is the lie detector") and the repo's "No Source-Text
+# Wiring Tests" doctrine (OTEL-event assertions are the prescribed way to lock
+# subsystem-decision paths against regression), pin the watcher emits + invariant
+# so a dropped `_watcher_publish` or a refactor can't silently re-blind the panel
+# to the gulliver lore-starve failure mode. These are regression guards — GREEN
+# against the verified-correct rt1 production code.
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_turn_lore_persist_failure_emits_watcher_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[HIGH] Isolating the lore failure is only half the contract — the GM panel
+    must SEE it. When `save_lore_fragments` raises mid-turn, production MUST emit a
+    `lore_persist_failed` watcher event with scope="turn". The sibling isolation
+    test proves the narrative survives; this pins the emit so a dropped
+    `_watcher_publish` (the lie-detector for silent lore loss) can't pass CI quietly.
+    """
+    import sidequest.server.websocket_session_handler as wsh
+
+    slug = "lore-persist-event-turn"
+    _seed_with_character(slug)
+    handler = _make_handler(tmp_path, "sock-a")
+
+    captured: list[tuple[str, dict]] = []
+
+    def _capture(event_type, fields, **kwargs):  # noqa: ANN001
+        captured.append((event_type, dict(fields)))
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("simulated lore-persist failure")
+
+    with patch(
+        "sidequest.agents.orchestrator.Orchestrator.run_narration_turn",
+        new=AsyncMock(return_value=_fake_narration()),
+    ):
+        await handler.handle_message(_connect_msg(slug))
+        sd = handler._session_data  # type: ignore[attr-defined]
+        assert sd is not None
+        monkeypatch.setattr(sd.repository, "save_lore_fragments", _boom)
+        # Patch the bound name in the consuming module (wsh emits via the
+        # module-global `_watcher_publish` at the turn-path except). Patch AFTER
+        # connect so connect's own events are out of scope.
+        monkeypatch.setattr(wsh, "_watcher_publish", _capture)
+        await handler.handle_message(_action_msg())
+
+    persist_failed = [f for et, f in captured if et == "lore_persist_failed"]
+    assert persist_failed, (
+        "a mid-turn lore-persist failure MUST emit a lore_persist_failed watcher "
+        f"event (GM-panel lie-detector); captured: {[et for et, _ in captured]}"
+    )
+    scopes = {f.get("scope") for f in persist_failed}
+    assert "turn" in scopes, (
+        f"the turn-path lore_persist_failed event must carry scope='turn'; got {scopes}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_lore_load_failure_emits_rehydrate_failed_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[HIGH] The graceful-degradation test proves the player isn't dropped — but
+    the panel must also SEE the degradation. When `load_lore_fragments` raises on
+    resume, connect.py MUST emit a `lore_rehydrate_failed` watcher event so a
+    silently-degraded resume (the gulliver starve failure mode) is visible. Pins
+    the emit against regression.
+    """
+    import sidequest.handlers.connect as connect_mod
+
+    slug = "lore-rehydrate-event"
+    _seed_with_character(slug)
+
+    def _boom(self):  # noqa: ANN001
+        raise RuntimeError("simulated lore-load failure")
+
+    monkeypatch.setattr(
+        "sidequest.game.pg.save_repository.PgSaveRepository.load_lore_fragments",
+        _boom,
+    )
+
+    captured: list[tuple[str, dict]] = []
+
+    def _capture(event_type, fields, **kwargs):  # noqa: ANN001
+        captured.append((event_type, dict(fields)))
+
+    # connect.py binds publish_event as the module-level name `_watcher_publish`;
+    # patch the bound name in the consuming module (per the sibling telemetry test).
+    monkeypatch.setattr(connect_mod, "_watcher_publish", _capture)
+
+    handler = _make_handler(tmp_path, "sock-b")
+    with patch(
+        "sidequest.agents.orchestrator.Orchestrator.run_narration_turn",
+        new=AsyncMock(return_value=_fake_narration()),
+    ):
+        await handler.handle_message(_connect_msg(slug))
+
+    rehydrate_failed = [f for et, f in captured if et == "lore_rehydrate_failed"]
+    assert rehydrate_failed, (
+        "a resume lore-load failure MUST emit a lore_rehydrate_failed watcher event "
+        f"so the panel sees the degraded resume; captured: {[et for et, _ in captured]}"
+    )
+    assert rehydrate_failed[0].get("slug") == slug, (
+        "the rehydrate-failed event must carry the slug for GM-panel correlation; "
+        f"got {rehydrate_failed[0].get('slug')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_disconnect_lore_failure_does_not_set_last_save_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[HIGH] The disconnect-isolation invariant — "a lore-only failure must NOT
+    set last_save_failure" — gates close_store() on the canonical snapshot save.
+    It is documented only in a production comment and pinned by no test. Pin it:
+    when only the lore write fails on disconnect, the canonical snapshot save still
+    succeeded, so `last_save_failure` must stay None (else ws_endpoint would skip
+    close_store on a benign lore hiccup, losing the clean-close guarantee).
+    """
+    slug = "lore-disconnect-isolation"
+    _seed_with_character(slug)
+    handler = _make_handler(tmp_path, "sock-a")
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("simulated disconnect lore-persist failure")
+
+    with patch(
+        "sidequest.agents.orchestrator.Orchestrator.run_narration_turn",
+        new=AsyncMock(return_value=_fake_narration()),
+    ):
+        await handler.handle_message(_connect_msg(slug))
+        _inject(handler, _creation_fragment())
+        sd = handler._session_data  # type: ignore[attr-defined]
+        assert sd is not None
+        # Only the lore write fails; the canonical snapshot save still succeeds.
+        monkeypatch.setattr(sd.repository, "save_lore_fragments", _boom)
+        await handler.cleanup()
+
+    assert handler.last_save_failure is None, (
+        "a lore-only disconnect failure must NOT set last_save_failure (it gates "
+        f"close_store on the canonical snapshot save); got {handler.last_save_failure!r}"
+    )

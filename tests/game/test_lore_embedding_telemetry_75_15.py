@@ -263,6 +263,43 @@ async def test_retrieve_flags_degenerate_zero_magnitude_embedding(
     )
 
 
+@pytest.mark.asyncio
+async def test_degenerate_embedding_reports_peak_similarity_none(
+    captured_events: list[tuple[str, dict]],
+) -> None:
+    """REWORK rt2 (Reviewer [EDGE]): the degenerate-embedding branch must report
+    ``peak_similarity=None``, not a fabricated ``0.0``.
+
+    No cosine is ever computed for a degenerate query embedding — the magnitude
+    guard fires before any similarity math — so emitting ``0.0`` invents a number
+    the engine never measured and makes "degenerate, nothing computed"
+    indistinguishable on the panel from "best candidate scored exactly 0.0". The
+    empty-store branch correctly uses ``None``; the degenerate branch must match
+    (AC5 panel-diagnosability).
+
+    Pre-rework: the degenerate branch hard-codes ``"peak_similarity": 0.0``.
+    """
+    store = LoreStore()
+    store.add(_embedded_frag("frag_any", [1.0, 0.0]))
+    fake = _FakeClient(embedding=[0.0, 0.0], model="hash-fallback")
+
+    result = await retrieve_lore_context(store, "a real query", client=fake)
+    assert result is None
+
+    events = _lore_events(captured_events)
+    degenerate = [
+        f
+        for f in events
+        if f.get("outcome") in {"degenerate_embedding", "zero_magnitude_embedding"}
+    ]
+    assert degenerate, "degenerate-embedding retrieval must emit a degenerate-outcome event"
+    assert degenerate[-1].get("peak_similarity") is None, (
+        "the degenerate-embedding event must report peak_similarity=None (no cosine "
+        "was computed for a degenerate query) — not a fabricated 0.0; got "
+        f"{degenerate[-1].get('peak_similarity')!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC2 — the embed worker telemetry must also surface the model name.
 # ---------------------------------------------------------------------------

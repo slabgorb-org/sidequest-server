@@ -130,6 +130,18 @@ def test_apply_world_patch_dedup_appends_anchors_preserving_spine() -> None:
     assert snap.quest_anchors == ["deep_root", "far"]
 
 
+def test_apply_world_patch_union_is_the_exact_critical_scenario() -> None:
+    """AC2 (SM final spec, the named critical assertion): snapshot already has
+    [A, B]; patch carries [B, C]; after apply snapshot == [A, B, C].
+
+    No clobber (A survives), no duplicate (B not re-added), append-in-order
+    (C lands last). A REPLACE would silently wipe A — this asserts it does NOT.
+    """
+    snap = GameSnapshot(quest_anchors=["A", "B"])
+    snap.apply_world_patch(WorldStatePatch(quest_anchors=["B", "C"]))
+    assert snap.quest_anchors == ["A", "B", "C"]
+
+
 def test_apply_world_patch_empty_list_is_noop_union() -> None:
     """AC2 (Neo ruling): there is no 'clear' semantic. An empty patch list
     unions to nothing-new, leaving the seeded spine intact — never wiped."""

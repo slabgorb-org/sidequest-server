@@ -44,6 +44,7 @@ from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
+from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.spans.intent_router import (
     intent_router_confrontation_vocabulary_span,
     intent_router_witnessed_act_classified_span,
@@ -266,6 +267,7 @@ async def execute_intent_router_pre_narrator_pass(
     dungeon_store: Any | None = None,
     palette: Any | None = None,
     lookahead_handle: Any | None = None,
+    phase_timings: PhaseTimings | None = None,
 ) -> tuple[DispatchPackage, BankResult]:
     """Run the IntentRouter and dispatch bank pre-narrator.
 
@@ -288,88 +290,99 @@ async def execute_intent_router_pre_narrator_pass(
     subsystem regression does not break the turn, but the watcher
     (Story 59-3) catches the resulting dispatch-without-engagement
     mismatch on the post-turn snapshot.
+
+    ``phase_timings`` (Bug B fix): when supplied, the entire router +
+    dispatch-bank call is wrapped in a ``timings.phase("intent_router_pass")``
+    context so the Timeline pipeline has a named intent_router stage between
+    the barrier-wait and the narrator phases. The caller (websocket_session_handler)
+    passes ``turn_context.phase_timings`` here; test callers pass a fresh
+    ``PhaseTimings`` instance to assert the phase was recorded.
     """
-    state_summary = _build_state_summary(snapshot, pack=pack)
-    package = await intent_router.decompose(
-        action=action,
-        state_summary=state_summary,
-    )
+    _timings = phase_timings if phase_timings is not None else PhaseTimings.NULL
+    with _timings.phase("intent_router_pass"):
+        state_summary = _build_state_summary(snapshot, pack=pack)
+        package = await intent_router.decompose(
+            action=action,
+            state_summary=state_summary,
+        )
 
-    # Story 59-30 — normalize the LLM-emitted per_player player_id to the real
-    # submitting seat id BEFORE the gates/bank, so the normalized id rides into
-    # the package the caller assigns to ``turn_context.dispatch_package`` (the
-    # post-turn movement witness reads it). See ``_normalize_per_player_ids``.
-    _normalize_per_player_ids(package, snapshot=snapshot, player_name=player_name)
+        # Story 59-30 — normalize the LLM-emitted per_player player_id to the real
+        # submitting seat id BEFORE the gates/bank, so the normalized id rides into
+        # the package the caller assigns to ``turn_context.dispatch_package`` (the
+        # post-turn movement witness reads it). See ``_normalize_per_player_ids``.
+        # Sits inside the measured ``intent_router_pass`` timing phase (#624),
+        # post-decompose, before the classification span and the gates/bank.
+        _normalize_per_player_ids(package, snapshot=snapshot, player_name=player_name)
 
-    # Classification-result observability (Plan 2b): only when the vocabulary
-    # was surfaced this turn (a political world) — so the GM panel can see the
-    # router's front-door decision, "classified as witnessed_act:X" vs "had the
-    # vocabulary and declined". Fires before the gates so it reflects the raw
-    # router output, not the post-gate package.
-    if "witnessed_act_vocabulary" in state_summary:
-        act_ids = _witnessed_act_ids(package)
-        with intent_router_witnessed_act_classified_span(
-            emitted=len(act_ids),
-            act_ids=",".join(act_ids),
-            genre_slug=snapshot.genre_slug or "",
-        ):
-            pass
+        # Classification-result observability (Plan 2b): only when the vocabulary
+        # was surfaced this turn (a political world) — so the GM panel can see the
+        # router's front-door decision, "classified as witnessed_act:X" vs "had the
+        # vocabulary and declined". Fires before the gates so it reflects the raw
+        # router output, not the post-gate package.
+        if "witnessed_act_vocabulary" in state_summary:
+            act_ids = _witnessed_act_ids(package)
+            with intent_router_witnessed_act_classified_span(
+                emitted=len(act_ids),
+                act_ids=",".join(act_ids),
+                genre_slug=snapshot.genre_slug or "",
+            ):
+                pass
 
-    # Unregistered-subsystem gate (Story 71-27): drop dispatches whose
-    # ``subsystem`` names no registered handler — the canonical case is the
-    # router emitting ``combat`` (a confrontation *type*, routed through the
-    # ``confrontation`` subsystem) as if it were a subsystem key. Such a
-    # dispatch can NEVER engage; gating it here — BEFORE the precondition gate,
-    # the bank, AND the caller's ``turn_context.dispatch_package`` — stops the
-    # router from emitting an unhandlable dispatch into the redaction path and
-    # the post-turn watcher, while a loud ``intent_router.dispatch.unregistered``
-    # span records each drop (NOT a silent fallback). The dispatch bank's own
-    # unknown-subsystem skip remains as a defense-in-depth backstop. The
-    # registry is the single source of truth — injected here so the gate stays
-    # registry-free and testable.
-    package = run_unregistered_subsystem_gate(package=package, registered=set(get_registered()))
+        # Unregistered-subsystem gate (Story 71-27): drop dispatches whose
+        # ``subsystem`` names no registered handler — the canonical case is the
+        # router emitting ``combat`` (a confrontation *type*, routed through the
+        # ``confrontation`` subsystem) as if it were a subsystem key. Such a
+        # dispatch can NEVER engage; gating it here — BEFORE the precondition gate,
+        # the bank, AND the caller's ``turn_context.dispatch_package`` — stops the
+        # router from emitting an unhandlable dispatch into the redaction path and
+        # the post-turn watcher, while a loud ``intent_router.dispatch.unregistered``
+        # span records each drop (NOT a silent fallback). The dispatch bank's own
+        # unknown-subsystem skip remains as a defense-in-depth backstop. The
+        # registry is the single source of truth — injected here so the gate stays
+        # registry-free and testable.
+        package = run_unregistered_subsystem_gate(package=package, registered=set(get_registered()))
 
-    # Precondition gate (Story 59-8): drop dispatches that are STRUCTURALLY
-    # inert on this snapshot — they can never engage no matter what the
-    # narrator does (e.g. scenario_clue with no ADR-053 scenario graph loaded),
-    # so engaging them only ever produces a guaranteed
-    # ``dispatch_engagement.*.mismatch`` false-positive. Gating here — BEFORE
-    # the bank AND before the package is returned to the caller (which assigns
-    # it to ``turn_context.dispatch_package`` for the post-turn watcher) —
-    # removes the inert dispatch from both the engine run and the lie-detector,
-    # while a loud ``intent_router.dispatch.gated`` span records each skip (NOT
-    # a silent fallback). A real scenario world is unaffected: the gate only
-    # fires when the precondition is unmet.
-    package = run_dispatch_precondition_gate(package=package, snapshot=snapshot)
+        # Precondition gate (Story 59-8): drop dispatches that are STRUCTURALLY
+        # inert on this snapshot — they can never engage no matter what the
+        # narrator does (e.g. scenario_clue with no ADR-053 scenario graph loaded),
+        # so engaging them only ever produces a guaranteed
+        # ``dispatch_engagement.*.mismatch`` false-positive. Gating here — BEFORE
+        # the bank AND before the package is returned to the caller (which assigns
+        # it to ``turn_context.dispatch_package`` for the post-turn watcher) —
+        # removes the inert dispatch from both the engine run and the lie-detector,
+        # while a loud ``intent_router.dispatch.gated`` span records each skip (NOT
+        # a silent fallback). A real scenario world is unaffected: the gate only
+        # fires when the precondition is unmet.
+        package = run_dispatch_precondition_gate(package=package, snapshot=snapshot)
 
-    bank_result = await run_dispatch_bank(
-        package,
-        context={
-            "snapshot": snapshot,
-            "pack": pack,
-            "player_name": player_name,
-            "npcs_present": [],
-            "additional_player_names": additional_player_names,
-            # ``npc_pool`` is required (kw-only, no default) by
-            # ``run_npc_agency``; sourced from the live snapshot so the NPC
-            # disposition subsystem engages in THIS pass instead of failing
-            # on a missing kwarg.
-            "npc_pool": list(snapshot.npc_pool or []),
-            # ``npcs`` — the authored roster. npc_agency resolves its target
-            # against the roster FIRST (roster NPCs are not mirrored into
-            # npc_pool; presence is tracked via last_seen_location), so
-            # without this the subsystem never engaged for the game's primary
-            # NPCs (playtest #C1, 2026-05-28). Signature-filtered by the bank.
-            "npcs": list(snapshot.npcs or []),
-            # Movement subsystem (§0 context threading): the live region
-            # graph + palette + worker handle the movement handler needs.
-            # The bank signature-filters context, so subsystems that do not
-            # declare these kwargs are unaffected.
-            "dungeon_store": dungeon_store,
-            "palette": palette,
-            "lookahead_handle": lookahead_handle,
-        },
-    )
+        bank_result = await run_dispatch_bank(
+            package,
+            context={
+                "snapshot": snapshot,
+                "pack": pack,
+                "player_name": player_name,
+                "npcs_present": [],
+                "additional_player_names": additional_player_names,
+                # ``npc_pool`` is required (kw-only, no default) by
+                # ``run_npc_agency``; sourced from the live snapshot so the NPC
+                # disposition subsystem engages in THIS pass instead of failing
+                # on a missing kwarg.
+                "npc_pool": list(snapshot.npc_pool or []),
+                # ``npcs`` — the authored roster. npc_agency resolves its target
+                # against the roster FIRST (roster NPCs are not mirrored into
+                # npc_pool; presence is tracked via last_seen_location), so
+                # without this the subsystem never engaged for the game's primary
+                # NPCs (playtest #C1, 2026-05-28). Signature-filtered by the bank.
+                "npcs": list(snapshot.npcs or []),
+                # Movement subsystem (§0 context threading): the live region
+                # graph + palette + worker handle the movement handler needs.
+                # The bank signature-filters context, so subsystems that do not
+                # declare these kwargs are unaffected.
+                "dungeon_store": dungeon_store,
+                "palette": palette,
+                "lookahead_handle": lookahead_handle,
+            },
+        )
 
     logger.debug(
         "intent_router_pass.complete turn_id=%s dispatch_count=%d player=%s encounter_engaged=%s",

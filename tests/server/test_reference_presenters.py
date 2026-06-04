@@ -57,6 +57,103 @@ def test_setting_anchor_emits_narrative_flourish(fake_theme: ReferenceTheme) -> 
     assert "One jump point in" in html
 
 
+# --- Fix #4: Cast id/name split (portrait KEY decoupled from display HEADING) ---
+
+
+def test_cast_entry_with_id_keys_portrait_on_id_but_heads_with_name(
+    fake_theme: ReferenceTheme,
+) -> None:
+    """An entry carrying both ``id`` (the slug-shaped portrait key) and ``name``
+    (the human display name) must: head the card with the display ``name``, and
+    key the portrait ``<img>`` on the ``id`` (the slug present in
+    ``portrait_image_slugs``). This is the oz shape — ``id: witch_of_the_west``,
+    ``name: "The Wicked Witch of the West"`` — where the old code showed the
+    snake_case id as the heading and would mis-key the portrait."""
+    from sidequest.server.reference_presenters import portrait_image_key, present_lore_cast
+
+    entry = {
+        "id": "witch_of_the_west",
+        "name": "The Wicked Witch of the West",
+        "role": "Tyrant of the Winkie Country",
+        "appearance": "A withered crone with one telescopic eye.",
+    }
+    html = present_lore_cast(
+        [entry],
+        pack="wry_whimsy",
+        world="oz",
+        theme=fake_theme,
+        portrait_image_slugs=frozenset({"witch_of_the_west"}),
+    )
+
+    # Heading + card anchor use the display name's slug rules / display text.
+    assert '<h3 class="ref-card__title">The Wicked Witch of the West</h3>' in html
+    assert 'id="cast-witch_of_the_west"' in html
+    # snake_case id must NOT leak into the visible heading.
+    assert ">witch_of_the_west</h3>" not in html
+    # The portrait <img> is emitted and keyed on the id-derived R2 key.
+    expected_src = portrait_image_key("wry_whimsy", "oz", "witch_of_the_west")
+    assert "ref-card__portrait" in html
+    assert expected_src in html
+    # alt mirrors the display name.
+    assert 'alt="The Wicked Witch of the West"' in html
+
+
+def test_cast_entry_without_id_keys_portrait_on_slugified_name(
+    fake_theme: ReferenceTheme,
+) -> None:
+    """Backward-compat: an entry with NO ``id`` (every other world's shape, where
+    ``name`` is the display name) keys the portrait on ``slugify_player_name(name)``
+    exactly as before. Heading is the name; portrait keyed on the slug."""
+    from sidequest.server.reference_presenters import portrait_image_key, present_lore_cast
+    from sidequest.server.utils import slugify_player_name
+
+    name = "Vivian Harbormaster"
+    slug = slugify_player_name(name)  # -> vivian_harbormaster
+    html = present_lore_cast(
+        [{"name": name, "role": "Keeper of the tide-ledgers"}],
+        pack="space_opera",
+        world="coyote_star",
+        theme=fake_theme,
+        portrait_image_slugs=frozenset({slug}),
+    )
+
+    assert f'<h3 class="ref-card__title">{name}</h3>' in html
+    assert f'id="cast-{slug}"' in html
+    assert "ref-card__portrait" in html
+    assert portrait_image_key("space_opera", "coyote_star", slug) in html
+
+
+def test_cast_entry_with_id_not_on_r2_renders_textonly(fake_theme: ReferenceTheme) -> None:
+    """An id-bearing entry whose id is NOT in the gated set renders text-only
+    (no broken <img>) — the gate still works on the id-derived slug."""
+    from sidequest.server.reference_presenters import present_lore_cast
+
+    html = present_lore_cast(
+        [{"id": "witch_of_the_west", "name": "The Wicked Witch of the West"}],
+        pack="wry_whimsy",
+        world="oz",
+        theme=fake_theme,
+        portrait_image_slugs=frozenset(),  # nothing on R2
+    )
+    assert "The Wicked Witch of the West" in html
+    assert "ref-card__portrait" not in html
+
+
+def test_cast_portrait_slug_prefers_id_then_falls_back_to_name() -> None:
+    """The shared slug helper: explicit non-empty ``id`` wins; blank/absent id
+    falls back to ``slugify_player_name(name)`` (the gate + presenter agreement)."""
+    from sidequest.server.reference_presenters import cast_portrait_slug
+    from sidequest.server.utils import slugify_player_name
+
+    assert cast_portrait_slug({"id": "witch_of_the_west", "name": "X"}) == "witch_of_the_west"
+    assert cast_portrait_slug({"id": "  ", "name": "Vivian Harbormaster"}) == slugify_player_name(
+        "Vivian Harbormaster"
+    )
+    assert cast_portrait_slug({"name": "Vivian Harbormaster"}) == slugify_player_name(
+        "Vivian Harbormaster"
+    )
+
+
 def test_history_splits_on_double_newline(fake_theme: ReferenceTheme) -> None:
     from sidequest.server.reference_presenters import present_lore_history
 
@@ -739,7 +836,10 @@ def test_magic_wrapped_shape_renders_prose_not_raw_dump(fake_theme: ReferenceThe
             "required_costs": ["backlash", "vitality"],
             "hard_limits": {"resurrection": "forbidden", "mind_compulsion": "with_cost"},
             "counter": [{"id": "suppressors", "description": "Old-world dampening tech"}],
-            "manifestation": {"modes": ["reflexive", "invoked"], "domains": ["physical", "psychic"]},
+            "manifestation": {
+                "modes": ["reflexive", "invoked"],
+                "domains": ["physical", "psychic"],
+            },
             "narrator_register": "Mutations are visibly costly. Don't narrate clean superpowers.",
             "player_options": {"can_build_caster": True, "mutation_outcomes_visible": False},
         }

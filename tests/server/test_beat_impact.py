@@ -101,8 +101,12 @@ def test_push_critsuccess_is_resolution_not_inert():
     assert impact.dial_moved is False
     assert impact.resolution is True
     assert impact.tag == "Clean Exit"
+    # (73-9) Replaced a redundant bare-truthy `assert impact.summary` with explicit
+    # field asserts: pin the no-dial numerics that ride a by-design resolution.
+    # The summary's non-emptiness is already proven by the substring checks below.
+    assert impact.own == 0
+    assert impact.opponent == 0
     # Reads as intended, not broken: explains the no-move, never as failure.
-    assert impact.summary  # non-empty
     assert "resolv" in impact.summary.lower()
     assert ("no dial" in impact.summary.lower()) or ("by design" in impact.summary.lower())
     assert "broken" not in impact.summary.lower()
@@ -151,6 +155,43 @@ def test_angle_critfail_is_backfire_distinct_from_tag():
         outcome=RollOutcome.CritFail,
     )
     assert impact.effect == "backfire"
+
+
+def test_angle_critfail_backfire_full_field_set():
+    # 73-9 characterization: 73-4 only pinned effect=="backfire". Pin the FULL
+    # descriptor so a refactor can't silently change the player-facing readout.
+    # NOTE (real behavior, vs the AC's loose wording): the `tag` field is the
+    # angle's OWN target tag ("Off-Balance"), not the literal string "backfire" —
+    # the backfire is the `effect`, the tag is what rebounded. A backfire grants
+    # no dial motion.
+    impact = describe_beat_impact(
+        _deltas(BeatKind.angle, RollOutcome.CritFail, target_tag="Off-Balance"),
+        kind=BeatKind.angle,
+        outcome=RollOutcome.CritFail,
+    )
+    assert impact.effect == "backfire"
+    assert impact.dial_moved is False
+    assert impact.own == 0
+    assert impact.opponent == 0
+    assert impact.resolution is False
+    assert impact.tag == "Off-Balance"
+    assert "backfire" in impact.summary.lower()
+    assert "Off-Balance" in impact.summary
+
+
+def test_brace_critfail_is_opponent_setback():
+    # 73-9 characterization: the opponent>0 branch of describe_beat_impact. A brace
+    # CritFail nudges the OPPONENT's dial UP (+1) — a real setback for the actor,
+    # and (unlike a backfire) the dial DID move. Pins the "their edge rises" summary.
+    deltas = _deltas(BeatKind.brace, RollOutcome.CritFail, base=2)
+    assert deltas.opponent == 1  # guard the fixture: this tier really yields opponent+1
+    impact = describe_beat_impact(deltas, kind=BeatKind.brace, outcome=RollOutcome.CritFail)
+    assert impact.effect == "setback"
+    assert impact.dial_moved is True
+    assert impact.own == 0
+    assert impact.opponent == 1
+    assert impact.tag is None
+    assert "their edge rises" in impact.summary.lower()
 
 
 # ── AC4: dial-moving outcomes still read as a dial move; tag not swallowed ──
@@ -301,3 +342,21 @@ def test_skipped_beat_records_no_impact():
     assert result.impact is None
     assert "player" not in enc.last_beat_impacts
     assert "neutral" not in enc.last_beat_impacts
+
+
+def test_same_side_beat_overwrites_prior_impact():
+    # 73-9 characterization of the same-side overwrite invariant: last_beat_impacts
+    # holds ONE entry per side — a second player beat REPLACES the first (it is the
+    # latest readout for that side), it is NOT appended or merged into a history.
+    enc = _enc()
+    pryce = enc.find_actor("Pryce")
+    # First player beat: a dial advance.
+    apply_beat(enc, pryce, _strike_beat(base=2), RollOutcome.Success)
+    assert enc.last_beat_impacts["player"]["effect"] == "advance"
+    # Second player beat (encounter stays live — angle doesn't resolve): a tag.
+    apply_beat(enc, pryce, _angle_beat(), RollOutcome.Success)
+    stamped = enc.last_beat_impacts["player"]
+    assert isinstance(stamped, dict)  # a single impact dict, NOT a list/append
+    assert stamped["effect"] == "tag"  # the SECOND beat's impact, not the first
+    assert stamped["tag"] == "Off-Balance"
+    assert list(enc.last_beat_impacts.keys()) == ["player"]  # no duplicate slot

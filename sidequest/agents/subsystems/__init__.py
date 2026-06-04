@@ -234,6 +234,17 @@ async def run_dispatch_bank(
     context = context or {}
     result = BankResult()
 
+    # Turn number for span attribution (Bug A fix): sourced from
+    # snapshot.turn_manager.interaction — the same field session_helpers.py
+    # uses at ``turn_number=snapshot.turn_manager.interaction``. Default 0
+    # matches the dashboard's fallback for spans that lack the attribute.
+    _snapshot = context.get("snapshot")
+    _turn_number: int = 0
+    if _snapshot is not None:
+        _tm = getattr(_snapshot, "turn_manager", None)
+        if _tm is not None:
+            _turn_number = int(getattr(_tm, "interaction", 0))
+
     all_dispatches: list[SubsystemDispatch] = []
     for pd in package.per_player:
         all_dispatches.extend(pd.dispatch)
@@ -245,6 +256,7 @@ async def run_dispatch_bank(
     with intent_router_dispatch_bank_span(
         turn_id=package.turn_id,
         dispatch_count=len(all_dispatches),
+        turn_number=_turn_number,
     ) as bank_span:
         if not all_dispatches:
             # Still include decomposer-authored narrator_instructions even when no

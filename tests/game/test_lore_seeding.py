@@ -8,10 +8,6 @@ epic 74), so there is no genre-tier seed left to exercise here.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from sidequest.game.lore_seeding import (
     seed_lore_from_char_creation,
     seed_lore_from_world,
@@ -21,15 +17,11 @@ from sidequest.game.lore_store import (
     LoreSource,
     LoreStore,
 )
-from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.character import (
     CharCreationChoice,
     CharCreationScene,
     MechanicalEffects,
 )
-from sidequest.genre.models.pack import GenrePack
-
-CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
 
 def _choice(label: str, description: str) -> CharCreationChoice:
@@ -129,57 +121,62 @@ class TestSeedFromCharCreation:
 
 
 # ---------------------------------------------------------------------------
-# Shared caverns_pack fixture (used by the world-seed tests below). The
-# genre-pack seeder (and its tests) were removed in story 74-4 — lore is
-# world-only (epic 74), so there is no longer a genre-tier seed to exercise.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def caverns_pack() -> GenrePack:
-    path = CONTENT_ROOT / "caverns_and_claudes"
-    if not path.is_dir():
-        pytest.skip(f"content pack not found at {path}")
-    return load_genre_pack(path)
-
-
-# ---------------------------------------------------------------------------
 # seed_lore_from_world — pingpong 2026-04-30 (lore RAG returns empty)
+#
+# These exercise the world-scoped seeder against SYNTHETIC ``WorldLore``
+# (story 74-5: no real-pack coupling). A world's ``lore.yaml`` is flavor and
+# lives at the world tier (epic 74); the seeding LOGIC is genre-agnostic, so
+# an in-test ``WorldLore`` is the correct fixture — the same pattern the two
+# tests below (``..._slug_does_not_break_id`` / ``_idempotent_...``) already
+# use. Synthetic lore makes every assertion deterministic — no skip-guards on
+# "did the real pack happen to populate this field?".
 # ---------------------------------------------------------------------------
 
 
 class TestSeedFromWorld:
-    """The world's ``lore.yaml`` overrides genre defaults for a specific
-    world (e.g. ``coyote_star`` has its own history/geography distinct
-    from ``space_opera``'s genre-level lore). These tests exercise the
-    world-scoped variant of the seeder added by pingpong 2026-04-30."""
+    """The world's ``lore.yaml`` carries history/geography/cosmology/factions
+    distinct from any other world in the genre. These tests exercise the
+    world-scoped variant of the seeder added by pingpong 2026-04-30 against a
+    synthetic world so the fragment-id scoping and metadata contracts are
+    pinned independent of shipping content."""
 
-    def test_world_lore_seeded_with_world_scoped_ids(self, caverns_pack: GenrePack) -> None:
-        worlds = caverns_pack.worlds
-        if not worlds:
-            pytest.skip("caverns pack has no worlds — cannot exercise world seed")
-        world_slug, world = next(iter(worlds.items()))
+    @staticmethod
+    def _world_lore():
+        # All four seedable fields populated (history + geography + cosmology +
+        # one faction) so the seeder yields exactly four world-scoped fragments
+        # and every one of its field branches is exercised at the unit level.
+        from sidequest.genre.models.lore import Faction, WorldLore
+
+        return WorldLore(
+            world_name="The Flickering Reach",
+            history="Three wounds define the Reach; the black glass plain still hums.",
+            geography="A continental interior scarred by a black glass plain and bone-wind canyons.",
+            cosmology="The Drifters hear the Long Signal in the static of pre-war machines.",
+            factions=[
+                Faction(name="The Dome Syndicate", summary="water cartel", description="x"),
+            ],
+        )
+
+    def test_world_lore_seeded_with_world_scoped_ids(self) -> None:
+        world_slug = "flickering_reach"
         store = LoreStore()
-        added = seed_lore_from_world(store, world.lore, world_slug)
-        # Worlds have at minimum a history string in shipping content.
-        if added == 0:
-            pytest.skip(f"world {world_slug!r} has no populated lore fields")
-        # Ids must be world-scoped so a future world swap doesn't leak
-        # the prior world's lore into the new world's RAG queries.
-        assert any(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), (
+        added = seed_lore_from_world(store, self._world_lore(), world_slug)
+        # history + geography + cosmology + one faction → four fragments.
+        assert added == 4
+        # EVERY id must be world-scoped so a future world swap doesn't leak the
+        # prior world's lore into the new world's RAG queries. `all`, not `any`:
+        # the assertion message is universal, so one correctly-scoped id is not
+        # enough — a single mis-scoped fragment must fail this test.
+        assert all(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), (
             f"World seeder must scope fragment ids by world_slug "
             f"({world_slug!r}); got: {list(store.fragments)}"
         )
 
-    def test_world_lore_carries_world_slug_metadata(self, caverns_pack: GenrePack) -> None:
-        worlds = caverns_pack.worlds
-        if not worlds:
-            pytest.skip("caverns pack has no worlds")
-        world_slug, world = next(iter(worlds.items()))
+    def test_world_lore_carries_world_slug_metadata(self) -> None:
+        world_slug = "flickering_reach"
         store = LoreStore()
-        added = seed_lore_from_world(store, world.lore, world_slug)
-        if added == 0:
-            pytest.skip(f"world {world_slug!r} has no populated lore fields")
+        added = seed_lore_from_world(store, self._world_lore(), world_slug)
+        assert added == 4
         for frag in store.fragments.values():
             assert frag.metadata.get("world_slug") == world_slug, (
                 "Every world-seeded fragment must carry world_slug metadata "

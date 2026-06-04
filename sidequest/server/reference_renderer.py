@@ -50,6 +50,7 @@ import yaml
 from sidequest.server.reference_map import load_cartography_config, present_lore_map
 from sidequest.server.reference_presenters import (
     PresenterContext,
+    cast_portrait_slug,
     lookup_presenter,
     poi_image_key,
     portrait_image_key,
@@ -1420,10 +1421,12 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
     # <img>s gated on R2 existence (the portrait analog of the POI gate above).
     cast_entries = load_cast_entries(world_dir)
     if cast_entries:
+        # Fix #4: gate on the SAME slug the presenter keys each card on —
+        # the entry's explicit `id`, else slugify(name). Deriving the gated set
+        # differently (e.g. always slugify(name)) would mismatch the per-card
+        # key and silently drop every portrait whose id != slugify(name).
         authored_portrait_slugs = frozenset(
-            slugify_player_name(str(e.get("name", "")))
-            for e in cast_entries
-            if str(e.get("name", "")).strip()
+            cast_portrait_slug(e) for e in cast_entries if str(e.get("name", "")).strip()
         )
         gated_portrait_slugs = _gate_cast_slugs_on_manifest(
             authored_portrait_slugs,

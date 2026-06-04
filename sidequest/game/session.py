@@ -523,6 +523,14 @@ class WorldStatePatch(BaseModel):
     active_stakes: str | None = None
     lore_established: list[str] | None = None
     discovered_facts: list[DiscoveredFact] | None = None
+    # Story 77-3 (ADR-137): promoted to a first-class patch field so a narrator
+    # world-patch can flow quest anchors into ``snapshot.quest_anchors`` (until
+    # now only the ``record_quest`` tool mutated the snapshot directly). The
+    # typed ``list[str]`` + ``extra="forbid"`` rejects malformed payloads loudly
+    # (No Silent Fallbacks). ``None`` means "no change"; the apply path UNIONs
+    # set lists into the snapshot (order-preserving dedup), never replaces — a
+    # replace would clobber the seeded campaign spine.
+    quest_anchors: list[str] | None = None
 
 
 class RegionTransition(BaseModel):
@@ -1377,6 +1385,11 @@ class GameSnapshot(BaseModel):
                 "field_count": sum(
                     1 for f in patch.model_fields_set if getattr(patch, f, None) is not None
                 ),
+                # Story 77-3 (AC5): explicit boolean so the GM panel never has to
+                # guess whether a patch touched the quest spine. True iff the
+                # patch carries quest_anchors (incl. an empty-list no-op union);
+                # False when the field is untouched (None).
+                "world.patch.quest_anchors_present": patch.quest_anchors is not None,
             },
         ):
             self._apply_world_patch_inner(patch)
@@ -1409,6 +1422,16 @@ class GameSnapshot(BaseModel):
             # into the widened QuestEntry type. Story 77-2.
             for quest_id, status in patch.quest_updates.items():
                 upsert_quest_status(self.quest_log, quest_id, status)
+        if patch.quest_anchors is not None:
+            # Story 77-3 (ADR-137): order-preserving dedup UNION, not replace.
+            # A narrator world-patch must never clobber the seeded campaign
+            # spine, so new anchors append after existing ones and duplicates
+            # are skipped — matching the only other two writers
+            # (quest_seed.py:85, record_quest.py:122/154). An empty patch list
+            # is therefore a no-op union (no "clear" semantic).
+            for anchor in patch.quest_anchors:
+                if anchor not in self.quest_anchors:
+                    self.quest_anchors.append(anchor)
         if patch.notes is not None:
             self.notes = patch.notes
         if patch.pc_region is not None:

@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from sidequest.game.entity_card import project_npc_card
+from sidequest.game.entity_card import EntityCard, project_npc_card
 from sidequest.game.entity_store import EntityStore
 
 if TYPE_CHECKING:
@@ -75,17 +75,62 @@ class EntitySyncResult:
         return "success"
 
 
+def _apply_npc_card(store: EntityStore, card: EntityCard, result: EntitySyncResult) -> None:
+    """Upsert one NPC card and update the reproject tallies. A content change
+    (or first insert) re-arms the card and counts a reproject; an unchanged card
+    is left untouched (embedding preserved)."""
+    if store.upsert(card):
+        result.reprojected += 1
+        result.npc_count += 1
+        result.card_ids.append(card.id)
+    else:
+        result.unchanged += 1
+
+
 def sync_entity_cards(store: EntityStore, snapshot: GameSnapshot) -> EntitySyncResult:
-    """Project the snapshot's NPC pool into ``store``, upserting each card.
+    """Project the snapshot's NPC cast into ``store``, upserting each card.
+
+    Story 76-6: the cast is the union of two sources — the stateful
+    ``snapshot.npcs`` (promoted / narrator-invented mechanical entities) and the
+    identity-only ``snapshot.npc_pool``. A promoted ``Npc`` and the pool member
+    it was promoted from share a card id (``npc:<slug>``); the **stateful entity
+    takes precedence** (it carries the live mechanical state) and the pool member
+    is skipped, so a promoted NPC is never double-indexed or double-counted.
 
     Idempotent within a turn: an entity whose projected content matches the
     stored card is counted ``unchanged`` and left untouched (including its
     embedding). A content change (e.g. a disposition crossing an attitude band)
     replaces the stored card and re-arms it for re-embedding. An entity the
-    projector rejects (e.g. a blank-named member) is recorded in ``failed_refs``
-    and counted — never minted as a stub card (No Silent Fallbacks).
+    projector rejects (e.g. a blank-named pool member) is recorded in
+    ``failed_refs`` and counted — never minted as a stub card (No Silent
+    Fallbacks). A stateful ``Npc`` cannot be unprojectable: ``CreatureCore``
+    validates its name non-blank, so the projector's ``_slug`` guard never fires
+    for it.
     """
     result = EntitySyncResult()
+    covered_ids: set[str] = set()
+    covered_origins: set[str] = set()
+
+    # Stateful NPCs first — the richer entity takes precedence over its origin.
+    for npc in snapshot.npcs:
+        try:
+            card = project_npc_card(npc)
+        except (ValueError, ValidationError) as exc:
+            result.failed += 1
+            result.failed_refs.append(npc.core.name)
+            logger.warning(
+                "entity_sync.project_failed entity=%r error=%s",
+                npc.core.name,
+                exc,
+            )
+            continue
+        covered_ids.add(card.id)
+        if npc.pool_origin:
+            covered_origins.add(npc.pool_origin)
+        _apply_npc_card(store, card, result)
+
+    # Pool members second — skip any superseded by a stateful Npc (same card id,
+    # or the pool member this Npc was promoted from).
     for member in snapshot.npc_pool:
         try:
             card = project_npc_card(member)
@@ -101,10 +146,7 @@ def sync_entity_cards(store: EntityStore, snapshot: GameSnapshot) -> EntitySyncR
                 exc,
             )
             continue
-        if store.upsert(card):
-            result.reprojected += 1
-            result.npc_count += 1
-            result.card_ids.append(card.id)
-        else:
-            result.unchanged += 1
+        if card.id in covered_ids or member.name in covered_origins:
+            continue
+        _apply_npc_card(store, card, result)
     return result

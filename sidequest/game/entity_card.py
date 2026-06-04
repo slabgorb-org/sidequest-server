@@ -16,6 +16,7 @@ later stories — this module only defines the OTEL attribute *names* they share
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,6 +26,13 @@ from pydantic import BaseModel, Field, field_validator
 from sidequest.game.lore_store import _estimate_tokens
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.genre.models.lore import Faction
+
+if TYPE_CHECKING:
+    # Story 76-6: the projector accepts both the identity-only pool member and
+    # the stateful ``Npc``. Imported under TYPE_CHECKING only — ``session`` pulls
+    # in this module's siblings, so a runtime import would risk a cycle. The
+    # ``from __future__ import annotations`` above keeps the union annotation lazy.
+    from sidequest.game.session import Npc
 
 
 class EntityType(StrEnum):
@@ -170,26 +178,41 @@ def _slug(name: str) -> str:
     return name.strip().casefold().replace(" ", "_")
 
 
-def project_npc_card(member: NpcPoolMember) -> EntityCard:
-    """Project an NPC pool member into an embeddable card.
+def project_npc_card(npc: NpcPoolMember | Npc) -> EntityCard:
+    """Project an NPC — pool member *or* stateful ``Npc`` — into a card.
 
     Content carries name, role, pronouns, and the disposition *attitude band*
     (not the raw int) so retrieval keys on relationship. Deterministic: the same
-    member state yields the same content every time (ADR-118 §D3 dual-rep risk —
+    entity state yields the same content every time (ADR-118 §D3 dual-rep risk —
     75-6's reproject relies on it).
+
+    Story 76-6: the two sources carry their name differently — a
+    ``NpcPoolMember`` at ``.name``, a stateful ``Npc`` at ``.core.name`` (and it
+    has no ``role``). Both expose ``.pronouns`` and a ``.disposition``
+    (``Disposition``), so only name/role need source-specific extraction. The
+    stateful name comes from ``CreatureCore``, whose validator rejects blanks, so
+    a stateful card is always projectable (the ``_slug`` blank guard fires only
+    for pool members).
     """
-    segments: list[str] = [member.name]
-    if member.role:
-        segments.append(member.role)
-    if member.pronouns:
-        segments.append(member.pronouns)
-    segments.append(member.disposition.attitude().value)
+    if isinstance(npc, NpcPoolMember):
+        name = npc.name
+        role = npc.role
+    else:
+        # Stateful Npc — name lives on the nested CreatureCore; no role field.
+        name = npc.core.name
+        role = None
+    segments: list[str] = [name]
+    if role:
+        segments.append(role)
+    if npc.pronouns:
+        segments.append(npc.pronouns)
+    segments.append(npc.disposition.attitude().value)
     content = " — ".join(segments)
     return EntityCard.new(
         EntityType.NPC,
-        _slug(member.name),
+        _slug(name),
         content,
-        entity_ref=member.name,
+        entity_ref=name,
     )
 
 

@@ -123,6 +123,26 @@ def _content_digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
 
 
+def _room_is_solo(room: object) -> bool:
+    """Story 71-23: is this a solo session (<= 1 connected player)?
+
+    The room arrives typed as ``object`` (agents must not import the server's
+    SessionRoom — that would invert the layer dependency), so duck-type the
+    ``connected_player_ids()`` accessor. Returns True only when the room
+    affirmatively reports <= 1 connected player; if the count cannot be
+    determined, returns False so the SOLO-only delta-streaming gate fails
+    CLOSED (no raw fan-out into a possibly-multiplayer room — the safe default
+    for an ADR-104/105 firewall boundary, not a silent fallback that masks
+    config).
+    """
+    accessor = getattr(room, "connected_player_ids", None)
+    if not callable(accessor):
+        return False
+    ids = accessor()
+    # connected_player_ids() returns a list[str]; anything else → fail closed.
+    return isinstance(ids, list) and len(ids) <= 1
+
+
 def _section_rides_cache(name: str, zone_value: str) -> bool:
     """True iff a section's content lands in the cached ``system_blocks[0]``.
 
@@ -4008,14 +4028,23 @@ class Orchestrator:
                 async def dispatch(block: ToolUseBlock) -> ToolResultBlock:
                     return await default_registry.dispatch(block, tool_ctx)
 
-                # Story 71-23: solo narration streaming. When a live room is
+                # Story 71-23: solo narration streaming. When a live SOLO room is
                 # present, fan each streamed prose chunk out as an ephemeral
                 # NarrationDelta so the player sees prose fill token-by-token
                 # before the canonical narration lands. turn_id mirrors the
                 # claude -p streaming path (str(turn_number)) so the UI reducer
                 # — which routes deltas by turn_id and the canonical NARRATION
-                # carries none — correlates them. room=None skips fan-out (the
-                # pre-71-23 non-streaming behavior is byte-identical).
+                # carries none — correlates them.
+                #
+                # SOLO-ONLY GATE (Reviewer F1): raw deltas are unfiltered,
+                # non-POV-swapped prose. The canonical path
+                # (websocket_session_handler.py: merged-MP author threading)
+                # treats this raw fan-out as a firewall+POV breach for
+                # ``len(connected) > 1`` and routes MP through projection +
+                # per-recipient POV-swap instead. Per-recipient MP delta
+                # streaming is out of scope (this story is solo). So stream ONLY
+                # when the room reports <= 1 connected player. room=None (no live
+                # session) also skips fan-out — byte-identical to pre-71-23.
                 import uuid
 
                 from sidequest.server.emitters import broadcast_delta
@@ -4025,11 +4054,29 @@ class Orchestrator:
                 )
                 seq = 0
                 delta_count = 0
+                stream_solo = room is not None and _room_is_solo(room)
 
                 async def _emit_delta(chunk: str) -> None:
                     nonlocal seq, delta_count
-                    await broadcast_delta(turn_id=turn_id, chunk=chunk, seq=seq, room=room)
+                    # Advance seq per attempt so ordering stays monotonic even if
+                    # a broadcast fails.
+                    current_seq = seq
                     seq += 1
+                    try:
+                        await broadcast_delta(
+                            turn_id=turn_id, chunk=chunk, seq=current_seq, room=room
+                        )
+                    except Exception:
+                        # Reviewer F2: a dead / mid-detach socket (or any room-API
+                        # failure) must NOT abort the narrator turn. Log loud and
+                        # continue — the canonical NARRATION still lands.
+                        logger.warning(
+                            "sdk_stream.delta_broadcast_failed turn_id=%s seq=%d",
+                            turn_id,
+                            current_seq,
+                            exc_info=True,
+                        )
+                        return
                     delta_count += 1
 
                 result = await self._client.complete_with_tools(
@@ -4045,9 +4092,10 @@ class Orchestrator:
                     # tracker cleanly; do NOT substitute the "adhoc"
                     # sentinel here.
                     session_id=context.session_id,
-                    # Story 71-23 — delta sink; None when no live room so the
-                    # SDK client takes the non-streaming path (AC2 byte-identical).
-                    on_text_delta=_emit_delta if room is not None else None,
+                    # Story 71-23 — delta sink; wired ONLY for a live solo room
+                    # (None otherwise → SDK client takes the non-streaming path,
+                    # AC2 byte-identical; MP is handled by the canonical path).
+                    on_text_delta=_emit_delta if stream_solo else None,
                 )
 
                 # Story 71-23 — GM-panel lie-detector signal: how many prose

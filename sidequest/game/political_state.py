@@ -59,7 +59,7 @@ class PoliticalState(BaseModel):
     ledger: list[BeliefLedgerEntry] = Field(default_factory=list)
 
     @classmethod
-    def from_world(cls, world: Any) -> "PoliticalState | None":
+    def from_world(cls, world: Any) -> PoliticalState | None:
         """Hydrate live dials from a genre ``World``'s authored premises/blocs.
 
         Returns ``None`` when the world authors no political layer — a valid

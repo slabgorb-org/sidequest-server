@@ -28,10 +28,12 @@ SPAN_ROUTES[SPAN_INVENTORY_NARRATOR_EXTRACTED] = SpanRoute(
         "lost": (span.attributes or {}).get("lost_json", "[]"),
         "discarded": (span.attributes or {}).get("discarded_json", "[]"),
         "consumed": (span.attributes or {}).get("consumed_json", "[]"),
+        "preserved": (span.attributes or {}).get("preserved_json", "[]"),
         "gained_count": (span.attributes or {}).get("gained_count", 0),
         "lost_count": (span.attributes or {}).get("lost_count", 0),
         "discarded_count": (span.attributes or {}).get("discarded_count", 0),
         "consumed_count": (span.attributes or {}).get("consumed_count", 0),
+        "preserved_count": (span.attributes or {}).get("preserved_count", 0),
         "player_name": (span.attributes or {}).get("player_name", ""),
         "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
@@ -47,6 +49,7 @@ def inventory_narrator_extracted_span(
     turn_number: int,
     discarded: list[str] | None = None,
     consumed: list[str] | None = None,
+    preserved: list[str] | None = None,
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
@@ -54,18 +57,26 @@ def inventory_narrator_extracted_span(
 
     ``discarded``: state transitioned out of Carried (still in inventory).
     ``consumed``: removed because used up (one-shot consumables).
+    ``preserved``: matched a narrator ``items_consumed`` entry but was NOT
+    removed because it is a reusable item (tool/weapon/armor/quest) — the
+    consume lane is single-use only, so the GM panel reads a non-empty
+    ``preserved`` as "the engine refused to destroy a reusable item the
+    narrator described using" (playtest 2026-06-04 handkerchief fix).
     """
     discarded_list = list(discarded or [])
     consumed_list = list(consumed or [])
+    preserved_list = list(preserved or [])
     attributes: dict[str, Any] = {
         "gained_json": _json.dumps(list(gained)),
         "lost_json": _json.dumps(list(lost)),
         "discarded_json": _json.dumps(discarded_list),
         "consumed_json": _json.dumps(consumed_list),
+        "preserved_json": _json.dumps(preserved_list),
         "gained_count": len(gained),
         "lost_count": len(lost),
         "discarded_count": len(discarded_list),
         "consumed_count": len(consumed_list),
+        "preserved_count": len(preserved_list),
         "player_name": player_name,
         "turn_number": turn_number,
         **attrs,

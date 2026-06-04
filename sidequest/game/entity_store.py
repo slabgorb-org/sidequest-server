@@ -82,6 +82,25 @@ class EntityStore(BaseModel):
         self.cards[card.id] = card
         return True
 
+    def discard(self, card_id: str) -> bool:
+        """Remove a card by id; return ``True`` iff a card was removed.
+
+        The eviction sibling of :meth:`upsert` (ADR-138 §D5). Used by the
+        defensive eviction path when a card is stranded on an entity that is no
+        longer projectable (a ratified member re-marked ``observation_pending``
+        after its card was already indexed). Unlike :meth:`update_embedding`,
+        absence is **not** an error — eviction is idempotent: a card the gate
+        already withheld (the common purge-needs-no-eviction case, §D5) leaves
+        the store unchanged and returns ``False``. The caller emits the
+        observable ``entity_card.evicted`` span only when this returns ``True``,
+        so the GM panel never sees a phantom eviction (No Silent Fallbacks cuts
+        both ways — no silent drop, and no fabricated eviction event either).
+        """
+        if card_id in self.cards:
+            del self.cards[card_id]
+            return True
+        return False
+
     def mark_embedding_failed(self, card_id: str) -> int:
         """Increment the retry counter for a card whose embed dispatch failed
         transiently. Returns the new count.

@@ -21,7 +21,9 @@ from typing import TYPE_CHECKING
 from opentelemetry import trace
 
 from sidequest.game.entity_card import (
+    ENTITY_CARD_EVICTED_REASON_UNPROJECTABLE,
     SPAN_CARD_REPROJECT_COUNT,
+    SPAN_ENTITY_CARD_EVICTED,
     SPAN_STALE_CARD_COUNT,
 )
 from sidequest.game.entity_sync import LocationSyncView, sync_entity_cards
@@ -226,8 +228,24 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
         # withheld from the index, so a quiet narrator (never re-citing a phantom)
         # is distinguishable from a silently-swallowed real NPC.
         span.set_attribute("entity_sync.npc_unratified_skipped", result.skipped_unratified)
+        # ADR-138 §D5/§D6 — defensive evictions on this sweep. Normally 0; a
+        # non-zero count is an invariant-violation signal (a card was stranded on a
+        # now-unprojectable member). Surfaced on the sweep span for the at-a-glance
+        # count; each individual eviction also fires its own entity_card.evicted span.
+        span.set_attribute("entity_sync.evicted", result.evicted)
         span.set_attribute("entity_sync.outcome", result.outcome)
         span.set_attribute("entity_sync.turn_number", interaction)
+
+        # ADR-138 §D6 — one observable span per defensive eviction, never a
+        # silent drop. Emitted INSIDE the sweep span's ``with`` block so each
+        # eviction span is a CHILD of ``accretion.entity_sync`` — a GM following
+        # a non-zero ``entity_sync.evicted`` attribute can trace straight to the
+        # per-card spans. An empty ``evicted_ids`` (the common case) emits nothing.
+        for card_id in result.evicted_ids:
+            with tracer.start_as_current_span(SPAN_ENTITY_CARD_EVICTED) as evict_span:
+                evict_span.set_attribute("reason", ENTITY_CARD_EVICTED_REASON_UNPROJECTABLE)
+                evict_span.set_attribute("entity_card.id", card_id)
+                evict_span.set_attribute("entity_sync.turn_number", interaction)
 
     _watcher_publish(
         "state_transition",
@@ -238,6 +256,7 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
             "unchanged": result.unchanged,
             "failed": result.failed,
             "skipped_unratified": result.skipped_unratified,
+            "evicted": result.evicted,
             "npc_count": result.npc_count,
             "faction_count": result.faction_count,
             "location_count": result.location_count,

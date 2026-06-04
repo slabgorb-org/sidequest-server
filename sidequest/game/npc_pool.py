@@ -67,3 +67,13 @@ class NpcPoolMember(BaseModel):
     name-generator-sourced members exempt: they enter the pool already
     ratified. Only ``_auto_mint_prose_only_npcs`` flags new entries as
     pending."""
+    is_creature: bool = False
+    """ping-pong #74: this member is a wild animal / beast / monster, not a
+    person. Set from ``NpcMention.is_creature`` at the invented-name seam.
+    A creature belongs to no culture or faction, so it keeps the narrator's
+    descriptive name verbatim — it is NEVER routed through the culture-bound
+    person namer (which would mint a person-name + a random culture). Defaults
+    ``False`` so every existing / authored / person member stays a person.
+    The full Monster Manual identity (creature_id / threat_level / hp / stat
+    block, ADR-059) is a deferred follow-up; this flag is the classification
+    that keeps the person namer off creatures in the meantime."""

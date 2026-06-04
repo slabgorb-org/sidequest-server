@@ -89,6 +89,7 @@ from sidequest.telemetry.spans import (
     lore_established_span,
     magic_working_span,
     npc_auto_registered_span,
+    npc_creature_preserved_span,
     npc_developed_span,
     npc_identity_seeded_span,
     npc_invented_name_routed_span,
@@ -1099,7 +1100,12 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
         npc_name=npc.core.name,
         disposition=int(npc.disposition),
         provenance=provenance,
-        is_creature=False,
+        # ping-pong #74: report the member's real creature classification
+        # instead of a hardcoded False. A creature member (the Forest Lions)
+        # promotes as a creature in the GM panel. Materializing the full
+        # Monster Manual stat block onto the promoted ``Npc`` (creature_id /
+        # threat_level / hp via ADR-059) is a deferred follow-up.
+        is_creature=member.is_creature,
         pool_origin=member.name,
     ):
         pass
@@ -1826,60 +1832,83 @@ def _apply_npc_mentions(
         # raw-degraded, or legacy-raw — is what every downstream span reports.
         original_name = mention.name
         minted_name = original_name
-        # Lazy resolution: build the culture-bound generator from the pack on
-        # the first novel mint only (skipped entirely on quiet turns and when a
-        # generator was injected directly).
-        if not naming_resolved and pack is not None:
-            (
-                name_generator,
-                culture_name,
-                culture_source,
-                naming_unresolved,
-            ) = _resolve_invented_naming_context(pack, world)
-            naming_resolved = True
-        if name_generator is not None and culture_name is not None:
-            minted_name, collision_reroll = _generate_invented_name(
-                name_generator=name_generator,
-                snapshot=snapshot,
-                fallback=original_name,
-            )
-            with npc_invented_name_routed_span(
-                original_name=original_name,
-                npc_name=minted_name,
-                culture=culture_name,
-                culture_source=culture_source or "",
-                collision_reroll=collision_reroll,
+        if mention.is_creature:
+            # ping-pong #74: a creature (wild animal / beast / monster) belongs
+            # to NO culture or faction, so it must NOT be routed through the
+            # culture-bound person namer — that path mints a person-name + a
+            # random culture ("a lion called Keeper Goldbraid of the Emerald
+            # City"). Preserve the narrator's descriptive name verbatim, mark
+            # the member creature-typed, and emit the OTEL lie-detector span
+            # proving the engine declined the namer. (Full Monster Manual
+            # identity — species/threat/hp, ADR-059 — is a deferred follow-up;
+            # this classification is the load-bearing fix.)
+            with npc_creature_preserved_span(
+                npc_name=original_name,
                 turn_number=turn_num,
             ):
                 logger.info(
-                    "npc.invented_name_routed original=%r minted=%r culture=%r "
-                    "source=%r reroll=%s turn=%d",
+                    "npc.creature_preserved name=%r turn=%d — creature mention, "
+                    "person namer declined (no culture)",
                     original_name,
-                    minted_name,
+                    turn_num,
+                )
+        else:
+            # Person: route the bare narrator string through the ADR-091
+            # culture-bound generator so invented NPCs are genre/culture-true.
+            # Lazy resolution: build the generator from the pack on the first
+            # novel *person* mint only (skipped on quiet turns, on creature
+            # mentions, and when a generator was injected directly).
+            if not naming_resolved and pack is not None:
+                (
+                    name_generator,
                     culture_name,
                     culture_source,
-                    collision_reroll,
-                    turn_num,
+                    naming_unresolved,
+                ) = _resolve_invented_naming_context(pack, world)
+                naming_resolved = True
+            if name_generator is not None and culture_name is not None:
+                minted_name, collision_reroll = _generate_invented_name(
+                    name_generator=name_generator,
+                    snapshot=snapshot,
+                    fallback=original_name,
                 )
-        elif naming_unresolved:
-            # No Silent Fallbacks: the active world bound no culture, so the
-            # route could not run. Fail loud, then deliberately degrade to the
-            # raw narrator string — a span-recorded degrade, never a silent
-            # swallow (recovery choice per the story's AC4 latitude).
-            with npc_invented_name_unrouted_span(
-                original_name=original_name,
-                reason="no_culture_bound",
-                world=world or "",
-                turn_number=turn_num,
-            ):
-                logger.warning(
-                    "npc.invented_name_unrouted original=%r world=%r "
-                    "reason=no_culture_bound turn=%d — no culture bound for the "
-                    "active world; degrading to the raw narrator name",
-                    original_name,
-                    world,
-                    turn_num,
-                )
+                with npc_invented_name_routed_span(
+                    original_name=original_name,
+                    npc_name=minted_name,
+                    culture=culture_name,
+                    culture_source=culture_source or "",
+                    collision_reroll=collision_reroll,
+                    turn_number=turn_num,
+                ):
+                    logger.info(
+                        "npc.invented_name_routed original=%r minted=%r culture=%r "
+                        "source=%r reroll=%s turn=%d",
+                        original_name,
+                        minted_name,
+                        culture_name,
+                        culture_source,
+                        collision_reroll,
+                        turn_num,
+                    )
+            elif naming_unresolved:
+                # No Silent Fallbacks: the active world bound no culture, so the
+                # route could not run. Fail loud, then deliberately degrade to
+                # the raw narrator string — a span-recorded degrade, never a
+                # silent swallow (recovery choice per the story's AC4 latitude).
+                with npc_invented_name_unrouted_span(
+                    original_name=original_name,
+                    reason="no_culture_bound",
+                    world=world or "",
+                    turn_number=turn_num,
+                ):
+                    logger.warning(
+                        "npc.invented_name_unrouted original=%r world=%r "
+                        "reason=no_culture_bound turn=%d — no culture bound for "
+                        "the active world; degrading to the raw narrator name",
+                        original_name,
+                        world,
+                        turn_num,
+                    )
 
         new_member = NpcPoolMember(
             name=minted_name,
@@ -1888,6 +1917,7 @@ def _apply_npc_mentions(
             appearance=mention.appearance or None,
             archetype_id=None,
             drawn_from="narrator_invented",
+            is_creature=mention.is_creature,
         )
         snapshot.npc_pool.append(new_member)
         with npc_referenced_span(

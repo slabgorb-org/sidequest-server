@@ -70,18 +70,14 @@ def test_is_projectable_is_importable_and_callable() -> None:
 def test_ratified_pool_member_is_projectable() -> None:
     """A ratified member (``observation_pending = False``) — the world has
     committed to it — is projectable."""
-    member = NpcPoolMember(
-        name="Marya", drawn_from="world_authored", observation_pending=False
-    )
+    member = NpcPoolMember(name="Marya", drawn_from="world_authored", observation_pending=False)
     assert is_projectable(member) is True
 
 
 def test_pending_pool_member_is_not_projectable() -> None:
     """An unratified, auto-minted phantom (``observation_pending = True``) is the
     precise case the gate exists to withhold — NOT projectable."""
-    member = NpcPoolMember(
-        name="Fen", drawn_from="narrator_invented", observation_pending=True
-    )
+    member = NpcPoolMember(name="Fen", drawn_from="narrator_invented", observation_pending=True)
     assert is_projectable(member) is False
 
 
@@ -101,7 +97,7 @@ def test_promoted_npc_is_always_projectable() -> None:
 
 
 def test_promoted_npc_projectable_regardless_of_pool_origin() -> None:
-    """"Always" means independent of the Npc's own state. An Npc promoted from a
+    """ "Always" means independent of the Npc's own state. An Npc promoted from a
     pool member (``pool_origin`` set) is still projectable — the predicate does
     not re-derive eligibility from the originating member."""
     npc = Npc(core=_minimal_creature_core(name="Marya"), pool_origin="Marya")
@@ -112,9 +108,7 @@ def test_promoted_npc_projectable_regardless_of_pool_origin() -> None:
 def test_predicate_is_exactly_not_observation_pending(pending: bool) -> None:
     """§D3 identity: for a pool member, ``is_projectable`` is exactly
     ``not member.observation_pending`` — both branches, no other field consulted."""
-    member = NpcPoolMember(
-        name="Boris", drawn_from="legacy_registry", observation_pending=pending
-    )
+    member = NpcPoolMember(name="Boris", drawn_from="legacy_registry", observation_pending=pending)
     assert is_projectable(member) == (not pending)
 
 
@@ -134,6 +128,4 @@ def test_is_projectable_has_boundary_type_annotations() -> None:
     assert params[0].annotation is not inspect.Parameter.empty, (
         "the entity parameter must be annotated"
     )
-    assert sig.return_annotation in (bool, "bool"), (
-        "the predicate must declare a bool return type"
-    )
+    assert sig.return_annotation in (bool, "bool"), "the predicate must declare a bool return type"

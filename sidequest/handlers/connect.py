@@ -1502,6 +1502,10 @@ class ConnectHandler:
                     row.world_slug,
                     resume_loc,
                     player_id=player_id,
+                    # Visited-region overlay on resume: thread the saved
+                    # discovered_regions so the Map tab paints the visited
+                    # set correctly on reload (ui #330 / ping-pong #329).
+                    discovered_regions=snapshot.discovered_regions,
                 )
                 if cart_map_msg is not None:
                     bootstrap_msgs.append(cart_map_msg)

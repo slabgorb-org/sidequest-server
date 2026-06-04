@@ -2058,6 +2058,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             snapshot.current_region
                             or snapshot.party_location(perspective=_acting_for_render_trigger),
                             player_id=sd.player_id,
+                            discovered_regions=snapshot.discovered_regions,
                         )
                         if _cart_map is not None:
                             _emit_shared_world_frame(_cart_map, "MAP_UPDATE")

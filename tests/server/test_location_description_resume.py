@@ -36,6 +36,7 @@ from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.enums import MessageType
 from sidequest.protocol.messages import (
+    CartographyMapMessage,
     SessionEventMessage,
     SessionEventPayload,
 )
@@ -78,7 +79,7 @@ def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
     return handler
 
 
-def _seed_resumable_region_game(slug: str) -> None:
+def _seed_resumable_region_game(slug: str, discovered_regions: list[str] | None = None) -> None:
     """Register a resumable SOLO region-mode session with a saved current_region."""
     from sidequest.game import db_pool
     from sidequest.server.session_state import _build_pg_repos_for_slug
@@ -110,6 +111,8 @@ def _seed_resumable_region_game(slug: str) -> None:
     snap.characters = [char]
     snap.character_locations["Susan"] = "The Munchkin Country"
     snap.current_region = _REGION
+    if discovered_regions is not None:
+        snap.discovered_regions = list(discovered_regions)
     repo.save(snap)
 
 
@@ -161,4 +164,57 @@ async def test_slug_resume_emits_location_description_for_region_mode_world(
     assert loc_msgs[0].payload.region_id == _REGION, (
         "Resume LOCATION_DESCRIPTION must key off the saved current_region, "
         f"got region_id={loc_msgs[0].payload.region_id!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_slug_resume_map_update_carries_visited_regions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On resume into a region-mode world, the bootstrap MAP_UPDATE must
+    carry the visited regions in ``payload.explored`` so the Map tab can
+    highlight visited-but-not-current regions (ui #330). Scene-title
+    pollution in ``discovered_regions`` (ping-pong #329) is filtered to
+    real region slugs only.
+    """
+    import sidequest.genre.loader as _loader_mod
+
+    monkeypatch.setattr(
+        _loader_mod,
+        "DEFAULT_GENRE_PACK_SEARCH_PATHS",
+        [_CONTENT_SEARCH_PATH],
+    )
+
+    slug = "2026-06-04-oz-visited-overlay"
+    _seed_resumable_region_game(
+        slug,
+        discovered_regions=[
+            "munchkin_country",
+            "the_yellow_brick_road",
+            "A Field of Blue Flowers, Munchkin Country",  # scene title, not a slug
+        ],
+    )
+    handler = _make_handler(tmp_path)
+
+    msg = SessionEventMessage(
+        type="SESSION_EVENT",
+        player_id="susan-player",
+        payload=SessionEventPayload(
+            event="connect",
+            game_slug=slug,
+            player_name="Susan",
+        ),
+    )
+    outbound = await handler.handle_message(msg)
+
+    map_msgs = [m for m in outbound if isinstance(m, CartographyMapMessage)]
+    assert map_msgs, (
+        "Expected a MAP_UPDATE (CartographyMapMessage) on region-mode resume. "
+        f"Got message types: {[getattr(m, 'type', None) for m in outbound]}"
+    )
+    explored_ids = [e.get("id") for e in map_msgs[0].payload.explored]
+    assert explored_ids == ["munchkin_country", "the_yellow_brick_road"], (
+        "Resume MAP_UPDATE must carry visited regions as {id,name} entries, "
+        f"with scene-title pollution filtered out; got explored={map_msgs[0].payload.explored!r}"
     )

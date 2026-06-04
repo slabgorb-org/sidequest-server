@@ -1,8 +1,10 @@
 """Story 59-35 — seat present FRIENDLY companions as side="player" combatants.
 
-RED tests. These FAIL today by design and pass once Dev implements the
-friendly-seater (ADR-116's friendly half + the SOUL "Guitar Solo" principle:
-an allied NPC at the player's side FIGHTS, it is never a silent spectator).
+Tests for Story 59-35 — written failing (red) before implementation and
+passing (green) since the friendly-seater (``_friendly_fallback_at_location``)
+was added in the same story. They cover ADR-116's friendly half + the SOUL
+"Guitar Solo" principle: an allied NPC at the player's side FIGHTS, it is never
+a silent spectator.
 
 Background (Explore + Architect, 2026-06-04, develop): the opponent half of
 ADR-116 seating already exists — ``_npc_fallback_at_location`` sources
@@ -11,13 +13,16 @@ The MISSING half: nothing scans ``snapshot.npcs`` for a scene-present,
 FRIENDLY-disposition NPC and seats it as ``side="player"``. This is the FIRST
 non-PC ``side="player"`` actor in the system.
 
-Design seam (per story context): in ``instantiate_encounter_from_trigger``,
-AFTER the opponent fallback and BEFORE the no-opponent guard, a symmetric
-``_friendly_fallback_at_location`` seats scene-present FRIENDLY NPCs as
-``side="player"`` — additive, independent of whether ``npcs_present`` was
-empty. Each friendly seat emits ``participant.joined`` with
-``source="friendly_fallback"`` (the GM-panel lie-detector proving the engine
-seated the ally, not the narrator inventing it).
+Design seam (as implemented): in ``instantiate_encounter_from_trigger``, AFTER
+the no-opponent guard, a symmetric ``_friendly_fallback_at_location`` seats
+scene-present FRIENDLY NPCs as ``side="player"`` — additive, independent of
+whether ``npcs_present`` was empty. Allies are deliberately kept OUT of
+``npcs_present`` so they never satisfy the "requires an Other" guard (ADR-116
+invariant — see ``test_friendly_ally_alone_still_raises_no_opponent``). Each
+friendly seat emits ``participant.joined`` with ``source="friendly_fallback"``
+plus ``disposition_attitude`` + ``last_seen_turn`` (the GM-panel lie-detector
+proving the engine seated the ally because it read FRIENDLY disposition, not
+the narrator inventing one).
 
 AC mapping:
   AC1 — symmetric seater: present friendly → side="player"; present hostile →
@@ -62,6 +67,10 @@ from sidequest.genre.loader import load_genre_pack
 from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
     find_confrontation_def,
+)
+from sidequest.server.dispatch.encounter_lifecycle import (
+    NoOpponentAvailableError,
+    instantiate_encounter_from_trigger,
 )
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 from tests._helpers.trigger_encounter import trigger_encounter
@@ -210,23 +219,38 @@ def test_present_hostile_npc_not_friendly_seated():
     assert raider.side == "opponent", (
         f"a HOSTILE NPC must seat as opponent, never player. got side={raider.side!r}"
     )
-    assert "Raider" not in _player_side_names(enc), (
-        "the friendly-seater wrongly seated a hostile NPC on the player side"
+    # Independent check (not entailed by the side assertion above): the ONLY
+    # player-side actor is the PC — the friendly-seater added no phantom ally
+    # from a hostile-only scene.
+    assert _player_side_names(enc) == {_PC}, (
+        "the only player-side actor should be the PC; the friendly-seater seated "
+        f"an unexpected ally from a hostile-only scene. got {_player_side_names(enc)!r}"
     )
 
 
 def test_absent_friendly_npc_not_seated():
     """A FRIENDLY NPC last seen at a DIFFERENT location is NOT pulled into the
     encounter — the friendly-seater is scene-scoped, mirroring the opponent
-    fallback's location filter."""
+    fallback's location filter.
+
+    Paired with a same-location FRIENDLY control ("Nessa" at ``_LOC``) so the
+    test proves LOCATION is the discriminator: the control IS seated and the
+    off-site ally is NOT. Without the control this assertion would pass against
+    a no-op seater (the off-site ally is never seated either way)."""
     snap = _snap()
     snap.npcs.append(_make_npc("Mara", disposition=_FRIENDLY, last_seen_location="Cargo Bay"))
+    snap.npcs.append(_make_npc("Nessa", disposition=_FRIENDLY, last_seen_location=_LOC))
     pack = _load_pack()
 
     trigger_encounter(snap, pack, "combat", _PC, npcs_present=_explicit_opponent())
 
     enc = snap.encounter
     assert enc is not None
+    nessa = _actor(enc, "Nessa")
+    assert nessa is not None and nessa.side == "player", (
+        "control failed: a same-location FRIENDLY ally must be seated side='player' "
+        f"— the seater is not engaging. actors={[(a.name, a.side) for a in enc.actors]!r}"
+    )
     assert _actor(enc, "Mara") is None, (
         "a FRIENDLY NPC last seen elsewhere was incorrectly seated into the "
         f"encounter. actors={[(a.name, a.side) for a in enc.actors]!r}"
@@ -236,15 +260,26 @@ def test_absent_friendly_npc_not_seated():
 def test_neutral_npc_not_seated_as_player():
     """A scene-present NEUTRAL NPC is NOT auto-seated to the player side — only
     FRIENDLY disposition qualifies (story context DECISIONS: hostile/neutral are
-    NOT auto-seated to player)."""
+    NOT auto-seated to player).
+
+    Paired with a same-location FRIENDLY control ("Nessa") so the test proves
+    DISPOSITION is the discriminator: the FRIENDLY ally IS seated player while
+    the co-located NEUTRAL bystander is NOT. Without the control this would pass
+    against a no-op seater."""
     snap = _snap()
     snap.npcs.append(_make_npc("Bystander", disposition=_NEUTRAL, last_seen_location=_LOC))
+    snap.npcs.append(_make_npc("Nessa", disposition=_FRIENDLY, last_seen_location=_LOC))
     pack = _load_pack()
 
     trigger_encounter(snap, pack, "combat", _PC, npcs_present=_explicit_opponent())
 
     enc = snap.encounter
     assert enc is not None
+    nessa = _actor(enc, "Nessa")
+    assert nessa is not None and nessa.side == "player", (
+        "control failed: a same-location FRIENDLY ally must be seated side='player' "
+        f"— the seater is not engaging. actors={[(a.name, a.side) for a in enc.actors]!r}"
+    )
     assert "Bystander" not in _player_side_names(enc), (
         "a NEUTRAL bystander was auto-seated on the player side — only FRIENDLY "
         f"disposition should qualify. actors={[(a.name, a.side) for a in enc.actors]!r}"
@@ -284,6 +319,47 @@ def test_friendly_ally_not_conscripted_as_opponent_when_room_sourced():
 
 
 # ---------------------------------------------------------------------------
+# AC3 — invariant: a friendly ally does NOT satisfy "requires an Other"
+# ---------------------------------------------------------------------------
+
+
+def test_friendly_ally_alone_still_raises_no_opponent():
+    """ADR-116 invariant (story AC3): a PC + a present FRIENDLY ally + ZERO
+    opponents still raises ``NoOpponentAvailableError`` — a friendly side="player"
+    seat must NEVER satisfy "a confrontation requires an Other".
+
+    This is the load-bearing guard for the whole story: the friendly-seater adds
+    the first non-PC player-side actor, and the danger is that a future refactor
+    counts that ally toward the no-opponent guard (e.g. by appending allies into
+    ``npcs_present``). The correct design keeps allies OUT of ``npcs_present`` so
+    the guard fires on the empty opponent list BEFORE any ally is seated. Without
+    this test that regression would pass every other test in the suite."""
+    snap = _snap()
+    # A FRIENDLY ally at the PC's location, and NO hostile/opponent anywhere.
+    snap.npcs.append(_make_npc("Mara", disposition=_FRIENDLY, last_seen_location=_LOC))
+    pack = _load_pack()
+
+    with pytest.raises(NoOpponentAvailableError):
+        instantiate_encounter_from_trigger(
+            snapshot=snap,
+            pack=pack,
+            encounter_type="combat",
+            player_name=_PC,
+            npcs_present=[],
+            genre_slug="test_pack",
+        )
+
+    # And the guard must refuse cleanly — no one-sided encounter left behind with
+    # the ally mis-seated as the Other.
+    if snap.encounter is not None:
+        opp = [a for a in snap.encounter.actors if a.side == "opponent"]
+        assert opp, (
+            "a combat encounter was created with no opponent — the friendly ally "
+            f"was wrongly treated as the Other. actors={[(a.name, a.side) for a in snap.encounter.actors]!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # AC4 — OTEL lie-detector: participant.joined source="friendly_fallback"
 # ---------------------------------------------------------------------------
 
@@ -295,7 +371,7 @@ def test_friendly_seat_emits_participant_joined_span(otel_capture):
     one). Today every ``side="player"`` participant.joined span hardcodes
     ``source="seat"`` (encounter_lifecycle.py), so no friendly_fallback-tagged
     span exists; the friendly-seater must distinguish its seats from PC seats."""
-    snap = _snap()
+    snap = _snap()  # TurnManager(interaction=2) — the seat turn the stamp records
     snap.npcs.append(_make_npc("Mara", disposition=_FRIENDLY, last_seen_location=_LOC))
     pack = _load_pack()
 
@@ -315,9 +391,24 @@ def test_friendly_seat_emits_participant_joined_span(otel_capture):
         "engine-seated ally from the narrator improvising. "
         f"spans={[(dict(s.attributes or {}).get('name'), dict(s.attributes or {}).get('side'), dict(s.attributes or {}).get('source')) for s in joined]!r}"
     )
-    assert friendly[0].attributes.get("side") == "player", (
-        "the friendly seat's span must record side='player'; "
-        f"got {friendly[0].attributes.get('side')!r}"
+    attrs = dict(friendly[0].attributes or {})
+    assert attrs.get("side") == "player", (
+        f"the friendly seat's span must record side='player'; got {attrs.get('side')!r}"
+    )
+    # AC4: the span must carry BOTH disposition_attitude AND last_seen_turn so
+    # the GM panel can prove the engine seated the ally *because it read FRIENDLY
+    # disposition* — not because the narrator invented an ally. disposition_attitude
+    # is the load-bearing "why" attribute; last_seen_turn is the recency stamp.
+    assert attrs.get("disposition_attitude") == "friendly", (
+        "the friendly seat's participant.joined span must carry "
+        "disposition_attitude='friendly' (the GM-panel lie-detector proving the "
+        f"seat was disposition-driven). got {attrs.get('disposition_attitude')!r}; "
+        f"attrs={sorted(attrs)!r}"
+    )
+    assert attrs.get("last_seen_turn") == 2, (
+        "the friendly seat's span must carry the ally's last_seen_turn recency "
+        "stamp — the presence stamp records the seat turn (interaction=2). "
+        f"got {attrs.get('last_seen_turn')!r}"
     )
 
 
@@ -451,7 +542,13 @@ def test_friendly_ally_armed_with_real_stat_block_in_hp_depletion_combat():
         "not a zeroed placeholder and not the opponent's content block. "
         f"got hp={mara_npc.core.hp.current}/{mara_npc.core.hp.max}"
     )
-    assert mara_npc.core.armor_class >= 1, (
-        "the seated ally must carry a resolvable armor_class so the hp_depletion "
-        f"engine can adjudicate attacks involving it. got AC={mara_npc.core.armor_class}"
+    # Non-vacuous: the ally is constructed with the CreatureCore default AC (10).
+    # `_seed_combat_hp_depletion_to_npcs` seeds armor_class only for side=="opponent",
+    # so a player-side ally's AC must be UNCHANGED at 10 — proving it was not
+    # clobbered with the opponent's content armor_class. (A `>= 1` floor could
+    # never fail and would be vacuous.)
+    assert mara_npc.core.armor_class == 10, (
+        "the seated ally must keep its own armor_class (default 10), NOT be "
+        "overwritten by the opponent's content stat block. "
+        f"got AC={mara_npc.core.armor_class}"
     )

@@ -72,6 +72,10 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
         span.set_attribute("entity_sync.location_count", result.location_count)
         span.set_attribute("entity_sync.faction_count", result.faction_count)
         span.set_attribute("entity_sync.failed", result.failed)
+        # ADR-138 §D6 — the GM-panel lie-detector sees what the ratification gate
+        # withheld from the index, so a quiet narrator (never re-citing a phantom)
+        # is distinguishable from a silently-swallowed real NPC.
+        span.set_attribute("entity_sync.npc_unratified_skipped", result.skipped_unratified)
         span.set_attribute("entity_sync.outcome", result.outcome)
         span.set_attribute("entity_sync.turn_number", interaction)
 
@@ -83,6 +87,7 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
             "reprojected": result.reprojected,
             "unchanged": result.unchanged,
             "failed": result.failed,
+            "skipped_unratified": result.skipped_unratified,
             "npc_count": result.npc_count,
             "outcome": result.outcome,
             "turn_number": interaction,

@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from sidequest.game.entity_card import EntityCard, project_npc_card
 from sidequest.game.entity_store import EntityStore
+from sidequest.game.npc_pool import is_projectable
 
 if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
@@ -40,8 +41,10 @@ class EntitySyncResult:
     ``reprojected`` counts cards that were inserted or content-changed (and so
     re-armed for embedding); ``unchanged`` counts cards whose projection matched
     the stored card (no churn); ``failed`` counts entities the projector
-    rejected. ``outcome`` is derived so the watcher/span telemetry can never
-    contradict the counts.
+    rejected. ``skipped_unratified`` counts pool members withheld from the index
+    by the ADR-138 §D2 ratification gate (``observation_pending`` phantoms) — a
+    deliberate, observable withholding, distinct from ``failed`` (§D6). ``outcome``
+    is derived so the watcher/span telemetry can never contradict the counts.
 
     The three per-type counters (``npc_count``/``location_count``/
     ``faction_count``) are honest reproject tallies per entity type, mirroring
@@ -57,6 +60,7 @@ class EntitySyncResult:
     reprojected: int = 0
     unchanged: int = 0
     failed: int = 0
+    skipped_unratified: int = 0
     npc_count: int = 0
     location_count: int = 0
     faction_count: int = 0
@@ -132,6 +136,18 @@ def sync_entity_cards(store: EntityStore, snapshot: GameSnapshot) -> EntitySyncR
     # Pool members second — skip any superseded by a stateful Npc (same card id,
     # or the pool member this Npc was promoted from).
     for member in snapshot.npc_pool:
+        # ADR-138 §D2 — gate the FILL, not the FLOOR. An unratified
+        # (``observation_pending``) pool member is an auto-minted phantom the
+        # Story 49-6 gate may purge next turn; the world has not committed to it,
+        # so it must NOT enter the semantic index (where it would resurface as a
+        # "recalled" NPC the world never ratified). Gate BEFORE projection: a
+        # phantom's name validity is irrelevant until ratification, so a blank
+        # name is a skip, not a ``failed`` (§D5: never indexed → never needs
+        # eviction). The skip is counted, never silent (§D6) — the scene-present
+        # floor still shows the member via ``build_npc_working_set``.
+        if not is_projectable(member):
+            result.skipped_unratified += 1
+            continue
         try:
             card = project_npc_card(member)
         except (ValueError, ValidationError) as exc:

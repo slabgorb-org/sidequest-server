@@ -136,6 +136,40 @@ def test_list_ordering_by_turn_then_entity(store) -> None:
     assert entity_ids == ["m_entity", "a_entity", "z_entity"]
 
 
+# ---------------------------------------------------------------------------
+# Story 76-11 — batched region_ids read (one query for many regions)
+# ---------------------------------------------------------------------------
+
+
+def test_batched_region_ids_returns_rows_for_all_requested_regions(store) -> None:
+    """A single ``region_ids=[...]`` read returns the union of all requested
+    regions' rows (Story 76-11 perf fix — one round-trip instead of N)."""
+    store.upsert_location_promotion(_row(region_id="reg_a", entity_id="e1"))
+    store.upsert_location_promotion(_row(region_id="reg_b", entity_id="e2"))
+    store.upsert_location_promotion(_row(region_id="reg_c", entity_id="e3"))
+    rows = store.list_location_promotions(region_ids=["reg_a", "reg_c"])
+    by_region = {(r.region_id, r.entity_id) for r in rows}
+    assert by_region == {("reg_a", "e1"), ("reg_c", "e3")}, (
+        f"batched read must return exactly the requested regions' rows; got {by_region!r}"
+    )
+
+
+def test_batched_empty_region_ids_returns_empty_without_query(store) -> None:
+    """An empty ``region_ids`` list is a no-op empty result (no degenerate
+    ``ANY('{}')`` round-trip)."""
+    store.upsert_location_promotion(_row(region_id="reg_a", entity_id="e1"))
+    assert store.list_location_promotions(region_ids=[]) == []
+
+
+def test_requires_exactly_one_selector(store) -> None:
+    """No Silent Fallbacks: passing neither selector, or both, raises rather
+    than silently returning everything or nothing."""
+    with pytest.raises(ValueError):
+        store.list_location_promotions()
+    with pytest.raises(ValueError):
+        store.list_location_promotions(region_id="reg_a", region_ids=["reg_a"])
+
+
 def test_pg_location_promotion_row_has_no_save_id() -> None:
     """PgLocationPromotionRow must NOT carry save_id (ADR-115 A6 design decision)."""
     r = _row()

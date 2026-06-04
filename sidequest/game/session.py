@@ -525,6 +525,37 @@ class WorldStatePatch(BaseModel):
     discovered_facts: list[DiscoveredFact] | None = None
 
 
+class RegionTransition(BaseModel):
+    """One turn-stamped per-PC relocation receipt — Story 59-30 / ADR-113.
+
+    The durable provenance artifact the ``movement`` engagement witness reads
+    to answer "did the router-dispatched move actually relocate this PC this
+    turn?". Mirrors the political ``BeliefLedgerEntry`` ledger: stamped on
+    EVERY relocation seam so the witness is correct on every world type.
+
+    There is no single relocation choke point — region-mode worlds bypass
+    ``apply_world_patch`` — so this is written at TWO sites:
+      - ``via="world_patch"``   — ``GameSnapshot._apply_world_patch_inner``
+        ``pc_region`` genuine-change block (the two procedural relocation
+        paths both route through ``apply_world_patch(pc_region=...)``).
+      - ``via="narration_apply"`` — the region-mode advance in
+        ``narration_apply`` (oz/wonderland/gulliver relocate here, NOT through
+        ``apply_world_patch``).
+
+    ``pc_name`` is the CHARACTER-NAME key (the same identifier ``pc_regions``
+    uses), NOT the raw ``player_id`` — the witness resolves player_id →
+    character name via ``player_seats`` before keying this ledger.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    turn: int
+    pc_name: str
+    from_region: str | None = None
+    to_region: str
+    via: str
+
+
 # ---------------------------------------------------------------------------
 # Minimal deferred-subsystem stubs needed as field types in GameSnapshot
 # (no logic, only data containers for JSON round-tripping)
@@ -930,6 +961,14 @@ class GameSnapshot(BaseModel):
     # movement writes ``pc_regions`` and NEVER reads back through
     # ``current_region`` (No Silent Fallbacks).
     pc_regions: dict[str, str] = Field(default_factory=dict)
+
+    # Story 59-30 — turn-stamped per-PC relocation ledger (the artifact the
+    # ``movement`` engagement witness reads). Mirrors ``political_state.ledger``
+    # but flat on the snapshot because movement is UNIVERSAL (every world has
+    # it), so a world-conditional sub-state container buys nothing. Written on
+    # both relocation seams (``apply_world_patch`` Site A and ``narration_apply``
+    # Site B); a durable GM-panel/forensics artifact (ADR-124).
+    region_transitions: list[RegionTransition] = Field(default_factory=list)
 
     # Combat state (P1-required: permadeath / death detection)
     player_dead: bool = False
@@ -1387,6 +1426,20 @@ class GameSnapshot(BaseModel):
                 prev = self.pc_regions.get(pc_name)
                 self.pc_regions[pc_name] = to_region
                 if to_region and to_region != prev:
+                    # Story 59-30 — Site A: stamp the per-PC relocation receipt
+                    # the movement engagement witness reads. Inside the
+                    # genuine-change gate, so a no-op re-patch does not pollute
+                    # the ledger. ``via="world_patch"`` covers both procedural
+                    # relocation paths (surface-descent + normal resolve).
+                    self.region_transitions.append(
+                        RegionTransition(
+                            turn=self.turn_manager.interaction,
+                            pc_name=pc_name,
+                            from_region=prev or None,
+                            to_region=to_region,
+                            via="world_patch",
+                        )
+                    )
                     notify_region_transition(
                         self,
                         pc_name=pc_name,

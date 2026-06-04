@@ -50,6 +50,7 @@ from sidequest.game.session import (
     ContainerState,
     GameSnapshot,
     Npc,
+    RegionTransition,
     RoomState,
     upsert_quest_status,
 )
@@ -2652,6 +2653,22 @@ def _apply_narration_result_to_snapshot(
                     _prior_region = snapshot.current_region
                     snapshot.current_region = known_region_id
                     snapshot.pc_regions[player_name] = known_region_id
+                    # Story 59-30 — Site B: stamp the per-PC relocation receipt
+                    # the movement engagement witness reads. MANDATORY here:
+                    # region-mode worlds (oz/wonderland/gulliver) relocate at
+                    # this seam, NOT through apply_world_patch — without it the
+                    # witness false-negatives on every region-mode move. The
+                    # witness is via-agnostic, so ``via="narration_apply"`` reads
+                    # as engaged exactly like a ``world_patch`` stamp.
+                    snapshot.region_transitions.append(
+                        RegionTransition(
+                            turn=snapshot.turn_manager.interaction,
+                            pc_name=player_name,
+                            from_region=_prior_region or None,
+                            to_region=known_region_id,
+                            via="narration_apply",
+                        )
+                    )
                     logger.info(
                         "region.current_region_advanced old=%r new=%r player=%s "
                         "caller=narration_apply.location_update",

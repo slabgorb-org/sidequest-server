@@ -95,6 +95,13 @@ _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
     # persist in the save and feed the engine + the future UI Standing panel
     # (Plan 4), which may promote this to a bounded _PHASE_C projection.
     "political_state",
+    # region_transitions (Story 59-30 - movement engagement ledger). Same
+    # rationale as political_state: a per-PC relocation ledger that grows one
+    # entry per move (unbounded by construction) and exists for the movement
+    # engagement witness + GM-panel/forensics (ADR-124), NOT the narrator -
+    # the narrator learns the PC moved from the scene prose, not the ledger.
+    # DROP affects only the narrator payload; the ledger persists in the save.
+    "region_transitions",
 )
 
 # Story 61-5 / ADR-110 architecture gate — fields that DO ride into

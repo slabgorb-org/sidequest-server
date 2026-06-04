@@ -47,6 +47,7 @@ from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
 from sidequest.server.session_handler import _build_turn_context, _SessionData
+from tests._helpers.doubles import FakeSocket
 from tests._helpers.session_room import room_for
 
 CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
@@ -131,9 +132,7 @@ def test_build_turn_context_populates_world_session_store_lore() -> None:
     assert ctx.session_id == "2026-05-14-caverns_mawdeep-28", (
         f"session_id not plumbed from sd.game_slug; got {ctx.session_id!r}"
     )
-    assert ctx.repository is sd.repository, (
-        "repository reference not plumbed from sd.repository"
-    )
+    assert ctx.repository is sd.repository, "repository reference not plumbed from sd.repository"
     assert ctx.lore_store is sd.lore_store, (
         "lore_store reference not plumbed from sd.lore_store — query_lore "
         "would see no world lore (hit_count=0) and the narrator confabulates"
@@ -471,17 +470,6 @@ async def test_sdk_path_unwired_ids_fire_only_umbrella_not_lore_store_warning(
     )
 
 
-class _FakeSocket:
-    """Minimal `_Sendable` for watcher_hub subscription — same shape as
-    `tests/agents/test_61_3_hard_cap_oversized_canary.py::_FakeSocket`."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-
-
 @pytest.mark.asyncio
 async def test_sdk_path_lore_store_warning_publishes_watcher_event(
     monkeypatch: pytest.MonkeyPatch,
@@ -497,7 +485,7 @@ async def test_sdk_path_lore_store_warning_publishes_watcher_event(
     async with watcher_hub._lock:  # noqa: SLF001
         watcher_hub._subscribers.clear()  # noqa: SLF001
 
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await watcher_hub.subscribe(sock)  # type: ignore[arg-type]
     try:
         ctx = TurnContext(

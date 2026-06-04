@@ -34,6 +34,7 @@ import sidequest.agents.tools  # noqa: F401
 from sidequest.agents.orchestrator import Orchestrator, TurnContext
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 from tests.agents.fakes.fake_anthropic_sdk_client import (
     FakeAnthropicSdkClient,
     ScriptedResponse,
@@ -43,9 +44,7 @@ TURN_COUNT = 5
 
 # Story 61-20: world_context (AVAILABLE CULTURES) is a session-static promoted
 # field — set once, constant across the session, rides the cached prefix.
-_AVAILABLE_CULTURES = (
-    "AVAILABLE CULTURES: Dwarven (Khazad dialect), Human (Common), Elven (Sylvan)"
-)
+_AVAILABLE_CULTURES = "AVAILABLE CULTURES: Dwarven (Khazad dialect), Human (Common), Elven (Sylvan)"
 
 
 def _end_turn(text: str) -> ScriptedResponse:
@@ -86,8 +85,12 @@ def _mutating_contexts(base: TurnContext) -> list[TurnContext]:
             base,
             turn_number=1,
             npc_pool=[
-                NpcPoolMember(name="Harlan", role="innkeeper", pronouns="he/him", drawn_from="world_authored"),
-                NpcPoolMember(name="Vessa", role="merchant", pronouns="she/her", drawn_from="world_authored"),
+                NpcPoolMember(
+                    name="Harlan", role="innkeeper", pronouns="he/him", drawn_from="world_authored"
+                ),
+                NpcPoolMember(
+                    name="Vessa", role="merchant", pronouns="she/her", drawn_from="world_authored"
+                ),
             ],
         ),
         # Turn 2: game state summary materializes
@@ -95,8 +98,12 @@ def _mutating_contexts(base: TurnContext) -> list[TurnContext]:
             base,
             turn_number=2,
             npc_pool=[
-                NpcPoolMember(name="Harlan", role="innkeeper", pronouns="he/him", drawn_from="world_authored"),
-                NpcPoolMember(name="Vessa", role="merchant", pronouns="she/her", drawn_from="world_authored"),
+                NpcPoolMember(
+                    name="Harlan", role="innkeeper", pronouns="he/him", drawn_from="world_authored"
+                ),
+                NpcPoolMember(
+                    name="Vessa", role="merchant", pronouns="she/her", drawn_from="world_authored"
+                ),
             ],
             state_summary=(
                 "Location: The Black Hart Tavern\n"
@@ -109,9 +116,18 @@ def _mutating_contexts(base: TurnContext) -> list[TurnContext]:
             base,
             turn_number=3,
             npc_pool=[
-                NpcPoolMember(name="Harlan", role="innkeeper", pronouns="he/him", drawn_from="world_authored"),
-                NpcPoolMember(name="Vessa", role="merchant", pronouns="she/her", drawn_from="world_authored"),
-                NpcPoolMember(name="Drenwick", role="guard captain", pronouns="he/him", drawn_from="world_authored"),
+                NpcPoolMember(
+                    name="Harlan", role="innkeeper", pronouns="he/him", drawn_from="world_authored"
+                ),
+                NpcPoolMember(
+                    name="Vessa", role="merchant", pronouns="she/her", drawn_from="world_authored"
+                ),
+                NpcPoolMember(
+                    name="Drenwick",
+                    role="guard captain",
+                    pronouns="he/him",
+                    drawn_from="world_authored",
+                ),
             ],
             state_summary=(
                 "Location: The Black Hart Tavern — back room\n"
@@ -130,10 +146,24 @@ def _mutating_contexts(base: TurnContext) -> list[TurnContext]:
             base,
             turn_number=4,
             npc_pool=[
-                NpcPoolMember(name="Harlan", role="innkeeper", pronouns="he/him", drawn_from="world_authored"),
-                NpcPoolMember(name="Vessa", role="merchant", pronouns="she/her", drawn_from="world_authored"),
-                NpcPoolMember(name="Drenwick", role="guard captain", pronouns="he/him", drawn_from="world_authored"),
-                NpcPoolMember(name="Old Meg", role="fortune teller", pronouns="she/her", drawn_from="narrator_invented"),
+                NpcPoolMember(
+                    name="Harlan", role="innkeeper", pronouns="he/him", drawn_from="world_authored"
+                ),
+                NpcPoolMember(
+                    name="Vessa", role="merchant", pronouns="she/her", drawn_from="world_authored"
+                ),
+                NpcPoolMember(
+                    name="Drenwick",
+                    role="guard captain",
+                    pronouns="he/him",
+                    drawn_from="world_authored",
+                ),
+                NpcPoolMember(
+                    name="Old Meg",
+                    role="fortune teller",
+                    pronouns="she/her",
+                    drawn_from="narrator_invented",
+                ),
             ],
             state_summary=(
                 "Location: Market square\n"
@@ -144,14 +174,6 @@ def _mutating_contexts(base: TurnContext) -> list[TurnContext]:
             active_trope_summary="Active trope: The Sealed Letter (stage: escalation)",
         ),
     ]
-
-
-class _FakeSocket:
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
 
 
 @pytest.fixture
@@ -218,7 +240,7 @@ async def test_stable_digest_on_watcher_events_across_5_mutating_turns(
     """Same mutation sequence, verified through the prompt_assembled watcher
     event path — the channel the GM panel actually reads."""
     contexts = _mutating_contexts(simple_turn_context)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(
         responses=[_end_turn(f"narration for turn {i}") for i in range(TURN_COUNT)]
     )
@@ -232,8 +254,7 @@ async def test_stable_digest_on_watcher_events_across_5_mutating_turns(
     enriched = [
         e
         for e in sock.events
-        if e.get("event_type") == "prompt_assembled"
-        and "cache_blocks" in e.get("fields", {})
+        if e.get("event_type") == "prompt_assembled" and "cache_blocks" in e.get("fields", {})
     ]
     assert len(enriched) == TURN_COUNT, (
         f"expected {TURN_COUNT} enriched prompt_assembled events; "
@@ -244,8 +265,7 @@ async def test_stable_digest_on_watcher_events_across_5_mutating_turns(
     for ev in enriched:
         by_label = {b["label"]: b for b in ev["fields"]["cache_blocks"]}
         assert "stable" in by_label, (
-            f"prompt_assembled event missing 'stable' cache_block; "
-            f"labels found: {sorted(by_label)}"
+            f"prompt_assembled event missing 'stable' cache_block; labels found: {sorted(by_label)}"
         )
         digests.append(by_label["stable"]["digest"])
 
@@ -318,9 +338,7 @@ async def test_per_turn_cost_on_otel_span_across_5_turns(
     for i, ctx in enumerate(contexts):
         await orch.run_narration_turn(f"player does thing {i}", ctx)
 
-    turn_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"
-    ]
+    turn_spans = [s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"]
     assert len(turn_spans) == TURN_COUNT, (
         f"expected {TURN_COUNT} narration.turn spans; got {len(turn_spans)}"
     )
@@ -355,10 +373,8 @@ async def test_cache_blocks_digest_present_and_valid_every_turn(
     loudly with the exact field name and location. The ground truth is the
     live watcher data, not inference."""
     contexts = _mutating_contexts(simple_turn_context)
-    sock = _FakeSocket()
-    fake = FakeAnthropicSdkClient(
-        responses=[_end_turn(f"turn {i}") for i in range(TURN_COUNT)]
-    )
+    sock = FakeSocket()
+    fake = FakeAnthropicSdkClient(responses=[_end_turn(f"turn {i}") for i in range(TURN_COUNT)])
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
     orch = Orchestrator(client=fake)
 
@@ -366,9 +382,7 @@ async def test_cache_blocks_digest_present_and_valid_every_turn(
         await orch.run_narration_turn(f"action {i}", ctx)
     await asyncio.sleep(0.05)
 
-    prompt_events = [
-        e for e in sock.events if e.get("event_type") == "prompt_assembled"
-    ]
+    prompt_events = [e for e in sock.events if e.get("event_type") == "prompt_assembled"]
     assert len(prompt_events) >= TURN_COUNT, (
         f"expected at least {TURN_COUNT} prompt_assembled events; "
         f"got {len(prompt_events)}. 60-2 wiring may not be fully live."
@@ -391,8 +405,7 @@ async def test_cache_blocks_digest_present_and_valid_every_turn(
         )
         digest = by_label["stable"]["digest"]
         assert isinstance(digest, str) and len(digest) == 8, (
-            f"Turn {i}: stable block digest must be an 8-char hex string; "
-            f"got {digest!r}"
+            f"Turn {i}: stable block digest must be an 8-char hex string; got {digest!r}"
         )
         assert all(c in "0123456789abcdef" for c in digest), (
             f"Turn {i}: stable block digest must be lowercase hex; got {digest!r}"
@@ -415,10 +428,8 @@ async def test_watcher_digest_matches_real_system_blocks_across_mutations(
     string than what was cached — exactly the decoupled-estimate bug the
     60-2 eyes were built to prevent."""
     contexts = _mutating_contexts(simple_turn_context)
-    sock = _FakeSocket()
-    fake = FakeAnthropicSdkClient(
-        responses=[_end_turn(f"turn {i}") for i in range(TURN_COUNT)]
-    )
+    sock = FakeSocket()
+    fake = FakeAnthropicSdkClient(responses=[_end_turn(f"turn {i}") for i in range(TURN_COUNT)])
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
     orch = Orchestrator(client=fake)
 
@@ -431,8 +442,7 @@ async def test_watcher_digest_matches_real_system_blocks_across_mutations(
     enriched = [
         e
         for e in sock.events
-        if e.get("event_type") == "prompt_assembled"
-        and "cache_blocks" in e.get("fields", {})
+        if e.get("event_type") == "prompt_assembled" and "cache_blocks" in e.get("fields", {})
     ]
     assert len(enriched) == TURN_COUNT
 
@@ -492,13 +502,16 @@ async def test_encounter_transitions_do_not_drift_stable_prefix(
             in_encounter=True,
             encounter_summary="Round 1: Kael vs Cave Spider. Ambush from above.",
             npc_pool=[
-                NpcPoolMember(name="Cave Spider", role="creature", pronouns="it/its", drawn_from="world_authored"),
+                NpcPoolMember(
+                    name="Cave Spider",
+                    role="creature",
+                    pronouns="it/its",
+                    drawn_from="world_authored",
+                ),
             ],
         ),
     ]
-    fake = FakeAnthropicSdkClient(
-        responses=[_end_turn(f"turn {i}") for i in range(TURN_COUNT)]
-    )
+    fake = FakeAnthropicSdkClient(responses=[_end_turn(f"turn {i}") for i in range(TURN_COUNT)])
     orch = Orchestrator(client=fake)
 
     for i, ctx in enumerate(contexts):
@@ -530,10 +543,8 @@ async def test_five_turn_stability_wired_end_to_end(
     test that would catch a decoupling between the real SDK input and the
     GM panel's display."""
     contexts = _mutating_contexts(simple_turn_context)
-    sock = _FakeSocket()
-    fake = FakeAnthropicSdkClient(
-        responses=[_end_turn(f"turn {i}") for i in range(TURN_COUNT)]
-    )
+    sock = FakeSocket()
+    fake = FakeAnthropicSdkClient(responses=[_end_turn(f"turn {i}") for i in range(TURN_COUNT)])
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
     orch = Orchestrator(client=fake)
 
@@ -546,8 +557,7 @@ async def test_five_turn_stability_wired_end_to_end(
     enriched = [
         e
         for e in sock.events
-        if e.get("event_type") == "prompt_assembled"
-        and "cache_blocks" in e.get("fields", {})
+        if e.get("event_type") == "prompt_assembled" and "cache_blocks" in e.get("fields", {})
     ]
     assert len(enriched) == TURN_COUNT
 
@@ -556,9 +566,7 @@ async def test_five_turn_stability_wired_end_to_end(
 
     for i in range(TURN_COUNT):
         prefix_text = fake.recorded_requests[i].system_blocks[0].text
-        recorded_digests.append(
-            hashlib.sha256(prefix_text.encode("utf-8")).hexdigest()[:8]
-        )
+        recorded_digests.append(hashlib.sha256(prefix_text.encode("utf-8")).hexdigest()[:8])
         by_label = {b["label"]: b for b in enriched[i]["fields"]["cache_blocks"]}
         emitted_digests.append(by_label["stable"]["digest"])
 

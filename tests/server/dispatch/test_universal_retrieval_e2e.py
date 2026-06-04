@@ -47,7 +47,6 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from sidequest.agents.orchestrator import Orchestrator
 from sidequest.agents.prompt_framework.core import PromptRegistry
 from sidequest.agents.prompt_framework.types import AttentionZone
 from sidequest.game.creature_core import CreatureCore
@@ -55,6 +54,7 @@ from sidequest.game.entity_card import EntityCard, EntityType
 from sidequest.game.retrieval_orchestration import RetrievedEntities
 from sidequest.game.session import Npc
 from sidequest.server.session_helpers import _build_turn_context
+from tests._helpers.doubles import FakeSocket, make_orchestrator
 
 # A fixed, non-degenerate query/card embedding. A card seeded with this exact
 # vector scores cosine 1.0 against a daemon that returns the same vector, so the
@@ -124,20 +124,6 @@ def _scene_present_npc(name: str, *, turn: int) -> Npc:
         core=CreatureCore(name=name, description=f"{name} is here.", personality="stoic"),
         last_seen_turn=turn,
     )
-
-
-def _make_orchestrator() -> Orchestrator:
-    """A real ``Orchestrator`` for the prompt-assembly half of the arc.
-
-    The ``session_handler_factory`` deliberately gives ``sd.orchestrator`` as a
-    ``MagicMock(spec=Orchestrator)`` (it isolates the handler from the narrator),
-    so the Valley-registration assertion must drive a real Orchestrator —
-    ``build_narrator_prompt`` is backend-agnostic for the entity-section
-    registrations under test (same pattern as ``tests/agents/test_seed_valley_injection.py``).
-    The retrieval half of the chain still runs through the production handler
-    delegate; only the final prompt assembly uses this fresh orchestrator.
-    """
-    return Orchestrator()
 
 
 def _valley_section_names(registry: PromptRegistry, agent_name: str) -> set[str]:
@@ -225,7 +211,7 @@ async def test_capstone_action_to_fill_to_valley_npc_section(
 
     # Injection seam (orchestrator): exactly one retrieved_npcs section, in Valley,
     # carrying the card content.
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     _prompt, registry = await orch.build_narrator_prompt(action, context)
     agent_name = orch._narrator.name()
     npc_sections = [
@@ -295,7 +281,7 @@ async def test_zero_byte_leak_absent_types_register_no_valley_section(
     assert context.retrieved_entity_locations is None
     assert context.retrieved_entity_factions is None
 
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     _prompt, registry = await orch.build_narrator_prompt(action, context)
     agent_name = orch._narrator.name()
     valley_names = _valley_section_names(registry, agent_name)
@@ -360,15 +346,9 @@ async def test_event_reaches_watcher_hub_via_production_delegate(
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
     sd.snapshot.turn_manager.interaction = 2
 
-    received: list[dict[str, Any]] = []
-
-    class _FakeSocket:
-        async def send_json(self, data: dict[str, Any]) -> None:
-            received.append(data)
-
     hub = wh_module.watcher_hub
     hub.bind_loop(asyncio.get_running_loop())
-    fake = _FakeSocket()
+    fake = FakeSocket()
     await hub.subscribe(fake)
     try:
         await handler._retrieve_entities_for_turn(sd, "shout into the dark")
@@ -377,7 +357,7 @@ async def test_event_reaches_watcher_hub_via_production_delegate(
         for _ in range(50):
             await asyncio.sleep(0.01)
             retrieval_events = [
-                e for e in received if e.get("fields", {}).get("field") == "universal_retrieval"
+                e for e in fake.events if e.get("fields", {}).get("field") == "universal_retrieval"
             ]
             if retrieval_events:
                 break

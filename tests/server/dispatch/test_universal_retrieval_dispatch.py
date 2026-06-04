@@ -65,6 +65,7 @@ from sidequest.agents.npc_context import build_npc_working_set
 from sidequest.game.entity_card import EntityCard, EntityType
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
+from tests._helpers.doubles import FakeSocket
 
 # ---------------------------------------------------------------------------
 # Helpers — craft a known RetrievedEntities and a fake daemon
@@ -543,15 +544,9 @@ async def test_event_reaches_watcher_hub_subscriber_via_handler(
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
     sd.snapshot.turn_manager.interaction = 2
 
-    received: list[dict[str, Any]] = []
-
-    class _FakeSocket:
-        async def send_json(self, data: dict[str, Any]) -> None:
-            received.append(data)
-
     hub = wh_module.watcher_hub
     hub.bind_loop(asyncio.get_running_loop())
-    fake = _FakeSocket()
+    fake = FakeSocket()
     await hub.subscribe(fake)
     try:
         await handler._retrieve_entities_for_turn(sd, "shout into the dark")
@@ -561,7 +556,7 @@ async def test_event_reaches_watcher_hub_subscriber_via_handler(
         for _ in range(50):
             await asyncio.sleep(0.01)
             retrieval_events = [
-                e for e in received if e.get("fields", {}).get("field") == "universal_retrieval"
+                e for e in fake.events if e.get("fields", {}).get("field") == "universal_retrieval"
             ]
             if retrieval_events:
                 break
@@ -621,4 +616,6 @@ async def test_wrapper_does_not_double_emit_the_universal_span(
         f"exactly one retrieval.universal span per turn; got {len(spans)} "
         f"(all spans: {[s.name for s in exporter.get_finished_spans()]})"
     )
-    assert spans[0].attributes.get("retrieval.outcome") == "query_failed"
+    attrs = spans[0].attributes
+    assert attrs is not None, "retrieval.universal span must carry attributes"
+    assert attrs.get("retrieval.outcome") == "query_failed"

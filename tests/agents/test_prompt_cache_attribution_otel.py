@@ -68,6 +68,7 @@ import sidequest.agents.tools  # noqa: F401
 from sidequest.agents.claude_client import ClaudeResponse
 from sidequest.agents.orchestrator import Orchestrator, TurnContext
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 from tests.agents.fakes.fake_anthropic_sdk_client import (
     FakeAnthropicSdkClient,
     ScriptedResponse,
@@ -75,14 +76,6 @@ from tests.agents.fakes.fake_anthropic_sdk_client import (
 
 CACHED_ZONES = {"Primacy", "Early"}
 UNCACHED_ZONES = {"Valley", "Late", "Recency"}
-
-
-class _FakeSocket:
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
 
 
 class _CannedClient:
@@ -122,7 +115,7 @@ async def bound_hub() -> WatcherHub:
     return watcher_hub
 
 
-def _enriched_event(sock: _FakeSocket) -> dict[str, Any]:
+def _enriched_event(sock: FakeSocket) -> dict[str, Any]:
     """Return the ``prompt_assembled`` event carrying the new cache
     attribution (``cache_blocks``). Robust to a one- or two-event emission
     design — picks the enriched one, fails loudly if absent."""
@@ -140,7 +133,7 @@ def _enriched_event(sock: _FakeSocket) -> dict[str, Any]:
 
 
 async def _run_turn(
-    sock: _FakeSocket,
+    sock: FakeSocket,
     bound_hub: WatcherHub,
     fake: FakeAnthropicSdkClient,
     context: TurnContext,
@@ -151,7 +144,7 @@ async def _run_turn(
     await orch.run_narration_turn(action, context)
     # watcher_hub.publish_event dispatches to subscribers via
     # run_coroutine_threadsafe on the bound loop; yield briefly so the
-    # _FakeSocket.send_json callbacks land before we read sock.events
+    # FakeSocket.send_json callbacks land before we read sock.events
     # (same settle pattern as tests/agents/test_prompt_zones_dashboard.py).
     await asyncio.sleep(0.05)
 
@@ -165,7 +158,7 @@ async def test_zones_carry_cache_boundary_flag(
 ) -> None:
     """Every zone row indicates whether it rides the cached ``system_blocks[0]``
     (Primacy/Early) or an uncached follow-on block (Valley/Late/Recency)."""
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(responses=[_scripted()])
     await _run_turn(sock, bound_hub, fake, simple_turn_context)
 
@@ -219,7 +212,7 @@ async def test_cache_usage_carries_real_sdk_numbers_not_estimates(
     5m/1h split), ``cost_usd`` and ``cache_ttl`` from the SDK response — not a
     char/4 estimate. Scripted distinct values so an estimate cannot
     accidentally match."""
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(
         responses=[
             _scripted(
@@ -270,7 +263,7 @@ async def test_cache_usage_is_explicit_na_when_sdk_usage_unavailable(
 
     Uses the non-tooling ``_CannedClient`` and drives ``build_narrator_prompt``
     directly (the only path that has no SDK usage in hand)."""
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
     orch = Orchestrator(client=_CannedClient())
     await orch.build_narrator_prompt("look around", simple_turn_context)
@@ -302,7 +295,7 @@ async def test_cache_blocks_carry_content_digest(
     """Each cacheable block emits a short content digest so the UI can detect
     drift turn-to-turn. The 'stable' block (and the tools array) are cached;
     valley/recency are not."""
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(responses=[_scripted()])
     await _run_turn(sock, bound_hub, fake, simple_turn_context)
 
@@ -342,7 +335,7 @@ async def test_stable_block_digest_stable_across_unchanging_turns(
     the SAME 'stable' digest — the property the UI's drift indicator relies on.
     (If this ever differs, that IS the bug — but with the *current* fixture the
     Early-zone state sections are unset, so the stable prefix holds.)"""
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(responses=[_scripted(), _scripted()])
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
     orch = Orchestrator(client=fake)
@@ -393,7 +386,7 @@ async def test_user_bucket_state_in_cached_zone_is_not_miszoned(
         in_chase=False,
         in_encounter=False,
     )
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(responses=[_scripted()])
     await _run_turn(sock, bound_hub, fake, ctx)
 
@@ -452,7 +445,7 @@ async def test_section_in_uncached_zone_is_never_miszoned(
     """``mis_zoned`` is about *cached* zones. Any section in Valley/Late/Recency
     — even a ``state``-category one — must never be flagged, because an
     uncached block is free to mutate per turn without cache cost."""
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(responses=[_scripted()])
     await _run_turn(sock, bound_hub, fake, simple_turn_context)
 
@@ -479,7 +472,7 @@ async def test_emitted_partition_matches_real_system_blocks(
     that block while uncached-zone content must not. The display cannot claim
     'stable' while the real prompt drifted.
     """
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(responses=[_scripted()])
     await _run_turn(sock, bound_hub, fake, simple_turn_context)
 
@@ -538,7 +531,7 @@ async def test_cache_attribution_wired_on_live_turn(
     enriched ``prompt_assembled`` event actually fires with all four new field
     groups present — proving the attribution is reachable from the real path,
     not just constructible in isolation."""
-    sock = _FakeSocket()
+    sock = FakeSocket()
     fake = FakeAnthropicSdkClient(responses=[_scripted(cache_read=11168, cache_write=12281)])
     await _run_turn(sock, bound_hub, fake, simple_turn_context)
 

@@ -46,6 +46,7 @@ from sidequest.agents.tooling_protocol import (
     ToolUseBlock,
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 
 USAGE_EVENT = "narrator.sdk.usage"
 USAGE_COMPONENT = "narrator.sdk"
@@ -172,18 +173,6 @@ def _dispatch(block: ToolUseBlock) -> ToolResultBlock:
     return ToolResultBlock(tool_use_id=block.id, content="17", is_error=False)
 
 
-class _FakeSocket:
-    """Watcher-hub subscriber that collects every published event so tests
-    assert delivery to the GM-panel transport — not just a logger call.
-    Same pattern as the 61-4 / 61-3 tests."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-
-
 @pytest.fixture
 async def bound_hub() -> WatcherHub:
     """Bind the watcher hub to the test loop and clear subscribers."""
@@ -197,7 +186,7 @@ def _build_client(sdk: _Sdk) -> AnthropicSdkClient:
     return AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
 
 
-def _usage_events(sock: _FakeSocket) -> list[dict[str, Any]]:
+def _usage_events(sock: FakeSocket) -> list[dict[str, Any]]:
     return [e for e in sock.events if e.get("event_type") == USAGE_EVENT]
 
 
@@ -217,7 +206,7 @@ async def test_sdk_usage_event_reaches_watcher_transport_as_info(
     tagged ``severity="info"`` and ``component="narrator.sdk"``. Captured at
     the hub boundary, not at the helper call — proves real wiring."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     client = _build_client(_Sdk(responses=[_text_resp(input_tokens=12_000, output_tokens=500)]))
@@ -261,7 +250,7 @@ async def test_sdk_usage_event_payload_carries_all_six_fields(
     ``cost`` — an easy mis-map), and ``cost_usd`` is a float, not a
     preformatted string."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     model = "claude-sonnet-4-6"
@@ -336,7 +325,7 @@ async def test_sdk_usage_event_includes_zero_cache_fields(
     ``cache_read_tokens=0`` and ``cache_write_tokens=0`` — present, not
     dropped — so the GM panel never sees a gap in the trend."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     client = _build_client(
@@ -376,7 +365,7 @@ async def test_sdk_usage_event_fires_once_per_tool_iteration(
     continuous baseline the 61-4 alarm feeds is per-call, so this event is
     per-call too."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     client = _build_client(
@@ -424,7 +413,7 @@ async def test_simple_turn_emits_usage_event_with_matching_payload(
     payload-correctness guard distinct from AC-4's transport-reachability
     guard."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     client = _build_client(_Sdk(responses=[_text_resp(input_tokens=4_096, output_tokens=128)]))

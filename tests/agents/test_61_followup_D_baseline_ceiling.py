@@ -43,8 +43,8 @@ from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
 # Reuse the SDK fake shape that 61-4's tests established. Importing from
 # the 61-4 module would create a test-test coupling; the shape is small
 # enough to redefine here.
+from tests._helpers.doubles import FakeSocket
 from tests.agents.test_61_4_cost_runaway_alarm import (  # type: ignore[attr-defined]
-    _FakeSocket,
     _resp,
     _Sdk,
     _system_blocks,
@@ -145,7 +145,7 @@ async def test_input_clamp_catches_post_ramp_call_unclamped_would_miss(
     clamp, not the drifted mean).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sustained = _resp(input_tokens=60_000, output_tokens=500)
@@ -212,7 +212,7 @@ async def test_baseline_cost_usd_field_is_clamped_post_warmup(
     NOT the unclamped mean (~$0.1875).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sustained = _resp(input_tokens=60_000, output_tokens=500)
@@ -278,7 +278,7 @@ async def test_clamp_is_noop_for_healthy_steady_state_baseline(
     averaging to ~$0.045 / 12_000 tokens.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 12K-in / 500-out costs $3/MTok × 12K + $15/MTok × 500 ≈ $0.0435.
@@ -333,7 +333,7 @@ async def test_cost_multiple_silent_for_low_cost_post_warmup_when_clamped(
     multiplier.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # Train cost baseline at $0.1875 (output 500 keeps io_fingerprint

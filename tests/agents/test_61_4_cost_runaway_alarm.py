@@ -57,6 +57,7 @@ from sidequest.agents.tooling_protocol import (
     ToolDefinition,
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 
 # --- SDK-shape fakes (mirror tests/agents/test_60_4_continuation_cache_breakpoint.py) --
 
@@ -154,18 +155,6 @@ def _tools_empty() -> list[ToolDefinition]:
     return []
 
 
-class _FakeSocket:
-    """Minimal ``_Sendable`` for watcher_hub subscription. Collects every
-    published event so tests can assert delivery to the GM-panel transport
-    (not just ``logger.error``). Same pattern as 61-3 tests."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-
-
 @pytest.fixture
 async def bound_hub() -> WatcherHub:
     """Bind the watcher hub to the test event loop and clear subscribers.
@@ -205,7 +194,7 @@ async def test_io_fingerprint_60k_in_12_out_fires_alarm_once(
     have caught the runaway on call #1 instead of $313 later.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_runaway_fingerprint()])
@@ -257,7 +246,7 @@ async def test_io_fingerprint_event_severity_is_warn_with_trigger_field(
     drill into io_fingerprint vs cost_multiple causes.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_runaway_fingerprint()])
@@ -326,7 +315,7 @@ async def test_rolling_baseline_window_is_k10_and_excludes_oldest(
     reason — that's covered by test 4 below which proves window eviction.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 10 healthy calls warm the baseline up to K=10 observations.
@@ -387,7 +376,7 @@ async def test_rolling_window_evicts_oldest_after_k_plus_one_calls(
     everything" / "K=11" / etc.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # Use output_tokens=500 on the 100K call so it pollutes baseline
@@ -450,7 +439,7 @@ async def test_first_call_uses_floor_and_can_trip_cost_trigger(
     io_fingerprint silent (output 5000 ≥ 50). Only cost_multiple fires.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_resp(input_tokens=30_000, output_tokens=5_000)])
@@ -494,7 +483,7 @@ async def test_healthy_first_call_under_floor_does_not_trip(
     is well under both floors: cost ≈ $0.044 (< $0.15), input 12_000
     (not > 24_000), output 500 (>= 50). MUST NOT fire."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_healthy()])
@@ -536,7 +525,7 @@ async def test_sustained_runaway_emits_one_event_per_call_not_per_iteration(
     the GM panel would drown during a real cost runaway.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_runaway_fingerprint() for _ in range(3)])
@@ -590,7 +579,7 @@ async def test_both_triggers_active_simultaneously_emit_single_event_with_io_pri
     field pair so the operator sees the full picture in one event.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_runaway_fingerprint()])
@@ -641,7 +630,7 @@ async def test_reset_baselines_clears_rolling_state(
     Confirm the very next call sees warmup floors (warmup=True) again.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 10 healthy warmup calls + 1 post-warmup probe that trips io_fingerprint
@@ -747,7 +736,7 @@ async def test_absolute_cost_floor_fires_when_baseline_is_high(
     $0.45 → cost_multiple silent. Only cost_absolute fires.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 10 sustained runaways at 60K in / 500 out (cost ≈ $0.1875 each) +
@@ -821,7 +810,7 @@ async def test_absolute_floor_does_not_re_fire_io_fingerprint_priority(
       with input>>floor (io_fingerprint) AND >>5x floor (cost_multiple).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 200K input / 12 output trips all three triggers simultaneously.
@@ -898,7 +887,7 @@ async def test_tea_adversarial_a_attack_baseline_self_training(
     cost_multiple lane stayed dark).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 10 "sub-warmup-floor" calls at 40K/500 (~$0.1275 each, AND input

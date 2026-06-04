@@ -66,6 +66,7 @@ from sidequest.agents.tooling_protocol import (
     ToolUseBlock,
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 
 # --- session-894 measured profile (the regression these tests defend) ------
 
@@ -199,18 +200,6 @@ def _three_zone_system() -> list[CacheableBlock]:
     ]
 
 
-class _FakeSocket:
-    """watcher_hub subscriber collecting every published event, so tests
-    assert delivery to the GM-panel transport — not just a logger call.
-    Same pattern as the 60-7 / 61-4 tests."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-
-
 @pytest.fixture
 async def bound_hub() -> WatcherHub:
     """Bind the watcher hub to the test loop and clear subscribers.
@@ -243,7 +232,7 @@ def _system_markers(call: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _split_events(sock: _FakeSocket) -> list[dict[str, Any]]:
+def _split_events(sock: FakeSocket) -> list[dict[str, Any]]:
     """Per-turn watcher events carrying the AC5 stable/tail write split.
     Event NAME is left to the implementer (the existing
     ``session.cost_running_total`` per-turn pulse is the natural home — see
@@ -442,12 +431,14 @@ async def test_per_turn_event_exposes_stable_prefix_and_tail_write_split(
     total cache_write.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # Warm turn: stable prefix is a READ (write_1h=0), volatile tail is a
     # fresh 5m write of ~1k (the post-fix steady state).
-    sdk = _Sdk(responses=[_end_turn("done", cache_write_5m=1_024, cache_write_1h=0, cache_read=25_000)])
+    sdk = _Sdk(
+        responses=[_end_turn("done", cache_write_5m=1_024, cache_write_1h=0, cache_read=25_000)]
+    )
     client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
 
     await client.complete_with_tools(
@@ -498,7 +489,7 @@ async def test_per_turn_split_event_is_info_severity_on_narrator_sdk_component(
     (groups with the 60-7 / followup-B siblings in the Subsystems tab).
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_end_turn("done", cache_write_5m=1_024, cache_write_1h=0)])
@@ -536,7 +527,7 @@ async def test_per_turn_split_fires_once_per_turn_not_per_iter(
     sum of the per-iter 5m writes.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # iter=1 writes the tail (5m=900); iter=2 continuation writes a small
@@ -655,6 +646,7 @@ def test_bounded_tail_flat_but_growing_tail_trips_the_flat_cost_guard() -> None:
     AC3's absolute 50-turn validation is the 61-6-style live run (deferred —
     see Delivery Findings).
     """
+
     def per_turn_cost(tail_write_tokens: int) -> float:
         # ~25k stable prefix READ + small output are constant; only the 5m
         # volatile-tail write varies (the thing the flat-cost invariant bounds).

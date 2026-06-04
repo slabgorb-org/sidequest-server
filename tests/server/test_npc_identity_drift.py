@@ -29,13 +29,9 @@ coverage in ``tests/server/test_dispatch.py``; we add the OTEL span check here.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-from sidequest.agents.claude_client import ClaudeClient
 from sidequest.agents.orchestrator import (
     NarrationTurnResult,
     NpcMention,
-    Orchestrator,
     TurnContext,
 )
 from sidequest.agents.prompt_framework.types import (
@@ -45,16 +41,12 @@ from sidequest.agents.prompt_framework.types import (
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import GameSnapshot
 from sidequest.server.session_handler import _apply_narration_result_to_snapshot
+from tests._helpers.doubles import make_orchestrator
 from tests._helpers.session_room import room_for
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_orchestrator() -> Orchestrator:
-    client = MagicMock(spec=ClaudeClient)
-    return Orchestrator(client=client)
 
 
 def _frandrew_captain() -> NpcPoolMember:
@@ -71,7 +63,7 @@ def _frandrew_captain() -> NpcPoolMember:
 async def _build_prompt_with_registry(
     registry_entries: list[NpcPoolMember],
 ) -> tuple[str, object]:
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Felix",
         genre="space_opera",
@@ -133,7 +125,7 @@ async def test_empty_npc_registry_produces_no_dossier_section():
     be added to the prompt. Story 42-3 introduced this discipline (PacingHint)
     and it applies here too — pay only when the dossier has content.
     """
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Felix",
         genre="space_opera",
@@ -154,7 +146,7 @@ async def test_npc_roster_section_uses_valley_or_early_zone():
     Valley (lower attention); acute rules belong in Early/Primacy. Accept
     either Early or Valley — both are defensible; Primacy is not.
     """
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Felix",
         genre="space_opera",
@@ -177,7 +169,7 @@ async def test_npc_roster_section_is_state_category():
     """Roster content describes current world state — not identity, genre,
     or format. Category should be ``SectionCategory.State``.
     """
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Felix",
         npc_pool=[_frandrew_captain()],
@@ -249,7 +241,7 @@ async def test_wiring_turn_n_registry_lands_in_turn_n_plus_1_prompt():
 
     # Turn N+1 — TurnContext is rebuilt from snapshot and prompt is assembled.
     # If the wire is closed, Frandrew's canonical identity must appear.
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Felix",
         genre="space_opera",
@@ -314,7 +306,7 @@ async def test_multi_turn_registry_persistence_in_prompt():
     )
 
     # Build turn-4 prompt and verify identity stability
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     context = TurnContext(
         character_name="Felix",
         genre="space_opera",
@@ -594,8 +586,7 @@ def test_explicit_drift_overwrites_canonical_pronouns_and_role(caplog, monkeypat
         "stick so the turn N+1 roster is right."
     )
     assert entry.role == "grease monkey", (
-        f"72-7: canonical role was not overwritten: got {entry.role!r}, "
-        "expected 'grease monkey'."
+        f"72-7: canonical role was not overwritten: got {entry.role!r}, expected 'grease monkey'."
     )
     # appearance is OUT of scope for overwrite — remains additive (fill-empty),
     # so the already-set value is preserved, not churned by paraphrase.
@@ -813,8 +804,12 @@ def test_drift_applied_span_carries_applied_marker_and_old_new(otel_capture):
     spans = _reinvented_spans(otel_capture)
     assert len(spans) == 1, f"expected exactly one npc.reinvented span, got {len(spans)}"
     attrs = dict(spans[0].attributes or {})
-    assert attrs.get("drift_field") == "pronouns", f"wrong drift_field: {attrs.get('drift_field')!r}"
-    assert attrs.get("expected") == "they/them", f"old value not captured: {attrs.get('expected')!r}"
+    assert attrs.get("drift_field") == "pronouns", (
+        f"wrong drift_field: {attrs.get('drift_field')!r}"
+    )
+    assert attrs.get("expected") == "they/them", (
+        f"old value not captured: {attrs.get('expected')!r}"
+    )
     assert attrs.get("narrator") == "she/her", f"new value not captured: {attrs.get('narrator')!r}"
     assert attrs.get("applied") is True, (
         "72-7 AC-3: span lacks the `applied=True` marker — the GM panel cannot "

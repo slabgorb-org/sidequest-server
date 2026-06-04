@@ -62,8 +62,8 @@ from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
 # tests/agents/fakes/sdk_shape.py BEFORE a sixth sibling lands; A is the
 # fifth and right-sizes per memory feedback_plan_ceremony (2pt story,
 # don't expand scope). See Delivery Findings in the session file.
+from tests._helpers.doubles import FakeSocket
 from tests.agents.test_61_4_cost_runaway_alarm import (  # type: ignore[attr-defined]
-    _FakeSocket,
     _resp,
     _Sdk,
     _system_blocks,
@@ -294,7 +294,7 @@ async def test_fresh_session_uses_warmup_floor_not_event(
     baseline would defeat the entire story.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     # 12K-in / 500-out is the explicit healthy reference shape (matches
@@ -383,7 +383,7 @@ async def test_session_a_trips_cost_multiple_after_session_b_floods(
     baseline is the entire surface 61-followup-A modifies.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     a_baseline = _resp(input_tokens=11_000, output_tokens=500)
@@ -516,7 +516,7 @@ async def test_complete_with_tools_with_none_session_id_does_not_populate_baseli
     closes that leak.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     sdk = _Sdk(responses=[_resp(input_tokens=12_000, output_tokens=500)])
@@ -573,7 +573,7 @@ async def test_complete_with_tools_routes_session_id_to_baseline_dict(
                         "Y": deque([cost_y1])}
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     healthy = _resp(input_tokens=12_000, output_tokens=500)

@@ -66,14 +66,23 @@ def test_apply_location_added_to_discovered_regions_once():
 
 
 def test_apply_quest_updates():
-    """Quest updates from game_patch are merged into snapshot.quest_log."""
+    """A stale ``quest_updates`` key on the raw game_patch is auto-forwarded into
+    snapshot.quest_log (Story 77-4 No-Silent-Fallbacks guard).
+
+    The typed ``quest_updates`` lane was retired (ADR-137 AC-3); record_quest is
+    the clean home. A narrator that still emits the key has its status update
+    forwarded — never dropped — via the narration-apply guard, landing as a
+    status-bearing QuestEntry. (Full guard contract incl. the loud
+    ``quest.updates.legacy_emitted`` span lives in
+    tests/game/test_quest_updates_retirement.py.)"""
     snapshot = GameSnapshot(genre_slug="test", world_slug="test")
-    result = _make_result(narration="Quest started.", quest_updates={"find_crystal": "active"})
+    result = _make_result(
+        narration="Quest started.",
+        game_patch_dict={"quest_updates": {"find_crystal": "active"}},
+    )
 
     _apply_narration_result_to_snapshot(snapshot, result, "player", room=room_for(snapshot))
 
-    # Story 77-2: quest_log values are QuestEntry; the legacy status-only lane
-    # coerces into a status-bearing entry.
     assert snapshot.quest_log["find_crystal"].status == "active"
 
 

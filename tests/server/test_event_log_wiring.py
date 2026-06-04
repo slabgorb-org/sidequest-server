@@ -105,7 +105,6 @@ def _fake_narration_result():
     return NarrationTurnResult(
         narration="The dungeon echoes with your footsteps.",
         location=None,
-        quest_updates={},
         lore_established=[],
         npcs_present=[],
         is_degraded=False,

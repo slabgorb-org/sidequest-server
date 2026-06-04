@@ -96,6 +96,7 @@ from sidequest.telemetry.spans import (
     npc_referenced_span,
     npc_spawn_disposition_span,
     quest_update_span,
+    quest_updates_legacy_emitted_span,
     region_entry_canonicalized_dedup_span,
     region_entry_rejected_span,
     table_commit_span,
@@ -2385,8 +2386,10 @@ def _apply_narration_result_to_snapshot(
 ) -> NarrationApplyOutcome:
     """Apply narrator-extracted fields to the snapshot.
 
-    Phase 1: location, quest_updates, lore_established, npc_pool / npcs
-    upsert, inventory items_gained / items_lost.
+    Phase 1: location, lore_established, npc_pool / npcs
+    upsert, inventory items_gained / items_lost. (The legacy quest_updates
+    lane was retired in 77-4; a stale ``quest_updates`` key on the raw
+    game_patch is auto-forwarded to quest_log, not applied as a typed field.)
     Story 3.4: encounter instantiation and beat application (when pack provided).
 
     ``dice_failed=True`` / ``False`` signals a dice-replay turn — the dice
@@ -2887,24 +2890,34 @@ def _apply_narration_result_to_snapshot(
                         component="confrontation",
                     )
 
-    if result.quest_updates:
-        # Span emission replaces the prior direct ``_watcher_publish`` —
-        # ``WatcherSpanProcessor`` re-emits the same ``state_transition``
-        # event via ``SPAN_ROUTES[SPAN_QUEST_UPDATE]``.
-        with quest_update_span(
-            updates=result.quest_updates,
+    # Story 77-4 (ADR-137 AC-3): the legacy ``quest_updates`` lane is retired —
+    # ``record_quest`` update-mode is the typed home, and the clean narrator
+    # path no longer emits the key (it was dropped from extraction + the typed
+    # NarrationTurnResult field). But a stale narrator can still put a
+    # ``quest_updates`` key on the RAW game_patch. No Silent Fallbacks: rather
+    # than drop it (status lost) or raise (a live turn crashes), auto-forward it
+    # to record_quest update-mode semantics (``upsert_quest_status`` — the same
+    # status-only mechanism record_quest update-mode uses) and fire the loud,
+    # GM-visible ``quest.updates.legacy_emitted`` span. The legacy
+    # ``SPAN_QUEST_UPDATE`` no longer fires from this path; ``quest.updated`` is
+    # the successor for the clean record_quest path.
+    _legacy_quest_updates = result.game_patch_dict.get("quest_updates")
+    if isinstance(_legacy_quest_updates, dict) and _legacy_quest_updates:
+        for quest_id, status in _legacy_quest_updates.items():
+            if isinstance(quest_id, str) and isinstance(status, str):
+                upsert_quest_status(snapshot.quest_log, quest_id, status)
+        quest_updates_legacy_emitted_span(
+            quest_ids=[k for k in _legacy_quest_updates if isinstance(k, str)],
+            updates_count=len(_legacy_quest_updates),
             player_name=player_name,
             turn_number=snapshot.turn_manager.interaction,
-        ):
-            for quest_id, status in result.quest_updates.items():
-                # Story 77-2: legacy status-only lane under the widened
-                # QuestEntry type (77-4 retires this onto record_quest).
-                upsert_quest_status(snapshot.quest_log, quest_id, status)
-            logger.info(
-                "state.quest_update count=%d player=%s",
-                len(result.quest_updates),
-                player_name,
-            )
+        )
+        logger.warning(
+            "state.quest_updates.legacy_emitted count=%d player=%s — narrator "
+            "emitted a retired quest_updates key; auto-forwarded to quest_log",
+            len(_legacy_quest_updates),
+            player_name,
+        )
 
     # Inventory — apply narrator items_gained/items_lost/items_discarded/
     # items_consumed on the rolling player's character. Playtest 2026-04-24

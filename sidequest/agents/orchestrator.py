@@ -469,7 +469,6 @@ class NarrationTurnResult:
     # extractor lane existed for the consume verb.
     items_consumed: list[dict[str, Any]] = field(default_factory=list)
     footnotes: list[dict[str, Any]] = field(default_factory=list)
-    quest_updates: dict[str, str] = field(default_factory=dict)
     sfx_triggers: list[str] = field(default_factory=list)
     action_rewrite: ActionRewrite | None = None
     # ADR-105 B3 — per-PC private narration prose the narrator
@@ -1185,7 +1184,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
     maps it to a plain dict, then strips the fence from the returned prose.
 
     Returns a dict with keys:
-      prose, footnotes, items_gained, items_lost, npcs_present, quest_updates,
+      prose, footnotes, items_gained, items_lost, npcs_present,
       visual_scene, scene_mood, sfx_triggers, action_rewrite,
       beat_selections, confrontation, location, affinity_progress, gold_change,
       lore_established.
@@ -1200,7 +1199,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         "game_patch.extracted "
         "footnotes=%d items_gained=%d items_lost=%d items_discarded=%d "
         "items_consumed=%d "
-        "npcs_present=%d quest_updates=%d sfx_triggers=%d "
+        "npcs_present=%d sfx_triggers=%d "
         "has_visual_scene=%s has_scene_mood=%s has_action_rewrite=%s "
         "beat_selections=%d confrontation=%r "
         "has_location=%s gold_change=%r status_changes=%d "
@@ -1211,7 +1210,6 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         len(patch.get("items_discarded", [])),
         len(patch.get("items_consumed", [])),
         len(patch.get("npcs_present", [])),
-        len(patch.get("quest_updates", {})),
         len(patch.get("sfx_triggers", [])),
         patch.get("visual_scene") is not None,
         patch.get("mood") is not None or patch.get("scene_mood") is not None,
@@ -1255,7 +1253,6 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         "items_discarded": patch.get("items_discarded", []),
         "items_consumed": patch.get("items_consumed", []),
         "npcs_present": patch.get("npcs_present", []),
-        "quest_updates": patch.get("quest_updates", {}),
         "visual_scene": patch.get("visual_scene"),
         "scene_mood": patch.get("scene_mood", patch.get("mood")),
         "sfx_triggers": patch.get("sfx_triggers", []),
@@ -1316,13 +1313,14 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
 # ``apply_world_patch`` (patches_other) and ``update_npc_disposition``
 # (patches_disposition) now own.
 #
-# items_* / gold_change / quest_updates / lore_established / companions_*
+# items_* / gold_change / lore_established / companions_*
 # are deliberately NOT in this partition: NO registered tool in
-# sidequest/agents/tools/ mutates inventory, gold, the quest log, lore, or
+# sidequest/agents/tools/ mutates inventory, gold, lore, or
 # the companion roster (verified — query_character/query_encounter only
 # READ inventory), and none has a COVERAGE_MAP row. They stay
 # sidecar-sourced so narration_apply remains their single applier on BOTH
-# paths.
+# paths. (``quest_updates`` was retired in 77-4 — record_quest is its typed
+# successor; a stale key is auto-forwarded by the narration-apply guard.)
 #
 # KNOWN GAP (out of scope, follow-up): zeroing ``location`` means
 # narration_apply's region canonicalization / room-graph promotion
@@ -3216,9 +3214,6 @@ class Orchestrator:
                 footnotes=extraction["footnotes"]
                 if isinstance(extraction["footnotes"], list)
                 else [],
-                quest_updates=extraction["quest_updates"]
-                if isinstance(extraction["quest_updates"], dict)
-                else {},
                 sfx_triggers=extraction["sfx_triggers"]
                 if isinstance(extraction["sfx_triggers"], list)
                 else [],
@@ -3481,7 +3476,7 @@ class Orchestrator:
         Covers the fields that are sidecar-sourced on every path:
         presentation/signal fields with no successor tool (scene_mood,
         visual_scene, npcs_present, footnotes, sfx_triggers, action_rewrite),
-        the no-successor-tool state lanes (items_*, quest_updates,
+        the no-successor-tool state lanes (items_*,
         gold_change, lore_established, companions_*), and the
         agent/token/prompt/raw/secret telemetry tail. Also performs the two
         shared side effects: the canonical-prose leak audit and the
@@ -3546,9 +3541,6 @@ class Orchestrator:
             "items_lost": extraction.get("items_lost", []),
             "items_discarded": extraction.get("items_discarded", []),
             "items_consumed": extraction.get("items_consumed", []),
-            "quest_updates": extraction["quest_updates"]
-            if isinstance(extraction["quest_updates"], dict)
-            else {},
             "gold_change": extraction["gold_change"],
             "lore_established": extraction["lore_established"],
             "companions_added": extraction.get("companions_added", []),
@@ -3601,7 +3593,7 @@ class Orchestrator:
         * **Presentation / no-successor-tool fields** — built by the shared
           :meth:`_presentation_and_untooled_fields` helper (scene_mood,
           visual_scene, npcs_present, footnotes, sfx_triggers,
-          action_rewrite, items_*, quest_updates, gold_change,
+          action_rewrite, items_*, gold_change,
           lore_established, companions_*, telemetry tail). That helper
           STRUCTURALLY cannot emit a tool-owned key, so the SDK result
           carries only sidecar-sourced presentation/untooled state.

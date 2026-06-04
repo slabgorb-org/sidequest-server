@@ -432,8 +432,8 @@ class QuestEntry(BaseModel):
 
     Replaces the pre-77-2 ``quest_log: dict[str, str]`` (id -> status-string)
     with id -> structured entry: title + objective + status + optional anchor.
-    Legacy string values (from pre-77-2 saves, the 77-1 seed, the trope
-    handshake, and the legacy ``quest_updates`` lane) are coerced into a
+    Legacy string values (from pre-77-2 saves, the 77-1 seed, and the trope
+    handshake) are coerced into a
     QuestEntry carrying that string as its ``status`` by ``_coerce_quest_log``,
     wired as a ``mode="before"`` validator on every field typed
     ``dict[str, QuestEntry]`` — so old saves load instead of failing loud.
@@ -467,13 +467,15 @@ def _coerce_quest_log(value: object) -> object:
 def upsert_quest_status(quest_log: dict[str, QuestEntry], quest_id: str, status: str) -> None:
     """Set an existing quest's status in place, or mint a status-only QuestEntry.
 
-    The status-only upsert idiom shared by every legacy/status-string writer
-    under the widened ``quest_log`` type (Story 77-2): the ``quest_updates``
-    apply path, the live ``quest_updates`` narration writer, the trope-resolution
-    handshake, and world-materialization chapter quests. Centralised so the
-    widened-type contract (never assign a bare ``str`` into ``quest_log``) lives
-    in one place. ``record_quest`` does NOT use this — it writes full
-    title+objective entries, not status-only.
+    The status-only upsert idiom shared by every status-string writer under
+    the widened ``quest_log`` type (Story 77-2): the trope-resolution handshake,
+    world-materialization chapter quests, and — after 77-4 retired the
+    ``quest_updates`` lane (ADR-137 AC-3) — the narration-apply auto-forward
+    guard that catches any narrator payload still carrying a legacy
+    ``quest_updates`` key. Centralised so the widened-type contract (never
+    assign a bare ``str`` into ``quest_log``) lives in one place.
+    ``record_quest`` does NOT use this — it writes full title+objective
+    entries, not status-only.
     """
     existing = quest_log.get(quest_id)
     if existing is not None:
@@ -495,10 +497,11 @@ class WorldStatePatch(BaseModel):
     time_of_day: str | None = None
     atmosphere: str | None = None
     # Story 77-2: widened from dict[str, str] to structured QuestEntry. The
-    # legacy ``quest_updates`` lane (still dict[str, str], retired in 77-4)
-    # is coerced in the apply path, not here.
+    # legacy ``quest_updates`` status-only lane was retired in 77-4 (ADR-137
+    # AC-3) — record_quest update-mode is the typed home; a narrator payload
+    # still carrying ``quest_updates`` is rejected loudly by ``extra="forbid"``
+    # and auto-forwarded by the narration-apply guard, never coerced here.
     quest_log: dict[str, QuestEntry] | None = None
-    quest_updates: dict[str, str] | None = None
 
     @field_validator("quest_log", mode="before")
     @classmethod
@@ -1378,11 +1381,6 @@ class GameSnapshot(BaseModel):
             self.atmosphere = patch.atmosphere
         if patch.quest_log is not None:
             self.quest_log = patch.quest_log
-        if patch.quest_updates is not None:
-            # Legacy status-only lane (dict[str, str], retired in 77-4). Coerce
-            # into the widened QuestEntry type. Story 77-2.
-            for quest_id, status in patch.quest_updates.items():
-                upsert_quest_status(self.quest_log, quest_id, status)
         if patch.quest_anchors is not None:
             # Story 77-3 (ADR-137): order-preserving dedup UNION, not replace.
             # A narrator world-patch must never clobber the seeded campaign

@@ -65,7 +65,9 @@ SPAN_ROUTES[SPAN_QUEST_SEEDED_AT_CREATION] = SpanRoute(
 # the lie-detector for the campaign-spine substrate: each routes to a
 # state_transition event the WatcherSpanProcessor re-emits, exactly like
 # SPAN_QUEST_UPDATE above. quest.updated is the successor to SPAN_QUEST_UPDATE
-# (the old span may co-fire until 77-4 cuts the legacy quest_updates lane).
+# for the quest-update path (77-4 retired the legacy quest_updates lane, so the
+# old span no longer fires from there). SPAN_QUEST_UPDATE itself is retained:
+# the separate trope-resolution handshake still uses it as its GM-panel surface.
 SPAN_QUEST_CREATED = "quest.created"
 SPAN_ROUTES[SPAN_QUEST_CREATED] = SpanRoute(
     event_type="state_transition",
@@ -89,6 +91,29 @@ SPAN_ROUTES[SPAN_QUEST_UPDATED] = SpanRoute(
         "quest_id": (span.attributes or {}).get("quest_id", ""),
         "old_status": (span.attributes or {}).get("old_status", ""),
         "new_status": (span.attributes or {}).get("new_status", ""),
+    },
+)
+# Story 77-4 (ADR-137 AC-3) — the No-Silent-Fallbacks guard span. After the
+# legacy ``quest_updates`` lane is retired, a narrator game_patch that STILL
+# carries a ``quest_updates`` key is auto-forwarded to record_quest update-mode
+# semantics (the status LANDS in quest_log via upsert_quest_status) and this
+# loud, GM-visible span fires so the panel can see a stale-contract emit
+# happened — never a silent drop. This span is the guard's lie-detector, so its
+# counts must NOT lie: ``quest_ids_json`` + ``updates_count`` carry only the
+# items that ACTUALLY forwarded (str status), and ``skipped_count`` carries the
+# items dropped (non-str status, or a non-dict value) so every drop is visible.
+SPAN_QUEST_UPDATES_LEGACY_EMITTED = "quest.updates.legacy_emitted"
+SPAN_ROUTES[SPAN_QUEST_UPDATES_LEGACY_EMITTED] = SpanRoute(
+    event_type="state_transition",
+    component="quest_log",
+    extract=lambda span: {
+        "field": "quest_log",
+        "op": "legacy_updates_auto_forwarded",
+        "quest_ids": (span.attributes or {}).get("quest_ids_json", "[]"),
+        "updates_count": (span.attributes or {}).get("updates_count", 0),
+        "skipped_count": (span.attributes or {}).get("skipped_count", 0),
+        "player_name": (span.attributes or {}).get("player_name", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
 )
 SPAN_STAKES_SET = "stakes.set"
@@ -233,6 +258,40 @@ def quest_updated_span(
         **attrs,
     }
     with Span.open(SPAN_QUEST_UPDATED, attributes, tracer_override=_tracer):
+        pass
+
+
+def quest_updates_legacy_emitted_span(
+    *,
+    quest_ids: list[str],
+    updates_count: int,
+    skipped_count: int = 0,
+    player_name: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit the Story 77-4 ``quest.updates.legacy_emitted`` span (point event).
+
+    Fired by the narration-apply auto-forward guard when a narrator game_patch
+    still carries a retired ``quest_updates`` key. Items with a string status are
+    forwarded into ``quest_log`` via ``upsert_quest_status`` — never dropped — and
+    this loud span makes the stale-contract emit visible to the GM panel (No
+    Silent Fallbacks). As the guard's lie-detector, its counts must reflect
+    reality: ``quest_ids`` + ``updates_count`` are the items that ACTUALLY
+    forwarded; ``skipped_count`` is the items dropped (non-str status, or a
+    non-dict ``quest_updates`` value) so every drop is observable. ``quest_ids``
+    is JSON-encoded (OTEL drops list values).
+    """
+    attributes: dict[str, Any] = {
+        "quest_ids_json": _json.dumps(quest_ids),
+        "updates_count": updates_count,
+        "skipped_count": skipped_count,
+        "player_name": player_name,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(SPAN_QUEST_UPDATES_LEGACY_EMITTED, attributes, tracer_override=_tracer):
         pass
 
 

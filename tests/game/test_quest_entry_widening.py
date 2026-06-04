@@ -128,17 +128,13 @@ def test_world_state_patch_quest_log_is_structured() -> None:
     assert isinstance(patch.quest_log["q1"], QuestEntry)
 
 
-def test_legacy_quest_updates_apply_coerces_to_quest_entry() -> None:
-    """The legacy ``quest_updates`` lane (dict[str, str], retired in 77-4)
-    must remain coherent with the widened type until then: applying it
-    yields QuestEntry values, not raw strings injected into a structured
-    dict. This is type-coherence under the widening, NOT lane retirement.
-    """
-    snap = _snapshot()
-    snap.apply_world_patch(WorldStatePatch(quest_updates={"deal_with_vex": "active"}))
-    entry = snap.quest_log["deal_with_vex"]
-    assert isinstance(entry, QuestEntry)
-    assert entry.status == "active"
+# Story 77-4 (ADR-137 AC-3): the legacy ``quest_updates`` apply lane was retired
+# (the field is gone from WorldStatePatch). The status-only type-coherence it
+# guarded — a bare status string lands as a ``QuestEntry``, never a raw str —
+# now lives on ``upsert_quest_status`` and is asserted by
+# tests/game/test_quest_updates_retirement.py::test_upsert_quest_status_status_only_path_intact.
+# The old ``test_legacy_quest_updates_apply_coerces_to_quest_entry`` was removed
+# here as it exercised the now-deleted field.
 
 
 # --------------------------------------------------------------------------- #

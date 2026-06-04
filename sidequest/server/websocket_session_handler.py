@@ -2235,13 +2235,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             _patch_summaries.append(
                                 PatchSummary(patch_type="location", fields_changed=["location"])
                             )
-                        if result.quest_updates:
-                            _patch_summaries.append(
-                                PatchSummary(
-                                    patch_type="quest",
-                                    fields_changed=list(result.quest_updates),
-                                )
-                            )
+                        # Story 77-4: the legacy quest_updates lane was retired
+                        # (record_quest is the typed home); the NarrationTurnResult
+                        # field is gone, so there is no quest PatchSummary here.
                         if result.lore_established:
                             _patch_summaries.append(
                                 PatchSummary(patch_type="lore", fields_changed=["lore_established"])

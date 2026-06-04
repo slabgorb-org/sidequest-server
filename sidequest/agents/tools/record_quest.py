@@ -7,8 +7,9 @@ fresh ``quest_id`` it MINTS a structured quest (``QuestEntry`` — title +
 objective + status + optional anchor) and fires ``quest.created``. On an
 existing id it UPDATES the entry (primarily status) and fires
 ``quest.updated`` — the behavioural successor to the legacy
-``quest_updates``/``SPAN_QUEST_UPDATE`` lane (77-4 retires that lane onto this
-tool).
+``quest_updates`` lane (77-4 retired that lane onto this tool; the legacy
+``SPAN_QUEST_UPDATE`` no longer fires from the quest-update path, though it
+survives as the GM-panel surface for the separate trope-resolution handshake).
 
 State-bloat guardrail (the explicit YAML AC): minting is capped at
 ``_QUEST_LOG_CARDINALITY_CAP`` quests so a runaway narrator cannot grow

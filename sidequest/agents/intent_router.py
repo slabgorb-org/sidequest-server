@@ -387,6 +387,11 @@ class IntentRouter:
                 # retry — the GM panel can see the self-heal that saved the
                 # turn's dispatch from a malformed first attempt.
                 span.set_attribute("schema_corrected", last_schema_error is not None)
+                # Happy-path decompose spans are never degraded (Story 71-29):
+                # the degrade path emits its own decompose span with degraded=True
+                # from the caller. Setting it explicitly here keeps the attribute
+                # present on every decompose span so the GM panel can filter.
+                span.set_attribute("degraded", False)
             return pkg
 
         assert last_failure is not None  # _MAX_TOTAL_ATTEMPTS >= 1

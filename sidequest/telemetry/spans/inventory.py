@@ -184,6 +184,7 @@ SPAN_ROUTES[SPAN_EQUIP_RESOLVED] = SpanRoute(
         "equipped_after": (span.attributes or {}).get("equipped_after"),
         "changed": (span.attributes or {}).get("changed", False),
         "matched_by": (span.attributes or {}).get("matched_by", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
 )
 
@@ -198,6 +199,7 @@ SPAN_ROUTES[SPAN_EQUIP_UNRESOLVED] = SpanRoute(
         "reason": (span.attributes or {}).get("reason", ""),
         "requested_item": (span.attributes or {}).get("requested_item", ""),
         "action": (span.attributes or {}).get("action", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
 )
 
@@ -213,12 +215,15 @@ def equip_resolved_span(
     equipped_after: bool,
     changed: bool,
     matched_by: str,
+    turn_number: int = 0,
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
     """One span per resolved equip/unequip — the item was found in the acting
     PC's inventory and its ``equipped`` flag set to ``equipped_after``.
-    ``changed`` is False on an idempotent re-equip (already in target state)."""
+    ``changed`` is False on an idempotent re-equip (already in target state).
+    ``turn_number`` is ``snapshot.turn_manager.interaction`` so the dashboard
+    grids this span to the correct turn column (Bug A fix)."""
     with Span.open(
         SPAN_EQUIP_RESOLVED,
         {
@@ -230,6 +235,7 @@ def equip_resolved_span(
             "equipped_after": equipped_after,
             "changed": changed,
             "matched_by": matched_by,
+            "turn_number": turn_number,
             **attrs,
         },
         tracer_override=_tracer,
@@ -244,12 +250,15 @@ def equip_unresolved_span(
     reason: str,
     requested_item: str,
     action: str,
+    turn_number: int = 0,
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
     """Fail-loud equip span: the named item or acting PC could not be resolved
     (``item_not_found`` / ``no_character`` / ``no_item_named``). ERROR status
-    so the GM panel surfaces it as a failure, never a silent stay-as-is."""
+    so the GM panel surfaces it as a failure, never a silent stay-as-is.
+    ``turn_number`` is ``snapshot.turn_manager.interaction`` so the dashboard
+    grids this span to the correct turn column (Bug A fix)."""
     with Span.open(
         SPAN_EQUIP_UNRESOLVED,
         {
@@ -257,6 +266,7 @@ def equip_unresolved_span(
             "reason": reason,
             "requested_item": requested_item,
             "action": action,
+            "turn_number": turn_number,
             **attrs,
         },
         tracer_override=_tracer,

@@ -857,6 +857,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         dungeon_store=_dungeon_store,
                         palette=_dungeon_palette,
                         lookahead_handle=_lookahead_handle,
+                        phase_timings=timings,
                     )
                 except IntentRouterFailure as exc:
                     if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):

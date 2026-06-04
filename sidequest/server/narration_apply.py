@@ -30,7 +30,7 @@ from sidequest.game.dogfight_shot import (
     frame_hp_resolver,
     resolve_dogfight_shots,
 )
-from sidequest.game.encounter_classifier import is_player_victory
+from sidequest.game.encounter_classifier import is_player_victory, yield_side_for
 from sidequest.game.item_catalog_resolution import resolve_gained_item_dict
 from sidequest.game.morale import (
     MoraleOutcome,
@@ -4606,9 +4606,14 @@ def _resolve_opponent_yield(
     # per-actor withdrawn flags.
     yielded_opponents = withdrawn_names or [a.name for a in opponents]
 
+    from sidequest.telemetry.spans import encounter_resolution_signal_emitted_span
+
     enc.resolved = True
     enc.outcome = "opponent_yielded"
     enc.structured_phase = EncounterPhase.Resolution
+    # Story 59-33: derive yield_side from the outcome (never hand-set) →
+    # "opponent" for an opponent yield.
+    yield_side = yield_side_for(enc.outcome)
     snapshot.pending_resolution_signal = ResolutionSignal(
         encounter_type=enc.encounter_type,
         outcome="opponent_yielded",
@@ -4616,7 +4621,18 @@ def _resolve_opponent_yield(
         final_opponent_metric=enc.opponent_metric.current,
         yielded_actors=tuple(yielded_opponents),
         edge_refreshed=0,
+        yield_side=yield_side,
     )
+    # Story 59-33: emit the resolution-signal span (the live GM-panel consumer)
+    # carrying yield_side — this inline opponent-yield builder does not route
+    # through _build_resolution_signal, so it emits its own span.
+    with encounter_resolution_signal_emitted_span(
+        outcome="opponent_yielded",
+        final_player_metric=enc.player_metric.current,
+        final_opponent_metric=enc.opponent_metric.current,
+        yield_side=yield_side,
+    ):
+        pass
     # Story 59-32: the credit-victory ``outcome`` attr is DERIVED through the
     # shared classifier from the mechanical-truth label the engine just set
     # (``enc.outcome == "opponent_yielded"``), not hardcoded. The classifier is
@@ -4851,15 +4867,33 @@ def _apply_companion_changes(
 
 def _build_resolution_signal(enc: object) -> object:
     from sidequest.game.resolution_signal import ResolutionSignal
+    from sidequest.telemetry.spans import encounter_resolution_signal_emitted_span
 
-    return ResolutionSignal(
+    outcome = enc.outcome or ""
+    # Story 59-33: yield_side is DERIVED from the outcome (never hand-set) so the
+    # factory cannot mislabel a surrender/rout/opponent_yielded resolution. None
+    # for non-yield resolutions (dial wins, abandonment, etc.).
+    yield_side = yield_side_for(outcome)
+    signal = ResolutionSignal(
         encounter_type=enc.encounter_type,
-        outcome=enc.outcome or "",
+        outcome=outcome,
         final_player_metric=enc.player_metric.current,
         final_opponent_metric=enc.opponent_metric.current,
         yielded_actors=tuple(),
         edge_refreshed=0,
+        yield_side=yield_side,
     )
+    # Story 59-33: the live GM-panel consumer (49-5 narrator consume is dormant).
+    # Emit the resolution-signal span carrying yield_side so the lie-detector can
+    # confirm which side yielded at every factory-built (dial/threshold) resolution.
+    with encounter_resolution_signal_emitted_span(
+        outcome=outcome,
+        final_player_metric=enc.player_metric.current,
+        final_opponent_metric=enc.opponent_metric.current,
+        yield_side=yield_side,
+    ):
+        pass
+    return signal
 
 
 # Phase 5 (Story 47-3): magic-confrontation outcome → branch mapping.

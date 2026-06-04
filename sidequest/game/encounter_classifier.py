@@ -20,6 +20,8 @@ and case variants (``PLAYER_VICTORY``) all fall to ``False``.
 
 from __future__ import annotations
 
+from typing import Literal
+
 # The EXACT set of outcome labels that count as a player victory for credit.
 # - player_victory  — dial-threshold / hp-depletion win
 # - opponent_yielded — the opponent backed down (59-31 mechanical-truth label)
@@ -45,4 +47,35 @@ def is_player_victory(outcome: str) -> bool:
     return outcome in _PLAYER_VICTORY_OUTCOMES
 
 
-__all__ = ["is_player_victory"]
+# Outcome labels where an actor yielded, mapped to WHICH side yielded — Story 59-33.
+# Orthogonal to is_player_victory: a PLAYER yield is a LOSS (side "player",
+# is_player_victory False); the opponent-side yields are WINS (side "opponent").
+_OPPONENT_YIELD_OUTCOMES: frozenset[str] = frozenset(
+    {
+        "opponent_yielded",
+        "surrender",
+        "rout",
+    }
+)
+
+
+def yield_side_for(outcome: str) -> Literal["player", "opponent"] | None:
+    """Return which side yielded for ``outcome``, or ``None`` if it is not a yield.
+
+    - ``"yielded"`` → ``"player"`` (the player side yielded — a LOSS)
+    - ``"opponent_yielded"`` / ``"surrender"`` / ``"rout"`` → ``"opponent"`` (a WIN)
+    - everything else (dial wins, ``mutual_destruction``, dynamic-prefix labels,
+      unknown, ``""``) → ``None``
+
+    Exact, case-sensitive matching. This is a DIFFERENT axis from
+    ``is_player_victory`` — it answers "which side yielded", not "did the player
+    win" — so the two must not be implemented in terms of each other.
+    """
+    if outcome == "yielded":
+        return "player"
+    if outcome in _OPPONENT_YIELD_OUTCOMES:
+        return "opponent"
+    return None
+
+
+__all__ = ["is_player_victory", "yield_side_for"]

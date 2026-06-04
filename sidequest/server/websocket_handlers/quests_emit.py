@@ -27,15 +27,15 @@ _SIG_ATTR = "_last_quests_sig"
 
 
 def _quests_signature(snapshot: Any) -> str:
-    """Cheap change signature over the spine: per-quest id/title/status/anchor,
-    the anchor list, and the stakes string. Any spine mutation changes it."""
-    quest_log = getattr(snapshot, "quest_log", {}) or {}
-    quest_anchors = getattr(snapshot, "quest_anchors", []) or []
-    active_stakes = getattr(snapshot, "active_stakes", "") or ""
+    """Change signature over the spine, derived from the projected wire payload.
 
-    quest_parts = [f"{qid}:{e.title}:{e.status}:{e.anchor_id}" for qid, e in quest_log.items()]
-    anchors_part = ",".join(quest_anchors)
-    return f"{'|'.join(quest_parts)}#{anchors_part}#{active_stakes}"
+    Using ``build_quests_payload(...).model_dump_json()`` makes the signature
+    track *exactly* what goes on the wire — including ``objective`` — so an
+    objective-only ``record_quest`` update re-broadcasts (AC2). JSON encoding
+    also escapes the field contents, so narrator free text containing ``:``/
+    ``,``/``|``/``#`` can never collapse two distinct spines onto one signature
+    (no delimiter-ambiguity collision)."""
+    return build_quests_payload(snapshot).model_dump_json()
 
 
 def _is_empty_spine(snapshot: Any) -> bool:
@@ -59,11 +59,14 @@ def _maybe_emit_quests(
     if _is_empty_spine(snapshot):
         return
 
-    sig = _quests_signature(snapshot)
+    # Build the payload once; the change signature is that same payload's JSON
+    # (see _quests_signature), so we derive the sig from it rather than building
+    # twice.
+    payload = build_quests_payload(snapshot)
+    sig = payload.model_dump_json()
     if getattr(handler, _SIG_ATTR, None) == sig:
         return
 
-    payload = build_quests_payload(snapshot)
     msg = QuestsMessage(payload=payload)
 
     from sidequest.telemetry.spans import SPAN_QUESTS_EMITTED, Span
@@ -84,5 +87,8 @@ def _maybe_emit_quests(
         len(payload.quest_anchors),
     )
 
-    setattr(handler, _SIG_ATTR, sig)
+    # Commit the signature only after the broadcast succeeds. If emit_fn raises,
+    # the sig stays unchanged so the next turn retries rather than skipping a
+    # never-delivered frame (client would otherwise stay stale).
     emit_fn(msg, "QUESTS")
+    setattr(handler, _SIG_ATTR, sig)

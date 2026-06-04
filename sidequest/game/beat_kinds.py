@@ -125,6 +125,11 @@ def describe_beat_impact(
     """
     own = deltas.own
     opponent = deltas.opponent
+    # A nominal dial move that suppression zeroed means the move actually landed on
+    # the HP channel — distinct from a genuine miss (no nominal delta at all), where
+    # "moved nothing" stays the honest summary. Captured before zeroing so the inert
+    # branch can tell the two apart (Story 73-8 follow-up).
+    suppressed_dial_move = hp_depletion_suppressed and (own != 0 or opponent != 0)
     if hp_depletion_suppressed:
         own = 0
         opponent = 0
@@ -169,6 +174,12 @@ def describe_beat_impact(
     elif tag:
         effect = "tag"
         summary = f"Sets up a scene tag: {tag} (no dial change by design)"
+    elif suppressed_dial_move:
+        # Story 73-8 — the dial was held (hp_depletion), but the beat DID resolve:
+        # the move landed on the HP channel, so "moved nothing" would itself be a
+        # small lie. The genuine-miss branch below keeps "moved nothing".
+        effect = "inert"
+        summary = "Dial held — HP channel resolved this beat"
     else:
         effect = "inert"
         summary = "No change — the beat landed but moved nothing"

@@ -147,6 +147,22 @@ def test_hp_depletion_strike_fail_is_inert():
     assert impact["effect"] == "inert"
 
 
+def test_hp_depletion_suppressed_summary_does_not_claim_total_inertness():
+    # Follow-up truthfulness gap: under suppression the move DID land (on HP, e.g.
+    # Pirate 7->4), so the inert summary must not reuse the generic "moved nothing"
+    # line — that would be a small lie on a fix-the-lie story.
+    enc = _enc("hp_depletion")
+    resolver, _ = _cores(pirate_hp=7)
+    apply_beat(
+        enc, enc.actors[0], _StrikeBeat(), RollOutcome.Success,
+        turn=1, edge_resolver=resolver, damage_resolver=lambda: 3,
+    )
+    summary = enc.last_beat_impacts["player"]["summary"].lower()
+    assert "moved nothing" not in summary
+    assert "no change" not in summary
+    assert any(k in summary for k in ("hp", "held", "suppress"))
+
+
 def test_hp_depletion_resolution_beat_still_resolves():
     # AC 1.c: resolution beats are NEVER suppressed — a push resolution under
     # hp_depletion must still read as "resolution", not get flattened to inert.

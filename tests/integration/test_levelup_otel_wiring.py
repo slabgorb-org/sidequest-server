@@ -165,11 +165,7 @@ async def test_no_crossing_is_silent_no_level_no_event(
 
     assert snapshot.characters[0].core.level == 1
     assert deltas == []
-    level_up_events = [
-        e
-        for e in captured
-        if e.get("fields", {}).get("field") == LEVEL_UP_FIELD
-    ]
+    level_up_events = [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]
     assert level_up_events == [], f"unexpected level-up event: {level_up_events}"
 
 
@@ -190,6 +186,4 @@ async def test_unconfigured_progression_never_levels(
 
     assert snapshot.characters[0].core.level == 1
     assert deltas == []
-    assert not [
-        e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD
-    ]
+    assert not [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]

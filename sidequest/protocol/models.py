@@ -433,6 +433,26 @@ class CharacterSheetDetails(ProtocolBase):
 # ---------------------------------------------------------------------------
 
 
+class AdvancementDelta(ProtocolBase):
+    """A player-facing level-up delta (ADR-021 track 1).
+
+    Surfaced so the player *sees the advancement and its driver* — not a
+    silent stat bump. Distinct from the ``progression.level_up`` OTEL/watcher
+    event, which is the dev/GM lie-detector (CLAUDE.md OTEL Observability
+    Principle); this is the player-UI channel (mechanics-first — Sebastien /
+    Jade want the math legible).
+    """
+
+    character_name: str
+    """Character that advanced."""
+    before: int
+    """Level before the crossing."""
+    after: int
+    """Level after the crossing."""
+    driver: str
+    """What drove the advancement (e.g. 'milestone')."""
+
+
 class PartyMember(ProtocolBase):
     """A party member in PARTY_STATUS.
 
@@ -463,6 +483,10 @@ class PartyMember(ProtocolBase):
     """Character class. Non-blank."""
     level: int
     """Character level."""
+    advancement: AdvancementDelta | None = None
+    """ADR-021 track 1: the most recent level-up delta (before/after/driver),
+    or None on turns with no advancement. Lets the player see the level change
+    and why, not a silent stat bump."""
     portrait_url: str | None = None
     """Portrait URL."""
     current_location: NonBlankString | None = None

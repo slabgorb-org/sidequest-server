@@ -133,24 +133,32 @@ def _yield_events(captured: list[dict]) -> list[dict]:
 #         dial_threshold_outcome()") ─────────────────────────────────────────
 
 
-def test_all_opponents_withdrawn_returns_player_victory() -> None:
+def test_all_opponents_withdrawn_returns_opponent_yielded() -> None:
     """Every side='opponent' actor withdrawn AND opponents exist → the helper
-    classifies the yield as a player_victory."""
+    returns the mechanical-truth label ``"opponent_yielded"``.
+
+    Story 59-32 normalized this return from ``"player_victory"`` (the credit
+    label) to ``"opponent_yielded"`` (the mechanical truth — the opponent
+    yielded; it was never a kill). Credit still flows: the shared
+    ``is_player_victory()`` classifier maps ``opponent_yielded`` → True. Behavior
+    is preserved (production consumers None-check the return; ``enc.outcome`` is
+    set independently by ``_resolve_opponent_yield``)."""
     enc = _encounter(opponents=[_lion(withdrawn=True)])
-    assert enc.opponent_yield_outcome() == "player_victory"
+    assert enc.opponent_yield_outcome() == "opponent_yielded"
 
 
-def test_opponents_disposition_surrendered_returns_player_victory() -> None:
+def test_opponents_disposition_surrendered_returns_opponent_yielded() -> None:
     """The B/X morale path sets ``opponents_disposition='surrendered'`` without
     necessarily flipping each actor's ``withdrawn``. A surrendered opponent is a
-    player victory regardless of the per-actor flag."""
+    yield regardless of the per-actor flag — mechanical-truth label
+    ``"opponent_yielded"`` (Story 59-32 normalization; credit via classifier)."""
     enc = _encounter(opponents=[_lion(withdrawn=False)], opponents_disposition="surrendered")
-    assert enc.opponent_yield_outcome() == "player_victory"
+    assert enc.opponent_yield_outcome() == "opponent_yielded"
 
 
-def test_opponents_disposition_routed_returns_player_victory() -> None:
+def test_opponents_disposition_routed_returns_opponent_yielded() -> None:
     enc = _encounter(opponents=[_lion(withdrawn=False)], opponents_disposition="routed")
-    assert enc.opponent_yield_outcome() == "player_victory"
+    assert enc.opponent_yield_outcome() == "opponent_yielded"
 
 
 def test_active_opponent_remaining_returns_none() -> None:
@@ -187,15 +195,18 @@ def test_player_side_withdrawn_does_not_trigger_opponent_yield() -> None:
 
 def test_opponent_yield_outcome_is_win_condition_agnostic() -> None:
     """A monster surrendering mid-combat (hp_depletion win condition) is just as
-    much a player victory as a yield in a dial confrontation. The opponent-yield
+    much an opponent yield as a yield in a dial confrontation. The opponent-yield
     check keys on actor/disposition state, not the dial win condition (unlike
-    ``dial_threshold_outcome`` which is gated to dial_threshold)."""
+    ``dial_threshold_outcome`` which is gated to dial_threshold).
+
+    Story 59-32: returns the mechanical-truth label ``"opponent_yielded"`` (was
+    ``"player_victory"``); credit still flows via ``is_player_victory()``."""
     enc = _encounter(
         opponents=[_lion(withdrawn=True)],
         win_condition="hp_depletion",
         threshold=1_000_000,
     )
-    assert enc.opponent_yield_outcome() == "player_victory"
+    assert enc.opponent_yield_outcome() == "opponent_yielded"
 
 
 # ── AC2 — same-turn resolution via the post-turn sweep (NO location change) ───

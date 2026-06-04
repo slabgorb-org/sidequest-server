@@ -30,6 +30,7 @@ from sidequest.game.dogfight_shot import (
     frame_hp_resolver,
     resolve_dogfight_shots,
 )
+from sidequest.game.encounter_classifier import is_player_victory
 from sidequest.game.item_catalog_resolution import resolve_gained_item_dict
 from sidequest.game.morale import (
     MoraleOutcome,
@@ -4616,11 +4617,18 @@ def _resolve_opponent_yield(
         yielded_actors=tuple(yielded_opponents),
         edge_refreshed=0,
     )
+    # Story 59-32: the credit-victory ``outcome`` attr is DERIVED through the
+    # shared classifier from the mechanical-truth label the engine just set
+    # (``enc.outcome == "opponent_yielded"``), not hardcoded. The classifier is
+    # the single source of truth for "does this outcome credit a victory?" — so a
+    # future relabel is mapped once, in one place. Module-level ``is_player_victory``
+    # name (not module-qualified) keeps the monkeypatch seam the wiring test uses.
+    credit_outcome = "player_victory" if is_player_victory(enc.outcome) else enc.outcome
     _watcher_publish(
         "confrontation_resolved_on_opponent_yield",
         {
             "encounter_type": enc.encounter_type,
-            "outcome": "player_victory",
+            "outcome": credit_outcome,
             "resolution_label": "opponent_yielded",
             "trigger": trigger,
             "yielded_opponents": yielded_opponents,

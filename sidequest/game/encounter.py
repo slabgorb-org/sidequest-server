@@ -271,8 +271,16 @@ class StructuredEncounter(BaseModel):
         return None
 
     def opponent_yield_outcome(self) -> str | None:
-        """Return ``"player_victory"`` if the OPPONENT side has yielded, else
+        """Return ``"opponent_yielded"`` if the OPPONENT side has yielded, else
         ``None``.
+
+        Story 59-32 normalized this to the **mechanical-truth** label
+        ``"opponent_yielded"`` (was the credit label ``"player_victory"``): each
+        producer emits mechanical truth and the shared ``is_player_victory()``
+        classifier owns the credit mapping (``opponent_yielded`` → victory).
+        Consumer-safe — production consumers None-check the return only
+        (``narration_apply.py:2824,4615``); ``enc.outcome`` is set independently
+        by ``_resolve_opponent_yield``.
 
         Sibling to ``dial_threshold_outcome`` (Story 59-31): a yielded opponent
         is a player VICTORY, distinct from a dial win, from the player-side
@@ -298,5 +306,5 @@ class StructuredEncounter(BaseModel):
         all_withdrawn = all(a.withdrawn for a in opponents)
         disposition_yield = self.opponents_disposition in ("surrendered", "routed")
         if all_withdrawn or disposition_yield:
-            return "player_victory"
+            return "opponent_yielded"
         return None

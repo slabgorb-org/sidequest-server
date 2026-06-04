@@ -32,6 +32,7 @@ SPAN_QUEST_UPDATE constant teardown. The behavioral contracts above force those 
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -198,3 +199,96 @@ def test_upsert_quest_status_status_only_path_intact() -> None:
     upsert_quest_status(log, "q_witch", "resolved")
     assert log["q_witch"].status == "resolved"
     assert len(log) == 1
+
+
+# ---------------------------------------------------------------------------
+# BROAD HARDENING (re-RED, Reviewer MEDIUM) — the legacy_emitted span must NOT
+# lie: it is this guard's GM-panel lie-detector, so its counts/ids must reflect
+# what ACTUALLY landed, dropped items must be observable, and non-dict input
+# must still emit a signal (never silent). Existing guarantees stay green:
+# valid str-status items still land, and the guard never raises.
+# ---------------------------------------------------------------------------
+
+
+def _legacy_emitted_span(otel_capture):
+    spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "quest.updates.legacy_emitted"
+    ]
+    assert spans, "quest.updates.legacy_emitted span did not fire"
+    return dict(spans[-1].attributes or {})
+
+
+def test_legacy_emitted_span_counts_only_forwarded_items(otel_capture) -> None:
+    """HARDENING 1 — SPAN ACCURACY: the span's quest_ids/updates_count must be
+    built from the items that ACTUALLY forwarded into quest_log, not the raw
+    input keys. A mixed dict {q1:str, q2:int} lands only q1; the span must say
+    so (quest_ids==[q1], updates_count==1) and surface the drop (skipped_count==1).
+    """
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from tests._helpers.session_room import room_for
+
+    snap = GameSnapshot(quest_log={})
+    result = NarrationTurnResult(
+        narration="A deal and a dud.",
+        game_patch_dict={"quest_updates": {"q1": "active", "q2": 9}},
+    )
+    _apply_narration_result_to_snapshot(snap, result, player_name="Sam", room=room_for(snap))
+
+    # Only the str-status item landed.
+    assert snap.quest_log["q1"].status == "active"
+    assert "q2" not in snap.quest_log
+
+    attrs = _legacy_emitted_span(otel_capture)
+    assert attrs.get("updates_count") == 1, "count must reflect forwarded items, not raw keys"
+    assert json.loads(attrs.get("quest_ids_json", "[]")) == ["q1"], (
+        "quest_ids must list only forwarded ids, not raw input keys"
+    )
+    assert attrs.get("skipped_count") == 1, "the dropped non-str-status item must be counted"
+
+
+def test_legacy_emitted_span_reports_all_skipped_drop(otel_capture) -> None:
+    """HARDENING 2 — SKIPPED VISIBILITY: when every item is dropped (non-str
+    status), nothing lands AND the span still fires with updates_count==0 and
+    skipped_count==1 — the drop is OBSERVABLE on the GM panel, never silent."""
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from tests._helpers.session_room import room_for
+
+    snap = GameSnapshot(quest_log={})
+    result = NarrationTurnResult(
+        narration="A dud.",
+        game_patch_dict={"quest_updates": {"q1": 5}},
+    )
+    _apply_narration_result_to_snapshot(snap, result, player_name="Sam", room=room_for(snap))
+
+    assert snap.quest_log == {}  # nothing landed (non-str status)
+    attrs = _legacy_emitted_span(otel_capture)
+    assert attrs.get("updates_count") == 0, "nothing forwarded → count must be 0, not the raw len"
+    assert attrs.get("skipped_count") == 1, "the silent drop must be made observable"
+
+
+def test_non_dict_legacy_quest_updates_emits_signal_not_silent(otel_capture) -> None:
+    """HARDENING 3 — NON-DICT INPUT: a quest_updates value that is not a dict
+    (list/str/number/None) must still emit an observable legacy signal span and
+    must never raise or vanish silently (No Silent Fallbacks)."""
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from tests._helpers.session_room import room_for
+
+    snap = GameSnapshot(quest_log={})
+    result = NarrationTurnResult(
+        narration="Garbage in.",
+        game_patch_dict={"quest_updates": ["junk"]},
+    )
+    # Must not raise — graceful, observable handling of a malformed stale key.
+    _apply_narration_result_to_snapshot(snap, result, player_name="Sam", room=room_for(snap))
+
+    assert snap.quest_log == {}
+    signal = [
+        s for s in otel_capture.get_finished_spans() if s.name.startswith("quest.updates.legacy")
+    ]
+    assert signal, (
+        "a non-dict quest_updates value must emit an observable quest.updates.legacy* "
+        "signal span — never a silent drop"
+    )

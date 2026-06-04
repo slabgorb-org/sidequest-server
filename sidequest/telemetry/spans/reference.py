@@ -679,13 +679,16 @@ def reference_npc_unratified_skipped_span(
     count: int,
     _tracer: trace.Tracer | None = None,
 ) -> Iterator[trace.Span]:
-    """INFO — fired once per lore render that has authored Cast entries (ADR-138
-    §D4). Carries ``reference.npc_unratified_skipped_count`` — the number of
-    unratified (``observation_pending``) phantoms withheld from the public Cast
-    section, the reference-page analog of 75-12's withholding from the ADR-118
-    retrieval index. The span fires even when the count is 0 (a ratified-only
-    world): 0 is a valid, observable record that the gate ran and found nothing to
-    withhold — the lie-detector that distinguishes a clean cast from a gate that
+    """INFO — fired once per lore render **iff** the world authors a non-empty
+    Cast (``cast_entries`` non-empty), ADR-138 §D4. A cast-less world (no
+    ``portrait_manifest.yaml`` / empty ``characters``) runs no Cast gate and emits
+    no span — consistent with the sibling ``reference.manifest_loaded``. Carries
+    ``reference.npc_unratified_skipped_count`` — the number of unratified
+    (``observation_pending``) phantoms withheld from the public Cast section, the
+    reference-page analog of 75-12's withholding from the ADR-118 retrieval index.
+    "Fires even when the count is 0" refers to the COUNT, not the render: a
+    ratified-only world (authored Cast, nothing withheld) still emits one span with
+    count 0 — the lie-detector that distinguishes a clean cast from a gate that
     never engaged (CLAUDE.md OTEL principle, No Silent Fallbacks)."""
     with Span.open(
         SPAN_REFERENCE_NPC_UNRATIFIED_SKIPPED,

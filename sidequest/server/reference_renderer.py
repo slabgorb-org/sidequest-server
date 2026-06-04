@@ -1321,11 +1321,22 @@ def _cast_entry_is_projectable(entry: dict) -> bool:
     ``False`` by design and this returns ``True`` in practice; the gate exists
     defensively so a future unratified entry cannot leak a phantom onto a
     player-facing page (No Silent Fallbacks — the skip is counted on an OTEL span,
-    never silently rendered)."""
+    never silently rendered).
+
+    The raw ``observation_pending`` value is handed to ``NpcPoolMember`` for
+    Pydantic coercion rather than pre-wrapped in ``bool()``: ``bool("false")`` is
+    ``True`` (every non-empty string is truthy), so a quoted-string authoring slip
+    (``observation_pending: "false"``) would otherwise *silently withhold a
+    ratified NPC*. Pydantic v2 coerces ``"false"``/``"true"``/``0``/``1`` to the
+    correct bool and raises loudly on unsalvageable input. An explicit ``null``
+    (Python ``None``) is coalesced to the ``False`` default — ``null`` means
+    "unset", identical to an absent key, and must render rather than raise a
+    ValidationError that would 500 the public page."""
+    raw_pending = entry.get("observation_pending", False)
     member = NpcPoolMember(
         name=str(entry.get("name", "")),
         drawn_from="world_authored",
-        observation_pending=bool(entry.get("observation_pending", False)),
+        observation_pending=False if raw_pending is None else raw_pending,
     )
     return is_projectable(member)
 

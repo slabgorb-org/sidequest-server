@@ -234,16 +234,24 @@ async def run_dispatch_bank(
     context = context or {}
     result = BankResult()
 
-    # Turn number for span attribution (Bug A fix): sourced from
-    # snapshot.turn_manager.interaction — the same field session_helpers.py
-    # uses at ``turn_number=snapshot.turn_manager.interaction``. Default 0
-    # matches the dashboard's fallback for spans that lack the attribute.
-    _snapshot = context.get("snapshot")
+    # Turn number for span attribution. The dispatch bank runs BEFORE
+    # record_interaction() bumps the counter, but turn_complete emits
+    # turn_id=interaction AFTER the bump — so reading the raw interaction here
+    # stamps the PRIOR turn and the GM-panel grid shows intent_router/inventory
+    # dark on the just-completed turn (off-by-one, DRIVER 2026-06-04). The
+    # caller threads the EFFECTIVE turn number (interaction+1 for a player turn)
+    # via ``context["turn_number"]``; we prefer it when present. Direct callers
+    # (tests, non-pre-pass sites) that omit it fall back to interaction.
     _turn_number: int = 0
-    if _snapshot is not None:
-        _tm = getattr(_snapshot, "turn_manager", None)
-        if _tm is not None:
-            _turn_number = int(getattr(_tm, "interaction", 0))
+    _ctx_turn_number = context.get("turn_number")
+    if _ctx_turn_number:
+        _turn_number = int(_ctx_turn_number)
+    else:
+        _snapshot = context.get("snapshot")
+        if _snapshot is not None:
+            _tm = getattr(_snapshot, "turn_manager", None)
+            if _tm is not None:
+                _turn_number = int(getattr(_tm, "interaction", 0))
 
     all_dispatches: list[SubsystemDispatch] = []
     for pd in package.per_player:
@@ -285,6 +293,7 @@ async def run_dispatch_bank(
             with intent_router_subsystem_span(
                 subsystem=d.subsystem,
                 idempotency_key=d.idempotency_key,
+                turn_number=_turn_number,
             ) as sub_span:
                 # ADR-113 confidence gate (Story 71-16): engage the engine only
                 # at/above the per-subsystem threshold. Below threshold the

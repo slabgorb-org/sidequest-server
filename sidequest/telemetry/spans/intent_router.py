@@ -95,6 +95,12 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_SUBSYSTEM] = SpanRoute(
         "confidence": (span.attributes or {}).get("confidence", 0.0),
         "threshold": (span.attributes or {}).get("threshold", 0.0),
         "decision": (span.attributes or {}).get("decision", ""),
+        # Turn attribution (off-by-one fix, 2026-06-04): the dashboard activity
+        # grid buckets each span by turn_number. The dispatch bank runs BEFORE
+        # record_interaction(), so without the effective turn number threaded in
+        # here the per-subsystem dot inherits the PRIOR turn and the row reads
+        # dark on the turn it actually engaged.
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
 )
 

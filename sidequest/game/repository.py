@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     )
     from sidequest.dungeon.region_graph.model import Expansion, RegionGraph
     from sidequest.game.event_log import EventRow
+    from sidequest.game.lore_store import LoreFragment, LoreStore
     from sidequest.game.persistence import SavedSession
     from sidequest.game.pg.narrative import BackfillRow
     from sidequest.game.pg.promotions import PgLocationPromotionRow
@@ -112,6 +113,14 @@ class SaveRepository(Protocol):
     def load(self) -> SavedSession | None: ...
 
     def init_session(self) -> None: ...
+
+    # ------------------------------------------------------------------
+    # Lore (Story 75-15) — RAG fragment write-through + re-hydrate
+    # ------------------------------------------------------------------
+
+    def save_lore_fragments(self, lore_store: LoreStore) -> int: ...
+
+    def load_lore_fragments(self) -> list[LoreFragment]: ...
 
     # ------------------------------------------------------------------
     # Narrative

@@ -26,11 +26,13 @@ from contextlib import contextmanager
 from psycopg_pool import ConnectionPool
 
 from sidequest.game.event_log import EventRow
+from sidequest.game.lore_store import LoreFragment, LoreStore
 from sidequest.game.persistence import SavedSession
 from sidequest.game.pg import sessions
 from sidequest.game.pg._conn import session_tx
 from sidequest.game.pg.asset_ledger import PgAssetLedgerStore
 from sidequest.game.pg.events import PgEventStore, PgSaveTransaction
+from sidequest.game.pg.lore import PgLoreStore
 from sidequest.game.pg.narrative import BackfillRow, PgNarrativeStore
 from sidequest.game.pg.promotions import PgLocationPromotionRow, PgPromotionStore
 from sidequest.game.pg.scrapbook import PgScrapbookStore
@@ -69,6 +71,7 @@ class PgSaveRepository:
         self._scrapbook = PgScrapbookStore(pool, session_id=session_id)
         self._asset_ledger = PgAssetLedgerStore(pool, session_id=session_id)
         self._promotions = PgPromotionStore(pool, session_id=session_id)
+        self._lore = PgLoreStore(pool, session_id=session_id)
 
     @property
     def session_id(self) -> int:
@@ -150,6 +153,27 @@ class PgSaveRepository:
 
     def init_session(self) -> None:
         sessions.init_session(self._pool, session_id=self._sid)
+
+    # ------------------------------------------------------------------
+    # Lore (Story 75-15) — RAG fragment write-through + re-hydrate
+    # ------------------------------------------------------------------
+
+    def save_lore_fragments(self, lore_store: LoreStore) -> int:
+        """Write the in-memory lore_store's fragments through to Postgres.
+
+        Idempotent upsert by id — fragments accrete, never evict. Returns the
+        number of fragments written. Called from the per-turn + disconnect save
+        so creation-seed and runtime-accreted fragments survive resume.
+        """
+        return self._lore.upsert_fragments(lore_store.fragments_iter())
+
+    def load_lore_fragments(self) -> list[LoreFragment]:
+        """Re-hydrate persisted lore fragments for this session.
+
+        Returned fragments carry ``embedding_pending=True`` so the per-turn
+        embed worker re-embeds them on the next turn.
+        """
+        return self._lore.load_fragments()
 
     # ------------------------------------------------------------------
     # Narrative

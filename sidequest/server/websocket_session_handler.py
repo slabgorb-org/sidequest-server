@@ -546,6 +546,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     self._room.save()
                 else:
                     self._session_data.repository.save(self._session_data.snapshot)
+                # Story 75-15: persist the lore_store on disconnect too — the
+                # in-memory store is not part of the snapshot, so the save above
+                # does not cover it. Keeps fragments durable for sessions that
+                # disconnect after accretion without a subsequent turn-save.
+                self._session_data.repository.save_lore_fragments(
+                    self._session_data.lore_store
+                )
                 logger.info(
                     "session.disconnect_save genre=%s world=%s player=%s "
                     "char_count=%d seat_count=%d",
@@ -1262,6 +1269,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             self._room.save()
                         else:
                             sd.repository.save(snapshot)
+                        # Story 75-15: write the lore_store through to Postgres
+                        # (lore_fragments) so creation-seed + runtime-accreted
+                        # fragments survive resume. The in-memory lore_store is
+                        # NOT part of the snapshot, so room.save()/repository.save()
+                        # above do not cover it — this is a separate write-through.
+                        lore_written = sd.repository.save_lore_fragments(sd.lore_store)
+                        logger.info(
+                            "lore.persisted turn=%s fragments=%s",
+                            snapshot.turn_manager.interaction,
+                            lore_written,
+                        )
                         # Story 45-22: log the player's turn before the narrator
                         # response so the narrative_log shows both sources
                         # (pre-fix every entry was author='narrator'). Skipped on

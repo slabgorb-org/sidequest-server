@@ -946,6 +946,26 @@ class ConnectHandler:
             # loaded on resume (CLAUDE.md OTEL lie-detector mandate).
             if has_character:
                 _resume_sd = session._session_data
+                # Story 75-15: re-hydrate the persisted lore fragments FIRST so
+                # creation-seed + runtime-accreted fragments survive resume — the
+                # gulliver 2026-06-02 starve was the world-only re-seed below
+                # restoring ~3 fragments while the 17 creation-seed fragments
+                # (lost with the never-persisted in-memory store) stayed gone.
+                # Re-hydrated fragments carry embedding_pending=True so the
+                # per-turn embed worker re-embeds them. Runs before the world
+                # re-seed so the lore_store_loaded emit's total reflects both.
+                _rehydrated = _pg_repository.load_lore_fragments()
+                _rehydrated_count = 0
+                for _frag in _rehydrated:
+                    if _frag.id not in _resume_sd.lore_store.fragments:
+                        _resume_sd.lore_store.add(_frag)
+                        _rehydrated_count += 1
+                logger.info(
+                    "lore.rehydrated_on_resume slug=%s persisted_fragments=%d added=%d",
+                    slug,
+                    len(_rehydrated),
+                    _rehydrated_count,
+                )
                 genre_lore_added, world_lore_added = _seed_world_lore_on_resume(
                     lore_store=_resume_sd.lore_store,
                     genre_pack=genre_pack,

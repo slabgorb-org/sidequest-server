@@ -53,6 +53,48 @@ class _Response:
     model: str
 
 
+@dataclass
+class _StreamTextDelta:
+    text: str
+    type: str = "text_delta"
+
+
+@dataclass
+class _StreamEvent:
+    type: str
+    delta: _StreamTextDelta
+
+
+class _StreamCtx:
+    """Story 71-23: minimal messages.stream() stand-in. Yields each text block
+    as a single content_block_delta event (token granularity is exercised in
+    test_sdk_narration_streaming.py; here we only prove on_text_delta is wired
+    through the streaming path)."""
+
+    def __init__(self, response: _Response) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _StreamCtx:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def __aiter__(self):
+        async def _events():
+            for block in self._response.content:
+                if getattr(block, "type", None) == "text":
+                    yield _StreamEvent(
+                        type="content_block_delta",
+                        delta=_StreamTextDelta(text=block.text),
+                    )
+
+        return _events()
+
+    async def get_final_message(self) -> _Response:
+        return self._response
+
+
 class _Messages:
     def __init__(self, responses: list[_Response]) -> None:
         self._responses = responses
@@ -61,6 +103,10 @@ class _Messages:
     async def create(self, **kwargs: Any) -> _Response:
         self.received.append(kwargs)
         return self._responses.pop(0)
+
+    def stream(self, **kwargs: Any) -> _StreamCtx:
+        self.received.append(kwargs)
+        return _StreamCtx(self._responses.pop(0))
 
 
 class _Sdk:

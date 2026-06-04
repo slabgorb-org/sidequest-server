@@ -71,7 +71,7 @@ class FakeAnthropicSdkClient:
         *,
         model: str,
         max_iterations: int = 8,
-        on_text_delta: Callable[[str], None] | None = None,
+        on_text_delta: Callable[[str], Awaitable[None] | None] | None = None,
         session_id: str | None = None,  # noqa: ARG002 — Story 61-followup-D protocol surface; fake does not track per-session cost
     ) -> ToolingResult:
         all_tool_calls: list[ToolUseBlock] = []
@@ -100,7 +100,12 @@ class FakeAnthropicSdkClient:
             )
             if on_text_delta is not None:
                 for chunk in response.stream_deltas:
-                    on_text_delta(chunk)
+                    # Story 71-23: the sink may be sync or async (the
+                    # orchestrator's sink awaits broadcast_delta). Mirror the
+                    # real client: await an awaitable result.
+                    maybe = on_text_delta(chunk)
+                    if inspect.isawaitable(maybe):
+                        await maybe
 
             # Mirror production: accumulate per-iter cost so consumers
             # that assert on ToolingResult.cumulative_cost_usd (Task B1)

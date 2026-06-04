@@ -753,6 +753,56 @@ class RelationshipsPayload(BaseModel):
     entries: list[RelationshipEntry] = Field(default_factory=list)
 
 
+class QuestLogEntry(BaseModel):
+    """One quest's player-visible state (ADR-137 / Story 77-8).
+
+    The wire projection of a stored ``QuestEntry`` (game/session.py), keyed by
+    its quest id. ``anchor_id`` links to the body/location anchor where the
+    objective resolves (orbital course planner consumes anchors per ADR-130).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    quest_id: str
+    title: str = ""
+    objective: str = ""
+    status: str = "active"
+    anchor_id: str | None = None
+
+
+class QuestAnchorEntry(BaseModel):
+    """One quest anchor's player-visible state (ADR-137 / Story 77-8).
+
+    ``anchor_id`` is the stored body id (``GameSnapshot.quest_anchors``).
+    ``quest_id`` is the quest that owns this anchor (matched via
+    ``QuestEntry.anchor_id``), or None when no quest claims it — surfaced
+    explicitly rather than silently dropped (No Silent Fallbacks).
+    ``resolution`` is an optional human-readable beat/location resolution
+    where one is present; the bare anchor list carries none in v1.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    anchor_id: str
+    quest_id: str | None = None
+    resolution: str | None = None
+
+
+class QuestsPayload(BaseModel):
+    """Full quest-spine snapshot (ADR-137 / Story 77-8).
+
+    The RELATIONSHIPS-snapshot analog for the quest spine: log + anchors +
+    stakes travel together. An unpopulated spine yields empty lists and an
+    empty string — a clean, well-formed empty payload, never None.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    quest_log: list[QuestLogEntry] = Field(default_factory=list)
+    quest_anchors: list[QuestAnchorEntry] = Field(default_factory=list)
+    active_stakes: str = ""
+
+
 class LocationEntityResolution(BaseModel):
     """Result of resolve_location_entity. ADR-109 §5.3.
 

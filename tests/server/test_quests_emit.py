@@ -125,9 +125,7 @@ def test_signature_changes_with_status_update() -> None:
 def test_emit_sends_message_when_populated() -> None:
     handler = _Handler()
     sent: list[tuple[object, str]] = []
-    _maybe_emit_quests(
-        handler, snapshot=_seeded(), emit_fn=lambda m, k: sent.append((m, k))
-    )
+    _maybe_emit_quests(handler, snapshot=_seeded(), emit_fn=lambda m, k: sent.append((m, k)))
     assert len(sent) == 1
     msg, kind = sent[0]
     assert kind == "QUESTS"

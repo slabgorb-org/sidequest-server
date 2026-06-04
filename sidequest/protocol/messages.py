@@ -40,6 +40,7 @@ from sidequest.protocol.models import (
     LocationDescriptionPayload,
     LocationOverlayChangedPayload,
     PartyMember,
+    QuestsPayload,
     RelationshipsPayload,
     RolledStat,
     StateDelta,
@@ -1308,6 +1309,21 @@ class RelationshipsMessage(ProtocolBase):
     player_id: str = ""
 
 
+class QuestsMessage(ProtocolBase):
+    """GameMessage::Quests — player-facing quest spine (ADR-137 / Story 77-8).
+
+    The RELATIONSHIPS-snapshot analog for quests. Emitted reactively when the
+    spine changes (a quest minted/updated, an anchor added, stakes set) — not
+    every turn (Cost Scales with Drama). Global payload, broadcast to all
+    seated PCs. Transient (never event-sourced), like its LOCATION_DESCRIPTION
+    / RELATIONSHIPS siblings.
+    """
+
+    type: Literal[MessageType.QUESTS] = MessageType.QUESTS
+    payload: QuestsPayload
+    player_id: str = ""
+
+
 # ---------------------------------------------------------------------------
 # DUNGEON_MAP — Beneath Sünden BETTER fix (seam 3). ADR-019 MAP_UPDATE was
 # deleted in the Rust→Python port; this is the NEW ADR-055 map frame (do
@@ -1507,6 +1523,7 @@ _Phase1Variant = Annotated[
     | LocationDescriptionMessage
     | LocationOverlayChangedMessage
     | RelationshipsMessage
+    | QuestsMessage
     | DungeonMapMessage
     | JournalRequestMessage
     | JournalResponseMessage

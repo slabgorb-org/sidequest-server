@@ -51,9 +51,7 @@ def test_payload_carries_all_three_spine_fields() -> None:
                 anchor_id="emerald_city",
             )
         ],
-        quest_anchors=[
-            QuestAnchorEntry(anchor_id="emerald_city", quest_id="q1")
-        ],
+        quest_anchors=[QuestAnchorEntry(anchor_id="emerald_city", quest_id="q1")],
         active_stakes="The witch hunts you",
     )
     assert payload.quest_log[0].quest_id == "q1"
@@ -101,9 +99,7 @@ def test_populated_payload_round_trips_on_the_wire() -> None:
 def test_quests_message_nests_through_game_message() -> None:
     """The message serializes through the GameMessage envelope with type=QUESTS
     so the client dispatcher can route it (parity with RelationshipsMessage)."""
-    msg = QuestsMessage(
-        payload=QuestsPayload(active_stakes="The witch hunts you")
-    )
+    msg = QuestsMessage(payload=QuestsPayload(active_stakes="The witch hunts you"))
     data = json.loads(msg.model_dump_json())
     assert data["type"] == "QUESTS"
     assert data["payload"]["active_stakes"] == "The witch hunts you"

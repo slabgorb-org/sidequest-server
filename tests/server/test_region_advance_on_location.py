@@ -127,6 +127,85 @@ def test_unchanged_region_heading_is_a_noop(
     assert snap.current_region == "the_emerald_city"
 
 
+def test_region_mode_unresolved_sub_location_not_added_to_discovered_regions(
+    snapshot_with_pack,
+    character_named_sam,
+):
+    """Location-tab bug (DRIVER 2026-06-04, the_circuit). In a region-mode world
+    the cartography region set is AUTHORED/closed. A narrator scene title that
+    does NOT resolve to a known region ("Dunkelkurve — Inside the Tunnel" is a
+    POI *within* sturmichi, not a region) must NOT be forked into
+    discovered_regions — otherwise chapter titles pollute the Map node-graph
+    (discovered_regions = ['sturmichi', 'Kanjō Loop — …', 'Dunkelkurve — …']).
+    The Story 45-17 surface-form forking is for room-graph worlds only.
+    """
+    snap, pack = snapshot_with_pack
+    _region_mode_pack(pack)
+    snap.current_region = "munchkin_country"
+    snap.discovered_regions = ["munchkin_country"]
+    snap.character_locations["Susan"] = "The Munchkin Country"
+    snap.characters.append(character_named_sam)
+
+    # A sub-location heading that resolves to NO cartography region.
+    result = NarrationTurnResult(
+        narration="Susan ducks into a hollow beneath the blue hills.",
+        location="A Hollow Beneath the Hills",
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        world="oz",
+        player_name="Susan",
+        room=room_for(snapshot=snap),
+    )
+
+    assert "A Hollow Beneath the Hills" not in snap.discovered_regions, (
+        "a region-mode world must NOT fork an unresolved scene title into "
+        "discovered_regions — it's a POI within the region, not a new region; "
+        f"got discovered_regions={snap.discovered_regions!r}"
+    )
+    assert snap.discovered_regions == ["munchkin_country"], (
+        "discovered_regions must hold only authored cartography region ids in a "
+        f"region-mode world; got {snap.discovered_regions!r}"
+    )
+
+
+def test_room_graph_world_still_forks_unresolved_heading_into_discovered_regions(
+    snapshot_with_pack,
+    character_named_sam,
+):
+    """Guard (preserve Story 45-17): a room-graph / non-region-mode world still
+    forks a narrator-invented sub-area heading into discovered_regions — those
+    worlds legitimately grow their graph from narrator inventions. The region-
+    mode skip must NOT regress this path.
+    """
+    snap, pack = snapshot_with_pack
+    _region_mode_pack(pack, mode=NavigationMode.room_graph)
+    snap.current_region = "munchkin_country"
+    snap.discovered_regions = ["munchkin_country"]
+    snap.characters.append(character_named_sam)
+
+    result = NarrationTurnResult(
+        narration="The party pries open a sealed maintenance hatch.",
+        location="The Sealed Maintenance Hatch",
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=result,
+        pack=pack,
+        world="oz",
+        player_name="Susan",
+        room=room_for(snapshot=snap),
+    )
+
+    assert "The Sealed Maintenance Hatch" in snap.discovered_regions, (
+        "a room-graph world must still fork an unresolved heading into "
+        "discovered_regions (Story 45-17 surface-form forking); "
+        f"got {snap.discovered_regions!r}"
+    )
+
+
 def test_room_graph_world_does_not_advance_current_region_from_heading(
     snapshot_with_pack,
     character_named_sam,

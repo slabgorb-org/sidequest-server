@@ -500,27 +500,16 @@ class TestCartographyResolvedDedupWiring:
             dict(s.attributes or {}).get("resolution") == "cartography" for s in dedup_spans
         ), "the resolution span must carry resolution='cartography'"
 
-    def test_unknown_subarea_still_forks(self) -> None:
-        """A narrator-invented place with no cartography region keeps the
-        surface form (45-17 forking preserved)."""
-        from sidequest.server.narration_apply import (
-            _apply_narration_result_to_snapshot,
-        )
-
-        pack = self._load_burning_peace()
-        snap = _make_minimal_snapshot()
-        snap.discovered_regions = ["edo"]
-
-        _apply_narration_result_to_snapshot(
-            snap,
-            _make_narration_result(narration="…", location="The Tanuki's Teahouse"),
-            player_name="Kaede",
-            room=room_for(snap),
-            pack=pack,
-            world="burning_peace",
-        )
-
-        assert snap.discovered_regions == ["edo", "The Tanuki's Teahouse"], (
-            "an invented sub-area with no cartography region must still fork; "
-            f"got {snap.discovered_regions}"
-        )
+    # NOTE (Location-tab bug, DRIVER 2026-06-04): the former
+    # ``test_unknown_subarea_still_forks`` was REMOVED here. It loaded the live
+    # ``elemental_harmony`` pack and asserted an unresolved sub-area heading
+    # forks into ``discovered_regions`` — but (1) that is the content-coupled
+    # "unit test against a production database" antipattern (dev sidecar:
+    # FIXTURES for unit tests, VALIDATORS for worlds, never live content), and
+    # (2) the behavior is now navigation-mode-scoped: burning_peace IS a
+    # region-mode world, so an unresolved heading is a POI WITHIN the region and
+    # must NOT fork (it polluted the Map node-graph with chapter titles). The
+    # fork-vs-skip engine behavior is covered by FIXTURE tests in
+    # ``tests/server/test_region_advance_on_location.py``:
+    #   - region-mode → skip:  test_region_mode_unresolved_sub_location_not_added_to_discovered_regions
+    #   - room-graph  → fork:  test_room_graph_world_still_forks_unresolved_heading_into_discovered_regions

@@ -2662,6 +2662,26 @@ def _apply_narration_result_to_snapshot(
             # to the surface-form path below, preserving narrator-invented
             # sub-area forking (story 45-17).
             known_region_id = _resolve_heading_to_cartography(result.location, pack, world)
+            # Region-mode detection (used by BOTH branches below). In a region-
+            # mode world the cartography region set is AUTHORED/closed, so an
+            # unresolved heading is a sub-location/POI within the current region —
+            # not a new region to fork into discovered_regions. Room-graph
+            # (dungeon) worlds manage current_region via the room graph / frontier
+            # hook and legitimately fork narrator-invented sub-areas (Story 45-17).
+            from sidequest.genre.models.world import NavigationMode
+
+            _region_world_obj = (
+                pack.worlds.get(world) if (pack is not None and world is not None) else None
+            )
+            _region_cart = (
+                getattr(_region_world_obj, "cartography", None)
+                if _region_world_obj is not None
+                else None
+            )
+            _is_region_mode_world = (
+                _region_cart is not None
+                and getattr(_region_cart, "navigation_mode", None) == NavigationMode.region
+            )
             if known_region_id is not None:
                 canonical_slug = canonicalize_region_name(known_region_id)
                 already_present = any(
@@ -2686,22 +2706,9 @@ def _apply_narration_result_to_snapshot(
                 # (no LLM compliance needed) and fires ONLY on a real region
                 # match — a sub-area heading like "The Emerald City — The Throne
                 # Room" resolves to the_emerald_city, so it never over-advances.
-                # Gated to region-mode worlds: room-graph (dungeon) worlds manage
-                # current_region via the room graph / frontier hook.
-                from sidequest.genre.models.world import NavigationMode
-
-                _region_world_obj = (
-                    pack.worlds.get(world) if (pack is not None and world is not None) else None
-                )
-                _region_cart = (
-                    getattr(_region_world_obj, "cartography", None)
-                    if _region_world_obj is not None
-                    else None
-                )
-                _is_region_mode_world = (
-                    _region_cart is not None
-                    and getattr(_region_cart, "navigation_mode", None) == NavigationMode.region
-                )
+                # Gated to region-mode worlds (computed above): room-graph
+                # (dungeon) worlds manage current_region via the room graph /
+                # frontier hook.
                 if _is_region_mode_world and snapshot.current_region != known_region_id:
                     _prior_region = snapshot.current_region
                     snapshot.current_region = known_region_id
@@ -2759,6 +2766,33 @@ def _apply_narration_result_to_snapshot(
                             known_region_id,
                             not already_present,
                         )
+            elif _is_region_mode_world:
+                # Location-tab bug (DRIVER 2026-06-04, the_circuit). The heading
+                # didn't resolve to a known cartography region AND this is a
+                # region-mode world whose region set is authored/closed — so the
+                # heading is a sub-location/POI WITHIN the current region (a
+                # narrator scene title like "Dunkelkurve — Inside the Tunnel"
+                # inside sturmichi), NOT a new region. Do NOT fork it into
+                # discovered_regions — that pollutes the Map node-graph with
+                # chapter titles ('Kanjō Loop — …', 'Dunkelkurve — …'). The Story
+                # 45-17 surface-form forking below is for room-graph worlds only.
+                # OTEL lie-detector: the GM panel must see the engine skip the
+                # pollution (No Silent Fallbacks — the skip is a decision, logged).
+                with region_entry_rejected_span(
+                    entry=result.location,
+                    reason="sub_location_in_region_mode_world",
+                    caller_path="narration_apply.location_update",
+                    player_name=player_name,
+                ):
+                    logger.info(
+                        "region.entry_skipped_sub_location entry=%r current_region=%r "
+                        "player=%s caller=narration_apply.location_update "
+                        "(region-mode world: scene title is a POI within the region, "
+                        "not a new cartography region)",
+                        result.location,
+                        snapshot.current_region,
+                        player_name,
+                    )
             else:
                 # Story 45-17: canonical-slug dedup. The narrator emits
                 # surface variants for the same room across turns

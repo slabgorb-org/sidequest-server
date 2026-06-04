@@ -154,6 +154,11 @@ def compute_courses(
     for bid in recent_body_mentions:
         if bid != party_at and bid in orbits.bodies:
             candidates[bid] = CourseSource.RECENT_MENTION
+    # Story 77-3 (AC2 OTEL): emit at the single anchor-read decision point so
+    # the GM panel sees what the scheduler consumed, regardless of caller.
+    from sidequest.telemetry.spans.course import emit_quest_anchors_consumed
+
+    emit_quest_anchors_consumed(anchor_count=len(quest_anchors))
     for bid in quest_anchors:
         if bid != party_at and bid in orbits.bodies:
             candidates[bid] = CourseSource.QUEST_OBJECTIVE

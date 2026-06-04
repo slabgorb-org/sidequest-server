@@ -95,6 +95,30 @@ def test_composing_is_pushed_live_but_not_persisted(sink_and_live) -> None:
     assert live[0]["event_type"] == "action_reveal.composing"
 
 
+def test_dropped_rate_limit_in_ephemeral_set() -> None:
+    """The rate-limit-drop diagnostic is a sibling of composing: it's a noisy
+    per-keystroke UI/throttle signal with no forensic or mechanical value, so it
+    must be a member of the ephemeral set and never event-source (71-30)."""
+    assert "action_reveal.dropped_rate_limit" in wh._EPHEMERAL_EVENT_TYPES
+
+
+def test_dropped_rate_limit_is_pushed_live_but_not_persisted(sink_and_live) -> None:
+    sink, live = sink_and_live
+
+    publish_event(
+        "action_reveal.dropped_rate_limit",
+        {"slug": "s", "player_id": "p1", "round": 3},
+        component="multiplayer",
+    )
+
+    assert sink.records == [], (
+        "action_reveal.dropped_rate_limit is an ephemeral throttle signal — it "
+        f"must NOT be written to turn_telemetry in any mode; got {sink.records}"
+    )
+    assert len(live) == 1, "dropped_rate_limit must STILL push live to the GM panel"
+    assert live[0]["event_type"] == "action_reveal.dropped_rate_limit"
+
+
 def test_submitted_still_persists(sink_and_live) -> None:
     sink, _live = sink_and_live
 

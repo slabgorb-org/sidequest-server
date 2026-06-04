@@ -89,7 +89,11 @@ def test_payload_surfaces_player_clean_exit_impact():
     assert impact["effect"] == "resolution"
     assert impact["dial_moved"] is False
     assert impact["tag"] == "Clean Exit"
-    assert impact["summary"]
+    # (73-9) Replaced a redundant bare-truthy `assert impact["summary"]` with
+    # explicit field asserts: pin the no-dial numerics that ride the clean-exit
+    # resolution. The summary substring check below already proves non-emptiness.
+    assert impact["own"] == 0
+    assert impact["opponent"] == 0
     assert "resolv" in impact["summary"].lower()
 
 
@@ -153,3 +157,24 @@ def test_protocol_boundary_clean_when_no_impact():
     )
     model = ConfrontationPayload(**payload_dict)
     assert model.last_beat_impact is None
+
+
+def test_resolved_encounter_skips_impact_and_writes_no_stamp(monkeypatch):
+    # 73-9 characterization of the encounter-resolved skip path: apply_beat
+    # short-circuits when the encounter is already resolved — it returns impact=None
+    # with skipped_reason="encounter_resolved", writes NO last_beat_impacts entry,
+    # and (crucially for the GM panel) emits NO watcher event, so a beat fired after
+    # the fight ended can't render as a phantom impact.
+    emitted: list[tuple] = []
+    monkeypatch.setattr(
+        "sidequest.game.beat_kinds._watcher_publish",
+        lambda *a, **k: emitted.append((a, k)),
+    )
+    enc = _enc()
+    enc.resolved = True
+    result = apply_beat(enc, enc.find_actor("Pryce"), _push_beat(), RollOutcome.CritSuccess)
+    assert result.impact is None
+    assert result.skipped_reason == "encounter_resolved"
+    assert "player" not in enc.last_beat_impacts
+    assert emitted == []  # no watcher span on the skip path
+    assert enc.resolved is True

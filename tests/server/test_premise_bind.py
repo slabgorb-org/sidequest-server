@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.premises import (
     BlocAwakening,
     BlocDef,
@@ -12,7 +13,6 @@ from sidequest.genre.models.premises import (
     PremiseDef,
     PremiseDrain,
 )
-from sidequest.game.session import GameSnapshot
 from sidequest.server.dispatch.premise_bind import bind_political_state
 
 

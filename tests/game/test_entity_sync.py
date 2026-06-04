@@ -30,7 +30,6 @@ from sidequest.game.entity_card import EntityType, project_npc_card
 from sidequest.game.entity_store import EntityStore
 from sidequest.game.npc_pool import NpcPoolMember
 
-
 # ---------------------------------------------------------------------------
 # Fixtures — deterministic NPC pool members (the source the floor reads as
 # off-stage and the fill retrieves by similarity).

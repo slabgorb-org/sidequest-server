@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from sidequest.genre.models.premises import PremiseClaim, PremiseCollapse, PremiseDef
 from sidequest.game.belief_state import BeliefState
-from sidequest.game.political_engine import inject_witnessed_contradiction
 from sidequest.game.creature_core import CreatureCore, HpPool
+from sidequest.game.political_engine import inject_witnessed_contradiction
 from sidequest.game.session import Npc
+from sidequest.genre.models.premises import PremiseClaim, PremiseCollapse, PremiseDef
 
 
 def _make_npc(name: str) -> Npc:

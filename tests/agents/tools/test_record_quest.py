@@ -23,7 +23,6 @@ an existing quest. The per-call schema is bound tightly (ADR-102 / SOUL
 from __future__ import annotations
 
 import asyncio
-import json
 import subprocess
 import sys
 from typing import Any, cast

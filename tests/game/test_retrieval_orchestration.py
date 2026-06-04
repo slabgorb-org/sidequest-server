@@ -81,16 +81,12 @@ from sidequest.game.creature_core import CreatureCore
 from sidequest.game.entity_card import (
     EntityCard,
     EntityType,
-    project_faction_card,
-    project_location_card,
     project_npc_card,
 )
 from sidequest.game.entity_store import EntityStore
-from sidequest.game.lore_store import cosine_similarity
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
-from sidequest.genre.models.lore import Faction
 
 _RETRIEVAL_SPAN_NAME = "retrieval.universal"
 
@@ -191,8 +187,8 @@ class TestRetrievalContractSurface:
         type, span-name constant, and the per-turn entity budget constant."""
         from sidequest.game.retrieval_orchestration import (  # noqa: F401
             DEFAULT_ENTITY_BUDGET_TOKENS,
-            RetrievedEntities,
             SPAN_UNIVERSAL_RETRIEVAL,
+            RetrievedEntities,
             retrieve_turn_context,
         )
 

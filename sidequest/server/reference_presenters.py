@@ -225,21 +225,31 @@ def portrait_image_key(pack: str, world: str, slug: str) -> str:
     return f"genre_packs/{pack}/worlds/{world}/assets/portraits/{slug}.png"
 
 
-def _poi_image_html(*, slug: str, name: str, ctx: PresenterContext) -> str:
+def _poi_image_html(
+    *, slug: str, name: str, ctx: PresenterContext, image_slug: str | None = None
+) -> str:
     """Story 63-8: an R2 landscape ``<img>`` for a location card, or "".
 
-    Emits the image iff the location ``slug`` is in ``ctx.poi_image_slugs``
-    (the history.yaml POI manifest). Fires an OTEL span on both outcomes so
-    the decision is observable. Border/shadow tint uses the per-pack theme
-    accent. Returns "" (text-only card) when there is no matching image — a
-    spanned, observable skip, not a silent fallback."""
+    Emits the image iff the location ``slug`` (the slugify **anchor** form) is in
+    ``ctx.poi_image_slugs`` (the R2-gated set). Fires an OTEL span on both
+    outcomes so the decision is observable. Border/shadow tint uses the per-pack
+    theme accent. Returns "" (text-only card) when there is no matching image — a
+    spanned, observable skip, not a silent fallback.
+
+    Story 71-38: ``image_slug`` is the **verbatim** authored slug used to build the
+    R2 object key (:func:`poi_image_key`) — distinct from ``slug`` (the slugify
+    anchor used for gate membership and the card id). Defaults to ``slug`` when not
+    given, so the legacy geography path (whose authored id == its anchor) is
+    unchanged; ``present_renderable_landscapes`` passes the verbatim authored slug
+    so an underscore-slug POI addresses the underscore R2 key that actually exists."""
     if ctx.world is None:
         # No world context → no POI image possible. Observable, not silent.
         with reference_poi_image_not_found_span(pack=ctx.pack, world=None, slug=slug):
             pass
         return ""
     if slug in ctx.poi_image_slugs:
-        src = resolve_asset_url(poi_image_key(ctx.pack, ctx.world, slug))
+        key_slug = image_slug if image_slug is not None else slug
+        src = resolve_asset_url(poi_image_key(ctx.pack, ctx.world, key_slug))
         with reference_poi_image_resolved_span(pack=ctx.pack, world=ctx.world, slug=slug):
             pass
         # Escape the accent: it lands in a style= attribute and, while theme.yaml is
@@ -361,7 +371,10 @@ def present_renderable_landscapes(
             chips.append(f'<span class="ref-chip">{escape(_format_chip_label(type_))}</span>')
         if region:
             chips.append(f'<span class="ref-chip">{escape(_format_chip_label(region))}</span>')
-        img_html = _poi_image_html(slug=slug, name=name, ctx=ctx)
+        # Story 71-38: the card id stays the slugify anchor (`landscape-{slug}`),
+        # but the <img src> addresses the VERBATIM authored slug — the R2 object
+        # key written unchanged by the render scripts (underscore-style for oz).
+        img_html = _poi_image_html(slug=slug, name=name, ctx=ctx, image_slug=raw_slug)
         cards.append(
             f'<article class="ref-card" id="landscape-{slug}">'
             '<div class="ref-card__kicker">Landscape</div>'

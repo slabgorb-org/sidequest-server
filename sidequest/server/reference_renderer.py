@@ -1135,21 +1135,50 @@ def load_points_of_interest(world_dir: Path) -> list[dict]:
     return pois
 
 
-def load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
-    """Story 63-8: the set of location slugs that have a generated POI
-    landscape image.
+def load_poi_slug_map(world_dir: Path) -> dict[str, str]:
+    """Story 71-38: ``{anchor_slug: verbatim_slug}`` for each authored POI.
 
-    The manifest is ``history.yaml`` ``points_of_interest[].slug`` (under
-    ``chapters[]`` and/or top-level). Slugs are ``slugify``-normalised so they
-    match the card ids the POI presenters emit — the authored POI slug (often
-    underscore-style) and the card slug (hyphenated) both pass through
-    ``slugify``."""
-    slugs: set[str] = set()
+    The two forms are DISTINCT and serve different consumers:
+
+    * **anchor_slug** = ``slugify(authored slug)`` (hyphen) — the
+      ``location-{slug}`` / ``landscape-{slug}`` HTML card id and the
+      ``/reference/lore#location-<slug>`` deep-link anchor
+      (:func:`reference_url_for_region`). Conventional, blast-radius-bearing
+      (Story 63-6).
+    * **verbatim_slug** = the authored ``history.yaml`` ``points_of_interest[].slug``
+      VERBATIM (often underscore) — the R2 object key, because
+      ``render_common.py`` writes ``<slug>.png`` from the authored slug
+      unchanged. This is the key :func:`poi_image_key` must be fed (NEVER the
+      slugified form) so the manifest gate matches the asset that is actually on
+      R2.
+
+    Conflating the two (slugifying the authored slug and then feeding it to
+    ``poi_image_key``) is the Story 71-38 bug: a hyphen R2 key never matches the
+    underscore manifest key, so every underscore-slug world emitted 0 POI
+    ``<img>``. Keyed on the anchor form so a later POI cannot silently overwrite
+    an earlier one whose authored slug slugifies identically."""
+    mapping: dict[str, str] = {}
     for poi in load_points_of_interest(world_dir):
         raw = poi.get("slug") or poi.get("name")
-        if raw and (normalised := slugify(str(raw))):
-            slugs.add(normalised)
-    return frozenset(slugs)
+        if raw:
+            verbatim = str(raw)
+            if anchor := slugify(verbatim):
+                mapping.setdefault(anchor, verbatim)
+    return mapping
+
+
+def load_poi_image_slugs(world_dir: Path) -> frozenset[str]:
+    """Story 63-8 / 71-38: the set of POI **anchor** slugs (``slugify``-normalised,
+    hyphen) — the form the card ids and ``/reference/lore#location-<slug>`` deep-link
+    anchors use (:func:`reference_url_for_region`, which matches
+    ``slugify(region_id)`` against this set).
+
+    This is the **anchor** projection of :func:`load_poi_slug_map`. The R2-object-key
+    gate (:func:`_gate_poi_slugs_on_manifest`) does NOT consume this set — it takes the
+    full ``{anchor: verbatim}`` map, because the R2 key is the *verbatim* authored slug,
+    not the slugified anchor (Story 71-38 decouple). Kept as the anchor-only frozenset so
+    the deep-link consumer in ``map_emit`` is untouched."""
+    return frozenset(load_poi_slug_map(world_dir))
 
 
 @lru_cache(maxsize=8)
@@ -1191,15 +1220,21 @@ def load_r2_manifest_keys(manifest_path: Path) -> frozenset[str]:
 
 
 def _gate_poi_slugs_on_manifest(
-    authored_slugs: frozenset[str],
+    slug_map: dict[str, str],
     *,
     pack: str,
     world: str,
     pack_dir: Path,
 ) -> frozenset[str]:
-    """Story 65-8: filter authored POI slugs to those whose R2 landscape image
-    is actually present in ``r2_manifest.json``. Authored-but-not-on-R2 POIs
-    render text-only — no broken ``<img>``.
+    """Story 65-8 / 71-38: filter authored POIs to those whose R2 landscape image
+    is actually present in ``r2_manifest.json``, returning the surviving **anchor**
+    slugs. Authored-but-not-on-R2 POIs render text-only — no broken ``<img>``.
+
+    Takes the ``{anchor_slug: verbatim_slug}`` map from :func:`load_poi_slug_map`.
+    The manifest comparison feeds :func:`poi_image_key` the **verbatim** slug (the
+    real R2 object key), while the returned set is the **anchor** (slugify) form the
+    presenters key cards on — the Story 71-38 decouple. Feeding ``poi_image_key`` the
+    anchor form was the bug: a hyphen key never matched an underscore manifest key.
 
     The manifest is required only when the world authors POIs; a POI-less lore
     page never consults it (so the manifest is not a hard dependency of every
@@ -1212,7 +1247,7 @@ def _gate_poi_slugs_on_manifest(
     authors POIs** — a POI-less world short-circuits and emits no span, so the
     span count tracks feature-bearing renders, not every render.
     """
-    if not authored_slugs:
+    if not slug_map:
         return frozenset()
     manifest_path = pack_dir.parent.parent / "r2_manifest.json"
     manifest_keys = load_r2_manifest_keys(manifest_path)
@@ -1225,7 +1260,9 @@ def _gate_poi_slugs_on_manifest(
     ):
         pass
     return frozenset(
-        slug for slug in authored_slugs if poi_image_key(pack, world, slug) in manifest_keys
+        anchor
+        for anchor, verbatim in slug_map.items()
+        if poi_image_key(pack, world, verbatim) in manifest_keys
     )
 
 
@@ -1411,8 +1448,11 @@ def assemble_lore_page(pack: str, world: str, pack_dir: Path, world_dir: Path) -
 
     # Story 65-8: gate authored POI slugs on R2 existence (r2_manifest.json) so
     # authored-but-not-rendered POIs render text-only instead of a broken <img>.
+    # Story 71-38: gate on the {anchor: verbatim} map — the R2 key is the verbatim
+    # authored slug, the returned survivors are anchor (slugify) form for the cards.
+    poi_slug_map = load_poi_slug_map(world_dir)
     gated_poi_slugs = _gate_poi_slugs_on_manifest(
-        load_poi_image_slugs(world_dir),
+        poi_slug_map,
         pack=pack,
         world=world,
         pack_dir=pack_dir,

@@ -335,6 +335,7 @@ def _resolve_out_of_frame_sink() -> TelemetrySink | None:
 _EPHEMERAL_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "action_reveal.composing",
+        "action_reveal.dropped_rate_limit",
     }
 )
 

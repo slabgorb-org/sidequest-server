@@ -289,6 +289,36 @@ def test_instantiate_two_dials_from_cdef(snapshot_with_pack):
     assert enc.opponent_metric.threshold == 10
 
 
+def test_instantiate_stamps_category_from_cdef(snapshot_with_pack):
+    """Wiring (road_warrior chase bug 2026-06-04): the StructuredEncounter must
+    carry its confrontation category, stamped from ConfrontationDef.category at
+    instantiation (sibling to win_condition). The location-change handler reads
+    this to decide whether a confrontation is mobile (a chase/escape moves WITH
+    the party and must not abandon on a scene change). The synthetic pack's only
+    def is category='combat', so stamping 'combat' here proves the field flows
+    from cdef.category end-to-end.
+    """
+    from sidequest.agents.orchestrator import NpcMention
+    from sidequest.server.dispatch.encounter_lifecycle import (
+        instantiate_encounter_from_trigger,
+    )
+
+    snap, pack = snapshot_with_pack
+    enc = instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=pack,
+        encounter_type="combat",
+        player_name="Sam",
+        npcs_present=[NpcMention(name="Promo", side="opponent", role="hostile")],
+        genre_slug="test_pack",
+    )
+    assert enc is not None
+    assert enc.category == "combat", (
+        "StructuredEncounter.category must be stamped from cdef.category at "
+        f"instantiation; got {enc.category!r}"
+    )
+
+
 def test_instantiate_routes_actor_sides_from_payload(snapshot_with_pack):
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.server.dispatch.encounter_lifecycle import (

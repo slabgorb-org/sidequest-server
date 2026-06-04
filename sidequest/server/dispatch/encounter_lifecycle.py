@@ -716,6 +716,7 @@ def instantiate_table_encounter(
     return StructuredEncounter(
         encounter_type=cdef.confrontation_type,
         win_condition=cdef.win_condition.value,
+        category=cdef.category,
         player_metric=EncounterMetric(name="table_player_inert", threshold=1),
         opponent_metric=EncounterMetric(name="table_opponent_inert", threshold=1),
         actors=actors,
@@ -1157,6 +1158,7 @@ def instantiate_encounter_from_trigger(
         enc = StructuredEncounter(
             encounter_type=encounter_type,
             win_condition=cdef.win_condition.value,
+            category=cdef.category,
             player_metric=EncounterMetric(
                 name=pm.name,
                 current=pm.starting,

@@ -2419,6 +2419,35 @@ def _resolve_heading_to_cartography(
     )
 
 
+# A chase/escape is intrinsically continuous movement — the narrator advances
+# the scene location every turn by design. Movement-category confrontations are
+# MOBILE: they move WITH the party, so a scene/location change CONTINUES them
+# rather than abandoning them (road_warrior chase bug, playtest 2026-06-04). Real
+# endings still come via dial-threshold (escaped), opponent-yield, or a beat
+# consequence ("Kill the Engine"). Anchored categories (social negotiation,
+# combat in a room) keep the abandon-on-leave semantics.
+_MOBILE_CONFRONTATION_CATEGORIES = frozenset({"movement"})
+
+
+def _encounter_is_mobile(enc: object, pack: GenrePack | None) -> bool:
+    """True when the active encounter is a mobile (movement-category) confrontation.
+
+    Reads the self-describing ``enc.category`` first (stamped from
+    ``ConfrontationDef.category`` at instantiation). For legacy saves predating
+    that field (``category == ""``) it falls back to a live pack lookup so a
+    resumed chase is still recognized as mobile — never silently mis-classify a
+    chase as anchored (No Silent Fallbacks). Returns False when neither source
+    resolves a category (degrades to the existing abandon-on-leave behavior).
+    """
+    cat = (getattr(enc, "category", "") or "").strip()
+    if not cat and pack is not None and pack.rules:
+        from sidequest.server.dispatch.confrontation import find_confrontation_def
+
+        cdef = find_confrontation_def(pack.rules.confrontations, getattr(enc, "encounter_type", ""))
+        cat = (cdef.category if cdef is not None else "") or ""
+    return cat in _MOBILE_CONFRONTATION_CATEGORIES
+
+
 def _apply_narration_result_to_snapshot(
     snapshot: GameSnapshot,
     result: object,
@@ -2844,20 +2873,20 @@ def _apply_narration_result_to_snapshot(
             # dispatcher's reconnected one. No new wire message
             # needed; we just trigger the existing clear path.
             #
-            # Caveat — chase encounters legitimately move with the
-            # party (location changes WITHIN the encounter). The
-            # genre pack carries `category` metadata on each
-            # confrontation def; rather than re-look it up here on
-            # the apply path (which would mean threading the
-            # GenrePack through narration_apply just for this), we
-            # accept a simple over-resolution rule: location change
-            # always resolves the encounter. The bug repro is a
-            # negotiation, not a chase, and the user accepted this
-            # rule explicitly in the pingpong note ("location-change
-            # events should auto-resolve any active confrontations
-            # whose participants are no longer co-located"). Chase
-            # support can revisit this with a `category in {chase,
-            # mobile}` skip if the gap surfaces in playtest.
+            # Mobility exemption (road_warrior chase bug, playtest 2026-06-04).
+            # A chase/escape (category="movement") legitimately moves WITH the
+            # party — the narrator advances the scene location every turn by
+            # design, so abandoning the encounter on any location-string change
+            # makes the chase structurally un-runnable (it never survives to a
+            # turn where the narrator is offered its beats → 0 beats ever fired).
+            # The earlier "location change always resolves the encounter" rule
+            # was the negotiation-walk-out fix (2026-04-30); the `category in
+            # {chase, mobile}` skip it punted to "if the gap surfaces in
+            # playtest" is now implemented via `_encounter_is_mobile`. Anchored
+            # categories (social negotiation, combat in a room) keep the
+            # abandon-on-leave semantics; a mobile encounter below threshold
+            # CONTINUES (real endings still come via dial-threshold/opponent-
+            # yield/beat-consequence, all checked first below).
             active_encounter = snapshot.encounter
             if active_encounter is not None and not active_encounter.resolved:
                 abandoned_type = active_encounter.encounter_type
@@ -2875,10 +2904,14 @@ def _apply_narration_result_to_snapshot(
                 # opponent yield) falls through to abandoned_on_location_change.
                 won_outcome = active_encounter.dial_threshold_outcome()
                 yield_outcome = active_encounter.opponent_yield_outcome()
-                active_encounter.resolved = True
+                # NOTE: `resolved=True` is set INSIDE each resolving branch below
+                # (not unconditionally up front) so the mobile-continue branch can
+                # leave a movement encounter ACTIVE. The opponent-yield branch sets
+                # it via `_resolve_opponent_yield`.
                 if won_outcome is not None:
                     from sidequest.game.encounter import EncounterPhase as _EncounterPhase
 
+                    active_encounter.resolved = True
                     active_encounter.outcome = won_outcome
                     active_encounter.structured_phase = _EncounterPhase.Resolution
                     logger.info(
@@ -2928,7 +2961,41 @@ def _apply_narration_result_to_snapshot(
                         trigger="opponent_yield_on_location_change",
                         turn_number=snapshot.turn_manager.interaction,
                     )
+                elif _encounter_is_mobile(active_encounter, pack):
+                    # Mobile (movement-category) confrontation below threshold:
+                    # a chase/escape MOVES with the party, so a scene/location
+                    # change CONTINUES it — do NOT resolve. The encounter stays
+                    # live (resolved=False), so next turn the narrator is offered
+                    # its beats again (in_chase stays true → build_encounter_context
+                    # injects the beat menu) and real mechanical resolution can
+                    # finally fire. OTEL lie-detector: the GM panel must see the
+                    # engine CHOSE to continue (not silently skip the boundary).
+                    logger.info(
+                        "encounter.continued_across_location_change "
+                        "encounter_type=%s category=%s old_location=%r "
+                        "new_location=%r player=%s",
+                        abandoned_type,
+                        getattr(active_encounter, "category", "") or "",
+                        old_loc,
+                        result.location,
+                        player_name,
+                    )
+                    _watcher_publish(
+                        "confrontation_continued_across_location_change",
+                        {
+                            "encounter_type": abandoned_type,
+                            "category": getattr(active_encounter, "category", "") or "",
+                            "old_location": old_loc,
+                            "new_location": result.location,
+                            "player_name": player_name,
+                            "turn_number": snapshot.turn_manager.interaction,
+                            "player_metric": active_encounter.player_metric.current,
+                            "opponent_metric": active_encounter.opponent_metric.current,
+                        },
+                        component="confrontation",
+                    )
                 else:
+                    active_encounter.resolved = True
                     active_encounter.outcome = "abandoned_on_location_change"
                     logger.info(
                         "encounter.deactivated_on_location_change "

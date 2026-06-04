@@ -152,6 +152,21 @@ def build_confrontation_payload(
     narrator-prompt one (``source='narrator_prompt'``). Without that
     discriminator the two spans look identical in the watcher
     dashboard and a regression at either site is invisible.
+
+    Story 85-3 (Tier B confrontation panel):
+    ``active_stakes`` is the session's current stakes string; an empty string
+    normalizes to ``None`` so the UI banner collapses on a single falsy check.
+    The ``stakes`` key is ALWAYS present in the returned dict (not
+    additive-conditional like the hp keys) — every confrontation reports its
+    stakes or explicit absence. Emits the ``confrontation.stakes_attached``
+    OTEL span on every call so the GM panel can tell a no-stakes confrontation
+    from a dropped emit.
+    ``portrait_resolver``, when supplied, is called for each
+    ``side == "opponent"`` actor to resolve a portrait URL (returns ``None`` on
+    miss — No Silent Fallbacks); player/companion actors are never resolved here
+    (they get portraits via PARTY_STATUS). The resolved URL rides the serialized
+    actor dict under ``portrait_url``. Build the resolver at call sites with
+    ``make_confrontation_portrait_resolver``.
     """
     if encounter.mood_override is not None:
         mood = encounter.mood_override

@@ -7,11 +7,14 @@ encounter engine paths without re-implementing the fixtures.
 
 from __future__ import annotations
 
+# session_handler_factory now lives in the tests/ root conftest (moved in 73-6,
+# de-duplicated in 73-11) and is inherited by tests/integration/ automatically —
+# no cross-module import needed. The fixtures below still live in
+# tests/server/conftest (a sibling dir, not a parent), so they are re-exported here.
 from tests.server.conftest import (  # noqa: F401
     encounter_dispatch_helper,
     otel_capture,
     session_fixture,
-    session_handler_factory,
     store_bound_to_hub,
     synthetic_two_dial_pack,
 )

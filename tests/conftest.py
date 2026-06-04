@@ -385,8 +385,10 @@ def minimal_pack_factory():
 
 # ---------------------------------------------------------------------------
 # session_handler_factory (moved from tests/server/conftest.py to be visible
-# to tests/e2e/ per story 73-6). Centralizes session_data + handler wiring
-# for e2e and server tests.
+# to tests/e2e/ per story 73-6; the original per-directory copy was deleted in
+# story 73-11, leaving this as the single canonical definition — inherited by
+# tests/server/ and tests/e2e/ via conftest). Centralizes session_data + handler
+# wiring for e2e and server tests.
 # ---------------------------------------------------------------------------
 
 

@@ -42,7 +42,8 @@ __all__ = [
 
 _GENRE = "caverns_and_claudes"
 _WORLD = "beneath_sunden"
-# 63-bit seed: positive, fits a SQLite INTEGER, ample entropy.
+# 63-bit seed: positive, fits a Postgres BIGINT (signed 64-bit;
+# dungeon_meta.campaign_seed per ADR-115), ample entropy.
 _SEED_BITS = 63
 
 # §14.D cross-session double-register guard. register_lookahead_worker

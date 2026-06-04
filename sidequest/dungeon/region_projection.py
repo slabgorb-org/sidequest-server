@@ -1,7 +1,8 @@
 """Beneath Sünden — per-turn region projection (the BETTER fix, seam 1+2).
 
 The materialized dungeon (``dungeon_map`` / ``RegionGraph``) is durable
-truth in SQLite. Each narration turn this module projects the party's
+truth in Postgres (``PgDungeonRepository``, ADR-115). Each narration turn
+this module projects the party's
 *current* region — its theme register/flavor/motifs, its depth tone, and
 its concrete adjacent region ids + edge kinds — into a structured
 ``RegionProjection``.
@@ -20,9 +21,9 @@ Two consumers, one source:
    look-ahead worker expands the dungeon — instead of location advancing
    by parsing invented scene titles.
 
-Re-derived every turn from ``DungeonStore.load_map`` (single source of
-truth — never mirrored onto the persisted snapshot; this codebase has a
-documented snapshot-vs-SQLite divergence disease the recency window was
+Re-derived every turn from ``DungeonRepository.load_map`` (single source
+of truth — never mirrored onto the persisted snapshot; this codebase has a
+documented snapshot-vs-store divergence disease the recency window was
 explicitly moved off the snapshot to cure).
 
 No Silent Fallbacks: a current_region that is not a node in the graph,

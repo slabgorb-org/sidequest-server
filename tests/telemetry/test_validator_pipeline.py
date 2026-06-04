@@ -117,6 +117,70 @@ async def test_entity_check_warns_on_unknown_npc(captured_events) -> None:
 
 
 @pytest.mark.asyncio
+async def test_entity_check_silent_on_current_location(captured_events) -> None:
+    """The scene's own starting location must not be flagged as an unknown
+    entity. The region is registered in the snapshot as a slug
+    (``current_region`` / ``discovered_regions`` / ``pc_regions``) and as a
+    display string (``character_locations``); the narrator headers the display
+    form. Playtest 2026-06-04 (gulliver): 35 false 'The Lilliput Shore'
+    warnings per session because the validator read only slug-form regions."""
+    snapshot_after = type(
+        "Snap",
+        (),
+        {
+            "npc_pool": [],
+            "npcs": [],
+            "discovered_regions": ["the_lilliput_shore"],
+            "current_region": "the_lilliput_shore",
+            "pc_regions": {"Zanzibar Jones": "the_lilliput_shore"},
+            "character_locations": {"Zanzibar Jones": "The Lilliput Shore — Landfall"},
+            "inventory": type("Inv", (), {"items": []})(),
+        },
+    )()
+
+    record = _make_record()
+    record_dict = record.__dict__.copy()
+    # Header uses the display form; the snapshot stores the slug + the
+    # "— Landfall" display string. Both must resolve as known.
+    record_dict["narration"] = "The tide rolls in along The Lilliput Shore."
+    record_dict["snapshot_after"] = snapshot_after
+    new_record = TurnRecord(**record_dict)
+
+    await entity_check(new_record)
+
+    warnings = [e for e in captured_events if e["event_type"] == "validation_warning"]
+    assert not warnings, f"current location must be a known entity, got {warnings}"
+
+
+@pytest.mark.asyncio
+async def test_entity_check_humanizes_region_slug_to_display(captured_events) -> None:
+    """A region present only as a slug in ``discovered_regions`` still matches
+    the narrator's display-form header via humanization
+    (``munchkin_country`` -> 'Munchkin Country')."""
+    snapshot_after = type(
+        "Snap",
+        (),
+        {
+            "npc_pool": [],
+            "npcs": [],
+            "discovered_regions": ["munchkin_country", "the_yellow_brick_road"],
+            "inventory": type("Inv", (), {"items": []})(),
+        },
+    )()
+
+    record = _make_record()
+    record_dict = record.__dict__.copy()
+    record_dict["narration"] = "She steps onto The Yellow Brick Road toward Munchkin Country."
+    record_dict["snapshot_after"] = snapshot_after
+    new_record = TurnRecord(**record_dict)
+
+    await entity_check(new_record)
+
+    warnings = [e for e in captured_events if e["event_type"] == "validation_warning"]
+    assert not warnings, f"humanized region slugs must match display headers, got {warnings}"
+
+
+@pytest.mark.asyncio
 async def test_inventory_check_warns_on_narration_grab_with_no_patch(
     captured_events,
 ) -> None:

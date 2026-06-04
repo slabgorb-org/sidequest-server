@@ -32,6 +32,59 @@ CheckFn = Callable[[TurnRecord], Awaitable[None]]
 # False positives are fine — entity_check is a hint, not an oracle.
 _NAMED_ENTITY_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
 
+# Separators the narrator appends a sub-scene to a region header with
+# ("The Lilliput Shore — Landfall", "Munchkin Country: the crossroads").
+_LOCATION_SEPARATORS = ("—", " – ", " - ", ":")
+
+
+def _humanize_region_slug(slug: str) -> str:
+    """``the_lilliput_shore`` -> ``The Lilliput Shore``.
+
+    ``discovered_regions`` / ``pc_regions`` / ``current_region`` store region
+    *slugs*, but the narrator headers the scene with the *display* form, so a
+    slug-only known set never matches the prose and the validator flags the
+    scene's own location every turn.
+    """
+    return slug.replace("_", " ").replace("-", " ").strip().title()
+
+
+def _known_location_forms(snap: object) -> set[str]:
+    """Every surface form of the snapshot's known locations/regions.
+
+    Playtest 2026-06-04 (gulliver): 35 per-session ``entity`` warnings fired on
+    "The Lilliput Shore" — the scene's OWN starting location. The region IS
+    registered in the snapshot (``current_region`` / ``discovered_regions`` /
+    ``pc_regions`` carry the slug; ``character_locations`` values carry the
+    display string), but ``entity_check`` only read ``discovered_regions`` in
+    slug form, so the display-form header never matched. We union the raw
+    slugs, their humanized display forms, the ``character_locations`` display
+    strings, and the region-header prefix before a sub-scene separator so the
+    validator stops crying wolf on the engine's own ground-truth location.
+    """
+    forms: set[str] = set()
+    region_slugs: list[str] = []
+    current_region = getattr(snap, "current_region", None)
+    if current_region:
+        region_slugs.append(str(current_region))
+    region_slugs.extend(str(r) for r in (getattr(snap, "discovered_regions", None) or ()))
+    region_slugs.extend(str(r) for r in (getattr(snap, "pc_regions", None) or {}).values())
+    for slug in region_slugs:
+        if not slug:
+            continue
+        forms.add(slug)
+        forms.add(_humanize_region_slug(slug))
+    locations = getattr(snap, "character_locations", None) or {}
+    for loc in locations.values():
+        loc_str = str(loc).strip()
+        if not loc_str:
+            continue
+        forms.add(loc_str)
+        for sep in _LOCATION_SEPARATORS:
+            if sep in loc_str:
+                forms.add(loc_str.split(sep, 1)[0].strip())
+                break
+    return forms
+
 
 async def entity_check(record: TurnRecord) -> None:
     """Warn when narration names an NPC / region / item absent from the
@@ -62,6 +115,11 @@ async def entity_check(record: TurnRecord) -> None:
             known_names.add(str(name))
     regions = getattr(snap, "discovered_regions", None) or ()
     known_names.update(str(r) for r in regions)
+    # The scene's current location/region is in the snapshot (just stored as a
+    # slug in the region collections / as a display string in
+    # character_locations) — register every surface form so the validator does
+    # not flag the narrator's own scene header (playtest 2026-06-04 gulliver).
+    known_names.update(_known_location_forms(snap))
     inventory = getattr(snap, "inventory", None)
     if inventory is not None:
         items = getattr(inventory, "items", None) or ()

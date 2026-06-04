@@ -2112,6 +2112,25 @@ def _apply_morale_sidecar(
             _apply_flee_consequences(enc, cdef, sidecar_fired)
 
 
+def _is_consumable_item(item: dict[str, object]) -> bool:
+    """True only for genuine single-use items the ``items_consumed`` lane may
+    remove. The consume lane means "spent on use", so a reusable item — a tool
+    (Pocket Handkerchief), weapon, armor, or quest item — must NOT be destroyed
+    when the narrator incidentally describes using it (playtest 2026-06-04, oz
+    turn 7). An item qualifies as consumable when its ``category`` is
+    ``consumable`` OR it carries a ``consumable`` tag (authored single-use
+    food/potions/scrolls). Everything else is preserved; explicit destruction
+    flows through the separate ``items_lost`` lane.
+    """
+    category = str(item.get("category", "") or "").strip().lower()
+    if category == "consumable":
+        return True
+    tags = item.get("tags") or []
+    if isinstance(tags, (list, tuple, set)):
+        return any(str(tag).strip().lower() == "consumable" for tag in tags)
+    return False
+
+
 def resolve_item_recipient(
     snapshot: GameSnapshot,
     entry: dict[str, object],
@@ -3041,6 +3060,7 @@ def _apply_narration_result_to_snapshot(
         unmatched_discards: list[str] = []
         consumed_names: list[str] = []
         unmatched_consumes: list[str] = []
+        preserved_consumes: list[str] = []
 
         # Story 45-13: per-room container retrieved-state. Each
         # ``items_gained`` entry may carry an optional ``from_container``
@@ -3266,9 +3286,33 @@ def _apply_narration_result_to_snapshot(
             for idx, existing in enumerate(recipient_char.core.inventory.items):
                 existing_name = str(existing.get("name", "") or "").strip().lower()
                 if existing_name == consume_name:
-                    recipient_char.core.inventory.items.pop(idx)
-                    consumed_names.append(consume_name)
                     matched = True
+                    # Playtest 2026-06-04 (oz turn 7): the narrator emitted
+                    # items_consumed for the chargen Pocket Handkerchief
+                    # (category=tool) after Susan wiped rust with it — a
+                    # reusable tool was silently destroyed by an incidental
+                    # narrated use. The consume lane is "spent on use" and must
+                    # only remove genuine single-use consumables; a tool /
+                    # weapon / armor / quest item is reusable and stays. This
+                    # also avoids a silent inventory deletion the prose never
+                    # acknowledged (Keith's #1 consistency class). Explicit
+                    # destruction is the items_lost lane, not consume. Per
+                    # "No Silent Fallbacks" the refusal is surfaced on the OTEL
+                    # span (preserved_consumes) + an INFO log, not swallowed.
+                    if _is_consumable_item(existing):
+                        recipient_char.core.inventory.items.pop(idx)
+                        consumed_names.append(consume_name)
+                    else:
+                        display_name = str(existing.get("name", "") or "") or consume_name
+                        preserved_consumes.append(display_name)
+                        logger.info(
+                            "state.inventory_consume_preserved player=%s turn=%d "
+                            "name=%r category=%r reason=non_consumable_reusable",
+                            player_name,
+                            turn_num,
+                            display_name,
+                            str(existing.get("category", "") or ""),
+                        )
                     break
             if not matched:
                 unmatched_consumes.append(consume_name)
@@ -3293,6 +3337,7 @@ def _apply_narration_result_to_snapshot(
             lost=removed_names,
             discarded=discarded_names,
             consumed=consumed_names,
+            preserved=preserved_consumes,
             player_name=player_name,
             turn_number=turn_num,
             unmatched_discards_count=len(unmatched_discards),
@@ -3301,7 +3346,7 @@ def _apply_narration_result_to_snapshot(
             logger.info(
                 "state.inventory_update player=%s turn=%d gained=%s lost=%s "
                 "discarded=%s unmatched_discards=%s consumed=%s "
-                "unmatched_consumes=%s",
+                "unmatched_consumes=%s preserved_consumes=%s",
                 player_name,
                 turn_num,
                 added_names,
@@ -3310,6 +3355,7 @@ def _apply_narration_result_to_snapshot(
                 unmatched_discards,
                 consumed_names,
                 unmatched_consumes,
+                preserved_consumes,
             )
 
     # Economy — apply narrator gold_change to the acting PC's purse.

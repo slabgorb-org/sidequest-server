@@ -11,9 +11,17 @@ docs/superpowers/specs/2026-05-04-snapshot-split-brain-cleanup-design.md).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from sidequest.game.disposition import Disposition
+
+if TYPE_CHECKING:
+    # ``Npc`` lives in ``sidequest.game.session``, which already imports THIS
+    # module (``from sidequest.game.npc_pool import NpcPoolMember``). Importing
+    # it at runtime here would be a circular import, so it is annotation-only.
+    from sidequest.game.session import Npc
 
 
 class NpcPoolMember(BaseModel):
@@ -77,3 +85,25 @@ class NpcPoolMember(BaseModel):
     The full Monster Manual identity (creature_id / threat_level / hp / stat
     block, ADR-059) is a deferred follow-up; this flag is the classification
     that keeps the person namer off creatures in the meantime."""
+
+
+def is_projectable(entity: NpcPoolMember | Npc) -> bool:
+    """Whether ``entity`` is eligible to be projected to any downstream surface.
+
+    ADR-138 §D1/D3: ratification is the single projection-eligibility gate, shared
+    by every projection surface (the ADR-118 retrieval index and the ADR-135 public
+    reference page) so none re-implements the rule.
+
+    - A ``NpcPoolMember`` is projectable iff it is **ratified**
+      (``observation_pending is False``). An unratified, auto-minted member is a
+      phantom the Story 49-6 gate may purge next turn; the world has not committed
+      to it, so it must not be embedded or rendered as if it had.
+    - A promoted ``Npc`` (``sidequest.game.session.Npc``) is **always** projectable —
+      promotion to the mechanical entity is itself the world's commitment.
+
+    This is the §D3 predicate only; wiring it into the projection surfaces is
+    deferred to stories 75-12 (ADR-118) and 75-13 (ADR-135).
+    """
+    if isinstance(entity, NpcPoolMember):
+        return not entity.observation_pending
+    return True

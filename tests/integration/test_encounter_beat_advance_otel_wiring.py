@@ -21,7 +21,9 @@ attributes, ``WatcherSpanProcessor`` translates it through
 typed ``state_transition`` with ``component=encounter`` carrying the beat
 transition.
 
-Same harness as ``test_combat_otel_wiring.py``: a local ``TracerProvider``
+Same harness as ``test_combat_otel_wiring.py`` — the shared
+``watcher_setup`` + ``wait_for_state_transition`` from
+``tests/integration/conftest.py`` (story 71-34): a local ``TracerProvider``
 + ``WatcherSpanProcessor`` with ``spans_module.tracer`` monkeypatched so the
 dispatch span (which resolves its tracer via ``Span.open`` →
 ``spans.tracer()``) lands on the test's processor.
@@ -34,7 +36,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
 
 from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
 from sidequest.agents.tool_registry import ToolContext, default_registry
@@ -47,10 +48,8 @@ from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import EncounterMetric, StructuredEncounter
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
-from sidequest.server.watcher import WatcherSpanProcessor
-from sidequest.telemetry import spans as spans_module
 from sidequest.telemetry.spans import SPAN_ROUTES
-from sidequest.telemetry.watcher_hub import watcher_hub
+from tests.integration.conftest import wait_for_state_transition, watcher_setup
 
 _DISPATCH_SPAN = "tool.write.advance_encounter_beat"
 
@@ -123,29 +122,8 @@ def _ctx(repo: _FakeRepo) -> ToolContext:
 
 
 # ---------------------------------------------------------------------------
-# Watcher harness (mirrors test_combat_otel_wiring.py::_setup)
+# Watcher harness — shared via tests/integration/conftest.py (story 71-34)
 # ---------------------------------------------------------------------------
-
-
-async def _setup(monkeypatch: pytest.MonkeyPatch, label: str) -> list[dict]:
-    watcher_hub.bind_loop(asyncio.get_running_loop())
-    async with watcher_hub._lock:  # noqa: SLF001
-        watcher_hub._subscribers.clear()  # noqa: SLF001
-
-    captured: list[dict] = []
-
-    class _Sock:
-        async def send_json(self, data: dict) -> None:
-            captured.append(data)
-
-    await watcher_hub.subscribe(_Sock())  # type: ignore[arg-type]
-
-    provider = TracerProvider()
-    provider.add_span_processor(WatcherSpanProcessor(watcher_hub))
-    local_tracer = provider.get_tracer(label)
-    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
-
-    return captured
 
 
 async def _wait_for_beat_event(captured: list[dict], *, timeout_s: float = 1.0) -> dict:
@@ -153,25 +131,13 @@ async def _wait_for_beat_event(captured: list[dict], *, timeout_s: float = 1.0) 
     a ``state_transition`` whose ``fields`` carry ``beat_from`` and
     ``beat_to``. Matching on payload content (not a magic ``field`` label)
     keeps the test decoupled from whatever discriminator string the GREEN
-    phase chooses."""
-    deadline = asyncio.get_event_loop().time() + timeout_s
-    while asyncio.get_event_loop().time() < deadline:
-        for evt in captured:
-            fields = evt.get("fields", {})
-            if (
-                evt.get("event_type") == "state_transition"
-                and "beat_from" in fields
-                and "beat_to" in fields
-            ):
-                return evt
-        await asyncio.sleep(0.01)
-    summary = [
-        (e.get("event_type"), e.get("component"), sorted((e.get("fields") or {}).keys()))
-        for e in captured
-    ]
-    raise AssertionError(
-        f"Expected a state_transition carrying beat_from/beat_to within {timeout_s}s; "
-        f"captured {len(captured)} events: {summary}"
+    phase chooses. Thin wrapper over the shared ``wait_for_state_transition``."""
+    return await wait_for_state_transition(
+        captured,
+        lambda evt: "beat_from" in evt.get("fields", {})
+        and "beat_to" in evt.get("fields", {}),
+        timeout_s=timeout_s,
+        describe="carrying beat_from/beat_to",
     )
 
 
@@ -216,7 +182,7 @@ async def test_advance_encounter_beat_publishes_state_transition(
 ) -> None:
     """Auto-advance (+1) from beat 2 must reach the hub as a typed
     state_transition carrying the beat transition and encounter context."""
-    captured = await _setup(monkeypatch, "test-beat-advance-wiring")
+    captured = await watcher_setup(monkeypatch, "test-beat-advance-wiring")
     ctx = _ctx(_FakeRepo(_snapshot(_encounter(beat=2, encounter_type="brawl"))))
 
     await _dispatch(ctx, {"reason": "scene shifts"})
@@ -247,7 +213,7 @@ async def test_explicit_to_beat_reflected_in_watcher_event(
     """An explicit ``to_beat`` jump (2 → 7) must surface as beat_from=2,
     beat_to=7 in the typed event — proving the route reads the tool's
     after-mutation attributes, not a stale or hard-coded delta."""
-    captured = await _setup(monkeypatch, "test-beat-advance-explicit")
+    captured = await watcher_setup(monkeypatch, "test-beat-advance-explicit")
     ctx = _ctx(_FakeRepo(_snapshot(_encounter(beat=2, encounter_type="duel"))))
 
     await _dispatch(ctx, {"to_beat": 7, "reason": "smash cut"})

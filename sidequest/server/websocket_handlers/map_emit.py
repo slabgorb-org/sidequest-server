@@ -575,6 +575,17 @@ def _maybe_emit_location_description(
             ):
                 pass
 
+    # POI landscape for the Location tab. Built from room_id VERBATIM — the
+    # authored region slug IS the R2 object key (munchkin_country.png), so no
+    # slugify (which would hyphenate to munchkin-country.png and miss the
+    # underscore R2 key). The UI hides the image on a load error, so a region
+    # with no rendered landscape degrades to text-only.
+    from sidequest.server.asset_urls import resolve_asset_url
+
+    poi_image_url = resolve_asset_url(
+        f"genre_packs/{sd.genre_slug}/worlds/{sd.world_slug}/assets/poi/{room_id}.png"
+    )
+
     payload = LocationDescriptionPayload(
         region_id=room_id,
         region_name=region_name,
@@ -583,6 +594,7 @@ def _maybe_emit_location_description(
         entities=entities,
         overlays=overlay_summaries,
         reference_url=reference_url,
+        poi_image_url=poi_image_url,
     )
     msg = LocationDescriptionMessage(
         payload=payload,

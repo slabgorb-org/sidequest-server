@@ -268,6 +268,15 @@ def _roll_and_persist_initiative(
         elif actor.side == "player":
             ch = char_by_name.get(actor.name)
             if ch is None:
+                # Story 59-35: a FRIENDLY NPC ally seated side="player" carries
+                # no SWN ability scores (CreatureCore has none) — it does not
+                # roll its own initiative; it acts on narrator beats like an
+                # opponent NPC. Skip it here. A player-side actor that is NEITHER
+                # a Character NOR a roster Npc is a real name-skew defect — fail
+                # loud (No Silent Fallbacks), preserving the original guard for
+                # genuine PCs.
+                if any(n.core.name == actor.name for n in snapshot.npcs):
+                    continue
                 raise ValueError(
                     f"player actor '{actor.name}' not found among snapshot.characters "
                     "— cannot resolve DEX for initiative (no silent fallback)"
@@ -500,9 +509,16 @@ def _npc_fallback_at_location(
     Story 59-17: ``adversary_only`` (sealed-letter 1v1 sourcing) additionally
     filters candidates through ``_npc_is_adversary`` so a same-location
     bystander is never promoted into a duel. The non-sealed path leaves this
-    False — a brawl/chase intentionally pulls in every location NPC as an
-    opponent (story 59-13's chase dial depends on it), so that contract is
-    byte-identical when ``adversary_only=False``.
+    False — a brawl/chase pulls in every location NPC as an opponent (story
+    59-13's chase dial depends on it).
+
+    Story 59-35: when ``adversarial`` is True the opponent fallback ALSO skips
+    ``Attitude.FRIENDLY`` NPCs — a co-located companion fights at the player's
+    side (``_friendly_fallback_at_location`` seats it ``side="player"``), it is
+    never conscripted as the Other. So the ``adversary_only=False`` contract is
+    "every HOSTILE/NEUTRAL location NPC" (no longer literally *every* NPC). The
+    chase-dial guarantee holds for hostile/neutral pursuers; only friendlies are
+    diverted to the friendly-seater.
 
     Returns ``(mentions, location_available)`` so the caller can decorate
     the empty-result span: ``location_available=False`` means the player
@@ -527,6 +543,16 @@ def _npc_fallback_at_location(
         # a neutral-disposition bystander sharing the room is not the Other.
         if adversary_only and not _npc_is_adversary(npc):
             continue
+        # Story 59-35: an adversarial (opponent-sourcing) fallback must NOT
+        # conscript a FRIENDLY ally as the enemy — a co-located companion fights
+        # at the player's side (``_friendly_fallback_at_location`` seats it
+        # side="player"), never as the Other. Hostile/neutral NPCs are still
+        # seated as opponents. (``adversary_only`` already excludes friendlies
+        # via ``_npc_is_adversary``; this covers the general brawl/chase
+        # opponent fallback where every same-location NPC was otherwise pulled
+        # in as an opponent.)
+        if adversarial and npc.disposition.attitude() == Attitude.FRIENDLY:
+            continue
         fallback.append(
             NpcMention(
                 name=npc.core.name,
@@ -537,6 +563,60 @@ def _npc_fallback_at_location(
             )
         )
     return fallback, True
+
+
+def _friendly_fallback_at_location(
+    snapshot: GameSnapshot,
+    *,
+    acting_character_name: str | None = None,
+) -> list[NpcMention]:
+    """Story 59-35: source scene-present FRIENDLY NPCs as side="player" allies.
+
+    The friendly half of ADR-116 seating — symmetric to
+    ``_npc_fallback_at_location``, and the engine enactment of the SOUL "Guitar
+    Solo" principle: an allied NPC at the player's side FIGHTS, it is never a
+    silent spectator. Scans ``snapshot.npcs`` for NPCs at the acting PC's
+    location whose ``disposition.attitude()`` is ``Attitude.FRIENDLY`` and
+    returns an ``NpcMention`` per ally with ``side="player"``.
+
+    Differs from the opponent fallback in two deliberate ways:
+
+    1. **Additive, not empty-gated.** The opponent fallback fires only when
+       ``npcs_present`` is empty; this runs regardless — an ally fights
+       alongside the PC whether or not the narrator named the enemy. The caller
+       keeps these mentions OUT of the ``npcs_present`` list the no-opponent
+       guard inspects, so a friendly ally never satisfies "a confrontation
+       requires an Other" (ADR-116 invariant unchanged).
+    2. **Disposition is the sole gate.** Only ``Attitude.FRIENDLY`` qualifies;
+       hostile/neutral NPCs are seated (if at all) by the opponent fallback /
+       explicit ``npcs_present``. Mirrors the location filter (same
+       ``last_seen_location`` as the acting PC) so an ally last seen elsewhere
+       is not pulled in.
+
+    Returns ``[]`` when the acting PC has no resolved location (No Silent
+    Fallbacks — never seat an ally against a bogus location).
+    """
+    from sidequest.agents.orchestrator import NpcMention
+
+    location = snapshot.party_location(perspective=acting_character_name)
+    if not location:
+        return []
+    allies: list[NpcMention] = []
+    for npc in snapshot.npcs:
+        if npc.last_seen_location != location:
+            continue
+        if npc.disposition.attitude() != Attitude.FRIENDLY:
+            continue
+        allies.append(
+            NpcMention(
+                name=npc.core.name,
+                pronouns=npc.pronouns or "",
+                role=npc.npc_role_id or "",
+                appearance=npc.appearance or "",
+                side="player",
+            )
+        )
+    return allies
 
 
 def _build_table_seat_seeds(
@@ -967,6 +1047,20 @@ def instantiate_encounter_from_trigger(
             f"location_available={location_available})"
         )
 
+    # Story 59-35: source FRIENDLY allies for the combat-confrontation path.
+    # Computed AFTER the no-opponent guard and kept SEPARATE from npcs_present
+    # so an ally never counts toward "a confrontation requires an Other"
+    # (ADR-116 invariant). Seated only in the generic branch below — never for
+    # sealed-letter (strict 1v1 red/blue) or table_resolution (handled earlier).
+    # ``friendly_seated_names`` lets the participant.joined loop tag these seats
+    # source="friendly_fallback", distinct from PC seats (source="seat").
+    friendly_allies: list[NpcMention] = []
+    friendly_seated_names: set[str] = set()
+    if cdef.category == "combat" and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup:
+        friendly_allies = _friendly_fallback_at_location(
+            snapshot, acting_character_name=player_name
+        )
+
     with encounter_confrontation_initiated_span(
         encounter_type=encounter_type,
         genre_slug=genre_slug or "",
@@ -1053,6 +1147,17 @@ def instantiate_encounter_from_trigger(
                 side_raw = getattr(npc, "side", None) or "neutral"
                 side = _validate_side(npc_name, side_raw)
                 actors.append(EncounterActor(name=npc_name, role=role, side=side))
+            # Story 59-35: seat scene-present FRIENDLY allies as side="player"
+            # combatants (ADR-116 friendly half / SOUL Guitar Solo). Additive to
+            # the opponent path; dedup against already-seated names so an ally the
+            # narrator also named in npcs_present (or a PC) is not double-seated.
+            already_seated = {a.name for a in actors}
+            for ally in friendly_allies:
+                if ally.name in already_seated:
+                    continue
+                actors.append(EncounterActor(name=ally.name, role=role, side="player"))
+                already_seated.add(ally.name)
+                friendly_seated_names.add(ally.name)
 
         # ADR-116: membership entry is observable. Emit a participant.joined
         # span per seated actor carrying side + source so the GM panel can
@@ -1080,12 +1185,27 @@ def instantiate_encounter_from_trigger(
                 _stamp_attrs = {
                     "last_seen_turn": _seated_npc.last_seen_turn,
                     "last_seen_location": _seated_npc.last_seen_location or "",
+                    # Story 59-35 (AC4): carry the seated NPC's disposition band so
+                    # the GM panel can prove WHY the engine seated it — a
+                    # friendly_fallback seat reads disposition_attitude="friendly",
+                    # confirming the seat was disposition-driven, not narrator improv.
+                    "disposition_attitude": _seated_npc.disposition.attitude().value,
                 }
+            # Story 59-35: a FRIENDLY ally seated by the friendly-seater carries
+            # source="friendly_fallback" (the GM-panel lie-detector proving the
+            # ENGINE seated the ally, not the narrator inventing one), distinct
+            # from a PC seat (source="seat") and an opponent (seating_source).
+            if actor.name in friendly_seated_names:
+                _join_source = "friendly_fallback"
+            elif actor.side == "player":
+                _join_source = "seat"
+            else:
+                _join_source = seating_source
             with participant_joined_span(
                 encounter_type=encounter_type,
                 name=actor.name,
                 side=actor.side,
-                source="seat" if actor.side == "player" else seating_source,
+                source=_join_source,
                 **_stamp_attrs,
             ):
                 pass

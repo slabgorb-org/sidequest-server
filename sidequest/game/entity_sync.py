@@ -18,6 +18,7 @@ render is counted and recorded, never minted as a stub card.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -171,8 +172,14 @@ def sync_entity_cards(
     guard never fires for it.
     """
     result = EntitySyncResult()
+    # Every ``npc:<slug>`` id a *projectable* entity owns this sweep: promoted
+    # stateful Npcs, the pool origins they were promoted from, and ratified pool
+    # members. The defensive eviction below (ADR-138 §D5) discards a stranded card
+    # only if its id is ABSENT here — so a live card is never evicted by a
+    # slug-colliding pending twin, regardless of pool order. Slug-normalized (via
+    # ``npc_card_id``), so the guard is case-insensitive: a pending ``borin``
+    # cannot evict a ratified ``BORIN``'s card.
     covered_ids: set[str] = set()
-    covered_origins: set[str] = set()
 
     # Stateful NPCs first — the richer entity takes precedence over its origin.
     for npc in snapshot.npcs:
@@ -188,12 +195,23 @@ def sync_entity_cards(
             )
             continue
         covered_ids.add(card.id)
+        # Seed the origin's slug too: a promoted Npc may have been renamed at
+        # promotion (``core.name`` diverges from ``pool_origin``), and a pending
+        # pool member matching the ORIGIN name must still be guarded against
+        # eviction. The slug form makes this case-insensitive — replacing the old
+        # raw-string ``covered_origins`` comparison, which missed case variants.
         if npc.pool_origin:
-            covered_origins.add(npc.pool_origin)
+            with contextlib.suppress(ValueError):
+                covered_ids.add(npc_card_id(npc.pool_origin))
         _apply_typed_card(store, card, result, "npc_count")
 
     # Pool members second — skip any superseded by a stateful Npc (same card id,
-    # or the pool member this Npc was promoted from).
+    # or the pool member this Npc was promoted from). Eviction of stranded cards
+    # is DEFERRED to a second pass (below): a ratified slug-twin can appear LATER
+    # in the pool than its pending sibling, so the eviction decision must wait
+    # until ``covered_ids`` is fully populated. Deciding inline would make the
+    # guard depend on pool order.
+    eviction_candidates: list[str] = []
     for member in snapshot.npc_pool:
         # ADR-138 §D2 — gate the FILL, not the FLOOR. An unratified
         # (``observation_pending``) pool member is an auto-minted phantom the
@@ -206,27 +224,22 @@ def sync_entity_cards(
         # floor still shows the member via ``build_npc_working_set``.
         if not is_projectable(member):
             result.skipped_unratified += 1
-            # ADR-138 §D5 — defensive eviction. The skip above keeps a *newly*
-            # pending member out of the index, but the EntityStore is durable
-            # session state: a member ratified on an earlier turn already has a
-            # card here, and a later code path can re-mark it ``observation_pending``
-            # (the mutable 49-6 gate outliving the persisted card). That strands a
-            # card on a now-unprojectable member — it would keep resurfacing as a
-            # "recalled" NPC the world has un-committed. Evict it; never serve it
-            # stale (No Silent Fallbacks). A promoted stateful ``Npc`` sharing this
-            # id legitimately owns the card (promotion is the world's commitment),
-            # so guard against evicting *its* fresh projection.
+            # ADR-138 §D5 — defensive eviction, DEFERRED. The skip above keeps a
+            # *newly* pending member out of the index, but the EntityStore is
+            # durable session state: a member ratified on an earlier turn already
+            # has a card here, and a later code path can re-mark it
+            # ``observation_pending`` (the mutable 49-6 gate outliving the
+            # persisted card). That strands a card on a now-unprojectable member.
+            # Collect its id as an eviction CANDIDATE and decide after the full
+            # pool loop has populated ``covered_ids``: a projectable slug-twin
+            # appearing later in the pool (or a promoted Npc) legitimately owns
+            # this id, and a pending member swept first must never delete a live
+            # card. A blank-named phantom could never have produced a card.
             try:
-                stranded_id = npc_card_id(member.name)
+                eviction_candidates.append(npc_card_id(member.name))
             except ValueError:
-                # Blank-named phantom — could never have produced a card; nothing
-                # to evict (and never indexed, so no invariant violation).
+                # Blank-named phantom — never indexed, no invariant violation.
                 continue
-            if stranded_id in covered_ids or member.name in covered_origins:
-                continue  # a projectable stateful Npc owns this id — not stranded
-            if store.discard(stranded_id):
-                result.evicted += 1
-                result.evicted_ids.append(stranded_id)
             continue
         try:
             card = project_npc_card(member)
@@ -242,17 +255,25 @@ def sync_entity_cards(
                 exc,
             )
             continue
-        if card.id in covered_ids or member.name in covered_origins:
+        if card.id in covered_ids:
             continue
         _apply_typed_card(store, card, result, "npc_count")
-        # Record the ratified pool card so a later pool member whose name
-        # case-folds to the same ``npc:<slug>`` (a distinct entry that
-        # world_materialization's exact-string dedup let coexist) cannot trip
-        # the ADR-138 §D5 defensive eviction and discard this live card. The
-        # stateful-Npc loop does the same at its own ``_apply_typed_card``; the
-        # pool loop must mirror it or the eviction guard sees an empty set for
-        # pool-on-pool slug collisions.
         covered_ids.add(card.id)
+
+    # ADR-138 §D5 — deferred defensive eviction. ``covered_ids`` now holds every
+    # ``npc:<slug>`` a projectable entity owns this sweep (promoted Npcs + their
+    # origins + ratified pool members), independent of the order they appeared in
+    # the pool. Evict a stranded candidate only if NO projectable entity owns its
+    # id; otherwise a pending slug-twin swept before its ratified sibling would
+    # discard a live card and fire a false ``entity_card.evicted`` span. No Silent
+    # Fallbacks cuts both ways: the eviction signal must be TRUE, not just loud.
+    # ``discard`` is idempotent, so duplicate candidate ids count at most once.
+    for stranded_id in eviction_candidates:
+        if stranded_id in covered_ids:
+            continue  # a projectable entity owns this id — not stranded
+        if store.discard(stranded_id):
+            result.evicted += 1
+            result.evicted_ids.append(stranded_id)
 
     # Factions (76-7) — the bound world's lore roster (world-tier flavor).
     for faction in factions:

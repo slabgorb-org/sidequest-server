@@ -181,19 +181,29 @@ class TestSlugCollisionDoesNotEvictRatifiedSibling:
         # The phantom twin is still counted as withheld from the index.
         assert result.skipped_unratified == 1
 
-    def test_slug_twin_guard_holds_regardless_of_pool_order(self) -> None:
-        """The guard must not depend on the pending twin appearing after the
-        ratified one in ``npc_pool`` — a fresh-store sweep with the pending twin
-        FIRST also retains the ratified card (the empty store means the early
-        discard is a no-op, and the ratified member re-indexes)."""
+    def test_pending_first_does_not_evict_preseeded_ratified_twin(self) -> None:
+        """The ordering the round-1 fix missed: the pending twin is swept BEFORE
+        its ratified slug-sibling AND the store already holds the ratified card
+        from a prior sweep. Eviction must be DEFERRED past the full pool loop —
+        the guard cannot depend on ``covered_ids`` being populated by the time the
+        pending member is processed (it is filled lazily as the loop walks). This
+        test FAILS on the lazy-``covered_ids`` (round-1) code: pending-first +
+        pre-seeded store → ``store.discard`` returns True → spurious eviction."""
         store = EntityStore()
-        pending_twin = _pending_member("Borin")
         ratified = _ratified_member("BORIN")
+        # Prior sweep indexed the ratified member's card (durable in the store).
+        sync_entity_cards(store, _Snapshot(pool=[ratified]))
+        assert "npc:borin" in store.cards
 
+        # This sweep: the pending case-twin is FIRST, the ratified member second.
+        pending_twin = _pending_member("Borin")
         result = sync_entity_cards(store, _Snapshot(pool=[pending_twin, ratified]))
 
-        assert "npc:borin" in store.cards
+        assert "npc:borin" in store.cards  # the committed card survives
         assert result.evicted == 0
+        assert result.evicted_ids == []
+        # The phantom twin is still counted as withheld from the index.
+        assert result.skipped_unratified == 1
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +256,28 @@ class TestNoSpuriousEviction:
         assert [c.id for c in store.query_by_type(EntityType.NPC)] == ["npc:borin"]
         assert result.evicted == 0
         assert result.npc_count == 1
+
+    def test_pending_member_matching_renamed_npc_origin_not_evicted(self) -> None:
+        """A promoted Npc renamed at promotion: ``core.name`` ("Borin Ironhand")
+        diverges from ``pool_origin`` ("borin"). A pending pool member whose name
+        case-folds to the ORIGIN slug (``npc:borin``) must NOT evict — the origin
+        slug is seeded into the projectable-id guard, case-insensitively. Without
+        seeding the origin slug (and with the old case-sensitive origin guard),
+        ``npc:borin`` would be stranded and spuriously evicted."""
+        store = EntityStore()
+        # Prior sweep: the origin pool member was ratified and indexed as npc:borin.
+        sync_entity_cards(store, _Snapshot(pool=[_ratified_member("borin")]))
+        assert "npc:borin" in store.cards
+
+        # Now it is promoted to a renamed stateful Npc, and the origin member is
+        # re-marked pending (its slug-twin card npc:borin still in the store).
+        snapshot = _Snapshot(
+            pool=[_pending_member("borin")],
+            npcs=[_npc("Borin Ironhand", disposition=40, pool_origin="borin")],
+        )
+
+        result = sync_entity_cards(store, snapshot)
+
+        assert "npc:borin" in store.cards  # the origin's card is not stranded
+        assert result.evicted == 0
+        assert result.evicted_ids == []

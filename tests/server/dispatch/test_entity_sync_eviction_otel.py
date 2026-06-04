@@ -63,9 +63,15 @@ def test_eviction_emits_entity_card_evicted_span(session_handler_factory, otel_c
     # The eviction span carries the turn it fired on (GM-panel correlation).
     assert attrs["entity_sync.turn_number"] == sd.snapshot.turn_manager.interaction
 
-    # The sweep span also carries the at-a-glance evicted count.
+    # The sweep span also carries the at-a-glance evicted count. Two sweeps ran
+    # (turn-1 index, turn-2 evict); pin len == 2 and locate the evicting sweep by
+    # its count so a regression that drops a span or mis-attributes the count
+    # cannot slip past a loose ``any()``.
     sweep_spans = span_attrs_by_name(otel_capture, "accretion.entity_sync")
-    assert any(s.get("entity_sync.evicted") == 1 for s in sweep_spans)
+    assert len(sweep_spans) == 2
+    evicting = [s for s in sweep_spans if s.get("entity_sync.evicted") == 1]
+    assert len(evicting) == 1
+    assert evicting[0].get("entity_sync.turn_number") == sd.snapshot.turn_manager.interaction
 
 
 def test_multiple_evictions_emit_one_span_each(session_handler_factory, otel_capture) -> None:

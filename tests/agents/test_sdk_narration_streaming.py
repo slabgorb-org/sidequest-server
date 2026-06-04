@@ -573,3 +573,82 @@ async def test_sdk_path_no_room_broadcasts_nothing(
 
     assert broadcasts == [], "no room → broadcast_delta must not be called"
     assert result.narration == "No one is watching."
+
+
+class _MultiPlayerRoom:
+    """SessionRoom stand-in with TWO connected players (a true shared-room MP
+    session, not the parallel-solo case). Captures broadcasts per player so the
+    test can prove whether raw deltas leaked to either socket."""
+
+    def __init__(self) -> None:
+        self._players = ["p-1", "p-2"]
+        self._sockets = {"p-1": "sock-1", "p-2": "sock-2"}
+        self.queues: dict[str, asyncio.Queue] = {
+            "sock-1": asyncio.Queue(),
+            "sock-2": asyncio.Queue(),
+        }
+
+    def connected_player_ids(self) -> list[str]:
+        return list(self._players)
+
+    def socket_for_player(self, pid: str) -> str | None:
+        return self._sockets.get(pid)
+
+    def queue_for_socket(self, socket_id: str):
+        return self.queues.get(socket_id)
+
+    def drain_all(self) -> list[Any]:
+        out: list[Any] = []
+        for q in self.queues.values():
+            while not q.empty():
+                out.append(q.get_nowait())
+        return out
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_does_not_stream_raw_deltas_in_multiplayer_room(
+    monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
+) -> None:
+    """REWORK (Reviewer F1, HIGH): the SDK streaming fan-out must be gated to
+    SOLO. In a ``>1``-connected (multiplayer) room, raw ``NarrationDelta`` chunks
+    must NOT be broadcast — they are unfiltered, non-POV-swapped prose, and the
+    canonical path (websocket_session_handler.py:1493) explicitly calls that raw
+    bypass "a firewall+POV breach" for ``len(connected) > 1``. This story is
+    scoped solo-only ("Out of scope: MP streaming"); per-recipient MP delta
+    streaming is deferred. The canonical NARRATION (projected + POV-swapped per
+    recipient) remains the authoritative MP delivery.
+
+    RED after rejection: the sink fires for ANY non-None room, so a 2-player room
+    leaks 2 raw deltas to each socket. GREEN gates the sink on a solo room
+    (``<= 1`` connected player), mirroring the canonical path's ``> 1`` check.
+    """
+    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _patch_orch_internals(monkeypatch)
+
+    client = _streaming_tooling_client(
+        ["A secret door ", "clicks open."], text="A secret door clicks open."
+    )
+    orch = Orchestrator(client=client)
+    room = _MultiPlayerRoom()
+    ctx = TurnContext(character_name="Rux", genre="caverns_and_claudes", turn_number=7)
+
+    result = await orch.run_narration_turn("I search the wall.", ctx, room=room)
+
+    # No raw deltas may reach ANY socket in a multiplayer room.
+    leaked = room.drain_all()
+    assert leaked == [], (
+        f"raw NarrationDelta leaked to MP sockets (firewall+POV breach): "
+        f"{[getattr(m, 'payload', m) for m in leaked]}"
+    )
+
+    # The GM panel must show streaming did NOT engage for MP this turn.
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == "narration.turn"]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes or {})
+    assert attrs.get("narration.turn.delta_count") == 0, (
+        "MP turn must report delta_count=0 — streaming is solo-only"
+    )
+
+    # The turn still completes; the canonical narration is the MP delivery path.
+    assert result.narration == "A secret door clicks open."

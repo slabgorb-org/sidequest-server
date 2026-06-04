@@ -27,7 +27,9 @@ from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.table.types import TablePot, TableSeat, TableState
 from sidequest.genre.models.pack import GenrePack
+from sidequest.genre.models.progression import ProgressionConfig, resolve_level
 from sidequest.genre.models.rules import ConfrontationDef, ResolutionMode, WinCondition
+from sidequest.protocol.models import AdvancementDelta as LevelUp
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
@@ -1066,9 +1068,7 @@ def instantiate_encounter_from_trigger(
         # span so the GM panel sees it alongside the seating event. Combat
         # opponents are re-stamped by the 72-8 seams below with the SAME turn +
         # location, so the value stays consistent (no double-advance).
-        _seat_turn = (
-            snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
-        )
+        _seat_turn = snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
         _seat_loc = snapshot.party_location(perspective=player_name)
         _npc_by_name = {n.core.name: n for n in snapshot.npcs}
         for actor in actors:
@@ -1345,6 +1345,68 @@ def award_turn_xp(snapshot: GameSnapshot, *, in_combat: bool) -> None:
         },
         component="progression",
     )
+
+
+# ADR-021 track 1: accumulated ``core.xp`` (the live per-turn accumulator from
+# ``award_turn_xp``) is the progression measure — "wire up what exists" rather
+# than minting a parallel milestone counter. One milestone is worth this many
+# XP; ``milestones_per_level`` (authored 2–3 by the packs) then governs the
+# level ladder. award_turn_xp grants 10 (calm) / 25 (combat) per turn, so a
+# milestone is ~4–10 turns of play.
+_XP_PER_MILESTONE = 100
+
+
+def apply_level_ups(snapshot: GameSnapshot, progression: ProgressionConfig) -> list[LevelUp]:
+    """Drive milestone → level-up for every PC and emit OTEL on each crossing.
+
+    The missing consumer for ADR-021 track 1: ``award_turn_xp`` already
+    accumulates ``core.xp`` each turn and tags its emit ``component=progression``,
+    but nothing ever advanced the character from it. This runs immediately after
+    ``award_turn_xp`` in the turn pipeline, converts accumulated XP into
+    milestones, resolves the level via :func:`resolve_level`, and — on a real
+    crossing — bumps ``core.level``, publishes a ``progression.level_up``
+    ``state_transition`` watcher event (the GM-panel lie-detector, mirroring the
+    ``award_turn_xp`` progression emit), and records a player-facing
+    :class:`AdvancementDelta` on the character so PartyMember can show *what
+    changed and why* (mechanics-first).
+
+    Returns the list of crossings this turn (empty when nobody leveled). A pack
+    that doesn't author progression resolves every character to level 1, so the
+    loop is a clean no-op — No Silent Fallbacks, no phantom advancement.
+    """
+    crossings: list[LevelUp] = []
+    for character in snapshot.characters:
+        # Clear last turn's notification first: the delta is per-turn, so a
+        # character that doesn't cross this turn surfaces no advancement.
+        character.last_advancement = None
+
+        milestones_completed = max(0, character.core.xp) // _XP_PER_MILESTONE
+        new_level = resolve_level(milestones_completed, progression)
+        before = character.core.level
+        if new_level <= before:
+            continue
+
+        character.core.level = new_level
+        delta = LevelUp(
+            character_name=character.core.name,
+            before=before,
+            after=new_level,
+            driver="milestone",
+        )
+        character.last_advancement = delta
+        crossings.append(delta)
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "progression.level_up",
+                "character_name": character.core.name,
+                "before": before,
+                "after": new_level,
+                "driver": "milestone",
+            },
+            component="progression",
+        )
+    return crossings
 
 
 def apply_resource_patches(

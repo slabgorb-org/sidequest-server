@@ -568,9 +568,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             # last_save_failure (that gates close_store on the canonical snapshot
             # save, which is a strictly more important write).
             try:
-                self._session_data.repository.save_lore_fragments(
-                    self._session_data.lore_store
-                )
+                self._session_data.repository.save_lore_fragments(self._session_data.lore_store)
             except Exception as exc:  # noqa: BLE001 — lore persist must not block teardown
                 logger.error("lore.disconnect_persist_failed error=%s", exc)
                 _watcher_publish(
@@ -1250,6 +1248,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
 
                     from sidequest.server.dispatch.encounter_lifecycle import (
                         _is_combat_category,
+                        apply_level_ups,
                         apply_resource_patches,
                         award_turn_xp,
                     )
@@ -1260,6 +1259,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         and _is_combat_category(sd.genre_pack, snapshot.encounter.encounter_type)
                     )
                     award_turn_xp(snapshot, in_combat=in_combat_now)
+                    # ADR-021 track 1: milestone → level-up runs on the freshly
+                    # awarded XP. The consumer that makes accumulation matter.
+                    apply_level_ups(snapshot, sd.genre_pack.progression)
 
                     try:
                         crossed_thresholds = apply_resource_patches(

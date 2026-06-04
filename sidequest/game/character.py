@@ -16,7 +16,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 from sidequest.game.creature_core import CreatureCore
-from sidequest.protocol.models import AbilityDefinition, FactCategory
+from sidequest.protocol.models import AbilityDefinition, AdvancementDelta, FactCategory
 
 
 class KnownFact(BaseModel):
@@ -101,6 +101,12 @@ class Character(BaseModel):
 
     # P6-deferred: affinity tier progression (advancement system, Epic F8)
     affinities: list[AffinityState] = Field(default_factory=list)
+
+    # ADR-021 track 1: the most recent milestone→level-up delta, set by
+    # ``apply_level_ups`` each turn so the player-facing PartyMember can show
+    # it. Transient (``exclude=True``) — a per-turn notification, never
+    # persisted into the save (it would otherwise re-surface stale on reload).
+    last_advancement: AdvancementDelta | None = Field(default=None, exclude=True)
 
     # P1-required: determines narrator behaviour (player vs enemy framing)
     is_friendly: bool = True

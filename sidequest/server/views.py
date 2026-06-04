@@ -514,6 +514,9 @@ def party_member_from_character(
         statuses=[s.text for s in character.core.statuses],
         **{"class": class_nbs},  # type: ignore[arg-type]
         level=character.core.level,
+        # ADR-021 track 1: the most recent level-up delta (None on turns with
+        # no advancement), so the player sees the change and its driver.
+        advancement=character.last_advancement,
         portrait_url=None,
         current_location=location_nbs,
         sheet=sheet,
@@ -599,13 +602,15 @@ def build_session_start_party_status(
             pid = seat_map.get(char.core.name) or f"peer:{char.core.name}"
             pname = char.core.name
         member_identity = (
-            handler._room.get_player_identity(pid)
-            if handler._room is not None
-            else None
+            handler._room.get_player_identity(pid) if handler._room is not None else None
         )
         members.append(
             party_member_from_character(
-                handler, sd, char, pid, pname,
+                handler,
+                sd,
+                char,
+                pid,
+                pname,
                 player_identity=member_identity,
             )
         )

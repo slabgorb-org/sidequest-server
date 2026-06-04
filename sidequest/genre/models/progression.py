@@ -229,6 +229,28 @@ def resolve_wealth_tier(gold: int, tiers: list[WealthTier]) -> WealthTier | None
     return tiers[-1]
 
 
+def resolve_level(milestones_completed: int, config: ProgressionConfig) -> int:
+    """Map accumulated milestones to a character level (ADR-021 track 1).
+
+    The sibling of ``resolve_wealth_tier`` (track 3, gold → wealth tier). The
+    character starts at level 1 and gains one level per
+    ``config.milestones_per_level`` milestones, clamped to ``config.max_level``
+    so accumulation past the ceiling stops at the top rather than running away.
+
+    A pack that doesn't author progression (``milestones_per_level`` or
+    ``max_level`` is ``0`` — the default) has no ladder to climb: resolve to
+    the floor level 1 rather than dividing by zero. No Silent Fallbacks — never
+    fabricate progression a content author didn't declare. A negative
+    accumulation (should never happen, but guard it) also floors at level 1.
+    """
+    if config.milestones_per_level <= 0 or config.max_level <= 0:
+        return 1
+    if milestones_completed <= 0:
+        return 1
+    level = 1 + milestones_completed // config.milestones_per_level
+    return min(level, config.max_level)
+
+
 class ProgressionConfig(BaseModel):
     """Character progression configuration.
 

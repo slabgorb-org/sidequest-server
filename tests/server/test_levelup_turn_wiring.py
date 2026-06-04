@@ -132,3 +132,152 @@ def test_party_member_exposes_advancement_delta_field() -> None:
         "PartyMember must surface an 'advancement' delta (before/after/driver) "
         "so the player sees the level-up, not a silent stat bump (AC3)"
     )
+
+
+def test_party_member_from_character_populates_advancement_after_level_up() -> None:
+    """AC3 (behavioral wiring): the field EXISTING is not enough — prove the
+    full chain reaches the player. Run the real ``apply_level_ups`` engine so it
+    sets ``Character.last_advancement``, then build the player-facing
+    ``PartyMember`` via ``party_member_from_character`` and assert the delta is
+    actually copied (before/after/driver). A regression that drops the
+    ``advancement=character.last_advancement`` line in views.py fails HERE — the
+    reflection test above would still pass. Mirrors the
+    ``test_reference_url_attach`` synthetic-_SessionData shape (fixture-driven,
+    no live packs)."""
+    from unittest.mock import MagicMock
+
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
+    from sidequest.game.persistence import GameMode
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+    from sidequest.server.dispatch.encounter_lifecycle import apply_level_ups
+    from sidequest.server.session_handler import _SessionData
+    from sidequest.server.views import party_member_from_character
+
+    genre_pack = MagicMock()
+    genre_pack.classes = []
+    genre_pack.inventory = None
+    genre_pack.rules.survivability_pool_label = None
+    genre_pack.progression.wealth_tiers = []
+
+    character = Character(
+        core=CreatureCore(
+            name="Rux",
+            description="A stoic fighter.",
+            personality="stoic",
+            inventory=Inventory(),
+            hp=HpPool(current=10, max=10, base_max=10),
+            xp=100_000,
+            level=1,
+        ),
+        backstory="A wandering fighter.",
+        char_class="Fighter",
+        race="Human",
+    )
+
+    snapshot = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="sunken_keep",
+        turn_manager=TurnManager(interaction=1),
+        characters=[character],
+    )
+
+    sd = _SessionData(
+        genre_slug="caverns_and_claudes",
+        world_slug="sunken_keep",
+        player_name="Keith",
+        player_id="p1",
+        snapshot=snapshot,
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
+        genre_pack=genre_pack,
+        orchestrator=MagicMock(),
+        mode=GameMode.SOLO,
+    )
+
+    # Real engine sets character.last_advancement on the crossing.
+    crossings = apply_level_ups(
+        snapshot,
+        ProgressionConfig(milestone_categories=["combat"], milestones_per_level=3, max_level=5),
+    )
+    assert crossings, "engine must produce a crossing for the seeded xp"
+
+    member = party_member_from_character(
+        MagicMock(),  # handler — only sd is used in this path
+        sd,
+        character,
+        player_id="p1",
+        player_name="Keith",
+    )
+
+    assert member.advancement is not None, (
+        "party_member_from_character must copy Character.last_advancement into "
+        "PartyMember.advancement — the player-facing populate (AC3)"
+    )
+    assert member.advancement.after == 5
+    assert member.advancement.before == 1
+    assert member.advancement.driver == "milestone"
+    assert member.advancement.character_name == "Rux"
+
+
+def test_party_member_advancement_is_none_without_a_level_up() -> None:
+    """The companion negative: a character that did NOT level this turn
+    surfaces ``advancement = None`` — the field is populated only on a real
+    crossing, never a spurious delta on an ordinary turn."""
+    from unittest.mock import MagicMock
+
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
+    from sidequest.game.persistence import GameMode
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+    from sidequest.server.session_handler import _SessionData
+    from sidequest.server.views import party_member_from_character
+
+    genre_pack = MagicMock()
+    genre_pack.classes = []
+    genre_pack.inventory = None
+    genre_pack.rules.survivability_pool_label = None
+    genre_pack.progression.wealth_tiers = []
+
+    character = Character(
+        core=CreatureCore(
+            name="Rux",
+            description="A stoic fighter.",
+            personality="stoic",
+            inventory=Inventory(),
+            hp=HpPool(current=10, max=10, base_max=10),
+        ),
+        backstory="A wandering fighter.",
+        char_class="Fighter",
+        race="Human",
+    )
+    # No level-up occurred → last_advancement stays at its default None.
+    assert character.last_advancement is None
+
+    snapshot = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="sunken_keep",
+        turn_manager=TurnManager(interaction=1),
+        characters=[character],
+    )
+    sd = _SessionData(
+        genre_slug="caverns_and_claudes",
+        world_slug="sunken_keep",
+        player_name="Keith",
+        player_id="p1",
+        snapshot=snapshot,
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
+        genre_pack=genre_pack,
+        orchestrator=MagicMock(),
+        mode=GameMode.SOLO,
+    )
+
+    member = party_member_from_character(
+        MagicMock(), sd, character, player_id="p1", player_name="Keith"
+    )
+    assert member.advancement is None

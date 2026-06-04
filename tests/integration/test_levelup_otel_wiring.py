@@ -144,8 +144,9 @@ async def test_level_up_returns_player_facing_delta_record(
     assert delta.character_name == "Rux"
     assert delta.before == 1
     assert delta.after == 5
-    assert delta.before < delta.after
-    assert delta.driver, "delta must name its driver (e.g. 'milestone')"
+    # Pin the exact driver value (rule #6: a bare truthy check would pass for
+    # any non-empty string and miss a regression that renamed the driver).
+    assert delta.driver == "milestone"
 
 
 @pytest.mark.asyncio
@@ -187,3 +188,77 @@ async def test_unconfigured_progression_never_levels(
     assert snapshot.characters[0].core.level == 1
     assert deltas == []
     assert not [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]
+
+
+@pytest.mark.asyncio
+async def test_character_already_at_max_level_does_not_re_level_or_emit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No-downgrade / no-re-fire guard (`new_level <= before`): a character
+    already AT max_level with accumulation past the ceiling must NOT level up
+    again and must NOT emit a phantom ``progression.level_up`` event. (A
+    ``<=`` → ``<`` regression would spam the GM panel with phantom crossings
+    every turn for a maxed character.)"""
+    captured = await _setup(monkeypatch, "test-levelup-at-max")
+
+    pc = _make_pc("Rux", xp=100_000, level=5)  # already at the cap
+    snapshot = GameSnapshot(genre_slug="caverns_and_claudes", characters=[pc])
+
+    deltas = apply_level_ups(snapshot, _progression(per_level=3, max_level=5))
+    await asyncio.sleep(0.05)
+
+    assert snapshot.characters[0].core.level == 5, "must not advance past or re-fire at cap"
+    assert deltas == []
+    assert not [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]
+
+
+@pytest.mark.asyncio
+async def test_last_advancement_is_cleared_on_a_later_no_crossing_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-turn notification is transient: a character who crossed on a
+    prior call must have ``last_advancement`` reset to None on a later call
+    that produces no new crossing — otherwise a stale "you leveled up!" delta
+    would re-surface every turn forever."""
+    await _setup(monkeypatch, "test-levelup-reset")
+
+    pc = _make_pc("Rux", xp=100_000, level=1)
+    snapshot = GameSnapshot(genre_slug="caverns_and_claudes", characters=[pc])
+    progression = _progression(per_level=3, max_level=5)
+
+    # First call: a real crossing sets the player-facing delta.
+    first = apply_level_ups(snapshot, progression)
+    assert first, "first call must produce a crossing"
+    assert pc.last_advancement is not None
+    assert pc.last_advancement.after == 5
+
+    # Second call: already at the cap → no new crossing → delta cleared.
+    second = apply_level_ups(snapshot, progression)
+    assert second == []
+    assert pc.last_advancement is None, "stale delta must be cleared on a no-crossing turn"
+
+
+@pytest.mark.asyncio
+async def test_multi_character_snapshot_levels_each_pc_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The engine iterates every PC: in a party where one character crosses
+    and another doesn't, only the crosser advances and emits — proving the
+    per-character loop (not a break/return after the first) and correct
+    ``character_name`` attribution on the event."""
+    captured = await _setup(monkeypatch, "test-levelup-multi-pc")
+
+    crosser = _make_pc("Ritali", xp=100_000, level=1)
+    bystander = _make_pc("Catalina", xp=0, level=1)
+    snapshot = GameSnapshot(genre_slug="space_opera", characters=[crosser, bystander])
+
+    deltas = apply_level_ups(snapshot, _progression(per_level=3, max_level=5))
+    await asyncio.sleep(0.05)
+
+    assert crosser.core.level == 5
+    assert bystander.core.level == 1
+    assert [d.character_name for d in deltas] == ["Ritali"]
+
+    events = [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]
+    assert len(events) == 1, f"exactly one PC crossed; got {len(events)} events"
+    assert events[0]["fields"]["character_name"] == "Ritali"

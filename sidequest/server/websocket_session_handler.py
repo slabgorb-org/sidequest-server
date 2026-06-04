@@ -1741,6 +1741,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         from sidequest.server.dispatch.confrontation import (
                             build_confrontation_payload,
                             find_confrontation_def,
+                            make_confrontation_portrait_resolver,
                         )
 
                         cdef = find_confrontation_def(
@@ -1764,6 +1765,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             genre_slug=sd.genre_slug,
                             recipient_pc=None,
                             core_resolver=sd.snapshot.find_creature_core,
+                            # Story 85-3: stakes + opponent portrait on the
+                            # canonical union (persisted + delivered to stub-room
+                            # fixtures). The supplier below re-projects per socket.
+                            active_stakes=sd.snapshot.active_stakes,
+                            portrait_resolver=make_confrontation_portrait_resolver(
+                                snapshot=sd.snapshot,
+                                genre_pack=sd.genre_pack,
+                                genre_slug=sd.genre_slug,
+                            ),
                         )
                         confrontation_payload = ConfrontationPayload(**payload_dict)
                         confrontation_event_attrs = {

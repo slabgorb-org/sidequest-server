@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.encounter import StructuredEncounter
+from sidequest.game.encounter import EncounterActor, StructuredEncounter
 from sidequest.game.session import GameSnapshot
 from sidequest.game.table.types import TableState
 from sidequest.game.wwn_magic import SpellcastingState
@@ -111,6 +111,8 @@ def build_confrontation_payload(
     recipient_actor_name: str | None = None,
     core_resolver: Callable[[str], CreatureCore | None] | None = None,
     spellcasting: SpellcastingState | None = None,
+    active_stakes: str | None = None,
+    portrait_resolver: Callable[[str], str | None] | None = None,
 ) -> dict[str, Any]:
     """Assemble the CONFRONTATION payload the UI overlay consumes.
 
@@ -150,6 +152,21 @@ def build_confrontation_payload(
     narrator-prompt one (``source='narrator_prompt'``). Without that
     discriminator the two spans look identical in the watcher
     dashboard and a regression at either site is invisible.
+
+    Story 85-3 (Tier B confrontation panel):
+    ``active_stakes`` is the session's current stakes string; an empty string
+    normalizes to ``None`` so the UI banner collapses on a single falsy check.
+    The ``stakes`` key is ALWAYS present in the returned dict (not
+    additive-conditional like the hp keys) — every confrontation reports its
+    stakes or explicit absence. Emits the ``confrontation.stakes_attached``
+    OTEL span on every call so the GM panel can tell a no-stakes confrontation
+    from a dropped emit.
+    ``portrait_resolver``, when supplied, is called for each
+    ``side == "opponent"`` actor to resolve a portrait URL (returns ``None`` on
+    miss — No Silent Fallbacks); player/companion actors are never resolved here
+    (they get portraits via PARTY_STATUS). The resolved URL rides the serialized
+    actor dict under ``portrait_url``. Build the resolver at call sites with
+    ``make_confrontation_portrait_resolver``.
     """
     if encounter.mood_override is not None:
         mood = encounter.mood_override
@@ -215,11 +232,30 @@ def build_confrontation_payload(
     else:
         beats_for_payload = cdef.beats
 
+    # Story 85-3 (Tier B): the session's active stakes, surfaced on the
+    # CONFRONTATION channel for the promoted dockview panel's stakes banner.
+    # ALWAYS present (empty string normalizes to None) — NOT additive-conditional
+    # like the hp keys (Architect decision 2026-06-04).
+    stakes_value = active_stakes or None
+
+    # Story 85-3: per-opponent portrait so the dial reads as *against someone*
+    # (ADR-116 — a confrontation requires an Other). Resolved via an INJECTED
+    # ``portrait_resolver`` (production wires it to _resolve_npc_portrait_url),
+    # scoped to ``side == "opponent"`` — players/companions get portraits via
+    # PARTY_STATUS, never here. None on resolver miss (No Silent Fallbacks).
+    def _actor_with_portrait(actor: EncounterActor) -> dict[str, Any]:
+        portrait_url = (
+            portrait_resolver(actor.name)
+            if (portrait_resolver is not None and actor.side == "opponent")
+            else None
+        )
+        return {**actor.model_dump(mode="json"), "portrait_url": portrait_url}
+
     payload: dict[str, Any] = {
         "type": encounter.encounter_type,
         "label": cdef.label,
         "category": cdef.category,
-        "actors": [a.model_dump(mode="json") for a in encounter.actors],
+        "actors": [_actor_with_portrait(a) for a in encounter.actors],
         "player_metric": encounter.player_metric.model_dump(mode="json"),
         "opponent_metric": encounter.opponent_metric.model_dump(mode="json"),
         "beats": [b.model_dump(mode="json") for b in beats_for_payload],
@@ -231,7 +267,22 @@ def build_confrontation_payload(
         "genre_slug": genre_slug,
         "mood": mood,
         "active": not encounter.resolved,
+        "stakes": stakes_value,
     }
+
+    # Story 85-3 — GM-panel lie-detector for the stakes wiring (CLAUDE.md OTEL
+    # discipline). Fires on EVERY build; has_stakes=False distinguishes a
+    # no-stakes confrontation from a dropped emit. Local import keeps the span
+    # off the module load path (mirrors the beat_filter local import above).
+    from sidequest.telemetry.spans import confrontation_stakes_attached_span
+
+    with confrontation_stakes_attached_span(
+        genre_slug=genre_slug,
+        confrontation_type=encounter.encounter_type,
+        has_stakes=stakes_value is not None,
+        stakes_len=len(stakes_value) if stakes_value else 0,
+    ):
+        pass
 
     # space_opera → SWN binding (Task 6): surface the resolution model and,
     # under hp_depletion, the primary combatants' HP so the player-facing
@@ -399,6 +450,38 @@ def project_table_frame_for_seat(table_state: TableState, *, seat_id: str | None
     }
 
 
+def make_confrontation_portrait_resolver(
+    *,
+    snapshot: GameSnapshot,
+    genre_pack: Any,
+    genre_slug: str,
+) -> Callable[[str], str | None]:
+    """Build the opponent-portrait resolver for ``build_confrontation_payload``'s
+    ``portrait_resolver`` arg (Story 85-3). Precomputes the world's manifest
+    slugs ONCE and closes over them so a multi-opponent confrontation doesn't
+    rebuild the set per actor (Architect note 2026-06-04). Reuses the proven
+    scrapbook resolver (``emitters._resolve_npc_portrait_url``), which emits the
+    resolved/not-found OTEL spans. Opponent-only scoping and None-on-miss live in
+    ``build_confrontation_payload``; this just resolves a name → world-scoped URL.
+    One source of truth shared by every per-frame build site (supplier, dice
+    union, websocket union, yield projection)."""
+    from sidequest.server.emitters import _resolve_npc_portrait_url, _world_portrait_slugs
+
+    world_slug = snapshot.world_slug
+    manifest_slugs = _world_portrait_slugs(genre_pack, world_slug)
+
+    def _resolve(npc_name: str) -> str | None:
+        return _resolve_npc_portrait_url(
+            pack=genre_pack,
+            genre_slug=genre_slug,
+            world_slug=world_slug,
+            npc_name=npc_name,
+            manifest_slugs=manifest_slugs,
+        )
+
+    return _resolve
+
+
 def make_confrontation_frame_supplier(
     *,
     snapshot: GameSnapshot,
@@ -430,6 +513,11 @@ def make_confrontation_frame_supplier(
     from sidequest.telemetry.spans.encounter import (
         confrontation_recipient_unresolved_span,
         confrontation_unfiltered_delivery_span,
+    )
+
+    # Story 85-3: opponent portraits on each delivered frame (shared resolver).
+    _portrait_for = make_confrontation_portrait_resolver(
+        snapshot=snapshot, genre_pack=genre_pack, genre_slug=genre_slug
     )
 
     def _frame_for(player_id: str) -> ConfrontationPayload | None:
@@ -487,6 +575,8 @@ def make_confrontation_frame_supplier(
             recipient_pc=recipient_pc,
             recipient_actor_name=recipient_actor,
             core_resolver=snapshot.find_creature_core,
+            active_stakes=snapshot.active_stakes,
+            portrait_resolver=_portrait_for,
         )
         # Free-for-all N-seat table: attach a per-seat private projection so
         # each socket sees only its own hand (+ public state) until showdown.

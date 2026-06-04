@@ -99,7 +99,9 @@ class DispatchMismatch:
 _MALFORMED_EVIDENCE = "malformed dispatch: router omitted required params['{key}'] for {subsystem}"
 
 
-def _check_confrontation_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
+def _check_confrontation_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
     if "type" not in dispatch.params:
         return _MALFORMED_EVIDENCE.format(subsystem="confrontation", key="type")
     dispatched_type: str = dispatch.params["type"]
@@ -114,7 +116,9 @@ def _check_confrontation_engaged(dispatch: SubsystemDispatch, snapshot: GameSnap
     return None
 
 
-def _check_magic_working_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
+def _check_magic_working_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
     if "actor" not in dispatch.params:
         return _MALFORMED_EVIDENCE.format(subsystem="magic_working", key="actor")
     actor: str = dispatch.params["actor"]
@@ -126,7 +130,9 @@ def _check_magic_working_engaged(dispatch: SubsystemDispatch, snapshot: GameSnap
     return None
 
 
-def _check_scenario_clue_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
+def _check_scenario_clue_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
     if "fact_id" not in dispatch.params:
         return _MALFORMED_EVIDENCE.format(subsystem="scenario_clue", key="fact_id")
     fact_id: str = dispatch.params["fact_id"]
@@ -138,7 +144,9 @@ def _check_scenario_clue_engaged(dispatch: SubsystemDispatch, snapshot: GameSnap
     return None
 
 
-def _check_npc_agency_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapshot) -> str | None:
+def _check_npc_agency_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
     if "npc_name" not in dispatch.params:
         return _MALFORMED_EVIDENCE.format(subsystem="npc_agency", key="npc_name")
     npc_name: str = dispatch.params["npc_name"]
@@ -155,15 +163,81 @@ def _check_npc_agency_engaged(dispatch: SubsystemDispatch, snapshot: GameSnapsho
 
 
 def _check_distinctive_detail_engaged(
-    dispatch: SubsystemDispatch, snapshot: GameSnapshot
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
 ) -> str | None:
     return None
 
 
 def _check_reflect_absence_engaged(
-    dispatch: SubsystemDispatch, snapshot: GameSnapshot
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
 ) -> str | None:
     return None
+
+
+def _check_witnessed_act_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
+    """witnessed_act witness — turn-scoped political-ledger read (Story 59-30).
+
+    ``apply_witnessed_act`` appends a ``BeliefLedgerEntry`` (stamped with ``turn``
+    + ``act_id``) for every dial it moves. Engaged iff such an entry exists for
+    THIS turn and THIS act. Turn-scoping is REQUIRED — a prior-turn entry for the
+    same act_id is NOT this-turn engagement (the false-negative TEA flagged).
+
+    The engine resolves ``act_id = params.get("act_id") or
+    params.get("act_archetype")`` (``witnessed_act.py:102``); the witness MUST
+    mirror that alias or it false-flags a legitimately-engaged turn.
+    """
+    # Alias parity with the engine (witnessed_act.py:102) — NOT act_id-only.
+    act_id = dispatch.params.get("act_id") or dispatch.params.get("act_archetype")
+    if not act_id:
+        return _MALFORMED_EVIDENCE.format(subsystem="witnessed_act", key="act_id")
+    state = snapshot.political_state
+    if state is None:
+        return "snapshot.political_state is None (world has no political layer loaded)"
+    current_turn = snapshot.turn_manager.interaction
+    if any(e.turn == current_turn and e.act_id == act_id for e in state.ledger):
+        return None
+    return (
+        f"no political ledger entry for act_id={act_id!r} at turn={current_turn} "
+        f"(router dispatched witnessed_act; no dial moved)"
+    )
+
+
+def _check_movement_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
+    """movement witness — "relocation-occurred", turn-scoped per-PC (Story 59-30).
+
+    Reads the ``region_transitions`` ledger (stamped on both relocation seams).
+    Engaged iff a transition exists for THIS turn and THIS PC. Per-PC keying
+    keeps MP/split-party correct (PC-B's successful move must not mask PC-A's
+    stuck move). The witness is via-agnostic — it reads turn + pc_name only — so
+    a ``narration_apply`` (region-mode) stamp reads as engaged exactly like a
+    ``world_patch`` one.
+
+    The moving PC is resolved player_id → character name via ``player_seats``
+    (the same character-name key the relocation writers use). No Silent
+    Fallbacks: an unresolvable player_id surfaces LOUD evidence — never a guess,
+    never a single-seat default.
+    """
+    if player_id is None:
+        return (
+            "movement dispatched with no owning player (cross_player movement is a router defect)"
+        )
+    pc_name = snapshot.player_seats.get(player_id)
+    if pc_name is None:
+        return (
+            f"movement player_id={player_id!r} has no seat→character mapping "
+            f"(player_seats={snapshot.player_seats!r})"
+        )
+    current_turn = snapshot.turn_manager.interaction
+    if any(t.turn == current_turn and t.pc_name == pc_name for t in snapshot.region_transitions):
+        return None
+    return (
+        f"no region_transition for pc={pc_name!r} at turn={current_turn} "
+        f"(router dispatched movement; PC did not relocate)"
+    )
 
 
 _DISPATCHED_TYPE_KEY: dict[str, str] = {
@@ -173,6 +247,8 @@ _DISPATCHED_TYPE_KEY: dict[str, str] = {
     "npc_agency": "npc_name",
     "distinctive_detail_hint": "target",
     "reflect_absence": "addressee_hint",
+    "witnessed_act": "act_id",
+    "movement": "direction",
 }
 
 
@@ -183,6 +259,8 @@ _WITNESSES = {
     "npc_agency": _check_npc_agency_engaged,
     "distinctive_detail_hint": _check_distinctive_detail_engaged,
     "reflect_absence": _check_reflect_absence_engaged,
+    "witnessed_act": _check_witnessed_act_engaged,
+    "movement": _check_movement_engaged,
 }
 
 
@@ -193,11 +271,23 @@ _WITNESSES = {
 # ---------------------------------------------------------------------------
 
 
-def _iter_all_dispatches(package: DispatchPackage) -> Iterable[SubsystemDispatch]:
+def _iter_all_dispatches(
+    package: DispatchPackage,
+) -> Iterable[tuple[str | None, SubsystemDispatch]]:
+    """Yield ``(player_id, dispatch)`` for every dispatch in the package.
+
+    ``per_player`` dispatches carry their owning ``player_id``; ``cross_player``
+    dispatches have no single owner, so they yield ``player_id=None`` (a
+    movement dispatch arriving via this leg is a router defect the witness
+    surfaces). This player-attribution thread is shared infra that Story 59-31
+    (opponent-yield) reuses.
+    """
     for pd in package.per_player:
-        yield from pd.dispatch
+        for d in pd.dispatch:
+            yield (pd.player_id, d)
     for ca in package.cross_player:
-        yield from ca.dispatch
+        for d in ca.dispatch:
+            yield (None, d)
 
 
 # ---------------------------------------------------------------------------
@@ -217,19 +307,21 @@ def detect_dispatch_engagement_mismatch(
     (``package=None`` or empty package) return ``[]``.
 
     Subsystems whose names are not in :data:`_WITNESSES` are *ignored* —
-    not every router subsystem is the watcher's concern. As of story 59-7,
-    all six live-path subsystems have witnesses: ``confrontation``,
+    not every router subsystem is the watcher's concern. As of story 59-30,
+    eight live-path subsystems have witnesses: ``confrontation``,
     ``magic_working``, ``scenario_clue``, ``npc_agency``,
-    ``distinctive_detail_hint``, ``reflect_absence``.
+    ``distinctive_detail_hint``, ``reflect_absence``, ``witnessed_act``
+    (turn-scoped political-ledger read), and ``movement`` (per-PC
+    relocation-occurred read).
     """
     if package is None:
         return []
     mismatches: list[DispatchMismatch] = []
-    for dispatch in _iter_all_dispatches(package):
+    for player_id, dispatch in _iter_all_dispatches(package):
         check = _WITNESSES.get(dispatch.subsystem)
         if check is None:
             continue  # subsystem outside the watcher's vocabulary
-        evidence = check(dispatch, snapshot)
+        evidence = check(dispatch, snapshot, player_id)
         if evidence is None:
             continue
         dispatched_type_key = _DISPATCHED_TYPE_KEY[dispatch.subsystem]

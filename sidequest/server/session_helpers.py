@@ -559,9 +559,9 @@ def _resolve_acting_character_name(sd: _SessionData, room: SessionRoom | None) -
 def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object | None:
     """Beneath Sünden BETTER fix (seam 1+2) — per-turn region projection.
 
-    Re-derive the party's current region from the live ``DungeonStore``
-    (SQLite is the single source of truth — never mirrored onto the
-    persisted snapshot, which has a documented divergence disease). The
+    Re-derive the party's current region from the live ``DungeonRepository``
+    (Postgres is the single source of truth, ADR-115 — never mirrored onto
+    the persisted snapshot, which has a documented divergence disease). The
     result rides ``TurnContext.region_projection`` and renders as the
     Early-zone "you are here" section + the constrained move vocabulary.
 
@@ -1280,17 +1280,18 @@ def _build_turn_context(
         quest_anchors=quest_anchors,
         pending_trope_context=pending_trope_context,
         active_trope_summary=active_trope_summary,
-        # Source the recency window from the durable narrative_log (SQLite)
-        # rather than the in-memory snapshot mirror. sd.store.append_narrative
-        # only writes to SQLite — the in-memory snapshot.narrative_log is
-        # populated *only* by world_materialization (one-shot at startup) and
-        # lore_seeding (chargen), never by the per-turn narrator append site
-        # at websocket_session_handler.py:2832/2840. Reading from snapshot
+        # Source the recency window from the durable narrative_log (Postgres,
+        # ADR-115) rather than the in-memory snapshot mirror.
+        # sd.repository.append_narrative only writes to Postgres — the in-memory
+        # snapshot.narrative_log is populated *only* by world_materialization
+        # (one-shot at startup) and lore_seeding (chargen), never by the
+        # per-turn narrator append site at
+        # websocket_session_handler.py:2832/2840. Reading from snapshot
         # made the recency injection emit turn_count=0/total_tokens=0 forever
         # (sq-playtest 2026-05-15 — story 49-1's safety-net was dormant).
-        # SQLite is the same ground-truth source Story 45-11's round
+        # Postgres is the same ground-truth source Story 45-11's round
         # invariant lie-detector relies on; aligning here closes the same
-        # snapshot/SQLite divergence class.
+        # snapshot/store divergence class.
         recent_narrative_log=sd.repository.recent_narrative(RECENT_NARRATIVE_WINDOW_K),
         # Story 50-4: thread the live snapshot so build_narrator_prompt can
         # render + clear pending_time_skip_summary (one-shot lifecycle).

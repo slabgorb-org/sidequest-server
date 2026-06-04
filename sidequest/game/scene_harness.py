@@ -1,7 +1,8 @@
 """Scene-harness fixture hydrator (ADR-092 §Implementation).
 
 Reads a YAML fixture from ``scenarios/fixtures/{name}.yaml`` and hydrates
-it into a :class:`GameSnapshot` the existing ``SqliteStore`` can persist.
+it into a :class:`GameSnapshot` the save repository (``PgSaveRepository``,
+ADR-115) can persist.
 The dev-gated HTTP route in :mod:`sidequest.server.scene_harness_router`
 wraps this hydrator; this module owns no I/O beyond the single fixture
 read.

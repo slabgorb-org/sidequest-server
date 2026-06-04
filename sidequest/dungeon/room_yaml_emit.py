@@ -13,7 +13,7 @@ tests can opt into ``overwrite=True`` to verify replacement behaviour.
   ``room_file_loader.load_room_payload`` accepts the file without
   requiring sibling cavern artefacts (``cellular``/``derived``/mask
   sidecar). The procedural rooms 55-1 emits ARE caverns whose mask
-  lives in the Plan 5 SQLite store (52-2/52-3) and whose ``.cavern.png``
+  lives in the Plan 5 dungeon store (Postgres, ADR-115; 52-2/52-3) and whose ``.cavern.png``
   is rendered at runtime (52-4); the YAML's job is to carry the
   cookbook-composed prose + manifest, not duplicate the cavern visual
   pipeline. See Delivery Findings on the session for the deviation log.

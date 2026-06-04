@@ -368,3 +368,58 @@
     margin-top: 1rem;
     opacity: 0.85;
 }
+
+/* --- Lore-image lightbox (Fix #5) --- */
+/* The gated lore images (cast portraits, POI landscapes) are inline-styled
+ * <img> elements; this only adds the click affordance so the lightbox island
+ * reads as interactive. The overlay below is created by islands.js, so its
+ * markup never appears in the server-rendered HTML (it is not subject to the
+ * chrome-wiring class contract). */
+img.ref-card__portrait,
+img.ref-card__poi {
+    cursor: zoom-in;
+}
+.ref-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    background: rgba(0, 0, 0, 0.82);
+}
+.ref-lightbox__img {
+    max-width: 92vw;
+    max-height: 88vh;
+    width: auto;
+    height: auto;
+    border: 2px solid var(--ref-color-accent);
+    border-radius: 4px;
+    box-shadow: 0 6px 32px rgba(0, 0, 0, 0.6);
+    background: var(--ref-color-background);
+}
+.ref-lightbox__close {
+    position: absolute;
+    top: 1rem;
+    right: 1.25rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--ref-color-accent);
+    border-radius: 50%;
+    background: var(--ref-color-background);
+    color: var(--ref-color-accent);
+    font-family: var(--ref-font-display);
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.ref-lightbox__close:hover,
+.ref-lightbox__close:focus {
+    background: var(--ref-color-accent);
+    color: var(--ref-color-background);
+    outline: none;
+}

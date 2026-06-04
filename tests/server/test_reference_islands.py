@@ -33,6 +33,34 @@ def test_islands_js_handles_picker_only_in_v1() -> None:
     assert "search" not in src.lower(), "Search island deferred — should not be in v1 islands.js"
 
 
+def test_islands_js_includes_lightbox_affordance() -> None:
+    """Fix #5: the islands bundle wires a generic lore-image lightbox.
+
+    Source-presence smoke only (the static bundle is not executed under pytest;
+    behavioral verification is manual — see PR body). Asserts the bundle targets
+    BOTH gated image classes and provides the three documented dismiss paths so a
+    refactor that drops one is caught at least at the bundle level."""
+    src = _ISLANDS_PATH.read_text()
+    # Targets both gated lore-image classes (cast portraits + POI landscapes).
+    assert "ref-card__portrait" in src
+    assert "ref-card__poi" in src
+    # The three dismiss affordances: close control, Esc key, backdrop click.
+    assert "ref-lightbox__close" in src
+    assert "Escape" in src
+    # The overlay element the lightbox creates.
+    assert "ref-lightbox" in src
+
+
+def test_lightbox_styles_present_in_presenters_css() -> None:
+    """Fix #5: the lightbox overlay (created by islands.js, so absent from the
+    server-rendered HTML and thus invisible to the chrome-wiring class contract)
+    must still be styled — assert its rules ship in the presenters bundle."""
+    css = (_ISLANDS_PATH.parent / "presenters.css").read_text()
+    assert ".ref-lightbox" in css
+    assert ".ref-lightbox__img" in css
+    assert ".ref-lightbox__close" in css
+
+
 def test_chrome_head_includes_islands_script_tag() -> None:
     """The page chrome must load islands.js with defer so picker chips hydrate."""
     import tempfile

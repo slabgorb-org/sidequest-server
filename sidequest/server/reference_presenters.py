@@ -340,6 +340,26 @@ def _cast_portrait_img_html(
     return ""
 
 
+def cast_portrait_slug(item: dict) -> str:
+    """The portrait-key slug for a Cast manifest entry, decoupled from heading.
+
+    Prefers the entry's explicit ``id`` (the portrait-key slug that keys the R2
+    portrait ``<slug>.png``) when present and non-empty; otherwise derives it
+    from the display ``name`` via ``slugify_player_name`` (the historical
+    behavior every other world relies on, where ``name`` is authored as the
+    display name and no ``id`` is present).
+
+    This is the single derivation shared by ``present_lore_cast`` (which keys
+    the portrait ``<img>``) and ``assemble_lore_page`` (which gates the slug set
+    on R2 existence) so the gated set and the per-card key always agree. The
+    ``id``-or-``slugify(name)`` fallback is a schema-optional field with a
+    deterministic derivation, not a silent config fallback."""
+    raw_id = str(item.get("id", "")).strip()
+    if raw_id:
+        return raw_id
+    return slugify_player_name(str(item.get("name", "")))
+
+
 def present_lore_cast(
     entries: list[dict],
     *,
@@ -353,11 +373,21 @@ def present_lore_cast(
     is never read).
 
     Each authored NPC renders an ``<article id="cast-{slug}">`` card with name,
-    role, and appearance, where ``slug = slugify_player_name(name)``. A portrait
-    ``<img>`` is attached iff the NPC's world-scoped portrait is present on R2
-    (``portrait_image_slugs`` — the gated set); authored-but-not-on-R2 NPCs
-    render text-only, never a broken image (the portrait analog of the 65-8 POI
-    gate). Returns "" when no NPC is authored, so the caller omits the section."""
+    role, and appearance. The portrait **key** (``slug``) and the display
+    **heading** are decoupled (Fix #4): the slug comes from
+    :func:`cast_portrait_slug` — the entry's explicit ``id`` when present, else
+    ``slugify_player_name(name)`` — while the ``<h3>`` heading and ``alt`` text
+    always use the display ``name``. This lets a world author a slug-shaped
+    portrait key (``id: witch_of_the_west``) alongside a human heading
+    (``name: "The Wicked Witch of the West"``) without the heading degrading to
+    a snake_case id. Worlds that author ``name`` == display and no ``id`` are
+    unchanged (slug derives from the name, exactly as before).
+
+    A portrait ``<img>`` is attached iff the NPC's world-scoped portrait is
+    present on R2 (``portrait_image_slugs`` — the gated set, keyed on the same
+    :func:`cast_portrait_slug`); authored-but-not-on-R2 NPCs render text-only,
+    never a broken image (the portrait analog of the 65-8 POI gate). Returns ""
+    when no NPC is authored, so the caller omits the section."""
     cards: list[str] = []
     for item in entries:
         if not isinstance(item, dict):
@@ -365,7 +395,7 @@ def present_lore_cast(
         name = str(item.get("name", "")).strip()
         if not name:
             continue
-        slug = slugify_player_name(name)
+        slug = cast_portrait_slug(item)
         role = str(item.get("role", "")).strip()
         appearance = str(item.get("appearance", "")).strip()
         img_html = _cast_portrait_img_html(

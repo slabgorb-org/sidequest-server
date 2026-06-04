@@ -208,6 +208,35 @@ async def test_retrieve_records_embedding_model(
 
 
 @pytest.mark.asyncio
+async def test_retrieve_flags_nan_embedding_as_degenerate(
+    captured_events: list[tuple[str, dict]],
+) -> None:
+    """REWORK (Reviewer [EDGE]): a NaN/Inf query embedding must also surface the
+    degenerate outcome. The zero-magnitude guard (`== 0.0`) does NOT catch NaN
+    (NaN != 0.0) or Inf, so a corrupt/truncated daemon reply would sail past it
+    and poison the cosine math + `peak_similarity` with NaN.
+    """
+    store = LoreStore()
+    store.add(_embedded_frag("frag_any", [1.0, 0.0]))
+    fake = _FakeClient(embedding=[float("nan"), 0.0], model="hash-fallback")
+
+    result = await retrieve_lore_context(store, "a real query", client=fake)
+    assert result is None
+
+    events = _lore_events(captured_events)
+    assert events, "NaN-embedding retrieval must still emit an event"
+    outcomes = {f.get("outcome") for f in events}
+    assert outcomes & {"degenerate_embedding", "zero_magnitude_embedding", "non_finite_embedding"}, (
+        "a non-finite (NaN/Inf) query embedding must surface a distinct degenerate "
+        f"outcome, not a silent no-hits with a NaN peak; got outcomes {outcomes}"
+    )
+    peaks = [f.get("peak_similarity") for f in events]
+    assert all(p is None or (isinstance(p, float) and math.isfinite(p)) for p in peaks), (
+        f"peak_similarity must never be NaN/Inf; got {peaks}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_retrieve_flags_degenerate_zero_magnitude_embedding(
     captured_events: list[tuple[str, dict]],
 ) -> None:

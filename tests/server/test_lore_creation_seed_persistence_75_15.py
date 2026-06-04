@@ -393,3 +393,22 @@ async def test_resume_lore_store_loaded_reports_persisted_total_not_world_only(
         "resume lore_store_loaded total must reflect re-hydrated persisted "
         f"fragments (>= world_only+2); got total={total} world_only={world_only}"
     )
+    # REWORK (Reviewer [TEST]): the >= world_only+2 check degenerates to ">= 2"
+    # when the fixture world has 0 world fragments — any two fragments would
+    # satisfy it regardless of rehydration. Independently falsify by asserting
+    # the SPECIFIC persisted ids re-hydrated into the resumed store, AND that the
+    # panel can see a non-trivial rehydrated count distinct from the world-only
+    # reseed (persisted-vs-reseeded legibility, AC5).
+    sd_b = handler_b._session_data  # type: ignore[attr-defined]
+    assert sd_b is not None
+    resumed_ids = set(sd_b.lore_store.fragments)
+    assert {_CREATION_FRAG_ID, _ACCRETED_FRAG_ID} <= resumed_ids, (
+        "the resume telemetry must reflect the specific re-hydrated persisted "
+        f"fragments, not just a count; resumed ids: {sorted(resumed_ids)}"
+    )
+    rehydrated = max(int(f.get("rehydrated_fragments", -1)) for f in loaded)
+    assert rehydrated >= 2, (
+        "lore_store_loaded must surface a 'rehydrated_fragments' count (>=2 here) "
+        "so the GM panel can distinguish persisted-vs-reseeded; got "
+        f"rehydrated_fragments={rehydrated}"
+    )

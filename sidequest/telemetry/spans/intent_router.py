@@ -76,6 +76,7 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_DISPATCH_BANK] = SpanRoute(
         "field": "intent_router.dispatch_bank",
         "turn_id": (span.attributes or {}).get("turn_id", ""),
         "dispatch_count": (span.attributes or {}).get("dispatch_count", 0),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
     },
 )
 
@@ -350,12 +351,15 @@ def intent_router_dispatch_bank_span(
     turn_id: str,
     dispatch_count: int,
     *,
+    turn_number: int = 0,
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
+    """``turn_number`` is ``snapshot.turn_manager.interaction`` so the dashboard
+    grids this span to the correct turn column (Bug A fix)."""
     with Span.open(
         SPAN_INTENT_ROUTER_DISPATCH_BANK,
-        {"turn_id": turn_id, "dispatch_count": dispatch_count, **attrs},
+        {"turn_id": turn_id, "dispatch_count": dispatch_count, "turn_number": turn_number, **attrs},
         tracer_override=_tracer,
     ) as span:
         yield span

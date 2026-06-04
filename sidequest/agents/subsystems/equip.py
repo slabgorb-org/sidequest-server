@@ -53,8 +53,7 @@ def _match_item(items: list[dict], ref: str) -> tuple[dict | None, str]:
     substring = [
         item
         for item in items
-        if (name := str(item.get("name", "")).strip().lower())
-        and (ref_l in name or name in ref_l)
+        if (name := str(item.get("name", "")).strip().lower()) and (ref_l in name or name in ref_l)
     ]
     if len(substring) == 1:
         return substring[0], "substring"
@@ -79,6 +78,9 @@ async def run_equip_dispatch(
     target_equipped = action != "unequip"
 
     character = next((c for c in snapshot.characters if c.core.name == player_name), None)
+    _tm = getattr(snapshot, "turn_manager", None)
+    _turn_number: int = int(getattr(_tm, "interaction", 0)) if _tm is not None else 0
+
     if character is None:
         # The acting PC has no seated character — a binding bug. Fail loud.
         return _unresolved(
@@ -87,6 +89,7 @@ async def run_equip_dispatch(
             requested_item=requested_item,
             action=action,
             surface="The way ahead is unknown — your bearings have not been set.",
+            turn_number=_turn_number,
         )
 
     if not requested_item:
@@ -96,6 +99,7 @@ async def run_equip_dispatch(
             requested_item="",
             action=action,
             surface=f"{player_name} reaches to {action} something, but names nothing to {action}.",
+            turn_number=_turn_number,
         )
 
     matched, matched_by = _match_item(character.core.inventory.items, requested_item)
@@ -106,6 +110,7 @@ async def run_equip_dispatch(
             requested_item=requested_item,
             action=action,
             surface=f"{player_name} is not carrying any {requested_item} to {action}.",
+            turn_number=_turn_number,
         )
 
     before = bool(matched.get("equipped", False))
@@ -126,6 +131,7 @@ async def run_equip_dispatch(
         equipped_after=target_equipped,
         changed=changed,
         matched_by=matched_by,
+        turn_number=_turn_number,
     ):
         pass
     logger.debug(
@@ -156,6 +162,7 @@ def _unresolved(
     requested_item: str,
     action: str,
     surface: str,
+    turn_number: int = 0,
 ) -> SubsystemOutput:
     """Emit the ERROR ``equip.unresolved`` span + an honest narrator surface
     directive; apply NO mutation."""
@@ -164,6 +171,7 @@ def _unresolved(
         reason=reason,
         requested_item=requested_item,
         action=action,
+        turn_number=turn_number,
     ):
         pass
     logger.warning(

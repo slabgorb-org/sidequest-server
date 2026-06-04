@@ -18,6 +18,7 @@ from sidequest.protocol.models import (
     RelationshipClaimPayload,
     RelationshipEntry,
 )
+from sidequest.telemetry.spans import SPAN_RELATIONSHIPS_SEEN_GATE, Span
 
 # 5-level DISPLAY band (ADR-136). Distinct from the engine 3-level Attitude enum.
 _TREND_WINDOW = 3
@@ -48,13 +49,36 @@ def trend_for(beats: list[DispositionBeat], k: int = _TREND_WINDOW) -> str:
 
 
 def build_relationship_entries(snapshot: Any) -> list[RelationshipEntry]:
-    """Build one RelationshipEntry per NPC in ``snapshot.npcs``.
+    """Build one RelationshipEntry per encountered NPC in ``snapshot.npcs``.
+
+    ADR-136 seen-gate: only NPCs the PC has actually met are projected.
+    The discriminator is ``last_seen_turn > 0`` — ``0`` is the spawn default
+    meaning "never mentioned in this session" (turn counter starts at 1).
+    Latent/authored NPCs who haven't appeared are excluded so the roster
+    doesn't spoil the world's ally/antagonist map on turn 1.
+
+    A ``relationships.seen_gate`` OTEL span records total/included/filtered
+    counts so the GM panel can verify the gate is firing.
 
     Phase A: band/disposition/trend/last-seen/beats. OCEAN (Phase B) and claims
     (Phase C) ship empty here and are populated by later phases.
     """
+    all_npcs = snapshot.npcs
+    encountered = [npc for npc in all_npcs if npc.last_seen_turn > 0]
+    filtered_count = len(all_npcs) - len(encountered)
+
+    with Span.open(
+        SPAN_RELATIONSHIPS_SEEN_GATE,
+        {
+            "total": len(all_npcs),
+            "included": len(encountered),
+            "filtered": filtered_count,
+        },
+    ):
+        pass
+
     entries: list[RelationshipEntry] = []
-    for npc in snapshot.npcs:
+    for npc in encountered:
         value = int(npc.disposition)
         beats = [
             DispositionBeatPayload(turn=b.turn, delta=b.delta, reason=b.reason, location=b.location)

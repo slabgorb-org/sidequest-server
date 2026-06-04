@@ -64,6 +64,9 @@ def _maybe_emit_relationships(
         return
 
     entries = build_relationship_entries(snapshot)
+    if not entries:
+        # All NPCs are latent (last_seen_turn == 0) — nothing to show yet.
+        return
     msg = RelationshipsMessage(payload=RelationshipsPayload(entries=entries))
 
     from sidequest.telemetry.spans import SPAN_RELATIONSHIPS_EMITTED, Span

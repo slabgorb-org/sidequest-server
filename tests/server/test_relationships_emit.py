@@ -38,6 +38,7 @@ def test_signature_changes_with_disposition():
 def test_emit_sends_message_when_changed():
     npc = _npc("Tabitha")
     npc.disposition = Disposition(24)
+    npc.last_seen_turn = 6
     npc.record_disposition_beat(turn=6, delta=3, reason="candor", location="parlor")
     handler = _Handler()
     sent = []
@@ -56,6 +57,7 @@ def test_emit_sends_message_when_changed():
 def test_emit_skipped_when_unchanged():
     npc = _npc("Tabitha")
     npc.disposition = Disposition(24)
+    npc.last_seen_turn = 1
     handler = _Handler()
     sent = []
 
@@ -93,6 +95,7 @@ def test_emitted_message_carries_claims_never_secrets():
 
     npc = _npc("Tabitha")
     npc.disposition = Disposition(24)
+    npc.last_seen_turn = 1
     npc.belief_state.beliefs.extend(
         [
             BeliefFact(
@@ -117,9 +120,7 @@ def test_emitted_message_carries_claims_never_secrets():
     )
     sent = []
     handler = _Handler()
-    _maybe_emit_relationships(
-        handler, snapshot=_Snap([npc]), emit_fn=lambda m, k: sent.append(m)
-    )
+    _maybe_emit_relationships(handler, snapshot=_Snap([npc]), emit_fn=lambda m, k: sent.append(m))
 
     entry = sent[0].payload.entries[0]
     claim_texts = [c.text for c in entry.claims]

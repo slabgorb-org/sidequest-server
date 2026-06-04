@@ -76,14 +76,12 @@ def test_build_entries_phase_a_fields():
 
 
 def test_build_entries_never_seen_npc():
-    # A never-seen NPC keeps the Npc defaults (last_seen_turn=0,
-    # last_seen_location=None). The builder must construct a valid payload
-    # without raising a pydantic ValidationError.
+    # ADR-136 seen-gate: a never-seen NPC (last_seen_turn == 0) is excluded
+    # from the roster to prevent spoiling the world's cast on turn 1.
     npc = _npc("Ghost")
+    assert npc.last_seen_turn == 0
     entries = build_relationship_entries(_snapshot_with([npc]))
-    assert len(entries) == 1
-    assert entries[0].last_seen_turn == 0
-    assert entries[0].last_seen_location is None
+    assert entries == []
 
 
 def test_build_entries_empty_roster():
@@ -126,6 +124,7 @@ def test_personality_read_flat_profile_is_balanced():
 def test_build_entries_populates_ocean_and_read():
     npc = _npc("Tabitha")
     npc.disposition = Disposition(24)
+    npc.last_seen_turn = 1
     npc.ocean = {
         "openness": 5.0,
         "conscientiousness": 7.0,
@@ -140,6 +139,7 @@ def test_build_entries_populates_ocean_and_read():
 
 def test_build_entries_no_ocean_keeps_none():
     npc = _npc("Stranger")
+    npc.last_seen_turn = 1
     assert npc.ocean is None
     e = build_relationship_entries(_snapshot_with([npc]))[0]
     assert e.ocean is None
@@ -150,6 +150,7 @@ def test_build_entries_populates_claims():
     from sidequest.game.belief_state import BeliefClaim, BeliefSourceToldBy
 
     npc = _npc("Tabitha")
+    npc.last_seen_turn = 1
     npc.belief_state.beliefs.append(
         BeliefClaim(
             subject="alibi",
@@ -176,6 +177,7 @@ def test_build_entries_claims_firewall_excludes_facts_and_suspicions():
     )
 
     npc = _npc("Tabitha")
+    npc.last_seen_turn = 1
     npc.belief_state.beliefs.append(
         BeliefFact(
             subject="killer",

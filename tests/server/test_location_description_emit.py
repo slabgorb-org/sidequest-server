@@ -144,6 +144,14 @@ def test_emit_sends_message_when_room_has_manifest(tmp_path, monkeypatch):
     # name, not the snake_case room id. Room-YAML path sources it from the
     # room's ``name`` (TacticalGridPayload.room_name).
     assert sent_msg.payload.region_name == "Test Square"
+    # Location-tab POI landscape (2026-06-04): built from the region_id VERBATIM
+    # (no slugify) so the URL matches the underscore R2 object key. The UI
+    # hides it on a 404, so emitting it unconditionally is safe.
+    assert sent_msg.payload.poi_image_url is not None
+    assert (
+        "genre_packs/test_pack/worlds/test_world/assets/poi/test_room.png"
+        in sent_msg.payload.poi_image_url
+    )
     assert len(sent_msg.payload.entities) == 2
     by_id = {e.id: e for e in sent_msg.payload.entities}
     assert by_id["square_well"].tier == "real_object"

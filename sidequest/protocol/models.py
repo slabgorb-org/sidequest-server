@@ -653,6 +653,12 @@ class LocationDescriptionPayload(BaseModel):
     # wiki. None when the region has no lore-page anchor (region-mode worlds,
     # old snapshots) — the UI then renders the header as plain text.
     reference_url: str | None = None
+    # POI landscape image URL for the region, built from the region_id VERBATIM
+    # (the authored slug == the R2 object key, e.g. munchkin_country.png) — no
+    # slugify, so it matches R2 directly. None on sources with no region. The UI
+    # renders it above the prose and hides it on a load error (a region with no
+    # rendered landscape 404s and degrades to text-only).
+    poi_image_url: str | None = None
 
 
 class LocationOverlayChangedPayload(BaseModel):

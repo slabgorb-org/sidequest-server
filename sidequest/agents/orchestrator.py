@@ -380,6 +380,13 @@ class NpcMention:
     appearance: str = ""
     side: str = "neutral"
     is_new: bool = False
+    # ping-pong #74: the narrator marks a mention as a wild animal / beast /
+    # monster that belongs to NO culture or faction. When true, the invented-
+    # name seam must NOT route the name through the culture-bound person namer
+    # (which would mint a person-name + a random culture — "a lion called
+    # Keeper Goldbraid of the Emerald City"). Defaults False so every existing
+    # mention stays a person, fully backward-compatible.
+    is_creature: bool = False
 
     @classmethod
     def from_value(cls, value: Any) -> NpcMention:
@@ -406,6 +413,7 @@ class NpcMention:
                 appearance=str(value.get("appearance", "")),
                 side=side,
                 is_new=bool(value.get("is_new", False)),
+                is_creature=bool(value.get("is_creature", False)),
             )
         return cls(name=str(value), side="neutral")
 

@@ -278,6 +278,26 @@ SPAN_ROUTES[SPAN_NPC_INVENTED_NAME_UNROUTED] = SpanRoute(
     },
 )
 
+# ping-pong #74: the narrator marked a novel mention as a creature (wild
+# animal / beast / monster). The invented-name seam DECLINED the culture-bound
+# person namer and preserved the narrator's descriptive name verbatim, minting
+# a creature-typed pool member with NO culture. This is the GM-panel lie
+# detector for the fix: it proves the engine routed a creature away from the
+# person namer (vs the old behavior of "a lion called Keeper Goldbraid of the
+# Emerald City"). ``culture`` is intentionally absent — a creature has none.
+SPAN_NPC_CREATURE_PRESERVED = "npc.creature_preserved"
+SPAN_ROUTES[SPAN_NPC_CREATURE_PRESERVED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc_pool",
+        "op": "creature_preserved",
+        "name": (span.attributes or {}).get("npc_name", ""),
+        "original_name": (span.attributes or {}).get("npc_name", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # Story 45-21 / 45-52: combat-stats publish onto Npc.core.edge.
 # Fired when an encounter handshake (or other combat-stats emit) writes the
 # dial-derived edge pool onto a matched ``snapshot.npcs`` entry. Renamed from
@@ -433,6 +453,37 @@ def npc_invented_name_unrouted_span(
     }
     with Span.open(
         SPAN_NPC_INVENTED_NAME_UNROUTED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_creature_preserved_span(
+    *,
+    npc_name: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """ping-pong #74: emitted when the Step-3 novel branch recognizes a
+    creature mention (``NpcMention.is_creature``) and DECLINES the culture-bound
+    person namer — the narrator's descriptive name ("The Forest Lions") is kept
+    verbatim and the new pool member is creature-typed with no culture.
+
+    This is the OTEL lie detector for the fix: a creature must never acquire a
+    person-name or a culture. ``npc_name`` is the preserved descriptive name;
+    there is deliberately no ``culture`` attribute. The full Monster Manual
+    identity (creature_id / threat_level / hp, ADR-059) is a deferred follow-up.
+    """
+    attributes: dict[str, Any] = {
+        "npc_name": npc_name,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_CREATURE_PRESERVED,
         attributes,
         tracer_override=_tracer,
     ) as span:

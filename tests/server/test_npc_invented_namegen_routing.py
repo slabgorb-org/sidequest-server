@@ -63,9 +63,7 @@ UNROUTED_SPAN = "npc.invented_name_unrouted"
 REFERENCED_SPAN = "npc.referenced"
 AUTO_REGISTERED_SPAN = "npc.auto_registered"
 
-CONTENT_GENRE_PACKS = (
-    Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
-)
+CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 SPACE_OPERA_DIR = CONTENT_GENRE_PACKS / "space_opera"
 
 
@@ -93,8 +91,15 @@ def _mention(
     role: str = "",
     pronouns: str = "",
     appearance: str = "",
+    is_creature: bool = False,
 ) -> NpcMention:
-    return NpcMention(name=name, role=role, pronouns=pronouns, appearance=appearance)
+    return NpcMention(
+        name=name,
+        role=role,
+        pronouns=pronouns,
+        appearance=appearance,
+        is_creature=is_creature,
+    )
 
 
 def _result(narration: str, npcs_present: list[NpcMention]) -> NarrationTurnResult:
@@ -127,9 +132,7 @@ class _SeqNameGenerator(NameGenerator):
 
 def _attrs_for(otel_capture, span_name: str) -> list[dict]:
     return [
-        dict(s.attributes or {})
-        for s in otel_capture.get_finished_spans()
-        if s.name == span_name
+        dict(s.attributes or {}) for s in otel_capture.get_finished_spans() if s.name == span_name
     ]
 
 
@@ -192,9 +195,7 @@ def test_invented_branch_emits_provenance_span(otel_capture) -> None:
     )
 
     routed = _attrs_for(otel_capture, ROUTED_SPAN)
-    assert len(routed) == 1, (
-        f"exactly one {ROUTED_SPAN} span must fire; got {len(routed)}"
-    )
+    assert len(routed) == 1, f"exactly one {ROUTED_SPAN} span must fire; got {len(routed)}"
     attrs = routed[0]
     assert attrs.get("original_name") == "Bob Hegemonic"
     assert attrs.get("npc_name") == "Veyra Solnë"  # the minted/generated name
@@ -226,8 +227,7 @@ def test_invented_branch_preserves_existing_invented_spans(otel_capture) -> None
     referenced = _attrs_for(otel_capture, REFERENCED_SPAN)
     invented = [a for a in referenced if a.get("match_strategy") == "invented"]
     assert len(invented) == 1, (
-        "npc.referenced(match_strategy='invented') must still fire on the "
-        "rerouted novel branch"
+        "npc.referenced(match_strategy='invented') must still fire on the rerouted novel branch"
     )
     # The referenced span reports the canonical (minted) name.
     assert invented[0].get("npc_name") == "Veyra Solnë"
@@ -265,8 +265,7 @@ def test_invented_branch_rerolls_on_stem_collision(otel_capture) -> None:
     assert len(snapshot.npc_pool) == 1
     member = snapshot.npc_pool[0]
     assert member.name == "Veyra Solnë", (
-        "the stem-collision candidate must be rejected and re-rolled; "
-        f"got {member.name!r}"
+        f"the stem-collision candidate must be rejected and re-rolled; got {member.name!r}"
     )
     assert gen.person_calls == 2, "route must re-roll exactly once past the collision"
 
@@ -304,9 +303,7 @@ def test_existing_npc_hit_is_not_regenerated(otel_capture) -> None:
     assert gen.person_calls == 0, "existing Npc must not be run through namegen"
     assert snapshot.npcs[0].last_seen_turn == 5
     assert snapshot.npc_pool == []
-    assert _attrs_for(otel_capture, ROUTED_SPAN) == [], (
-        "no reroute span may fire for an npcs_hit"
-    )
+    assert _attrs_for(otel_capture, ROUTED_SPAN) == [], "no reroute span may fire for an npcs_hit"
 
 
 def test_existing_pool_member_hit_is_not_regenerated(otel_capture) -> None:
@@ -401,9 +398,7 @@ pytestmark_e2e = pytest.mark.skipif(
 
 
 @pytestmark_e2e
-def test_wiring_full_apply_routes_invented_name_through_namegen(
-    otel_capture, monkeypatch
-) -> None:
+def test_wiring_full_apply_routes_invented_name_through_namegen(otel_capture, monkeypatch) -> None:
     """MANDATORY WIRING TEST (CLAUDE.md "Every Test Suite Needs a Wiring Test").
 
     Drive the REAL ``_apply_narration_result_to_snapshot`` →
@@ -420,9 +415,7 @@ def test_wiring_full_apply_routes_invented_name_through_namegen(
     from sidequest.genre import load_genre_pack
     from sidequest.server.session_handler import _apply_narration_result_to_snapshot
 
-    monkeypatch.setattr(
-        NameGenerator, "generate_person", lambda self, pattern=None: "Veyra Solnë"
-    )
+    monkeypatch.setattr(NameGenerator, "generate_person", lambda self, pattern=None: "Veyra Solnë")
 
     pack = load_genre_pack(SPACE_OPERA_DIR)
     snapshot = GameSnapshot(genre_slug="space_opera", world_slug="perseus_cloud")
@@ -444,9 +437,7 @@ def test_wiring_full_apply_routes_invented_name_through_namegen(
     )
 
     invented = [m for m in snapshot.npc_pool if m.drawn_from == "narrator_invented"]
-    assert len(invented) == 1, (
-        "exactly one narrator-invented pool member must be minted end-to-end"
-    )
+    assert len(invented) == 1, "exactly one narrator-invented pool member must be minted end-to-end"
     assert invented[0].name == "Veyra Solnë", (
         "WIRING FAILURE: the production apply path did not route the invented "
         f"name through namegen; minted {invented[0].name!r} (the raw narrator "
@@ -464,9 +455,7 @@ def test_wiring_full_apply_routes_invented_name_through_namegen(
 
 
 @pytestmark_e2e
-def test_wiring_provenance_records_effective_culture_source(
-    otel_capture, monkeypatch
-) -> None:
+def test_wiring_provenance_records_effective_culture_source(otel_capture, monkeypatch) -> None:
     """AC2 regression guard (perseus_cloud session-894 divergence).
 
     Culture must be resolved via ``Pack.effective_cultures(world)`` — NOT raw
@@ -477,9 +466,7 @@ def test_wiring_provenance_records_effective_culture_source(
     from sidequest.genre import load_genre_pack
     from sidequest.server.session_handler import _apply_narration_result_to_snapshot
 
-    monkeypatch.setattr(
-        NameGenerator, "generate_person", lambda self, pattern=None: "Veyra Solnë"
-    )
+    monkeypatch.setattr(NameGenerator, "generate_person", lambda self, pattern=None: "Veyra Solnë")
 
     pack = load_genre_pack(SPACE_OPERA_DIR)
     expected_cultures, expected_source = pack.effective_cultures("perseus_cloud")
@@ -530,9 +517,7 @@ def test_wiring_fails_loud_when_no_culture_bound(otel_capture, monkeypatch) -> N
 
     pack = load_genre_pack(SPACE_OPERA_DIR)
     # Force the unresolved-culture condition independent of pack content.
-    monkeypatch.setattr(
-        GenrePack, "effective_cultures", lambda self, world: ([], "genre")
-    )
+    monkeypatch.setattr(GenrePack, "effective_cultures", lambda self, world: ([], "genre"))
 
     snapshot = GameSnapshot(genre_slug="space_opera", world_slug="perseus_cloud")
     result = _result(
@@ -560,3 +545,123 @@ def test_wiring_fails_loud_when_no_culture_bound(otel_capture, monkeypatch) -> N
     # The reroute success span must NOT fire when culture is unresolved —
     # otherwise the GM panel would show a culture-true route that never happened.
     assert _attrs_for(otel_capture, ROUTED_SPAN) == []
+
+
+# ===========================================================================
+# ping-pong #74 — creature mentions bypass the culture-bound person namer
+# ===========================================================================
+#
+# A wild animal / beast / monster belongs to no culture or faction. Before
+# this fix the Step-3 novel branch routed EVERY novel name through the person
+# namer, so "The Forest Lions" got minted as "Clemence Coralfast of the South"
+# (culture=Quadling) — a person-name + a random culture for a pack of lions.
+# The narrator now marks such mentions ``is_creature=True``; the seam must keep
+# the descriptive name verbatim, mint a creature-typed pool member with no
+# culture, and emit ``npc.creature_preserved`` (the GM-panel lie detector).
+
+CREATURE_PRESERVED_SPAN = "npc.creature_preserved"
+
+
+def test_creature_mention_preserves_name_and_skips_namer(otel_capture) -> None:
+    """A creature mention keeps the narrator's descriptive name verbatim and is
+    NEVER run through the person namer — even when a generator + culture are
+    available (the production case: a culture IS bound, but creatures opt out)."""
+    gen = _SeqNameGenerator(["Clemence Coralfast"])
+    snapshot = GameSnapshot()
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("The Forest Lions", role="hostile", is_creature=True)],
+        turn_num=8,
+        name_generator=gen,
+        culture_name="Quadling",
+        culture_source="world",
+    )
+
+    assert len(snapshot.npc_pool) == 1
+    member = snapshot.npc_pool[0]
+    assert member.name == "The Forest Lions", (
+        "a creature must keep its descriptive name verbatim, not acquire a "
+        f"person-name; got {member.name!r}"
+    )
+    assert member.is_creature is True
+    assert member.drawn_from == "narrator_invented"
+    # The person namer was never invoked for the creature.
+    assert gen.person_calls == 0
+
+
+def test_creature_mention_emits_creature_preserved_span_not_routed(otel_capture) -> None:
+    """The creature path emits ``npc.creature_preserved`` (with no culture) and
+    does NOT emit ``npc.invented_name_routed`` — the lie detector proves the
+    engine declined the person namer for a creature."""
+    gen = _SeqNameGenerator(["Clemence Coralfast"])
+    snapshot = GameSnapshot()
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("The Forest Lions", is_creature=True)],
+        turn_num=8,
+        name_generator=gen,
+        culture_name="Quadling",
+        culture_source="world",
+    )
+
+    preserved = _attrs_for(otel_capture, CREATURE_PRESERVED_SPAN)
+    assert len(preserved) == 1, f"expected one {CREATURE_PRESERVED_SPAN} span, got {len(preserved)}"
+    assert preserved[0].get("npc_name") == "The Forest Lions"
+    # No culture attribute — a creature has none.
+    assert "culture" not in preserved[0]
+    # The person-namer success span must NOT fire for a creature.
+    assert _attrs_for(otel_capture, ROUTED_SPAN) == []
+
+
+def test_person_routed_creature_preserved_in_same_turn(otel_capture) -> None:
+    """A mixed mention list: the person routes through the namer; the creature
+    is preserved. The lazy generator resolves once (for the person) and the
+    creature never touches it."""
+    gen = _SeqNameGenerator(["Veyra Solnë"])
+    snapshot = GameSnapshot()
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[
+            _mention("The Forest Lions", role="hostile", is_creature=True),
+            _mention("Bob Hegemonic", role="deckhand"),
+        ],
+        turn_num=9,
+        name_generator=gen,
+        culture_name="Spacer",
+        culture_source="world",
+    )
+
+    by_name = {m.name: m for m in snapshot.npc_pool}
+    assert "The Forest Lions" in by_name, "creature name preserved"
+    assert by_name["The Forest Lions"].is_creature is True
+    assert "Veyra Solnë" in by_name, "person routed to a culture-true name"
+    assert by_name["Veyra Solnë"].is_creature is False
+    # Exactly one person was named; the creature did not consume a draw.
+    assert gen.person_calls == 1
+    assert len(_attrs_for(otel_capture, CREATURE_PRESERVED_SPAN)) == 1
+    assert len(_attrs_for(otel_capture, ROUTED_SPAN)) == 1
+
+
+def test_creature_preserved_with_no_culture_bound(otel_capture) -> None:
+    """A creature mint must NOT trip the No-Silent-Fallbacks unrouted warning
+    even when no culture is bound — creatures intentionally have no culture, so
+    the unresolved-culture path is irrelevant to them."""
+    snapshot = GameSnapshot()
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("A Beast in the Dark", is_creature=True)],
+        turn_num=2,
+        # No generator / culture supplied at all (legacy context-free call).
+    )
+
+    assert len(snapshot.npc_pool) == 1
+    assert snapshot.npc_pool[0].name == "A Beast in the Dark"
+    assert snapshot.npc_pool[0].is_creature is True
+    assert len(_attrs_for(otel_capture, CREATURE_PRESERVED_SPAN)) == 1
+    # Neither the routed nor the unrouted (warning) person-namer span fires.
+    assert _attrs_for(otel_capture, ROUTED_SPAN) == []
+    assert _attrs_for(otel_capture, UNROUTED_SPAN) == []

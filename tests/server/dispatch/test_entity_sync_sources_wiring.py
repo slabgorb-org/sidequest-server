@@ -105,9 +105,7 @@ def _patched_watcher(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 
 
 class TestFactionSync:
-    def test_sync_for_turn_indexes_a_world_faction(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_sync_for_turn_indexes_a_world_faction(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """AC1/AC3: a faction declared on the bound world projects into the live
         ``entity_store`` as a namespaced ``FACTION`` card the narrator's
         retrieval (75-5) can recall. Today nothing reads the world lore → RED."""
@@ -119,9 +117,7 @@ class TestFactionSync:
         faction_ids = {c.id for c in sd.entity_store.query_by_type(EntityType.FACTION)}
         assert "faction:the_tide_syndicate" in faction_ids
 
-    def test_faction_card_keys_on_name_and_summary(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_faction_card_keys_on_name_and_summary(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The projected card embeds the faction's name and summary so retrieval
         keys on who they are, not just that they exist."""
         _patched_watcher(monkeypatch)
@@ -170,9 +166,7 @@ class TestFactionSourceIsWorldTier:
 
         assert sd.entity_store.query_by_type(EntityType.FACTION) == []
 
-    def test_binding_the_world_surfaces_its_factions(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_binding_the_world_surfaces_its_factions(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The positive half of the world-tier contract: the SAME machinery that
         indexes zero factions with no world bound indexes the world's roster once
         a world IS bound — proving the source is the world, keyed by world_slug."""
@@ -192,9 +186,7 @@ class TestFactionSourceIsWorldTier:
 
 
 class TestSourceCountTelemetry:
-    def test_watcher_event_reports_faction_count(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_watcher_event_reports_faction_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """AC4: the published ``entity_sync`` event must carry ``faction_count``
         so the GM panel can confirm factions actually flowed into the index.
         Today the payload omits the key entirely → KeyError-by-assertion (RED)."""
@@ -210,9 +202,7 @@ class TestSourceCountTelemetry:
         assert len(synced) == 1, f"expected one 'synced' event, got {captured!r}"
         assert synced[0]["faction_count"] == 2
 
-    def test_watcher_event_reports_location_count(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_watcher_event_reports_location_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """AC4: the published event must ALSO carry ``location_count`` — even at
         zero — so the GM panel can tell 'no locations this turn' from 'locations
         not wired'. Today the key is absent entirely → RED. (The non-zero
@@ -261,12 +251,16 @@ class TestRealWorldFactionsFlowEndToEnd:
     def test_real_bound_world_factions_index_through_production_sync(
         self, session_handler_factory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The strongest faction wiring guard: load a REAL genre pack, bind a
-        REAL world that ships authored factions (``elemental_harmony`` /
-        ``burning_peace`` — 5 authored factions), drive the production
+        """The strongest faction wiring guard: load a real (frozen-fixture) genre
+        pack, bind a real world that ships authored factions
+        (``caverns_and_claudes`` / ``flickering_reach`` — 5 authored factions in
+        the fixture pack the server suite resolves against), drive the production
         ``sync_for_turn``, and assert the world's factions reached the index and
-        the GM-panel count reflects them. No source text, real content, real
-        seam — fails if the sync exists but never reads the bound world's lore."""
+        the GM-panel count reflects them. Real ``World``/``WorldLore`` models,
+        real seam, no source text — fails if the sync exists but never reads the
+        bound world's lore. (The ``tests/server`` autouse fixture repoints the
+        loader at ``tests/fixtures/packs``, so this exercises that authored
+        content, not ``sidequest-content``.)"""
         captured: list[dict] = []
 
         def _record(event_type: str, payload: dict, **kwargs: object) -> None:
@@ -274,8 +268,8 @@ class TestRealWorldFactionsFlowEndToEnd:
 
         monkeypatch.setattr(dispatch_entity_sync, "_watcher_publish", _record)
 
-        sd, handler = session_handler_factory(genre="elemental_harmony")
-        sd.world_slug = "burning_peace"  # bind the world whose lore has factions
+        sd, handler = session_handler_factory(genre="caverns_and_claudes")
+        sd.world_slug = "flickering_reach"  # bind the world whose lore has factions
 
         dispatch_entity_sync.sync_for_turn(handler, sd)
 
@@ -283,3 +277,55 @@ class TestRealWorldFactionsFlowEndToEnd:
         assert len(faction_cards) >= 1, "real authored world factions must index"
         synced = [p for p in captured if p.get("op") == "synced"]
         assert synced and synced[0]["faction_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# AC2 / AC4 (location) — a PG-promotion location flows end-to-end to a non-zero
+# location_count through the production sync seam (GREEN-phase test added by Dev
+# per the TEA Delivery Finding: v1 location source = PG promotions).
+# ---------------------------------------------------------------------------
+
+
+class TestPromotionLocationFlowsEndToEnd:
+    def test_promoted_location_indexes_with_source_origin(
+        self, session_handler_factory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A persisted Yes-And location (PG ``location_promotions``) for a
+        discovered region projects into the index as a ``LOCATION`` card tagged
+        ``source="promotion"``, and the GM-panel ``location_count`` reflects it —
+        proving the location half of the universal index is no longer hardwired
+        to 0. Room-graph + materialization sources are deferred (Dev deviation)."""
+        from sidequest.game.pg.promotions import PgLocationPromotionRow
+
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            dispatch_entity_sync,
+            "_watcher_publish",
+            lambda event_type, payload, **kwargs: captured.append(payload),
+        )
+
+        sd, handler = session_handler_factory(genre="caverns_and_claudes")
+        sd.world_slug = "flickering_reach"
+        sd.snapshot.discovered_regions = ["rusted_junction"]
+        row = PgLocationPromotionRow(
+            region_id="rusted_junction",
+            entity_id="ember_shrine",
+            provenance="yes_and_minted",
+            label="The Ember Shrine",
+            promoted_at_turn=3,
+            promoted_canon="A soot-blackened shrine where pilgrims bank the eternal coals.",
+            new_tier="yes_and",
+            new_binding_kind=None,
+            new_binding_ref=None,
+        )
+        sd.repository.list_location_promotions = lambda *, region_id: (
+            [row] if region_id == "rusted_junction" else []
+        )
+
+        dispatch_entity_sync.sync_for_turn(handler, sd)
+
+        loc_ids = {c.id for c in sd.entity_store.query_by_type(EntityType.LOCATION)}
+        assert "loc:ember_shrine" in loc_ids
+        assert sd.entity_store.cards["loc:ember_shrine"].metadata["source"] == "promotion"
+        synced = [p for p in captured if p.get("op") == "synced"]
+        assert synced and synced[0]["location_count"] >= 1

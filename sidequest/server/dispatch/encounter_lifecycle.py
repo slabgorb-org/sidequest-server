@@ -509,9 +509,16 @@ def _npc_fallback_at_location(
     Story 59-17: ``adversary_only`` (sealed-letter 1v1 sourcing) additionally
     filters candidates through ``_npc_is_adversary`` so a same-location
     bystander is never promoted into a duel. The non-sealed path leaves this
-    False — a brawl/chase intentionally pulls in every location NPC as an
-    opponent (story 59-13's chase dial depends on it), so that contract is
-    byte-identical when ``adversary_only=False``.
+    False — a brawl/chase pulls in every location NPC as an opponent (story
+    59-13's chase dial depends on it).
+
+    Story 59-35: when ``adversarial`` is True the opponent fallback ALSO skips
+    ``Attitude.FRIENDLY`` NPCs — a co-located companion fights at the player's
+    side (``_friendly_fallback_at_location`` seats it ``side="player"``), it is
+    never conscripted as the Other. So the ``adversary_only=False`` contract is
+    "every HOSTILE/NEUTRAL location NPC" (no longer literally *every* NPC). The
+    chase-dial guarantee holds for hostile/neutral pursuers; only friendlies are
+    diverted to the friendly-seater.
 
     Returns ``(mentions, location_available)`` so the caller can decorate
     the empty-result span: ``location_available=False`` means the player
@@ -562,7 +569,7 @@ def _friendly_fallback_at_location(
     snapshot: GameSnapshot,
     *,
     acting_character_name: str | None = None,
-) -> list:
+) -> list[NpcMention]:
     """Story 59-35: source scene-present FRIENDLY NPCs as side="player" allies.
 
     The friendly half of ADR-116 seating — symmetric to
@@ -594,7 +601,7 @@ def _friendly_fallback_at_location(
     location = snapshot.party_location(perspective=acting_character_name)
     if not location:
         return []
-    allies: list = []
+    allies: list[NpcMention] = []
     for npc in snapshot.npcs:
         if npc.last_seen_location != location:
             continue
@@ -1047,7 +1054,7 @@ def instantiate_encounter_from_trigger(
     # sealed-letter (strict 1v1 red/blue) or table_resolution (handled earlier).
     # ``friendly_seated_names`` lets the participant.joined loop tag these seats
     # source="friendly_fallback", distinct from PC seats (source="seat").
-    friendly_allies: list = []
+    friendly_allies: list[NpcMention] = []
     friendly_seated_names: set[str] = set()
     if cdef.category == "combat" and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup:
         friendly_allies = _friendly_fallback_at_location(
@@ -1178,6 +1185,11 @@ def instantiate_encounter_from_trigger(
                 _stamp_attrs = {
                     "last_seen_turn": _seated_npc.last_seen_turn,
                     "last_seen_location": _seated_npc.last_seen_location or "",
+                    # Story 59-35 (AC4): carry the seated NPC's disposition band so
+                    # the GM panel can prove WHY the engine seated it — a
+                    # friendly_fallback seat reads disposition_attitude="friendly",
+                    # confirming the seat was disposition-driven, not narrator improv.
+                    "disposition_attitude": _seated_npc.disposition.attitude().value,
                 }
             # Story 59-35: a FRIENDLY ally seated by the friendly-seater carries
             # source="friendly_fallback" (the GM-panel lie-detector proving the

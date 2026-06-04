@@ -119,6 +119,55 @@ def test_signature_changes_with_status_update() -> None:
     assert _quests_signature(base) != sig1
 
 
+def test_signature_changes_with_objective_update() -> None:
+    """REWORK (Reviewer HIGH, AC2): an objective-only ``record_quest`` update —
+    title/status/anchor unchanged — is a real spine mutation and MUST change the
+    signature so the projection re-broadcasts. The original signature omitted
+    ``objective``, so an objective edit was silently dropped (the client kept a
+    stale objective). This test fails against that bug."""
+    base = _seeded()
+    sig1 = _quests_signature(base)
+    base.quest_log["q1"].objective = "Return to Kansas via the Emerald City"
+    assert _quests_signature(base) != sig1, (
+        "objective change must alter the signature — objective is in the wire "
+        "payload, so an objective-only update must trigger a re-broadcast"
+    )
+
+
+def test_signature_no_collision_on_free_text_delimiters() -> None:
+    """REWORK (Reviewer HIGH): the signature must not be ambiguated by narrator
+    free text containing the join delimiters. Two genuinely DIFFERENT spines —
+    here a status/anchor split that the old ':'-joined format rendered to an
+    identical string — must produce DIFFERENT signatures. This fails against the
+    delimiter-joined-free-text implementation and passes once the signature is
+    derived from a structured/escaped representation (e.g. model_dump_json)."""
+    spine_a = _spine(
+        quests={"q1": QuestEntry(title="", status="active:done", anchor_id="x")},
+        stakes="s",
+    )
+    spine_b = _spine(
+        quests={"q1": QuestEntry(title="", status="active", anchor_id="done:x")},
+        stakes="s",
+    )
+    assert _quests_signature(spine_a) != _quests_signature(spine_b), (
+        "distinct spines collided in the change signature — free-text fields "
+        "joined with ':' delimiters ambiguate segment boundaries"
+    )
+
+
+def test_emit_refires_when_only_objective_changes() -> None:
+    """REWORK (Reviewer HIGH, AC2, end-to-end): the emitter actually re-broadcasts
+    on an objective-only change, and the new objective is on the wire."""
+    handler = _Handler()
+    sent: list[object] = []
+    snap = _seeded()
+    _maybe_emit_quests(handler, snapshot=snap, emit_fn=lambda m, k: sent.append(m))
+    snap.quest_log["q1"].objective = "Return to Kansas via the Emerald City"
+    _maybe_emit_quests(handler, snapshot=snap, emit_fn=lambda m, k: sent.append(m))
+    assert len(sent) == 2, "objective-only change must re-broadcast"
+    assert sent[1].payload.quest_log[0].objective == ("Return to Kansas via the Emerald City")
+
+
 # --- emitter (AC1, AC2, AC3) ------------------------------------------------
 
 

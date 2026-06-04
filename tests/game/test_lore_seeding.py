@@ -142,11 +142,16 @@ class TestSeedFromWorld:
 
     @staticmethod
     def _world_lore():
+        # All four seedable fields populated (history + geography + cosmology +
+        # one faction) so the seeder yields exactly four world-scoped fragments
+        # and every one of its field branches is exercised at the unit level.
         from sidequest.genre.models.lore import Faction, WorldLore
 
         return WorldLore(
             world_name="The Flickering Reach",
             history="Three wounds define the Reach; the black glass plain still hums.",
+            geography="A continental interior scarred by a black glass plain and bone-wind canyons.",
+            cosmology="The Drifters hear the Long Signal in the static of pre-war machines.",
             factions=[
                 Faction(name="The Dome Syndicate", summary="water cartel", description="x"),
             ],
@@ -156,11 +161,13 @@ class TestSeedFromWorld:
         world_slug = "flickering_reach"
         store = LoreStore()
         added = seed_lore_from_world(store, self._world_lore(), world_slug)
-        # history + one faction → two fragments.
-        assert added == 2
-        # Ids must be world-scoped so a future world swap doesn't leak
-        # the prior world's lore into the new world's RAG queries.
-        assert any(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), (
+        # history + geography + cosmology + one faction → four fragments.
+        assert added == 4
+        # EVERY id must be world-scoped so a future world swap doesn't leak the
+        # prior world's lore into the new world's RAG queries. `all`, not `any`:
+        # the assertion message is universal, so one correctly-scoped id is not
+        # enough — a single mis-scoped fragment must fail this test.
+        assert all(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), (
             f"World seeder must scope fragment ids by world_slug "
             f"({world_slug!r}); got: {list(store.fragments)}"
         )
@@ -169,7 +176,7 @@ class TestSeedFromWorld:
         world_slug = "flickering_reach"
         store = LoreStore()
         added = seed_lore_from_world(store, self._world_lore(), world_slug)
-        assert added == 2
+        assert added == 4
         for frag in store.fragments.values():
             assert frag.metadata.get("world_slug") == world_slug, (
                 "Every world-seeded fragment must carry world_slug metadata "

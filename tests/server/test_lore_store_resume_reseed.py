@@ -233,9 +233,16 @@ def test_shared_helper_matches_inline_genre_plus_world_pair(fixture_pack: GenreP
 
     via_inline = LoreStore()
     world_obj = fixture_pack.worlds.get(world_slug)
-    inline_world = (
-        seed_lore_from_world(via_inline, world_obj.lore, world_slug) if world_obj is not None else 0
+    # Fail loud if the fixture world stops resolving (e.g. a rename in the
+    # fixture pack). Without this guard, world_obj=None drives inline_world=0
+    # AND seed_world_lore also yields an empty via_helper, so the equality
+    # assertions below would pass vacuously on two empty stores — proving
+    # nothing about helper/primitive parity.
+    assert world_obj is not None, (
+        f"fixture world {world_slug!r} must resolve in the test_genre pack; "
+        f"worlds={list(fixture_pack.worlds)}"
     )
+    inline_world = seed_lore_from_world(via_inline, world_obj.lore, world_slug)
 
     assert helper_genre == 0, "epic 74: the helper seeds no genre lore (world-only)"
     assert helper_world == inline_world

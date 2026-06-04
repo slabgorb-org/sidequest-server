@@ -177,8 +177,9 @@ class TestLoreSeedingDispatch:
 
             # Partition: every fragment must carry one of the expected
             # source flags. Char-creation fragments still keep their
-            # ``lore_char_creation_`` id prefix; genre-pack fragments
-            # carry ``lore_genre_`` / ``lore_world_`` prefixes.
+            # ``lore_char_creation_`` id prefix; genre-pack fragments carry the
+            # ``lore_world_`` prefix (epic 74: genre-tier ``lore_genre_*`` ids
+            # are no longer produced, so that arm would be dead code).
             char_creation_frags = []
             genre_pack_frags = []
             for frag in sd.lore_store.fragments_iter():
@@ -186,11 +187,9 @@ class TestLoreSeedingDispatch:
                     assert frag.id.startswith("lore_char_creation_")
                     char_creation_frags.append(frag)
                 elif frag.source == LoreSource.GenrePack:
-                    assert frag.id.startswith("lore_genre_") or frag.id.startswith(
-                        "lore_world_",
-                    ), (
-                        f"Genre-pack fragment {frag.id!r} must use "
-                        "lore_genre_*/lore_world_* prefix; got %s" % frag.id
+                    assert frag.id.startswith("lore_world_"), (
+                        f"Genre-pack fragment {frag.id!r} must use the "
+                        "world-scoped lore_world_* prefix (epic 74: world-only lore)"
                     )
                     genre_pack_frags.append(frag)
                 else:

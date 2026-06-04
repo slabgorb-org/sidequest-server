@@ -163,10 +163,14 @@ def _mage_character(name: str, *, casts_remaining: int, prepared: list[str]) -> 
 
 
 class _FakeGenrePack:
-    """Minimal stub to satisfy resolve_recipient_pc's genre_pack.classes access."""
+    """Minimal stub to satisfy resolve_recipient_pc's genre_pack.classes access
+    and (Story 85-3) the portrait resolver's genre_pack.worlds access. `worlds`
+    is empty → opponent portraits resolve to None, which is fine here: this
+    suite asserts cast_spell filtering, not portraits."""
 
     def __init__(self, classes: list[ClassDef]) -> None:
         self.classes = classes
+        self.worlds: dict[str, object] = {}
 
 
 def _snapshot_with_mage(char: Character, player_id: str = "player_1") -> GameSnapshot:

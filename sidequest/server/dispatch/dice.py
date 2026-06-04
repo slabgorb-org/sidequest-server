@@ -59,6 +59,7 @@ from sidequest.protocol.types import Stat
 from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
     make_confrontation_frame_supplier,
+    make_confrontation_portrait_resolver,
 )
 from sidequest.server.dispatch.damage_roll import _DAMAGE_THROW_PARAMS, damage_request_from_spec
 from sidequest.server.dispatch.damage_roll import (
@@ -907,6 +908,13 @@ def dispatch_dice_throw(
                     genre_slug=genre_slug,
                     recipient_pc=None,
                     core_resolver=snapshot.find_creature_core,
+                    # Story 85-3: stakes + opponent portrait on the canonical
+                    # union (persisted + delivered to bare-dispatch room_broadcast
+                    # fixtures). The supplier below re-projects per recipient.
+                    active_stakes=snapshot.active_stakes,
+                    portrait_resolver=make_confrontation_portrait_resolver(
+                        snapshot=snapshot, genre_pack=pack, genre_slug=genre_slug
+                    ),
                 )
             )
             with encounter_momentum_broadcast_span(

@@ -377,6 +377,24 @@ SPAN_ROUTES[SPAN_CONFRONTATION_UNFILTERED_DELIVERY] = SpanRoute(
     },
 )
 
+# Story 85-3 — fires once per build_confrontation_payload, confirming the
+# session's active_stakes was attached to the CONFRONTATION channel (Tier B
+# dockview panel renders a stakes banner from it). The GM-panel lie-detector for
+# the stakes wiring: has_stakes=False means a confrontation ran with no active
+# stakes (legitimate), distinct from the span being ABSENT (emit dropped).
+SPAN_CONFRONTATION_STAKES_ATTACHED = "confrontation.stakes_attached"
+SPAN_ROUTES[SPAN_CONFRONTATION_STAKES_ATTACHED] = SpanRoute(
+    event_type="state_transition",
+    component="confrontation",
+    extract=lambda span: {
+        "field": "confrontation.stakes_attached",
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+        "confrontation_type": (span.attributes or {}).get("confrontation_type", ""),
+        "has_stakes": (span.attributes or {}).get("has_stakes", False),
+        "stakes_len": (span.attributes or {}).get("stakes_len", 0),
+    },
+)
+
 
 @contextmanager
 def confrontation_recipient_unresolved_span(
@@ -424,6 +442,33 @@ def confrontation_unfiltered_delivery_span(
             "actor": actor,
             "reason": reason,
             "confrontation_type": confrontation_type,
+            **attrs,
+        },
+    ) as span:
+        yield span
+
+
+@contextmanager
+def confrontation_stakes_attached_span(
+    *,
+    genre_slug: str,
+    confrontation_type: str,
+    has_stakes: bool,
+    stakes_len: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open the ``confrontation.stakes_attached`` span (Story 85-3). Fires once
+    per ``build_confrontation_payload`` so the GM panel can confirm the active
+    stakes were attached to the CONFRONTATION channel — ``has_stakes`` tells a
+    no-stakes confrontation apart from a dropped emit."""
+    with Span.open(
+        SPAN_CONFRONTATION_STAKES_ATTACHED,
+        {
+            "genre_slug": genre_slug,
+            "confrontation_type": confrontation_type,
+            "has_stakes": has_stakes,
+            "stakes_len": stakes_len,
             **attrs,
         },
     ) as span:

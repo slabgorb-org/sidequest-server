@@ -832,6 +832,14 @@ class ConfrontationPayload(ProtocolBase):
     # redacted. At showdown (resolved_winner set): all hands reveal.
     # None for every non-table confrontation.
     table_state: dict[str, Any] | None = None
+    # Story 85-3 (Tier B): the session's active stakes, surfaced on the
+    # CONFRONTATION channel so the promoted dockview panel can render a stakes
+    # banner without racing the separate QUESTS message (Architect decision
+    # 2026-06-04). ALWAYS present (None when the session has no active stakes —
+    # empty string normalizes to None in build_confrontation_payload), NOT
+    # additive-conditional like the hp keys. Declared because the model is
+    # extra="forbid".
+    stakes: str | None = None
 
 
 # ---------------------------------------------------------------------------

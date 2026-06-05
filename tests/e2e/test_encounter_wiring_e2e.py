@@ -14,11 +14,13 @@ Post-ADR-113 scope note (Story 73-12): the original story-3.4 test drove the who
 
 This file now pins the CREATION half end-to-end through the handler (router dispatch →
 ADR-116 seating → dual-dial encounter → CONFRONTATION frame → OTEL span) plus the
-in-combat XP-award semantics. The beat-tick → threshold → resolution half is covered
-deterministically at the engine level (``tests/integration/test_combat_otel_wiring.py``,
-``tests/server/test_confrontation_dispatch_wiring.py``); driving it through the handler
-needs the DICE_THROW path with fully wired opponent combatant cores — a fixture lift
-out of scope for this stale-assertion rewrite (see the 73-12 session deviation + finding).
+in-combat XP-award semantics. The beat-tick → threshold → resolution MECHANICS are
+covered deterministically at the engine level (``tests/integration/test_combat_otel_wiring.py``
+calls ``apply_beat`` directly; ``tests/server/test_confrontation_dispatch_wiring.py``
+pre-seats an encounter to drive resolution). The FULL router→beat→resolution *handler*
+path is not yet covered anywhere — a tracked gap (73-12 delivery finding): driving it
+needs the DICE_THROW path with fully wired opponent combatant cores, a fixture lift out
+of scope for this stale-assertion rewrite.
 """
 
 from __future__ import annotations

@@ -27,6 +27,8 @@ road_warrior / calibration-suite environment-guard convention.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -252,6 +254,60 @@ def test_mutant_wasteland_archetype_stat_ranges_standard_six() -> None:
     assert not offending, (
         "archetype stat_ranges must use standard-six keys (no retired flavor "
         f"names); found (archetype, dead_stat): {offending}"
+    )
+
+
+def _world_archetype_files() -> list[tuple[str, Path]]:
+    """(world_slug, archetypes.yaml path) for every world under the pack that ships one."""
+    try:
+        worlds_dir = find_pack_path(_PACK_SLUG) / "worlds"
+    except PackNotFound as exc:  # pragma: no cover - environment guard
+        pytest.skip(str(exc))
+    if not worlds_dir.is_dir():
+        return []
+    return [
+        (wd.name, wd / "archetypes.yaml")
+        for wd in sorted(worlds_dir.iterdir())
+        if wd.is_dir() and (wd / "archetypes.yaml").is_file()
+    ]
+
+
+def test_mutant_wasteland_world_archetype_stat_ranges_standard_six() -> None:
+    """Every WORLD-tier `archetypes.yaml` `stat_ranges` key is standard-six too.
+
+    The genre-tier sweep is NOT sufficient: `effective_archetypes` (pack.py) makes a
+    world's archetypes REPLACE the genre archetypes in play, and flickering_reach is
+    mutant_wasteland's ONLY playable world. A world archetype with a retired flavor
+    `stat_ranges` key produces an NPC stat block keyed by a dead name; the awn/swn
+    `_stat` lookup raises `KeyError` (it no longer falls back to a neutral 10), so
+    combat resolution against that NPC CRASHES. §6.3: "Every flavor-name reference
+    must move to the standard six … The sweep must be exhaustive."
+
+    Reviewer Finding F1 (round-trip 1): the original gate only checked the genre-tier
+    `archetypes.yaml` and missed `worlds/flickering_reach/archetypes.yaml` (12 dead keys).
+    """
+    world_files = _world_archetype_files()
+    # Fail loud (not silent-skip) if no world archetypes are present — the test must
+    # actually exercise world content, and mutant_wasteland ships flickering_reach.
+    assert world_files, (
+        "expected at least one world archetypes.yaml under mutant_wasteland/worlds/ "
+        "(flickering_reach) — an empty result means this gate is not exercising world content"
+    )
+    offending: list[tuple[str, str, str]] = []
+    for world_name, path in world_files:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            continue
+        for arch in raw:
+            name = arch.get("name", "<unnamed>")
+            for stat_key in arch.get("stat_ranges") or {}:
+                if stat_key in RETIRED_FLAVOR_NAMES or stat_key not in STANDARD_SIX:
+                    offending.append((world_name, name, stat_key))
+    assert not offending, (
+        "world archetype stat_ranges must use standard-six keys (no retired flavor "
+        "names) — world archetypes REPLACE genre archetypes in play, and the awn/swn "
+        "_stat lookup raises KeyError on a dead key; found (world, archetype, dead_stat): "
+        f"{offending}"
     )
 
 

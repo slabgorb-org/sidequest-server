@@ -91,7 +91,6 @@ from sidequest.server.narration_apply import (
     _handshake_resolved_tropes,
 )
 from sidequest.server.session_helpers import (
-    _build_cartography_map_message,
     _build_turn_context,
     _error_msg,
     _render_url_from_path,
@@ -216,6 +215,7 @@ from sidequest.server.websocket_handlers.chargen_mixin import (  # noqa: E402
     CharGenMixin,
 )
 from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
+    _maybe_emit_cartography_map,
     _maybe_emit_dungeon_map,
     _maybe_emit_location_description,
     _maybe_emit_location_overlay_changed,
@@ -2151,20 +2151,20 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         snapshot=snapshot,
                         emit_fn=_emit_shared_world_frame,
                     )
-                    # Region-mode cartography map: emit MAP_UPDATE on
-                    # location change so the Map tab shows the region list.
-                    # No-op for room_graph worlds (they use DUNGEON_MAP).
-                    if _is_region_mode_world and _region_changed:
-                        _cart_map = _build_cartography_map_message(
-                            sd.genre_pack,
-                            sd.world_slug,
-                            snapshot.current_region
-                            or snapshot.party_location(perspective=_acting_for_render_trigger),
-                            player_id=sd.player_id,
-                            discovered_regions=snapshot.discovered_regions,
-                        )
-                        if _cart_map is not None:
-                            _emit_shared_world_frame(_cart_map, "MAP_UPDATE")
+                    # Region-mode cartography map: project the region graph to
+                    # the UI Map tab EVERY turn (NOT gated on a region change —
+                    # covers turn 1 + intra-region moves + resume, curing "No map
+                    # data yet"; EH-2 burning_peace 2026-06-05). Idempotent (the
+                    # UI replaces its MapState); no-op for room_graph worlds (they
+                    # use DUNGEON_MAP). Mirrors the dungeon-map / relationships /
+                    # quests projections above, which already fire unconditionally.
+                    _maybe_emit_cartography_map(
+                        self,
+                        sd=sd,
+                        snapshot=snapshot,
+                        emit_fn=_emit_shared_world_frame,
+                        acting_perspective=_acting_for_render_trigger,
+                    )
                     # Story 54-7 / ADR-109: encounter overlay transitions —
                     # activate when a fresh encounter with a location_overlay goes
                     # live, deactivate when one resolves. Decoupled from room change.

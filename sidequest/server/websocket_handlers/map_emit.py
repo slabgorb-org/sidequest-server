@@ -945,3 +945,88 @@ def _maybe_emit_dungeon_map(
         len(graph.nodes),
     )
     emit_fn(msg, "DUNGEON_MAP")  # type: ignore[operator]
+
+
+def _maybe_emit_cartography_map(
+    handler: object,
+    *,
+    sd: _SessionData,
+    snapshot: GameSnapshot,
+    emit_fn: object,
+    acting_perspective: str | None = None,
+) -> None:
+    """Emit a MAP_UPDATE (cartography region graph) for a region-mode world.
+
+    The region-mode sibling of :func:`_maybe_emit_dungeon_map` (which serves
+    room_graph/procedural-dungeon worlds). Projects the world's authored
+    cartography graph + visited-region overlay to the UI Map tab.
+
+    EH-2 burning_peace playtest (2026-06-05): the Map tab read "No map data
+    yet" for the entire opening of a region-mode world. Root cause — this
+    emit was previously gated on ``_region_changed`` (only fired when the
+    party MOVED to a different region), so turn 1 and intra-region moves
+    (teahouse -> Hakone road, both in ``edo``) emitted nothing and the UI
+    never received the graph. Now fires EVERY region-mode turn (idempotent —
+    the UI just replaces its MapState), exactly like the dungeon-map,
+    relationships, and quests projections that share this cadence. The single
+    discovered region renders as a lone current-region node; adjacents come
+    from the cartography ``adjacent`` lists.
+
+    Clean no-op for non-region-mode worlds (the builder returns None off
+    cartography / room_graph). OTEL: emits ``cartography.map_emitted`` on
+    success / ``cartography.map_skipped`` (with a reason) otherwise, so the GM
+    panel sees the Map-tab seam engaged — never a silent skip (CLAUDE.md OTEL
+    principle; the prior inline emit carried no span at all)."""
+    from sidequest.server.session_helpers import _build_cartography_map_message
+
+    location = snapshot.current_region or snapshot.party_location(perspective=acting_perspective)
+    msg = _build_cartography_map_message(
+        getattr(sd, "genre_pack", None),
+        getattr(sd, "world_slug", None),
+        location,
+        player_id=getattr(sd, "player_id", ""),
+        discovered_regions=snapshot.discovered_regions,
+    )
+    if msg is None:
+        # Off-region-mode (the common case) OR region-mode with no resolvable
+        # location yet. Only the latter is worth a span — a non-region world is
+        # not "skipping" anything. Distinguish on the world's navigation mode.
+        world = getattr(getattr(sd, "genre_pack", None), "worlds", {}).get(
+            getattr(sd, "world_slug", "") or ""
+        )
+        cart = getattr(world, "cartography", None)
+        is_region_mode = (
+            cart is not None and str(getattr(cart, "navigation_mode", "")) != "room_graph"
+        )
+        if is_region_mode:
+            _watcher_publish(
+                "cartography.map_skipped",
+                {
+                    "world": getattr(sd, "world_slug", ""),
+                    "reason": "no_resolvable_location",
+                    "current_region": snapshot.current_region or "",
+                },
+                component="location",
+                severity="warning",
+            )
+        return
+
+    _watcher_publish(
+        "cartography.map_emitted",
+        {
+            "world": getattr(sd, "world_slug", ""),
+            "current_location": location or "",
+            "discovered_regions": len(msg.payload.explored),
+            "total_regions": len(msg.payload.cartography.get("regions", {}))
+            if msg.payload.cartography
+            else 0,
+        },
+        component="location",
+    )
+    logger.info(
+        "cartography.map_emitted world=%s location=%s discovered=%d",
+        getattr(sd, "world_slug", ""),
+        location,
+        len(msg.payload.explored),
+    )
+    emit_fn(msg, "MAP_UPDATE")  # type: ignore[operator]

@@ -89,6 +89,15 @@ UNIVERSAL_RETRIEVAL_SPAN_ATTRS: frozenset[str] = frozenset(
         "retrieval.faction_count",
         "retrieval.rejected_below_similarity",
         "retrieval.dimension_mismatch_count",
+        # ADR-118 §A1 (84-1) drama-gate observable. 84-1 EMITTED this on the span
+        # but never added it to the contract set — 84-4 (WI-6) closes that gap.
+        "retrieval.embed_skipped",
+        # ADR-118 §A5 (84-4, WI-6): per-card score decomposition (JSON-encoded
+        # list) + the A3 forgetting-lifecycle zero-state counters (logic is WI-3).
+        "retrieval.card.reason",
+        "retrieval.tier_demotions",
+        "retrieval.tier_rehydrations",
+        "retrieval.vectors_shed",
     }
 )
 

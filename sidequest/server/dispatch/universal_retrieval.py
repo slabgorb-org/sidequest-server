@@ -31,6 +31,7 @@ from sidequest.game.retrieval_orchestration import (
     RetrievedEntities,
     retrieve_turn_context,
 )
+from sidequest.telemetry.retrieval_reason import card_reason_payload
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 if TYPE_CHECKING:
@@ -90,6 +91,17 @@ async def retrieve_for_turn(
                 "rejected_below_similarity": result.rejected_below_similarity,
                 "dimension_mismatch_count": result.dimension_mismatch_count,
                 "turn_number": sd.snapshot.turn_manager.interaction,
+                # Story 84-4 (ADR-118 §A5): the load-bearing WI-6 fix. 84-1 put
+                # embed_skipped on the SPAN only — the GM panel reads the WatcherHub
+                # EVENT stream, not Jaeger, so the drama-gate decision never reached
+                # the dashboard. Surface it (both polarities) here.
+                "embed_skipped": result.embed_skipped,
+                # The per-card score decomposition rides the event NATIVELY (a list
+                # of dicts) — the hub passes the fields dict through verbatim. This
+                # is the SAME payload shape the span JSON-encodes; do NOT double-
+                # encode it into a string here. Empty list on a gate-skip (present,
+                # never absent — the panel always reads a parseable field).
+                "card_reasons": [card_reason_payload(s) for s in result.card_scores],
             },
             component="retrieval",
             severity=severity,

@@ -27,46 +27,133 @@ from sidequest.telemetry.spans.span import Span
 # constant so the emitter here and the GM-panel reader agree on the exact string.
 SPAN_ALIAS_ACCRETED = "entity.alias_accreted"
 
-# Conservative appositive-epithet pattern. §A4 makes alias correctness LOAD-BEARING:
-# a garbage extractor pollutes the DOMINANT mention signal, so we extract ONLY the
-# tightest, unambiguous form — a DETERMINER-led, LOWERCASE epithet appositive
-# directly attached to the NPC's name: "Borin, the old smith" / "the old smith,
-# Borin". Requirements that keep out garbage:
-#   * a leading determiner ("the"/"a"/"an"/"old"/"young") — a real epithet reads
-#     "the old smith", not a bare noun;
-#   * lowercase words only (matched case-SENSITIVELY) — a capitalized run is a
-#     proper name, never an epithet, so "Borin, Thorn, and Vex" can't misfire;
-#   * 1-3 trailing words — an epithet, not a clause.
-# The name anchor matches case-insensitively (player/narrator casing varies); only
-# the epithet body is lowercase-locked.
-_EPITHET_BODY = r"(?:the|a|an|old|young)\s+[a-z][a-z'-]+(?:\s+[a-z][a-z'-]+){0,2}"
+# Conservative appositive-epithet extraction. §A4 makes alias correctness
+# LOAD-BEARING: a garbage extractor pollutes the DOMINANT mention signal, so we
+# extract ONLY a DETERMINER-led, LOWERCASE noun-phrase appositive anchored on the
+# NPC's name — and reject anything that is actually a SCENE CLAUSE ("Borin, the
+# torch sputters and dies"; "the crowd parts, Borin walks through"). Two guards,
+# defense in depth (TEA 84-2 review):
+#   1. FINITE-VERB rejection (primary) — a valid epithet is a noun phrase with NO
+#      finite verb ("the old smith"); a clause has one ("sputters", "parts"). This
+#      is the ONLY signal that catches the epithet-FIRST mirror, where comma
+#      position can't tell a descriptor from a clause.
+#   2. COMMA-CLOSED name-first appositives (reinforcing) — a real name-first
+#      epithet is comma-bracketed ("Borin, the old smith,"); the garbage name-first
+#      cases are comma-OPEN ("Borin, the torch sputters…").
+# The epithet body is lowercase-locked (case-sensitive) so a capitalized proper-name
+# run ("Borin, Thorn, and Vex") can't misfire; the name anchor matches
+# case-insensitively. The minted epithet is the leading 1-3-word determiner phrase.
+
+# Determiners that may lead an epithet.
+_DETERMINER = r"(?:the|a|an|old|young)"
+# A determiner-led noun phrase: determiner + 1-3 lowercase words. This is the SHAPE
+# that gets MINTED (truncated to the leading words).
+_EPITHET_BODY = rf"{_DETERMINER}\s+[a-z][a-z'-]+(?:\s+[a-z][a-z'-]+){{0,2}}"
+
+# Finite present-tense 3rd-person scene verbs. Leads with the matrix verbs and
+# common scene verbs so the clause cases reject; the structural -s guard below
+# generalizes beyond the list without misclassifying -s NOUNS.
+_FINITE_VERB_STOPLIST: frozenset[str] = frozenset(
+    {
+        "sputters", "swings", "parts", "creaks", "howls", "walks", "enters", "dies",
+        "stands", "sits", "turns", "looks", "moves", "steps", "nods", "raises",
+        "leans", "draws", "speaks", "shouts", "whispers", "runs", "falls", "rises",
+        "opens", "closes", "slams", "crashes", "rumbles", "groans", "hisses",
+        "flickers", "glows", "burns", "drips", "echoes", "rattles", "snaps",
+        "is", "was", "has", "goes", "comes", "stares", "glares", "watches",
+    }
+)
+
+# Noun endings that look 3rd-person-verb-ish (-s) but are NOT verbs — guards the
+# structural -s heuristic so "the duchess" / "the boss" / "the chaos" don't read as
+# clauses (TEA's explicit warning).
+_NOUN_S_SUFFIXES: tuple[str, ...] = ("ss", "us", "is", "ous", "ics", "ness", "ess")
+
+
+def _looks_like_finite_verb(word: str) -> bool:
+    """True when ``word`` is a present-tense 3rd-person finite verb (a clause tell).
+
+    Curated stoplist first (covers the matrix + common scene verbs), then a
+    structural fallback: a word ending in a lone ``s`` (3rd-person present) that is
+    not one of the ``-ss``/``-us``/``-is`` noun shapes. Conservative on the noun
+    side — a false "not a verb" only risks minting one extra epithet, while a false
+    "is a verb" wrongly rejects a valid one; §A4 says miss before mint-garbage, so
+    the verb side stays tight (curated list + a guarded heuristic)."""
+    w = word.lower().strip("'-")
+    if not w:
+        return False
+    if w in _FINITE_VERB_STOPLIST:
+        return True
+    # Structural -s heuristic: ``parts``/``creaks`` shape, but never an -ss/-us/-is
+    # noun. Requires length > 3 so tiny words ("is" handled above) don't trip it.
+    return len(w) > 3 and w.endswith("s") and not w.endswith(_NOUN_S_SUFFIXES)
+
+
+def _phrase_has_finite_verb(phrase: str) -> bool:
+    """True when any token in ``phrase`` is a finite verb — i.e. it is a clause, not
+    a noun-phrase epithet."""
+    return any(_looks_like_finite_verb(tok) for tok in re.split(r"[\s,]+", phrase) if tok)
+
+
+def _leading_epithet(phrase: str) -> str | None:
+    """Truncate a determiner-led ``phrase`` to its leading 1-3-word epithet, if it is
+    a clean noun phrase.
+
+    Truncate FIRST (to the leading determiner + 1-3 words), THEN verb-check that
+    truncated epithet — not the whole span. This matters for a long valid epithet
+    like "the grand high warlock of the seven towers": its TRUNCATION ("the grand
+    high warlock") is a clean noun phrase, even though a later word ("towers") would
+    trip the structural -s heuristic. A scene clause's verb falls INSIDE the leading
+    1-3 words ("the crowd parts" → "parts"), so it is still caught.
+
+    Returns the minted epithet, or ``None`` when ``phrase`` has no determiner-led
+    head, or that head carries a finite verb (it is a clause, not a descriptor)."""
+    phrase = phrase.strip().rstrip(".,;:")
+    m = re.match(rf"^({_EPITHET_BODY})\b", phrase)
+    if not m:
+        return None
+    epithet = m.group(1).strip()
+    if _phrase_has_finite_verb(epithet):
+        return None
+    return epithet
 
 
 def extract_epithets_for_npc(narration: str, npc_name: str) -> list[str]:
-    """Extract appositive epithets the narration attaches to ``npc_name``.
+    """Extract appositive noun-phrase epithets the narration attaches to ``npc_name``.
 
-    CONSERVATIVE by design (§A4 — alias correctness is load-bearing): matches only
-    the two tightest appositive forms, both anchored on the canonical name and both
-    requiring a determiner-led, lowercase epithet:
+    CONSERVATIVE by design (§A4 — alias correctness is load-bearing). Two anchored
+    forms, both rejecting scene clauses via the finite-verb guard:
 
-      * ``Name, <the epithet>``  — "Borin, the old smith"
-      * ``<the epithet>, Name``  — "the old smith, Borin"
+      * ``Name, <the epithet>,``  — comma-CLOSED appositive ("Borin, the old smith,")
+      * ``<the epithet>, Name``   — epithet-first appositive ("the old smith, Borin")
 
-    The lowercase + determiner requirement means a comma-separated run of proper
-    names ("Borin, Thorn, and Vex") is NOT mistaken for an epithet. Returns the
-    matched epithet phrases (may be empty); de-dup/blank/idempotency policy is left
-    to :func:`accrete_npc_aliases`.
+    A clause masquerading as an appositive ("Borin, the torch sputters…",
+    "the crowd parts, Borin…") is rejected because the noun phrase carries a finite
+    verb. The name-first form additionally requires the closing comma (the garbage
+    name-first cases are comma-open). Returns the minted epithet phrases (may be
+    empty); de-dup/blank/idempotency policy is left to :func:`accrete_npc_aliases`.
     """
     if not narration.strip() or not npc_name.strip():
         return []
     name = re.escape(npc_name.strip())
     epithets: list[str] = []
-    # Name first: "Borin, the old smith" — name case-insensitive, epithet lowercase.
-    for m in re.finditer(rf"(?i:\b{name}\b),\s+({_EPITHET_BODY})\b", narration):
-        epithets.append(m.group(1).strip())
-    # Epithet first: "the old smith, Borin".
-    for m in re.finditer(rf"\b({_EPITHET_BODY}),\s+(?i:\b{name}\b)", narration):
-        epithets.append(m.group(1).strip())
+
+    # Name first, COMMA-CLOSED: "Borin, <appositive>," — the appositive runs from the
+    # name's comma to the next comma. Reject if that span is a clause (finite verb);
+    # else mint its leading determiner phrase.
+    for m in re.finditer(rf"(?i:\b{name}\b),\s+([^,]+?),", narration):
+        epithet = _leading_epithet(m.group(1))
+        if epithet:
+            epithets.append(epithet)
+
+    # Epithet first: "<phrase>, Borin" — the phrase before the name's comma. Reject
+    # if it is a clause; else mint its leading determiner phrase. Comma-closure can't
+    # disambiguate here (the closing comma IS the name), so the verb guard carries it.
+    for m in re.finditer(rf"([^,.]+?),\s+(?i:\b{name}\b)", narration):
+        epithet = _leading_epithet(m.group(1))
+        if epithet:
+            epithets.append(epithet)
+
     return epithets
 
 

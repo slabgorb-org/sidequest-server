@@ -56,6 +56,124 @@ def _npc(name: str, *, aliases: list[str] | None = None):
 
 
 # ===========================================================================
+# AC-3 (extractor correctness) — appositive NOUN PHRASE mints, SCENE CLAUSE rejects
+# ===========================================================================
+#
+# Reviewer defect (84-2, pre-merge): ``extract_epithets_for_npc`` mints GARBAGE
+# from ordinary narrator prose because it accepts any determiner-led lowercase
+# word-run after the name, including a clause that describes the SCENE rather than
+# the NPC:
+#   "Borin, the torch sputters and dies..."  → minted "the torch sputters and"
+#   "Borin, the door swings open..."         → minted "the door swings open"
+#   "the crowd parts, Borin walks through."  → minted "the crowd parts"
+# A garbage alias pollutes the DOMINANT mention pertinence signal (84-1), and this
+# extractor is the TEMPLATE the §A4 faction/location alias work will copy — so the
+# contract must be correct now.
+#
+# The distinguishing signal: a valid epithet is a NOUN PHRASE describing the person
+# ("the old smith", "a grizzled veteran"); garbage is an independent CLAUSE with a
+# finite verb describing an action/scene ("the torch sputters", "the door swings").
+# These tests pin that contract — scene clauses REJECT, appositive noun-phrase
+# epithets MINT. Dev chooses the guard mechanism (finite-verb detection, and/or
+# requiring the appositive to be comma-CLOSED — "Borin, <epithet>,"); the tests
+# only pin behavior.
+
+
+class TestExtractEpithets:
+    """Direct unit matrix for ``extract_epithets_for_npc``. NEGATIVE cases must
+    extract NOTHING (scene/independent clauses); POSITIVE cases must STILL mint
+    (valid appositive noun-phrase epithets — locked so the fix can't over-reject)."""
+
+    # --- NEGATIVE: scene clauses / verb-bearing clauses → must extract [] ---
+
+    def test_name_first_scene_clause_torch_sputters_rejected(self) -> None:
+        """The clause after the comma describes the SCENE (a torch), not Borin —
+        the appositive is comma-OPEN and runs into a finite verb."""
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert (
+            extract_epithets_for_npc("Borin, the torch sputters and dies in the sconce.", "Borin")
+            == []
+        )
+
+    def test_name_first_scene_clause_door_swings_rejected(self) -> None:
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert extract_epithets_for_npc("Borin, the door swings open behind him.", "Borin") == []
+
+    def test_name_first_scene_clause_crowd_parts_rejected(self) -> None:
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert extract_epithets_for_npc("Borin, the crowd parts as he walks.", "Borin") == []
+
+    def test_name_first_scene_clause_floor_creaks_rejected(self) -> None:
+        """Another verb-bearing clause shape Dev must guard: subject + finite verb
+        + prepositional tail."""
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert extract_epithets_for_npc("Borin, the floor creaks under his boots.", "Borin") == []
+
+    def test_name_first_scene_clause_wind_howls_rejected(self) -> None:
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert (
+            extract_epithets_for_npc("Borin, the wind howls through the window.", "Borin") == []
+        )
+
+    def test_epithet_first_scene_clause_crowd_parts_rejected(self) -> None:
+        """The MIRROR defect: an epithet-first scene clause comma-anchored to the
+        name ("the crowd parts, Borin walks through") is ALSO a clause, not a
+        descriptor — comma-closure alone won't catch this, the verb is the tell."""
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert (
+            extract_epithets_for_npc("the crowd parts, Borin walks through.", "Borin") == []
+        )
+
+    def test_epithet_first_scene_clause_door_swings_rejected(self) -> None:
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert extract_epithets_for_npc("the door swings open, Borin enters.", "Borin") == []
+
+    # --- POSITIVE: valid appositive noun-phrase epithets → must STILL mint ---
+    # (Match the existing accepted behavior so the fix can't regress these.)
+
+    def test_name_first_valid_epithet_old_smith_mints(self) -> None:
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert extract_epithets_for_npc("Borin, the old smith, steps forward.", "Borin") == [
+            "the old smith"
+        ]
+
+    def test_name_first_valid_epithet_grizzled_veteran_mints(self) -> None:
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert extract_epithets_for_npc("Borin, a grizzled veteran, nods.", "Borin") == [
+            "a grizzled veteran"
+        ]
+
+    def test_name_first_long_epithet_truncates_but_mints(self) -> None:
+        """Locks the EXISTING accepted truncation behavior: a long determiner-led
+        noun phrase is truncated to its leading 1-3-word epithet and still mints.
+        The fix must not over-reject this valid (if truncated) noun-phrase epithet."""
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert extract_epithets_for_npc(
+            "Borin, the grand high warlock of the seven towers, raises a hand.", "Borin"
+        ) == ["the grand high warlock"]
+
+    def test_epithet_first_valid_epithet_mints(self) -> None:
+        """The valid epithet-FIRST appositive ("the old smith, Borin") must still
+        mint — distinguished from the epithet-first scene clause by the absence of
+        a finite verb in the noun phrase."""
+        from sidequest.game.alias_accretion import extract_epithets_for_npc
+
+        assert extract_epithets_for_npc(
+            "the old smith, Borin, hammers at the forge.", "Borin"
+        ) == ["the old smith"]
+
+
+# ===========================================================================
 # AC-3 — accretion mutates aliases idempotently
 # ===========================================================================
 

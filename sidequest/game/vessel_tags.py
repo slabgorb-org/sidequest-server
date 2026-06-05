@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 _VESSEL_TAG = "vessel"
 _COMPOSURE_KEY = "composure"
 _COMPOSURE_MAX_KEY = "composure_max"
+_ARMOR_KEY = "armor"
 
 
 class InvalidVesselTagsError(ValueError):
@@ -65,12 +66,19 @@ class InvalidVesselTagsError(ValueError):
 
 
 class VesselTags(BaseModel):
-    """Parsed composure values from a vessel inventory item's tag list."""
+    """Parsed mechanical values from a vessel inventory item's tag list.
+
+    Story 86-2 adds ``armor`` (CWN §2.4.8 — a rating subtracted from all
+    rig damage). It defaults to 0 so composure-only legacy items (Story
+    53-2, before the tag was read) keep parsing; an explicit but malformed
+    ``armor:N`` still fails loud per :class:`InvalidVesselTagsError`.
+    """
 
     model_config = {"extra": "forbid"}
 
     composure: int
     composure_max: int
+    armor: int = 0
 
 
 def _parse_int_tag(value: str, *, key: str, item_id: str) -> int:
@@ -110,6 +118,7 @@ def parse_vessel_tags(item: dict) -> VesselTags:
 
     composure: int | None = None
     composure_max: int | None = None
+    armor: int | None = None
 
     for tag in tags:
         if not isinstance(tag, str) or ":" not in tag:
@@ -123,6 +132,13 @@ def parse_vessel_tags(item: dict) -> VesselTags:
             if composure_max is not None:
                 raise InvalidVesselTagsError(item_id, f"duplicate {_COMPOSURE_MAX_KEY!r} tag")
             composure_max = _parse_int_tag(raw_value, key=_COMPOSURE_MAX_KEY, item_id=item_id)
+        elif key == _ARMOR_KEY:
+            if armor is not None:
+                raise InvalidVesselTagsError(item_id, f"duplicate {_ARMOR_KEY!r} tag")
+            armor = _parse_int_tag(raw_value, key=_ARMOR_KEY, item_id=item_id)
+
+    if armor is not None and armor < 0:
+        raise InvalidVesselTagsError(item_id, f"{_ARMOR_KEY} must be >= 0, got {armor}")
 
     if composure is None:
         raise InvalidVesselTagsError(item_id, f"missing {_COMPOSURE_KEY!r}:N tag")
@@ -140,7 +156,7 @@ def parse_vessel_tags(item: dict) -> VesselTags:
             f"{_COMPOSURE_KEY} ({composure}) exceeds {_COMPOSURE_MAX_KEY} ({composure_max})",
         )
 
-    return VesselTags(composure=composure, composure_max=composure_max)
+    return VesselTags(composure=composure, composure_max=composure_max, armor=armor or 0)
 
 
 def find_vessel_item(items: Iterable[dict]) -> dict | None:

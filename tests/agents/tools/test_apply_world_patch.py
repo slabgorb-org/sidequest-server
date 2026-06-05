@@ -153,8 +153,13 @@ async def test_current_region_path_applies() -> None:
     assert reloaded.snapshot.current_region == "Tin Quarter"
 
 
-async def test_active_stakes_path_applies() -> None:
+async def test_active_stakes_path_rejected_set_stakes_is_typed_home() -> None:
+    # Story 77-4 (ADR-137 AC-3): ``/active_stakes`` was retired from this escape
+    # hatch — ``set_stakes`` is its typed home now (covered by
+    # tests/agents/tools/test_set_stakes.py). The escape hatch must reject it
+    # recoverably and must NOT clobber snapshot state.
     snap = _build_snapshot()
+    stakes_before = snap.active_stakes
     store = _store_with(snap)
     ctx = _make_ctx(store)
 
@@ -166,10 +171,14 @@ async def test_active_stakes_path_applies() -> None:
         },
         ctx,
     )
-    assert r.status is ToolResultStatus.OK
+    assert r.status is ToolResultStatus.ERROR_RECOVERABLE
+    assert r.message is not None
+    assert "/active_stakes" in r.message
+    # Escape hatch did not write — set_stakes remains the only writer.
     reloaded = store.load()
     assert reloaded is not None
-    assert reloaded.snapshot.active_stakes == "rescue the merchant before dawn"
+    assert reloaded.snapshot.active_stakes == stakes_before
+    assert reloaded.snapshot.active_stakes != "rescue the merchant before dawn"
 
 
 # ---------------------------------------------------------------------------

@@ -793,6 +793,11 @@ class TestRetrievalPipelineWiring:
     turn-build path, not merely unit-correct in isolation. Behavior + span,
     never a source grep."""
 
+    # Heavy end-to-end wiring test: full chargen walk + narration turn through
+    # the real pack (~25-30s). Override the global ``--timeout=30`` so the
+    # thread-method timeout doesn't fire mid-event-loop and crash the xdist
+    # worker. Real-logic correctness is unaffected.
+    @pytest.mark.timeout(120)
     def test_player_action_drives_universal_retrieval(
         self,
         otel_capture: Any,

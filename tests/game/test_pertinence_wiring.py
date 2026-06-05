@@ -50,6 +50,11 @@ class _RecordingDaemon:
 
 
 class TestUnifiedScorerProductionWiring:
+    # Heavy end-to-end wiring test: full chargen walk + narration turn through
+    # the real pack (~25-30s). Override the global ``--timeout=30`` so the
+    # thread-method timeout doesn't fire mid-event-loop and crash the xdist
+    # worker. Real-logic correctness is unaffected.
+    @pytest.mark.timeout(120)
     def test_named_present_action_skips_embed_on_live_turn(
         self,
         otel_capture: Any,

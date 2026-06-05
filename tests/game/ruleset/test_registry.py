@@ -34,3 +34,42 @@ def test_wwn_registered_and_singleton():
     mod = get_ruleset_module("wwn")
     assert isinstance(mod, WwnRulesetModule)
     assert get_ruleset_module("wwn") is mod  # stateless singleton
+
+
+# ---------------------------------------------------------------------------
+# Story 88-1 — AWN ruleset module registration (Items 1 & 2)
+# ---------------------------------------------------------------------------
+
+
+def test_get_ruleset_module_awn_resolves():
+    from sidequest.game.ruleset.awn import AwnRulesetModule
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    module = get_ruleset_module("awn")
+    assert isinstance(module, AwnRulesetModule)
+    assert module.slug == "awn"
+
+
+def test_awn_module_is_singleton():
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    assert get_ruleset_module("awn") is get_ruleset_module("awn")  # stateless singleton
+
+
+def test_awn_module_is_a_cwn_subclass():
+    # AWN combat == CWN combat: the module subclasses CwnRulesetModule so every
+    # capability check (isinstance(module, CwnRulesetModule)) covers AWN for free.
+    from sidequest.game.ruleset.awn import AwnRulesetModule
+    from sidequest.game.ruleset.cwn import CwnRulesetModule
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    assert issubclass(AwnRulesetModule, CwnRulesetModule)
+    assert isinstance(get_ruleset_module("awn"), CwnRulesetModule)
+
+
+def test_unknown_ruleset_still_fails_loud_after_awn():
+    # Regression guard for the fail-loud contract: registering "awn" must not
+    # introduce a silent default for unknown slugs (No Silent Fallbacks).
+    with pytest.raises(UnknownRulesetError) as exc:
+        get_ruleset_module("ashes")  # close to "awn" but not registered
+    assert "ashes" in str(exc.value)

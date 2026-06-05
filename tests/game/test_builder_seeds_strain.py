@@ -23,11 +23,12 @@ from sidequest.genre.models.character import (
     CharCreationScene,
     MechanicalEffects,
 )
-from sidequest.genre.models.rules import CwnConfig, RulesConfig
+from sidequest.genre.models.rules import AwnConfig, CwnConfig, RulesConfig, SwnConfig
 from tests._helpers.genre_paths import PackNotFound, find_pack_path
 
 CWN_ABILITY_NAMES = ["Brawn", "Reflex", "Body", "Tech", "Instinct", "Cool"]
 NATIVE_ABILITY_NAMES = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
+AWN_ABILITY_NAMES = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"]
 
 CWN_ATTRIBUTE_MAP = {
     "STRENGTH": "Brawn",
@@ -36,6 +37,15 @@ CWN_ATTRIBUTE_MAP = {
     "INTELLIGENCE": "Tech",
     "WISDOM": "Instinct",
     "CHARISMA": "Cool",
+}
+
+AWN_ATTRIBUTE_MAP = {
+    "STRENGTH": "Strength",
+    "DEXTERITY": "Dexterity",
+    "CONSTITUTION": "Constitution",
+    "INTELLIGENCE": "Intelligence",
+    "WISDOM": "Wisdom",
+    "CHARISMA": "Charisma",
 }
 
 
@@ -93,6 +103,32 @@ def native_rules() -> RulesConfig:
     )
 
 
+def awn_rules() -> RulesConfig:
+    """Minimal valid awn RulesConfig with Constitution mapped to CONSTITUTION."""
+    return RulesConfig(
+        stat_generation="standard_array",
+        ability_score_names=list(AWN_ABILITY_NAMES),
+        point_buy_budget=27,
+        default_class="Survivor",
+        default_race="Wastelander",
+        ruleset="awn",
+        awn=AwnConfig(attribute_map=AWN_ATTRIBUTE_MAP),
+    )
+
+
+def swn_rules() -> RulesConfig:
+    """Minimal valid swn RulesConfig — SWN has no System Strain (regression guard)."""
+    return RulesConfig(
+        stat_generation="standard_array",
+        ability_score_names=list(AWN_ABILITY_NAMES),
+        point_buy_budget=27,
+        default_class="Spacer",
+        default_race="Human",
+        ruleset="swn",
+        swn=SwnConfig(attribute_map=AWN_ATTRIBUTE_MAP),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Unit tests for seed_system_strain helper
 # ---------------------------------------------------------------------------
@@ -121,6 +157,45 @@ class TestSeedSystemStrainHelper:
         stats = {k: 10 for k in NATIVE_ABILITY_NAMES}
         result = seed_system_strain(rules, stats)
         assert result is None
+
+    # -- Story 88-1 Item 4: AWN characters must get a System Strain pool --
+    # The bug: seed_system_strain gated on the slug-string `ruleset != "cwn"`,
+    # so an AWN character (System Strain inherited from CWN) silently got NO
+    # pool. The fix switches to the capability form `isinstance(cfg, CwnConfig)`,
+    # which covers CWN + AWN + future sister modules.
+
+    def test_awn_returns_pool_maxed_at_con_score(self) -> None:
+        rules = awn_rules()
+        stats = {
+            "Strength": 10,
+            "Dexterity": 12,
+            "Constitution": 14,
+            "Intelligence": 8,
+            "Wisdom": 11,
+            "Charisma": 13,
+        }
+        pool = seed_system_strain(rules, stats)
+        assert pool is not None, (
+            "an AWN character must get a SystemStrainPool (AWN inherits CWN System "
+            "Strain) — the chargen gate must not silently fall through on the slug"
+        )
+        assert pool.max == 14  # CONSTITUTION-flavor (Constitution) score
+        assert pool.current == 0
+        assert pool.permanent == 0
+
+    def test_awn_uses_max_1_floor(self) -> None:
+        rules = awn_rules()
+        stats = {k: 10 for k in AWN_ABILITY_NAMES} | {"Constitution": 0}
+        pool = seed_system_strain(rules, stats)
+        assert pool is not None
+        assert pool.max == 1
+
+    def test_swn_still_returns_none(self) -> None:
+        # Regression: broadening the gate to cover AWN must NOT start handing
+        # SWN characters a strain pool (SWN has no System Strain).
+        rules = swn_rules()
+        stats = {k: 10 for k in AWN_ABILITY_NAMES}
+        assert seed_system_strain(rules, stats) is None
 
 
 # ---------------------------------------------------------------------------

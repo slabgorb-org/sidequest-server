@@ -103,6 +103,37 @@ class _NonCwnPack:
             self.rules = _NonCwnRules()
 
 
+@dataclass
+class _FakeAwnRules:
+    """Minimal rules object that acts like RulesConfig for an awn pack.
+
+    AWN has the stabilize-at-0 Mortal Injury rule (SRD p.52) inherited from CWN,
+    so stabilize_mortal_injury must accept it. The current guard
+    (`ruleset != "cwn"`) blocks it (Item 6); the fix loosens to the capability form.
+    """
+
+    ruleset: str = "awn"
+    _awn_cfg: Any = None
+
+    def __post_init__(self) -> None:
+        if self._awn_cfg is None:
+            from sidequest.genre.models.rules import AwnConfig
+
+            self._awn_cfg = AwnConfig(attribute_map=_AMAP)
+
+    def ruleset_config(self) -> Any:
+        return self._awn_cfg
+
+
+@dataclass
+class _FakeAwnPack:
+    rules: _FakeAwnRules = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.rules is None:
+            self.rules = _FakeAwnRules()
+
+
 # ---------------------------------------------------------------------------
 # Snapshot / character builders
 # ---------------------------------------------------------------------------
@@ -255,6 +286,44 @@ async def test_stabilize_failure_keeps_mortal() -> None:
     assert core is not None
     assert any("Mortal Injury" in s.text for s in core.statuses)
     assert not any("Frail" in s.text for s in core.statuses)
+
+
+# ---------------------------------------------------------------------------
+# Story 88-1 Item 6: an AWN pack must be able to stabilize a Mortal Injury
+# ---------------------------------------------------------------------------
+
+
+async def test_awn_pack_can_stabilize() -> None:
+    """AWN inherits the CWN stabilize-at-0 rule; the cwn-only guard must accept "awn"."""
+    char = _cwn_character("Vane")
+    snap = _build_snapshot(characters=[char])
+    pack = _FakeAwnPack()
+    store = _store_with(snap)
+    ctx = _make_ctx(store, genre_pack=pack)
+
+    r = await _call(
+        {
+            "actor": "Vane",
+            "skill": "Heal",
+            "attribute": "Reflex",
+            "rounds_elapsed": 1,
+            "roll": 18,  # passes difficulty 8+1=9
+        },
+        ctx,
+    )
+    assert r.status is ToolResultStatus.OK, (
+        "stabilize_mortal_injury must accept an awn pack, not raise the cwn-only guard"
+    )
+    p = _payload(r)
+    assert p["success"] is True
+    assert p["difficulty"] == 9
+
+    reloaded = store.load()
+    assert reloaded is not None
+    core = reloaded.snapshot.find_creature_core("Vane")
+    assert core is not None
+    assert not any("Mortal Injury" in s.text for s in core.statuses)
+    assert any("Frail" in s.text for s in core.statuses)
 
 
 # ---------------------------------------------------------------------------

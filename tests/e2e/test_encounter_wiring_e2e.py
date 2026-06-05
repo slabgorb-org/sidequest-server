@@ -32,8 +32,10 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from pydantic import ValidationError
 
 from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
+from sidequest.game.encounter import StructuredEncounter
 from sidequest.protocol.messages import ConfrontationMessage
 
 
@@ -135,11 +137,17 @@ def deterministic_combat_router(monkeypatch):
         )
 
     async def _fake_decompose(*, action: str, state_summary) -> DispatchPackage:
-        # Open a combat encounter only on the turn that BOTH lacks a live encounter
-        # and reads as an attack. state_summary drops defaults/None, so a present
-        # "encounter" key means one is already live (resolved encounters are cleared
-        # from the snapshot by the lifecycle, so its mere presence is "live").
-        has_live_encounter = bool(state_summary.get("encounter"))
+        # Open a combat encounter only on the turn that BOTH lacks a LIVE encounter
+        # and reads as an attack. Liveness check (corrected per 73-12 review): the
+        # production lifecycle does NOT clear ``snapshot.encounter`` to None on
+        # resolution — it flips ``resolved=True`` on the live object. ``state_summary``
+        # is ``model_dump(exclude_defaults=True, exclude_none=True)``, so a present
+        # "encounter" dict carries ``resolved: True`` once resolved (resolved is a
+        # non-default value); a resolved encounter must therefore be treated as NOT
+        # live so a subsequent attack can re-open. (No current test drives a
+        # resolved-then-attack turn, but the guard must be correct, not accidental.)
+        enc_summary = state_summary.get("encounter")
+        has_live_encounter = bool(enc_summary) and not enc_summary.get("resolved", False)
         if not has_live_encounter and "attack" in action.lower():
             return _combat_package(action)
         return _empty_package()
@@ -158,11 +166,11 @@ _COMBAT_LOCATION = "Mawdeep Caverns"
 def _seat_combat_scene(sd) -> None:
     """Give the factory session a combat-capable scene.
 
-    The bare ``session_handler_factory`` snapshot has the PC "Rux" but no seat
-    mapping, no location, and no NPCs. ADR-116 ("A Confrontation Requires an
-    Other") correctly refuses to open an opponentless combat encounter, so the
+    The bare ``session_handler_factory`` snapshot has a PC but no seat mapping,
+    no location, and no NPCs. ADR-116 ("A Confrontation Requires an Other")
+    correctly refuses to open an opponentless combat encounter, so the
     router-driven confrontation dispatch logs ``encounter.no_opponent_available``
-    and creates nothing. Seat the acting player as "Rux", place Rux at a
+    and creates nothing. Seat the acting player as that PC, place the PC at a
     location, and put a hostile NPC there so the ADR-116 location-roster
     fallback (``_npc_fallback_at_location``) can seat the Other. Recipe mirrors
     ``tests/server/test_encounter_actors_all_combatants.py``.
@@ -171,10 +179,13 @@ def _seat_combat_scene(sd) -> None:
     from sidequest.game.session import Npc
 
     snap = sd.snapshot
-    # Resolve the acting player ("player-1") to the character "Rux" so the
-    # acting-character location lookup + party-wide XP seating both target Rux.
-    snap.player_seats[sd.player_id] = "Rux"
-    snap.character_locations["Rux"] = _COMBAT_LOCATION
+    # Derive the PC name from the factory's own character rather than hard-coding
+    # it (73-12 review) so this helper survives a factory rename. Resolve the
+    # acting player to that PC so the acting-character location lookup AND the
+    # party-wide XP seating both target it.
+    pc_name = snap.characters[0].core.name
+    snap.player_seats[sd.player_id] = pc_name
+    snap.character_locations[pc_name] = _COMBAT_LOCATION
     snap.npcs.append(
         Npc(
             core=CreatureCore(
@@ -242,13 +253,20 @@ async def test_combat_walkthrough_router_initiates_dual_dial_encounter(
     assert "player" in sides and "opponent" in sides
 
     # Dual-dial model (ADR-024): both side-routed dials exist and start at 0.
-    # The legacy single ``metric`` field is gone (rejected by
-    # StructuredEncounter._reject_legacy_metric).
-    assert not hasattr(enc, "metric")
     assert enc.player_metric.current == 0
     assert enc.opponent_metric.current == 0
     assert enc.player_metric.threshold > 0
     assert enc.opponent_metric.threshold > 0
+    # The legacy single ``metric`` field isn't merely absent from the schema — the
+    # validator ACTIVELY rejects it (73-12 review: the prior `assert not hasattr`
+    # was vacuous, since a Pydantic model can't carry an undeclared attribute and it
+    # proved nothing about `_reject_legacy_metric`). Drive the rejection path so a
+    # deleted/bypassed validator fails loudly.
+    with pytest.raises(ValidationError):
+        StructuredEncounter(
+            encounter_type="combat",
+            metric={"name": "momentum", "current": 0, "threshold": 10},
+        )
 
     conf = [m for m in msgs if isinstance(m, ConfrontationMessage)]
     assert len(conf) == 1
@@ -277,14 +295,21 @@ async def test_xp_award_higher_in_combat_than_out(
     )
     from sidequest.server.session_handler import _build_turn_context
 
+    # Pin XP reads to the ACTING character by name (73-12 review) rather than
+    # characters[0], so an award credited to the wrong character can't pass.
+    pc_name = sd.snapshot.characters[0].core.name
+
+    def _pc_xp() -> int:
+        return next(c for c in sd.snapshot.characters if c.core.name == pc_name).core.xp
+
     # Out-of-combat turn.
-    before = sd.snapshot.characters[0].core.xp
+    before = _pc_xp()
     await handler._execute_narration_turn(
         sd,
         "I walk.",
         _build_turn_context(sd),
     )
-    after_out = sd.snapshot.characters[0].core.xp
+    after_out = _pc_xp()
     assert after_out - before == 10
 
     # Start combat, then take a beat turn in combat. The router-driven
@@ -296,20 +321,25 @@ async def test_xp_award_higher_in_combat_than_out(
             NarrationTurnResult(
                 narration="You strike.",
                 beat_selections=[
-                    BeatSelection(actor="Rux", beat_id="attack", target=None),
+                    BeatSelection(actor=pc_name, beat_id="attack", target=None),
                 ],
             ),
         ]
     )
 
-    # Turn that creates the encounter (the XP check for this turn sees
-    # in_combat_now=True because the router opened the encounter pre-narrator).
+    # Turn that creates the encounter. Its OWN XP award is in-combat (25), not 10:
+    # the router opens the encounter in the pre-narrator pass, so in_combat_now is
+    # already True when award_turn_xp runs this turn. Pin that boundary turn
+    # explicitly (73-12 review) — it is the exact encounter-commit-vs-XP-timing the
+    # 73-6 flake turned on.
     await handler._execute_narration_turn(
         sd,
         "I attack.",
         _build_turn_context(sd),
     )
-    mid = sd.snapshot.characters[0].core.xp
+    mid = _pc_xp()
+    assert mid - after_out == 25
+
     # Second combat turn: still live, attack beat ticks metric but does NOT
     # resolve (momentum 0+2=2 < 10). XP still 25.
     await handler._execute_narration_turn(
@@ -317,5 +347,5 @@ async def test_xp_award_higher_in_combat_than_out(
         "Again!",
         _build_turn_context(sd),
     )
-    after_combat = sd.snapshot.characters[0].core.xp
+    after_combat = _pc_xp()
     assert after_combat - mid == 25

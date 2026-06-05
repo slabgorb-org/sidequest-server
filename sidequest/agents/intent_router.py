@@ -217,11 +217,21 @@ through the tool input — no preamble, no commentary, no extra text blocks."""
 )
 
 
-def _build_user_prompt(action: str, state_summary: Any) -> str:
+def _serialize_state_summary(state_summary: Any) -> str:
+    """Serialize ``state_summary`` exactly as it lands in the user prompt.
+
+    A string summary passes through verbatim; anything else is JSON-encoded
+    (sorted keys, ``default=str``). This is the single source of truth for both
+    the prompt body and the ``state_summary_bytes`` attribution attribute
+    (Story 71-40) so the recorded size matches the bytes actually sent.
+    """
     if isinstance(state_summary, str):
-        state_text = state_summary
-    else:
-        state_text = json.dumps(state_summary, default=str, sort_keys=True)
+        return state_summary
+    return json.dumps(state_summary, default=str, sort_keys=True)
+
+
+def _build_user_prompt(action: str, state_summary: Any) -> str:
+    state_text = _serialize_state_summary(state_summary)
     return (
         f"<game_state>\n{state_text}\n</game_state>\n"
         f"<raw_action>\n{action}\n</raw_action>\n"
@@ -291,7 +301,18 @@ class IntentRouter:
         base_user_prompt = _build_user_prompt(action, state_summary)
         tool_schema = _dispatch_tool_schema()
         action_length = len(action)
+        # AC2 (code suspect): the serialized state-summary size — the prime
+        # candidate for the 4-12s decompose blowup is an oversized prompt
+        # inflating input tokens every call. Recorded as the sibling of
+        # ``action_length``. Measured from the exact serialization the prompt
+        # uses so the byte count matches what is actually sent.
+        state_summary_bytes = len(_serialize_state_summary(state_summary).encode("utf-8"))
         start_ns = time.perf_counter_ns()
+        # AC2 (env cost): the raw SDK round-trip of the SUCCESSFUL ``emit_tool``
+        # call, timed independently of the surrounding retry/validation
+        # bookkeeping. A component of the total ``latency_ms``, so the
+        # ``sdk_latency_ms <= latency_ms`` invariant holds by construction.
+        sdk_latency_ms = 0
         last_failure: tuple[str, str] | None = None
         # When the prior attempt was rejected by DispatchPackage validation,
         # carry the pydantic error into the retry prompt so the producer can
@@ -304,6 +325,7 @@ class IntentRouter:
             if last_schema_error is not None:
                 user_prompt += _schema_correction_suffix(last_schema_error)
             try:
+                sdk_start_ns = time.perf_counter_ns()
                 tool_input = await self._llm.emit_tool(
                     system=_SYSTEM_PROMPT,
                     user=user_prompt,
@@ -311,6 +333,7 @@ class IntentRouter:
                     tool_description=_TOOL_DESCRIPTION,
                     tool_schema=tool_schema,
                 )
+                sdk_latency_ms = max(0, (time.perf_counter_ns() - sdk_start_ns) // 1_000_000)
             except TimeoutError as exc:
                 last_failure = ("timeout", str(exc))
                 _emit_failed_span(
@@ -381,6 +404,11 @@ class IntentRouter:
             ) as span:
                 span.set_attribute("dispatch_count", _count_dispatches(pkg))
                 span.set_attribute("latency_ms", int(latency_ms))
+                # AC2 env-vs-code attribution split (Story 71-40): the GM panel
+                # can now tell whether the over-budget decompose is the raw SDK
+                # round-trip (env) or an oversized state-summary prompt (code).
+                span.set_attribute("sdk_latency_ms", int(sdk_latency_ms))
+                span.set_attribute("state_summary_bytes", int(state_summary_bytes))
                 span.set_attribute("retry_count", retry_count)
                 span.set_attribute("confidence_global", float(pkg.confidence_global))
                 # True when this success came from a schema-error-informed

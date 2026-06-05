@@ -157,3 +157,26 @@ SPAN_ROUTES[SPAN_CHARGEN_CLASS_ABILITIES_SEEDED] = SpanRoute(
         "player_id": (span.attributes or {}).get("player_id", ""),
     },
 )
+
+
+# Story 89-5: World-tier origin trait applied (Barsoom Earthman gravity boon).
+# Fires when the builder seeds a chargen-choice-authored origin trait onto
+# character.abilities (source=Race) alongside its stat_bonuses edge. The
+# trait definition lives in a WORLD's char_creation.yaml — this event is the
+# GM-panel proof that the world-tier crunch exception actually engaged
+# (no unwired crunch, design D5/§9).
+SPAN_CHARGEN_ORIGIN_TRAIT_APPLIED = "chargen.origin_trait.applied"
+SPAN_ROUTES[SPAN_CHARGEN_ORIGIN_TRAIT_APPLIED] = SpanRoute(
+    event_type="state_transition",
+    component="character_creation",
+    extract=lambda span: {
+        "field": "chargen.origin_trait",
+        "op": "applied",
+        "origin": (span.attributes or {}).get("origin", ""),
+        "ability_names": (span.attributes or {}).get("ability_names", ""),
+        "stat_bonuses": (span.attributes or {}).get("stat_bonuses", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)

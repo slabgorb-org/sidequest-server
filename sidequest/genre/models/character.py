@@ -74,6 +74,27 @@ class IdentityCapture(BaseModel):
     description_optional: bool = True
 
 
+class OriginTraitDef(BaseModel):
+    """A world-authored origin trait granted by a chargen choice (story 89-5).
+
+    The dual-voice shape mirrors AbilityDefinition: the builder seeds it onto
+    Character.abilities with source=Race and emits the
+    ``chargen.origin_trait.applied`` OTEL event. This is the documented
+    world-tier crunch exception (Barsoom design D5/§9): the trait definition
+    lives in a WORLD's char_creation.yaml choice — never keyed off a race
+    string in engine code — and its mechanical halves ride pre-wired
+    consumers (``stat_bonuses`` → generate_stats; the ability → the
+    narrator/ability surface).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    genre_description: str
+    mechanical_effect: str
+    involuntary: bool = False
+
+
 class MechanicalEffects(BaseModel):
     """Mechanical effects of a character creation choice or scene-level directive."""
 
@@ -112,6 +133,11 @@ class MechanicalEffects(BaseModel):
     # Story-scene flags (the_story)
     identity_capture: IdentityCapture | None = None
     background_autogen_source: str | None = None
+
+    # World-tier origin trait (89-5): a chargen choice may grant a dual-voice
+    # Race-source ability (e.g. the Barsoom Earthman gravity boon). Authored
+    # in world char_creation.yaml; seeded by the builder with OTEL.
+    origin_trait: OriginTraitDef | None = None
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 

@@ -33,6 +33,7 @@ from sidequest.genre.models.character import (
     ClassDef,
     EquipmentTables,
     MechanicalEffects,
+    OriginTraitDef,
 )
 from sidequest.genre.models.rules import CwnConfig, EdgeConfig, RulesConfig
 from sidequest.protocol.messages import (
@@ -430,6 +431,10 @@ class AccumulatedChoices:
     # label ("Vault Dweller", "Heap Rat").
     backstory_label: str | None = None
     mutation_hint: str | None = None
+    # World-tier origin trait (89-5): dual-voice Race-source ability carried
+    # by a chargen choice (e.g. the Barsoom Earthman gravity boon).
+    # Last-wins like other single-value hints.
+    origin_trait: OriginTraitDef | None = None
     training_hint: str | None = None
     emotional_state: str | None = None
     relationship: str | None = None
@@ -1245,6 +1250,8 @@ class CharacterBuilder:
                     acc.background_label = result.choice_label
             if eff.mutation_hint is not None:
                 acc.mutation_hint = eff.mutation_hint
+            if eff.origin_trait is not None:
+                acc.origin_trait = eff.origin_trait
             if eff.training_hint is not None:
                 acc.training_hint = eff.training_hint
             if eff.emotional_state is not None:
@@ -2280,6 +2287,37 @@ class CharacterBuilder:
                 "names": ", ".join(a.name for a in abilities),
             },
         )
+
+        # World-tier origin trait (89-5): a chargen choice may grant a
+        # dual-voice Race-source ability (the Barsoom Earthman gravity boon).
+        # The trait DEFINITION lives in the world's char_creation.yaml choice
+        # — never keyed off the race string in engine code — so non-barsoom
+        # builds with race "Earthman" correctly receive nothing. The stat
+        # half of such a boon rides the same choice's stat_bonuses (already
+        # consumed additively by generate_stats); this seam wires the
+        # ability half and the lie-detector event.
+        if acc.origin_trait is not None:
+            trait = acc.origin_trait
+            abilities.append(
+                AbilityDefinition(
+                    name=trait.name,
+                    genre_description=trait.genre_description,
+                    mechanical_effect=trait.mechanical_effect,
+                    involuntary=trait.involuntary,
+                    source=AbilitySource.Race,
+                    reference_url=None,
+                )
+            )
+            from sidequest.telemetry.spans import SPAN_CHARGEN_ORIGIN_TRAIT_APPLIED
+
+            span.add_event(
+                SPAN_CHARGEN_ORIGIN_TRAIT_APPLIED,
+                {
+                    "origin": race_str,
+                    "ability_names": trait.name,
+                    "stat_bonuses": str(dict(acc.stat_bonuses)),
+                },
+            )
 
         # Class signature seeding (spec 2026-05-10 §6.1).
         # Resolve the ClassDef from the pack's class list using class_str.

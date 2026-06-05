@@ -72,26 +72,32 @@ def beats_available_for(
         if beat.class_filter is None:
             pool.append(beat)
             continue
+        # WWN cast_spell (89-5): gate 1 (class_filter) is the ONLY class
+        # gate that offers it on the WWN arm. The heavy_metal chassis
+        # contract deliberately forbids cast_spell in every class's
+        # encounter_beat_choices ("the rules.yaml class_filter is the only
+        # gate that should offer it"), so running gate 2 here starved every
+        # WWN caster of the beat. The WWN economy still gates casts/prepared.
+        if beat.id == "cast_spell" and spellcasting is not None:
+            if spellcasting.casts_remaining < 1:
+                continue
+            if not spellcasting.prepared:
+                continue
+            pool.append(beat)
+            continue
         # Gate 2 — per-class whitelist for class-specific beats.
         if beat.id not in class_def.encounter_beat_choices:
             continue
         if beat.id == "cast_spell":
-            if spellcasting is not None:
-                # WWN arm: gate on SpellcastingState, ignore B/X slots.
-                if spellcasting.casts_remaining < 1:
-                    continue
-                if not spellcasting.prepared:
-                    continue
-            else:
-                # B/X arm — unchanged.
-                if spell_slots_remaining < 1.0:
-                    continue
-                # Prepared-list gate runs only when the caller opts in by
-                # passing prepared_spells. Backward-compat: existing callers
-                # that don't pass the param skip this gate and rely on the
-                # slot gate alone.
-                if prepared_spells is not None and not _has_any_prepared(prepared_spells):
-                    continue
+            # B/X arm — unchanged (the WWN arm exited above).
+            if spell_slots_remaining < 1.0:
+                continue
+            # Prepared-list gate runs only when the caller opts in by
+            # passing prepared_spells. Backward-compat: existing callers
+            # that don't pass the param skip this gate and rely on the
+            # slot gate alone.
+            if prepared_spells is not None and not _has_any_prepared(prepared_spells):
+                continue
         pool.append(beat)
     return pool
 
@@ -128,15 +134,18 @@ def cast_spell_rejection_reason(
         return "absent"
     if cast_beat.class_filter is not None and class_def.display_name not in cast_beat.class_filter:
         return "class"
-    if "cast_spell" not in (class_def.encounter_beat_choices or []):
-        return "class"
     if spellcasting is not None:
-        # WWN arm: gate on SpellcastingState, ignore B/X slots.
+        # WWN arm (89-5): class_filter is the only class gate — symmetric
+        # with beats_available_for; classes never list cast_spell in
+        # encounter_beat_choices on the WWN chassis. Gate on
+        # SpellcastingState, ignore B/X slots.
         if spellcasting.casts_remaining < 1:
             return "no_slots"
         if not spellcasting.prepared:
             return "unprepared"
         return None
+    if "cast_spell" not in (class_def.encounter_beat_choices or []):
+        return "class"
     # B/X arm — unchanged.
     if spell_slots_remaining < 1.0:
         return "no_slots"

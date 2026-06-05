@@ -40,6 +40,20 @@ _ENV = "SIDEQUEST_NARRATOR_ITERATION_CAP"
 _CAP_HIT_SPAN = "narrator.tool_loop.cap_hit"
 
 
+@pytest.fixture(autouse=True)
+def _clear_iteration_cap_cache():
+    """Story 82-11: the resolver is memoized (``functools.cache``) because a
+    running server's env is fixed at boot. Tests in this file mutate the env
+    per-test, so the cache must be cleared around each one — before (so a
+    value cached by an earlier test in the worker doesn't leak in) and after
+    (so this file's env values don't leak out to other narrator-turn tests)."""
+    from sidequest.agents.narrator import resolve_narrator_iteration_cap
+
+    resolve_narrator_iteration_cap.cache_clear()
+    yield
+    resolve_narrator_iteration_cap.cache_clear()
+
+
 # --- AC4a: the env-parsing contract -----------------------------------------
 
 
@@ -80,6 +94,43 @@ def test_resolve_iteration_cap_non_positive_raises(
     from sidequest.agents.narrator import resolve_narrator_iteration_cap
 
     monkeypatch.setenv(_ENV, bad)
+    with pytest.raises(ValueError):
+        resolve_narrator_iteration_cap()
+
+
+# --- Story 82-11: parse-once memoization contract ----------------------------
+
+
+def test_resolve_iteration_cap_is_memoized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 82-11 AC1: the resolver parses the env ONCE and caches. A
+    subsequent env mutation in the same process does NOT change the resolved
+    value — the toggle is operator/startup config, not a per-turn input. (In a
+    real server the env never changes post-boot; this test pins the parse-once
+    semantics so a future edit doesn't silently reintroduce the per-turn read.)"""
+    from sidequest.agents.narrator import resolve_narrator_iteration_cap
+
+    monkeypatch.setenv(_ENV, "5")
+    assert resolve_narrator_iteration_cap() == 5
+    monkeypatch.setenv(_ENV, "9")
+    assert resolve_narrator_iteration_cap() == 5, (
+        "memoized resolver must not re-read the env on a later call"
+    )
+    # cache_clear() is the explicit re-read seam (used by tests/tooling only).
+    resolve_narrator_iteration_cap.cache_clear()
+    assert resolve_narrator_iteration_cap() == 9
+
+
+def test_resolve_iteration_cap_invalid_value_raises_every_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Story 82-11 AC2: ``functools.cache`` does not cache exceptions, so an
+    invalid value fails loud on EVERY call (not one-shot) — the typo cannot
+    vanish after first raise (No Silent Fallbacks)."""
+    from sidequest.agents.narrator import resolve_narrator_iteration_cap
+
+    monkeypatch.setenv(_ENV, "lots")
+    with pytest.raises(ValueError):
+        resolve_narrator_iteration_cap()
     with pytest.raises(ValueError):
         resolve_narrator_iteration_cap()
 

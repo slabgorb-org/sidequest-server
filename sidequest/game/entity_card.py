@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     # the stateful ``Npc``. Imported under TYPE_CHECKING only — ``session`` pulls
     # in this module's siblings, so a runtime import would risk a cycle. The
     # ``from __future__ import annotations`` above keeps the union annotation lazy.
+    from sidequest.game.disposition import DispositionBeat
     from sidequest.game.session import Npc
 
 
@@ -44,6 +45,10 @@ class EntityType(StrEnum):
     NPC = "npc"
     LOCATION = "location"
     FACTION = "faction"
+    # Story 84-3 (WI-4, ADR-118 §A2): the relationship between the PC and an NPC,
+    # projected SUMMARY-tier from the disposition_log. A sibling of the npc card —
+    # the NPC card carries identity, the relationship card carries standing + why.
+    RELATIONSHIP = "relationship"
 
 
 # Card-id namespace per entity type. ADR-118 §D3 ids are ``npc:borin``,
@@ -56,6 +61,8 @@ _ID_NAMESPACE: dict[str, str] = {
     EntityType.NPC: "npc",
     EntityType.LOCATION: "loc",
     EntityType.FACTION: "faction",
+    # ``rel:<slug>`` — distinct from ``npc:<slug>`` so the two coexist in the index.
+    EntityType.RELATIONSHIP: "rel",
 }
 
 
@@ -88,6 +95,8 @@ UNIVERSAL_RETRIEVAL_SPAN_ATTRS: frozenset[str] = frozenset(
         "retrieval.npc_count",
         "retrieval.location_count",
         "retrieval.faction_count",
+        # ADR-118 §A2 (84-3, WI-4): RELATIONSHIP-card fill count.
+        "retrieval.relationship_count",
         "retrieval.rejected_below_similarity",
         "retrieval.dimension_mismatch_count",
         # ADR-118 §A1 (84-1) drama-gate observable. 84-1 EMITTED this on the span
@@ -251,6 +260,63 @@ def project_npc_card(npc: NpcPoolMember | Npc) -> EntityCard:
     metadata = {"aliases": json.dumps(sorted(aliases))} if aliases else None
     return EntityCard.new(
         EntityType.NPC,
+        _slug(name),
+        content,
+        entity_ref=name,
+        metadata=metadata,
+    )
+
+
+def select_load_bearing_beats(
+    log: list[DispositionBeat], *, limit: int = 3
+) -> list[DispositionBeat]:
+    """Pick the most-recent NON-ZERO-delta beats from a disposition log (84-3, §A2).
+
+    A relationship card SUMMARIZES the ADR-136 cap-10 ``disposition_log`` — it cannot
+    embed the whole time series. The load-bearing beats are the ones where the
+    standing actually MOVED (non-zero delta), most-recent first, capped at ``limit``
+    (default 3). A zero-delta beat (nothing moved) is not load-bearing and is
+    dropped; an empty or all-zero log yields ``[]`` (the caller falls back to the
+    attitude band alone — never a blank card).
+    """
+    nonzero = [b for b in log if b.delta != 0]
+    # Most-recent first. The log is appended chronologically (record_disposition_beat),
+    # so reversing gives recency order deterministically.
+    return list(reversed(nonzero))[:limit]
+
+
+def project_relationship_card(npc: Npc) -> EntityCard:
+    """Project the PC↔NPC relationship into a SUMMARY-tier card (84-3, WI-4, §A2).
+
+    Content = the 5-level attitude BAND (reused from ADR-136 ``band_for`` — the
+    5-level display band, NOT the engine 3-level ``Attitude``) plus the 2-3
+    load-bearing beat reasons (:func:`select_load_bearing_beats`). NEVER the full
+    cap-10 log. An empty / all-zero log yields an attitude-band-only card (never
+    blank — ``EntityCard`` rejects blank content). Born at SUMMARY tier
+    (``metadata['tier']='summary'``, §A3) — never FULL.
+
+    Deterministic for the 75-6 reproject: the same ``Npc`` state yields byte-
+    identical content + metadata. Aliases ride ``metadata['aliases']`` as a sorted
+    JSON list (like :func:`project_npc_card`). Id is ``rel:<slug>`` — distinct from
+    the NPC's ``npc:<slug>`` card so both coexist in the index.
+    """
+    from sidequest.game.projection.relationships import band_for
+
+    name = npc.core.name
+    band = band_for(int(npc.disposition))
+    beats = select_load_bearing_beats(npc.disposition_log)
+    segments: list[str] = [name, band]
+    segments.extend(b.reason for b in beats if b.reason.strip())
+    content = " — ".join(segments)
+
+    # Tier rides metadata (§A3 — summary, never full). Aliases sorted (75-6
+    # reproject determinism), like the NPC card. ``tier`` is always present so a
+    # consumer never has to guess; aliases only when there are any.
+    metadata: dict[str, str] = {"tier": "summary"}
+    if npc.aliases:
+        metadata["aliases"] = json.dumps(sorted(npc.aliases))
+    return EntityCard.new(
+        EntityType.RELATIONSHIP,
         _slug(name),
         content,
         entity_ref=name,

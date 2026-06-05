@@ -223,6 +223,9 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
         span.set_attribute("entity_sync.npc_count", result.npc_count)
         span.set_attribute("entity_sync.location_count", result.location_count)
         span.set_attribute("entity_sync.faction_count", result.faction_count)
+        # Story 84-3 (WI-4): relationship-card reproject tally on the sweep span, so
+        # the GM panel does not under-report the relationship index.
+        span.set_attribute("entity_sync.relationship_count", result.relationship_count)
         span.set_attribute("entity_sync.failed", result.failed)
         # ADR-138 §D6 — the GM-panel lie-detector sees what the ratification gate
         # withheld from the index, so a quiet narrator (never re-citing a phantom)
@@ -260,6 +263,10 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
             "npc_count": result.npc_count,
             "faction_count": result.faction_count,
             "location_count": result.location_count,
+            # Story 84-3 (WI-4): the relationship-card reproject tally reaches the
+            # GM-panel watcher event so the relationship index is observable, not
+            # silently under-reported.
+            "relationship_count": result.relationship_count,
             "outcome": result.outcome,
             "turn_number": interaction,
         },

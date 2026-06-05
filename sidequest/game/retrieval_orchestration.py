@@ -118,6 +118,11 @@ class RetrievedEntities:
     # by ``_finish`` on the live path (No Silent Fallbacks — never silently empty).
     embed_skipped: bool = False
     card_scores: list[PertinenceScore] = field(default_factory=list)
+    # Story 84-3 (WI-4, ADR-118 §A2): the SEMANTIC FILL for RELATIONSHIP cards,
+    # mirroring the other ``retrieved_*`` typed buckets — ``None`` when none were
+    # retrieved (zero-byte-leak). Defaulted (added after the §A1 fields) so legacy
+    # keyword constructors keep working; populated by ``_finish``.
+    retrieved_relationships: list[EntityCard] | None = None
 
 
 def _floor_token_cost(working_set: NpcWorkingSet) -> int:
@@ -229,12 +234,15 @@ async def retrieve_turn_context(
                 EntityType.NPC: [],
                 EntityType.LOCATION: [],
                 EntityType.FACTION: [],
+                # Story 84-3 (WI-4): RELATIONSHIP cards get their own typed bucket.
+                EntityType.RELATIONSHIP: [],
             }
             for card in selected:
                 by_type.setdefault(card.entity_type, []).append(card)
             npc_cards = by_type.get(EntityType.NPC) or []
             loc_cards = by_type.get(EntityType.LOCATION) or []
             fac_cards = by_type.get(EntityType.FACTION) or []
+            rel_cards = by_type.get(EntityType.RELATIONSHIP) or []
 
             span.set_attribute("retrieval.budget_total", budget_tokens)
             span.set_attribute("retrieval.outcome", outcome)
@@ -246,6 +254,8 @@ async def retrieve_turn_context(
             span.set_attribute("retrieval.npc_count", len(npc_cards))
             span.set_attribute("retrieval.location_count", len(loc_cards))
             span.set_attribute("retrieval.faction_count", len(fac_cards))
+            # Story 84-3 (WI-4): relationship-card fill count on the span.
+            span.set_attribute("retrieval.relationship_count", len(rel_cards))
             span.set_attribute("retrieval.rejected_below_similarity", rejected_below_similarity)
             span.set_attribute("retrieval.dimension_mismatch_count", dimension_mismatch_count)
             # Story 84-1 (ADR-118 §A1): the drama-gate observable. WI-6 reads this
@@ -287,6 +297,7 @@ async def retrieve_turn_context(
                 outcome=outcome,
                 embed_skipped=embed_skipped,
                 card_scores=card_scores,
+                retrieved_relationships=rel_cards or None,
             )
 
         # --- Drama-gate (ADR-118 §A1): can structured signals resolve the turn? ---

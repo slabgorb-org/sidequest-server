@@ -322,6 +322,40 @@ def test_inject_is_idempotent_across_turns() -> None:
     assert len(snap.npcs) == 1
 
 
+def test_reinjection_across_combat_turns_preserves_damaged_hp() -> None:
+    """BUG 2b (eh-opp-damage) WIRING: drive the REAL per-turn inject path twice,
+    damaging the materialized creature between turns, and assert the second
+    inject does NOT heal it back to full.
+
+    This is the exact playtest shape: ``monster_manual.injected ... in_combat=True``
+    fires every combat turn; before the fix the merge leg reset core.hp to a full
+    pool from the patch's hp claim, so a damaged (or dead) opponent sprang back.
+    Proves the session.py merge-seam fix is wired into the production injection
+    seam, not just unit-correct in isolation."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="Salt Burrower", hp=9)],
+    )
+    snap = _snapshot()
+
+    # Turn 1: creature materializes at full HP.
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    npc = next(n for n in snap.npcs if n.core.name == "Salt Burrower")
+    assert npc.core.hp.current == 9
+
+    # Player damages it mid-combat to 2/9.
+    npc.core.hp.current = 2
+
+    # Turn 2: the per-turn inject re-emits the SAME creature with hp=9.
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    npc = next(n for n in snap.npcs if n.core.name == "Salt Burrower")
+    assert npc.core.hp.current == 2, (
+        f"the per-turn re-injection must PRESERVE the damaged HP (2/9), not heal "
+        f"the enemy back to full; got {npc.core.hp.current}/{npc.core.hp.max}"
+    )
+    assert npc.core.hp.max == 9
+
+
 # ---------------------------------------------------------------------------
 # Playtest 2026-05-11 regression — location stamp on injected NPCs.
 #

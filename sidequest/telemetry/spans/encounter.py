@@ -234,6 +234,24 @@ SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_ATTACK] = SpanRoute(
     },
 )
 
+# BUG 1 (eh-opp-damage): a seated hp_depletion combat opponent has NO resolvable
+# reprisal damage source (no cdef.opponent_damage, no strike beat damage_override,
+# weaponless opponent core). Fires AT INSTANTIATION (the seating seam) so the GM
+# panel flags the toothless Other the moment it is seated — not once per reprisal,
+# six rounds deep. Authoring opponent_damage is the content fix; this is the
+# engine's at-seat detector for the gap.
+SPAN_ENCOUNTER_OPPONENT_TOOTHLESS = "encounter.opponent_toothless"
+SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_TOOTHLESS] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.opponent_toothless",
+        "encounter_type": (span.attributes or {}).get("confrontation_type", ""),
+        "opponent": (span.attributes or {}).get("opponent", ""),
+        "rationale": (span.attributes or {}).get("rationale", ""),
+    },
+)
+
 # Story 45-3: Mid-turn momentum broadcast lie-detector. Fires whenever the
 # server emits a CONFRONTATION frame carrying post-mutation momentum, so
 # the GM panel can audit "the dial moved on screen because the engine
@@ -701,6 +719,35 @@ def encounter_opponent_attack_resolved_span(
             "attack_total": int(attack_total),
             "target_ac": int(target_ac),
             "hit": bool(hit),
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def encounter_opponent_toothless_span(
+    *,
+    confrontation_type: str,
+    opponent: str,
+    rationale: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """BUG 1 (eh-opp-damage) instantiation-time lie-detector: an hp_depletion
+    combat seated an opponent with NO resolvable reprisal damage source, so every
+    enemy reprisal will land for 0 HP (the player is invulnerable). Emitted at
+    SEATING by ``_seed_combat_hp_depletion_to_npcs`` so the GM panel flags the
+    toothless Other immediately, rather than only via the per-turn
+    ``dice.opponent_reprisal_damage_spec_missing`` warning. ``rationale`` records
+    which sources were checked and came up empty."""
+    with Span.open(
+        SPAN_ENCOUNTER_OPPONENT_TOOTHLESS,
+        {
+            "confrontation_type": confrontation_type,
+            "opponent": opponent,
+            "rationale": rationale,
             **attrs,
         },
         tracer_override=_tracer,

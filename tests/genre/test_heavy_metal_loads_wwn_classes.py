@@ -43,11 +43,28 @@ _CASTER_IDS = {"necromancer", "elementalist", "pact_born"}
 
 # 5e scaffolding that MUST NOT survive the port anywhere in rules.yaml.
 _5E_CLASS_NAMES = {
-    "Fighter", "Ranger", "Rogue", "Cleric", "Druid", "Bard",
-    "Barbarian", "Monk", "Wizard", "Warlock", "Sorcerer", "Paladin",
+    "Fighter",
+    "Ranger",
+    "Rogue",
+    "Cleric",
+    "Druid",
+    "Bard",
+    "Barbarian",
+    "Monk",
+    "Wizard",
+    "Warlock",
+    "Sorcerer",
+    "Paladin",
 }
 _5E_RACE_NAMES = {"Human", "Dwarf", "Elf", "Halfling"}
-_WWN_CANONICAL_KEYS = {"STRENGTH", "DEXTERITY", "CONSTITUTION", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+_WWN_CANONICAL_KEYS = {
+    "STRENGTH",
+    "DEXTERITY",
+    "CONSTITUTION",
+    "INTELLIGENCE",
+    "WISDOM",
+    "CHARISMA",
+}
 
 
 def _has_real_content() -> bool:
@@ -72,7 +89,9 @@ def test_heavy_metal_classes_are_faithful_wwn_chassis() -> None:
         f"heavy_metal must stay bound ruleset: wwn (Story 1); got {pack.rules.ruleset!r}"
     )
 
-    assert pack.classes is not None, "classes.yaml must be authored (Story 2) — pack.classes is None"
+    assert pack.classes is not None, (
+        "classes.yaml must be authored (Story 2) — pack.classes is None"
+    )
     by_id = {c.id: c for c in pack.classes}
     assert set(by_id) == {e[0] for e in _EXPECTED_CLASSES}, (
         f"heavy_metal must declare exactly the 5 WWN classes "
@@ -81,14 +100,18 @@ def test_heavy_metal_classes_are_faithful_wwn_chassis() -> None:
 
     for cid, display, prime, is_caster, is_warrior in _EXPECTED_CLASSES:
         cls = by_id[cid]
-        assert cls.display_name == display, f"{cid} display_name must be {display!r}; got {cls.display_name!r}"
+        assert cls.display_name == display, (
+            f"{cid} display_name must be {display!r}; got {cls.display_name!r}"
+        )
         assert cls.prime_requisite == prime, (
             f"{cid} prime_requisite must be {prime!r} (abbreviation, not flavor name); got {cls.prime_requisite!r}"
         )
         assert cls.rpg_role, f"{cid} must declare a non-empty rpg_role"
 
         # ADR-095: one signature ability per class.
-        assert len(cls.abilities) >= 1, f"{cid} must carry >=1 signature ability (ADR-095); got {len(cls.abilities)}"
+        assert len(cls.abilities) >= 1, (
+            f"{cid} must carry >=1 signature ability (ADR-095); got {len(cls.abilities)}"
+        )
 
         # Story-3-folded-in: saving_throws required on every class once a catalog ships.
         assert cls.saving_throws is not None, (
@@ -103,18 +126,26 @@ def test_heavy_metal_classes_are_faithful_wwn_chassis() -> None:
         )
 
         if is_warrior:
-            assert cls.warrior is True, f"{cid} must set warrior: true (Killing Blow / Veteran's Luck seams)"
+            assert cls.warrior is True, (
+                f"{cid} must set warrior: true (Killing Blow / Veteran's Luck seams)"
+            )
         else:
             assert cls.warrior is False, f"{cid} must not set warrior: true"
 
         if is_caster:
-            assert cls.magic_access == "wwn", f"{cid} must set magic_access: wwn; got {cls.magic_access!r}"
+            assert cls.magic_access == "wwn", (
+                f"{cid} must set magic_access: wwn; got {cls.magic_access!r}"
+            )
             wm = cls.wwn_magic
             assert wm is not None, f"{cid} (caster) must carry a wwn_magic block"
             # REAL magic — NOT Effort-only. Full cast tables + a starting spell list.
             assert wm.effort_sources, f"{cid} wwn_magic must declare effort_sources"
-            assert wm.casts_per_day_by_level.get("1"), f"{cid} must declare casts_per_day_by_level['1'] (real caster)"
-            assert wm.max_spell_level_by_level.get("1"), f"{cid} must declare max_spell_level_by_level['1']"
+            assert wm.casts_per_day_by_level.get("1"), (
+                f"{cid} must declare casts_per_day_by_level['1'] (real caster)"
+            )
+            assert wm.max_spell_level_by_level.get("1"), (
+                f"{cid} must declare max_spell_level_by_level['1']"
+            )
             assert wm.prepared_by_level.get("1"), f"{cid} must declare prepared_by_level['1']"
             assert wm.starting_prepared, (
                 f"{cid} must declare a non-empty starting_prepared (real spells) — "
@@ -126,7 +157,9 @@ def test_heavy_metal_classes_are_faithful_wwn_chassis() -> None:
                     f"(e.g. INTELLIGENCE/CHARISMA); got {src.governing_attr!r}"
                 )
         else:
-            assert cls.magic_access is None, f"{cid} (non-caster) must not set magic_access; got {cls.magic_access!r}"
+            assert cls.magic_access is None, (
+                f"{cid} (non-caster) must not set magic_access; got {cls.magic_access!r}"
+            )
             assert cls.wwn_magic is None, f"{cid} (non-caster) must not carry wwn_magic"
 
 
@@ -176,15 +209,18 @@ def test_heavy_metal_blade_work_has_class_filtered_cast_spell() -> None:
     assert cast_beat is not None, (
         f"Blade-work must add a cast_spell beat (real magic); beats: {sorted(b.id for b in combat.beats)}"
     )
-    assert cast_beat.class_filter, "cast_spell must carry a class_filter so the cast gate fires only for casters"
+    assert cast_beat.class_filter, (
+        "cast_spell must carry a class_filter so the cast gate fires only for casters"
+    )
 
     # The filter must name the three caster classes (by id or display_name) and nothing else.
     by_id = {c.id: c for c in pack.classes}
-    caster_labels = {by_id[cid].id for cid in _CASTER_IDS} | {by_id[cid].display_name for cid in _CASTER_IDS}
-    noncaster_labels = (
-        {c.id for c in pack.classes if c.id not in _CASTER_IDS}
-        | {c.display_name for c in pack.classes if c.id not in _CASTER_IDS}
-    )
+    caster_labels = {by_id[cid].id for cid in _CASTER_IDS} | {
+        by_id[cid].display_name for cid in _CASTER_IDS
+    }
+    noncaster_labels = {c.id for c in pack.classes if c.id not in _CASTER_IDS} | {
+        c.display_name for c in pack.classes if c.id not in _CASTER_IDS
+    }
     flt = set(cast_beat.class_filter)
     assert flt <= caster_labels, (
         f"cast_spell class_filter must contain only the caster classes "
@@ -193,7 +229,9 @@ def test_heavy_metal_blade_work_has_class_filtered_cast_spell() -> None:
     assert not (flt & noncaster_labels), (
         f"cast_spell class_filter must NOT include non-caster classes; got {sorted(flt)}"
     )
-    assert len(flt) == 3, f"cast_spell class_filter must name all three caster traditions; got {sorted(flt)}"
+    assert len(flt) == 3, (
+        f"cast_spell class_filter must name all three caster traditions; got {sorted(flt)}"
+    )
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
@@ -201,7 +239,9 @@ def test_heavy_metal_rules_purged_of_5e_scaffolding() -> None:
     pack = _load_heavy_metal()
     rules = pack.rules
 
-    assert rules.class_label == "Calling", f"class_label must be 'Calling'; got {rules.class_label!r}"
+    assert rules.class_label == "Calling", (
+        f"class_label must be 'Calling'; got {rules.class_label!r}"
+    )
 
     assert rules.default_class is not None, "default_class must be set"
     assert rules.default_class.lower() == "warrior", (
@@ -210,7 +250,9 @@ def test_heavy_metal_rules_purged_of_5e_scaffolding() -> None:
 
     # 5e class names must not survive in allowed_classes.
     leftover_classes = set(rules.allowed_classes) & _5E_CLASS_NAMES
-    assert not leftover_classes, f"5e class names survive in allowed_classes: {sorted(leftover_classes)}"
+    assert not leftover_classes, (
+        f"5e class names survive in allowed_classes: {sorted(leftover_classes)}"
+    )
     # If populated, every allowed_class must be a real WWN class.
     if rules.allowed_classes:
         valid = {c.id for c in pack.classes} | {c.display_name for c in pack.classes}

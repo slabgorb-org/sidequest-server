@@ -24,8 +24,18 @@ import yaml
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 
 _5E_CLASS_NAMES = {
-    "fighter", "ranger", "rogue", "cleric", "druid", "bard",
-    "barbarian", "monk", "wizard", "warlock", "sorcerer", "paladin",
+    "fighter",
+    "ranger",
+    "rogue",
+    "cleric",
+    "druid",
+    "bard",
+    "barbarian",
+    "monk",
+    "wizard",
+    "warlock",
+    "sorcerer",
+    "paladin",
 }
 
 
@@ -65,7 +75,7 @@ def _char_creation_class_hints(path: Path) -> list[str]:
     scenes = _load_yaml(path) or []
     hints: list[str] = []
     for scene in scenes:
-        for choice in (scene.get("choices") or []):
+        for choice in scene.get("choices") or []:
             me = choice.get("mechanical_effects") or {}
             hint = me.get("class_hint")
             if hint:
@@ -81,7 +91,7 @@ def _typical_classes(path: Path) -> list[str]:
     for arch in archetypes:
         if not isinstance(arch, dict):
             continue
-        for tc in (arch.get("typical_classes") or []):
+        for tc in arch.get("typical_classes") or []:
             out.append(str(tc))
     return out
 
@@ -113,7 +123,9 @@ def test_every_class_reference_resolves_and_no_5e_survives() -> None:
     assert refs, "expected class references across content files — none found (test wiring?)"
 
     # No 5e class name may survive in any reference.
-    surviving_5e = sorted({f"{label} ({src})" for label, src in refs if label.lower() in _5E_CLASS_NAMES})
+    surviving_5e = sorted(
+        {f"{label} ({src})" for label, src in refs if label.lower() in _5E_CLASS_NAMES}
+    )
     assert not surviving_5e, f"5e class names survive in content: {surviving_5e}"
 
     # Every reference must resolve to a real class in classes.yaml.

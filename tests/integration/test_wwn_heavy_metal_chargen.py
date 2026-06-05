@@ -129,7 +129,9 @@ def test_non_caster_seeds_no_magic(class_display: str, _is_caster: bool) -> None
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 @pytest.mark.parametrize("class_display,_is_caster", _CASTERS)
-def test_caster_seeds_effort_and_populated_spellcasting(class_display: str, _is_caster: bool) -> None:
+def test_caster_seeds_effort_and_populated_spellcasting(
+    class_display: str, _is_caster: bool
+) -> None:
     """Each Mage tradition seeds an Effort pool AND a populated SpellcastingState.
 
     This is the real-magic contract: casters are NOT Effort-only. spellcasting

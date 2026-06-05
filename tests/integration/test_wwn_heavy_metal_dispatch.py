@@ -46,7 +46,9 @@ def _discover_caster_and_damage_spell(pack):
     """Return (class_display, spell_id) for a caster whose starting_prepared holds
     a damage spell. RED-clear if none exists (Dev must give a caster a damage spell)."""
     cat = pack.wwn_spell_catalog
-    assert cat is not None, "spells_wwn.yaml must be authored (real magic) — wwn_spell_catalog is None"
+    assert cat is not None, (
+        "spells_wwn.yaml must be authored (real magic) — wwn_spell_catalog is None"
+    )
     damage_ids = {s.id for s in cat.spells if s.damage_die}
     assert damage_ids, "the spell catalog must include at least one damage spell"
     assert pack.classes is not None
@@ -144,10 +146,14 @@ def test_wwn_cast_spell_routes_through_wwn_module_on_real_heavy_metal(otel_captu
     # ── Build the real caster; it must seed the spell we will cast ─────────
     caster_name = "Sael"
     caster = _build_caster(pack, caster_name, class_display=class_display)
-    assert caster.char_class == class_display, f"chargen must resolve {class_display}; got {caster.char_class!r}"
+    assert caster.char_class == class_display, (
+        f"chargen must resolve {class_display}; got {caster.char_class!r}"
+    )
     sc = caster.core.spellcasting
     assert sc is not None, f"{class_display} must be seeded with a SpellcastingState"
-    assert spell_id in sc.prepared, f"{class_display} must have {spell_id!r} prepared; got {sc.prepared!r}"
+    assert spell_id in sc.prepared, (
+        f"{class_display} must have {spell_id!r} prepared; got {sc.prepared!r}"
+    )
     casts_before = sc.casts_remaining
     assert casts_before >= 1, "caster must start with at least one cast"
 

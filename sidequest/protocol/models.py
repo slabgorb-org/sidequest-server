@@ -453,6 +453,30 @@ class AdvancementDelta(ProtocolBase):
     """What drove the advancement (e.g. 'milestone')."""
 
 
+class AffinityTierUp(ProtocolBase):
+    """A player-facing affinity tier-promotion delta (ADR-021 track 2).
+
+    Surfaced so the player *sees which affinity advanced and to what tier* — not
+    a silent tier bump. The sibling of :class:`AdvancementDelta` (track 1
+    level-up); it additionally carries ``affinity_id`` because a character has
+    many affinities and several can advance in one turn. Distinct from the
+    ``progression.affinity_tier_up`` OTEL/watcher event, which is the dev/GM
+    lie-detector; this is the player-UI channel (mechanics-first — Sebastien /
+    Jade want the math legible).
+    """
+
+    character_name: str
+    """Character whose affinity advanced."""
+    affinity_id: str
+    """Which affinity advanced (matches ``Affinity.name``)."""
+    before: int
+    """Tier before the crossing."""
+    after: int
+    """Tier after the crossing."""
+    driver: str
+    """What drove the advancement (e.g. 'affinity')."""
+
+
 class PartyMember(ProtocolBase):
     """A party member in PARTY_STATUS.
 
@@ -487,6 +511,11 @@ class PartyMember(ProtocolBase):
     """ADR-021 track 1: the most recent level-up delta (before/after/driver),
     or None on turns with no advancement. Lets the player see the level change
     and why, not a silent stat bump."""
+    affinity_advancements: list[AffinityTierUp] = Field(default_factory=list)
+    """ADR-021 track 2: affinity tier promotions this turn (each carries
+    affinity_id/before/after/driver), or empty on turns with none. A list
+    because several affinities can advance in one turn. Lets the player see the
+    tier change and why, not a silent bump."""
     portrait_url: str | None = None
     """Portrait URL."""
     current_location: NonBlankString | None = None

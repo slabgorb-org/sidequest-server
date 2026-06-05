@@ -251,6 +251,30 @@ def resolve_level(milestones_completed: int, config: ProgressionConfig) -> int:
     return min(level, config.max_level)
 
 
+def resolve_affinity_tier(progress: float, tier_thresholds: list[int]) -> int:
+    """Map accumulated affinity progress to a tier (ADR-021 track 2).
+
+    The sibling of ``resolve_level`` (track 1) and ``resolve_wealth_tier``
+    (track 3). A character's tier in an affinity is the number of authored
+    ``tier_thresholds`` its ``progress`` has reached — ``progress >= threshold``
+    counts as reached (a value exactly on a boundary belongs to *that* tier),
+    walking the thresholds in their authored (ascending) order. The result is
+    clamped to ``len(tier_thresholds)`` so accumulation past the top threshold
+    stops at the highest authored tier rather than running away.
+
+    An affinity whose author declared no thresholds has no ladder to climb:
+    resolve to the floor tier 0 rather than fabricating one. No Silent
+    Fallbacks — never invent a tier a content author didn't declare. A negative
+    progress (should never happen, but guard it) also floors at tier 0.
+    """
+    if not tier_thresholds:
+        return 0
+    if progress <= 0:
+        return 0
+    tier = sum(1 for threshold in tier_thresholds if progress >= threshold)
+    return min(tier, len(tier_thresholds))
+
+
 class ProgressionConfig(BaseModel):
     """Character progression configuration.
 

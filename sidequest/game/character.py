@@ -16,7 +16,12 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 from sidequest.game.creature_core import CreatureCore
-from sidequest.protocol.models import AbilityDefinition, AdvancementDelta, FactCategory
+from sidequest.protocol.models import (
+    AbilityDefinition,
+    AdvancementDelta,
+    AffinityTierUp,
+    FactCategory,
+)
 
 
 class KnownFact(BaseModel):
@@ -107,6 +112,13 @@ class Character(BaseModel):
     # it. Transient (``exclude=True``) — a per-turn notification, never
     # persisted into the save (it would otherwise re-surface stale on reload).
     last_advancement: AdvancementDelta | None = Field(default=None, exclude=True)
+
+    # ADR-021 track 2: affinity tier promotions from this turn, set by
+    # ``apply_affinity_tier_ups`` so the player-facing PartyMember can show them.
+    # A list — several affinities can advance in one turn. Transient
+    # (``exclude=True``) — a per-turn notification, never persisted (it would
+    # otherwise re-surface stale on reload).
+    last_affinity_tier_ups: list[AffinityTierUp] = Field(default_factory=list, exclude=True)
 
     # P1-required: determines narrator behaviour (player vs enemy framing)
     is_friendly: bool = True

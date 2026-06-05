@@ -46,6 +46,13 @@ class Culture(BaseModel):
     person_patterns: list[str] = Field(default_factory=list)
     place_patterns: list[str] = Field(default_factory=list)
     dictionary: dict[str, str] = Field(default_factory=dict)
+    # Story 83-2: authored demonyms / plural forms for culture self-match.
+    # Content authors add "Munchkins", "Little Folk", etc. so the narrator's
+    # people-group mention resolves to the right culture without the engine
+    # having to guess. Default is empty (engine falls back to name + plural
+    # heuristic). ``extra="forbid"`` previously caused ValidationError when
+    # any content YAML included this field.
+    aliases: list[str] = Field(default_factory=list)
     # heavy_metal flag: when False, culture is lore-only (NPCs, history) and
     # must not be offered during player chargen. Rust dropped it; chargen UI
     # is currently unaware — wiring story pending.

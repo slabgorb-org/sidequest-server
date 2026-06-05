@@ -61,9 +61,15 @@ def _npc(name: str, *, aliases: list[str] | None = None):
 
 
 class TestAccreteNpcAliases:
-    def test_promotion_accretes_epithet_into_aliases(self) -> None:
-        """An epithet the narration carried for the promoted NPC lands in
-        ``npc.aliases`` (the §A4 accretion)."""
+    # NOTE: these are UNIT tests of the ``accrete_npc_aliases`` helper in
+    # isolation — they call it directly and do NOT exercise the production
+    # promotion path. The end-to-end wiring (resolve_status_target →
+    # extract_epithets_for_npc → accrete_npc_aliases, with narration_text
+    # threaded and the mutated NPC persisted into snapshot.npcs) is guarded by
+    # ``TestRealPromotionAccretionWiring`` below.
+    def test_accrete_helper_appends_epithet_into_aliases(self) -> None:
+        """An epithet handed to the accreter lands in ``npc.aliases`` (the §A4
+        accretion). Helper-level unit test — not the promotion wiring."""
         from sidequest.game.alias_accretion import accrete_npc_aliases
 
         npc = _npc("Thorn")
@@ -130,3 +136,131 @@ class TestAliasAccretionOtel:
         from sidequest.game.alias_accretion import SPAN_ALIAS_ACCRETED
 
         assert SPAN_ALIAS_ACCRETED == _ALIAS_ACCRETED_SPAN
+
+
+# ===========================================================================
+# AC-3 / AC-5 WIRING (mandatory) — the REAL promotion path accretes + observes
+# ===========================================================================
+
+
+def _snapshot_with_pool_member(name: str):
+    """A minimal snapshot carrying an unpromoted pool member ``name``. Promotion
+    happens inside ``resolve_status_target`` when that name is resolved as a
+    status actor — the live production seam (no auto-mint, no LLM)."""
+    from sidequest.game.npc_pool import NpcPoolMember
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+
+    return GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        turn_manager=TurnManager(interaction=7),
+        npc_pool=[NpcPoolMember(name=name, drawn_from="world_authored")],
+    )
+
+
+class TestRealPromotionAccretionWiring:
+    """server CLAUDE.md "Every Test Suite Needs a Wiring Test": the helper unit
+    tests above call ``accrete_npc_aliases`` directly. This class drives the REAL
+    production seam — ``resolve_status_target`` (narration_apply.py:1208), which
+    threads ``narration_text`` → ``extract_epithets_for_npc`` →
+    ``accrete_npc_aliases`` on the same ``Npc`` object it appends to
+    ``snapshot.npcs``. It is a regression guard on already-correct wiring: it
+    passes today and FAILS if someone later drops the ``narration_text=`` arg at
+    the call site (narration_apply.py:4629) or breaks the
+    extract→accrete→persist seam.
+
+    Behaviour + span only (No Source-Text Wiring Tests): assertions read the
+    promoted ``Npc`` on ``snapshot.npcs`` and the emitted span, never source text.
+    """
+
+    def test_real_promotion_path_accretes_epithet_and_emits_span(
+        self, otel_capture: Any
+    ) -> None:
+        """Drive ``resolve_status_target`` with a pool member being promoted and an
+        appositive promotion narration. The epithet must land on the NPC that is
+        appended to ``snapshot.npcs`` (proving ``narration_text`` threads through
+        the real seam and the mutated NPC is the persisted one), and the
+        ``entity.alias_accreted`` span must fire."""
+        from sidequest.server.narration_apply import resolve_status_target
+
+        snapshot = _snapshot_with_pool_member("Borin")
+        promoted = resolve_status_target(
+            snapshot,
+            actor_name="Borin",
+            turn_num=7,
+            trigger="status_change",
+            narration_text="Borin, the old smith, steps forward to greet you.",
+        )
+
+        # (1) The promotion happened on the live path and the epithet was accreted.
+        assert promoted is not None
+        assert "the old smith" in promoted.aliases, (
+            "the promotion narration's appositive epithet must accrete onto the "
+            "promoted NPC via the real resolve_status_target seam"
+        )
+
+        # (2) The mutated NPC IS the one persisted in snapshot.npcs (no dual-rep):
+        #     the alias lives on the snapshot object, not a detached copy.
+        in_snapshot = next((n for n in snapshot.npcs if n.core.name == "Borin"), None)
+        assert in_snapshot is not None, "the promoted NPC must be appended to snapshot.npcs"
+        assert "the old smith" in in_snapshot.aliases, (
+            "the accreted alias must be on the snapshot NPC (so it persists)"
+        )
+
+        # (3) The accretion is observable: the entity.alias_accreted span fired.
+        spans = [s for s in otel_capture.get_finished_spans() if s.name == _ALIAS_ACCRETED_SPAN]
+        assert spans, (
+            "a real promotion-path accretion must emit an entity.alias_accreted span"
+        )
+        attrs = dict(spans[-1].attributes or {})
+        assert "Borin" in str(attrs.values())
+        assert "the old smith" in str(attrs.values())
+
+    def test_real_promotion_aliases_survive_snapshot_json_roundtrip(self) -> None:
+        """The accreted alias rides the GameSnapshot JSON blob (no migration): a
+        promotion-then-serialize round-trip preserves it on the snapshot NPC."""
+        from sidequest.game.session import GameSnapshot
+        from sidequest.server.narration_apply import resolve_status_target
+
+        snapshot = _snapshot_with_pool_member("Borin")
+        resolve_status_target(
+            snapshot,
+            actor_name="Borin",
+            turn_num=7,
+            trigger="status_change",
+            narration_text="Borin, the old smith, steps forward.",
+        )
+
+        restored = GameSnapshot.model_validate_json(snapshot.model_dump_json())
+        borin = next((n for n in restored.npcs if n.core.name == "Borin"), None)
+        assert borin is not None
+        assert "the old smith" in borin.aliases, (
+            "accreted aliases must survive the snapshot JSON round-trip (no migration)"
+        )
+
+    def test_non_epithet_promotion_accretes_nothing_and_emits_no_span(
+        self, otel_capture: Any
+    ) -> None:
+        """Regression guard on no-op honesty at the REAL seam: a promotion whose
+        narration carries no appositive epithet for the NPC accretes nothing AND
+        fires no span — the production path must not spam the lie-detector or mint
+        a phantom alias."""
+        from sidequest.server.narration_apply import resolve_status_target
+
+        snapshot = _snapshot_with_pool_member("Vex")
+        promoted = resolve_status_target(
+            snapshot,
+            actor_name="Vex",
+            turn_num=8,
+            trigger="status_change",
+            narration_text="Vex draws a blade and lunges at the hero.",
+        )
+
+        assert promoted is not None
+        assert promoted.aliases == [], (
+            "a promotion narration with no appositive epithet must accrete nothing "
+            "(conservative extraction — §A4 alias correctness is load-bearing)"
+        )
+        spans = [s for s in otel_capture.get_finished_spans() if s.name == _ALIAS_ACCRETED_SPAN]
+        assert not spans, "a no-op promotion must not emit an alias-accreted span"

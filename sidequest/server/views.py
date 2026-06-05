@@ -517,6 +517,9 @@ def party_member_from_character(
         # ADR-021 track 1: the most recent level-up delta (None on turns with
         # no advancement), so the player sees the change and its driver.
         advancement=character.last_advancement,
+        # ADR-021 track 2: affinity tier promotions this turn (empty on turns
+        # with none), so the player sees which affinity advanced and why.
+        affinity_advancements=character.last_affinity_tier_ups,
         portrait_url=None,
         current_location=location_nbs,
         sheet=sheet,

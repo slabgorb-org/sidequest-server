@@ -27,9 +27,14 @@ from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.table.types import TablePot, TableSeat, TableState
 from sidequest.genre.models.pack import GenrePack
-from sidequest.genre.models.progression import ProgressionConfig, resolve_level
+from sidequest.genre.models.progression import (
+    ProgressionConfig,
+    resolve_affinity_tier,
+    resolve_level,
+)
 from sidequest.genre.models.rules import ConfrontationDef, ResolutionMode, WinCondition
 from sidequest.protocol.models import AdvancementDelta as LevelUp
+from sidequest.protocol.models import AffinityTierUp
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
@@ -1587,6 +1592,75 @@ def apply_level_ups(snapshot: GameSnapshot, progression: ProgressionConfig) -> l
             },
             component="progression",
         )
+    return crossings
+
+
+def apply_affinity_tier_ups(
+    snapshot: GameSnapshot, progression: ProgressionConfig
+) -> list[AffinityTierUp]:
+    """Drive affinity progress → tier promotion for every PC and emit OTEL on
+    each crossing (ADR-021 track 2).
+
+    The missing consumer for ADR-021 track 2: ``AffinityState`` (``tier`` /
+    ``progress``) and ``Affinity.tier_thresholds`` exist as live data, but
+    nothing ever advanced a character's affinity tier from accumulated progress.
+    This runs in the turn pipeline alongside :func:`apply_level_ups`, resolves
+    each affinity's tier via :func:`resolve_affinity_tier`, and — on a real
+    crossing — bumps ``AffinityState.tier``, publishes a
+    ``progression.affinity_tier_up`` ``state_transition`` watcher event (the
+    GM-panel lie-detector, mirroring the track-1 ``progression.level_up`` emit),
+    and records a player-facing :class:`AffinityTierUp` on the character so
+    PartyMember can show *which affinity advanced and why* (mechanics-first).
+
+    Each character's affinities are matched to the pack's authored ladders by
+    ``AffinityState.affinity_id == Affinity.name``. An affinity with no matching
+    authored ladder, or whose ladder declares no thresholds, is skipped — No
+    Silent Fallbacks, no phantom promotion against another affinity's ladder.
+
+    Returns the list of crossings this turn (empty when nobody advanced).
+    """
+    thresholds_by_name = {
+        affinity.name: affinity.tier_thresholds for affinity in progression.affinities
+    }
+    crossings: list[AffinityTierUp] = []
+    for character in snapshot.characters:
+        # Clear last turn's notifications first: the deltas are per-turn, so a
+        # character that doesn't advance this turn surfaces none.
+        character.last_affinity_tier_ups = []
+
+        for state in character.affinities:
+            thresholds = thresholds_by_name.get(state.affinity_id)
+            # No authored ladder for this affinity → nothing to climb.
+            if not thresholds:
+                continue
+
+            new_tier = resolve_affinity_tier(state.progress, thresholds)
+            before = state.tier
+            if new_tier <= before:
+                continue
+
+            state.tier = new_tier
+            delta = AffinityTierUp(
+                character_name=character.core.name,
+                affinity_id=state.affinity_id,
+                before=before,
+                after=new_tier,
+                driver="affinity",
+            )
+            character.last_affinity_tier_ups.append(delta)
+            crossings.append(delta)
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "progression.affinity_tier_up",
+                    "character_name": character.core.name,
+                    "affinity_id": state.affinity_id,
+                    "before": before,
+                    "after": new_tier,
+                    "driver": "affinity",
+                },
+                component="progression",
+            )
     return crossings
 
 

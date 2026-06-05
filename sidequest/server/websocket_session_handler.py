@@ -1276,6 +1276,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
 
                     from sidequest.server.dispatch.encounter_lifecycle import (
                         _is_combat_category,
+                        apply_affinity_tier_ups,
                         apply_level_ups,
                         apply_resource_patches,
                         award_turn_xp,
@@ -1290,6 +1291,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     # ADR-021 track 1: milestone → level-up runs on the freshly
                     # awarded XP. The consumer that makes accumulation matter.
                     apply_level_ups(snapshot, sd.genre_pack.progression)
+                    # ADR-021 track 2: affinity progress → tier promotion, the
+                    # consumer that makes AffinityState.progress matter.
+                    apply_affinity_tier_ups(snapshot, sd.genre_pack.progression)
 
                     try:
                         crossed_thresholds = apply_resource_patches(

@@ -103,13 +103,19 @@ class TestSyncProjectsRelationshipCard:
 
 
 class TestRelationshipCardSyncWiring:
-    def test_relationship_card_live_retrieval_wiring(
+    def test_relationship_card_indexed_by_live_sync_for_turn(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Drive the PRODUCTION ``sync_for_turn`` (the per-turn sweep that runs
-        from ``_execute_narration_turn``): a stateful NPC with disposition history
-        lands a ``rel:<slug>`` card in the live ``entity_store``, reachable by the
-        narrator's retrieval. Behavior + watcher event, never source text."""
+        """Drive the PRODUCTION ``sync_for_turn`` (the per-turn sweep that runs from
+        ``_execute_narration_turn``): a stateful NPC with disposition history lands a
+        ``rel:<slug>`` card in the live ``entity_store``.
+
+        SCOPE NOTE (Reviewer correction): this proves INDEXING only — the card is
+        stored and the watcher event counts it. It does NOT prove the card reaches
+        the narrator. The §A2 retrieval (named/present → retrieved_relationships) is
+        in ``tests/game/test_relationship_retrieval.py`` and the render-to-prompt
+        wiring is in ``tests/server/test_relationship_card_render_wiring.py``. The
+        three together cover index → retrieve → render."""
         from sidequest.server.dispatch import entity_sync as dispatch_entity_sync
 
         captured: list[dict] = []

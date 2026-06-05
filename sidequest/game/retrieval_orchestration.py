@@ -29,6 +29,7 @@ is the 75-7 follow-up).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -41,7 +42,7 @@ from sidequest.daemon_client import (
     DaemonRequestError,
     DaemonUnavailableError,
 )
-from sidequest.game.entity_card import EntityCard, EntityType
+from sidequest.game.entity_card import EntityCard, EntityType, relationship_card_id
 from sidequest.game.entity_store import EntityStore
 from sidequest.game.lore_embedding import DEFAULT_RETRIEVAL_MIN_SIMILARITY
 from sidequest.game.lore_store import _estimate_tokens
@@ -214,6 +215,28 @@ async def retrieve_turn_context(
         floor_token_cost = _floor_token_cost(floor)
         remaining = budget_tokens - floor_token_cost
 
+        # --- §A2 floor-companion (84-3, Reviewer blocker): a relationship card
+        # rides the FLOOR, not the cosine fill. For every NPC the player is
+        # structurally engaging this turn — the present-scene floor
+        # (``floor.full_profiles``) AND the named set (``player_referenced_npcs``) —
+        # pull its ``rel:<slug>`` card from the store if one is indexed. This is
+        # floor plumbing ONLY: it never touches the 84-1 ``score_card`` /
+        # ``select_within_budget`` fill scorer. It surfaces on EVERY return path
+        # (including the ``embed_skipped`` early-return, where the cosine fill is
+        # empty) because the relationship's pertinence is the NPC's presence/naming,
+        # not a vector match (a present NPC's rel card may even have a zero vector).
+        floor_relationship_cards: list[EntityCard] = []
+        _seen_rel_ids: set[str] = set()
+        _companion_names = {npc.core.name for npc in floor.full_profiles}
+        _companion_names |= set(player_referenced_npcs or set())
+        for _name in _companion_names:
+            with contextlib.suppress(ValueError):
+                rel_id = relationship_card_id(_name)
+                rel_card = entity_store.cards.get(rel_id)
+                if rel_card is not None and rel_id not in _seen_rel_ids:
+                    floor_relationship_cards.append(_sanitize_card(rel_card))
+                    _seen_rel_ids.add(rel_id)
+
         # Defaults for the early-return (failure / empty) paths.
         dimension_mismatch_count = 0
         fill_candidate_count = 0
@@ -242,7 +265,16 @@ async def retrieve_turn_context(
             npc_cards = by_type.get(EntityType.NPC) or []
             loc_cards = by_type.get(EntityType.LOCATION) or []
             fac_cards = by_type.get(EntityType.FACTION) or []
-            rel_cards = by_type.get(EntityType.RELATIONSHIP) or []
+            # §A2 floor-companion (84-3): merge the floor-surfaced relationship
+            # cards with any that also came through the cosine fill, deduped by id.
+            # The floor companions surface on EVERY return path (the fill may be
+            # empty on the embed_skipped / query_failed paths) — that is the
+            # Reviewer-blocker fix: a present/named NPC's rel card is never lost.
+            fill_rel_cards = by_type.get(EntityType.RELATIONSHIP) or []
+            _rel_ids = {c.id for c in fill_rel_cards}
+            rel_cards = fill_rel_cards + [
+                c for c in floor_relationship_cards if c.id not in _rel_ids
+            ]
 
             span.set_attribute("retrieval.budget_total", budget_tokens)
             span.set_attribute("retrieval.outcome", outcome)

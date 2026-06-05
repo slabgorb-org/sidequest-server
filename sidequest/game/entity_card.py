@@ -218,6 +218,18 @@ def npc_card_id(name: str) -> str:
     return f"{_ID_NAMESPACE[EntityType.NPC]}:{_slug(name)}"
 
 
+def relationship_card_id(name: str) -> str:
+    """The stable card id the relationship for an NPC named ``name`` projects to
+    (``rel:<slug>``).
+
+    Single source of the relationship id convention (Story 84-3, §A2), shared by
+    :func:`project_relationship_card` and the §A2 floor-companion lookup in
+    ``retrieve_turn_context``, which must compute the would-be ``rel:`` id for a
+    present/named NPC to pull its card onto the floor *without* re-projecting it.
+    Raises ``ValueError`` on a blank name (via :func:`_slug`)."""
+    return f"{_ID_NAMESPACE[EntityType.RELATIONSHIP]}:{_slug(name)}"
+
+
 def project_npc_card(npc: NpcPoolMember | Npc) -> EntityCard:
     """Project an NPC — pool member *or* stateful ``Npc`` — into a card.
 

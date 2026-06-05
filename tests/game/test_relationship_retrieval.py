@@ -52,14 +52,6 @@ class _FakeDaemon:
         return {"embedding": list(self._vector), "model": "fake", "latency_ms": 1}
 
 
-def _seed_relationship_card(store: EntityStore, entity_id: str, content: str) -> EntityCard:
-    """Seed an embedded RELATIONSHIP card so the fill can select it deterministically."""
-    card = EntityCard.new(EntityType.RELATIONSHIP, entity_id, content=content)
-    store.add(card)
-    store.update_embedding(card.id, list(_VEC))
-    return card
-
-
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
@@ -82,58 +74,115 @@ class TestRetrievedRelationshipsField:
         )
 
 
-class TestRelationshipCardInRetrieval:
-    def test_relationship_card_surfaces_in_retrieval(self) -> None:
-        """A thin action (embed runs) over an index holding a RELATIONSHIP card
-        surfaces it in ``retrieved_relationships`` — the card reaches the fill."""
+class TestRelationshipCardOnNamedPresentPath:
+    """§A2: a relationship card surfaces BECAUSE the related NPC is named/present —
+    NOT via cosine similarity. The mechanism is FLOOR-COMPANION: a present/named
+    NPC's ``rel:<slug>`` card rides the floor alongside its ``npc:<slug>`` card, so
+    it reaches ``retrieved_relationships`` on the very turn the player engages the
+    NPC — including the drama-gate-skip turn where the cosine fill never runs.
+
+    This is the path the Reviewer's blocker targets: the prior AC-6 test seeded a
+    cosine embedding + a thin action (the ONE path that works) and so MASKED the
+    dead §A2 path. These tests drive the real named/present intent and currently
+    return None (the floor-companion mechanism is unbuilt) — that is the RED.
+    """
+
+    def test_named_present_npc_surfaces_relationship_card_on_gate_skip(self) -> None:
+        """THE §A2 contract. Borin is scene-present AND player-referenced, so the
+        84-1 drama-gate SKIPS the cosine embed (``embed_skipped=True``). On that
+        same turn the relationship card for Borin must still surface in
+        ``retrieved_relationships`` — it rides the floor because Borin is present,
+        not because anything matched a vector. The cosine fill is empty here; the
+        rel card must NOT depend on it."""
         from sidequest.game.retrieval_orchestration import retrieve_turn_context
 
         store = EntityStore()
-        _seed_relationship_card(
-            store, "borin", "Borin — friendly — saved the party from the ogre"
+        # Borin's relationship card is indexed (projected by entity_sync), with a
+        # ZERO vector so it can NEVER win a cosine match — proving the surfacing is
+        # structural (floor), not similarity.
+        rel = EntityCard.new(
+            EntityType.RELATIONSHIP, "borin", content="Borin — Warm — saved the party"
         )
-        snap = _snap(current_turn=10, npcs=[])  # thin action → cosine fill runs
+        store.add(rel)
+        store.update_embedding(rel.id, [0.0, 0.0, 0.0])
+
+        snap = _snap(current_turn=10, npcs=[_npc("Borin", 10)])  # scene-present
 
         result = _run(
             retrieve_turn_context(
                 store,
                 snap,
-                "tell me about my history with the dwarf",
+                "I attack Borin",  # named + present → drama-gate skips the embed
+                current_turn=10,
+                player_referenced_npcs={"Borin"},
+                client=_FakeDaemon(),
+            )
+        )
+
+        # The drama-gate genuinely skipped the cosine pass this turn.
+        assert result.embed_skipped is True, (
+            "a named+present action must trigger the 84-1 drama-gate skip"
+        )
+        # ...and YET the relationship card surfaced — via the floor, not cosine.
+        assert result.retrieved_relationships is not None, (
+            "§A2: a present/named NPC's relationship card MUST surface even when "
+            "the cosine embed is skipped — it rides the floor (Reviewer blocker)"
+        )
+        assert "rel:borin" in {c.id for c in result.retrieved_relationships}
+
+    def test_present_npc_relationship_card_does_not_need_cosine(self) -> None:
+        """A scene-present NPC (not explicitly named) still gets its relationship
+        card surfaced — present-scene is a structural signal. A zero-vector rel
+        card (no cosine match possible) must still ride the floor."""
+        from sidequest.game.retrieval_orchestration import retrieve_turn_context
+
+        store = EntityStore()
+        rel = EntityCard.new(EntityType.RELATIONSHIP, "borin", content="Borin — Warm — ally")
+        store.add(rel)
+        store.update_embedding(rel.id, [0.0, 0.0, 0.0])  # never wins cosine
+
+        snap = _snap(current_turn=10, npcs=[_npc("Borin", 10)])  # present floor
+
+        result = _run(
+            retrieve_turn_context(
+                store,
+                snap,
+                "I look around the room",  # nobody named; Borin is just present
                 current_turn=10,
                 player_referenced_npcs=set(),
                 client=_FakeDaemon(),
             )
         )
-
-        assert result.outcome == "success"
         assert result.retrieved_relationships is not None, (
-            "a retrieved RELATIONSHIP card must surface in retrieved_relationships"
+            "a scene-present NPC's relationship card must surface via the floor "
+            "(structural presence), not require a cosine hit"
         )
-        assert [c.id for c in result.retrieved_relationships] == ["rel:borin"]
+        assert "rel:borin" in {c.id for c in result.retrieved_relationships}
 
-    def test_no_relationship_card_yields_none(self) -> None:
-        """Zero-byte-leak: with no relationship card retrieved,
-        ``retrieved_relationships`` is ``None`` (not an empty list), mirroring the
-        other typed fields."""
+    def test_absent_npc_relationship_card_not_surfaced(self) -> None:
+        """The complement: an NPC who is NEITHER present NOR named does not pull
+        its relationship card onto the floor. With no present/named NPC and no
+        cosine match, ``retrieved_relationships`` is None (zero-byte-leak)."""
         from sidequest.game.retrieval_orchestration import retrieve_turn_context
 
         store = EntityStore()
-        # Only a LOCATION card in the index — no relationship cards.
-        loc = EntityCard.new(EntityType.LOCATION, "black_hart", content="The Black Hart tavern")
-        store.add(loc)
-        store.update_embedding(loc.id, list(_VEC))
-        snap = _snap(current_turn=10, npcs=[])
+        rel = EntityCard.new(EntityType.RELATIONSHIP, "borin", content="Borin — Warm — ally")
+        store.add(rel)
+        store.update_embedding(rel.id, [0.0, 0.0, 0.0])  # never wins cosine
+
+        # Borin is off-stage (last_seen far in the past) and not named.
+        snap = _snap(current_turn=20, npcs=[_npc("Borin", last_seen_turn=2)])
 
         result = _run(
             retrieve_turn_context(
                 store,
                 snap,
-                "I look around the tavern",
-                current_turn=10,
+                "I wander the empty corridor",
+                current_turn=20,
                 player_referenced_npcs=set(),
                 client=_FakeDaemon(),
             )
         )
         assert result.retrieved_relationships is None, (
-            "no relationship card retrieved → retrieved_relationships is None (zero-byte-leak)"
+            "an absent, unnamed NPC must not pull its relationship card onto the floor"
         )

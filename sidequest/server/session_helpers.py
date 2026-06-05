@@ -1151,6 +1151,7 @@ def _build_turn_context(
     retrieved_entity_npcs: str | None = None
     retrieved_entity_locations: str | None = None
     retrieved_entity_factions: str | None = None
+    retrieved_entity_relationships: str | None = None
     if entity_retrieval is not None:
         if entity_retrieval.retrieved_npcs:
             retrieved_entity_npcs = render_entity_section(
@@ -1163,6 +1164,14 @@ def _build_turn_context(
         if entity_retrieval.retrieved_factions:
             retrieved_entity_factions = render_entity_section(
                 "retrieved_factions", entity_retrieval.retrieved_factions
+            )
+        # Story 84-3 (WI-4, ADR-118 §A2, Reviewer blocker): render the §A2
+        # floor-companion relationship cards into a typed Valley block, mirroring
+        # the npc/location/faction sections. Without this the relationship card the
+        # retrieval surfaced dies at the render seam and never reaches the narrator.
+        if entity_retrieval.retrieved_relationships:
+            retrieved_entity_relationships = render_entity_section(
+                "retrieved_relationships", entity_retrieval.retrieved_relationships
             )
 
     # Story 81-3 (ADR-025): derive the pacing hint from the per-session
@@ -1270,6 +1279,7 @@ def _build_turn_context(
         retrieved_entity_npcs=retrieved_entity_npcs,
         retrieved_entity_locations=retrieved_entity_locations,
         retrieved_entity_factions=retrieved_entity_factions,
+        retrieved_entity_relationships=retrieved_entity_relationships,
         lethality_policy=sd.genre_pack.lethality_policy,
         pc_cores_by_player=pc_cores_by_player,
         npc_cores_by_name=npc_cores_by_name,

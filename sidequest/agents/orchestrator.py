@@ -804,6 +804,10 @@ class TurnContext:
     retrieved_entity_npcs: str | None = None
     retrieved_entity_locations: str | None = None
     retrieved_entity_factions: str | None = None
+    # Story 84-3 (WI-4, ADR-118 §A2): the §A2 floor-companion relationship section
+    # — the PC↔NPC standing + key beats for a present/named NPC. ``None`` when no
+    # relationship card surfaced (zero-byte-leak), like the others.
+    retrieved_entity_relationships: str | None = None
 
     # Group B (Local DM decomposer) — session handler populates before calling
     # run_narration_turn. Consumed by build_narrator_prompt to register the
@@ -2169,6 +2173,9 @@ class Orchestrator:
             ("retrieved_npcs", context.retrieved_entity_npcs),
             ("retrieved_locations", context.retrieved_entity_locations),
             ("retrieved_factions", context.retrieved_entity_factions),
+            # Story 84-3 (WI-4, §A2, Reviewer blocker): inject the relationship
+            # section so the narrator sees the present/named NPC's standing + beats.
+            ("retrieved_relationships", context.retrieved_entity_relationships),
         ):
             if section_body:
                 registry.register_section(

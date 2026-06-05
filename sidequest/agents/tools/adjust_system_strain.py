@@ -81,6 +81,7 @@ class AdjustSystemStrainArgs(BaseModel):
         "the narrator can describe the limit being hit."
     ),
     category=ToolCategory.WRITE,
+    ruleset="cwn",
 )
 async def adjust_system_strain(args: AdjustSystemStrainArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

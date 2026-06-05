@@ -3897,15 +3897,48 @@ class Orchestrator:
                     narration="[narrator-overload — operator paged]",
                 )
 
+            # Story 73-15 (ADR-117 tightening): advertise only the tools the
+            # bound ruleset can actually use. The WWN/CWN-only tools declare a
+            # ``ruleset`` and are filtered out on any other pack so the narrator
+            # neither wastes tool-budget on, nor mis-attempts, tools it can only
+            # fail to use. ``context.pack`` is None on legacy/fixture paths —
+            # there we pass ruleset=None (the full catalog) so behavior is
+            # unchanged (No Silent Fallbacks: the unfiltered list is the honest
+            # answer when no ruleset is bound, and each tool keeps its fail-loud
+            # self-guard backstop). Computed once here and reused for the real
+            # ``tools=`` array below.
+            _pack = context.pack
+            bound_ruleset: str | None = None
+            if _pack is not None and getattr(_pack, "rules", None) is not None:
+                bound_ruleset = _pack.rules.ruleset
+            advertised_tool_defs = default_registry.tool_definitions(bound_ruleset)
+            _total_tool_count = len(default_registry.list_names())
+            _advertised_tool_count = len(advertised_tool_defs)
+            # GM-panel lie detector (CLAUDE.md OTEL Observability Principle):
+            # surface the filter decision so the panel can verify the tightening
+            # engaged rather than the narrator improvising.
+            from sidequest.telemetry.spans.span import Span as _ToolFilterSpan
+
+            with _ToolFilterSpan.open(
+                "narrator.tools.ruleset_filter",
+                {
+                    "tools.bound_ruleset": bound_ruleset or "none",
+                    "tools.advertised_count": _advertised_tool_count,
+                    "tools.excluded_count": _total_tool_count - _advertised_tool_count,
+                },
+            ):
+                pass
+
             # Stability-audit diagnostic — per-block token estimate using the
             # project's standard char/4 approximation (see orchestrator.py
             # token-estimate pattern). Tools size is computed from the
-            # registry's serialized JSON. Drift in the 'stable' region
-            # surfaces as a growing value across turns of one session.
+            # registry's serialized JSON (now the ruleset-filtered set, so the
+            # estimate reflects what the narrator is actually handed). Drift in
+            # the 'stable' region surfaces as a growing value across turns.
             tools_payload = json.dumps(
                 [
                     {"name": t.name, "description": t.description, "input_schema": t.input_schema}
-                    for t in default_registry.tool_definitions()
+                    for t in advertised_tool_defs
                 ]
             )
             system_block_sizes = {
@@ -4104,7 +4137,10 @@ class Orchestrator:
                 result = await self._client.complete_with_tools(
                     system_blocks=system_blocks,
                     messages=messages,
-                    tools=default_registry.tool_definitions(),
+                    # Story 73-15: the ruleset-filtered set computed once above
+                    # (bound_ruleset derived from context.pack). Pack-less paths
+                    # get the full catalog unchanged.
+                    tools=advertised_tool_defs,
                     tool_dispatch=dispatch,
                     model=model,
                     # Story 61-followup-D §C.1 — forward the session_id so

@@ -23,6 +23,10 @@ if TYPE_CHECKING:
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
 
+from sidequest.game.alias_accretion import (
+    accrete_npc_aliases,
+    extract_epithets_for_npc,
+)
 from sidequest.game.dogfight_shot import (
     GunSolution,
     PendingDogfightShot,
@@ -1207,6 +1211,7 @@ def resolve_status_target(
     actor_name: str,
     turn_num: int,
     trigger: str,
+    narration_text: str | None = None,
 ):
     """Resolve a status-mutation actor name to a creature whose
     ``core.statuses`` can be appended to or popped from.
@@ -1278,6 +1283,15 @@ def resolve_status_target(
         trigger,
         turn_num,
     )
+    # Story 84-2 (WI-5, ADR-118 §A4): accrete any appositive epithets the promotion
+    # turn's narration attached to this NPC ("Borin, the old smith") into
+    # ``promoted.aliases`` so a later player reference by epithet resolves to it.
+    # Conservative extraction (alias correctness is load-bearing); the accreter is
+    # idempotent and emits ``entity.alias_accreted`` only on a real accretion.
+    if narration_text:
+        epithets = extract_epithets_for_npc(narration_text, promoted.core.name)
+        if epithets:
+            accrete_npc_aliases(promoted, epithets, turn=turn_num)
     return promoted
 
 
@@ -4610,6 +4624,9 @@ def _apply_narration_result_to_snapshot(
                 actor_name=actor_name,
                 turn_num=turn_num,
                 trigger="status_change",
+                # Story 84-2 (WI-5): the promotion turn's narration is the epithet
+                # source for alias accretion when this status promotes a pool member.
+                narration_text=result.narration or "",
             )
             if target is None:
                 logger.warning(

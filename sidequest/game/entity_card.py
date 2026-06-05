@@ -15,6 +15,7 @@ later stories — this module only defines the OTEL attribute *names* they share
 
 from __future__ import annotations
 
+import json
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -224,6 +225,7 @@ def project_npc_card(npc: NpcPoolMember | Npc) -> EntityCard:
     a stateful card is always projectable (the ``_slug`` blank guard fires only
     for pool members).
     """
+    aliases: list[str] = []
     if isinstance(npc, NpcPoolMember):
         name = npc.name
         role = npc.role
@@ -231,6 +233,8 @@ def project_npc_card(npc: NpcPoolMember | Npc) -> EntityCard:
         # Stateful Npc — name lives on the nested CreatureCore; no role field.
         name = npc.core.name
         role = None
+        # Story 84-2 (WI-5): only the stateful Npc carries accreted aliases.
+        aliases = list(npc.aliases)
     segments: list[str] = [name]
     if role:
         segments.append(role)
@@ -238,11 +242,19 @@ def project_npc_card(npc: NpcPoolMember | Npc) -> EntityCard:
         segments.append(npc.pronouns)
     segments.append(npc.disposition.attitude().value)
     content = " — ".join(segments)
+    # Story 84-2 (WI-5): carry the aliases into card metadata so the mention
+    # resolver can read epithets off the indexed card. JSON-encoded and SORTED so
+    # the same alias SET projects to identical metadata regardless of list order —
+    # 75-6's dirty-flag reproject depends on this determinism. Aliases never enter
+    # ``content`` (they must not pollute the retrieval embedding vector). Only set
+    # the key when there are aliases — an empty NPC projects no bogus value.
+    metadata = {"aliases": json.dumps(sorted(aliases))} if aliases else None
     return EntityCard.new(
         EntityType.NPC,
         _slug(name),
         content,
         entity_ref=name,
+        metadata=metadata,
     )
 
 

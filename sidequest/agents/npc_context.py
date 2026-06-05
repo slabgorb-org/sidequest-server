@@ -24,7 +24,6 @@ considered-vs-selected counts per tier.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 
 from sidequest.game.npc_pool import NpcPoolMember
@@ -74,17 +73,29 @@ def player_referenced_npcs_from_action(snapshot: GameSnapshot, action_text: str)
     matched names; the caller passes the set to ``build_npc_working_set``, which
     only reads its truthiness (any reference → brief mode for the whole off-stage
     tier — this is a turn-level signal, not per-entity promotion).
+
+    Story 84-2 (WI-5, ADR-118 §A4): the match now also resolves through each
+    stateful NPC's ``aliases`` — a reference by epithet ("the old man") registers
+    the aliased NPC. The word-boundary discipline is NOT forked: this delegates to
+    :func:`sidequest.game.alias_resolution.resolve_mention`, which carries the same
+    ``\\b``, case-insensitive, multi-word-phrase matcher for names AND aliases. Pool
+    members carry no aliases (identity-only), so only ``snapshot.npcs`` contribute
+    an alias list; both still match by canonical name.
     """
     if not action_text or not action_text.strip():
         return set()
-    referenced: set[str] = set()
+    from sidequest.game.alias_resolution import resolve_mention
+
+    names: set[str] = set()
+    aliases_by_name: dict[str, list[str]] = {}
     for entry in (*snapshot.npcs, *snapshot.npc_pool):
         name = _name_of(entry).strip()
         if not name:
             continue
-        if re.search(rf"\b{re.escape(name)}\b", action_text, re.IGNORECASE):
-            referenced.add(name)
-    return referenced
+        names.add(name)
+        if isinstance(entry, Npc) and entry.aliases:
+            aliases_by_name.setdefault(name, []).extend(entry.aliases)
+    return resolve_mention(action_text, names=names, aliases_by_name=aliases_by_name)
 
 
 def build_npc_working_set(

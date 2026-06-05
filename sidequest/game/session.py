@@ -179,6 +179,13 @@ class Npc(BaseModel):
     build: str | None = None
     height: str | None = None
     distinguishing_features: list[str] = Field(default_factory=list)
+    # Aliases / epithets the narrator has used for this NPC (Story 84-2, WI-5,
+    # ADR-118 §A4). Feeds the DOMINANT ``mention`` pertinence signal (84-1) so a
+    # player reference by epithet ("the old man") resolves to the canonical NPC.
+    # Accreted on promotion via ``alias_accretion.accrete_npc_aliases``. Rides the
+    # GameSnapshot JSON blob (model_dump_json → game_state.snapshot_json) — NO
+    # migration; ``default_factory=list`` means pre-84-2 saves (no key) load to [].
+    aliases: list[str] = Field(default_factory=list)
 
     # P5-deferred: OCEAN personality (story 10-1, scenario system)
     ocean: dict | None = None

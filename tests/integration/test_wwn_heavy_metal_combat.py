@@ -58,7 +58,17 @@ def _make_attacker(name: str):
         inventory=Inventory(),
         hp={"current": 12, "max": 12, "base_max": 12},
     )
-    return Character(core=core, char_class="Warrior", race="Human", backstory="—")
+    # WWN seating rolls initiative (1d8 + DEX) off character.stats, so the six
+    # ability scores must be populated even though Story 1 has no classes.yaml
+    # to build through. STR 12 matches the character_stats passed to the dice
+    # seam below; the rest are flat 10s.
+    return Character(
+        core=core,
+        char_class="Warrior",
+        race="Human",
+        backstory="—",
+        stats={"STR": 12, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
+    )
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
@@ -116,13 +126,13 @@ def test_heavy_metal_combat_is_wwn_bound_and_ablates_hp(otel_capture, monkeypatc
         "opponent HP must come from opponent_default_stats"
     )
 
-    # ── Pin rng: damage roll fires through random.randint; pin to MIN
-    # (1 per die = 2 on 2d6) so the opponent survives the ablation and the
-    # downed seam is not tripped (this story proves ablation, not the kill
-    # path). The d20 attack uses the provided face=[20], not rng. ──────────
-    monkeypatch.setattr(
-        "sidequest.server.dispatch.dice.random.randint", lambda a, b: a
-    )
+    # ── Pin rng: the damage faces are rolled by
+    # ``damage_roll.generate_server_faces`` via ``random.randint`` (NOT in the
+    # dice module). Pin to MIN (1 per die = 2 on 2d6) so the opponent survives
+    # the ablation and the downed seam is not tripped (this story proves
+    # ablation, not the kill path). The d20 attack uses the provided face=[20],
+    # not rng. ─────────────────────────────────────────────────────────────
+    monkeypatch.setattr("sidequest.server.dispatch.damage_roll.random.randint", lambda a, b: a)
 
     hp_before = opponent_core.hp.current
 

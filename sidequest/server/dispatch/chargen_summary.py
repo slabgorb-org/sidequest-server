@@ -247,8 +247,18 @@ def render_confirmation_summary(
         _add("mutation", humanize_display(acc.mutation_hint))
     if acc.affinity_hint is not None:
         _add("affinity", humanize_display(acc.affinity_hint))
+    # Rig: the player-given vessel name (the_name scene's second half,
+    # playtest 2026-06-05 RW-2) leads; the mechanical type hint stays as a
+    # parenthetical so the sheet shows "Duck Soup (Interceptor)" instead of
+    # silently dropping the name the player just gave.
+    vessel = builder.vessel_name()
     if acc.rig_type_hint is not None:
-        _add("rig", humanize_display(acc.rig_type_hint))
+        rig_display = humanize_display(acc.rig_type_hint)
+        if vessel:
+            rig_display = f"{vessel} ({rig_display})"
+        _add("rig", rig_display)
+    elif vessel:
+        _add("rig", vessel)
     if acc.rig_trait is not None:
         _add("rig_trait", humanize_display(acc.rig_trait))
 

@@ -296,6 +296,7 @@ class AnthropicSdkClient:
         max_tokens: int = 4096,
         on_text_delta: Callable[[str], Awaitable[None] | None] | None = None,
         session_id: str | None = None,
+        caller: str = "narrator",
     ) -> ToolingResult:
         # Story 61-followup-D §C.2 — pre-flight ceiling check. A session
         # whose cumulative has already crossed the ceiling on a prior call
@@ -590,9 +591,15 @@ class AnthropicSdkClient:
                 # events below), recording how many SDK round-trips the turn
                 # consumed so the GM panel can spot runaway loops inflating
                 # solo-turn p95.
+                #
+                # Story 82-9: ``caller`` tags the span so the non-narrator
+                # dungeon-curate caller (materializer.py) is filtered OUT of the
+                # narrator solo-turn p95 source. The converged path carries no
+                # loop_exceeded marker (that is reserved for the raise path).
                 with narrator_tool_loop_span(
                     iterations_used=iteration,
                     max_iterations=max_iterations,
+                    caller=caller,
                 ):
                     pass
 
@@ -670,6 +677,20 @@ class AnthropicSdkClient:
                 {"role": "assistant", "content": assistant_blocks},
                 {"role": "user", "content": user_results},
             ]
+
+        # Story 82-9: a turn that exhausts max_iterations and raises is the
+        # WORST-latency turn — exactly the one the AC5 diagnosis most wants
+        # iterations_used for — yet 71-40 emitted no summary span here, leaving
+        # it invisible to the metric. Emit the per-turn summary before raising,
+        # marked loop_exceeded=True so the GM panel can tell a ceiling-blown turn
+        # from a deep-but-converged one. The fail-loud ceiling is unchanged.
+        with narrator_tool_loop_span(
+            iterations_used=max_iterations,
+            max_iterations=max_iterations,
+            caller=caller,
+            loop_exceeded=True,
+        ):
+            pass
 
         raise AnthropicSdkLoopExceeded(
             f"Tool-use loop did not converge in {max_iterations} iterations"

@@ -275,6 +275,9 @@ def _yielding_concurrency_probe_client(probe: dict[str, int]) -> Any:
             max_iterations: int = 8,
             max_tokens: int = 4096,
             on_text_delta: Any = None,
+            # Absorb forward-added client kwargs (Story 82-9: caller=) so this
+            # probe double keeps tracking the real complete_with_tools signature.
+            **_kwargs: Any,
         ) -> ToolingResult:
             probe["live"] = probe.get("live", 0) + 1
             probe["max"] = max(probe.get("max", 0), probe["live"])

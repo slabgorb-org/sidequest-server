@@ -1212,6 +1212,9 @@ async def _stage_curate(
             tool_dispatch=None,
             model=resolve_model(CallType.SCRATCH),
             max_tokens=16384,  # Layer 0 (retained)
+            # Story 82-9: tag this non-narrator curate loop so its tool_loop
+            # summary span is filtered OUT of the narrator solo-turn p95 source.
+            caller="dungeon_curate",
         )
         return _parse_curation_verdict(result.text)
 

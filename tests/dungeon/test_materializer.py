@@ -1296,6 +1296,10 @@ def _reflecting_sdk_client(**_: Any) -> Any:
             max_iterations: int = 8,
             max_tokens: int = 4096,
             on_text_delta: Any = None,
+            # Absorb forward-added client kwargs the curate call now passes
+            # (Story 82-9: caller="dungeon_curate"; also iteration_cap/session_id)
+            # so this reflecting double keeps tracking the real signature.
+            **_kwargs: Any,
         ) -> ToolingResult:
             prompt = messages[0].content
             _, _, input_blob = prompt.partition("INPUT:\n")

@@ -302,3 +302,18 @@ class TestSpanAttrContract:
             assert wi6_attr in span.attributes, (
                 f"live span must carry the WI-6 attribute {wi6_attr!r}"
             )
+        # ...AND the REVERSE direction (84-4 review): every retrieval.* attribute the
+        # span actually SETS must be DECLARED in the contract set. The forward check
+        # above only proves declared ⊆ emitted; without this an emitted-but-undeclared
+        # attr (the exact 84-1 bug — embed_skipped was set on the span but never added
+        # to UNIVERSAL_RETRIEVAL_SPAN_ATTRS) would pass green. Scoped to retrieval.*
+        # so unrelated span attributes don't false-fail the contract.
+        emitted_retrieval_attrs = {
+            name for name in span.attributes if name.startswith("retrieval.")
+        }
+        undeclared = emitted_retrieval_attrs - set(UNIVERSAL_RETRIEVAL_SPAN_ATTRS)
+        assert not undeclared, (
+            "span emits retrieval.* attributes not declared in "
+            f"UNIVERSAL_RETRIEVAL_SPAN_ATTRS: {undeclared} — add them to the contract "
+            "set (the 84-1 embed_skipped gap class)"
+        )

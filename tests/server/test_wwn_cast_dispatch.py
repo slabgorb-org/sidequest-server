@@ -310,6 +310,69 @@ def test_killing_cast_fires_wwn_downed_seam(otel_capture, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# BUG 2a (eh-opp-damage): a killing cast must RESOLVE the encounter via
+# hp_depletion. Playtest (elemental_harmony/burning_peace, WWN): a cast_spell
+# CritSuccess drove the opponent to 0 HP but the encounter stayed
+# resolved=False / active=True — the win condition never fired, so combat
+# could not be WON. The strike path resolves hp_depletion inside apply_beat,
+# but the cast path (_resolve_wwn_cast_for_beat) applied spell damage + ran the
+# downed seam WITHOUT ever calling check_hp_depletion.
+# ---------------------------------------------------------------------------
+
+
+def test_killing_cast_resolves_encounter_via_hp_depletion(otel_capture, monkeypatch):
+    """A cast that drops the seated opponent to 0 HP must RESOLVE the encounter
+    (player_victory via hp_depletion) and emit encounter.resolved source=
+    hp_depletion — the cast path's parity with the strike path's win-condition
+    firing. RED before the fix: the opponent hits 0 HP but enc.resolved stays
+    False (combat can't be won by a spell kill)."""
+    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: a)
+
+    pack = _make_wwn_pack()
+    snap, enc = _make_snapshot_and_encounter("Wisp", "Brigand", opponent_hp=1)
+
+    _cast(snap=snap, enc=enc, pack=pack, caster="Wisp", spell_id="firebolt")
+
+    opp = snap.find_creature_core("Brigand")
+    assert opp.hp.current == 0, (
+        f"precondition: the killing cast must drop the defender to 0 HP; hp={opp.hp.current}"
+    )
+    assert enc.resolved is True, (
+        "a cast that drops the seated opponent to 0 HP must RESOLVE the encounter "
+        "(the player can finally WIN via a spell kill)"
+    )
+    assert enc.outcome == "player_victory", (
+        f"the resolution outcome must be player_victory; got {enc.outcome!r}"
+    )
+    resolved_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "encounter.resolved"
+    ]
+    assert resolved_spans, "an encounter.resolved span must fire on the spell kill"
+    sources = [s.attributes.get("source") for s in resolved_spans]
+    assert any("hp_depletion" in str(src) for src in sources), (
+        f"resolution must be sourced to hp_depletion; got sources={sources}"
+    )
+
+
+def test_nonlethal_cast_leaves_encounter_active(otel_capture, monkeypatch):
+    """A cast that damages but does NOT drop the opponent to 0 HP must leave the
+    encounter unresolved — check_hp_depletion is a no-op above 0 HP, so the win
+    condition only fires on a genuine kill (guards against an over-eager fix)."""
+    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: b)
+
+    pack = _make_wwn_pack()
+    snap, enc = _make_snapshot_and_encounter("Wisp", "Brigand", opponent_hp=20)
+
+    _cast(snap=snap, enc=enc, pack=pack, caster="Wisp", spell_id="firebolt")
+
+    opp = snap.find_creature_core("Brigand")
+    assert opp.hp.current > 0, "precondition: the opponent survives the cast"
+    assert enc.resolved is False, (
+        "a non-lethal cast must NOT resolve the encounter — combat continues"
+    )
+
+
+# ---------------------------------------------------------------------------
 # unknown spell id: refuse-recorded via the watcher event (no raise)
 # ---------------------------------------------------------------------------
 

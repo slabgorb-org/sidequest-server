@@ -35,6 +35,7 @@ from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
     encounter_confrontation_initiated_span,
     encounter_no_opponent_available_span,
+    encounter_opponent_toothless_span,
     encounter_resolved_span,
     encounter_sealed_letter_arity_rejected_span,
     npc_edge_published_span,
@@ -122,6 +123,45 @@ def _stamp_encounter_presence(npc, *, turn: int, location: str | None) -> None:
     npc.last_seen_turn = turn
     if location:
         npc.last_seen_location = location
+
+
+def _opponent_reprisal_damage_resolvable(cdef, opponent_core) -> bool:
+    """BUG 1 (eh-opp-damage): can the seated opponent's reprisal resolve ANY
+    damage spec? Mirrors the reprisal damage-resolution priority in
+    ``dispatch.dice._resolve_opponent_reprisal`` so the at-seat detector agrees
+    with the runtime path EXACTLY (no drift):
+
+    1. ``cdef.opponent_damage`` — the authored enemy weapon (space_opera's fix).
+    2. The opponent's STRIKE beat ``damage_override`` — a natural-attack spec on
+       the beat the reprisal reuses (first ``damage_channel == "strike"`` beat).
+    3. The opponent core's inventory weapon — an item dict carrying a ``damage``
+       field (``resolve_damage_spec_from_beat_and_actor`` priority 2).
+
+    Catalog-id weapon resolution (priority 3 of the runtime resolver) is NOT
+    re-checked here: a seeded/materialized mook carries no catalog-id inventory,
+    and threading the pack catalog into the seating seam to cover a case the
+    seeded opponent never has would over-couple the detector. The conservative
+    bias is correct — a false "toothless" flag is a visible nudge to author
+    ``opponent_damage``, never a silent miss.
+    """
+    if getattr(cdef, "opponent_damage", None) is not None:
+        return True
+    strike_beat = next(
+        (
+            b
+            for b in (getattr(cdef, "beats", None) or [])
+            if str(getattr(b, "damage_channel", "none") or "none") == "strike"
+        ),
+        None,
+    )
+    if strike_beat is not None and getattr(strike_beat, "damage_override", None) is not None:
+        return True
+    if opponent_core is not None:
+        inv = getattr(opponent_core, "inventory", None)
+        for item_dict in getattr(inv, "items", []) or []:
+            if isinstance(item_dict, dict) and item_dict.get("damage") is not None:
+                return True
+    return False
 
 
 def _seed_combat_hp_depletion_to_npcs(
@@ -219,6 +259,25 @@ def _seed_combat_hp_depletion_to_npcs(
             last_seen_location=npc.last_seen_location or "",
         ):
             pass
+        # BUG 1 (eh-opp-damage): flag a TOOTHLESS Other at INSTANTIATION. If this
+        # seated opponent has no resolvable reprisal damage source, every enemy
+        # reprisal will land for 0 HP (the player is invulnerable — playtest
+        # elemental_harmony/burning_peace). Surface it here, at seating, so the GM
+        # panel catches it immediately instead of only via the per-turn
+        # ``dice.opponent_reprisal_damage_spec_missing`` warning six rounds deep.
+        if not _opponent_reprisal_damage_resolvable(cdef, npc.core):
+            with encounter_opponent_toothless_span(
+                confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
+                opponent=actor.name,
+                rationale=(
+                    "hp_depletion combat seated this opponent with no resolvable "
+                    "reprisal damage source: cdef.opponent_damage is unset, no "
+                    "strike beat carries damage_override, and the opponent core "
+                    "has no inventory weapon with a damage spec — author "
+                    "opponent_damage under the confrontation (No Silent Fallbacks)"
+                ),
+            ):
+                pass
 
 
 def _roll_and_persist_initiative(

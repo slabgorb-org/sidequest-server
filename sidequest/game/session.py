@@ -1737,7 +1737,39 @@ class GameSnapshot(BaseModel):
         if patch.morale is not None:
             npc.morale = patch.morale
         if patch.hp is not None:
-            npc.core.hp = _hp_pool_from_hp(patch.hp)
+            # BUG 2b (eh-opp-damage): a re-injected creature patch must NOT heal an
+            # NPC that is already taking damage. The per-turn Monster-Manual inject
+            # re-emits each Available creature with its content ``hp`` claim EVERY
+            # combat turn; the old code reset ``npc.core.hp`` to a FULL pool here, so
+            # an opponent damaged to 2/8 (or killed at 0/8) sprang back to 8/8 on the
+            # next turn — combat could be neither won nor lost. Re-seed the pool
+            # CEILING from the claim (content may legitimately re-state max), but
+            # PRESERVE the live ``current`` (clamped to the new max). A genuinely new
+            # creature still gets a full pool via ``_npc_from_patch`` (the spawn leg,
+            # untouched). Emit the GM-panel lie-detector span so a re-inject that
+            # keeps the damaged HP is observable (its ABSENCE on a combat turn would
+            # signal a regression back to silent healing).
+            new_max = max(1, int(patch.hp))
+            preserved_current = min(npc.core.hp.current, new_max)
+            npc.core.hp.max = new_max
+            npc.core.hp.base_max = new_max
+            npc.core.hp.current = preserved_current
+            from sidequest.telemetry.spans import Span
+            from sidequest.telemetry.spans.monster_manual import (
+                SPAN_MONSTER_MANUAL_HP_PRESERVED,
+            )
+
+            with Span.open(
+                SPAN_MONSTER_MANUAL_HP_PRESERVED,
+                {
+                    "npc_name": npc.core.name,
+                    "preserved_current": preserved_current,
+                    "patch_hp": int(patch.hp),
+                    "new_max": new_max,
+                    "manual_origin": npc.manual_origin or patch.manual_origin,
+                },
+            ):
+                pass
 
         # Provenance (story 72-3): monotonic — an authored Monster Manual
         # patch records manual-origin on the surviving record (E2 forward),

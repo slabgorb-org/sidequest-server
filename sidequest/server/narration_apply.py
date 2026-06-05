@@ -340,6 +340,7 @@ def _resolve_wwn_cast_for_beat(
     # then run the shared CWN/WWN downed seam if the defender hit 0 HP.
     if result.cast and result.damage > 0 and target_core is not None:
         from sidequest.game.beat_kinds import apply_beat_hp_channel
+        from sidequest.game.hp_depletion import check_hp_depletion
 
         apply_beat_hp_channel(
             target=target_core,
@@ -356,6 +357,23 @@ def _resolve_wwn_cast_for_beat(
             pack=pack,
             actor_side=actor.side,
             rng=random,
+        )
+        # BUG 2a (eh-opp-damage): FIRE THE WIN CONDITION. The strike path resolves
+        # hp_depletion inside ``apply_beat``; the cast path bypasses that branch
+        # (cast_spell carries damage_channel=none, so ``apply_beat`` runs with no
+        # damage_resolver and the defender still has full HP when its
+        # check_hp_depletion runs — the spell damage lands HERE, afterward).
+        # Without this call the opponent could be dropped to 0 HP by a spell and
+        # the encounter would never resolve (resolved=False / active=True forever,
+        # the same beats re-offered) — combat could not be WON by a caster.
+        # ``check_hp_depletion`` is unconditional + idempotent (no-op above 0 HP
+        # and when already resolved) and emits encounter.resolved with
+        # source="hp_depletion" — the same win-condition span + GM-panel
+        # lie-detector the strike/reprisal/dogfight paths use.
+        check_hp_depletion(
+            encounter,
+            snapshot.find_creature_core,
+            beat_id=f"cast_spell:{spell_id}",
         )
 
 

@@ -81,6 +81,13 @@ SIGNAL_APPLICABILITY: dict[str, frozenset[str]] = {
     EntityType.NPC: frozenset({SIGNAL_MENTION, SIGNAL_HERE, SIGNAL_RECENCY, SIGNAL_SIM}),
     EntityType.LOCATION: frozenset({SIGNAL_MENTION, SIGNAL_HERE, SIGNAL_RECENCY, SIGNAL_SIM}),
     EntityType.FACTION: frozenset({SIGNAL_MENTION, SIGNAL_RECENCY, SIGNAL_SIM}),
+    # Story 84-3 (WI-4, ADR-118 §A2): a relationship card surfaces because its NPC
+    # is named/present (mention) or in the scene (here), or was recently touched
+    # (recency). It carries NO ``sim`` — topical cosine matching is the NPC card's
+    # job; the relationship rides the related NPC's structural signals, never a
+    # free-floating embedding. Omitting ``sim`` means its contribution is dropped
+    # (per-type applicability), not weighted.
+    EntityType.RELATIONSHIP: frozenset({SIGNAL_MENTION, SIGNAL_HERE, SIGNAL_RECENCY}),
 }
 
 

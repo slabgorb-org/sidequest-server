@@ -31,14 +31,16 @@ from sidequest.game.entity_card import (
     project_faction_card,
     project_location_card,
     project_npc_card,
+    project_relationship_card,
 )
 from sidequest.game.entity_store import EntityStore
 from sidequest.game.npc_pool import is_projectable
+from sidequest.game.projection.relationships import band_for
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from sidequest.game.session import GameSnapshot
+    from sidequest.game.session import GameSnapshot, Npc
     from sidequest.genre.models.lore import Faction
 
 logger = logging.getLogger(__name__)
@@ -100,6 +102,12 @@ class EntitySyncResult:
     npc_count: int = 0
     location_count: int = 0
     faction_count: int = 0
+    # Story 84-3 (WI-4, ADR-118 §A2): honest reproject tally for RELATIONSHIP
+    # cards, mirroring the other per-type counters. A relationship card is only
+    # projected for an NPC that has SOMETHING to say (disposition history or a
+    # non-neutral band — the gate below), so this counts the cards that crossed the
+    # gate AND content-changed/inserted, not every stateful NPC.
+    relationship_count: int = 0
     failed_refs: list[str] = field(default_factory=list)
     card_ids: list[str] = field(default_factory=list)
     evicted_ids: list[str] = field(default_factory=list)
@@ -134,6 +142,21 @@ def _apply_typed_card(
         result.card_ids.append(card.id)
     else:
         result.unchanged += 1
+
+
+def _has_relationship_to_project(npc: Npc) -> bool:
+    """The §A2 projection gate (Diamonds and Coal, SM steer): a relationship card is
+    worth indexing only when there is SOMETHING to say.
+
+    True when the NPC carries disposition HISTORY (a non-empty ``disposition_log``)
+    OR a NON-NEUTRAL standing (its 5-level band is not ``"Neutral"``). A neutral NPC
+    with no beats is coal — projecting an empty neutral relationship card for every
+    stateful NPC would flood the index with content-free cards (and waste an embed
+    slot), so it is deliberately skipped. The skip is observable: the
+    ``relationship_count`` tally only advances for gated, content-bearing cards."""
+    if npc.disposition_log:
+        return True
+    return band_for(int(npc.disposition)) != "Neutral"
 
 
 def sync_entity_cards(
@@ -204,6 +227,17 @@ def sync_entity_cards(
             with contextlib.suppress(ValueError):
                 covered_ids.add(npc_card_id(npc.pool_origin))
         _apply_typed_card(store, card, result, "npc_count")
+
+        # Story 84-3 (WI-4, ADR-118 §A2): project the relationship card alongside
+        # the NPC card — STORED at index time, not on-demand at retrieval. Gated on
+        # there being something to say (history or a non-neutral band) so a neutral,
+        # history-less NPC doesn't flood the index. A stateful Npc is always
+        # projectable (CreatureCore validates the name), so this never fails here;
+        # the rel card upserts into its own ``rel:<slug>`` id, distinct from the NPC
+        # card, and advances the ``relationship_count`` tally on insert/change.
+        if _has_relationship_to_project(npc):
+            rel_card = project_relationship_card(npc)
+            _apply_typed_card(store, rel_card, result, "relationship_count")
 
     # Pool members second — skip any superseded by a stateful Npc (same card id,
     # or the pool member this Npc was promoted from). Eviction of stranded cards

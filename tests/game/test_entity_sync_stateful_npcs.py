@@ -198,7 +198,11 @@ class TestPromotedNpcDedup:
         assert npc_cards[0].content.endswith("friendly")
         # Honest count: one unique NPC, not two.
         assert result.npc_count == 1
-        assert result.reprojected == 1
+        # Story 84-3 (WI-4): the non-neutral NPC also yields a relationship card, so
+        # the sweep reprojects two cards (npc:borin + rel:borin). The dedup invariant
+        # this test guards is npc_count == 1 (one unique NPC, not double-counted).
+        assert result.relationship_count == 1
+        assert result.reprojected == 2
 
     def test_stateful_band_change_reprojects_through_sync(self) -> None:
         """The stateful path participates in the dirty-flag reproject: a band
@@ -216,7 +220,12 @@ class TestPromotedNpcDedup:
         borin.disposition = Disposition(50)
         result = sync_entity_cards(store, snapshot)
 
-        assert result.reprojected == 1
+        # Story 84-3 (WI-4): the band crossing re-arms BOTH the npc card (content
+        # changed) AND the now-projected relationship card (Borin crossed into a
+        # non-neutral band, so a rel:borin card is born this sweep). The invariant
+        # this test guards — the npc card's embedding_pending flips True — is
+        # asserted directly below.
+        assert result.reprojected == 2
         assert store.cards["npc:borin"].embedding_pending is True
 
 

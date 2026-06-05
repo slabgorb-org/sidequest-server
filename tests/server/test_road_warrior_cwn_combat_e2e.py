@@ -19,8 +19,13 @@ Behavioral, not implementation-coupled: the test reads the combat confrontation'
 first strike beat (id + stat_check) from the LOADED content, so it survives beat
 renames; it asserts HP depletion + the span, not HOW Dev wires the damage.
 
-Pattern precedent: tests/server/test_awn_combat_dispatch.py (the AWN production
-dispatch proof) and tests/server/test_space_opera_swn_combat_e2e.py.
+The attacker is armed with the real ``sawed_off_shotgun`` from the pack's item
+catalog (damage 3d4) — CWN strike damage flows from the equipped weapon (Priority
+2/3 of the damage resolver), exactly as in real play, mirroring how
+``tests/integration/test_space_opera_hp_e2e.py`` arms with ``blaster_sidearm``.
+
+Pattern precedent: tests/integration/test_space_opera_hp_e2e.py (real pack + HP
+depletion), tests/server/test_awn_combat_dispatch.py (AWN production dispatch).
 ``otel_capture`` is provided by tests/server/conftest.py.
 """
 
@@ -50,8 +55,7 @@ def _load_road_warrior():
 def _combat_confrontation(pack):
     combats = [c for c in pack.rules.confrontations if c.category == "combat"]
     assert len(combats) == 1, (
-        f"road_warrior must ship exactly one combat confrontation; found "
-        f"{len(combats)}"
+        f"road_warrior must ship exactly one combat confrontation; found {len(combats)}"
     )
     return combats[0]
 
@@ -79,11 +83,14 @@ def _make_snapshot_and_encounter(*, attacker: str, opponent: str, opponent_hp: i
     from sidequest.game.session import GameSnapshot, Npc
     from sidequest.game.turn import TurnManager
 
+    # Armed with the real catalog weapon so the strike resolves weapon damage
+    # (Priority 2/3 of the damage resolver) — faithful to real play, mirrors the
+    # space_opera hp e2e's blaster_sidearm.
     atk_core = CreatureCore(
         name=attacker,
         description="Road runner, jacket full of road dust.",
         personality="reckless",
-        inventory=Inventory(),
+        inventory=Inventory(items=[{"id": "sawed_off_shotgun", "name": "Sawed-off Shotgun"}]),
         hp={"current": 12, "max": 12, "base_max": 12},
         armor_class=13,
     )

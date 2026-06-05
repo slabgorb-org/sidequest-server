@@ -32,7 +32,7 @@ import pytest
 from sidequest.game.ruleset.cwn import CwnRulesetModule
 from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.genre.models.pack import GenrePack
-from sidequest.genre.models.rules import CwnConfig, OPPONENT_RESERVED_STAT_KEYS, WinCondition
+from sidequest.genre.models.rules import OPPONENT_RESERVED_STAT_KEYS, CwnConfig, WinCondition
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound
 from tests.genre.test_resolution_mode import load_pack
 

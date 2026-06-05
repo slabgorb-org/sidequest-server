@@ -28,6 +28,7 @@ from sidequest.game.alias_accretion import (
     accrete_npc_aliases,
     extract_epithets_for_npc,
 )
+from sidequest.game.alias_resolution import _phrase_matches
 from sidequest.game.dogfight_shot import (
     GunSolution,
     PendingDogfightShot,
@@ -63,7 +64,8 @@ from sidequest.game.session import (
 from sidequest.game.table.types import TableCommit
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import FleeConsequence, MoraleTrigger, ResolutionMode
-from sidequest.genre.names.generator import build_from_culture, has_stem_collision
+from sidequest.genre.names import generator as _namegen_module
+from sidequest.genre.names.generator import has_stem_collision
 from sidequest.magic.confrontations import (
     BranchName,
     evaluate_auto_fire_triggers,
@@ -1612,8 +1614,33 @@ def _generate_invented_name(
     return candidate, collision_reroll
 
 
+def _culture_mention_matches(culture: Any, mention_name: str) -> str | None:
+    """Return culture.name if mention_name identifies this culture; else None.
+
+    Story 83-2 (ADR-091 self-match). Checks in order:
+    1. Exact word-boundary name match (``_phrase_matches`` discipline).
+    2. Engine-side plural heuristic: culture name + "s" (e.g. "Munchkin"~"Munchkins").
+    3. Any authored alias in ``culture.aliases`` (content-controlled demonyms).
+
+    Reuses the word-boundary discipline from :mod:`sidequest.game.alias_resolution`
+    (ADR-118) so name-match and alias-match never drift apart (CLAUDE.md "Don't
+    Reinvent"). The plural heuristic covers the common English case; content authors
+    can cover irregular forms via ``culture.aliases``.
+    """
+    if not mention_name:
+        return None
+    if _phrase_matches(culture.name, mention_name):
+        return culture.name
+    if _phrase_matches(culture.name + "s", mention_name):
+        return culture.name
+    for alias in getattr(culture, "aliases", None) or []:
+        if _phrase_matches(alias, mention_name):
+            return culture.name
+    return None
+
+
 def _resolve_invented_naming_context(
-    pack: GenrePack | None, world: str | None
+    pack: GenrePack | None, world: str | None, mention_name: str | None = None
 ) -> tuple[NameGenerator | None, str | None, str | None, bool]:
     """Resolve the culture-bound naming context for narrator-invented NPCs.
 
@@ -1631,6 +1658,14 @@ def _resolve_invented_naming_context(
     - Pack present but the world resolves no culture, or the generator cannot
       be built → ``naming_unresolved=True`` so the mint seam fails loud (No
       Silent Fallbacks) and deliberately degrades to the raw narrator string.
+
+    Story 83-2: when ``mention_name`` is supplied and matches a bound culture by
+    name, plural form, or authored alias (see :func:`_culture_mention_matches`),
+    that culture is tried FIRST — deterministic self-match before the shuffle.
+    If the matched culture's corpus fails to build the function returns
+    ``naming_unresolved=True`` immediately (No-Silent-Fallbacks: never silently
+    continue to a different culture for a named people-group). Only when no
+    culture matches the mention does the code fall into the shuffle loop.
     """
     if pack is None:
         return None, None, None, False
@@ -1641,19 +1676,47 @@ def _resolve_invented_naming_context(
 
     corpus_dir = pack.source_dir / "corpus"
     fallback_dirs = [pack.source_dir.parent.parent / "corpus" / "shared"]
-    # Try each bound culture (shuffled, so invented NPCs vary across a
-    # multi-culture world) and use the first whose corpus actually builds. A
-    # culture with a missing or below-floor corpus raises inside
-    # ``build_from_culture`` — which already emitted ``namegen.fail_loud`` /
-    # ``namegen.thin_corpus`` — so skip it and try the next rather than failing
-    # the whole route on one thin culture (perseus_cloud's provisional Yulan
-    # corpus is exactly this case). Only when NO bound culture can build do we
-    # surface the loud-degrade condition.
+
+    # Story 83-2: self-match — try to find the culture the narrator named before
+    # falling back to the shuffle. The first culture whose name, plural, or alias
+    # matches mention_name wins. On a corpus failure for the MATCHED culture we
+    # degrade loud (No-Silent-Fallbacks) rather than silently retrying a different
+    # one — the mention was specific and wrong-culture names would be a lie.
+    if mention_name:
+        for culture in cultures:
+            if _culture_mention_matches(culture, mention_name) is not None:
+                try:
+                    generator = _namegen_module.build_from_culture(
+                        culture, corpus_dir, fallback_dirs=fallback_dirs
+                    )
+                    return generator, culture.name, culture_source, False
+                except (FileNotFoundError, ValueError):
+                    logger.warning(
+                        "namegen.self_match_corpus_failed culture=%r world=%r "
+                        "mention=%r — matched culture corpus unavailable or below "
+                        "floor; loud degrade (No-Silent-Fallbacks: will not shuffle "
+                        "to a different culture for a named people-group)",
+                        culture.name,
+                        world,
+                        mention_name,
+                    )
+                    return None, None, None, True
+
+    # No self-match (unaffiliated stranger or no mention_name supplied): try each
+    # bound culture (shuffled, so invented NPCs vary across a multi-culture world)
+    # and use the first whose corpus actually builds. A culture with a missing or
+    # below-floor corpus raises inside ``build_from_culture`` — which already
+    # emitted ``namegen.fail_loud`` / ``namegen.thin_corpus`` — so skip it and try
+    # the next rather than failing the whole route on one thin culture
+    # (perseus_cloud's provisional Yulan corpus is exactly this case). Only when NO
+    # bound culture can build do we surface the loud-degrade condition.
     candidates = list(cultures)
     random.shuffle(candidates)
     for culture in candidates:
         try:
-            generator = build_from_culture(culture, corpus_dir, fallback_dirs=fallback_dirs)
+            generator = _namegen_module.build_from_culture(
+                culture, corpus_dir, fallback_dirs=fallback_dirs
+            )
         except (FileNotFoundError, ValueError):
             logger.warning(
                 "namegen.invented_build_failed culture=%r world=%r — corpus "
@@ -2019,7 +2082,7 @@ def _apply_npc_mentions(
                     culture_name,
                     culture_source,
                     naming_unresolved,
-                ) = _resolve_invented_naming_context(pack, world)
+                ) = _resolve_invented_naming_context(pack, world, mention_name=original_name)
                 naming_resolved = True
             if name_generator is not None and culture_name is not None:
                 minted_name, collision_reroll = _generate_invented_name(
@@ -2027,6 +2090,23 @@ def _apply_npc_mentions(
                     snapshot=snapshot,
                     fallback=original_name,
                 )
+                # Story 83-2: determine resolution strategy for the OTEL span
+                # (lie-detector so the GM panel sees whether culture routing was
+                # deterministic self-match or shuffle-based fallback). We check
+                # per-mention so the strategy reflects this NPC's mention_name,
+                # not the first resolved mention in the turn.
+                _resolution_strategy = "shuffle_fallback"
+                _matched_token = ""
+                if original_name:
+                    _cultures_for_strategy, _ = pack.effective_cultures(world)
+                    _matched_culture = next(
+                        (c for c in _cultures_for_strategy if c.name == culture_name), None
+                    )
+                    if _matched_culture is not None:
+                        _tok = _culture_mention_matches(_matched_culture, original_name)
+                        if _tok is not None:
+                            _resolution_strategy = "self_match"
+                            _matched_token = _tok
                 with npc_invented_name_routed_span(
                     original_name=original_name,
                     npc_name=minted_name,
@@ -2034,15 +2114,18 @@ def _apply_npc_mentions(
                     culture_source=culture_source or "",
                     collision_reroll=collision_reroll,
                     turn_number=turn_num,
+                    resolution_strategy=_resolution_strategy,
+                    matched_token=_matched_token,
                 ):
                     logger.info(
                         "npc.invented_name_routed original=%r minted=%r culture=%r "
-                        "source=%r reroll=%s turn=%d",
+                        "source=%r reroll=%s strategy=%r turn=%d",
                         original_name,
                         minted_name,
                         culture_name,
                         culture_source,
                         collision_reroll,
+                        _resolution_strategy,
                         turn_num,
                     )
             elif naming_unresolved:

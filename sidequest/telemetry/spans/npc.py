@@ -254,6 +254,11 @@ SPAN_ROUTES[SPAN_NPC_INVENTED_NAME_ROUTED] = SpanRoute(
         "culture_source": (span.attributes or {}).get("culture_source", ""),
         "collision_reroll": (span.attributes or {}).get("collision_reroll", False),
         "turn_number": (span.attributes or {}).get("turn_number", 0),
+        # Story 83-2: culture resolution strategy — "self_match" when the mention
+        # name matched a bound culture by name/alias, "shuffle_fallback" when the
+        # engine shuffled the culture list and picked the first buildable one.
+        "resolution_strategy": (span.attributes or {}).get("resolution_strategy", ""),
+        "matched_token": (span.attributes or {}).get("matched_token", ""),
     },
 )
 
@@ -409,6 +414,8 @@ def npc_invented_name_routed_span(
     culture_source: str,
     collision_reroll: bool,
     turn_number: int,
+    resolution_strategy: str = "shuffle_fallback",
+    matched_token: str = "",
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
@@ -423,6 +430,14 @@ def npc_invented_name_routed_span(
     is True when a candidate was rejected (stem collision or an existing-member
     name clash) and the route re-rolled. Attribute key ``npc_name`` avoids the
     OTEL reserved ``name`` attribute (mirrors the sibling NPC spans).
+
+    Story 83-2: ``resolution_strategy`` is ``"self_match"`` when the mention
+    name mapped to a specific bound culture by name/alias (the Munchkin→Munchkin
+    fix); ``"shuffle_fallback"`` when the engine shuffled and picked the first
+    buildable culture (pre-existing behavior for unaffiliated NPCs).
+    ``matched_token`` is the culture name (or alias) that matched; empty string
+    on shuffle_fallback. The GM panel reads these attributes to verify the
+    culture router is no longer guessing for named people-groups.
     """
     attributes: dict[str, Any] = {
         "original_name": original_name,
@@ -431,6 +446,8 @@ def npc_invented_name_routed_span(
         "culture_source": culture_source,
         "collision_reroll": collision_reroll,
         "turn_number": turn_number,
+        "resolution_strategy": resolution_strategy,
+        "matched_token": matched_token,
         **attrs,
     }
     with Span.open(

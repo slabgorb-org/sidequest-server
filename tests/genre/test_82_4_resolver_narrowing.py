@@ -30,6 +30,15 @@ RED contract for Dev:
 - Do NOT remove the survivors pinned below.
 - Rewrite ADR-121 (orchestrator repo) to describe the two-tier shim as the
   production reality — verified by Reviewer, not by this suite.
+
+Coverage cross-references (this file pins the narrowing contract; it is NOT
+the complete shim spec):
+- Shim error paths (forbidden pairings, world-forbidden, unknown axis ids)
+  are covered in ``tests/genre/test_archetype_shim.py``.
+- Production *invocation* of the shim (the real chargen dispatch driving
+  ``_resolve_character_archetype``) plus the
+  ``character_creation.archetype_resolved`` OTEL span proof live in
+  ``tests/server/test_45_6_chargen_archetype_gate.py``.
 """
 
 from __future__ import annotations
@@ -99,9 +108,7 @@ def test_genre_package_no_longer_exports_dead_walk() -> None:
         assert name not in genre_pkg.__all__, (
             f"sidequest.genre.__all__ still exports dead symbol {name!r}"
         )
-        assert not hasattr(genre_pkg, name), (
-            f"sidequest.genre still exposes dead symbol {name!r}"
-        )
+        assert not hasattr(genre_pkg, name), f"sidequest.genre still exposes dead symbol {name!r}"
 
 
 # ---------------------------------------------------------------------------

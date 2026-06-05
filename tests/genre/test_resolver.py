@@ -1,4 +1,4 @@
-"""Tests for LayeredMerge base class, MergeStrategy, and Resolved[T].
+"""Tests for LayeredMerge base class and MergeStrategy.
 
 Ports from Rust:
   tests/layered_derive.rs  — 4 strategy tests

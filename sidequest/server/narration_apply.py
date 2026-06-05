@@ -98,6 +98,7 @@ from sidequest.telemetry.spans import (
     npc_auto_registered_span,
     npc_creature_bestiary_draw_span,
     npc_creature_preserved_span,
+    npc_creature_reconciled_span,
     npc_developed_span,
     npc_identity_seeded_span,
     npc_invented_name_routed_span,
@@ -1768,6 +1769,115 @@ def _npc_name_match_keys(name: str) -> set[str]:
     return keys
 
 
+# Story 83-3: ongoing-threat reconciliation. Tokens too generic to identify a
+# specific creature — excluded so "a hulking shadow" and "the lurking thing"
+# don't false-match on filler. Kept small and conservative.
+_RECONCILE_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "of",
+        "with",
+        "and",
+        "that",
+        "is",
+        "its",
+        "his",
+        "her",
+        "their",
+        "in",
+        "on",
+        "to",
+        "at",
+        "it",
+        "this",
+        "these",
+        "those",
+        "some",
+    }
+)
+
+
+def _creature_tokens(*parts: str | None) -> set[str]:
+    """Meaningful lowercase tokens from a creature's descriptors (name + role +
+    appearance), stripped of punctuation and filler stopwords."""
+    toks: set[str] = set()
+    for part in parts:
+        if not part:
+            continue
+        for raw in part.lower().replace(",", " ").replace("-", " ").split():
+            tok = raw.strip(".'\"!?;:()")
+            if tok and tok not in _RECONCILE_STOPWORDS:
+                toks.add(tok)
+    return toks
+
+
+def _creature_similarity(
+    mention: Any, *, name: str, role: str | None, appearance: str | None
+) -> int:
+    """Shared-token count between an incoming creature mention and an existing
+    creature identity. Higher = more likely the same threat. Used only to
+    disambiguate WHICH existing creature a re-description belongs to when more
+    than one is active in the scene (the single-creature case uses the
+    scene-guard lever and needs no scoring)."""
+    incoming = _creature_tokens(mention.name, mention.role, mention.appearance)
+    existing = _creature_tokens(name, role, appearance)
+    return len(incoming & existing)
+
+
+def _reconcile_ongoing_threat(
+    *, snapshot: GameSnapshot, mention: Any
+) -> tuple[Npc | None, NpcPoolMember | None, str] | None:
+    """Resolve a continuity-flagged creature mention to an EXISTING creature
+    identity instead of minting a Step-3 duplicate (story 83-3).
+
+    Returns ``(npc, None, signal)`` for an authored/roster ``Npc`` target,
+    ``(None, member, signal)`` for a prior pool member, or ``None`` when nothing
+    safe to reconcile to exists (→ caller mints as before).
+
+    Levers (story 83-3 / AC-3 ``signal``):
+      * ``scene_guard``  — exactly one active creature in scene; the re-description
+                           is that one threat (the "one active unnamed threat"
+                           lever). No similarity needed.
+      * ``similarity``   — several creatures active; pick the one whose role/
+                           appearance/name tokens overlap the mention, and only
+                           when there is a clear (>0) overlap. With no overlap we
+                           decline and mint — conservative, never a false merge.
+
+    Creature-ness: a roster ``Npc`` is a creature when it carries a
+    ``creature_id`` (ADR-059); a pool member when ``is_creature`` is set.
+    """
+    npc_candidates = [n for n in snapshot.npcs if n.creature_id is not None]
+    member_candidates = [m for m in snapshot.npc_pool if m.is_creature]
+    total = len(npc_candidates) + len(member_candidates)
+    if total == 0:
+        return None
+    if total == 1:
+        # Scene-guard: one active threat — the re-description is it.
+        if npc_candidates:
+            return (npc_candidates[0], None, "scene_guard")
+        return (None, member_candidates[0], "scene_guard")
+
+    # Several active creatures — disambiguate by token similarity, reconcile only
+    # on a clear best match (>0 shared tokens). Ties / zero overlap → mint.
+    best: tuple[Npc | None, NpcPoolMember | None, str] | None = None
+    best_score = 0
+    for npc in npc_candidates:
+        score = _creature_similarity(
+            mention, name=npc.core.name, role=None, appearance=npc.appearance
+        )
+        if score > best_score:
+            best_score, best = score, (npc, None, "similarity")
+    for member in member_candidates:
+        score = _creature_similarity(
+            mention, name=member.name, role=member.role, appearance=member.appearance
+        )
+        if score > best_score:
+            best_score, best = score, (None, member, "similarity")
+    return best
+
+
 def _apply_npc_mentions(
     *,
     snapshot: GameSnapshot,
@@ -2031,6 +2141,65 @@ def _apply_npc_mentions(
                     turn_num,
                 )
             continue
+
+        # Story 83-3: ongoing-threat reconciliation guard. A creature the narrator
+        # re-describes under a fresh descriptor each turn ("a snarling beast" ->
+        # "the lurking predator" -> "the shadow that stalks") misses the name-only
+        # Steps 1/2 above and would mint a NEW pool member every turn — the
+        # #74-deferred bug where one forest threat became three monsters and
+        # shadowed the authored Cowardly Lion. When the narrator flags the mention
+        # as NOT new (``is_new=False``, the continuity signal), resolve it to an
+        # existing creature identity instead of minting.
+        #
+        # Gate: creature mentions only, continuity-flagged only. A genuinely-new
+        # creature (``is_new=True``) always falls through to Step 3, so two
+        # distinct threats in one scene stay distinct (no false merge, mirroring
+        # the comma-inversion false-positive guard). The match is conservative and
+        # always span-visible — never a silent identity collapse.
+        if mention.is_creature and not mention.is_new:
+            reconciled = _reconcile_ongoing_threat(snapshot=snapshot, mention=mention)
+            if reconciled is not None:
+                reconciled_npc, reconciled_member, signal = reconciled
+                if reconciled_npc is not None:
+                    # Mirror the npcs_hit presence stamp (Step 1) — the authored
+                    # creature was referenced this turn, just under a new descriptor.
+                    actor_loc = snapshot.party_location(perspective=acting_character_name)
+                    if actor_loc:
+                        reconciled_npc.last_seen_location = actor_loc
+                    reconciled_npc.last_seen_turn = turn_num
+                    reconciled_to = reconciled_npc.core.name
+                    target_store = "npcs"
+                else:
+                    # Fill-empty upsert onto the surviving pool member: a
+                    # re-described look/role accretes; existing values win
+                    # (same additive precedent as the Step-2 pool_hit upsert).
+                    assert reconciled_member is not None
+                    if mention.role and not reconciled_member.role:
+                        reconciled_member.role = mention.role
+                    if mention.pronouns and not reconciled_member.pronouns:
+                        reconciled_member.pronouns = mention.pronouns
+                    if mention.appearance and not reconciled_member.appearance:
+                        reconciled_member.appearance = mention.appearance
+                    reconciled_to = reconciled_member.name
+                    target_store = "pool"
+                with npc_creature_reconciled_span(
+                    incoming=mention.name,
+                    reconciled_to=reconciled_to,
+                    signal=signal,
+                    target_store=target_store,
+                    turn_number=turn_num,
+                ):
+                    logger.info(
+                        "npc.creature_reconciled incoming=%r reconciled_to=%r "
+                        "signal=%s store=%s turn=%d — recurring threat collapsed, "
+                        "no phantom mint",
+                        mention.name,
+                        reconciled_to,
+                        signal,
+                        target_store,
+                        turn_num,
+                    )
+                continue
 
         # Step 3: novel — narrator invented a name not in any store.
         # Story 72-4: route the bare narrator string through the ADR-091

@@ -136,8 +136,7 @@ def test_mutant_wasteland_awn_attribute_map_complete_standard_six() -> None:
     assert awn is not None, "rules.awn must be present (see binding test)"
     amap = awn.attribute_map
     assert set(amap.keys()) == CANONICAL_SIX, (
-        "awn.attribute_map must key on all six canonical attributes; "
-        f"got {sorted(amap.keys())}"
+        f"awn.attribute_map must key on all six canonical attributes; got {sorted(amap.keys())}"
     )
     assert set(amap.values()) == STANDARD_SIX, (
         "awn.attribute_map must map canonical → the standard-six flavor labels; "
@@ -159,11 +158,18 @@ def test_mutant_wasteland_combat_is_hp_depletion() -> None:
     the by-design break that drops mutant_wasteland from the dial COMBAT_PACKS set."""
     pack = _load_pack()
     combat = _combat_confrontation(pack)
-    win = combat.win_condition.value if hasattr(combat.win_condition, "value") else str(combat.win_condition)
-    mode = combat.resolution_mode.value if hasattr(combat.resolution_mode, "value") else str(combat.resolution_mode)
+    win = (
+        combat.win_condition.value
+        if hasattr(combat.win_condition, "value")
+        else str(combat.win_condition)
+    )
+    mode = (
+        combat.resolution_mode.value
+        if hasattr(combat.resolution_mode, "value")
+        else str(combat.resolution_mode)
+    )
     assert win == "hp_depletion", (
-        f"combat confrontation {combat.label!r} must use win_condition "
-        f"'hp_depletion'; got {win!r}"
+        f"combat confrontation {combat.label!r} must use win_condition 'hp_depletion'; got {win!r}"
     )
     assert mode != "opposed_check", (
         "an hp_depletion combat must not also be a dial opposed_check confrontation "
@@ -199,7 +205,9 @@ def test_mutant_wasteland_social_and_movement_stay_dial() -> None:
     for category in ("social", "movement"):
         confs = [c for c in pack.rules.confrontations if c.category == category]
         for c in confs:
-            win = c.win_condition.value if hasattr(c.win_condition, "value") else str(c.win_condition)
+            win = (
+                c.win_condition.value if hasattr(c.win_condition, "value") else str(c.win_condition)
+            )
             assert win != "hp_depletion", (
                 f"{category} confrontation {c.label!r} must remain a dial "
                 f"confrontation, not hp_depletion; got win_condition {win!r}"
@@ -238,7 +246,7 @@ def test_mutant_wasteland_archetype_stat_ranges_standard_six() -> None:
     offending: list[tuple[str, str]] = []
     for arch in raw:
         name = arch.get("name", "<unnamed>")
-        for stat_key in (arch.get("stat_ranges") or {}):
+        for stat_key in arch.get("stat_ranges") or {}:
             if stat_key in RETIRED_FLAVOR_NAMES or stat_key not in STANDARD_SIX:
                 offending.append((name, stat_key))
     assert not offending, (

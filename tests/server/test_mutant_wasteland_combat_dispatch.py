@@ -234,7 +234,9 @@ def test_mutant_wasteland_binds_awn_module_in_production_registry() -> None:
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-def test_mutant_wasteland_strike_depletes_ablative_hp_on_real_turn(otel_capture, monkeypatch) -> None:
+def test_mutant_wasteland_strike_depletes_ablative_hp_on_real_turn(
+    otel_capture, monkeypatch
+) -> None:
     """A real mutant_wasteland combat strike, driven through dispatch_dice_throw,
     ablates the target's HP pool (ADR-114) and emits state_patch.hp — proving the
     awn hp_depletion combat path is reachable from the production turn path with the
@@ -251,8 +253,13 @@ def test_mutant_wasteland_strike_depletes_ablative_hp_on_real_turn(otel_capture,
     assert target.hp.current == target.hp.max  # precondition: full HP
 
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Vex", beat_id=beat.id,
-        face=[20], request_id="mw-ablative",
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Vex",
+        beat_id=beat.id,
+        face=[20],
+        request_id="mw-ablative",
     )
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
@@ -288,8 +295,13 @@ def test_mutant_wasteland_downed_target_routes_through_cwn_seam(otel_capture, mo
     assert target is not None
 
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Vex", beat_id=beat.id,
-        face=[20], request_id="mw-downed",
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Vex",
+        beat_id=beat.id,
+        face=[20],
+        request_id="mw-downed",
     )
 
     assert target.hp.current == 0, (
@@ -323,9 +335,7 @@ def test_mutant_wasteland_personal_weapons_carry_damage_specs() -> None:
     pack = _load_pack()
     catalog = pack.inventory.item_catalog
     personal_weapons = [
-        item
-        for item in catalog
-        if item.category == "weapon" and "mounted" not in item.tags
+        item for item in catalog if item.category == "weapon" and "mounted" not in item.tags
     ]
     assert personal_weapons, "mutant_wasteland must declare personal weapons in its catalog"
 

@@ -1232,6 +1232,18 @@ def _resolve_opponent_reprisal(
         beat_id=f"{opponent_beat.id}:opponent_attack",
     )
 
+    # EH-2 burning_peace playtest (2026-06-05): a PC just dropped to 0 by the
+    # reprisal must take the genre lethality policy's mechanical consequence —
+    # otherwise the PC is parked at 0/10 with full agency, no status, no span
+    # (the player-strike / player-cast paths run the CWN/WWN downed seam for the
+    # OPPONENT they drop; nothing handled the PLAYER going down here). No-op
+    # unless check_hp_depletion above resolved a PC-down outcome with the PC at 0.
+    from sidequest.server.post_resolution_lethality import apply_post_resolution_lethality
+
+    apply_post_resolution_lethality(
+        snapshot=snapshot, encounter=encounter, pack=pack, turn=round_number
+    )
+
     return messages
 
 

@@ -35,6 +35,26 @@ SPAN_ROUTES[SPAN_ENCOUNTER_RESOLVED] = SpanRoute(
         "source": (span.attributes or {}).get("source", ""),
     },
 )
+# EH-2 burning_peace playtest (2026-06-05): the lie-detector for "did anything
+# handle the 0-HP exit". When a confrontation resolves against the PC
+# (opponent_victory / mutual_destruction) with the PC at 0 HP, the post-resolution
+# lethality seam applies the genre policy's mechanical consequence and emits this
+# span. ``decision`` is non_lethal_recover | lethal_down | no_policy; the GM panel
+# reads hp_before/hp_after to confirm the PC was not left parked at 0/10.
+SPAN_POST_RESOLUTION_LETHALITY = "encounter.post_resolution_lethality"
+SPAN_ROUTES[SPAN_POST_RESOLUTION_LETHALITY] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.post_resolution_lethality",
+        "decision": (span.attributes or {}).get("decision", ""),
+        "outcome": (span.attributes or {}).get("outcome", ""),
+        "verdict": (span.attributes or {}).get("verdict", ""),
+        "actor": (span.attributes or {}).get("actor", ""),
+        "hp_before": (span.attributes or {}).get("hp_before", -1),
+        "hp_after": (span.attributes or {}).get("hp_after", -1),
+    },
+)
 # SWN P4 initiative spine: the engine rolls initiative and seats the turn
 # order at instantiation. This span is the GM-panel polygraph proving the
 # order is engine-rolled (not narrator improv). ``initiative_order`` is the
@@ -524,6 +544,39 @@ def encounter_resolved_span(
         span_attrs["outcome"] = outcome
     span_attrs.update(attrs)
     with Span.open(SPAN_ENCOUNTER_RESOLVED, span_attrs, tracer_override=_tracer) as span:
+        yield span
+
+
+@contextmanager
+def post_resolution_lethality_span(
+    *,
+    decision: str,
+    outcome: str,
+    verdict: str,
+    actor: str,
+    hp_before: int,
+    hp_after: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """EH-2 lie-detector: the post-resolution PC-down decision (recover vs hold).
+
+    Missing span on an ``opponent_victory`` where the PC hit 0 HP → nothing
+    handled the 0-HP exit (the PC is parked at 0/10 with full agency, the bug).
+    ``decision`` is ``non_lethal_recover`` | ``lethal_down`` | ``no_policy``."""
+    with Span.open(
+        SPAN_POST_RESOLUTION_LETHALITY,
+        {
+            "decision": decision,
+            "outcome": outcome,
+            "verdict": verdict,
+            "actor": actor,
+            "hp_before": hp_before,
+            "hp_after": hp_after,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
         yield span
 
 

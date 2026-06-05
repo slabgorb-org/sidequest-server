@@ -262,9 +262,11 @@ async def test_combat_walkthrough_router_initiates_dual_dial_encounter(
     # The legacy single ``metric`` field isn't merely absent from the schema — the
     # validator ACTIVELY rejects it (73-12 review: the prior `assert not hasattr`
     # was vacuous, since a Pydantic model can't carry an undeclared attribute and it
-    # proved nothing about `_reject_legacy_metric`). Drive the rejection path so a
-    # deleted/bypassed validator fails loudly.
-    with pytest.raises(ValidationError):
+    # proved nothing about `_reject_legacy_metric`). ``match=`` pins the validator's
+    # own message so the block fails if `_reject_legacy_metric` is deleted — without
+    # it the block would pass on the unrelated ``extra="forbid"`` / missing-required-
+    # dial ValidationError this same constructor also raises (round-2 review).
+    with pytest.raises(ValidationError, match=r"legacy 'metric' field"):
         StructuredEncounter(
             encounter_type="combat",
             metric={"name": "momentum", "current": 0, "threshold": 10},

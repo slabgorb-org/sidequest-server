@@ -198,6 +198,13 @@ def _seed_embedded_fragment(handler: WebSocketSessionHandler) -> LoreFragment:
 # ---------------------------------------------------------------------------
 
 
+# These wiring tests drive the real chargen state machine to confirmation plus
+# multiple full narration turns through the real caverns_and_claudes pack — each
+# is ~25-30s of legitimate end-to-end work. The global ``--timeout=30`` (addopts)
+# is too tight for them; under xdist the thread-method timeout fires mid-event-
+# loop and crashes the worker. Raise the per-test ceiling for this heavy class
+# only (does not relax the global budget the rest of the suite relies on).
+@pytest.mark.timeout(120)
 class TestLoreRagWiring:
     def test_player_action_drives_full_lore_pipeline(
         self,

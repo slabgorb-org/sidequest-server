@@ -591,6 +591,15 @@ def session_fixture():
     _mock_repo = MagicMock()
     _mock_repo.save = MagicMock()
     _mock_repo.append_narrative = MagicMock()
+    # #646 wired per-turn ``apply_level_ups(snapshot, sd.genre_pack.progression)``
+    # into the narration pipeline. Any test that seats a PC and drives a turn
+    # through this fixture now reads ``genre_pack.progression`` and compares its
+    # int fields, so a bare ``MagicMock()`` raises ``TypeError`` at the ``<=``.
+    # Hand it a real default ProgressionConfig (milestones_per_level/max_level=0
+    # → resolve_level floors at 1, a clean no-op) so the unrelated level-up step
+    # doesn't crash unrelated wiring tests.
+    from sidequest.genre.models.progression import ProgressionConfig
+
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
         world_slug="sunken_keep",
@@ -600,7 +609,7 @@ def session_fixture():
         repository=_mock_repo,
         dungeon_repository=MagicMock(),
         telemetry_sink=MagicMock(),
-        genre_pack=MagicMock(),
+        genre_pack=MagicMock(progression=ProgressionConfig()),
         orchestrator=MagicMock(),
     )
     # Task E.2 wiring: ``_apply_narration_result_to_snapshot`` (called by
@@ -718,6 +727,12 @@ def synthetic_two_dial_pack():
     # bare MagicMock (a real GenrePack always returns this 2-tuple).
     pack.effective_cultures.return_value = ([], "genre")
     pack.source_dir = None
+    # Story 85-3: the yield/confrontation portrait resolver reads
+    # pack.worlds.get(world_slug) to surface an opponent portrait. A real
+    # GenrePack.worlds is a dict[str, World]; an empty dict is the correct
+    # "no world bound → no portrait manifest" path (resolver returns no
+    # portrait) rather than an AttributeError on the spec'd MagicMock.
+    pack.worlds = {}
     return pack
 
 

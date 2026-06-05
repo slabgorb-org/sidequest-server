@@ -2266,7 +2266,14 @@ def _apply_npc_mentions(
                 # not the first resolved mention in the turn.
                 _resolution_strategy = "shuffle_fallback"
                 _matched_token = ""
-                if original_name:
+                # Story 83-2 self-match needs the pack's culture list to detect a
+                # deterministic mention→culture match. The pre-built-generator
+                # path (docstring: name_generator + culture_name passed directly,
+                # no pack) legitimately has pack=None — there is no Pack to resolve
+                # cultures from, so we keep the "shuffle_fallback" default rather
+                # than crash. Self-match still fires on the lazy path where pack
+                # is resolved.
+                if original_name and pack is not None:
                     _cultures_for_strategy, _ = pack.effective_cultures(world)
                     _matched_culture = next(
                         (c for c in _cultures_for_strategy if c.name == culture_name), None

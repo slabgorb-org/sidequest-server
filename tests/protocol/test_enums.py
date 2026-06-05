@@ -250,10 +250,14 @@ def test_message_type_complete_count() -> None:
     Emitted reactively when the relationship set changes (disposition shift, NPC
     promoted, claim recorded), not every turn. Intentional addition; bumped
     53 → 54.
+    ADR-137 (story 77-8) added QUESTS — the player-facing quest-spine snapshot
+    (quest_log + quest_anchors + active_stakes). Emitted reactively on
+    seed/record_quest/set_stakes; transient broadcast, never event-sourced.
+    Intentional addition; bumped 54 → 55.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 54
+    assert len(MessageType) == 55
 
 
 # ===========================================================================

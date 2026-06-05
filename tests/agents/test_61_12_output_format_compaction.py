@@ -13,8 +13,10 @@ Pins the post-rewrite contract:
   narrator-facing; the silent fallback at ``orchestrator.py:979,1003``
   (``patch.get("npcs_present", patch.get("npcs_met", []))``) is removed.
 
-* **AC-2.** ``len(NARRATOR_OUTPUT_ONLY) <= 13800`` bytes (~2,000 tok under
-  Anthropic's chars/4 rule-of-thumb). Today: ~24,784 bytes / ~3,600 tok.
+* **AC-2.** ``len(NARRATOR_OUTPUT_ONLY) <= 14600`` codepoints (~2,150 tok under
+  Anthropic's chars/4 rule-of-thumb). 61-12 compacted to 13,156; two later
+  load-bearing rules (anti-fabrication + ``is_creature``) lifted it to 14,416,
+  so the ceiling was raised 13,800 → 14,600 (2026-06-05) rather than re-compact.
 
 * **AC-3.** The three CRITICAL MAGIC banners — ``CRITICAL MAGIC EFFECT RULE``
   (§1), ``CRITICAL MAGIC RULE`` (§3 plugin-aware), ``CRITICAL MAGIC NEGATIVE
@@ -255,19 +257,27 @@ def test_orchestrator_parser_has_no_npcs_met_silent_fallback() -> None:
 
 
 def test_output_only_prose_under_byte_budget() -> None:
-    """``NARRATOR_OUTPUT_ONLY`` post-rewrite is ≤ 13,800 bytes (~ 2,000
-    tok under Anthropic's chars/4 rule-of-thumb).
+    """``NARRATOR_OUTPUT_ONLY`` stays within the prompt token ceiling.
 
-    Today: 24,784 bytes / ~3,600 tok / 284 lines. Target reduction:
-    ~44 % bytes, matches the "~50 % prose reduction" story title with
-    headroom.
+    Story 61-12 compacted the file to 13,156 (from a pre-compaction
+    24,784). Two later commits each appended a load-bearing narrator
+    rule — the ANTI-FABRICATION guard (playtest #431, +557) and the
+    ``is_creature`` routing field (npc #74, +625) — which pushed it to
+    14,416. Both rules are intentional and preserved verbatim, so the
+    ceiling was lifted 13,800 → 14,600 (decision 2026-06-05) rather than
+    re-compacting prose at the risk of narrator-quality loss. The
+    prompt is primacy-cached (ADR-112), so the marginal per-turn cost of
+    the extra tokens is amortized. The budget still guards against
+    unbounded growth — a future addition that crosses 14,600 must either
+    compact or make a fresh ceiling decision.
     """
     actual = len(NARRATOR_OUTPUT_ONLY)
-    assert actual <= 13_800, (
-        f"NARRATOR_OUTPUT_ONLY is {actual} bytes, exceeds the 13,800-byte "
-        f"budget (~ 2,000 tok ceiling). Story 61-12 AC-2 requires the "
-        f"file to compact to ≤ 13,800 bytes via the five preservation-by-"
-        f"rewrite passes in the story context. Today: 24,784 bytes."
+    assert actual <= 14_600, (
+        f"NARRATOR_OUTPUT_ONLY is {actual} codepoints, exceeds the "
+        f"14,600 budget (~ 2,150 tok ceiling). The narrator prompt grew "
+        f"past its growth-discipline ceiling — compact the prose "
+        f"(preservation-by-rewrite, keep every rule) or make a fresh "
+        f"ceiling decision. Pre-61-12 baseline was 24,784."
     )
 
 

@@ -832,6 +832,20 @@ def derive_class_label(text: str) -> str:
     return label
 
 
+def indefinite_article(word: str) -> str:
+    """Return "a" or "an" for the leading sound of ``word``.
+
+    Letter-based heuristic on the first character (good enough for the
+    race/class identity line — "Ember Isles" → "an", "Channeler" → "a"). Not a
+    full phonetic library; it does not special-case "hour"/"university"-class
+    exceptions, which do not occur in race/class slugs.
+    """
+    stripped = word.lstrip()
+    if stripped and stripped[0].lower() in "aeiou":
+        return "an"
+    return "a"
+
+
 # ---------------------------------------------------------------------------
 # CharacterBuilder — the state machine
 # ---------------------------------------------------------------------------
@@ -1195,7 +1209,15 @@ class CharacterBuilder:
                 # class_hint "Doctor"). Display-only; symmetric with
                 # background_label. Lets the summary + {class} prose show the
                 # flavor instead of the collapsed archetype slug.
-                if result.choice_label is not None:
+                #
+                # BUT not when the SAME choice also sets race_hint: that's a
+                # combined ORIGIN choice (elemental_harmony "The Ember Isles" →
+                # race_hint "Ember Isles" + class_hint "Channeler"), whose label
+                # names the origin, not the class. Capturing it here duplicated
+                # origin_label onto calling_label and seeded a hollow quest
+                # ("The Ember Isles · The Ember Isles"). The label belongs to
+                # race_label (set below); calling_label resolves from class_hint.
+                if result.choice_label is not None and eff.race_hint is None:
                     acc.class_label = result.choice_label
             # Freeform vocation display label (class-selecting scene answered
             # with free text). Last-wins, display-only.
@@ -2348,7 +2370,7 @@ class CharacterBuilder:
         character = Character(
             core=CreatureCore(
                 name=name,
-                description=f"A {race_str} {class_str}",
+                description=(f"{indefinite_article(race_str).capitalize()} {race_str} {class_str}"),
                 personality=acc.personality_trait or "Determined",
                 level=1,
                 xp=0,
@@ -2380,7 +2402,12 @@ class CharacterBuilder:
             # when it differs from the collapsed mechanical hint; empty when the
             # label IS the archetype. The live sheet shows these over the slug.
             origin_label=acc.race_label or "",
-            calling_label=acc.class_label or "",
+            # A genuine vocation-flavor label wins (tea_and_murder "Country
+            # Veterinary Surgeon"); otherwise fall back to the mechanical
+            # class_hint ("Channeler") so combined-origin packs get a real
+            # Discipline identity instead of an empty calling. class_hint must
+            # win over the origin display label — never duplicate origin_label.
+            calling_label=acc.class_label or acc.class_hint or "",
             first_name=first_name,
             last_name=last_name,
             nickname="",

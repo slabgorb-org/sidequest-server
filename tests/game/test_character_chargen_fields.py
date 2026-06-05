@@ -264,6 +264,85 @@ class TestOriginCallingLabelsPlumbed:
 
 
 # ---------------------------------------------------------------------------
+# Case 4c — combined origin choice (elemental_harmony shape). A SINGLE choice
+# whose label is the ORIGIN ("The Ember Isles") carries BOTH race_hint and
+# class_hint in its mechanical_effects. The choice label names the origin, NOT
+# the class — so it must populate origin_label, and calling_label must come from
+# the mechanical class_hint ("Channeler"), never the origin display label.
+#
+# Regression guard for the live burning_peace playtest bug: calling_label was
+# being set from the choice display label ("The Ember Isles"), duplicating
+# origin_label and cascading into a hollow seed_drive quest + wrong sheet
+# identity line ("The Ember Isles · The Ember Isles").
+# ---------------------------------------------------------------------------
+
+
+class TestCombinedOriginChoiceCallingLabel:
+    def _ember_isles_scene(self) -> list[CharCreationScene]:
+        # elemental_harmony shape: one Origin choice carries race_hint AND
+        # class_hint. There is NO separate class-selecting scene (the Discipline
+        # is derived from the Origin's class_hint).
+        return [
+            make_scene(
+                "origins",
+                choices=[
+                    make_choice(
+                        "The Ember Isles",
+                        description="Born to the fire-touched isles.",
+                        race_hint="Ember Isles",
+                        class_hint="Channeler",
+                    ),
+                ],
+            ),
+        ]
+
+    def test_calling_label_comes_from_class_hint_not_origin_display_label(self) -> None:
+        b = CharacterBuilder(scenes=self._ember_isles_scene(), rules=base_rules())
+        b.apply_choice(0)
+        char = b.build("Chico")
+        # The origin display label belongs to origin_label only.
+        assert char.origin_label == "The Ember Isles"
+        # calling_label must be the mechanical Discipline, NOT the origin label.
+        assert char.calling_label == "Channeler"
+        # The two display surfaces must not collapse to the same string.
+        assert char.origin_label != char.calling_label
+        # Mechanical archetypes underneath are unchanged.
+        assert char.race == "Ember Isles"
+        assert char.char_class == "Channeler"
+
+    def test_seed_drive_fallback_uses_class_hint_not_origin_string(self) -> None:
+        """Wiring: a PC built from the combined origin choice with an empty
+        drive must NOT seed a hollow quest titled after the origin. With
+        calling_label fixed to 'Channeler', the seed-drive fallback (drive →
+        calling_label) references the Discipline, never 'The Ember Isles'."""
+        from sidequest.game.quest_seed import seed_quest_spine
+        from sidequest.game.session import GameSnapshot
+
+        b = CharacterBuilder(scenes=self._ember_isles_scene(), rules=base_rules())
+        b.apply_choice(0)
+        char = b.build("Chico")
+        assert char.drive == ""  # burning_peace defers drive; fallback engages.
+
+        snap = GameSnapshot()
+        seed_quest_spine(snap, char)
+
+        # The hollow-seed bug surfaced "The Ember Isles" as the quest title and
+        # active_stakes. The origin string must appear in NEITHER.
+        assert snap.active_stakes != "The Ember Isles"
+        for entry in snap.quest_log.values():
+            assert entry.title != "The Ember Isles"
+            assert entry.objective != "The Ember Isles"
+
+    def test_identity_description_uses_correct_indefinite_article(self) -> None:
+        """Grammar nit bundled with the calling_label fix: 'An Ember Isles
+        Channeler', not 'A Ember Isles Channeler' (vowel-initial origin)."""
+        b = CharacterBuilder(scenes=self._ember_isles_scene(), rules=base_rules())
+        b.apply_choice(0)
+        char = b.build("Chico")
+        assert char.core.description == "An Ember Isles Channeler"
+
+
+# ---------------------------------------------------------------------------
 # Case 5 — nickname always empty (no chargen source today).
 # ---------------------------------------------------------------------------
 

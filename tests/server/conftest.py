@@ -598,6 +598,13 @@ def session_fixture():
     # Hand it a real default ProgressionConfig (milestones_per_level/max_level=0
     # → resolve_level floors at 1, a clean no-op) so the unrelated level-up step
     # doesn't crash unrelated wiring tests.
+    #
+    # 77-7 wired ``apply_lull_escalation`` into the same turn path; it reads
+    # ``genre_pack.drama_thresholds or DramaThresholds()``. A bare MagicMock
+    # returns a truthy auto-mock there, so ``pacing_hint(mock)`` raises at the
+    # ``boring_streak >= mock`` comparison. Pin ``drama_thresholds=None`` (the
+    # realistic "pack ships no pacing.yaml" value, e.g. caverns_and_claudes) so
+    # the ``or`` falls through to real defaults — same pattern as progression.
     from sidequest.genre.models.progression import ProgressionConfig
 
     sd = _SessionData(
@@ -609,7 +616,7 @@ def session_fixture():
         repository=_mock_repo,
         dungeon_repository=MagicMock(),
         telemetry_sink=MagicMock(),
-        genre_pack=MagicMock(progression=ProgressionConfig()),
+        genre_pack=MagicMock(progression=ProgressionConfig(), drama_thresholds=None),
         orchestrator=MagicMock(),
     )
     # Task E.2 wiring: ``_apply_narration_result_to_snapshot`` (called by

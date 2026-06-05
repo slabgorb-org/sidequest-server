@@ -832,6 +832,18 @@ class GameSnapshot(BaseModel):
     active_seeds: list[SeedState] = Field(default_factory=list)
     seed_ghosts: list[SeedGhost] = Field(default_factory=list)
 
+    # Story 77-7 (ADR-024/025/128) — engine lull-escalation. When the game
+    # lulls (TensionTracker boring_streak >= the genre's escalation_streak),
+    # ``apply_lull_escalation`` fires a seed and stores its narrative_hint here
+    # as the concrete escalation directive for the NEXT turn; ``_build_turn_context``
+    # consumes + clears it, overriding the generic escalation_beat (sibling of
+    # ``next_turn_directives``' populate-then-consume discipline).
+    # ``last_lull_fire_turn`` enforces the ADR-128 FIRE_COOLDOWN_TURNS governor
+    # (never fire two turns running) and is persisted so a resume re-fires
+    # identically. ``extra: ignore`` → pre-77-7 saves load with these as None.
+    pending_escalation_directive: str | None = None
+    last_lull_fire_turn: int | None = None
+
     # Story 50-4 — in-game day counter and time-skip beat summary.
     # ``days_elapsed`` is monotonic, advances by clamp(days_advanced, 0, 14)
     # on every narrator turn that emits a multi-day jump. ``pending_time_skip_summary``

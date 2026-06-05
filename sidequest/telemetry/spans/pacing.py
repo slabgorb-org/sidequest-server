@@ -63,3 +63,58 @@ def pacing_hint_span(
     }
     with Span.open(SPAN_PACING_HINT, attributes, tracer_override=_tracer) as span:
         yield span
+
+
+# Story 77-7 (ADR-024/025/128) — engine lull-escalation. When the game lulls
+# (TensionTracker boring_streak >= the genre's escalation_streak), the selector
+# in ``sidequest.game.lull_escalation`` fires a seed as a concrete escalation
+# directive for the next turn. This span is the GM-panel lie detector for that
+# decision — the proof the ENGINE pushed a Bang rather than the narrator
+# improvising one. Routed under the same ``tension`` component as
+# ``SPAN_PACING_HINT`` so it lights the pacing/tension subsystem grid, and it
+# fires on every engaged run (fire / cooldown / none_available) carrying the
+# five decision fields the panel renders.
+SPAN_LULL_ESCALATION = "pacing.lull_escalation"
+SPAN_ROUTES[SPAN_LULL_ESCALATION] = SpanRoute(
+    event_type="state_transition",
+    component="tension",
+    extract=lambda span: {
+        "field": "lull_escalation",
+        "op": "lull_escalation",
+        "boring_streak": (span.attributes or {}).get("boring_streak", 0),
+        "drama_weight": (span.attributes or {}).get("drama_weight", 0.0),
+        "fired": (span.attributes or {}).get("fired", False),
+        "selected_seed_id": (span.attributes or {}).get("selected_seed_id", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+    },
+)
+
+
+@contextmanager
+def lull_escalation_span(
+    *,
+    boring_streak: int,
+    drama_weight: float,
+    fired: bool,
+    selected_seed_id: str,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 77-7: emitted once per engaged lull-escalation run.
+
+    ``selected_seed_id`` is the empty string (not ``None``) when nothing fired —
+    OTEL attributes reject ``None`` (same convention as ``escalation_present``
+    being a bool above). ``reason`` is one of ``fired`` / ``cooldown`` /
+    ``none_available``; the below-threshold no-op emits no span at all.
+    """
+    attributes: dict[str, Any] = {
+        "boring_streak": boring_streak,
+        "drama_weight": drama_weight,
+        "fired": fired,
+        "selected_seed_id": selected_seed_id,
+        "reason": reason,
+        **attrs,
+    }
+    with Span.open(SPAN_LULL_ESCALATION, attributes, tracer_override=_tracer) as span:
+        yield span

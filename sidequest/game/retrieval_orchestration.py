@@ -29,6 +29,7 @@ is the 75-7 follow-up).
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -53,6 +54,7 @@ from sidequest.game.pertinence import (
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.sanitize import sanitize_player_text
+from sidequest.telemetry.retrieval_reason import card_reason_payload
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -249,6 +251,25 @@ async def retrieve_turn_context(
             # Story 84-1 (ADR-118 §A1): the drama-gate observable. WI-6 reads this
             # on the GM panel to show whether the cosine pass was bypassed.
             span.set_attribute("retrieval.embed_skipped", embed_skipped)
+            # Story 84-4 (ADR-118 §A5): the per-card score decomposition. OTEL
+            # attributes can't hold a list of dicts, so it is JSON-encoded into a
+            # single string attribute (one entry per selected fill card; an empty
+            # JSON list "[]" on a gate-skip — present, never absent/malformed, so
+            # the GM panel can always parse it). The watcher event carries the same
+            # payloads NATIVELY (see dispatch/universal_retrieval) — two encodings,
+            # one source shape (telemetry.retrieval_reason.card_reason_payload).
+            span.set_attribute(
+                "retrieval.card.reason",
+                json.dumps([card_reason_payload(s) for s in card_scores]),
+            )
+            # Story 84-4 (ADR-118 §A5): the A3 forgetting-lifecycle counters. The
+            # LOGIC is WI-3 (84-6); WI-6 emits the honest zero-state SHAPE now —
+            # all three present and 0 this turn (an absent counter would be a silent
+            # gap). No demotion/rehydration/shedding happens yet, so 0 is truthful,
+            # not a stub.
+            span.set_attribute("retrieval.tier_demotions", 0)
+            span.set_attribute("retrieval.tier_rehydrations", 0)
+            span.set_attribute("retrieval.vectors_shed", 0)
 
             return RetrievedEntities(
                 floor=floor,

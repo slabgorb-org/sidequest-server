@@ -1,4 +1,4 @@
-"""Tests for LayeredMerge base class, MergeStrategy, and Resolved[T].
+"""Tests for LayeredMerge base class and MergeStrategy.
 
 Ports from Rust:
   tests/layered_derive.rs  — 4 strategy tests
@@ -13,8 +13,6 @@ from pydantic import Field
 from sidequest.genre.resolver import (
     LayeredMerge,
     MergeStrategy,
-    ResolutionContext,
-    Resolved,
     _apply_strategy,
 )
 from sidequest.protocol.provenance import (
@@ -141,16 +139,9 @@ def test_append_strategy_handles_empty_base() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Port of resolver_unit.rs — ResolutionContext
+# ResolutionContext tests removed (Story 82-4): the four-tier Resolver walk
+# is dead code slated for deletion — see tests/genre/test_82_4_resolver_narrowing.py.
 # ---------------------------------------------------------------------------
-
-
-def test_resolution_context_identifies_chain() -> None:
-    """Port of fn resolution_context_identifies_chain."""
-    ctx = ResolutionContext(genre="heavy_metal", world="evropi", culture="thornwall")
-    assert ctx.genre == "heavy_metal"
-    assert ctx.world == "evropi"
-    assert ctx.culture == "thornwall"
 
 
 # ---------------------------------------------------------------------------
@@ -243,20 +234,9 @@ def test_deep_merge_raises_type_error_for_non_layered() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Resolved[T] — shape and provenance access
+# Resolved[T] tests removed (Story 82-4): the wrapper exists only for the
+# dead four-tier walk — see tests/genre/test_82_4_resolver_narrowing.py.
 # ---------------------------------------------------------------------------
-
-
-def test_resolved_carries_value_and_provenance() -> None:
-    archetype = Archetype(name="Sage", quirks=["wise"])
-    prov = Provenance(
-        source_tier=Tier.genre,
-        source_file="caverns/archetype.yaml",
-        merge_trail=[],
-    )
-    resolved: Resolved[Archetype] = Resolved(value=archetype, provenance=prov)
-    assert resolved.value.name == "Sage"
-    assert resolved.provenance.source_tier == Tier.genre
 
 
 # ---------------------------------------------------------------------------

@@ -78,6 +78,11 @@ SPAN_ROUTES[SPAN_NARRATOR_TOOL_LOOP] = SpanRoute(
         "field": "narrator.tool_loop",
         "iterations_used": (span.attributes or {}).get("iterations_used", 0),
         "max_iterations": (span.attributes or {}).get("max_iterations", 0),
+        # Story 82-9: surface the caller discriminator (so the panel can filter
+        # solo-turn p95 to caller="narrator") and the loop_exceeded marker (so a
+        # ceiling-blown worst-latency turn is visible, not just converged ones).
+        "caller": (span.attributes or {}).get("caller", "narrator"),
+        "loop_exceeded": (span.attributes or {}).get("loop_exceeded", False),
     },
 )
 

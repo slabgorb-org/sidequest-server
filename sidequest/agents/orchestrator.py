@@ -55,7 +55,11 @@ from sidequest.agents.claude_client import (
 from sidequest.agents.claude_client import (
     TimeoutError as _ClaudeTimeoutError,
 )
-from sidequest.agents.narrator import NarratorAgent, is_streaming_enabled
+from sidequest.agents.narrator import (
+    NarratorAgent,
+    is_streaming_enabled,
+    resolve_narrator_iteration_cap,
+)
 from sidequest.agents.narrator_guardrails import (
     CONFRONTATION_TRIGGER_CONSTRAINT,
     GUARDRAIL_NAMES,
@@ -4114,6 +4118,12 @@ class Orchestrator:
                     # (None otherwise → SDK client takes the non-streaming path,
                     # AC2 byte-identical; MP is handled by the canonical path).
                     on_text_delta=_emit_delta if stream_solo else None,
+                    # Story 82-9 — forward the operator's soft tool-loop cap
+                    # (SIDEQUEST_NARRATOR_ITERATION_CAP; None = off) and tag the
+                    # tool_loop summary span as a narrator solo-turn so the GM
+                    # panel can filter curate calls out of solo-turn p95.
+                    iteration_cap=resolve_narrator_iteration_cap(),
+                    caller="narrator",
                 )
 
                 # Story 71-23 — GM-panel lie-detector signal: how many prose

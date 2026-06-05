@@ -83,6 +83,32 @@ def is_streaming_enabled() -> bool:
     return os.environ.get("SIDEQUEST_NARRATOR_STREAMING", "0") == "1"
 
 
+def resolve_narrator_iteration_cap() -> int | None:
+    """Resolve the operator's soft tool-loop ``iteration_cap`` for narrator turns.
+
+    Story 82-9: 71-40 added the ``iteration_cap`` kwarg but left it with no
+    production caller. This toggle lets an operator switch it on without a code
+    change via ``SIDEQUEST_NARRATOR_ITERATION_CAP``.
+
+    Fail-loud (CLAUDE.md "No Silent Fallbacks", mirroring the
+    ``SIDEQUEST_SESSION_COST_CEILING_USD`` parser): unset → ``None`` (no cap, the
+    loop runs to the hard ``max_iterations`` ceiling); a valid positive int → that
+    cap; a non-integer or non-positive value raises ``ValueError`` rather than
+    silently disabling the throttle (a cap of 0 would "throttle" before the first
+    iteration; a typo must not vanish).
+    """
+    raw = os.environ.get("SIDEQUEST_NARRATOR_ITERATION_CAP")
+    if raw is None:
+        return None
+    cap = int(raw)  # raises ValueError on a non-integer value — fail loud.
+    if cap <= 0:
+        raise ValueError(
+            f"SIDEQUEST_NARRATOR_ITERATION_CAP={raw!r} must be a positive integer "
+            "(a non-positive cap would throttle before the first iteration)."
+        )
+    return cap
+
+
 # ---------------------------------------------------------------------------
 # Story 50-4 — TIME-SKIP CONTEXT block renderer
 # ---------------------------------------------------------------------------

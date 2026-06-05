@@ -281,6 +281,9 @@ async def retrieve_turn_context(
         turn_signals = PertinenceSignals(
             mention=1.0 if player_referenced_npcs else 0.0,
             here=1.0 if floor.full_profiles else 0.0,
+            # deferred: recency decay not yet wired — no card-level last_seen to
+            # decay against; the gate resolves on mention + here only (see the
+            # fill-scoring block below for the full deferral note).
             recency=0.0,
             sim=None,
             present_scene=bool(floor.full_profiles),
@@ -338,9 +341,17 @@ async def retrieve_turn_context(
 
         # --- Score (ADR-118 §A1): one weighted selection over the fill cards. The
         # fill is the topical-fallback tail — these cards carry the cosine ``sim``
-        # signal (mention/here/recency are the floor's job). present_scene=False:
+        # signal (mention/here are the floor's job). present_scene=False:
         # the present scene rides the floor, never the fill. select_within_budget
-        # ranks by score and admits within the remaining token budget. ---
+        # ranks by score and admits within the remaining token budget.
+        #
+        # DEFERRED (recency decay not yet wired): the §A1 ``w_recency·decay`` term
+        # is hardcoded to 0.0 here because ``EntityCard`` carries no
+        # ``last_seen_turn`` field to decay against. This is an EXPLICIT,
+        # documented zero — NOT a silent fallback that looks like a live term: the
+        # w_recency weight is real (0.2) but its signal input is unavailable on the
+        # card model until a later Epic-84 work item adds card-level recency
+        # (the EntityCard projector / lifecycle scope, WI-2 84-5 territory). ---
         cards_by_id = {card.id: card for _, card in candidates}
         scored = [
             score_card(
@@ -348,7 +359,7 @@ async def retrieve_turn_context(
                 PertinenceSignals(
                     mention=0.0,
                     here=0.0,
-                    recency=0.0,
+                    recency=0.0,  # deferred: no EntityCard.last_seen_turn to decay (see above)
                     sim=sim,
                     present_scene=False,
                 ),

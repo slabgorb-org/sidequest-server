@@ -718,6 +718,10 @@ class TestNeverRaisesAndDedup:
 
         assert result.outcome == "query_failed"
         assert result.retrieved_npcs is None
+        # §A1 No-Silent-Fallbacks negative case: a REAL daemon embed failure must
+        # NOT masquerade as a drama-gate skip. embed_skipped is reserved for the
+        # deliberate structured-signals-sufficient bypass; a failure leaves it False.
+        assert result.embed_skipped is False
 
     def test_floor_npc_is_deduped_from_fill(self) -> None:
         """Design decision (session file): an NPC present in BOTH the floor

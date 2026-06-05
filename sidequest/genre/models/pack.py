@@ -21,6 +21,7 @@ from sidequest.genre.models.archetype_funnels import ArchetypeFunnels
 from sidequest.genre.models.audio import AudioConfig, VoicePresets
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig
+from sidequest.genre.models.bestiary import Bestiary
 from sidequest.genre.models.character import (
     BackstoryTables,
     CharCreationScene,
@@ -248,6 +249,11 @@ class GenrePack(BaseModel):
     visibility_baseline: VisibilityBaseline | None = None
     lethality_policy: LethalityPolicy | None = None
     wwn_spell_catalog: WwnSpellCatalog | None = None
+    bestiary: Bestiary | None = None
+    """Pack-root ``bestiary.yaml`` (story 90-1): SRD-aligned combat-layer stat
+    blocks for ruleset-module packs. None when the file is absent — encountergen
+    fails loud when the bound ruleset is non-native and this is None (the
+    bestiary is REQUIRED for ruleset-module packs; native packs ignore it)."""
     source_dir: Path | None = None
     client_theme_css: str | None = None
     """Raw contents of the genre's top-level ``client_theme.css`` if present.

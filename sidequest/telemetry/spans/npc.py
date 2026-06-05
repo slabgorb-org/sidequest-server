@@ -321,6 +321,32 @@ SPAN_ROUTES[SPAN_NPC_CREATURE_BESTIARY_DRAW] = SpanRoute(
     },
 )
 
+# Story 83-3: emitted when the ongoing-threat reconciliation guard collapses a
+# re-described creature back onto an existing identity (an authored ``Npc`` or a
+# prior pool member) INSTEAD of minting a fresh pool duplicate at the Step-3
+# novel branch. This is the GM-panel lie detector proving the engine recognized
+# "three monsters" as one threat: ``incoming`` is the new descriptor the
+# narrator used this turn, ``reconciled_to`` is the surviving canonical identity,
+# and ``signal`` records WHICH lever fired (``scene_guard`` = one active creature
+# in scene; ``similarity`` = appearance/role overlap disambiguated among
+# several). Continuity (the narrator's ``is_new=False``) is the gate; the guard
+# never fires on a genuinely-new mention, so the match is conservative and
+# always span-visible (No Silent Fallbacks — never a silent identity collapse).
+SPAN_NPC_CREATURE_RECONCILED = "npc.creature_reconciled"
+SPAN_ROUTES[SPAN_NPC_CREATURE_RECONCILED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc.creature_reconciled",
+        "op": "reconciled",
+        "incoming": (span.attributes or {}).get("incoming", ""),
+        "reconciled_to": (span.attributes or {}).get("reconciled_to", ""),
+        "signal": (span.attributes or {}).get("signal", ""),
+        "target_store": (span.attributes or {}).get("target_store", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # Story 45-21 / 45-52: combat-stats publish onto Npc.core.edge.
 # Fired when an encounter handshake (or other combat-stats emit) writes the
 # dial-derived edge pool onto a matched ``snapshot.npcs`` entry. Renamed from
@@ -555,6 +581,43 @@ def npc_creature_bestiary_draw_span(
     }
     with Span.open(
         SPAN_NPC_CREATURE_BESTIARY_DRAW,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_creature_reconciled_span(
+    *,
+    incoming: str,
+    reconciled_to: str,
+    signal: str,
+    target_store: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 83-3: emitted when the reconciliation guard collapses a re-described
+    creature onto an existing identity instead of minting a Step-3 duplicate.
+
+    ``incoming`` is the narrator's new descriptor this turn; ``reconciled_to`` is
+    the surviving canonical identity; ``signal`` is the lever that fired
+    (``scene_guard`` | ``similarity``); ``target_store`` is ``npcs`` (authored
+    roster Npc) or ``pool`` (prior pool member). The GM panel reads this to
+    verify the engine recognized one threat under many names, rather than seeing
+    phantom duplicates.
+    """
+    attributes: dict[str, Any] = {
+        "incoming": incoming,
+        "reconciled_to": reconciled_to,
+        "signal": signal,
+        "target_store": target_store,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_CREATURE_RECONCILED,
         attributes,
         tracer_override=_tracer,
     ) as span:

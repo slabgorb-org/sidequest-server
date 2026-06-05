@@ -115,9 +115,7 @@ def _creature_pool_members(snap: GameSnapshot) -> list[NpcPoolMember]:
 
 def _attrs_for(otel_capture, span_name: str) -> list[dict]:
     return [
-        dict(s.attributes or {})
-        for s in otel_capture.get_finished_spans()
-        if s.name == span_name
+        dict(s.attributes or {}) for s in otel_capture.get_finished_spans() if s.name == span_name
     ]
 
 
@@ -330,6 +328,73 @@ def test_distinct_creatures_in_scene_stay_distinct() -> None:
         "two genuinely distinct threats (distinct appearance + is_new=True) must stay "
         f"distinct; the guard must not over-merge. got {len(creatures)}: "
         f"{[m.name for m in creatures]}"
+    )
+
+
+def test_multiple_threats_redescription_reconciles_by_similarity(otel_capture) -> None:
+    """AC-1 + AC-4 (similarity lever): when SEVERAL creatures are active in scene,
+    a continuity-flagged re-description must reconcile to the matching one by
+    role/appearance similarity — not mint a third, and not collapse onto the wrong
+    threat. The scene-guard lever alone (one-active-threat) cannot resolve this;
+    the similarity lever disambiguates.
+
+    Two distinct creatures are minted (golem + needle-swarm); a third mention
+    (``is_new=False``) re-describes the golem ("the granite sentinel", glowing
+    granite runes). It must reconcile to the golem via ``signal="similarity"`` —
+    no third pool member, and ``reconciled_to`` names the golem, not the swarm.
+    """
+    snap = GameSnapshot()
+    _apply_npc_mentions(
+        snapshot=snap,
+        mentions=[
+            _creature_mention(
+                "a towering stone golem",
+                is_new=True,
+                role="construct",
+                appearance="hewn from granite, runes glowing along its arms",
+            )
+        ],
+        turn_num=1,
+    )
+    _apply_npc_mentions(
+        snapshot=snap,
+        mentions=[
+            _creature_mention(
+                "a darting needle-swarm",
+                is_new=True,
+                role="swarm",
+                appearance="a shifting cloud of metallic stinging flies",
+            )
+        ],
+        turn_num=2,
+    )
+
+    _apply_npc_mentions(
+        snapshot=snap,
+        mentions=[
+            _creature_mention(
+                "the granite sentinel",
+                is_new=False,
+                role="construct",
+                appearance="a towering shape of glowing granite, runes along its arms",
+            )
+        ],
+        turn_num=3,
+    )
+
+    creatures = _creature_pool_members(snap)
+    assert len(creatures) == 2, (
+        "a re-description in a multi-creature scene must reconcile to an existing threat, "
+        f"not mint a third; got {len(creatures)}: {[m.name for m in creatures]}"
+    )
+    reconciled = _attrs_for(otel_capture, SPAN_CREATURE_RECONCILED)
+    assert reconciled, "the multi-creature re-description must emit a reconciliation span"
+    attrs = reconciled[0]
+    assert attrs.get("reconciled_to") == "a towering stone golem", (
+        f"the granite re-description must reconcile to the GOLEM, not the swarm; got {attrs!r}"
+    )
+    assert attrs.get("signal") == "similarity", (
+        f"a multi-creature disambiguation must report signal='similarity'; got {attrs!r}"
     )
 
 

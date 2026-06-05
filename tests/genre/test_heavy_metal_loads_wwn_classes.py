@@ -30,16 +30,23 @@ import pytest
 
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 
-# The 5 faithful-WWN classes (spec §3). (id, display_name, prime_requisite,
+# The faithful-WWN classes. (id, display_name, prime_requisite,
 # is_caster, is_warrior). governing canonical attr for casters checked below.
+# 87-2 authored the 5 doom Callings; 89-5 adds the two Barsoom caster
+# Callings (Keith's classes-vs-Foci call: Full Callings) staged by the
+# 89-4 BARSOOM HOOK comments in spells_wwn.yaml / rules.yaml.
 _EXPECTED_CLASSES = [
     ("warrior", "Warrior", "STR", False, True),
     ("expert", "Expert", "DEX", False, False),
     ("necromancer", "Necromancer", "INT", True, False),
     ("elementalist", "Elementalist", "INT", True, False),
     ("pact_born", "Pact-born", "CHA", True, False),
+    # 89-5 — Barsoom caster Callings (inert outside barsoom until a world
+    # chargen surface offers them; the spell catalog is pack-tier per 89-4).
+    ("mentalist", "Mentalist", "WIS", True, False),
+    ("super_scientist", "Super-scientist", "INT", True, False),
 ]
-_CASTER_IDS = {"necromancer", "elementalist", "pact_born"}
+_CASTER_IDS = {"necromancer", "elementalist", "pact_born", "mentalist", "super_scientist"}
 
 # 5e scaffolding that MUST NOT survive the port anywhere in rules.yaml.
 _5E_CLASS_NAMES = {
@@ -94,7 +101,7 @@ def test_heavy_metal_classes_are_faithful_wwn_chassis() -> None:
     )
     by_id = {c.id: c for c in pack.classes}
     assert set(by_id) == {e[0] for e in _EXPECTED_CLASSES}, (
-        f"heavy_metal must declare exactly the 5 WWN classes "
+        f"heavy_metal must declare exactly the {len(_EXPECTED_CLASSES)} WWN classes "
         f"{sorted(e[0] for e in _EXPECTED_CLASSES)}; got {sorted(by_id)}"
     )
 
@@ -229,8 +236,13 @@ def test_heavy_metal_blade_work_has_class_filtered_cast_spell() -> None:
     assert not (flt & noncaster_labels), (
         f"cast_spell class_filter must NOT include non-caster classes; got {sorted(flt)}"
     )
-    assert len(flt) == 3, (
-        f"cast_spell class_filter must name all three caster traditions; got {sorted(flt)}"
+    # 89-5: the filter grows from the 3 doom Callings to 5 — the two Barsoom
+    # caster Callings join per the BARSOOM HOOK staged in 89-4. The loader's
+    # _validate_class_filter_refs fails loud on dangling names, so this count
+    # only passes once the Callings genuinely exist in classes.yaml.
+    assert len(flt) == 5, (
+        f"cast_spell class_filter must name all five caster Callings "
+        f"(3 doom + Mentalist + Super-scientist, 89-5); got {sorted(flt)}"
     )
 
 

@@ -27,8 +27,19 @@ import pytest
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 
 # (display_name, is_caster) — the build target + expected seeding shape.
+# 89-5 adds the two Barsoom caster Callings (Mentalist + Super-scientist);
+# they ride the same WWN seeding contract as the doom casters. The build
+# helper's class_hint injection covers them even though the genre-tier
+# crucible scene doesn't offer them (barsoom's world-tier surface does —
+# see tests/integration/test_barsoom_chargen.py).
 _NON_CASTERS = [("Warrior", False), ("Expert", False)]
-_CASTERS = [("Necromancer", True), ("Elementalist", True), ("Pact-born", True)]
+_CASTERS = [
+    ("Necromancer", True),
+    ("Elementalist", True),
+    ("Pact-born", True),
+    ("Mentalist", True),
+    ("Super-scientist", True),
+]
 
 
 def _has_real_content() -> bool:

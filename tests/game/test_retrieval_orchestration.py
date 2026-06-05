@@ -237,13 +237,15 @@ class TestFloorAndFill:
         )
         fake = _FakeDaemon(embedding=[1.0, 0.0, 0.0])
 
+        # §A1 (84-1): a THIN action (no NPC named) keeps the drama-gate open so
+        # the cosine fill still runs — naming Borin would skip the embed. Borin
+        # stays scene-present for the floor regardless.
         result = _run(
             retrieve_turn_context(
                 store,
                 snap,
                 "I head to the dockside tavern",
                 current_turn=10,
-                player_referenced_npcs={"Borin"},
                 client=fake,
             )
         )
@@ -273,13 +275,15 @@ class TestFloorAndFill:
         )
         fake = _FakeDaemon(embedding=[1.0, 0.0, 0.0])
 
+        # §A1 (84-1): thin action so the drama-gate opens and the budget-vs-floor
+        # accounting path is exercised (a named action would skip the embed and
+        # return success before the budget check).
         result = _run(
             retrieve_turn_context(
                 store,
                 snap,
                 "I head to the dockside tavern",
                 current_turn=10,
-                player_referenced_npcs={"Borin"},
                 budget_tokens=1,  # below any non-empty floor cost
                 client=fake,
             )
@@ -738,13 +742,14 @@ class TestNeverRaisesAndDedup:
         )
         fake = _FakeDaemon(embedding=[1.0, 0.0, 0.0])
 
+        # §A1 (84-1): thin action so the cosine fill runs and the floor-dedup path
+        # is actually exercised — naming Borin would skip the embed entirely.
         result = _run(
             retrieve_turn_context(
                 store,
                 snap,
                 "the smithy",
                 current_turn=10,
-                player_referenced_npcs={"Borin"},
                 budget_tokens=10_000,
                 client=fake,
             )

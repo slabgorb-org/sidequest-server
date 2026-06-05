@@ -808,6 +808,12 @@ class TurnContext:
     # — the PC↔NPC standing + key beats for a present/named NPC. ``None`` when no
     # relationship card surfaced (zero-byte-leak), like the others.
     retrieved_entity_relationships: str | None = None
+    # Story 84-5 (WI-2, ADR-118 §A2): the DORMANT quest / trope recall sections —
+    # a completed quest / resolved trope the player referenced this turn. ``None``
+    # when none surfaced. Distinct from the ACTIVE quest/trope paths (state_summary /
+    # trope foreground), which are unchanged — these carry DORMANT recall only.
+    retrieved_entity_quests: str | None = None
+    retrieved_entity_tropes: str | None = None
 
     # Group B (Local DM decomposer) — session handler populates before calling
     # run_narration_turn. Consumed by build_narrator_prompt to register the
@@ -2176,6 +2182,11 @@ class Orchestrator:
             # Story 84-3 (WI-4, §A2, Reviewer blocker): inject the relationship
             # section so the narrator sees the present/named NPC's standing + beats.
             ("retrieved_relationships", context.retrieved_entity_relationships),
+            # Story 84-5 (WI-2, §A2): inject the DORMANT quest / trope recall
+            # sections so the narrator can answer "what happened with X?". Active
+            # quests/tropes ride their existing paths — not registered here.
+            ("retrieved_quests", context.retrieved_entity_quests),
+            ("retrieved_tropes", context.retrieved_entity_tropes),
         ):
             if section_body:
                 registry.register_section(

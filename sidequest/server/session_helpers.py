@@ -1152,6 +1152,8 @@ def _build_turn_context(
     retrieved_entity_locations: str | None = None
     retrieved_entity_factions: str | None = None
     retrieved_entity_relationships: str | None = None
+    retrieved_entity_quests: str | None = None
+    retrieved_entity_tropes: str | None = None
     if entity_retrieval is not None:
         if entity_retrieval.retrieved_npcs:
             retrieved_entity_npcs = render_entity_section(
@@ -1172,6 +1174,19 @@ def _build_turn_context(
         if entity_retrieval.retrieved_relationships:
             retrieved_entity_relationships = render_entity_section(
                 "retrieved_relationships", entity_retrieval.retrieved_relationships
+            )
+        # Story 84-5 (WI-2, ADR-118 §A2): render the DORMANT quest / trope recall
+        # cards into typed Valley blocks. These are for items surfaced via RETRIEVAL
+        # (a completed quest / resolved trope the player referenced) — distinct from
+        # the ACTIVE quest/trope render paths (state_summary / trope foreground),
+        # which are untouched. No double-render: only dormant items reach here.
+        if entity_retrieval.retrieved_quests:
+            retrieved_entity_quests = render_entity_section(
+                "retrieved_quests", entity_retrieval.retrieved_quests
+            )
+        if entity_retrieval.retrieved_tropes:
+            retrieved_entity_tropes = render_entity_section(
+                "retrieved_tropes", entity_retrieval.retrieved_tropes
             )
 
     # Story 81-3 (ADR-025): derive the pacing hint from the per-session
@@ -1280,6 +1295,8 @@ def _build_turn_context(
         retrieved_entity_locations=retrieved_entity_locations,
         retrieved_entity_factions=retrieved_entity_factions,
         retrieved_entity_relationships=retrieved_entity_relationships,
+        retrieved_entity_quests=retrieved_entity_quests,
+        retrieved_entity_tropes=retrieved_entity_tropes,
         lethality_policy=sd.genre_pack.lethality_policy,
         pc_cores_by_player=pc_cores_by_player,
         npc_cores_by_name=npc_cores_by_name,

@@ -32,6 +32,7 @@ from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 if TYPE_CHECKING:
     from sidequest.genre.models.lore import Faction
+    from sidequest.genre.models.tropes import TropeDefinition
     from sidequest.server.websocket_session_handler import (
         WebSocketSessionHandler,
         _SessionData,
@@ -57,6 +58,19 @@ def _collect_world_factions(sd: _SessionData) -> list[Faction]:
         return []
     lore = getattr(world, "lore", None)
     return list(getattr(lore, "factions", None) or [])
+
+
+def _collect_trope_definitions(sd: _SessionData) -> list[TropeDefinition]:
+    """The bound genre pack's trope DEFINITIONS (Story 84-5, WI-2). The dormant-
+    trope projector joins these (by id) onto each ``TropeState`` to recover the
+    human name/description (``TropeState`` carries only ``id``). Defensive
+    ``getattr`` reads keep an entity-sync sweep from crashing a turn on a
+    partially-built session; an absent pack yields zero definitions (so no dormant
+    trope projects — never a fabricated name)."""
+    genre_pack = getattr(sd, "genre_pack", None)
+    if genre_pack is None:
+        return []
+    return list(getattr(genre_pack, "tropes", None) or [])
 
 
 def _resolve_region_view(
@@ -195,8 +209,17 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
     try:
         factions = _collect_world_factions(sd)
         locations, location_failed = _collect_location_views(sd)
+        # Story 84-5 (WI-2): thread the trope DEFINITIONS so the dormant-trope
+        # projector can join the human name/description onto each TropeState (which
+        # carries only id). The quest source is read off snapshot.quest_log inside
+        # sync_entity_cards.
+        tropes = _collect_trope_definitions(sd)
         result = sync_entity_cards(
-            sd.entity_store, snapshot, factions=factions, locations=locations
+            sd.entity_store,
+            snapshot,
+            factions=factions,
+            locations=locations,
+            tropes=tropes,
         )
         # 76-11: a dropped promotion read is counted so the GM-panel sees the
         # location under-report (it already published its own watcher event).
@@ -226,6 +249,16 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
         # Story 84-3 (WI-4): relationship-card reproject tally on the sweep span, so
         # the GM panel does not under-report the relationship index.
         span.set_attribute("entity_sync.relationship_count", result.relationship_count)
+        # Story 84-5 (WI-2): dormant quest / trope reproject tallies — the
+        # active-vs-dormant routing decision the GM panel verifies.
+        span.set_attribute("entity_sync.quest_count", result.quest_count)
+        span.set_attribute("entity_sync.trope_count", result.trope_count)
+        # Story 84-5 (WI-2, Reviewer OTEL nit): the ACTIVE side of the routing split
+        # — items that rode their existing floor and were NOT indexed. Parity with
+        # the dormant quest/trope counts so the GM panel (and Jaeger) sees the full
+        # active-vs-dormant routing decision, not just the dormant half.
+        span.set_attribute("entity_sync.active_quest_count", result.active_quest_count)
+        span.set_attribute("entity_sync.active_trope_count", result.active_trope_count)
         span.set_attribute("entity_sync.failed", result.failed)
         # ADR-138 §D6 — the GM-panel lie-detector sees what the ratification gate
         # withheld from the index, so a quiet narrator (never re-citing a phantom)
@@ -267,6 +300,16 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
             # GM-panel watcher event so the relationship index is observable, not
             # silently under-reported.
             "relationship_count": result.relationship_count,
+            # Story 84-5 (WI-2): dormant quest / trope routing counts on the event,
+            # so the GM panel sees how many notes were indexed (vs. active items that
+            # rode their existing floor).
+            "quest_count": result.quest_count,
+            "trope_count": result.trope_count,
+            # Story 84-5 (WI-2, Reviewer OTEL nit): the active-vs-dormant routing
+            # split on the watcher event — the GM panel sees N active items riding
+            # the floor vs M dormant notes indexed, not just the dormant side.
+            "active_quest_count": result.active_quest_count,
+            "active_trope_count": result.active_trope_count,
             "outcome": result.outcome,
             "turn_number": interaction,
         },

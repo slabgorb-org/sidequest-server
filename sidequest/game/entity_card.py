@@ -34,7 +34,8 @@ if TYPE_CHECKING:
     # in this module's siblings, so a runtime import would risk a cycle. The
     # ``from __future__ import annotations`` above keeps the union annotation lazy.
     from sidequest.game.disposition import DispositionBeat
-    from sidequest.game.session import Npc
+    from sidequest.game.session import Npc, QuestEntry, TropeState
+    from sidequest.genre.models.tropes import TropeDefinition
 
 
 class EntityType(StrEnum):
@@ -49,6 +50,12 @@ class EntityType(StrEnum):
     # projected SUMMARY-tier from the disposition_log. A sibling of the npc card —
     # the NPC card carries identity, the relationship card carries standing + why.
     RELATIONSHIP = "relationship"
+    # Story 84-5 (WI-2, ADR-118 §A2): a DORMANT quest / trope, indexed for recall.
+    # Only DORMANT items (completed quest; dormant/resolved trope) are projected —
+    # ACTIVE ones ride their existing floor path (state_summary / trope foreground),
+    # never indexed (no double-render).
+    QUEST = "quest"
+    TROPE = "trope"
 
 
 # Card-id namespace per entity type. ADR-118 §D3 ids are ``npc:borin``,
@@ -63,6 +70,10 @@ _ID_NAMESPACE: dict[str, str] = {
     EntityType.FACTION: "faction",
     # ``rel:<slug>`` — distinct from ``npc:<slug>`` so the two coexist in the index.
     EntityType.RELATIONSHIP: "rel",
+    # Story 84-5 (WI-2): ``quest:<id>`` / ``trope:<id>`` — the namespace IS the
+    # type name here (no abbreviation), so the dormant card id is self-describing.
+    EntityType.QUEST: "quest",
+    EntityType.TROPE: "trope",
 }
 
 
@@ -97,6 +108,9 @@ UNIVERSAL_RETRIEVAL_SPAN_ATTRS: frozenset[str] = frozenset(
         "retrieval.faction_count",
         # ADR-118 §A2 (84-3, WI-4): RELATIONSHIP-card fill count.
         "retrieval.relationship_count",
+        # ADR-118 §A2 (84-5, WI-2): DORMANT quest / trope fill counts.
+        "retrieval.quest_count",
+        "retrieval.trope_count",
         "retrieval.rejected_below_similarity",
         "retrieval.dimension_mismatch_count",
         # ADR-118 §A1 (84-1) drama-gate observable. 84-1 EMITTED this on the span
@@ -334,6 +348,41 @@ def project_relationship_card(npc: Npc) -> EntityCard:
         entity_ref=name,
         metadata=metadata,
     )
+
+
+def project_quest_card(quest_id: str, entry: QuestEntry) -> EntityCard:
+    """Project a DORMANT quest into an embeddable card (Story 84-5, WI-2, §A2).
+
+    Content = title + objective + status, so a completed quest is recallable by
+    pertinence ("what happened with the smuggler quest?"). Id is ``quest:<id>``.
+    Deterministic (75-6 reproject). NEVER blank — a sparse quest (no title /
+    objective) still yields the id + status, so ``EntityCard``'s blank-content
+    guard never fires. Only DORMANT quests are projected; the routing gate lives in
+    ``entity_sync`` (an active quest rides ``state_summary``, never this card)."""
+    segments: list[str] = [seg for seg in (entry.title, entry.objective) if seg.strip()]
+    # Always include a status descriptor so a title/objective-less quest is still
+    # non-blank and self-identifying (No Silent Fallbacks: no empty card, no crash).
+    status = entry.status.strip() or "unknown"
+    segments.append(f"quest:{quest_id} ({status})" if not segments else status)
+    content = " — ".join(segments)
+    return EntityCard.new(EntityType.QUEST, quest_id, content, entity_ref=quest_id)
+
+
+def project_trope_card(state: TropeState, definition: TropeDefinition) -> EntityCard:
+    """Project a DORMANT trope into an embeddable card (Story 84-5, WI-2, §A2).
+
+    Content = the trope's NAME (from the ``TropeDefinition`` — ``TropeState`` carries
+    only ``id``) + description + status, so a resolved/dormant trope is recallable
+    for callbacks. Id is ``trope:<id>``. Deterministic. NEVER blank — a definition
+    with only a name still yields the name. Only DORMANT tropes are projected; a
+    progressing trope rides the existing trope-foreground floor, never this card."""
+    segments: list[str] = [definition.name]
+    if definition.description and definition.description.strip():
+        segments.append(definition.description.strip())
+    status = state.status.strip() or "unknown"
+    segments.append(status)
+    content = " — ".join(seg for seg in segments if seg.strip())
+    return EntityCard.new(EntityType.TROPE, state.id, content, entity_ref=state.id)
 
 
 def project_faction_card(faction: Faction) -> EntityCard:

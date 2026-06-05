@@ -31,9 +31,12 @@ from sidequest.game.entity_card import (
     project_faction_card,
     project_location_card,
     project_npc_card,
+    project_quest_card,
     project_relationship_card,
+    project_trope_card,
 )
 from sidequest.game.entity_store import EntityStore
+from sidequest.game.lifecycle_scope import quest_is_dormant, trope_is_dormant
 from sidequest.game.npc_pool import is_projectable
 from sidequest.game.projection.relationships import band_for
 
@@ -42,6 +45,7 @@ if TYPE_CHECKING:
 
     from sidequest.game.session import GameSnapshot, Npc
     from sidequest.genre.models.lore import Faction
+    from sidequest.genre.models.tropes import TropeDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +112,21 @@ class EntitySyncResult:
     # non-neutral band — the gate below), so this counts the cards that crossed the
     # gate AND content-changed/inserted, not every stateful NPC.
     relationship_count: int = 0
+    # Story 84-5 (WI-2, ADR-118 §A2): honest reproject tallies for DORMANT quest /
+    # trope cards. Only DORMANT items are projected (completed quest; dormant/
+    # resolved trope) — active ones ride their existing floor and are NOT indexed,
+    # so these count the dormant-routed cards, the active-vs-dormant routing decision
+    # the GM panel verifies.
+    quest_count: int = 0
+    trope_count: int = 0
+    # Story 84-5 (WI-2, Reviewer OTEL nit): the ACTIVE side of the routing split —
+    # quests/tropes that rode their EXISTING floor and were deliberately NOT indexed
+    # (the items the loops ``continue`` past). Emitted alongside the dormant
+    # ``quest_count``/``trope_count`` so the GM panel sees the full active-vs-dormant
+    # routing decision ("N active riding floor vs M dormant indexed"), not just the
+    # dormant half.
+    active_quest_count: int = 0
+    active_trope_count: int = 0
     failed_refs: list[str] = field(default_factory=list)
     card_ids: list[str] = field(default_factory=list)
     evicted_ids: list[str] = field(default_factory=list)
@@ -165,6 +184,7 @@ def sync_entity_cards(
     *,
     factions: Iterable[Faction] = (),
     locations: Iterable[LocationSyncView] = (),
+    tropes: Iterable[TropeDefinition] = (),
 ) -> EntitySyncResult:
     """Project the snapshot's cast — and (76-7) the bound world's factions and
     the turn's locations — into ``store``, upserting each card.
@@ -349,5 +369,53 @@ def sync_entity_cards(
             continue
         covered_ids.add(card.id)
         _apply_typed_card(store, card, result, "location_count")
+
+    # Quests (84-5, §A2) — DORMANT-ONLY. A completed quest is a dormant note,
+    # indexed for recall; an ACTIVE quest rides the existing ``state_summary`` floor
+    # and is NOT projected here (double-render guard, AC-8). The dormant predicate
+    # is the routing gate.
+    for quest_id, entry in getattr(snapshot, "quest_log", {}).items():
+        if not quest_is_dormant(entry):
+            # Active quest — rides the existing state_summary floor, NOT indexed.
+            # Count it so the routing split is observable (Reviewer OTEL nit).
+            result.active_quest_count += 1
+            continue
+        try:
+            card = project_quest_card(quest_id, entry)
+        except (ValueError, ValidationError) as exc:
+            result.failed += 1
+            result.failed_refs.append(f"quest:{quest_id}")
+            logger.warning("entity_sync.project_failed quest=%r error=%s", quest_id, exc)
+            continue
+        _apply_typed_card(store, card, result, "quest_count")
+
+    # Tropes (84-5, §A2) — DORMANT-ONLY. A dormant/resolved trope is a callback
+    # note; a PROGRESSING trope rides the existing trope-foreground floor and is NOT
+    # projected (AC-8). The human name/description live on the ``TropeDefinition``
+    # (TropeState carries only id), so the definitions are joined in by id; a state
+    # with no matching definition cannot be projected (no name) and is skipped loud.
+    _trope_defs = {d.id: d for d in tropes if d.id}
+    for state in getattr(snapshot, "active_tropes", []):
+        if not trope_is_dormant(state):
+            # Progressing trope — rides the existing trope-foreground floor, NOT
+            # indexed. Count it so the routing split is observable (Reviewer OTEL nit).
+            result.active_trope_count += 1
+            continue
+        definition = _trope_defs.get(state.id)
+        if definition is None:
+            result.failed += 1
+            result.failed_refs.append(f"trope:{state.id}")
+            logger.warning(
+                "entity_sync.project_failed trope=%r error=no_definition", state.id
+            )
+            continue
+        try:
+            card = project_trope_card(state, definition)
+        except (ValueError, ValidationError) as exc:
+            result.failed += 1
+            result.failed_refs.append(f"trope:{state.id}")
+            logger.warning("entity_sync.project_failed trope=%r error=%s", state.id, exc)
+            continue
+        _apply_typed_card(store, card, result, "trope_count")
 
     return result

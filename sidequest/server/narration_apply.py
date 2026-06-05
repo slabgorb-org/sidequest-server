@@ -89,6 +89,7 @@ from sidequest.telemetry.spans import (
     lore_established_span,
     magic_working_span,
     npc_auto_registered_span,
+    npc_creature_bestiary_draw_span,
     npc_creature_preserved_span,
     npc_developed_span,
     npc_identity_seeded_span,
@@ -1054,14 +1055,121 @@ def _build_magic_confrontation_payload(
     }
 
 
+def _synthetic_creature_dict(name: str) -> dict:
+    """Generate a minimal encountergen-shaped dict for a narrator-invented
+    creature that has no pre-fetched Monster Manual entry.
+
+    ``creature_id`` is a deterministic slug of the name so that story 83-3
+    (recurring-threat reconciliation) can key on it across separate promotion
+    calls for the same species.  All other fields are conservative defaults
+    appropriate for a tier-2 wild creature.
+    """
+    creature_id = name.lower().replace(" ", "_").replace("'", "").replace("-", "_")
+    return {
+        "name": name,
+        "creature_id": creature_id,
+        "threat_level": 2,
+        "hp": 16,
+        "abilities": [f"{name} — natural attack"],
+        "morale": "steady",
+        "role": "wild creature",
+    }
+
+
+def _promote_creature_to_npc(member: NpcPoolMember) -> Npc:
+    """Promote a creature-classified pool member to an ``Npc`` with Monster
+    Manual bestiary identity (ADR-059, story 83-1).
+
+    Uses ``member.creature_data`` when available (pre-fetched from MM at
+    pool-mint time); otherwise synthesises a minimal stat block from the
+    pool member's name.  In both cases the resulting ``Npc`` carries
+    ``creature_id``, ``threat_level``, ``abilities``, ``morale``, and HP
+    drawn from the bestiary — never the 10/10 person placeholder.
+
+    Emits two OTEL spans:
+    - ``npc.spawn_disposition`` — existing lie-detector for materialisation.
+    - ``npc.creature_bestiary_draw`` — story 83-1 lie-detector proving the
+      engine drew a bestiary identity instead of improvising a placeholder.
+    """
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
+    from sidequest.server.dispatch.monster_manual_inject import _creature_patch_from_enemy
+
+    enemy = (
+        member.creature_data
+        if member.creature_data is not None
+        else _synthetic_creature_dict(member.name)
+    )
+    patch = _creature_patch_from_enemy(enemy, tier=2, location=None)
+    if patch is None:
+        # No Silent Fallbacks: this should never happen with a well-formed dict.
+        raise ValueError(
+            f"_creature_patch_from_enemy returned None for creature {member.name!r}; "
+            "cannot promote creature pool member without a valid patch"
+        )
+
+    hp_val = patch.hp if patch.hp is not None else 16
+    core = CreatureCore(
+        name=member.name,
+        description=member.appearance or patch.description or "wild creature",
+        personality=patch.role or "aggressive",
+        level=patch.threat_level or 2,
+        xp=0,
+        inventory=Inventory(),
+        statuses=[],
+        hp=HpPool(current=hp_val, max=hp_val, base_max=hp_val),
+    )
+    npc = Npc(
+        core=core,
+        pronouns=None,
+        appearance=member.appearance,
+        pool_origin=member.name,
+        disposition=member.disposition,
+        creature_id=patch.creature_id,
+        threat_level=patch.threat_level,
+        abilities=list(patch.abilities) if patch.abilities else [],
+        morale=patch.morale,
+    )
+
+    # Story 72-5: spawn-disposition lie-detector.
+    provenance = "default_neutral" if int(member.disposition) == 0 else "carried_from_pool"
+    with npc_spawn_disposition_span(
+        npc_name=npc.core.name,
+        disposition=int(npc.disposition),
+        provenance=provenance,
+        is_creature=True,
+        pool_origin=member.name,
+    ):
+        pass
+
+    # Story 83-1: bestiary-draw lie-detector — proves the engine produced a
+    # real creature identity rather than the person-shaped placeholder.
+    with npc_creature_bestiary_draw_span(
+        npc_name=npc.core.name,
+        creature_id=patch.creature_id or "",
+        threat_level=patch.threat_level or 2,
+        hp=hp_val,
+        source="mm",
+    ):
+        pass
+
+    return npc
+
+
 def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
     """Build an ``Npc`` from an ``NpcPoolMember``, preserving identity
     (name, pronouns, appearance, role) and recording ``pool_origin`` so
-    Sebastien's mechanical-visibility lens can trace the NPC back to the
-    pool entry it was promoted from. Stat block is the same placeholder
-    shape ``Session._npc_from_patch`` uses — fresh edge pool, empty
-    inventory, level 1.
+    the mechanical-visibility lens can trace the NPC back to the pool entry
+    it was promoted from.
+
+    Creature-classified members (``is_creature=True``) are routed to
+    ``_promote_creature_to_npc`` which draws a Monster Manual bestiary
+    identity (ADR-059, story 83-1) instead of the person-shaped placeholder.
+    Person members receive the existing placeholder stat block (HP 10/10,
+    level 1) and OCEAN seeding via ``_seed_invented_npc_identity``.
     """
+    if member.is_creature:
+        return _promote_creature_to_npc(member)
+
     from sidequest.game.creature_core import (
         CreatureCore,
         HpPool,
@@ -1100,12 +1208,7 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
         npc_name=npc.core.name,
         disposition=int(npc.disposition),
         provenance=provenance,
-        # ping-pong #74: report the member's real creature classification
-        # instead of a hardcoded False. A creature member (the Forest Lions)
-        # promotes as a creature in the GM panel. Materializing the full
-        # Monster Manual stat block onto the promoted ``Npc`` (creature_id /
-        # threat_level / hp via ADR-059) is a deferred follow-up.
-        is_creature=member.is_creature,
+        is_creature=False,
         pool_origin=member.name,
     ):
         pass
@@ -1145,6 +1248,10 @@ def _seed_invented_npc_identity(
     profile so a re-touch never clobbers learned identity.
     """
     if member.drawn_from != "narrator_invented":
+        return
+    if member.is_creature:
+        # Story 83-1: creatures have stat blocks, not Big-Five personalities.
+        # A Forest Lion should never receive an OCEAN profile — skip seeding.
         return
     if npc.ocean:
         # Already seeded — never re-seed (would clobber learned identity).

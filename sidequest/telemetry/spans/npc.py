@@ -298,6 +298,24 @@ SPAN_ROUTES[SPAN_NPC_CREATURE_PRESERVED] = SpanRoute(
     },
 )
 
+# Story 83-1: emitted when a creature pool member is promoted and draws its
+# identity from the Monster Manual bestiary (ADR-059). The lie-detector for
+# the bestiary draw: the GM panel can verify the engine produced a real
+# creature identity (creature_id, threat_level, hp) rather than the 10/10
+# person-shaped placeholder.
+SPAN_NPC_CREATURE_BESTIARY_DRAW = "npc.creature_bestiary_draw"
+SPAN_ROUTES[SPAN_NPC_CREATURE_BESTIARY_DRAW] = SpanRoute(
+    event_type="state_transition",
+    component="npc_pool",
+    extract=lambda span: {
+        "field": "npc.creature_bestiary_draw",
+        "creature_id": (span.attributes or {}).get("creature_id", ""),
+        "threat_level": (span.attributes or {}).get("threat_level", 0),
+        "hp": (span.attributes or {}).get("hp", 0),
+        "source": (span.attributes or {}).get("source", ""),
+    },
+)
+
 # Story 45-21 / 45-52: combat-stats publish onto Npc.core.edge.
 # Fired when an encounter handshake (or other combat-stats emit) writes the
 # dial-derived edge pool onto a matched ``snapshot.npcs`` entry. Renamed from
@@ -484,6 +502,42 @@ def npc_creature_preserved_span(
     }
     with Span.open(
         SPAN_NPC_CREATURE_PRESERVED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_creature_bestiary_draw_span(
+    *,
+    npc_name: str,
+    creature_id: str,
+    threat_level: int,
+    hp: int,
+    source: str = "mm",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 83-1: emitted when a creature pool member is promoted and receives
+    a Monster Manual bestiary identity (ADR-059) instead of the person-shaped
+    placeholder.
+
+    ``creature_id`` is the stable species slug (derived from the name or from
+    the MM entry). ``source="mm"`` distinguishes a real MM draw (or synthetic
+    identity) from a person-placeholder path. The GM panel reads this span to
+    verify the engine produced a real stat block rather than winging it.
+    """
+    attributes: dict[str, Any] = {
+        "npc_name": npc_name,
+        "creature_id": creature_id,
+        "threat_level": threat_level,
+        "hp": hp,
+        "source": source,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_CREATURE_BESTIARY_DRAW,
         attributes,
         tracer_override=_tracer,
     ) as span:

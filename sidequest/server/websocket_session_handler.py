@@ -1009,6 +1009,10 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         opposed_player_beat_id=opposed_player_beat_id,
                         opposed_player_actor=dice_actor,
                         acting_character_name=_resolve_acting_character_name(sd, sd._room),
+                        # Story 83-1: thread the MonsterManual so creature mentions
+                        # at the _apply_npc_mentions seam can look up real bestiary
+                        # entries and embed them as creature_data on the pool member.
+                        monster_manual=sd.monster_manual,
                     )
                     applied_outcome = _apply_narration_result_to_snapshot(
                         snapshot,

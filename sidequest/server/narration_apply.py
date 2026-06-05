@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from sidequest.agents.orchestrator import BeatSelection
     from sidequest.game.character import Character
     from sidequest.game.encounter import EncounterActor, EncounterPhase, StructuredEncounter
+    from sidequest.game.monster_manual import MonsterManual
     from sidequest.genre.names.generator import NameGenerator
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
@@ -1143,12 +1144,16 @@ def _promote_creature_to_npc(member: NpcPoolMember) -> Npc:
 
     # Story 83-1: bestiary-draw lie-detector — proves the engine produced a
     # real creature identity rather than the person-shaped placeholder.
+    # source="mm" when the creature matched a real Monster Manual entry
+    # (pre-fetched via find_enemy_by_name at pool-mint time); source="synthesized"
+    # when the narrator invented a creature with no MM entry (slug-derived id).
+    draw_source = "mm" if member.creature_data is not None else "synthesized"
     with npc_creature_bestiary_draw_span(
         npc_name=npc.core.name,
         creature_id=patch.creature_id or "",
         threat_level=patch.threat_level or 2,
         hp=hp_val,
-        source="mm",
+        source=draw_source,
     ):
         pass
 
@@ -1679,6 +1684,7 @@ def _apply_npc_mentions(
     culture_source: str | None = None,
     pack: GenrePack | None = None,
     world: str | None = None,
+    monster_manual: MonsterManual | None = None,
 ) -> None:
     """Apply narrator NPC mentions via 3-step lookup (Wave 2A, story 45-47).
 
@@ -1939,6 +1945,7 @@ def _apply_npc_mentions(
         # raw-degraded, or legacy-raw — is what every downstream span reports.
         original_name = mention.name
         minted_name = original_name
+        creature_data: dict | None = None
         if mention.is_creature:
             # ping-pong #74: a creature (wild animal / beast / monster) belongs
             # to NO culture or faction, so it must NOT be routed through the
@@ -1946,18 +1953,27 @@ def _apply_npc_mentions(
             # random culture ("a lion called Keeper Goldbraid of the Emerald
             # City"). Preserve the narrator's descriptive name verbatim, mark
             # the member creature-typed, and emit the OTEL lie-detector span
-            # proving the engine declined the namer. (Full Monster Manual
-            # identity — species/threat/hp, ADR-059 — is a deferred follow-up;
-            # this classification is the load-bearing fix.)
+            # proving the engine declined the namer.
+            # Story 83-1: if a MonsterManual is in context, look up the creature
+            # name in the pre-generated encounter pool. On a match, embed the MM
+            # enemy dict so the promotion seam receives a real bestiary stat block
+            # rather than synthesized identity. Narrator-invented creatures with no
+            # MM entry keep creature_data=None; _promote_creature_to_npc synthesizes
+            # a deterministic identity from the name (source="synthesized").
+            if monster_manual is not None:
+                match = monster_manual.find_enemy_by_name(original_name)
+                if match is not None:
+                    creature_data = match[0]
             with npc_creature_preserved_span(
                 npc_name=original_name,
                 turn_number=turn_num,
             ):
                 logger.info(
-                    "npc.creature_preserved name=%r turn=%d — creature mention, "
+                    "npc.creature_preserved name=%r turn=%d mm_matched=%s — creature mention, "
                     "person namer declined (no culture)",
                     original_name,
                     turn_num,
+                    creature_data is not None,
                 )
         else:
             # Person: route the bare narrator string through the ADR-091
@@ -2025,6 +2041,11 @@ def _apply_npc_mentions(
             archetype_id=None,
             drawn_from="narrator_invented",
             is_creature=mention.is_creature,
+            # Story 83-1: embed MM creature data when the name matched a
+            # pre-generated bestiary entry so the promotion seam receives a
+            # real stat block (source="mm"). None for person members and for
+            # narrator-invented creatures with no MM match (source="synthesized").
+            creature_data=creature_data if mention.is_creature else None,
         )
         snapshot.npc_pool.append(new_member)
         with npc_referenced_span(
@@ -2570,6 +2591,7 @@ def _apply_narration_result_to_snapshot(
     opposed_player_beat_id: str | None = None,
     opposed_player_actor: str | None = None,
     acting_character_name: str | None = None,
+    monster_manual: MonsterManual | None = None,
 ) -> NarrationApplyOutcome:
     """Apply narrator-extracted fields to the snapshot.
 
@@ -3709,6 +3731,7 @@ def _apply_narration_result_to_snapshot(
         acting_character_name=acting_character_name,
         pack=pack,
         world=world,
+        monster_manual=monster_manual,
     )
 
     # Story 45-53: detect known recurring NPCs named in prose but missing

@@ -197,7 +197,12 @@ def _make_sdk(prose: str) -> _Sdk:
     )
 
 
-async def _run_sdk_turn(monkeypatch: pytest.MonkeyPatch, prose: str) -> NarrationTurnResult:
+async def _run_sdk_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    prose: str,
+    *,
+    confrontation_def: Any = None,
+) -> NarrationTurnResult:
     """Drive ``run_narration_turn`` through the SDK path with the fixture."""
     monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -221,7 +226,12 @@ async def _run_sdk_turn(monkeypatch: pytest.MonkeyPatch, prose: str) -> Narratio
 
     monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
 
-    ctx = TurnContext(character_name="Kael", genre="caverns_and_claudes", turn_number=2)
+    ctx = TurnContext(
+        character_name="Kael",
+        genre="caverns_and_claudes",
+        turn_number=2,
+        confrontation_def=confrontation_def,
+    )
     return await orch.run_narration_turn("wade in", ctx)
 
 
@@ -471,6 +481,133 @@ async def test_sdk_assembler_is_wired_into_run_narration_turn(
     assert result.status_changes == []
     assert result.scene_mood == "claustrophobic dread"
     assert result.narration == "Reachability proof."
+
+
+# ---------------------------------------------------------------------------
+# 6. RW-2 opposed_check carve-out (playtest 2026-06-05, the_circuit chase).
+#
+# The opposed_check resolution engine (narration_apply._resolve_opposed_check_
+# branch) consumes ``result.beat_selections`` — the narrator's OPPONENT-side
+# beat pick. Zeroing beat_selections unconditionally on the SDK path made the
+# entire engine structurally unreachable on the default backend: the player's
+# stashed DICE_THROW d20 was silently discarded every turn and ALL dial
+# movement came from the narrator free-handing advance_confrontation.
+#
+# The carve-out: when the ACTIVE confrontation resolves via opposed_check
+# (``context.confrontation_def.resolution_mode``), the SDK assembler carries
+# the sidecar beat_selections through so narration_apply can run the resolver.
+# This is NOT a double-apply risk for that mode: no WRITE tool applies
+# opposed_check beats during dispatch (advance_encounter_beat's apply path is
+# the legacy DC mode; advance_confrontation is refused for opposed_check), and
+# the SOUL gate in narration_apply still drops PC-side selections.
+# ---------------------------------------------------------------------------
+
+
+def _opposed_cdef() -> Any:
+    from sidequest.genre.models.rules import ConfrontationDef
+
+    return ConfrontationDef.model_validate(
+        {
+            "type": "chase",
+            "label": "Chase",
+            "category": "movement",
+            "resolution_mode": "opposed_check",
+            "opponent_default_stats": {"STR": 12},
+            "player_metric": {"name": "separation", "starting": 0, "threshold": 7},
+            "opponent_metric": {"name": "pursuit", "starting": 0, "threshold": 7},
+            "beats": [
+                {
+                    "id": "press_attack",
+                    "label": "Press Attack",
+                    "kind": "strike",
+                    "base": 2,
+                    "stat_check": "STR",
+                }
+            ],
+        }
+    )
+
+
+def _legacy_mode_cdef() -> Any:
+    from sidequest.genre.models.rules import ConfrontationDef
+
+    return ConfrontationDef.model_validate(
+        {
+            "type": "chase",
+            "label": "Chase",
+            "category": "movement",
+            "resolution_mode": "beat_selection",
+            "player_metric": {"name": "separation", "starting": 0, "threshold": 7},
+            "opponent_metric": {"name": "pursuit", "starting": 0, "threshold": 7},
+            "beats": [
+                {
+                    "id": "press_attack",
+                    "label": "Press Attack",
+                    "kind": "strike",
+                    "base": 2,
+                    "stat_check": "STR",
+                }
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_carries_beat_selections_under_opposed_check(
+    monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
+) -> None:
+    """When the active confrontation is opposed_check, the SDK result MUST
+    carry the sidecar beat_selections — they are the resolver's only input
+    for the opponent's beat. Every OTHER tool-owned field stays zeroed.
+    """
+    result = await _run_sdk_turn(
+        monkeypatch,
+        "The patrol cuts across the median.",
+        confrontation_def=_opposed_cdef(),
+    )
+
+    assert len(result.beat_selections) == 1, (
+        "opposed_check carve-out must lift the sidecar beat_selections onto "
+        "the SDK result — the opposed resolver is unreachable without them"
+    )
+    sel = result.beat_selections[0]
+    assert sel.actor == "Kael"
+    assert sel.beat_id == "press_attack"
+
+    # The carve-out is surgical: every other tool-owned field stays zeroed
+    # (the anti-double-apply guard holds for tool-applied categories).
+    assert result.status_changes == []
+    assert result.location is None
+    assert result.magic_working is None
+    assert result.days_advanced == 0
+    assert result.affinity_progress == []
+    assert result.game_patch_dict == {}
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_zeros_beat_selections_under_non_opposed_confrontation(
+    monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
+) -> None:
+    """Regression guard: a NON-opposed confrontation (legacy beat_selection
+    mode) keeps the zeroed partition — beats on that mode flow through the
+    advance_encounter_beat WRITE tool, so carrying the sidecar would
+    double-apply.
+    """
+    result = await _run_sdk_turn(
+        monkeypatch,
+        "Steel rings on steel.",
+        confrontation_def=_legacy_mode_cdef(),
+    )
+    assert result.beat_selections == []
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_zeros_beat_selections_with_no_confrontation(
+    monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
+) -> None:
+    """Regression guard: no active confrontation → zeroed, as before."""
+    result = await _run_sdk_turn(monkeypatch, "A quiet road.")
+    assert result.beat_selections == []
 
 
 def test_sdk_tool_owned_partition_is_explicit_and_documented() -> None:

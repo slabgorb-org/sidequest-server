@@ -90,6 +90,7 @@ from sidequest.game.tension_tracker import PacingHint
 from sidequest.game.weather import WeatherState
 from sidequest.genre.models.lethality import LethalityPolicy
 from sidequest.genre.models.narrative import Prompts
+from sidequest.genre.models.rules import ResolutionMode
 from sidequest.protocol.dice import RollOutcome
 from sidequest.protocol.dispatch import DispatchPackage, NarratorDirective
 from sidequest.telemetry.leak_audit import audit_canonical_prose
@@ -3697,15 +3698,47 @@ class Orchestrator:
         # not set on the SDK path. The retired ``begin_confrontation`` tool
         # stub lives at ``sidequest/agents/tools/_retired/begin_confrontation.py``
         # with a breadcrumb docstring.
-        assembled = NarrationTurnResult(**shared, tool_calls=tool_calls_ledger)
+        #
+        # RW-2 opposed_check carve-out (playtest 2026-06-05, the_circuit
+        # chase): ``narration_apply._resolve_opposed_check_branch`` consumes
+        # ``result.beat_selections`` — the narrator's OPPONENT-side beat pick
+        # paired with the player's stashed DICE_THROW d20. Zeroing the field
+        # unconditionally made the entire opposed_check engine structurally
+        # unreachable on the SDK path: the player's roll was silently
+        # discarded every turn and all dial movement came from the narrator
+        # free-handing ``advance_confrontation``. When the ACTIVE
+        # confrontation declares ``resolution_mode: opposed_check`` we lift
+        # the sidecar selections through. This is NOT a double-apply risk for
+        # that mode — no WRITE tool applies opposed_check beats during
+        # dispatch (``advance_confrontation`` refuses the mode), and the SOUL
+        # gate in narration_apply still drops PC-side selections. All other
+        # modes stay zeroed (anti-double-apply guard unchanged).
+        _opposed_check_active = (
+            getattr(context.confrontation_def, "resolution_mode", None)
+            == ResolutionMode.opposed_check
+        )
+        beat_selections: list[BeatSelection] = []
+        if _opposed_check_active:
+            beat_selections = [
+                BeatSelection.from_dict(d)
+                for d in extraction["beat_selections"]
+                if isinstance(d, dict)
+            ]
+
+        assembled = NarrationTurnResult(
+            **shared, tool_calls=tool_calls_ledger, beat_selections=beat_selections
+        )
 
         # Fail-loud backstop (CLAUDE.md no silent fallbacks): the tool-owned
         # partition must remain at dataclass defaults so narration_apply
         # does not double-apply what the WRITE tools already persisted.
+        # ``beat_selections`` is exempt exactly when the opposed_check
+        # carve-out above is active — that is the single sanctioned carrier.
         _violations = [
             name
             for name in _SDK_TOOL_OWNED_FIELDS
-            if getattr(assembled, name) != getattr(_NTR_DEFAULTS, name)
+            if not (name == "beat_selections" and _opposed_check_active)
+            and getattr(assembled, name) != getattr(_NTR_DEFAULTS, name)
         ]
         if _violations:
             raise AssertionError(

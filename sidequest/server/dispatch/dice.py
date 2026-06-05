@@ -845,6 +845,12 @@ def dispatch_dice_throw(
         total=result.total,
         outcome=result.outcome.value,
         seed=result.seed,
+        # RW-2: on the opposed-pending branch the stamped outcome is the
+        # provisional flat-DC tier — apply was deferred to the opposed
+        # resolver, whose ``opposed_roll_resolved`` span carries the real
+        # tier. Mark the deferral so the GM panel doesn't read a final
+        # CritSuccess on a beat that may lose the exchange.
+        deferred_opposed=opposed_pending,
     )
 
     # Broadcast the dice pair (DICE_REQUEST → DICE_RESULT) first so
@@ -951,7 +957,8 @@ def dispatch_dice_throw(
 
     logger.info(
         "dice.throw_resolved request_id=%s rolling_player=%s total=%d outcome=%s "
-        "beat_id=%s player_momentum=%d opponent_momentum=%d resolved_encounter=%s",
+        "beat_id=%s player_momentum=%d opponent_momentum=%d resolved_encounter=%s "
+        "deferred_opposed=%s",
         request.request_id,
         rolling_player_id,
         resolved.total,
@@ -960,6 +967,7 @@ def dispatch_dice_throw(
         encounter.player_metric.current,
         encounter.opponent_metric.current,
         encounter_resolved,
+        opposed_pending,
     )
 
     if opposed_pending:

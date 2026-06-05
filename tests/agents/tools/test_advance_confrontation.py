@@ -137,6 +137,7 @@ def _make_ctx(
     *,
     snapshot: GameSnapshot | None = None,
     session_id: str = "s",
+    genre_pack: Any = None,
 ) -> ToolContext:
     """Build a ToolContext carrying the canonical in-turn snapshot (Story 73-3).
 
@@ -154,8 +155,42 @@ def _make_ctx(
         repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
+        genre_pack=genre_pack,
         snapshot=snapshot,
     )
+
+
+def _pack_with_mode(resolution_mode: str, *, confrontation_type: str = "brawl") -> Any:
+    """Minimal GenrePack whose rules carry one cdef of the given mode.
+
+    ``model_construct`` skips full-pack validation (mirrors
+    tests/server/test_opposed_check_wiring.py) — only ``rules`` is
+    consulted by the guard under test.
+    """
+    from sidequest.genre.models.pack import GenrePack
+    from sidequest.genre.models.rules import ConfrontationDef, RulesConfig
+
+    cdef = ConfrontationDef.model_validate(
+        {
+            "type": confrontation_type,
+            "label": "Brawl",
+            "category": "combat",
+            "resolution_mode": resolution_mode,
+            "opponent_default_stats": {"STR": 12},
+            "player_metric": {"name": "momentum", "starting": 0, "threshold": 10},
+            "opponent_metric": {"name": "menace", "starting": 0, "threshold": 10},
+            "beats": [
+                {
+                    "id": "attack",
+                    "label": "Attack",
+                    "kind": "strike",
+                    "base": 2,
+                    "stat_check": "STR",
+                }
+            ],
+        }
+    )
+    return GenrePack.model_construct(rules=RulesConfig(confrontations=[cdef]))
 
 
 async def _call(arguments: dict, ctx: ToolContext) -> ToolResult:
@@ -262,8 +297,7 @@ async def test_advance_confrontation_refuses_resolved_encounter() -> None:
 
     r = await _call({"axis": "player", "delta": 3}, ctx)
     assert r.status is ToolResultStatus.ERROR_RECOVERABLE, (
-        "advancing a resolved encounter's dial must fail loud (recoverable), "
-        f"got status={r.status}"
+        f"advancing a resolved encounter's dial must fail loud (recoverable), got status={r.status}"
     )
     # The zombie dial must NOT move.
     assert snap.encounter is not None
@@ -682,6 +716,159 @@ async def test_advance_and_resolve_same_turn_both_persist() -> None:
     assert enc.opponent_metric.current == 11  # crossing dial value, not clobbered
     assert enc.resolved is True
     assert enc.outcome == "opponent_victory"
+
+
+# ---------------------------------------------------------------------------
+# RW-2 (playtest 2026-06-05, the_circuit chase) — opposed_check guard
+# ---------------------------------------------------------------------------
+#
+# With beat_selections zeroed on the SDK path, ALL dial movement in the chase
+# came from the narrator free-handing this tool with invented deltas (PG
+# telemetry: only phase-`advanced` events "moved the dial without a beat";
+# ZERO opposed_roll_resolved all session). On an opposed_check confrontation
+# the dice engine — not the narrator — owns the deltas: the narrator's job is
+# to emit the OPPONENT's beat_selection, which the resolver pairs with the
+# player's stashed d20. The tool must refuse the mode (recoverable, loud).
+
+
+async def test_refuses_opposed_check_confrontation() -> None:
+    enc = _encounter(player_current=2, encounter_type="brawl")
+    snap = _build_snapshot(characters=[_character("Alice")], encounter=enc)
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap, genre_pack=_pack_with_mode("opposed_check"))
+
+    r = await _call({"axis": "opponent", "delta": 2}, ctx)
+    assert r.status is ToolResultStatus.ERROR_RECOVERABLE, (
+        "advance_confrontation must refuse an opposed_check confrontation — "
+        f"the dice engine owns those deltas; got status={r.status}"
+    )
+    # The dial must NOT move on a narrator free-hand.
+    assert snap.encounter is not None
+    assert snap.encounter.opponent_metric.current == 1, (
+        "refused advance silently moved the opposed_check dial to "
+        f"{snap.encounter.opponent_metric.current}"
+    )
+    # The refusal steers the narrator to the sanctioned channel.
+    assert r.message is not None
+    assert "beat_selection" in r.message
+    # GM-panel visibility for the refusal (No Silent Fallbacks).
+    attrs = _otel_attrs(ctx)
+    assert attrs.get("tool.confrontation.refused_opposed_check") is True
+
+
+async def test_allows_non_opposed_confrontation_with_pack() -> None:
+    """beat_selection mode (legacy dial engine) keeps working with a pack wired."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(player_current=2, encounter_type="brawl"),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap, genre_pack=_pack_with_mode("beat_selection"))
+
+    r = await _call({"axis": "player", "delta": 3}, ctx)
+    assert r.status is ToolResultStatus.OK
+    assert _payload(r)["value_after"] == 5
+
+
+async def test_allows_when_encounter_type_not_in_pack() -> None:
+    """An encounter type with no matching cdef cannot be mode-checked — the
+    guard stands down (the dial engine remains the narrator's channel)."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(player_current=2, encounter_type="unlisted_type"),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap, genre_pack=_pack_with_mode("opposed_check"))
+
+    r = await _call({"axis": "player", "delta": 1}, ctx)
+    assert r.status is ToolResultStatus.OK
+
+
+async def test_allows_when_genre_pack_none() -> None:
+    """Legacy fixtures construct ToolContext without a genre_pack — the guard
+    must tolerate None (every pre-existing test in this file runs that way)."""
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(player_current=2),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap, genre_pack=None)
+
+    r = await _call({"axis": "player", "delta": 1}, ctx)
+    assert r.status is ToolResultStatus.OK
+
+
+# ---------------------------------------------------------------------------
+# RW-2 — GM-timeline watcher event on narrator-driven dial moves
+# ---------------------------------------------------------------------------
+#
+# The DRIVER could not attribute the pursuit 4→5 tick: the tool's OTEL span
+# attrs exist, but no watcher state_transition reaches the GM timeline, so a
+# narrator-driven dial move is invisible next to the engine's own events.
+
+
+async def test_successful_advance_publishes_watcher_state_transition(
+    monkeypatch,
+) -> None:
+    from sidequest.agents.tools import advance_confrontation as ac_module
+
+    published: list[tuple[str, dict, dict]] = []
+
+    def _capture(event_type: str, fields: dict, **kwargs: Any) -> None:
+        published.append((event_type, fields, kwargs))
+
+    monkeypatch.setattr(ac_module, "_watcher_publish", _capture)
+
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        encounter=_encounter(opponent_current=4, encounter_type="brawl"),
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call(
+        {"axis": "opponent", "delta": 1, "reason": "they're closing"},
+        ctx,
+    )
+    assert r.status is ToolResultStatus.OK
+
+    assert len(published) == 1, "a successful advance must publish exactly one watcher event"
+    event_type, fields, kwargs = published[0]
+    assert event_type == "state_transition"
+    assert fields["op"] == "narrator_dial_advance"
+    assert fields["axis"] == "opponent"
+    assert fields["delta"] == 1
+    assert fields["reason"] == "they're closing"
+    assert fields["value_before"] == 4
+    assert fields["value_after"] == 5
+    assert fields["encounter_type"] == "brawl"
+    assert kwargs.get("component") == "encounter"
+
+
+async def test_refused_advance_does_not_publish_dial_advance_event(
+    monkeypatch,
+) -> None:
+    """Refusals (resolved encounter / opposed_check) must not emit a
+    narrator_dial_advance event — the dial did not move."""
+    from sidequest.agents.tools import advance_confrontation as ac_module
+
+    published: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        ac_module,
+        "_watcher_publish",
+        lambda event_type, fields, **kw: published.append((event_type, fields)),
+    )
+
+    enc = _encounter(player_current=2)
+    enc.resolved = True
+    enc.outcome = "abandoned_on_location_change"
+    snap = _build_snapshot(characters=[_character("Alice")], encounter=enc)
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call({"axis": "player", "delta": 3}, ctx)
+    assert r.status is ToolResultStatus.ERROR_RECOVERABLE
+    assert published == []
 
 
 async def test_otel_reports_canonical_persisted_delta() -> None:

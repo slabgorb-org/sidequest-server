@@ -4646,6 +4646,47 @@ def _apply_narration_result_to_snapshot(
                 beat_by_id = {b.id: b for b in cdef.beats}
         else:
             _legacy_beat_path = False
+            # RW-2 loud-stash guard (playtest 2026-06-05, the_circuit chase):
+            # the player rolled (DICE_THROW stashed a pending d20 for the
+            # opposed resolver) but ZERO beat selections survived this
+            # narration turn — the resolver above never ran, and the session
+            # handler clears the stash right after this apply returns. That
+            # discard was SILENT, which is how the entire opposed_check
+            # engine died unnoticed on the SDK path (beat_selections zeroed
+            # every turn → every player roll vanished). Surface it loudly on
+            # the GM panel before the stash is lost (No Silent Fallbacks).
+            if enc is not None and not enc.resolved and opposed_player_d20 is not None:
+                _pending_cdef = find_confrontation_def(
+                    pack.rules.confrontations if pack is not None and pack.rules else [],
+                    enc.encounter_type,
+                )
+                if (
+                    _pending_cdef is not None
+                    and _pending_cdef.resolution_mode == ResolutionMode.opposed_check
+                ):
+                    logger.warning(
+                        "encounter.opposed_check_pending_roll_unconsumed "
+                        "encounter=%r player_d20=%d player_beat_id=%r — no beat "
+                        "selections survived the narration turn; the stashed "
+                        "player roll will be cleared unconsumed",
+                        enc.encounter_type,
+                        opposed_player_d20,
+                        opposed_player_beat_id,
+                    )
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "encounter",
+                            "op": "opposed_check_pending_roll_unconsumed",
+                            "encounter_type": enc.encounter_type,
+                            "player_d20": opposed_player_d20,
+                            "player_beat_id": opposed_player_beat_id or "",
+                            "player_actor": opposed_player_actor or "",
+                            "raw_selection_count": len(result.beat_selections),
+                        },
+                        component="encounter",
+                        severity="warning",
+                    )
 
         if _legacy_beat_path:
             selections = gated_selections

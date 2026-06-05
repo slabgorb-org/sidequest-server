@@ -80,6 +80,37 @@ class _FakePack:
 
 
 @dataclass
+class _FakeAwnRules:
+    """Minimal rules object that acts like RulesConfig for an awn pack.
+
+    AWN uses System Strain inherited from CWN (stims, mutations, first-aid), so
+    adjust_system_strain must accept it. The guard is capability-based
+    (`isinstance(module, CwnRulesetModule)`), so `awn` is accepted.
+    """
+
+    ruleset: str = "awn"
+    _awn_cfg: Any = None
+
+    def __post_init__(self) -> None:
+        if self._awn_cfg is None:
+            from sidequest.genre.models.rules import AwnConfig
+
+            self._awn_cfg = AwnConfig(attribute_map=_AMAP)
+
+    def ruleset_config(self) -> Any:
+        return self._awn_cfg
+
+
+@dataclass
+class _FakeAwnPack:
+    rules: _FakeAwnRules = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.rules is None:
+            self.rules = _FakeAwnRules()
+
+
+@dataclass
 class _NonCwnRules:
     ruleset: str = "native"
 
@@ -275,6 +306,36 @@ async def test_non_cwn_pack_raises() -> None:
 # ---------------------------------------------------------------------------
 # Guard: unknown actor returns NOT_FOUND
 # ---------------------------------------------------------------------------
+
+
+async def test_awn_pack_applies_strain() -> None:
+    """Story 88-1 Item 7: an AWN pack must apply System Strain (it inherits the
+    mechanic from CWN). The cwn-only guard must loosen to accept "awn".
+    """
+    char = _cwn_character("Vane", strain_current=0, strain_max=12)
+    snap = _build_snapshot(characters=[char])
+    pack = _FakeAwnPack()
+    store = _store_with(snap)
+    ctx = _make_ctx(store, genre_pack=pack)
+
+    r = await _call(
+        {"actor": "Vane", "kind": "temporary", "amount": 3, "source": "stimpack"},
+        ctx,
+    )
+    assert r.status is ToolResultStatus.OK, (
+        "adjust_system_strain must accept an awn pack, not raise the cwn-only guard"
+    )
+    p = _payload(r)
+    assert p["applied"] is True
+    assert p["current"] == 3
+    assert p["delta"] == 3
+
+    reloaded = store.load()
+    assert reloaded is not None
+    core = reloaded.snapshot.find_creature_core("Vane")
+    assert core is not None
+    assert core.system_strain is not None
+    assert core.system_strain.current == 3
 
 
 async def test_unknown_actor_returns_not_found() -> None:

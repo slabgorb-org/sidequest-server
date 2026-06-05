@@ -148,7 +148,15 @@ def test_bestiary_requirement_is_ruleset_generic() -> None:
     This pins the seam as ruleset-generic rather than a wwn special case."""
     failures: list[str] = []
     found_any = False
-    for slug in ("heavy_metal", "elemental_harmony", "neon_dystopia", "space_opera"):
+    # mutant_wasteland joined the ruleset-module fleet mid-story (88-2 bound
+    # `ruleset: awn` during 90-1's green phase) — the contract covers it too.
+    for slug in (
+        "heavy_metal",
+        "elemental_harmony",
+        "neon_dystopia",
+        "space_opera",
+        "mutant_wasteland",
+    ):
         try:
             pack_dir = find_pack_path(slug)
         except PackNotFound:

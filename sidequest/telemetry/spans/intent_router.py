@@ -51,6 +51,11 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_DECOMPOSE] = SpanRoute(
         "model": (span.attributes or {}).get("model", ""),
         "dispatch_count": (span.attributes or {}).get("dispatch_count", 0),
         "latency_ms": (span.attributes or {}).get("latency_ms", 0),
+        # Story 71-40 env-vs-code latency attribution: raw SDK round-trip
+        # (env) vs serialized state-summary size (code), so the GM panel can
+        # localize the 4-12s decompose blowup.
+        "sdk_latency_ms": (span.attributes or {}).get("sdk_latency_ms", 0),
+        "state_summary_bytes": (span.attributes or {}).get("state_summary_bytes", 0),
         "retry_count": (span.attributes or {}).get("retry_count", 0),
         "confidence_global": (span.attributes or {}).get("confidence_global", 0.0),
         # Degrade-path marker (Story 71-29): True when this decompose span was

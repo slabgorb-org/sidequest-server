@@ -21,6 +21,10 @@ from sidequest.agents.tooling_protocol import (
     ToolUseBlock,
 )
 from sidequest.telemetry.spans.llm_request import llm_request_span
+from sidequest.telemetry.spans.narrator import (
+    narrator_tool_loop_cap_hit_span,
+    narrator_tool_loop_span,
+)
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish_event
 
 logger = logging.getLogger(__name__)
@@ -288,6 +292,7 @@ class AnthropicSdkClient:
         *,
         model: str,
         max_iterations: int = 8,
+        iteration_cap: int | None = None,
         max_tokens: int = 4096,
         on_text_delta: Callable[[str], Awaitable[None] | None] | None = None,
         session_id: str | None = None,
@@ -327,7 +332,23 @@ class AnthropicSdkClient:
 
         initial_message_count = len(running_messages)
 
+        # Story 71-40: the soft ``iteration_cap`` cap-hit span fires at most once
+        # per turn — a warning the turn is unusually tool-heavy, not a stop.
+        cap_hit_fired = False
+
         for iteration in range(1, max_iterations + 1):
+            # Story 71-40: a turn that reaches the soft cap (set below the hard
+            # ``max_iterations`` ceiling) records ONE cap-hit span so the GM panel
+            # surfaces the throttled turn. The loop is NOT stopped here — the
+            # fail-loud ``AnthropicSdkLoopExceeded`` ceiling below is unchanged.
+            if iteration_cap is not None and iteration >= iteration_cap and not cap_hit_fired:
+                cap_hit_fired = True
+                with narrator_tool_loop_cap_hit_span(
+                    iteration_cap=iteration_cap,
+                    iterations_used=iteration,
+                    max_iterations=max_iterations,
+                ):
+                    pass
             # Story 60-4/60-7: every iter — iter=1 included — build the API
             # payload with a moving cache_control breakpoint on the LAST
             # content block of the newest user message. Without this marker
@@ -564,6 +585,17 @@ class AnthropicSdkClient:
             last_text = text or last_text
 
             if response.stop_reason != "tool_use":
+                # Story 71-40: per-turn tool-loop summary. Fires once per
+                # CONVERGED turn (independent of session_id, unlike the cost
+                # events below), recording how many SDK round-trips the turn
+                # consumed so the GM panel can spot runaway loops inflating
+                # solo-turn p95.
+                with narrator_tool_loop_span(
+                    iterations_used=iteration,
+                    max_iterations=max_iterations,
+                ):
+                    pass
+
                 # Story 61-followup-D §C.3 — per-turn pulse for the GM
                 # panel live counter. Fires once per successful turn, not
                 # per tool-loop iteration; bypassed when session_id is

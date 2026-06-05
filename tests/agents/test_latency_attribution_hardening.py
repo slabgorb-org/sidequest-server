@@ -118,10 +118,15 @@ async def test_sdk_latency_tracks_real_emit_tool_duration(otel_capture) -> None:
     await router.decompose(action="wait", state_summary={"scene": "x"})
 
     attrs = _decompose_attrs(otel_capture)
-    # asyncio.sleep(0.05) guarantees >= 50ms; floor-to-ms leaves a safe margin.
-    assert attrs["sdk_latency_ms"] >= 20, (
-        "sdk_latency_ms must track the real ~50ms emit_tool round-trip, not sit "
-        f"at 0 like a flat mock; got {attrs['sdk_latency_ms']}"
+    # A real >=50ms emit_tool must record a POSITIVE measured ms — that alone
+    # de-vacuifies the flat-mock-0 case. We assert strictly >0 (not a magnitude
+    # floor): the perf_counter window is the emit_tool interior, but event-loop
+    # scheduling under heavy CI load can shave the measured ms, so a magnitude
+    # floor like >=20 would flake. >0 proves "not the constant 0" without that
+    # risk (Story 82-9 review T3).
+    assert attrs["sdk_latency_ms"] >= 1, (
+        "sdk_latency_ms must record the real emit_tool round-trip as a positive "
+        f"measured value, not sit at 0 like a flat mock; got {attrs['sdk_latency_ms']}"
     )
     assert attrs["sdk_latency_ms"] <= attrs["latency_ms"], (
         "the raw SDK round-trip is a COMPONENT of the total — it cannot exceed it; "

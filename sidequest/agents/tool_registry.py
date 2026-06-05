@@ -164,6 +164,12 @@ class _RegisteredTool:
     category: ToolCategory
     args_model: type[BaseModel]
     handler: Callable[..., Awaitable[ToolResult]]
+    # Story 73-15: the SRD ruleset this tool requires, or None for a
+    # ruleset-agnostic tool. WWN-only tools declare "wwn", CWN-only tools
+    # "cwn". Drives tool_definitions(ruleset=...) filtering so the narrator is
+    # only ever advertised tools its bound ruleset can actually use (ADR-117
+    # tightening). The per-tool fail-loud self-guard remains as a backstop.
+    ruleset: str | None = None
 
 
 class Registry:
@@ -181,6 +187,7 @@ class Registry:
         category: ToolCategory,
         args_model: type[BaseModel],
         handler: Callable[..., Awaitable[ToolResult]],
+        ruleset: str | None = None,
     ) -> None:
         if name in self._tools:
             raise ValueError(f"Tool {name!r} already registered")
@@ -190,12 +197,24 @@ class Registry:
             category=category,
             args_model=args_model,
             handler=handler,
+            ruleset=ruleset,
         )
 
     def list_names(self) -> list[str]:
         return sorted(self._tools)
 
-    def tool_definitions(self) -> list[ToolDefinition]:
+    def tool_definitions(self, ruleset: str | None = None) -> list[ToolDefinition]:
+        """Tool definitions, optionally filtered to a bound ruleset.
+
+        Story 73-15 (ADR-117 tightening): when ``ruleset`` is a slug (e.g.
+        ``"native"`` / ``"wwn"`` / ``"cwn"``), a tool is advertised iff it is
+        ruleset-agnostic (``t.ruleset is None``) OR declares that exact slug.
+        WWN/CWN-only tools therefore vanish from the narrator's surface on any
+        other pack. ``ruleset=None`` (the default) returns the full catalog —
+        back-compat for the diagnostic token-estimate call site, pack-less /
+        legacy narration paths, and the per-tool self-guard backstop, none of
+        which carry a bound slug.
+        """
         return [
             ToolDefinition(
                 name=t.name,
@@ -203,6 +222,7 @@ class Registry:
                 input_schema=t.args_model.model_json_schema(),
             )
             for t in self._tools.values()
+            if ruleset is None or t.ruleset is None or t.ruleset == ruleset
         ]
 
     async def dispatch(
@@ -307,6 +327,7 @@ def tool(
     description: str,
     category: ToolCategory,
     registry: Registry | None = None,
+    ruleset: str | None = None,
 ) -> Callable[[Callable[..., Awaitable[ToolResult]]], Callable[..., Awaitable[ToolResult]]]:
     """Decorator: register an async handler with a Pydantic-args model.
 
@@ -346,6 +367,7 @@ def tool(
             category=category,
             args_model=args_annotation,
             handler=fn,
+            ruleset=ruleset,
         )
         return fn
 

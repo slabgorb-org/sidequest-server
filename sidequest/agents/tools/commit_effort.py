@@ -84,6 +84,7 @@ class CommitEffortArgs(BaseModel):
         "the narrator can describe the Effort limit being hit."
     ),
     category=ToolCategory.WRITE,
+    ruleset="wwn",
 )
 async def commit_effort(args: CommitEffortArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

@@ -95,6 +95,7 @@ class StabilizeMortalInjuryArgs(BaseModel):
         "keeps running."
     ),
     category=ToolCategory.WRITE,
+    ruleset="cwn",
 )
 async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

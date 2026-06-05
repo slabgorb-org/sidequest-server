@@ -64,6 +64,7 @@ class VeteransLuckArgs(BaseModel):
         "describe the ability being spent."
     ),
     category=ToolCategory.WRITE,
+    ruleset="wwn",
 )
 async def veterans_luck(args: VeteransLuckArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

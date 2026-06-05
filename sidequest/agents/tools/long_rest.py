@@ -80,6 +80,7 @@ class LongRestArgs(BaseModel):
         "(validated against the pack's spell catalog — unknown ids raise)."
     ),
     category=ToolCategory.WRITE,
+    ruleset="wwn",
 )
 async def long_rest(args: LongRestArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

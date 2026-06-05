@@ -47,8 +47,8 @@ def test_heavy_metal_pack_loads_with_dual_dial_schema():
     beat_selection`` + ``win_condition: hp_depletion`` — combat resolves on HP
     reaching 0 and legitimately carries NO player_metric/opponent_metric,
     mirroring elemental_harmony / space_opera. The dual-dial invariant therefore
-    only applies to its remaining dial confrontations (negotiation, chase,
-    pact_working, debt_collection), which are ``win_condition: dial_threshold``
+    only applies to its remaining dial confrontations (negotiation, chase),
+    which are ``win_condition: dial_threshold``
     (the model default) and still carry metrics. Filter on win_condition so the
     metricless hp_depletion combat is skipped rather than NPE-ing on
     ``player_metric.threshold``. At least one dial confrontation must remain so

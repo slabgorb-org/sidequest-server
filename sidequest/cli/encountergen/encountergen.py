@@ -76,6 +76,11 @@ class EnemyBlock:
     ocean_summary: str
     trope_connections: list[TropeConnection]
     visual_prompt: str
+    # Bestiary combat layer (story 90-1) — only set on the ruleset-module
+    # path; None on the native / creatures.yaml paths, where the keys are
+    # dropped from JSON output so the legacy shape is byte-identical.
+    armor_class: int | None = None
+    attack_bonus: int | None = None
 
 
 @dataclass
@@ -87,6 +92,12 @@ def _enemy_block_to_dict(block: EnemyBlock) -> dict[str, Any]:
     """Serialize EnemyBlock — rename ``class_`` to ``class`` for JSON compat."""
     data = asdict(block)
     data["class"] = data.pop("class_")
+    # Keep the legacy (native / creatures.yaml) output shape unchanged:
+    # the bestiary combat keys only appear when the bestiary path set them.
+    if data["armor_class"] is None:
+        del data["armor_class"]
+    if data["attack_bonus"] is None:
+        del data["attack_bonus"]
     return data
 
 
@@ -325,6 +336,78 @@ def creature_to_enemy_block(creature: dict[str, Any], rng: random.Random) -> Ene
         ocean_summary="feral and aggressive",
         trope_connections=[],
         visual_prompt=visual_prompt,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pack bestiary → EnemyBlock (ruleset-module packs, story 90-1)
+# ---------------------------------------------------------------------------
+
+
+def generate_enemy_from_bestiary(
+    pack: GenrePack,
+    args: argparse.Namespace,
+    rng: random.Random,
+) -> EnemyBlock:
+    """Generate an enemy from the pack-root bestiary (``ruleset != native``).
+
+    The bestiary entry supplies the combat layer (level / hp / armor_class /
+    attack_bonus, SRD-aligned per the bound ruleset); encountergen composes
+    the narrative layers (OCEAN, visual prompt) the same way the
+    creatures.yaml path does. Caller guarantees ``pack.bestiary`` is set.
+    """
+    assert pack.bestiary is not None  # guarded by main()'s fail-loud branch
+    entries = pack.bestiary.entries
+
+    tier = args.tier if args.tier is not None else rng.randint(1, 3)
+    level_min, level_max = tier_to_level_range(tier)
+    pool = [e for e in entries if level_min <= e.level <= level_max]
+    if not pool:
+        # Mirror the creatures.yaml sampling rule: an unpopulated tier falls
+        # back to the full entry list (a sampling decision, not a config
+        # fallback — the bestiary itself is validated non-empty at load).
+        pool = list(entries)
+    entry = rng.choice(pool)
+
+    role = entry.role if entry.role else entry.name.lower()
+
+    # Narrative layers stay encountergen's job (90-1 schema decision).
+    parts: list[str] = [entry.description if entry.description else f"{entry.name}, {role}"]
+    if args.context:
+        parts.append(args.context)
+    if pack.visual_style is not None:
+        parts.append(pack.visual_style.positive_suffix)
+    visual_prompt = ", ".join(p.strip().rstrip(",") for p in parts if p and p.strip())
+
+    ocean = OceanValues(
+        openness=rng.uniform(1.0, 4.0),
+        conscientiousness=rng.uniform(2.0, 5.0),
+        extraversion=rng.uniform(2.0, 6.0),
+        agreeableness=rng.uniform(1.0, 3.0),
+        neuroticism=rng.uniform(4.0, 8.0),
+    )
+
+    return EnemyBlock(
+        name=entry.name,
+        class_="creature",
+        race=entry.tags[0] if entry.tags else "hostile",
+        level=entry.level,
+        tier_label=f"tier-{tier}",
+        role=role,
+        hp=entry.hp,
+        abilities=list(entry.abilities),
+        weaknesses=[],
+        disposition=-20,
+        personality=[],
+        dialogue_quirks=[],
+        inventory=[],
+        stat_scores={},
+        ocean=ocean,
+        ocean_summary=summarize_ocean(ocean),
+        trope_connections=[],
+        visual_prompt=visual_prompt,
+        armor_class=entry.armor_class,
+        attack_bonus=entry.attack_bonus,
     )
 
 
@@ -669,6 +752,15 @@ def _generate_name(
 # ---------------------------------------------------------------------------
 
 
+def _emit(enemies: list[EnemyBlock]) -> int:
+    """Print the encounter JSON to stdout + write the sidecar. Always 0."""
+    block = EncounterBlock(enemies=enemies)
+    out = {"enemies": [_enemy_block_to_dict(e) for e in block.enemies]}
+    print(json.dumps(out, indent=2))
+    write_sidecar(block)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     genre_dir = Path(args.genre_packs_path) / args.genre
@@ -699,21 +791,31 @@ def main(argv: list[str] | None = None) -> int:
             creature = rng.choice(pool)
             enemies.append(creature_to_enemy_block(creature, rng))
 
-        block = EncounterBlock(enemies=enemies)
-        out = {"enemies": [_enemy_block_to_dict(e) for e in block.enemies]}
-        print(json.dumps(out, indent=2))
-        write_sidecar(block)
-        return 0
+        return _emit(enemies)
 
-    # Fallback: humanoid NPCs from rules.yaml
+    # Ruleset-module packs (ADR-117) deliberately drop allowed_classes —
+    # enemies come from the pack-root bestiary instead (story 90-1). Fail
+    # loud when the bestiary is absent: silently seeding an empty Monster
+    # Manual pool was the 87-4 bug this branch retires.
+    if pack.rules.ruleset != "native":
+        if pack.bestiary is None:
+            print(
+                f"sidequest-encountergen: genre '{args.genre}' binds ruleset "
+                f"'{pack.rules.ruleset}' but ships no bestiary.yaml at the pack "
+                "root — ruleset-module packs REQUIRE a bestiary (90-1 fail-loud "
+                "contract; author SRD-aligned combat stat blocks)",
+                file=sys.stderr,
+            )
+            return 1
+        for _ in range(args.count):
+            enemies.append(generate_enemy_from_bestiary(pack, args, rng))
+        return _emit(enemies)
+
+    # Native packs: humanoid NPCs from rules.yaml allowed_classes
     for _ in range(args.count):
         enemies.append(generate_enemy(pack, genre_dir, args, rng))
 
-    block = EncounterBlock(enemies=enemies)
-    out = {"enemies": [_enemy_block_to_dict(e) for e in block.enemies]}
-    print(json.dumps(out, indent=2))
-    write_sidecar(block)
-    return 0
+    return _emit(enemies)
 
 
 if __name__ == "__main__":

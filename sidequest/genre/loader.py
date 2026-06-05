@@ -27,6 +27,7 @@ from sidequest.genre.models.archetype_funnels import ArchetypeFunnels
 from sidequest.genre.models.audio import AudioConfig, VoicePresets
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig
+from sidequest.genre.models.bestiary import Bestiary
 from sidequest.genre.models.character import (
     BackstoryTables,
     CharCreationScene,
@@ -1477,6 +1478,15 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # authoring bug. No silent fallback.
     wwn_catalog = _load_wwn_spell_catalog(path, rules, classes_list)
 
+    # Pack-root bestiary (story 90-1) — SRD-aligned combat stat blocks for
+    # ruleset-module packs. Optional at load (synthetic fixtures and non-
+    # encounter consumers don't need it); a malformed file still fails loud.
+    # The REQUIRED-for-ruleset-module-packs contract is enforced at the
+    # generation seam: encountergen exits loud when ruleset != native and
+    # this is None, and pregen.seed_manual raises rather than silently
+    # seeding an empty encounters pool.
+    bestiary = _load_yaml_optional(path / "bestiary.yaml", Bestiary)
+
     # Fail loud: every starting_prepared spell id on every class must resolve
     # against the loaded catalog.  Unknown ids are authoring bugs.
     _validate_wwn_starting_prepared_refs(classes_list, wwn_catalog)
@@ -1614,6 +1624,7 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         visibility_baseline=visibility_baseline,
         lethality_policy=lethality_policy,
         wwn_spell_catalog=wwn_catalog,
+        bestiary=bestiary,
         source_dir=path,
         client_theme_css=client_theme_css,
     )

@@ -42,6 +42,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class EncounterSeedError(RuntimeError):
+    """Encounter seeding failed for a ruleset-module pack (story 90-1).
+
+    A ``ruleset: wwn|cwn|swn|awn`` pack must seed its Monster Manual
+    encounters pool from the pack bestiary or fail LOUD — the old
+    warning-only skip shipped worlds with silently-empty pools (87-4:
+    evropi 49 NPCs / 0 encounters). Native packs keep the warning-only
+    behavior (their generation path is unchanged by 90-1).
+    """
+
+
 NPCS_PER_CULTURE = 3
 """How many NPCs to generate per culture during seeding (Rust parity)."""
 
@@ -285,6 +297,7 @@ def seed_manual(
     # that failed to load defaults to combat-enabled (the model default), since
     # the no-culture fallback path is the legacy combat behavior.
     combat_encounters = getattr(getattr(pack, "rules", None), "combat_encounters", True)
+    ruleset = getattr(getattr(pack, "rules", None), "ruleset", "native") if pack else "native"
     if combat_encounters:
         for tier in ENCOUNTER_TIERS:
             data = _generate_encounter(
@@ -295,8 +308,20 @@ def seed_manual(
                 count=ENCOUNTERS_PER_TIER,
             )
             if data is not None:
-                logger.info("pregen.encounter_generated (tier=%d)", tier)
+                logger.info("pregen.encounter_generated (tier=%d, ruleset=%s)", tier, ruleset)
                 manual.add_encounter(data, tier, [])
+            elif ruleset != "native":
+                # Story 90-1: a ruleset-module pack seeds from its bestiary or
+                # fails LOUD — the old warning-only skip shipped silently-empty
+                # encounter pools (No Silent Fallbacks). Native packs keep the
+                # legacy warning-only behavior.
+                raise EncounterSeedError(
+                    f"encounter seeding failed for ruleset-module pack "
+                    f"'{genre}' (ruleset={ruleset}, world={world!r}, tier={tier}): "
+                    "encountergen produced no output — check the pack's "
+                    "bestiary.yaml (REQUIRED for ruleset-module packs) and the "
+                    "pregen.encountergen_failed log line above"
+                )
     else:
         logger.info(
             "pregen.encounters_skipped (genre=%s, world=%s, reason=combat_encounters=false)",
@@ -323,6 +348,10 @@ def seed_manual(
         {
             "genre": genre,
             "world": world or "",
+            # Story 90-1 (AC4): which ruleset path seeded the encounters pool —
+            # ruleset-module packs draw from the pack bestiary, native packs
+            # from allowed_classes. GM-panel proof the right path fired.
+            "ruleset": ruleset,
             "cultures_source": cultures_source,
             # ``effective_culture_count`` is the world's TRUE culture count
             # (pre-seed); ``culture_count`` is how many were actually seeded.

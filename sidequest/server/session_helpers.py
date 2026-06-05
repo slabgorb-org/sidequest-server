@@ -202,8 +202,15 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "current_region",
     "days_elapsed",
     "genre_slug",
+    "last_lull_fire_turn",
     "last_saved_at",
+    # 82-2 (ADR-049) added these enum-scalar narrator-tuning fields to
+    # GameSnapshot but never categorized them; classify here (enums are
+    # bounded by construction) so the 61-5 governance gate is green.
+    "narrator_verbosity",
+    "narrator_vocabulary",
     "party_body_id",
+    "pending_escalation_directive",
     "player_dead",
     "time_of_day",
     "total_beats_fired",
@@ -1202,6 +1209,19 @@ def _build_turn_context(
     # the dev can confirm it tracks real tension state (OTEL Observability).
     pacing_thresholds = sd.genre_pack.drama_thresholds or DramaThresholds()
     pacing_hint = sd.tension_tracker.pacing_hint(pacing_thresholds)
+    # Story 77-7 (ADR-024/025/128): if the lull-escalation engine fired a seed
+    # last turn, its narrative_hint is THIS turn's concrete escalation directive.
+    # Override the generic 'environment shifts' escalation_beat with it and
+    # consume the one-shot directive (sibling of next_turn_directives'
+    # populate-then-consume discipline). PacingHint is frozen → dataclasses.replace.
+    # Applied regardless of the current boring_streak: the directive can outlive
+    # the streak the fire itself reset.
+    _lull_directive = snapshot.pending_escalation_directive
+    if _lull_directive:
+        import dataclasses  # noqa: PLC0415
+
+        pacing_hint = dataclasses.replace(pacing_hint, escalation_beat=_lull_directive)
+        snapshot.pending_escalation_directive = None
     with pacing_hint_span(
         drama_weight=pacing_hint.drama_weight,
         target_sentences=pacing_hint.target_sentences,

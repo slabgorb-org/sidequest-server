@@ -1235,6 +1235,31 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             now_turn=snapshot.turn_manager.interaction,
                         )
 
+                    # Story 77-7 (ADR-024/025/128): engine lull-escalation. Peer
+                    # to tick_seeds / the 22-5 engagement draw (post-bump), and
+                    # before the per-turn tension observe() below, so it reads the
+                    # boring_streak accumulated through the prior turn. When the
+                    # game has lulled (boring_streak >= the genre's
+                    # escalation_streak) the engine PUSHES: fire a seed as the
+                    # next turn's concrete escalation directive instead of waiting
+                    # for the player to prod. SPAN_LULL_ESCALATION is the GM-panel
+                    # lie detector for the push.
+                    from sidequest.game.lull_escalation import (  # noqa: PLC0415
+                        apply_lull_escalation,
+                    )
+                    from sidequest.genre.models.ocean import (  # noqa: PLC0415
+                        DramaThresholds,
+                    )
+
+                    apply_lull_escalation(
+                        snapshot,
+                        sd.genre_pack,
+                        tracker=sd.tension_tracker,
+                        thresholds=(sd.genre_pack.drama_thresholds or DramaThresholds()),
+                        session_id=seed_session_id,
+                        now_turn=snapshot.turn_manager.interaction,
+                    )
+
                     # Story 45-20: trope-resolution handshake. Diffs the baseline
                     # against the post-recompute snapshot to detect tropes that
                     # flipped to "resolved" this turn; writes the durable record

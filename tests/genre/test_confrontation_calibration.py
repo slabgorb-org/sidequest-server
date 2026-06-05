@@ -90,9 +90,18 @@ SHIPPED_PACKS = [
 # intentionally carries ZERO opposed_check confrontations. Its remaining dial
 # confrontations (negotiation "Diplomatic Council", chase "Pursuit") are still
 # covered by the SHIPPED_PACKS threshold tests above.
+#
+# mutant_wasteland is excluded as of the AWN binding (epic 88, design §6.4): its
+# combat confrontation ("Wasteland Brawl") moved off resolution_mode:
+# opposed_check to ruleset:awn beat_selection + win_condition: hp_depletion,
+# again mirroring the space_opera→SWN / elemental_harmony→WWN migrations.
+# mutant_wasteland therefore intentionally carries ZERO opposed_check
+# confrontations. Its remaining dial confrontations (negotiation "Wasteland
+# Parley", chase "Wasteland Pursuit") are still covered by the SHIPPED_PACKS
+# threshold tests above. This is the documented by-design calibration migration,
+# NOT a regression.
 COMBAT_PACKS = [
     "caverns_and_claudes",
-    "mutant_wasteland",
 ]
 
 CALIBRATED_THRESHOLD = 7

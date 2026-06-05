@@ -20,7 +20,9 @@ victim "Recovers at 1 HP + Frail" — the Mortal Injury (a Scar) clears and a
 Frail Wound (clears with rest, per StatusSeverity.Wound) takes its place.
 
 Guards (fail loud — no silent fallbacks per CLAUDE.md):
-- ``ctx.genre_pack.rules.ruleset != "cwn"`` → ValueError (tool is CWN-only)
+- bound module ``not isinstance(module, CwnRulesetModule)`` → ValueError (the tool
+  requires a CWN-family ruleset — ``cwn`` or its ``awn`` subclass — since the
+  Mortal Injury / stabilize-at-0 rule is a CwnRulesetModule mechanic)
 - actor not found in snapshot → NOT_FOUND
 - no active session → ERROR_FATAL
 

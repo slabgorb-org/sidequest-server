@@ -13,10 +13,12 @@ number the SAME way for both paths: PC stats come from the seated
 silently defaults the target number (No Silent Fallbacks).
 
 ``run_cwn_wwn_downed_seam`` runs the gated seam: it is a no-op unless the bound
-ruleset is ``cwn``/``wwn`` AND the named defender is at <= 0 HP, and otherwise
-computes the save target and calls ``ruleset.resolve_downed`` (which emits
-``wwn.mortal_injury.declared`` / ``cwn.mortal_injury.declared`` and, on a failed
-Traumatic-Hit save, the ``*.major_injury.roll`` span).
+ruleset config IS a ``CwnConfig``/``WwnConfig`` (covers ``cwn``, ``wwn``, and
+``awn`` — whose ``AwnConfig`` subclasses ``CwnConfig``) AND the named defender is
+at <= 0 HP, and otherwise computes the save target and calls
+``ruleset.resolve_downed`` (which emits ``wwn.mortal_injury.declared`` /
+``cwn.mortal_injury.declared`` and, on a failed Traumatic-Hit save, the
+``*.major_injury.roll`` span).
 """
 
 from __future__ import annotations

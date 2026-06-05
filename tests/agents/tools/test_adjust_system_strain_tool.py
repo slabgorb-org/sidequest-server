@@ -84,8 +84,8 @@ class _FakeAwnRules:
     """Minimal rules object that acts like RulesConfig for an awn pack.
 
     AWN uses System Strain inherited from CWN (stims, mutations, first-aid), so
-    adjust_system_strain must accept it. The current guard (`ruleset != "cwn"`)
-    blocks it (Item 7); the fix loosens to the capability form.
+    adjust_system_strain must accept it. The guard is capability-based
+    (`isinstance(module, CwnRulesetModule)`), so `awn` is accepted.
     """
 
     ruleset: str = "awn"

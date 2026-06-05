@@ -13,7 +13,9 @@ recovery, first-aid cost) live in CwnRulesetModule.apply_system_strain.
     pool:     SystemStrainPool.current updated in place
 
 Guards (fail loud — no silent fallbacks per CLAUDE.md):
-- ``ctx.genre_pack.rules.ruleset != "cwn"`` → ValueError (tool is CWN-only)
+- bound module ``not isinstance(module, CwnRulesetModule)`` → ValueError (the tool
+  requires a CWN-family ruleset — ``cwn`` or its ``awn`` subclass — since System
+  Strain is a CwnRulesetModule mechanic)
 - actor not found in snapshot → NOT_FOUND
 - no active session → ERROR_FATAL
 

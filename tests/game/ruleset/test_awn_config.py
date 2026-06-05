@@ -79,7 +79,9 @@ def test_rules_awn_requires_complete_attribute_map():
 def test_rules_awn_rejects_flavor_not_in_ability_scores():
     bad = dict(_AWN_AMAP, CHARISMA="Mutie")  # Mutie not declared in ability_score_names
     with pytest.raises(ValidationError, match="ability_score_names"):
-        RulesConfig(ruleset="awn", ability_score_names=_AWN_FLAVOR, awn=AwnConfig(attribute_map=bad))
+        RulesConfig(
+            ruleset="awn", ability_score_names=_AWN_FLAVOR, awn=AwnConfig(attribute_map=bad)
+        )
 
 
 def test_rules_awn_accepts_complete_map():
@@ -95,6 +97,14 @@ def test_rules_awn_with_no_config_block_fails_loud():
     # then rejects it for the missing attribute_map (no silent default).
     with pytest.raises(ValidationError, match="attribute_map"):
         RulesConfig(ruleset="awn", ability_score_names=_AWN_FLAVOR)
+
+
+def test_rules_awn_empty_attribute_map_hits_none_authored_branch():
+    # An explicitly empty attribute_map ({}) takes the distinct "none authored"
+    # branch (rules.py:1238) — separate from the partial-map "missing required keys"
+    # branch. Asserts the fail-loud message that guards against a silent default.
+    with pytest.raises(ValidationError, match="none authored"):
+        RulesConfig(ruleset="awn", ability_score_names=_AWN_FLAVOR, awn=AwnConfig(attribute_map={}))
 
 
 def test_rules_awn_strain_source_must_be_in_map():

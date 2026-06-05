@@ -358,7 +358,9 @@ def test_awn_strike_fires_trauma_span_and_depletes_hp(otel_capture, monkeypatch)
     assert target is not None
     assert target.hp.current == target.hp.max  # precondition: full HP
 
-    _drive_strike(snap=snap, enc=enc, pack=pack, attacker="Vane", face=[20], request_id="awn-trauma")
+    _drive_strike(
+        snap=snap, enc=enc, pack=pack, attacker="Vane", face=[20], request_id="awn-trauma"
+    )
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert "cwn.trauma.roll" in span_names, (
@@ -399,9 +401,12 @@ def test_awn_shock_chips_hp_on_miss(otel_capture):
         f"the inherited cwn.shock.applied span must fire when an AWN strike MISSES "
         f"a low-Melee-AC target with a shock weapon; got spans: {span_names}"
     )
+    assert "state_patch.hp" in span_names, (
+        f"ADR-114 ablative HP: the Shock chip mutates HP, so a state_patch.hp span "
+        f"must fire even on the miss path; got spans: {span_names}"
+    )
     assert target.hp.current < target.hp.max, (
-        f"Shock must chip the target's HP despite the miss; "
-        f"hp={target.hp.current}/{target.hp.max}"
+        f"Shock must chip the target's HP despite the miss; hp={target.hp.current}/{target.hp.max}"
     )
 
 
@@ -429,7 +434,9 @@ def test_awn_downed_target_gets_mortal_injury(otel_capture, monkeypatch):
     target = snap.find_creature_core("Scrag")
     assert target is not None
 
-    _drive_strike(snap=snap, enc=enc, pack=pack, attacker="Vane", face=[20], request_id="awn-downed")
+    _drive_strike(
+        snap=snap, enc=enc, pack=pack, attacker="Vane", face=[20], request_id="awn-downed"
+    )
 
     assert target.hp.current == 0, (
         f"precondition for the downed seam: the strike must drop the target to 0 HP; "
@@ -452,14 +459,26 @@ def test_awn_downed_target_gets_mortal_injury(otel_capture, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_awn_opponent_reprisal_fires(otel_capture):
+def test_awn_opponent_reprisal_fires(otel_capture, monkeypatch):
     """In hp_depletion AWN combat, the seated opponent answers with a server-driven
     attack turn after the player acts (inherited from SWN via the capability check
     on ``resolve_opponent_attack``). The opponent survives the player's strike
     (hp=30) so the encounter is unresolved and the reprisal runs.
+
+    Determinism: the opponent's to-hit d20 rolls via
+    ``sidequest.server.dispatch.dice.random.randint``; forcing it HIGH (return the
+    upper bound) guarantees the reprisal CONNECTS, so we can prove it dealt damage
+    (player HP drops) — not merely that the attempt span fired. The reprisal beat
+    carries no ``trauma_die``, so this monkeypatch only governs the to-hit roll;
+    damage faces roll via the untouched ``damage_roll.random`` module.
     """
+    monkeypatch.setattr("sidequest.server.dispatch.dice.random.randint", lambda a, b: b)
+
     pack = _make_awn_reprisal_pack()
     snap, enc = _make_snapshot_and_encounter("Vane", "Scrag", opponent_hp=30)
+    attacker = snap.find_creature_core("Vane")
+    assert attacker is not None
+    assert attacker.hp.current == attacker.hp.max  # precondition: player at full HP
 
     _drive_strike(
         snap=snap, enc=enc, pack=pack, attacker="Vane", face=[20], request_id="awn-reprisal"
@@ -470,4 +489,8 @@ def test_awn_opponent_reprisal_fires(otel_capture):
         f"AWN must inherit the server-driven opponent reprisal (the capability "
         f"check keys on resolve_opponent_attack, which AwnRulesetModule inherits "
         f"from SWN); got spans: {span_names}"
+    )
+    assert attacker.hp.current < attacker.hp.max, (
+        f"the forced-hit reprisal must deal damage to the player's ablative HP, not "
+        f"just emit the attempt span; hp={attacker.hp.current}/{attacker.hp.max}"
     )

@@ -108,8 +108,8 @@ class _FakeAwnRules:
     """Minimal rules object that acts like RulesConfig for an awn pack.
 
     AWN has the stabilize-at-0 Mortal Injury rule (SRD p.52) inherited from CWN,
-    so stabilize_mortal_injury must accept it. The current guard
-    (`ruleset != "cwn"`) blocks it (Item 6); the fix loosens to the capability form.
+    so stabilize_mortal_injury must accept it. The guard is capability-based
+    (`isinstance(module, CwnRulesetModule)`), so `awn` is accepted.
     """
 
     ruleset: str = "awn"

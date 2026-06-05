@@ -187,3 +187,16 @@ class NarratorVocabulary(StrEnum):
     def default(cls) -> NarratorVocabulary:
         """Return the default vocabulary (Literary)."""
         return cls.literary
+
+    @classmethod
+    def default_for_player_count(cls, player_count: int) -> NarratorVocabulary:
+        """Return the default vocabulary for a given player count.
+
+        Per ADR-049 the vocabulary axis is player-count-invariant — both solo
+        (n=1) and multiplayer (n>1) default to Literary. This method exists for
+        *interface parity* with :meth:`NarratorVerbosity.default_for_player_count`
+        so the TurnContext fallback can resolve both axes through the same call
+        shape without special-casing one. ``player_count`` is accepted and
+        ignored deliberately.
+        """
+        return cls.literary

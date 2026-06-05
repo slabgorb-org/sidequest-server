@@ -571,3 +571,56 @@ def test_session_event_with_both_verbosity_and_vocabulary() -> None:
     decoded = GameMessage.model_validate_json(json_str)
     assert decoded.payload.narrator_verbosity == NarratorVerbosity.concise  # type: ignore[union-attr]
     assert decoded.payload.narrator_vocabulary == NarratorVocabulary.epic  # type: ignore[union-attr]
+
+
+# ===========================================================================
+# Story 82-2 / AC3 — NarratorVocabulary.default_for_player_count parity
+#
+# ADR-049 specifies BOTH enums implement default_for_player_count(n):
+#   - Solo (n=1):       Verbose / Literary
+#   - Multiplayer (n>1): Standard / Literary
+# NarratorVerbosity already has it (covered above). NarratorVocabulary does
+# NOT on develop — these tests fail with AttributeError until 82-2 adds it.
+# The vocabulary axis is player-count-invariant per the ADR (always Literary);
+# the method exists for *interface parity* so the TurnContext fallback can call
+# Verbosity.default_for_player_count(n) and Vocabulary.default_for_player_count(n)
+# uniformly without special-casing one axis.
+# ===========================================================================
+
+
+def test_narrator_vocabulary_has_default_for_player_count() -> None:
+    """AC3: the method exists (parity with NarratorVerbosity). Fails with
+    AttributeError on develop — NarratorVocabulary lacks it entirely."""
+    assert hasattr(NarratorVocabulary, "default_for_player_count"), (
+        "NarratorVocabulary must implement default_for_player_count for "
+        "interface parity with NarratorVerbosity (ADR-049, story 82-2)"
+    )
+
+
+def test_narrator_vocabulary_solo_defaults_to_literary() -> None:
+    """ADR-049: Solo (n=1) -> Literary."""
+    result = NarratorVocabulary.default_for_player_count(1)
+    assert result == NarratorVocabulary.literary
+    assert isinstance(result, NarratorVocabulary)
+
+
+def test_narrator_vocabulary_multiplayer_defaults_to_literary() -> None:
+    """ADR-049: Multiplayer (n>1) -> Literary. Vocabulary is count-invariant
+    (unlike verbosity, which steps solo->verbose); both branches return
+    Literary, but the method must still exist and accept the count."""
+    assert NarratorVocabulary.default_for_player_count(2) == NarratorVocabulary.literary
+    assert NarratorVocabulary.default_for_player_count(4) == NarratorVocabulary.literary
+
+
+def test_narrator_vocabulary_zero_players_defaults_to_literary() -> None:
+    """Edge: the n<=0 'unknown count' path (room=None safe-empty default in
+    _build_turn_context) must still resolve to a real member, not raise."""
+    assert NarratorVocabulary.default_for_player_count(0) == NarratorVocabulary.literary
+
+
+def test_narrator_vocabulary_default_for_player_count_matches_plain_default() -> None:
+    """Since vocabulary is count-invariant, default_for_player_count(n) must
+    agree with default() for every n — guards against a future change that
+    silently diverges the two defaulting paths."""
+    for n in (0, 1, 2, 5):
+        assert NarratorVocabulary.default_for_player_count(n) == NarratorVocabulary.default()

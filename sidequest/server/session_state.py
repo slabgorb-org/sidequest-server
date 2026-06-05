@@ -42,6 +42,7 @@ from sidequest.game.tension_tracker import TensionTracker
 from sidequest.game.weather import WeatherState
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.scenario import ScenarioPack
+from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 from sidequest.protocol.models import PartyFormationWireEntry, StateDelta
 from sidequest.server.image_pacing import ImagePacingThrottle
 from sidequest.server.session_helpers import _resolve_acting_character_name
@@ -271,6 +272,14 @@ class _SessionData:
     # game_slug rather than the legacy genre+world path.
     game_slug: str | None = None
     mode: GameMode | None = None
+    # Story 82-2 (ADR-049): player-chosen narrator tuning. The LIVE runtime
+    # choice read every turn by ``_build_turn_context`` — ``None`` means the
+    # player made no choice, so the builder falls back to
+    # ``default_for_player_count`` (No Silent Fallbacks: never a hardcoded
+    # literal). Hydrated from the inbound CONNECT payload (new session) or from
+    # ``snapshot.narrator_*`` (resume); the snapshot is the durable mirror.
+    narrator_verbosity: NarratorVerbosity | None = None
+    narrator_vocabulary: NarratorVocabulary | None = None
     # Lore embed worker lifecycle (Story 37-33 round-trip #4). A live
     # reference to the most recent background embed task so cleanup() can
     # cancel it before the SQLite store closes and so _dispatch_embed_worker

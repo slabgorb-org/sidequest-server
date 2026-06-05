@@ -10,9 +10,10 @@ turn.
 These tests pin the fix:
 
 * The Intent Router adapter (``_IntentRouterLlm.emit_tool``) marks its static
-  system prompt as a 1h ephemeral cache block. Its prompt (~2,760 tokens)
-  clears Haiku's 2,048-token cacheable-prefix floor (Sonnet/Opus floor is
-  1,024), so the marker actually caches.
+  system prompt as a 1h ephemeral cache block. One marker caches the whole
+  tools+system prefix (~4,730 tok), which clears Haiku 4.5's 4,096-token
+  cacheable-prefix floor. The system prompt ALONE (~2,760 tok) is below the
+  floor — the margin comes entirely from bundling the DispatchPackage schema.
 * The 1h TTL is a beta — without the ``extended-cache-ttl`` header the API
   400-rejects the request, so the adapter MUST send that header (No Silent
   Fallbacks). Mirrors ``anthropic_sdk_client``'s 1h path.
@@ -142,10 +143,14 @@ async def test_intent_router_emits_cache_read_tokens_on_llm_request_span(
     monkeypatch: pytest.MonkeyPatch,
     otel_capture,
 ) -> None:
-    """The Haiku call emits an llm.request span carrying the cache-read count.
+    """The Haiku call threads cache-read usage onto its llm.request span.
 
-    This is the lie-detector field — on turn 2+ it goes non-zero, proving the
-    cache actually engaged rather than Claude just claiming it did.
+    This verifies the telemetry PLUMBING only: a (mocked) ``cache_read`` from
+    the SDK response is propagated to ``llm.cached_input_read_tokens`` on the
+    span. It does NOT prove the cache engaged — that is confirmed against the
+    live API (the manual two-turn cache-read check), not this unit test. The
+    span is the field the GM panel reads to watch cache-read go non-zero on
+    turn 2+ in production.
     """
     create = AsyncMock(return_value=_fake_tool_response(cache_read=2500, cache_write=0))
     adapter = _build_intent_adapter(monkeypatch, create)
@@ -170,9 +175,10 @@ async def test_aside_system_prompt_stays_uncached_subfloor(
 ) -> None:
     """The aside resolver prompt is sub-floor; it must stay a bare string.
 
-    Marking a <2,048-token prefix is accepted by the API but silently does not
-    cache. Pinning the bare-string shape prevents a well-meaning future dev
-    from adding a marker that implies caching that never happens.
+    Marking a prefix below Haiku 4.5's 4,096-token floor is accepted by the API
+    but silently does not cache. Pinning the bare-string shape prevents a
+    well-meaning future dev from adding a marker that implies caching that
+    never happens.
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     text_block = SimpleNamespace(
@@ -205,17 +211,76 @@ async def test_aside_system_prompt_stays_uncached_subfloor(
     )
 
 
-def test_intent_router_system_prompt_clears_haiku_cache_floor() -> None:
-    """Guard: the Intent Router prompt must stay above Haiku's cache floor.
+def test_intent_router_cacheable_prefix_tripwire() -> None:
+    """Char tripwire: the cached prefix is tools+system (one marker on the
+    system block caches both — canonical order tools → system → messages), and
+    that COMBINED prefix must clear Haiku 4.5's 4,096-token cacheable floor or
+    the cache_control marker silently no-ops (No Silent Fallbacks).
 
-    Haiku only caches a prefix of >= 2,048 tokens. At a pessimistic 4 chars/
-    token the prompt must exceed 8,192 chars for the cache_control marker to
-    actually cache. If a future edit trims it below the floor, the marker
-    silently stops caching — fail loud here instead.
+    The system prompt ALONE (~2,760 tok) is below the floor — the margin comes
+    from bundling the DispatchPackage tool schema, so this guard measures the
+    combined char length, NOT the system block alone (the original defect). It
+    is a coarse early warning, not a proof of the exact token floor: char/token
+    ratio varies, so the authoritative check is
+    ``test_intent_router_prefix_token_floor_live`` below (count_tokens) plus the
+    manual two-turn cache-read verification. Today the combined prefix is
+    ~15,289 chars ≈ 4,730 tok; if it shrinks materially, re-verify the live
+    token count before trusting the cache.
     """
-    from sidequest.agents.intent_router import _SYSTEM_PROMPT
+    import json
 
-    assert len(_SYSTEM_PROMPT) >= 8192, (
-        f"Intent Router system prompt is {len(_SYSTEM_PROMPT)} chars; below the "
-        "Haiku cacheable-prefix floor the cache_control marker silently no-ops."
+    from sidequest.agents.intent_router import _SYSTEM_PROMPT, _dispatch_tool_schema
+
+    combined_chars = len(_SYSTEM_PROMPT) + len(json.dumps(_dispatch_tool_schema()))
+    # 4,096-tok floor; at the measured ~3.2 char/tok this prefix is ~4,730 tok.
+    # Trip at 13,500 chars (~4,180 tok at that ratio) so a meaningful shrink
+    # fails HERE and forces a live re-check rather than silently breaking cache.
+    assert combined_chars >= 13_500, (
+        f"Intent Router tools+system prefix is {combined_chars} chars; this risks "
+        "dropping the combined prefix under Haiku 4.5's 4,096-token cacheable "
+        "floor, where the cache_control marker silently no-ops. Re-verify with "
+        "test_intent_router_prefix_token_floor_live before changing prompt/schema."
+    )
+
+
+def test_intent_router_prefix_token_floor_live() -> None:
+    """Authoritative guard: the live tools+system token count must clear Haiku
+    4.5's 4,096-token cacheable floor (count_tokens — the only exact source).
+
+    Opt-in: gated on ``SIDEQUEST_VERIFY_HAIKU_CACHE_FLOOR`` so the default suite
+    stays network-free; set it (with ``ANTHROPIC_API_KEY``) to authoritatively
+    re-verify after changing the Intent Router prompt or DispatchPackage schema.
+    Fails loud — not skips — if the flag is set but the key is missing.
+    """
+    import os
+
+    if not os.environ.get("SIDEQUEST_VERIFY_HAIKU_CACHE_FLOOR"):
+        pytest.skip("set SIDEQUEST_VERIFY_HAIKU_CACHE_FLOOR=1 (+ ANTHROPIC_API_KEY) to run")
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        pytest.fail("SIDEQUEST_VERIFY_HAIKU_CACHE_FLOOR set but ANTHROPIC_API_KEY missing")
+
+    from anthropic import Anthropic
+
+    from sidequest.agents.intent_router import (
+        _SYSTEM_PROMPT,
+        _TOOL_DESCRIPTION,
+        _TOOL_NAME,
+        _dispatch_tool_schema,
+    )
+
+    result = Anthropic().messages.count_tokens(
+        model=_HAIKU_MODEL,
+        system=[{"type": "text", "text": _SYSTEM_PROMPT}],
+        tools=[
+            {
+                "name": _TOOL_NAME,
+                "description": _TOOL_DESCRIPTION,
+                "input_schema": _dispatch_tool_schema(),
+            }
+        ],
+        messages=[{"role": "user", "content": "x"}],
+    )
+    assert result.input_tokens >= 4096, (
+        f"Intent Router tools+system is {result.input_tokens} tok; below Haiku "
+        "4.5's 4,096-token cacheable floor the cache_control marker silently no-ops."
     )

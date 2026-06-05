@@ -107,7 +107,7 @@ class _AsideLlm:
 
     async def complete(self, *, system: str, user: str) -> str:
         # ``system`` stays a BARE string — NOT a cached content block. The
-        # aside prompt is ~361 tokens, far below Haiku's 2,048-token
+        # aside prompt is ~361 tokens, far below Haiku 4.5's 4,096-token
         # cacheable-prefix floor, so a ``cache_control`` marker here is
         # accepted by the API but silently never caches. Adding one would
         # imply caching that does not happen (No Silent Fallbacks). The
@@ -134,12 +134,16 @@ def build_aside_llm() -> _AsideLlm:
 # moves the constant with it.
 _INTENT_ROUTER_MODEL = "claude-haiku-4-5-20251001"
 
-# The Intent Router system prompt (~2,760 tokens) clears Haiku's 2,048-token
-# cacheable-prefix floor (Sonnet/Opus floor is 1,024), so a 1h ephemeral marker
-# on it actually caches. 1h — not 5m — because the submit-and-wait MP turn
-# cadence (a slow typist at the table) can space these Haiku calls minutes
-# apart; a 5m prefix would expire between turns. Matches the stable-prefix TTL
-# the narrator keeps in ``anthropic_sdk_client``.
+# The marker on the system block caches the whole tools+system prefix (canonical
+# cache order tools → system → messages). For the Intent Router that combined
+# prefix is ~4,730 tokens (DispatchPackage tool schema ~1,970 tok + system prompt
+# ~2,760 tok), which clears Haiku 4.5's 4,096-token cacheable floor. NOTE: the
+# system prompt ALONE is below the floor — the whole margin comes from bundling
+# the tool schema, so the floor guard checks the COMBINED prefix (see
+# test_haiku_cache_control.py), not the system block in isolation. 1h — not 5m —
+# because the submit-and-wait MP turn cadence (a slow typist at the table) can
+# space these Haiku calls minutes apart; a 5m prefix would expire between turns.
+# Matches the stable-prefix TTL the narrator keeps in ``anthropic_sdk_client``.
 _INTENT_ROUTER_CACHE_TTL = "1h"
 
 

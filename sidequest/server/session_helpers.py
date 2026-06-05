@@ -43,6 +43,7 @@ from sidequest.game.shared_world_delta import (
 from sidequest.genre.models.ocean import DramaThresholds
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
+from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 from sidequest.protocol.messages import (
     CartographyMapMessage,
     CartographyMapPayload,
@@ -54,6 +55,7 @@ from sidequest.protocol.messages import (
 from sidequest.protocol.types import NonBlankString
 from sidequest.telemetry.spans import (
     cartography_map_emitted_span,
+    narrator_settings_span,
     npc_auto_mint_skipped_span,
     npc_auto_minted_from_prose_span,
     npc_observation_gate_promoted_span,
@@ -1208,6 +1210,31 @@ def _build_turn_context(
     ):
         pass
 
+    # Story 82-2 (ADR-049) — resolve the active narrator verbosity + vocabulary
+    # the player chose (carried on _SessionData, hydrated from the CONNECT
+    # payload / persisted snapshot). When the player made no choice we fall back
+    # to default_for_player_count using the same live player count the
+    # notorious-party gate computed above — NEVER a hardcoded literal (No Silent
+    # Fallbacks). The span is the GM-panel lie detector: it records the active
+    # setting AND whether it came from the player or the default.
+    verbosity_source = "player" if sd.narrator_verbosity is not None else "default_for_player_count"
+    vocabulary_source = (
+        "player" if sd.narrator_vocabulary is not None else "default_for_player_count"
+    )
+    resolved_verbosity = sd.narrator_verbosity or NarratorVerbosity.default_for_player_count(
+        player_count_for_gate
+    )
+    resolved_vocabulary = sd.narrator_vocabulary or NarratorVocabulary.default_for_player_count(
+        player_count_for_gate
+    )
+    with narrator_settings_span(
+        narrator_verbosity=str(resolved_verbosity),
+        narrator_vocabulary=str(resolved_vocabulary),
+        verbosity_source=verbosity_source,
+        vocabulary_source=vocabulary_source,
+    ):
+        pass
+
     return TurnContext(
         pacing_hint=pacing_hint,
         in_combat=in_combat,
@@ -1218,8 +1245,8 @@ def _build_turn_context(
         available_confrontations=available_confrontations,
         encounter_summary=encounter_summary,
         state_summary=state_summary_json,
-        narrator_verbosity="standard",
-        narrator_vocabulary="literary",
+        narrator_verbosity=resolved_verbosity,
+        narrator_vocabulary=resolved_vocabulary,
         genre=sd.genre_slug,
         genre_prompts=sd.genre_pack.prompts,
         # Phase E wiring (completes the deferral the ToolContext docstring

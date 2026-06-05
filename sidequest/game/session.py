@@ -52,6 +52,7 @@ from sidequest.game.turn import TurnManager
 from sidequest.genre.models.rules import ResourceDeclaration
 from sidequest.magic.state import MagicState
 from sidequest.orbital.course import PlottedCourse
+from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 
 # ---------------------------------------------------------------------------
 # NarrativeEntry — narrative log entries
@@ -803,6 +804,15 @@ class GameSnapshot(BaseModel):
 
     notes: list[str] = Field(default_factory=list)
     narrative_log: list[NarrativeEntry] = Field(default_factory=list)
+
+    # Story 82-2 (ADR-049): player-chosen narrator tuning, persisted so the
+    # choice survives slug-resume. ``None`` means the player never chose — the
+    # turn-context builder falls back to ``default_for_player_count`` rather
+    # than a hardcoded literal. Mirrored onto ``_SessionData.narrator_*`` at
+    # connect/resume for the per-turn read. ``extra: ignore`` means pre-82-2
+    # saves load with these as None.
+    narrator_verbosity: NarratorVerbosity | None = None
+    narrator_vocabulary: NarratorVocabulary | None = None
 
     # StructuredEncounter (ADR-033 confrontation engine) — typed in story 42-1.
     encounter: StructuredEncounter | None = None

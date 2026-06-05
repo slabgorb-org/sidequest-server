@@ -864,6 +864,22 @@ class ConnectHandler:
                 ),
             )
 
+            # Story 82-2 (ADR-049): hydrate the live narrator tuning onto the
+            # session and persist it. Precedence: an explicit choice on THIS
+            # CONNECT payload (the player just set a slider) wins; otherwise
+            # carry whatever the persisted snapshot holds from a prior session
+            # (slug-resume); None means "never chosen" and the turn builder
+            # falls back to default_for_player_count (No Silent Fallbacks).
+            # Mirror the resolved choice back onto the snapshot so it round-trips
+            # the save and the resume ``ready`` event below reports it.
+            _live_snapshot = session._session_data.snapshot
+            _chosen_verbosity = payload.narrator_verbosity or _live_snapshot.narrator_verbosity
+            _chosen_vocabulary = payload.narrator_vocabulary or _live_snapshot.narrator_vocabulary
+            session._session_data.narrator_verbosity = _chosen_verbosity
+            session._session_data.narrator_vocabulary = _chosen_vocabulary
+            _live_snapshot.narrator_verbosity = _chosen_verbosity
+            _live_snapshot.narrator_vocabulary = _chosen_vocabulary
+
             # Story 24-10: stamp the world-grounding state assembled above
             # onto the session. _build_turn_context reads these every turn
             # and passes them through to the get_world_grounding ToolContext.
@@ -1440,8 +1456,13 @@ class ConnectHandler:
                         has_character=True,
                         initial_state=None,
                         css=None,
-                        narrator_verbosity=None,
-                        narrator_vocabulary=None,
+                        # Story 82-2 (ADR-049): slug-resume reports the player's
+                        # persisted narrator tuning so the UI sliders rehydrate
+                        # to the saved choice instead of snapping to defaults.
+                        # Read from the session (hydrated from the snapshot at
+                        # construction above) — never a bare None.
+                        narrator_verbosity=session._session_data.narrator_verbosity,
+                        narrator_vocabulary=session._session_data.narrator_vocabulary,
                         image_cooldown_seconds=None,
                     ),
                     player_id=player_id,

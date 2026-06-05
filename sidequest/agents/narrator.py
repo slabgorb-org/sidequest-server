@@ -10,6 +10,7 @@ from former separate agents (CreatureSmith, Dialectician, Ensemble).
 
 from __future__ import annotations
 
+import functools
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -83,12 +84,21 @@ def is_streaming_enabled() -> bool:
     return os.environ.get("SIDEQUEST_NARRATOR_STREAMING", "0") == "1"
 
 
+@functools.cache
 def resolve_narrator_iteration_cap() -> int | None:
     """Resolve the operator's soft tool-loop ``iteration_cap`` for narrator turns.
 
     Story 82-9: 71-40 added the ``iteration_cap`` kwarg but left it with no
     production caller. This toggle lets an operator switch it on without a code
     change via ``SIDEQUEST_NARRATOR_ITERATION_CAP``.
+
+    Story 82-11: memoized via ``functools.cache`` — the env of a running server
+    process is fixed at boot, so per-turn re-read bought nothing in production
+    while re-paying the parse+validate on every narrator turn. First call parses
+    and caches; tests that mutate the env must call
+    ``resolve_narrator_iteration_cap.cache_clear()``. Note ``functools.cache``
+    does NOT cache exceptions, so an invalid value re-raises on every call —
+    fail-loud is preserved, not one-shot.
 
     Fail-loud (CLAUDE.md "No Silent Fallbacks", mirroring the
     ``SIDEQUEST_SESSION_COST_CEILING_USD`` parser): unset → ``None`` (no cap, the

@@ -944,6 +944,22 @@ class CwnConfig(SwnConfig):
     hacking: HackingConfig | None = None
 
 
+class AwnConfig(CwnConfig):
+    """Ashes Without Number universal constants (Sine Nomine, CC0).
+
+    AWN personal combat is mechanically identical to CWN, so this inherits
+    CwnConfig verbatim: unarmored_ac=10, save_base=15 (AWN's "16 - level" ==
+    "save_base - (level-1)"), the 6/8/10/12/14 difficulty ladder, the
+    System Strain and Trauma tuning, and the six-key attribute_map. ``hacking``
+    stays the inherited ``None`` default — AWN has the "Program" skill but no
+    cyberspace net-run ladder, so the hacking gates correctly skip it. Empty
+    body in Plan 1; AWN-only tuning (radiation, mutations) lands in later plans.
+    NOT a fallback — selected explicitly by `ruleset: awn`.
+    """
+
+    model_config = {"extra": "forbid"}
+
+
 class MagicConfig(BaseModel):
     """WWN magic ruleset constants (Sine Nomine, CC0). Per-class tables (Effort
     sources, casts/day, max spell level) live on the class def (WwnClassMagic),
@@ -1057,6 +1073,8 @@ class RulesConfig(BaseModel):
     cwn: CwnConfig | None = None
     # Present only when ruleset == "wwn"; None for all other rulesets.
     wwn: WwnConfig | None = None
+    # Present only when ruleset == "awn"; None for all other rulesets.
+    awn: AwnConfig | None = None
     # ADR-113 confidence gate (Story 71-16): per-subsystem engagement
     # thresholds. Keys are dispatch subsystem names (``confrontation``,
     # ``magic_working``, ``scenario_clue``, ``npc_agency``, ``movement``,
@@ -1203,6 +1221,49 @@ class RulesConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_awn(self) -> RulesConfig:
+        """Enforce a complete attribute_map when ruleset == 'awn'; raises ValueError if omitted.
+
+        Mirrors ``_validate_cwn`` (AWN combat == CWN combat). AwnConfig has no
+        hacking in practice (the field stays None), so no hacking cross-check.
+        """
+        if self.ruleset != "awn":
+            return self
+        if self.awn is None:
+            object.__setattr__(self, "awn", AwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        assert self.awn is not None
+        amap = self.awn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'awn' requires rules.awn.attribute_map (AWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"awn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for awn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"awn attribute_map[{awn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
+        strain_source = self.awn.system_strain.max_source
+        if strain_source not in amap:
+            raise ValueError(
+                f"awn.system_strain.max_source = {strain_source!r} is not a key of "
+                f"awn.attribute_map {sorted(amap.keys())}"
+            )
+        valid_saves = {"physical", "evasion", "mental", "luck"}
+        if self.awn.trauma.major_injury_save not in valid_saves:
+            raise ValueError(
+                f"awn.trauma.major_injury_save = {self.awn.trauma.major_injury_save!r} "
+                f"is not one of {sorted(valid_saves)}"
+            )
+        return self
+
     def ruleset_config(self) -> SwnConfig | None:
         """The config block for the bound ruleset, or None for engines that carry none.
 
@@ -1215,6 +1276,8 @@ class RulesConfig(BaseModel):
             return self.cwn
         if self.ruleset == "wwn":
             return self.wwn
+        if self.ruleset == "awn":
+            return self.awn
         return None
 
     @property

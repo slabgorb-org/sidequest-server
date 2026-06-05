@@ -34,7 +34,7 @@ from sidequest.genre.models.character import (
     EquipmentTables,
     MechanicalEffects,
 )
-from sidequest.genre.models.rules import EdgeConfig, RulesConfig
+from sidequest.genre.models.rules import CwnConfig, EdgeConfig, RulesConfig
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
@@ -80,16 +80,20 @@ def qualifying_classes_arrangement(
 
 
 def seed_system_strain(rules: RulesConfig, stats: dict[str, int]) -> SystemStrainPool | None:
-    """Return a SystemStrainPool for a cwn pack (max = CONSTITUTION-flavor score), else None.
+    """Return a SystemStrainPool for a CWN-family pack (max = CONSTITUTION-flavor score), else None.
 
-    For a cwn pack, ``rules.cwn.attribute_map["CONSTITUTION"]`` gives the
-    flavor stat name (e.g. "Body"). The pool max is clamped to at least 1.
-    Non-cwn packs receive None — SystemStrainPool is a CWN-only concept.
-    ``_validate_cwn`` guarantees the CONSTITUTION key exists in attribute_map.
+    System Strain is a CwnConfig mechanic, shared by CWN and AWN (which subclasses
+    CWN). We gate on the CAPABILITY (``isinstance(cfg, CwnConfig)``) rather than a
+    slug string so AWN — and any future CWN sister module — gets a strain pool for
+    free, instead of silently falling through the ``ruleset == "cwn"`` check.
+    ``attribute_map["CONSTITUTION"]`` gives the flavor stat name (e.g. "Body");
+    the pool max is clamped to at least 1. The ruleset's validator guarantees the
+    CONSTITUTION key exists in attribute_map.
     """
-    if rules.ruleset != "cwn" or rules.cwn is None:
+    cfg = rules.ruleset_config()
+    if not isinstance(cfg, CwnConfig):  # covers CWN + AWN + future subclasses
         return None
-    con_flavor = rules.cwn.attribute_map["CONSTITUTION"]  # validated present by _validate_cwn
+    con_flavor = cfg.attribute_map["CONSTITUTION"]  # validated present by the ruleset validator
     body_score = int(stats.get(con_flavor, 10))
     return SystemStrainPool(current=0, max=max(1, body_score), permanent=0)
 

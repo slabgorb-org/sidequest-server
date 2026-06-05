@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from sidequest.game.ruleset.awn import AwnRulesetModule
 from sidequest.game.ruleset.base import RulesetModule, UnknownRulesetError
 from sidequest.game.ruleset.cwn import CwnRulesetModule
 from sidequest.game.ruleset.native import NativeRulesetModule
@@ -12,6 +13,7 @@ _REGISTRY: dict[str, RulesetModule] = {
     SwnRulesetModule.slug: SwnRulesetModule(),
     CwnRulesetModule.slug: CwnRulesetModule(),
     WwnRulesetModule.slug: WwnRulesetModule(),
+    AwnRulesetModule.slug: AwnRulesetModule(),
 }
 
 

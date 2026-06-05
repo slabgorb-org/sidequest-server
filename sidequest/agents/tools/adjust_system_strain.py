@@ -85,20 +85,28 @@ async def adjust_system_strain(args: AdjustSystemStrainArgs, ctx: ToolContext) -
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
+    # Capability gate (not a slug string): System Strain is a CwnRulesetModule
+    # mechanic, so the tool serves any module that IS a CwnRulesetModule — covers
+    # cwn AND awn (AwnRulesetModule subclasses it). Resolve the bound module and
+    # check the capability rather than `ruleset != "cwn"`, which silently
+    # excluded awn.
     pack = ctx.genre_pack
-    if pack is None or pack.rules is None or pack.rules.ruleset != "cwn":
+    module = (
+        get_ruleset_module(pack.rules.ruleset)
+        if pack is not None and pack.rules is not None
+        else None
+    )
+    if not isinstance(module, CwnRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
-        raise ValueError(f"adjust_system_strain is cwn-only; loaded pack has ruleset={ruleset!r}")
+        raise ValueError(
+            f"adjust_system_strain requires a CWN-family ruleset (cwn/awn); "
+            f"loaded pack has ruleset={ruleset!r}"
+        )
 
     snapshot = session.snapshot
     core = snapshot.find_creature_core(args.actor)
     if core is None:
         return ToolResult.not_found(f"unknown actor: {args.actor!r}")
-
-    module = get_ruleset_module(pack.rules.ruleset)
-    assert isinstance(module, CwnRulesetModule), (
-        f"expected CwnRulesetModule for slug 'cwn', got {type(module).__name__!r}"
-    )
 
     cfg = pack.rules.ruleset_config()
 

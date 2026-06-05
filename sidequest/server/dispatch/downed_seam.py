@@ -109,11 +109,12 @@ def run_cwn_wwn_downed_seam(
 ) -> None:
     """Run the CWN/WWN Mortal/Major Injury seam for a defender just dropped to 0 HP.
 
-    Gated on the bound ruleset being ``cwn`` or ``wwn`` — base ``resolve_downed``
-    is a no-op for native/swn, but ``physical_save_target_for`` calls
-    ``save_params`` (which native/swn DO have) and reads ``cfg.trauma`` (present
-    on CwnConfig AND WwnConfig, absent on SwnConfig), so we gate the WHOLE seam
-    on the ruleset rather than relying on the no-op return.
+    Gated on the bound ruleset config being a ``CwnConfig``/``WwnConfig`` — which
+    covers cwn, wwn, AND awn (``AwnConfig`` subclasses ``CwnConfig``). Base
+    ``resolve_downed`` is a no-op for native/swn, but ``physical_save_target_for``
+    calls ``save_params`` (which native/swn DO have) and reads ``cfg.trauma``
+    (present on CwnConfig AND WwnConfig, absent on SwnConfig), so we gate the
+    WHOLE seam on the config capability rather than relying on the no-op return.
 
     The defender is the first live actor on the side OPPOSITE ``actor_side``
     (the same ``_opposite_side_first_actor`` idiom the strike path uses). No-op
@@ -125,7 +126,15 @@ def run_cwn_wwn_downed_seam(
     it additionally rolls a Physical save and, on failure, the Major Injury
     table (emits ``{ruleset}.major_injury.roll``).
     """
-    if not (pack and pack.rules and pack.rules.ruleset in ("cwn", "wwn")):
+    from sidequest.genre.models.rules import CwnConfig, WwnConfig
+
+    # Capability gate (not a slug string): the seam runs for any ruleset whose
+    # config IS a Cwn/WwnConfig — covers cwn, wwn, AND awn (AwnConfig subclasses
+    # CwnConfig) plus future sister modules, instead of silently falling through
+    # on a `ruleset in ("cwn","wwn")` string check.
+    if not (
+        pack and pack.rules and isinstance(pack.rules.ruleset_config(), (CwnConfig, WwnConfig))
+    ):
         return
     down_name = _opposite_side_first_actor(encounter, actor_side)
     if down_name is None:

@@ -43,6 +43,8 @@ from sidequest.agents.tool_registry import (
     ToolResult,
     tool,
 )
+from sidequest.game.ruleset import get_ruleset_module
+from sidequest.game.ruleset.cwn import CwnRulesetModule
 from sidequest.game.status import Status, StatusSeverity
 
 _MORTAL_INJURY_MARKER = "Mortal Injury"
@@ -97,11 +99,22 @@ async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolCont
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
+    # Capability gate (not a slug string): the Mortal Injury / stabilize-at-0
+    # rule is a CwnRulesetModule mechanic, so the tool serves any module that IS
+    # a CwnRulesetModule — covers cwn AND awn (AwnRulesetModule subclasses it).
+    # Resolve the bound module and check the capability rather than
+    # `ruleset != "cwn"`, which silently excluded awn.
     pack = ctx.genre_pack
-    if pack is None or pack.rules is None or pack.rules.ruleset != "cwn":
+    module = (
+        get_ruleset_module(pack.rules.ruleset)
+        if pack is not None and pack.rules is not None
+        else None
+    )
+    if not isinstance(module, CwnRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
         raise ValueError(
-            f"stabilize_mortal_injury is cwn-only; loaded pack has ruleset={ruleset!r}"
+            f"stabilize_mortal_injury requires a CWN-family ruleset (cwn/awn); "
+            f"loaded pack has ruleset={ruleset!r}"
         )
 
     snapshot = session.snapshot

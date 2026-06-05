@@ -81,9 +81,34 @@ def _witnessed_act_precondition_unmet(snapshot: GameSnapshot) -> str | None:
     return None
 
 
+def _magic_working_precondition_unmet(snapshot: GameSnapshot) -> str | None:
+    # ``magic_working`` is the ADR-126 pact-working magic plugin; it engages
+    # ``apply_magic_working`` against ``snapshot.magic_state`` (the per-session
+    # pact-working ledger, loaded at chargen ONLY for worlds that ship a
+    # ``magic.yaml``). A world whose ``magic_state`` is None cannot service it:
+    # ``apply_magic_working`` raises ``MagicWorkingParseError`` ("magic_working
+    # emitted but world has no magic_state loaded") on every channel.
+    #
+    # This is the wwn/swn/cwn class-spellcasting case (elemental_harmony,
+    # space_opera-without-coyote, neon_dystopia): their magic lives on the
+    # character core (spellcasting/effort/system_strain + class moves), NOT in
+    # the pact-working plugin, so ``magic_state`` stays None. Gating off the
+    # inapplicable dispatch lets the channel be narrated via the existing beat
+    # path instead of erroring every turn.
+    #
+    # The condition is PLUGIN PRESENCE, not the ruleset slug: space_opera is
+    # ``ruleset: swn`` yet ships a pact-working ``magic.yaml`` for coyote_star,
+    # so its ``magic_state`` IS populated and the dispatch passes through. A
+    # ruleset-slug gate would wrongly suppress coyote_star's salvage magic.
+    if snapshot.magic_state is None:
+        return "snapshot.magic_state is None (world ships no ADR-126 pact-working magic plugin)"
+    return None
+
+
 _INERT_PRECONDITIONS: dict[str, Callable[[GameSnapshot], str | None]] = {
     "scenario_clue": _scenario_clue_precondition_unmet,
     "witnessed_act": _witnessed_act_precondition_unmet,
+    "magic_working": _magic_working_precondition_unmet,
 }
 
 

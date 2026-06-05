@@ -194,6 +194,84 @@ def _witnessed_act_dispatch(*, key: str = "k-wa-1") -> SubsystemDispatch:
     )
 
 
+# --- magic_working fixtures (mirror the scenario_clue builders above) -------
+# magic_working keys off snapshot.magic_state (the ADR-126 pact-working magic
+# plugin). It is structurally inert when magic_state is None — the world ships
+# no magic.yaml, so the pact-working ledger was never loaded. This is the
+# elemental_harmony/burning_peace case (ruleset: wwn): WWN magic lives on the
+# character core (spellcasting/effort/system_strain + class moves), NOT in the
+# pact-working plugin, so magic_state stays None and apply_magic_working would
+# raise MagicWorkingParseError on every channel. A pact-working world
+# (space_opera/coyote_star — swn ruleset but ships magic.yaml) has magic_state
+# populated and routes normally; the gate must NOT fire there. The principled
+# condition is plugin presence (magic_state populated), NOT the ruleset slug —
+# proven by the swn coyote_star pass-through test below.
+
+
+def _magic_working_dispatch(*, key: str = "k-magic-1") -> SubsystemDispatch:
+    return _dispatch(
+        subsystem="magic_working",
+        params={
+            "plugin": "innate_v1",
+            "mechanism": "channel",
+            "actor": "Chico",
+            "domain": "fire",
+            "narrator_basis": "a thread of heat coils up the forearm",
+        },
+        idempotency_key=key,
+    )
+
+
+def _populated_magic_state() -> Any:
+    """Minimal hydrated MagicState (the pact-working ADR-126 plugin ledger).
+
+    A coyote_star-shaped config is enough — the gate only checks
+    ``magic_state is not None``; it does not introspect the ledger.
+    """
+    from sidequest.magic.models import (
+        HardLimit,
+        LedgerBarSpec,
+        WorldKnowledge,
+        WorldMagicConfig,
+    )
+    from sidequest.magic.state import MagicState
+
+    config = WorldMagicConfig(
+        world_slug="coyote_star",
+        genre_slug="space_opera",
+        allowed_sources=["innate"],
+        active_plugins=["innate_v1"],
+        intensity=0.25,
+        world_knowledge=WorldKnowledge(primary="classified", local_register="folkloric"),
+        visibility={"primary": "feared", "local_register": "dismissed"},
+        hard_limits=[HardLimit(id="x", description="x")],
+        cost_types=["sanity"],
+        ledger_bars=[
+            LedgerBarSpec(
+                id="sanity",
+                scope="character",
+                direction="down",
+                range=(0.0, 1.0),
+                threshold_low=0.0,
+                consequence_on_low_cross="break",
+                starts_at_chargen=1.0,
+            )
+        ],
+        narrator_register="x",
+    )
+    return MagicState.from_config(config)
+
+
+def _magic_snapshot(*, magic_state: Any, genre_slug: str = "elemental_harmony") -> GameSnapshot:
+    snap = GameSnapshot(
+        genre_slug=genre_slug,
+        world_slug="burning_peace",
+        player_seats={"player:Alice": "Alice"},
+    )
+    snap.magic_state = magic_state
+    return snap
+
+
 # ===========================================================================
 # Pure function — gate_inert_dispatches(package, snapshot)
 # ===========================================================================
@@ -406,6 +484,118 @@ def test_gate_emits_no_span_for_witnessed_act_when_political_state_present() -> 
 
 
 # ===========================================================================
+# magic_working precondition (FIXER 2026-06-04 — playtest bug).
+#
+# Playtest (elemental_harmony/burning_peace, ruleset: wwn, magic_level: high)
+# turn 5: the player channels ("let a thread of heat coil up my forearm in
+# warning"). The Intent Router routes it to magic_working, but burning_peace
+# ships no magic.yaml — WWN magic lives on the character core, not the
+# pact-working plugin — so snapshot.magic_state is None and
+# apply_magic_working raises MagicWorkingParseError ("magic_working emitted but
+# world has no magic_state loaded") on EVERY channel. The dispatch can never
+# engage on this world.
+#
+# Same structural shape as scenario_clue (no scenario_state) and witnessed_act
+# (no political_state): gate the dispatch out before the bank, emit a loud
+# intent_router.dispatch.gated span. The condition is PLUGIN PRESENCE
+# (magic_state populated), NOT the ruleset slug: space_opera is swn yet ships a
+# pact-working magic.yaml for coyote_star, so its magic_state IS populated and
+# the gate must pass it through — pinned below.
+# ===========================================================================
+
+
+def test_magic_working_dropped_when_magic_state_none() -> None:
+    """No pact-working magic plugin (wwn/swn/cwn world without magic.yaml) →
+    magic_working is structurally inert → dropped, and a GatedDispatch records
+    the reason for the span layer. This is the burning_peace channel bug."""
+    from sidequest.agents.dispatch_precondition_gate import gate_inert_dispatches
+
+    package = _package_with(_magic_working_dispatch())
+    snap = _magic_snapshot(magic_state=None)
+
+    filtered, gated = gate_inert_dispatches(package=package, snapshot=snap)
+
+    assert _all_dispatch_subsystems(filtered) == [], (
+        "magic_working must be removed from the package when magic_state is "
+        f"None; got {_all_dispatch_subsystems(filtered)}"
+    )
+    assert len(gated) == 1
+    assert gated[0].subsystem == "magic_working"
+    assert gated[0].idempotency_key == "k-magic-1"
+    assert "magic_state is None" in gated[0].reason
+
+
+def test_magic_working_kept_when_magic_state_present() -> None:
+    """A pact-working world (e.g. swn coyote_star, which ships magic.yaml) has
+    magic_state populated → magic_working passes through untouched, nothing
+    gated. Proves the gate is plugin-driven, not ruleset-driven."""
+    from sidequest.agents.dispatch_precondition_gate import gate_inert_dispatches
+
+    package = _package_with(_magic_working_dispatch())
+    snap = _magic_snapshot(magic_state=_populated_magic_state(), genre_slug="space_opera")
+
+    filtered, gated = gate_inert_dispatches(package=package, snapshot=snap)
+
+    assert _all_dispatch_subsystems(filtered) == ["magic_working"]
+    assert gated == []
+
+
+def test_magic_working_dropped_but_sibling_dispatch_preserved() -> None:
+    """Selective filtering: a turn that dispatches magic_working AND npc_agency
+    into a no-magic_state world drops only the inert magic_working; the
+    npc_agency dispatch (no precondition) survives the package rebuild."""
+    from sidequest.agents.dispatch_precondition_gate import gate_inert_dispatches
+
+    package = _package_with(
+        _magic_working_dispatch(key="k-magic-1"),
+        _dispatch(subsystem="npc_agency", params={"npc_name": "Harpo"}, idempotency_key="k-npc"),
+    )
+    snap = _magic_snapshot(magic_state=None)
+
+    filtered, gated = gate_inert_dispatches(package=package, snapshot=snap)
+
+    assert _all_dispatch_subsystems(filtered) == ["npc_agency"]
+    assert [g.subsystem for g in gated] == ["magic_working"]
+
+
+def test_gate_emits_one_magic_working_gated_span_per_drop() -> None:
+    """Each dropped magic_working dispatch emits a loud
+    intent_router.dispatch.gated span so the GM panel sees WHY the channel
+    produced no magic-subsystem result."""
+    from sidequest.agents.dispatch_precondition_gate import run_dispatch_precondition_gate
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_magic_working_dispatch())
+    snap = _magic_snapshot(magic_state=None)
+
+    filtered = run_dispatch_precondition_gate(package=package, snapshot=snap, tracer=tracer)
+
+    assert _all_dispatch_subsystems(filtered) == []
+    spans = [s for s in exporter.get_finished_spans() if s.name == "intent_router.dispatch.gated"]
+    assert len(spans) == 1, (
+        f"expected exactly 1 gated span, got {[s.name for s in exporter.get_finished_spans()]}"
+    )
+    attrs = dict(spans[0].attributes or {})
+    assert attrs.get("subsystem") == "magic_working"
+    assert "magic_state is None" in str(attrs.get("reason", ""))
+
+
+def test_gate_emits_no_span_for_magic_working_when_magic_state_present() -> None:
+    """Quiet turn: pact-working world present → zero gated spans (no false
+    skip), and the magic_working dispatch survives to engage its engine."""
+    from sidequest.agents.dispatch_precondition_gate import run_dispatch_precondition_gate
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_magic_working_dispatch())
+    snap = _magic_snapshot(magic_state=_populated_magic_state(), genre_slug="space_opera")
+
+    run_dispatch_precondition_gate(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if s.name == "intent_router.dispatch.gated"]
+    assert spans == []
+
+
+# ===========================================================================
 # Wiring / end-to-end — the gate is live in the pre-narrator router pass and
 # makes the 59-3 watcher go quiet for the no-scenario case (AC3).
 # ===========================================================================
@@ -512,4 +702,75 @@ async def test_router_pass_does_not_gate_scenario_clue_in_scenario_world() -> No
         "the gate must NOT fire in a scenario world; the watcher must still "
         "catch a genuinely-unengaged scenario_clue dispatch. Got "
         f"{[s.name for s in exporter.get_finished_spans()]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_pass_gates_magic_working_so_bank_raises_no_parse_error() -> None:
+    """Wiring + bug fix end-to-end: drive the real pre-narrator router pass with
+    a router that dispatches magic_working into a no-magic_state world (the
+    burning_peace wwn channel). The returned package must carry NO magic_working
+    dispatch, and the bank result must record NO MagicWorkingParseError — i.e.
+    the inapplicable dispatch never reaches apply_magic_working.
+
+    This is the exact playtest failure (elemental_harmony/burning_peace turn 5)
+    and its fix: the gate removes the structurally-inert dispatch before the
+    bank runs, so the channel no longer errors every turn.
+    """
+    from sidequest.server.intent_router_pass import execute_intent_router_pre_narrator_pass
+
+    snap = _magic_snapshot(magic_state=None)
+    pack = _synthetic_pack()
+    package = _package_with(_magic_working_dispatch())
+
+    router = MagicMock()
+    router.decompose = AsyncMock(return_value=package)
+
+    returned, bank = await execute_intent_router_pre_narrator_pass(
+        intent_router=router,
+        snapshot=snap,
+        pack=pack,
+        action="I let a thread of heat coil up my forearm in warning.",
+        player_name="Alice",
+    )
+
+    assert _all_dispatch_subsystems(returned) == [], (
+        "the pre-narrator pass must gate the inert magic_working dispatch out of "
+        f"the returned package; got {_all_dispatch_subsystems(returned)}"
+    )
+    parse_errors = [
+        (key, repr_) for (key, repr_) in bank.errors if "MagicWorkingParseError" in repr_
+    ]
+    assert parse_errors == [], (
+        "with the gate live, the no-magic_state world must NOT raise "
+        f"MagicWorkingParseError in the bank. Got bank.errors={bank.errors}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_pass_does_not_gate_magic_working_in_pact_working_world() -> None:
+    """Regression guard: in a pact-working world (magic_state populated) the
+    gate MUST NOT fire — the magic_working dispatch passes through to engage its
+    engine. Proves the gate narrows the false-positive without breaking the
+    genuine pact-working path (coyote_star)."""
+    from sidequest.server.intent_router_pass import execute_intent_router_pre_narrator_pass
+
+    snap = _magic_snapshot(magic_state=_populated_magic_state(), genre_slug="space_opera")
+    pack = _synthetic_pack()
+    package = _package_with(_magic_working_dispatch())
+
+    router = MagicMock()
+    router.decompose = AsyncMock(return_value=package)
+
+    returned, _bank = await execute_intent_router_pre_narrator_pass(
+        intent_router=router,
+        snapshot=snap,
+        pack=pack,
+        action="I let a thread of heat coil up my forearm in warning.",
+        player_name="Alice",
+    )
+
+    assert _all_dispatch_subsystems(returned) == ["magic_working"], (
+        "magic_working must pass through untouched in a pact-working world "
+        f"(magic_state populated); got {_all_dispatch_subsystems(returned)}"
     )

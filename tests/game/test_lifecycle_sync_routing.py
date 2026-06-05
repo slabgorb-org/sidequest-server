@@ -69,6 +69,34 @@ class TestDormantOnlySync:
             "a COMPLETED quest must be projected into the index (dormant note)"
         )
 
+    def test_sync_indexes_failed_quest(self) -> None:
+        """Routing completeness (Reviewer Should-fix): a FAILED quest is terminal →
+        dormant → indexed for recall. Currently NOT indexed (predicate only matched
+        'completed') — that's the RED."""
+        from sidequest.game.entity_card import EntityType
+        from sidequest.game.entity_sync import sync_entity_cards
+
+        store = EntityStore()
+        snap = _Snapshot(quest_log={"q_fail": QuestEntry(title="Save the village", status="failed")})
+        sync_entity_cards(store, snap)
+        assert "quest:q_fail" in _ids(store, EntityType.QUEST), (
+            "a FAILED quest must be indexed (it is a finished, recall-able note)"
+        )
+
+    def test_sync_indexes_resolved_quest(self) -> None:
+        """A RESOLVED quest is terminal → dormant → indexed. Currently NOT indexed."""
+        from sidequest.game.entity_card import EntityType
+        from sidequest.game.entity_sync import sync_entity_cards
+
+        store = EntityStore()
+        snap = _Snapshot(
+            quest_log={"q_res": QuestEntry(title="Broker the truce", status="resolved")}
+        )
+        sync_entity_cards(store, snap)
+        assert "quest:q_res" in _ids(store, EntityType.QUEST), (
+            "a RESOLVED quest must be indexed (it is a finished, recall-able note)"
+        )
+
     def test_sync_does_not_index_active_quest(self) -> None:
         """An ACTIVE quest rides the existing state_summary floor — it must NOT be
         indexed (double-render guard)."""

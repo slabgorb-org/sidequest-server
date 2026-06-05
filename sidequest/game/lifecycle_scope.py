@@ -20,19 +20,27 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from sidequest.game.session import QuestEntry, TropeState
 
-# The ONE active status for each type. Everything else is dormant.
-_QUEST_DORMANT_STATUS = "completed"  # ADR-137: a completed quest is a past note.
+# The active/dormant status sets for each type.
+# ADR-137: a quest that FINISHED in any way is a dormant, recall-able note. The
+# canonical quest-status vocabulary is the narrator's ``record_quest`` tool field
+# (``sidequest/agents/tools/record_quest.py``): "active / completed / failed /
+# resolved". status is a free-form LLM-set string (no enum), so dormancy is a
+# TERMINAL-status ALLOWLIST — "completed", "failed", and "resolved" are all
+# finished threads; "active" and any non-terminal mid-flight status are live
+# pressure riding the ``state_summary`` floor.
+_QUEST_TERMINAL_STATUSES = frozenset({"completed", "failed", "resolved"})
 _TROPE_ACTIVE_STATUS = "progressing"  # ADR-128: the governor caps progressing at 3.
 
 
 def quest_is_dormant(entry: QuestEntry) -> bool:
     """True when a quest is a DORMANT note (index it), False when ACTIVE (floor).
 
-    ADR-137: a ``status == "completed"`` quest is dormant — a finished thread
-    recalled by pertinence. ANY other status (active / progressing / …) is active
-    pressure that already rides the ``state_summary`` floor, so it is NOT dormant
-    and must NOT be indexed (double-render guard)."""
-    return entry.status == _QUEST_DORMANT_STATUS
+    ADR-137: a quest in any TERMINAL status (``"completed"`` / ``"failed"`` /
+    ``"resolved"``) is dormant — a finished thread recalled by pertinence. ANY
+    other status (active / progressing / …) is active pressure that already rides
+    the ``state_summary`` floor, so it is NOT dormant and must NOT be indexed
+    (double-render guard)."""
+    return entry.status in _QUEST_TERMINAL_STATUSES
 
 
 def trope_is_dormant(state: TropeState) -> bool:

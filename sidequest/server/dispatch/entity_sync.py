@@ -253,6 +253,12 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
         # active-vs-dormant routing decision the GM panel verifies.
         span.set_attribute("entity_sync.quest_count", result.quest_count)
         span.set_attribute("entity_sync.trope_count", result.trope_count)
+        # Story 84-5 (WI-2, Reviewer OTEL nit): the ACTIVE side of the routing split
+        # — items that rode their existing floor and were NOT indexed. Parity with
+        # the dormant quest/trope counts so the GM panel (and Jaeger) sees the full
+        # active-vs-dormant routing decision, not just the dormant half.
+        span.set_attribute("entity_sync.active_quest_count", result.active_quest_count)
+        span.set_attribute("entity_sync.active_trope_count", result.active_trope_count)
         span.set_attribute("entity_sync.failed", result.failed)
         # ADR-138 §D6 — the GM-panel lie-detector sees what the ratification gate
         # withheld from the index, so a quiet narrator (never re-citing a phantom)
@@ -299,6 +305,11 @@ def sync_for_turn(handler: WebSocketSessionHandler, sd: _SessionData) -> None:
             # rode their existing floor).
             "quest_count": result.quest_count,
             "trope_count": result.trope_count,
+            # Story 84-5 (WI-2, Reviewer OTEL nit): the active-vs-dormant routing
+            # split on the watcher event — the GM panel sees N active items riding
+            # the floor vs M dormant notes indexed, not just the dormant side.
+            "active_quest_count": result.active_quest_count,
+            "active_trope_count": result.active_trope_count,
             "outcome": result.outcome,
             "turn_number": interaction,
         },

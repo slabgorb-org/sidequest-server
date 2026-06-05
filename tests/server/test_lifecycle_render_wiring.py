@@ -239,6 +239,117 @@ class TestRoutingObservable:
             "the entity_sync event must carry quest_count + trope_count (routing observability)"
         )
 
+    def test_sync_emits_active_quest_trope_counts(
+        self, session_handler_factory, monkeypatch
+    ) -> None:
+        """OTEL nit (Reviewer): the routing DECISION is the active-vs-dormant SPLIT.
+        Today only the DORMANT-indexed count is emitted; the ACTIVE count (items
+        riding the floor, NOT indexed) is invisible, so the GM panel can't see
+        "N active riding floor vs M dormant indexed." The watcher event AND the
+        entity_sync span must ALSO carry ``active_quest_count`` / ``active_trope_count``.
+
+        Snapshot: 1 active quest + 1 completed (dormant) quest; 1 progressing trope
+        + 1 resolved (dormant) trope → active counts must be 1 each, dormant 1 each."""
+        from sidequest.game.session import TropeState
+        from sidequest.server.dispatch import entity_sync as dispatch_entity_sync
+
+        sd, _h = session_handler_factory(genre="caverns_and_claudes")
+        sd.snapshot.quest_log["q_live"] = QuestEntry(title="Live", status="active")
+        sd.snapshot.quest_log["q_done"] = QuestEntry(title="Done", status="completed")
+        sd.snapshot.active_tropes.append(TropeState(id="the_keeper_stirs", status="progressing"))
+        sd.snapshot.active_tropes.append(TropeState(id="extraction_panic", status="resolved"))
+
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            dispatch_entity_sync,
+            "_watcher_publish",
+            lambda event_type, payload, **kw: captured.append(payload),
+        )
+        dispatch_entity_sync.sync_for_turn(handler=None, sd=sd)  # type: ignore[arg-type]
+
+        synced = [p for p in captured if p.get("field") == "entity_sync"]
+        assert synced, "the sync must publish an entity_sync watcher event"
+        ev = synced[-1]
+        assert "active_quest_count" in ev and "active_trope_count" in ev, (
+            "the entity_sync event must carry active_quest_count + active_trope_count so the "
+            "GM panel sees the active-vs-dormant routing split, not just the dormant side"
+        )
+        assert ev["active_quest_count"] == 1, "one active quest rides the floor"
+        assert ev["active_trope_count"] == 1, "one progressing trope rides the floor"
+        # And the dormant side is the existing counters (sanity: the split is honest).
+        assert ev["quest_count"] == 1 and ev["trope_count"] == 1
+
+    def test_active_counts_on_entity_sync_span(self, session_handler_factory) -> None:
+        """The active counts must also ride the ``accretion.entity_sync`` OTEL span
+        (parity with quest_count/trope_count), so Jaeger sees the routing split too."""
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from sidequest.game.session import TropeState
+        from sidequest.server.dispatch import entity_sync as dispatch_entity_sync
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        # Patch the dispatch module's tracer so the entity_sync span lands in-memory.
+        import opentelemetry.trace as _t
+
+        sd, _h = session_handler_factory(genre="caverns_and_claudes")
+        sd.snapshot.quest_log["q_live"] = QuestEntry(title="Live", status="active")
+        sd.snapshot.active_tropes.append(TropeState(id="the_keeper_stirs", status="progressing"))
+
+        orig_get_tracer = _t.get_tracer
+        try:
+            _t.get_tracer = lambda *a, **k: provider.get_tracer("test-84-5-active")  # type: ignore[assignment]
+            dispatch_entity_sync.sync_for_turn(handler=None, sd=sd)  # type: ignore[arg-type]
+        finally:
+            _t.get_tracer = orig_get_tracer
+
+        spans = [s for s in exporter.get_finished_spans() if "entity_sync" in s.name]
+        assert spans, "an entity_sync span must fire"
+        attrs = dict(spans[-1].attributes or {})
+        assert "entity_sync.active_quest_count" in attrs, (
+            "the entity_sync span must carry entity_sync.active_quest_count"
+        )
+        assert "entity_sync.active_trope_count" in attrs, (
+            "the entity_sync span must carry entity_sync.active_trope_count"
+        )
+        assert attrs["entity_sync.active_quest_count"] == 1
+        assert attrs["entity_sync.active_trope_count"] == 1
+
+
+# ===========================================================================
+# Routing completeness (Reviewer Should-fix) — failed/resolved quests index live
+# ===========================================================================
+
+
+class TestTerminalQuestRoutingLive:
+    def test_failed_and_resolved_quests_indexed_via_live_sync(
+        self, session_handler_factory
+    ) -> None:
+        """The full Should-fix, end-to-end: failed AND resolved quests, driven
+        through the live ``sync_for_turn``, ARE indexed (terminal → dormant →
+        recall-able). An active quest control is NOT — so the routing is live, not
+        dead. Currently failed/resolved are NOT indexed (predicate only matched
+        'completed') — that's the RED."""
+        from sidequest.game.entity_card import EntityType
+        from sidequest.server.dispatch import entity_sync as dispatch_entity_sync
+
+        sd, _h = session_handler_factory(genre="caverns_and_claudes")
+        sd.snapshot.quest_log["q_failed"] = QuestEntry(title="Save the village", status="failed")
+        sd.snapshot.quest_log["q_resolved"] = QuestEntry(title="Broker the truce", status="resolved")
+        sd.snapshot.quest_log["q_active"] = QuestEntry(title="Find the heir", status="active")
+
+        dispatch_entity_sync.sync_for_turn(handler=None, sd=sd)  # type: ignore[arg-type]
+        indexed = {c.id for c in sd.entity_store.query_by_type(EntityType.QUEST)}
+
+        assert "quest:q_failed" in indexed, "a FAILED quest must be indexed (terminal → dormant)"
+        assert "quest:q_resolved" in indexed, "a RESOLVED quest must be indexed (terminal → dormant)"
+        assert "quest:q_active" not in indexed, "an ACTIVE quest must NOT be indexed (rides floor)"
+
 
 # ===========================================================================
 # AC-11 — the two e2e wiring paths

@@ -27,10 +27,32 @@ from sidequest.game.session import QuestEntry, TropeState
 
 
 class TestQuestPredicate:
+    # The canonical quest-status vocabulary is the narrator's record_quest tool field
+    # description (sidequest/agents/tools/record_quest.py:76):
+    #   "Quest status, e.g. active / completed / failed / resolved."
+    # status is a free-form LLM-set string (no enum), so dormancy is a TERMINAL-status
+    # ALLOWLIST: a quest that FINISHED in any way ("completed" / "failed" / "resolved")
+    # is a dormant, recall-able note (§A2). "active" — and any non-terminal mid-flight
+    # status — is live pressure that rides the state_summary floor.
+
     def test_quest_completed_is_dormant(self) -> None:
         from sidequest.game.lifecycle_scope import quest_is_dormant
 
         assert quest_is_dormant(QuestEntry(title="Slay the dragon", status="completed")) is True
+
+    def test_quest_failed_is_dormant(self) -> None:
+        """A FAILED quest is a finished thread — dormant + recall-able, not live
+        pressure polluting state_summary forever (Reviewer Should-fix)."""
+        from sidequest.game.lifecycle_scope import quest_is_dormant
+
+        assert quest_is_dormant(QuestEntry(title="Save the village", status="failed")) is True
+
+    def test_quest_resolved_is_dormant(self) -> None:
+        """A RESOLVED quest is terminal (the trope-resolution handshake / narrator
+        sets it) — dormant + recall-able."""
+        from sidequest.game.lifecycle_scope import quest_is_dormant
+
+        assert quest_is_dormant(QuestEntry(title="Broker the truce", status="resolved")) is True
 
     def test_quest_active_is_not_dormant(self) -> None:
         from sidequest.game.lifecycle_scope import quest_is_dormant
@@ -38,10 +60,22 @@ class TestQuestPredicate:
         assert quest_is_dormant(QuestEntry(title="Slay the dragon", status="active")) is False
 
     def test_quest_progressing_is_not_dormant(self) -> None:
-        """Any non-completed status is active pressure (rides the floor)."""
+        """A non-terminal mid-flight status is active pressure (rides the floor) —
+        the allowlist only matches the terminal set, so anything else is active."""
         from sidequest.game.lifecycle_scope import quest_is_dormant
 
         assert quest_is_dormant(QuestEntry(title="q", status="progressing")) is False
+
+    def test_quest_terminal_allowlist_exhaustive(self) -> None:
+        """Pin the full terminal allowlist {completed, failed, resolved} → dormant,
+        and a representative active status → not dormant, in one place."""
+        from sidequest.game.lifecycle_scope import quest_is_dormant
+
+        for terminal in ("completed", "failed", "resolved"):
+            assert quest_is_dormant(QuestEntry(title="q", status=terminal)) is True, (
+                f"terminal status {terminal!r} must be dormant"
+            )
+        assert quest_is_dormant(QuestEntry(title="q", status="active")) is False
 
 
 # ===========================================================================

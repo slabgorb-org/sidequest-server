@@ -119,6 +119,14 @@ class EntitySyncResult:
     # the GM panel verifies.
     quest_count: int = 0
     trope_count: int = 0
+    # Story 84-5 (WI-2, Reviewer OTEL nit): the ACTIVE side of the routing split —
+    # quests/tropes that rode their EXISTING floor and were deliberately NOT indexed
+    # (the items the loops ``continue`` past). Emitted alongside the dormant
+    # ``quest_count``/``trope_count`` so the GM panel sees the full active-vs-dormant
+    # routing decision ("N active riding floor vs M dormant indexed"), not just the
+    # dormant half.
+    active_quest_count: int = 0
+    active_trope_count: int = 0
     failed_refs: list[str] = field(default_factory=list)
     card_ids: list[str] = field(default_factory=list)
     evicted_ids: list[str] = field(default_factory=list)
@@ -368,6 +376,9 @@ def sync_entity_cards(
     # is the routing gate.
     for quest_id, entry in getattr(snapshot, "quest_log", {}).items():
         if not quest_is_dormant(entry):
+            # Active quest — rides the existing state_summary floor, NOT indexed.
+            # Count it so the routing split is observable (Reviewer OTEL nit).
+            result.active_quest_count += 1
             continue
         try:
             card = project_quest_card(quest_id, entry)
@@ -386,6 +397,9 @@ def sync_entity_cards(
     _trope_defs = {d.id: d for d in tropes if d.id}
     for state in getattr(snapshot, "active_tropes", []):
         if not trope_is_dormant(state):
+            # Progressing trope — rides the existing trope-foreground floor, NOT
+            # indexed. Count it so the routing split is observable (Reviewer OTEL nit).
+            result.active_trope_count += 1
             continue
         definition = _trope_defs.get(state.id)
         if definition is None:

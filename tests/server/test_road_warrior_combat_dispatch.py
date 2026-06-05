@@ -110,16 +110,17 @@ def _make_snapshot_and_encounter(pack: GenrePack, attacker: str, opponent: str, 
     from sidequest.game.session import GameSnapshot, Npc
     from sidequest.game.turn import TurnManager
 
-    # The attacker carries a scrap weapon whose DamageSpec includes a trauma_die,
-    # so the strike resolves a concrete DamageSpec via inventory (Priority 2 in
-    # resolve_damage_spec_from_beat_and_actor) even if the beat itself authors no
-    # damage_override. 1d6 with monkeypatched-low faces deals exactly 1 — enough to
-    # drop a 1-HP opponent and to leave a 20-HP opponent alive but dented.
-    weapon = {
-        "id": "scrap_iron",
-        "name": "Scrap Iron",
-        "damage": {"dice": "1d6", "trauma_die": "1d6", "trauma_rating": 2, "trauma_target": 2},
-    }
+    # The attacker carries the REAL road_warrior starting weapon (the Wheelman's
+    # pistol) by id with NO inline damage spec, so the strike must resolve its
+    # DamageSpec from the pack's own catalog (Priority 3 in
+    # resolve_damage_spec_from_beat_and_actor — CatalogItem.damage). This drives
+    # the real-content path the Reviewer flagged: if no personal weapon authors a
+    # `damage:` spec, this resolves to None → damage_spec_missing → HP never
+    # depletes → these tests go RED. The pistol's authored damage (1d6, trauma_die
+    # 1d8) deals 1-6 — enough to drop a 1-HP opponent and to leave a 20-HP opponent
+    # alive but dented. The trauma die rolls via the monkeypatched dice.random (=1)
+    # vs the cfg default Trauma Target (6) → non-traumatic, clean Mortal Injury.
+    weapon = {"id": "pistol", "name": "Pistol"}
     atk_core = CreatureCore(
         name=attacker,
         description="Wheelman of the Circuit.",
@@ -282,4 +283,79 @@ def test_road_warrior_downed_target_routes_through_cwn_seam(otel_capture, monkey
     assert any("Mortal Injury" in s.text for s in target.statuses), (
         "the downed target must carry a Mortal Injury status; "
         f"statuses={[s.text for s in target.statuses]}"
+    )
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_road_warrior_personal_weapons_carry_damage_specs() -> None:
+    """Every PERSONAL weapon in the road_warrior catalog must author a ``damage``
+    spec — the content half of the hp_depletion combat the engine seam serves.
+
+    This is the regression lock for the Reviewer's HIGH finding (Story 86-1 Plan 1):
+    the combat confrontation is ``win_condition: hp_depletion`` and its strike beats
+    carry ``damage_channel: strike`` with no ``damage_override``, so damage resolves
+    from the actor's weapon (resolve_damage_spec_from_beat_and_actor Priority 3 →
+    CatalogItem.damage). A personal weapon with no ``damage`` spec resolves to None →
+    ``damage_spec_missing`` → the strike lands in prose but moves no HP (the exact
+    "narrator improvising combat with nothing underneath" failure the story exists to
+    kill). Mounted/rig weapons (vehicular, Plan 2) are excluded — they are not the
+    actor's personal strike weapon in Plan 1.
+
+    This guard fails the suite if a future edit ships a personal weapon without
+    damage, so the gap a seeded-weapon integration test once masked can never pass
+    green again.
+    """
+    pack = _load_road_warrior()
+    catalog = pack.inventory.item_catalog
+    personal_weapons = [
+        item
+        for item in catalog
+        if item.category == "weapon" and "mounted" not in item.tags
+    ]
+    assert personal_weapons, "road_warrior must declare personal weapons in its catalog"
+
+    missing = [item.id for item in personal_weapons if item.damage is None]
+    assert not missing, (
+        "every personal weapon must author a `damage:` spec so the hp_depletion "
+        f"combat actually depletes HP; missing damage on: {missing}"
+    )
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_road_warrior_combat_classes_start_with_a_personal_weapon() -> None:
+    """Every class whose combat beat menu includes a strike beat (``shoot`` /
+    ``pistol_whip``) must start with a personal weapon that authors a ``damage``
+    spec — otherwise it is unarmed in a lethal genre and deals 0 HP even after
+    the catalog gains damage specs (Reviewer HIGH finding #2: Chrome Saint has
+    shoot/pistol_whip beats but no gun).
+    """
+    pack = _load_road_warrior()
+    catalog_by_id = {item.id: item for item in pack.inventory.item_catalog}
+    starting = pack.inventory.starting_equipment
+
+    strike_beats = {"shoot", "pistol_whip"}
+    classes_needing_a_weapon = [
+        cls.display_name
+        for cls in pack.classes
+        if strike_beats & set(getattr(cls, "encounter_beat_choices", []) or [])
+    ]
+    assert classes_needing_a_weapon, (
+        "expected at least one road_warrior class to have a strike beat (shoot/pistol_whip)"
+    )
+
+    unarmed = []
+    for class_name in classes_needing_a_weapon:
+        loadout = starting.get(class_name, [])
+        has_damaging_weapon = any(
+            (item := catalog_by_id.get(item_id)) is not None
+            and item.category == "weapon"
+            and "mounted" not in item.tags
+            and item.damage is not None
+            for item_id in loadout
+        )
+        if not has_damaging_weapon:
+            unarmed.append(class_name)
+    assert not unarmed, (
+        "every combat class with a strike beat must start with a damaging personal "
+        f"weapon; these start unarmed: {unarmed}"
     )

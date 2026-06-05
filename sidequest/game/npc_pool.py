@@ -83,8 +83,14 @@ class NpcPoolMember(BaseModel):
     person namer (which would mint a person-name + a random culture). Defaults
     ``False`` so every existing / authored / person member stays a person.
     The full Monster Manual identity (creature_id / threat_level / hp / stat
-    block, ADR-059) is a deferred follow-up; this flag is the classification
-    that keeps the person namer off creatures in the meantime."""
+    block, ADR-059) is wired at promotion time via ``_promote_creature_to_npc``
+    in narration_apply.py (story 83-1)."""
+    creature_data: dict | None = None
+    """Story 83-1: pre-fetched encountergen enemy dict (Monster Manual shape)
+    embedded at pool-mint time so the promotion seam is self-contained.
+    ``None`` for pool members minted without MM context (narrator-invented
+    creatures receive synthetic bestiary identity at promotion time via
+    ``_synthetic_creature_dict``)."""
 
 
 def is_projectable(entity: NpcPoolMember | Npc) -> bool:

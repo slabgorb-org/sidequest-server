@@ -186,6 +186,34 @@ class MonsterManual(BaseModel):
                 return npc
         return None
 
+    def find_enemy_by_name(self, name: str) -> tuple[dict, int] | None:
+        """Find a pre-generated enemy across all encounters by name.
+
+        Returns ``(enemy_dict, tier)`` for the first match, or ``None``.
+        Case-insensitive, substring-fuzzy (mirrors ``find_npc_by_name``).
+        Caller passes the result to ``_creature_patch_from_enemy`` so the
+        promotion seam receives a real MM-derived stat block.
+        """
+        name_lower = name.lower()
+        for enc in self.encounters:
+            enemies_raw = enc.data.get("enemies") or []
+            if not isinstance(enemies_raw, list):
+                continue
+            for enemy in enemies_raw:
+                if not isinstance(enemy, dict):
+                    continue
+                enemy_name = enemy.get("name")
+                if not isinstance(enemy_name, str):
+                    continue
+                enemy_lower = enemy_name.lower()
+                if (
+                    enemy_lower == name_lower
+                    or name_lower in enemy_lower
+                    or enemy_lower in name_lower
+                ):
+                    return enemy, enc.tier
+        return None
+
     # ── Lifecycle ───────────────────────────────────────────────
 
     def mark_active(self, name: str, location: str) -> None:

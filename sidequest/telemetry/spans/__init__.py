@@ -39,6 +39,7 @@ from .catch_up import *  # noqa: F401, F403
 from .cavern_room import *  # noqa: F401, F403
 from .chargen import *  # noqa: F401, F403
 from .chart import *  # noqa: F401, F403
+from .chase import *  # noqa: F401, F403
 from .clock import *  # noqa: F401, F403
 from .combat import *  # noqa: F401, F403
 from .compose import *  # noqa: F401, F403

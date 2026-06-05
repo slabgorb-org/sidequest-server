@@ -88,6 +88,12 @@ SIGNAL_APPLICABILITY: dict[str, frozenset[str]] = {
     # free-floating embedding. Omitting ``sim`` means its contribution is dropped
     # (per-type applicability), not weighted.
     EntityType.RELATIONSHIP: frozenset({SIGNAL_MENTION, SIGNAL_HERE, SIGNAL_RECENCY}),
+    # Story 84-5 (WI-2, ADR-118 §A2): a DORMANT quest / trope is NOT physically
+    # present, so ``here`` does NOT apply (omitted → contributes 0). It surfaces by
+    # NAME reference (mention) or TOPICAL similarity (sim), decayed by recency. Same
+    # signal set for both — they are both recall-by-pertinence notes.
+    EntityType.QUEST: frozenset({SIGNAL_MENTION, SIGNAL_RECENCY, SIGNAL_SIM}),
+    EntityType.TROPE: frozenset({SIGNAL_MENTION, SIGNAL_RECENCY, SIGNAL_SIM}),
 }
 
 

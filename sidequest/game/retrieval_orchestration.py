@@ -124,6 +124,11 @@ class RetrievedEntities:
     # retrieved (zero-byte-leak). Defaulted (added after the §A1 fields) so legacy
     # keyword constructors keep working; populated by ``_finish``.
     retrieved_relationships: list[EntityCard] | None = None
+    # Story 84-5 (WI-2, ADR-118 §A2): the SEMANTIC FILL for DORMANT quest / trope
+    # cards (recall-by-pertinence) — ``None`` when none retrieved. Same typed-bucket
+    # shape; populated by ``_finish`` from the cosine fill.
+    retrieved_quests: list[EntityCard] | None = None
+    retrieved_tropes: list[EntityCard] | None = None
 
 
 def _floor_token_cost(working_set: NpcWorkingSet) -> int:
@@ -259,12 +264,17 @@ async def retrieve_turn_context(
                 EntityType.FACTION: [],
                 # Story 84-3 (WI-4): RELATIONSHIP cards get their own typed bucket.
                 EntityType.RELATIONSHIP: [],
+                # Story 84-5 (WI-2): DORMANT quest / trope buckets.
+                EntityType.QUEST: [],
+                EntityType.TROPE: [],
             }
             for card in selected:
                 by_type.setdefault(card.entity_type, []).append(card)
             npc_cards = by_type.get(EntityType.NPC) or []
             loc_cards = by_type.get(EntityType.LOCATION) or []
             fac_cards = by_type.get(EntityType.FACTION) or []
+            quest_cards = by_type.get(EntityType.QUEST) or []
+            trope_cards = by_type.get(EntityType.TROPE) or []
             # §A2 floor-companion (84-3): merge the floor-surfaced relationship
             # cards with any that also came through the cosine fill, deduped by id.
             # The floor companions surface on EVERY return path (the fill may be
@@ -288,6 +298,9 @@ async def retrieve_turn_context(
             span.set_attribute("retrieval.faction_count", len(fac_cards))
             # Story 84-3 (WI-4): relationship-card fill count on the span.
             span.set_attribute("retrieval.relationship_count", len(rel_cards))
+            # Story 84-5 (WI-2): dormant quest / trope fill counts on the span.
+            span.set_attribute("retrieval.quest_count", len(quest_cards))
+            span.set_attribute("retrieval.trope_count", len(trope_cards))
             span.set_attribute("retrieval.rejected_below_similarity", rejected_below_similarity)
             span.set_attribute("retrieval.dimension_mismatch_count", dimension_mismatch_count)
             # Story 84-1 (ADR-118 §A1): the drama-gate observable. WI-6 reads this
@@ -330,6 +343,8 @@ async def retrieve_turn_context(
                 embed_skipped=embed_skipped,
                 card_scores=card_scores,
                 retrieved_relationships=rel_cards or None,
+                retrieved_quests=quest_cards or None,
+                retrieved_tropes=trope_cards or None,
             )
 
         # --- Drama-gate (ADR-118 §A1): can structured signals resolve the turn? ---

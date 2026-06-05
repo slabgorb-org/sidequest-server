@@ -30,7 +30,7 @@ is the 75-7 follow-up).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from opentelemetry import trace
 
@@ -44,6 +44,13 @@ from sidequest.game.entity_card import EntityCard, EntityType
 from sidequest.game.entity_store import EntityStore
 from sidequest.game.lore_embedding import DEFAULT_RETRIEVAL_MIN_SIMILARITY
 from sidequest.game.lore_store import _estimate_tokens
+from sidequest.game.pertinence import (
+    PertinenceScore,
+    PertinenceSignals,
+    score_card,
+    select_within_budget,
+    structured_signals_sufficient,
+)
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.sanitize import sanitize_player_text
 
@@ -95,6 +102,20 @@ class RetrievedEntities:
     rejected_below_similarity: int
     dimension_mismatch_count: int
     outcome: str
+    # Story 84-1 (ADR-118 §A1): the unified scorer's per-turn signals. These are
+    # ADDED to the §D4 shape — every field above is preserved so the renderer
+    # (session_helpers) and watcher (universal_retrieval) keep working unchanged.
+    #
+    # ``embed_skipped`` — True when the drama-gate resolved the turn on structured
+    # signals (mention + here) and the cosine embed was never computed; the WI-6
+    # GM-panel surface reads this to show WHY the cosine pass was bypassed.
+    # ``card_scores`` — the ``PertinenceScore`` decomposition for each selected
+    # fill card (feeds the A5/WI-6 ``retrieval.card.reason`` per-card OTEL).
+    #
+    # Defaulted so legacy/fixture constructors don't break, but ALWAYS populated
+    # by ``_finish`` on the live path (No Silent Fallbacks — never silently empty).
+    embed_skipped: bool = False
+    card_scores: list[PertinenceScore] = field(default_factory=list)
 
 
 def _floor_token_cost(working_set: NpcWorkingSet) -> int:
@@ -193,6 +214,13 @@ async def retrieve_turn_context(
         fill_token_cost = 0
         rejected_below_similarity = 0
         selected: list[EntityCard] = []
+        card_scores: list[PertinenceScore] = []
+        # ADR-118 §A1 drama-gate state. ``embed_skipped`` flips True only when the
+        # structured signals (mention + here) suffice and we deliberately bypass
+        # the cosine embed. A daemon-down / blank-query degrade is a DIFFERENT
+        # thing (query_failed) — it must NOT masquerade as a drama-gate skip
+        # (No Silent Fallbacks), so it leaves embed_skipped False.
+        embed_skipped = False
 
         def _finish(outcome: str) -> RetrievedEntities:
             by_type: dict[str, list[EntityCard]] = {
@@ -218,6 +246,9 @@ async def retrieve_turn_context(
             span.set_attribute("retrieval.faction_count", len(fac_cards))
             span.set_attribute("retrieval.rejected_below_similarity", rejected_below_similarity)
             span.set_attribute("retrieval.dimension_mismatch_count", dimension_mismatch_count)
+            # Story 84-1 (ADR-118 §A1): the drama-gate observable. WI-6 reads this
+            # on the GM panel to show whether the cosine pass was bypassed.
+            span.set_attribute("retrieval.embed_skipped", embed_skipped)
 
             return RetrievedEntities(
                 floor=floor,
@@ -233,7 +264,33 @@ async def retrieve_turn_context(
                 rejected_below_similarity=rejected_below_similarity,
                 dimension_mismatch_count=dimension_mismatch_count,
                 outcome=outcome,
+                embed_skipped=embed_skipped,
+                card_scores=card_scores,
             )
+
+        # --- Drama-gate (ADR-118 §A1): can structured signals resolve the turn? ---
+        # The present-scene floor (mention + here) is the cheap structured signal.
+        # ``here`` is strong when the scene has a present NPC; ``mention`` is strong
+        # when the player named a roster NPC this turn. When both clear the gate the
+        # cosine embed is SKIPPED entirely ("I attack Borin" resolves on mention +
+        # location) — strictly cheaper than the §D4 always-embed fill. The floor
+        # already carries the present scene to the prompt, so the fill stays empty.
+        #
+        # Mention is name-match only for now (WI-5/84-2 adds aliases); the seam is
+        # ``player_referenced_npcs`` flowing in from the caller's word-bounded match.
+        turn_signals = PertinenceSignals(
+            mention=1.0 if player_referenced_npcs else 0.0,
+            here=1.0 if floor.full_profiles else 0.0,
+            # deferred: recency decay not yet wired — no card-level last_seen to
+            # decay against; the gate resolves on mention + here only (see the
+            # fill-scoring block below for the full deferral note).
+            recency=0.0,
+            sim=None,
+            present_scene=bool(floor.full_profiles),
+        )
+        if structured_signals_sufficient(turn_signals):
+            embed_skipped = True
+            return _finish(_OUTCOME_SUCCESS)
 
         # --- Fill: embed the action text (graceful, recorded degradation) ---
         if client is None:
@@ -249,7 +306,8 @@ async def retrieve_turn_context(
         except (DaemonUnavailableError, DaemonRequestError, ValueError) as exc:
             # Mirror retrieve_lore_context's failure taxonomy. The failure is
             # RECORDED in the span (No Silent Fallbacks), never swallowed into a
-            # false empty success.
+            # false empty success — and crucially NOT folded into a false
+            # embed_skipped (a real daemon failure is not a drama-gate skip).
             logger.warning("retrieve_turn_context embed_failed error=%s", exc)
             return _finish(_OUTCOME_QUERY_FAILED)
 
@@ -269,7 +327,9 @@ async def retrieve_turn_context(
         all_hits = entity_store.query_by_similarity(query_embedding, top_k=DEFAULT_ENTITY_TOP_K)
         rejected_below_similarity = sum(1 for sim, _ in all_hits if sim < min_similarity)
         candidates = [
-            card for sim, card in all_hits if sim >= min_similarity and card.id not in floor_ids
+            (sim, card)
+            for sim, card in all_hits
+            if sim >= min_similarity and card.id not in floor_ids
         ]
         fill_candidate_count = len(candidates)
 
@@ -279,11 +339,39 @@ async def retrieve_turn_context(
         if not candidates:
             return _finish(_OUTCOME_NO_CANDIDATES)
 
-        for card in candidates:
-            if fill_token_cost + card.token_estimate > remaining:
-                continue
-            selected.append(_sanitize_card(card))
-            fill_token_cost += card.token_estimate
+        # --- Score (ADR-118 §A1): one weighted selection over the fill cards. The
+        # fill is the topical-fallback tail — these cards carry the cosine ``sim``
+        # signal (mention/here are the floor's job). present_scene=False:
+        # the present scene rides the floor, never the fill. select_within_budget
+        # ranks by score and admits within the remaining token budget.
+        #
+        # DEFERRED (recency decay not yet wired): the §A1 ``w_recency·decay`` term
+        # is hardcoded to 0.0 here because ``EntityCard`` carries no
+        # ``last_seen_turn`` field to decay against. This is an EXPLICIT,
+        # documented zero — NOT a silent fallback that looks like a live term: the
+        # w_recency weight is real (0.2) but its signal input is unavailable on the
+        # card model until a later Epic-84 work item adds card-level recency
+        # (the EntityCard projector / lifecycle scope, WI-2 84-5 territory). ---
+        cards_by_id = {card.id: card for _, card in candidates}
+        scored = [
+            score_card(
+                card,
+                PertinenceSignals(
+                    mention=0.0,
+                    here=0.0,
+                    recency=0.0,  # deferred: no EntityCard.last_seen_turn to decay (see above)
+                    sim=sim,
+                    present_scene=False,
+                ),
+            )
+            for sim, card in candidates
+        ]
+        chosen = select_within_budget(scored, cards_by_id, budget_tokens=remaining)
+        chosen_ids = {card.id for card in chosen}
+        # Preserve descending-score order from the selector, sanitize on the way out.
+        selected = [_sanitize_card(card) for card in chosen]
+        card_scores = [ps for ps in scored if ps.card_id in chosen_ids]
+        fill_token_cost = sum(card.token_estimate for card in chosen)
         fill_selected_count = len(selected)
 
         if not selected:

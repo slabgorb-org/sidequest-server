@@ -497,9 +497,11 @@ async def test_sdk_path_fans_out_deltas_to_room(
     )
     # turn_id stamped consistently with the streaming path (str(turn_number)).
     assert {m.payload.turn_id for m in deltas} == {"3"}
-    # seq monotonic from 0; chunks reconstruct the prose in order.
-    assert [m.payload.seq for m in deltas] == [0, 1]
-    assert [m.payload.chunk for m in deltas] == ["The wind howls. ", "The door slams."]
+    # seq monotonic from 0; chunks reconstruct the prose in order. Exact chunk
+    # boundaries are NOT part of the contract — the fence-suppression parser
+    # (playtest fix 2026-06-05) holds back a lookahead tail, shifting them.
+    assert [m.payload.seq for m in deltas] == list(range(len(deltas)))
+    assert "".join(m.payload.chunk for m in deltas) == "The wind howls. The door slams."
     # The canonical turn result still carries the full prose.
     assert result.narration == "The wind howls. The door slams."
 
@@ -652,3 +654,120 @@ async def test_sdk_path_does_not_stream_raw_deltas_in_multiplayer_room(
 
     # The turn still completes; the canonical narration is the MP delivery path.
     assert result.narration == "A secret door clicks open."
+
+
+# ===========================================================================
+# Section D — fence suppression (playtest fix 2026-06-05): the ADR-013
+# text-embedded ```game_patch fence must NOT stream to the client
+# ===========================================================================
+#
+# When the narrator falls back to emitting its patch as a fenced JSON block in
+# the text (tool_calls=0 turns happen in production), the raw delta sink
+# streamed the GAME_PATCH fence verbatim into the narration card. The SDK solo
+# sink must route through StreamFenceParser (the same seam the legacy claude -p
+# streaming path uses) so fence bytes are withheld from broadcast.
+
+_FENCE_PROSE = "The convoy grinds to a halt before the toll gate."
+_FENCE_JSON = '{"hp_delta": -2}'
+# Split so the fence opener/closer straddle chunk boundaries — the parser must
+# recognize a fence cut mid-chunk, not just whole-fence deltas.
+_FENCE_DELTAS = [
+    "The convoy grinds to a halt ",
+    "before the toll gate.\n```game",
+    '_patch\n{"hp_delta"',
+    ": -2}\n``",
+    "`\n",
+]
+_FENCE_FULL_TEXT = "".join(_FENCE_DELTAS)
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_suppresses_game_patch_fence_from_deltas(
+    monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
+) -> None:
+    """Playtest 2026-06-05 (RW-2): a solo SDK turn whose text embeds a
+    ```game_patch fence must stream ONLY the prose — no fence marker, no JSON —
+    to the room. RED today: _emit_delta is a raw pass-through, so the JSON
+    streams verbatim into the narration card.
+    """
+    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _patch_orch_internals(monkeypatch)
+
+    client = _streaming_tooling_client(_FENCE_DELTAS, text=_FENCE_FULL_TEXT)
+    orch = Orchestrator(client=client)
+    room = _RoomWithPlayer()
+    ctx = TurnContext(character_name="Zeppo", genre="road_warrior", turn_number=9)
+
+    await orch.run_narration_turn("I pull up to the gate.", ctx, room=room)
+
+    deltas = room.drain()
+    streamed = "".join(m.payload.chunk for m in deltas)
+    assert "game_patch" not in streamed, f"fence marker leaked into stream: {streamed!r}"
+    assert "hp_delta" not in streamed, f"patch JSON leaked into stream: {streamed!r}"
+    assert "```" not in streamed, f"fence backticks leaked into stream: {streamed!r}"
+    assert streamed == _FENCE_PROSE
+    # seq stays monotonic from 0 across the suppression.
+    assert [m.payload.seq for m in deltas] == list(range(len(deltas)))
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_emits_fence_suppressed_span(
+    monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
+) -> None:
+    """OTEL Observability Principle: the suppression must be visible on the GM
+    panel — a ``sdk_stream.fence_suppressed`` span fires when (and only when)
+    a fence was withheld from the broadcast deltas.
+    """
+    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _patch_orch_internals(monkeypatch)
+
+    client = _streaming_tooling_client(_FENCE_DELTAS, text=_FENCE_FULL_TEXT)
+    orch = Orchestrator(client=client)
+    room = _RoomWithPlayer()
+    ctx = TurnContext(character_name="Zeppo", genre="road_warrior", turn_number=10)
+
+    await orch.run_narration_turn("I pull up to the gate.", ctx, room=room)
+
+    spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "sdk_stream.fence_suppressed"
+    ]
+    assert len(spans) == 1, (
+        "fence suppression must emit sdk_stream.fence_suppressed so the GM panel "
+        "can see the filter engage"
+    )
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["turn_id"] == "10"
+    assert attrs["suppressed_json_bytes"] == len(_FENCE_JSON)
+    assert attrs["parse_status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_sdk_path_no_fence_streams_full_prose_and_no_suppression_span(
+    monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
+) -> None:
+    """Guard the finalize-flush wiring: with NO fence in the text, the parser's
+    held-back lookahead tail must still reach the room (full prose streams), and
+    no ``sdk_stream.fence_suppressed`` span fires.
+    """
+    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _patch_orch_internals(monkeypatch)
+
+    prose = "Dust on the horizon. Engines, three of them, closing fast."
+    client = _streaming_tooling_client(
+        ["Dust on the horizon. ", "Engines, three of them, ", "closing fast."], text=prose
+    )
+    orch = Orchestrator(client=client)
+    room = _RoomWithPlayer()
+    ctx = TurnContext(character_name="Zeppo", genre="road_warrior", turn_number=11)
+
+    await orch.run_narration_turn("I scan the road behind us.", ctx, room=room)
+
+    deltas = room.drain()
+    assert "".join(m.payload.chunk for m in deltas) == prose
+    spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "sdk_stream.fence_suppressed"
+    ]
+    assert spans == [], "no fence → no suppression span"

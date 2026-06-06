@@ -30,6 +30,7 @@ SPAN_NARRATOR_STREAM_FENCE_DETECTED = "narrator.stream.fence_detected"
 SPAN_NARRATOR_STREAM_COMPLETE = "narrator.stream.complete"
 SPAN_NARRATOR_STREAM_ERROR = "narrator.stream.error"
 SPAN_NARRATOR_STREAM_CANCELLED = "narrator.stream.cancelled"
+SPAN_SDK_STREAM_FENCE_SUPPRESSED = "sdk_stream.fence_suppressed"
 
 FLAT_ONLY_SPANS.update(
     {
@@ -39,6 +40,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_NARRATOR_STREAM_COMPLETE,
         SPAN_NARRATOR_STREAM_ERROR,
         SPAN_NARRATOR_STREAM_CANCELLED,
+        SPAN_SDK_STREAM_FENCE_SUPPRESSED,
     }
 )
 
@@ -159,6 +161,32 @@ def narrator_stream_error_span(
         tracer_override=_tracer,
     ) as span:
         span.set_status(trace.Status(trace.StatusCode.ERROR, detail))
+
+
+def sdk_stream_fence_suppressed(
+    *,
+    turn_id: str,
+    fence_offset: int | None,
+    suppressed_json_bytes: int,
+    parse_status: str,
+    _tracer: trace.Tracer | None = None,
+) -> None:
+    """Emitted when the SDK solo streaming path withheld a text-embedded
+    ``game_patch`` fence from the broadcast deltas (playtest fix 2026-06-05).
+
+    The GM-panel lie-detector for the filter: without this span you can't tell
+    whether a tool_calls=0 turn streamed its patch JSON to the player or the
+    suppression engaged.
+    """
+    attrs: dict[str, Any] = {
+        "turn_id": turn_id,
+        "suppressed_json_bytes": suppressed_json_bytes,
+        "parse_status": parse_status,
+    }
+    if fence_offset is not None:
+        attrs["fence_offset"] = fence_offset
+    with Span.open(SPAN_SDK_STREAM_FENCE_SUPPRESSED, attrs, tracer_override=_tracer):
+        pass
 
 
 def narrator_stream_cancelled_span(

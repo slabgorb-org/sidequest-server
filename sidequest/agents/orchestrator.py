@@ -4169,7 +4169,9 @@ class Orchestrator:
                 # session) also skips fan-out — byte-identical to pre-71-23.
                 import uuid
 
+                from sidequest.agents.stream_fence import StreamFenceParser
                 from sidequest.server.emitters import broadcast_delta
+                from sidequest.telemetry.spans import sdk_stream_fence_suppressed
 
                 turn_id: str = (
                     str(context.turn_number) if context.turn_number else str(uuid.uuid4())
@@ -4201,6 +4203,19 @@ class Orchestrator:
                         return
                     delta_count += 1
 
+                # Playtest fix 2026-06-05 (RW-2): the narrator can fall back to
+                # the ADR-013 text-embedded ```game_patch fence (tool_calls=0
+                # turns happen in production). Raw pass-through streamed that
+                # JSON verbatim into the narration card. Route the SDK delta
+                # stream through the SAME StreamFenceParser the legacy claude -p
+                # streaming path uses (_run_narration_turn_streaming) so fence
+                # bytes are withheld from broadcast. The canonical NARRATION is
+                # already stripped post-hoc (game_patch.extracted) — only the
+                # live deltas were leaking.
+                fence_parser = (
+                    StreamFenceParser(on_prose_delta=_emit_delta) if stream_solo else None
+                )
+
                 result = await self._client.complete_with_tools(
                     system_blocks=system_blocks,
                     messages=messages,
@@ -4220,7 +4235,10 @@ class Orchestrator:
                     # Story 71-23 — delta sink; wired ONLY for a live solo room
                     # (None otherwise → SDK client takes the non-streaming path,
                     # AC2 byte-identical; MP is handled by the canonical path).
-                    on_text_delta=_emit_delta if stream_solo else None,
+                    # The sink is the fence parser's feed(), NOT _emit_delta
+                    # directly — prose chunks reach _emit_delta only once
+                    # confirmed to be outside a game_patch fence.
+                    on_text_delta=fence_parser.feed if fence_parser is not None else None,
                     # Story 82-9 — forward the operator's soft tool-loop cap
                     # (SIDEQUEST_NARRATOR_ITERATION_CAP; None = off) and tag the
                     # tool_loop summary span as a narrator solo-turn so the GM
@@ -4228,6 +4246,21 @@ class Orchestrator:
                     iteration_cap=resolve_narrator_iteration_cap(),
                     caller="narrator",
                 )
+
+                # Playtest fix 2026-06-05 (RW-2): flush the parser's held-back
+                # lookahead tail (prose) and, when a fence was buffered, emit
+                # the GM-panel lie-detector span for the suppression. Skipped
+                # on exception — the deltas already shipped and the degraded
+                # path replaces the narration anyway.
+                if fence_parser is not None:
+                    fence_result = await fence_parser.finalize()
+                    if fence_result.game_patch_json is not None:
+                        sdk_stream_fence_suppressed(
+                            turn_id=turn_id,
+                            fence_offset=fence_result.fence_offset,
+                            suppressed_json_bytes=len(fence_result.game_patch_json),
+                            parse_status=fence_result.status,
+                        )
 
                 # Story 71-23 — GM-panel lie-detector signal: how many prose
                 # deltas actually fanned out this turn (0 when room=None).

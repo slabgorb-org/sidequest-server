@@ -1,10 +1,19 @@
-"""LlmClient factory — selects backend from env (ADR-073 Phase 1/2)."""
+"""LlmClient factory — selects backend from env (ADR-073 Phase 1/2).
+
+Story 91-1 (epic 91 "Dark Spend"): this module is also the **single SDK
+choke point** — :func:`build_async_anthropic` is the sole ``AsyncAnthropic``
+construction site in the server, and :func:`_record_usage_telemetry` is the
+uniform per-call usage accounting (log line + ``llm.request`` span attributes
++ ``cost_usd`` + caller tag) every Anthropic call flows through.
+"""
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
+from sidequest.agents.anthropic_cost import compute_cost_usd
 from sidequest.agents.anthropic_sdk_client import (
     _EXTENDED_CACHE_TTL_BETA,
     AnthropicSdkClient,
@@ -12,6 +21,11 @@ from sidequest.agents.anthropic_sdk_client import (
 from sidequest.agents.claude_client import LlmClient, LlmClientError
 from sidequest.agents.tooling_protocol import ToolingLlmClient
 from sidequest.telemetry.spans.llm_request import llm_request_span
+
+if TYPE_CHECKING:
+    from anthropic import AsyncAnthropic
+
+logger = logging.getLogger(__name__)
 
 # Canonical Anthropic beta opt-in for ttl:"1h" ephemeral cache lives in
 # ``anthropic_sdk_client`` (the narrator's 1h path). Import it rather than
@@ -38,6 +52,94 @@ class NarratorBackendRetired(LlmClientError):
     deferred-failure trap. Fail at the config boundary instead (NO-FALLBACK
     per project memory ``feedback_no_fallbacks_hard``).
     """
+
+
+def build_async_anthropic() -> AsyncAnthropic:
+    """Construct the Anthropic SDK client — the SINGLE construction site.
+
+    Story 91-1 (epic 91 "Dark Spend"): every ``AsyncAnthropic`` in the server
+    is built here so usage instrumentation cannot be bypassed by an ad-hoc
+    construction. Consumers must look this function up late-bound (through
+    the module dict at call time, e.g. ``llm_factory.build_async_anthropic()``
+    or a function-level ``from ... import``) so the wiring test's
+    monkeypatched fake is what every adapter receives.
+
+    Fails loudly when ``ANTHROPIC_API_KEY`` is unset — No Silent Fallbacks.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise LlmClientError(
+            "ANTHROPIC_API_KEY not set — required to construct the Anthropic "
+            "SDK client (story 91-1 single choke point). No silent fallback."
+        )
+    from anthropic import AsyncAnthropic
+
+    return AsyncAnthropic(api_key=api_key)
+
+
+def _record_usage_telemetry(
+    span: Any,
+    resp: Any,
+    *,
+    caller: str,
+    request_model: str,
+) -> None:
+    """Uniform per-call usage accounting (story 91-1, OTEL Observability
+    Principle applied to money): stamp token/cost/caller attributes onto the
+    ``llm.request`` span AND emit the uniform ``llm.sdk.usage`` INFO line so
+    both Jaeger and log-based accounting see every call.
+
+    ``cached_input_read_tokens`` remains the lie-detector field — it goes
+    non-zero on turn 2+ once a static prefix is warm, proving the cache
+    actually engaged rather than Claude just claiming a cheap turn.
+
+    A response without a ``usage`` block is a real condition to surface —
+    a call we cannot account for is exactly the dark spend this epic
+    eliminates — so it raises rather than logging a zero-cost line
+    (No Silent Fallbacks).
+
+    ``request_model`` is the model id the adapter put on the request; the
+    response's own ``model`` field (the billed id) wins when present.
+    """
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        raise LlmClientError(
+            f"Anthropic response for caller={caller!r} carried no usage block "
+            "— the call cannot be cost-accounted (epic 91 Dark Spend). "
+            "Refusing to emit a zero-cost usage line (No Silent Fallbacks)."
+        )
+    model = str(getattr(resp, "model", "") or "") or request_model
+    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    cost = compute_cost_usd(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_input_read_tokens=cache_read,
+        cached_input_write_tokens=cache_write,
+        model=model,
+    )
+    span.set_attribute("llm.caller", caller)
+    span.set_attribute("llm.input_tokens", input_tokens)
+    span.set_attribute("llm.output_tokens", output_tokens)
+    span.set_attribute("llm.cached_input_read_tokens", cache_read)
+    span.set_attribute("llm.cached_input_write_tokens", cache_write)
+    span.set_attribute("llm.cost_usd", cost)
+    stop_reason = getattr(resp, "stop_reason", None)
+    if stop_reason:
+        span.set_attribute("llm.stop_reason", str(stop_reason))
+    logger.info(
+        "llm.sdk.usage caller=%s model=%s input=%d output=%d "
+        "cache_read=%d cache_write=%d cost_usd=%.6f",
+        caller,
+        model,
+        input_tokens,
+        output_tokens,
+        cache_read,
+        cache_write,
+        cost,
+    )
 
 
 def build_llm_client(
@@ -90,20 +192,13 @@ _ASIDE_MODEL = "claude-haiku-4-5-20251001"
 class _AsideLlm:
     """Single-shot Haiku adapter satisfying ``AsideResolver``'s ``AsideLLM``.
 
-    Lazily constructs an ``AsyncAnthropic`` (same SDK the narrator uses).
-    Fails loudly if ``ANTHROPIC_API_KEY`` is unset — No Silent Fallbacks.
+    Obtains its SDK through :func:`build_async_anthropic` — the single
+    construction site (story 91-1). Fails loudly if ``ANTHROPIC_API_KEY``
+    is unset — No Silent Fallbacks.
     """
 
     def __init__(self) -> None:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise LlmClientError(
-                "ANTHROPIC_API_KEY not set — required to resolve player "
-                "asides (ADR-107). No silent fallback."
-            )
-        from anthropic import AsyncAnthropic
-
-        self._sdk = AsyncAnthropic(api_key=api_key)
+        self._sdk = build_async_anthropic()
 
     async def complete(self, *, system: str, user: str) -> str:
         # ``system`` stays a BARE string — NOT a cached content block. The
@@ -113,12 +208,18 @@ class _AsideLlm:
         # imply caching that does not happen (No Silent Fallbacks). The
         # Intent Router (``_IntentRouterLlm``) is the every-turn cost driver
         # and clears the floor — that is where caching pays off.
-        resp = await self._sdk.messages.create(
-            model=_ASIDE_MODEL,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            max_tokens=512,
-        )
+        #
+        # Story 91-1: the call runs inside an ``llm.request`` span with the
+        # uniform usage accounting — pre-91-1 this path emitted NO telemetry
+        # at all and was structurally invisible to cost forensics.
+        with llm_request_span(model=_ASIDE_MODEL) as span:
+            resp = await self._sdk.messages.create(
+                model=_ASIDE_MODEL,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                max_tokens=512,
+            )
+            _record_usage_telemetry(span, resp, caller="aside", request_model=_ASIDE_MODEL)
         return "".join(block.text for block in resp.content if block.type == "text")
 
 
@@ -147,27 +248,6 @@ _INTENT_ROUTER_MODEL = "claude-haiku-4-5-20251001"
 _INTENT_ROUTER_CACHE_TTL = "1h"
 
 
-def _record_haiku_usage_on_span(span: Any, resp: Any) -> None:
-    """Stamp token usage onto an ``llm.request`` span (OTEL Observability
-    Principle). ``cached_input_read_tokens`` is the lie-detector field — it goes
-    non-zero on turn 2+ once the static prefix is warm, proving the cache
-    actually engaged rather than Claude just claiming a cheap turn."""
-    usage = getattr(resp, "usage", None)
-    span.set_attribute("llm.input_tokens", int(getattr(usage, "input_tokens", 0) or 0))
-    span.set_attribute("llm.output_tokens", int(getattr(usage, "output_tokens", 0) or 0))
-    span.set_attribute(
-        "llm.cached_input_read_tokens",
-        int(getattr(usage, "cache_read_input_tokens", 0) or 0),
-    )
-    span.set_attribute(
-        "llm.cached_input_write_tokens",
-        int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
-    )
-    stop_reason = getattr(resp, "stop_reason", None)
-    if stop_reason:
-        span.set_attribute("llm.stop_reason", str(stop_reason))
-
-
 class IntentRouterEmptyResponse(LlmClientError):
     """Haiku returned a response with no ``tool_use`` block.
 
@@ -184,21 +264,14 @@ class IntentRouterEmptyResponse(LlmClientError):
 class _IntentRouterLlm:
     """Single-shot Haiku adapter satisfying the Intent Router's ``IntentRouterLLM``.
 
-    Same shape as :class:`_AsideLlm` — eagerly constructs an
-    ``AsyncAnthropic`` so the build-time environment check fires loudly
-    (memory rule ``feedback_no_fallbacks_hard``).
+    Same shape as :class:`_AsideLlm` — eagerly obtains its SDK through
+    :func:`build_async_anthropic` (the single construction site, story 91-1)
+    so the build-time environment check fires loudly (memory rule
+    ``feedback_no_fallbacks_hard``).
     """
 
     def __init__(self) -> None:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise LlmClientError(
-                "ANTHROPIC_API_KEY not set — required for the Intent Router "
-                "producer (ADR-113). No silent fallback."
-            )
-        from anthropic import AsyncAnthropic
-
-        self._sdk = AsyncAnthropic(api_key=api_key)
+        self._sdk = build_async_anthropic()
 
     async def emit_tool(
         self,
@@ -250,7 +323,9 @@ class _IntentRouterLlm:
                 max_tokens=2048,
                 extra_headers={"anthropic-beta": _EXTENDED_CACHE_TTL_BETA},
             )
-            _record_haiku_usage_on_span(span, resp)
+            _record_usage_telemetry(
+                span, resp, caller="intent_router", request_model=_INTENT_ROUTER_MODEL
+            )
         for block in resp.content:
             if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
                 return dict(block.input)

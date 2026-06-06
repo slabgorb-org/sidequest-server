@@ -26,14 +26,17 @@ Source diff to consult (DO NOT cherry-pick; carries the option-A prompt
 banner that's been ruled out): commit ``1b70578`` on probe branch.
 
 Also covers AC-5 OTEL: ``narrator.cache.both_writes_fired`` WARN watcher
-event that fires whenever a single iter reports
+event that fires when a single iter reports
 ``cache_write_5m > 0 AND cache_write_1h > 0`` — the lie-detector for
-future regressions of this class.
+future regressions of this class. Per story 91-6 the WARN is gated on
+``cache_read > 0`` (warm stable-prefix churn); the cold-start dual mint
+(``cache_read == 0``) downgrades to severity=info / logger.info.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -136,6 +139,7 @@ def _tool_use(
     *,
     cache_write_5m: int = 0,
     cache_write_1h: int = 0,
+    cache_read: int = 0,
 ) -> _Resp:
     return _Resp(
         content=[_ToolUseBlock(type="tool_use", id=tool_id, name=name, input={})],
@@ -143,6 +147,7 @@ def _tool_use(
         usage=_Usage(
             input_tokens=50,
             output_tokens=4,
+            cache_read_input_tokens=cache_read,
             cache_creation=_CacheCreation(
                 ephemeral_5m_input_tokens=cache_write_5m,
                 ephemeral_1h_input_tokens=cache_write_1h,
@@ -541,26 +546,39 @@ async def test_both_writes_fired_event_emits_when_5m_and_1h_both_nonzero(
     monkeypatch: pytest.MonkeyPatch,
     bound_hub: WatcherHub,
 ) -> None:
-    """AC-5 (lie-detector). When a single iter reports
+    """AC-5 (lie-detector) + 91-6 AC-2 (warm pathology stays loud). When a
+    WARM iter (`cache_read > 0` — the prefix IS being read back) reports
     `cache_creation.ephemeral_5m_input_tokens > 0` AND
     `cache_creation.ephemeral_1h_input_tokens > 0`, the client MUST
     publish exactly one `narrator.cache.both_writes_fired` watcher event
     with `severity="warn"`.
 
     Rationale: this is the lie-detector signature for "the cache fix isn't
-    working." A healthy turn writes to exactly one tier per iter (the
-    iter=1 write at 1h, then iter=2 reads it). Both > 0 in a single iter
-    means a breakpoint defaulted to 5m while another explicit 1h marker
-    fired on overlapping content — the same waste pattern 60-7 fixed. If
-    this ever fires post-60-7, a regression of the same class is live.
+    working." A healthy WARM turn writes 5m-only (tail) while the 1h
+    prefix is a read. cache_read > 0 AND cache_write_1h > 0 means the
+    prefix is being read back yet RE-MINTED anyway — stable-prefix churn,
+    the May 25-30 pathology the May-31 fix closed. If this ever fires
+    post-60-7, a regression of the same class is live. (Per 91-6, the
+    cold-start dual mint — cache_read == 0 — no longer WARNs; see
+    test_both_writes_fired_cold_start_downgrades_to_info.)
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
-    # Synthesize the pre-60-7 steady-state shape: iter=1 writes ~17K at 5m
-    # AND ~17K at 1h (the exact double-billing pattern from probe evidence).
-    sdk = _Sdk(responses=[_end_turn("done", cache_write_5m=17_000, cache_write_1h=17_000)])
+    # Synthesize the warm-churn shape: the prefix reads back (~12K) yet the
+    # iter still writes ~17K at 5m AND ~17K at 1h (the double-billing
+    # pattern from probe evidence, now with the warm read-back present).
+    sdk = _Sdk(
+        responses=[
+            _end_turn(
+                "done",
+                cache_write_5m=17_000,
+                cache_write_1h=17_000,
+                cache_read=11_988,
+            )
+        ]
+    )
     client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
 
     await client.complete_with_tools(
@@ -575,23 +593,93 @@ async def test_both_writes_fired_event_emits_when_5m_and_1h_both_nonzero(
     events = [e for e in sock.events if e.get("event_type") == "narrator.cache.both_writes_fired"]
     assert len(events) == 1, (
         "Exactly one narrator.cache.both_writes_fired event must reach "
-        f"watcher subscribers when a single iter writes both 5m AND 1h; got "
-        f"{len(events)}. All events: {[e.get('event_type') for e in sock.events]}"
+        f"watcher subscribers when a single WARM iter writes both 5m AND 1h; "
+        f"got {len(events)}. All events: {[e.get('event_type') for e in sock.events]}"
     )
     event = events[0]
     assert event.get("severity") == "warn", (
-        "narrator.cache.both_writes_fired MUST use severity='warn' (lie-"
-        "detector, not hard error — the call already succeeded; the "
-        f"observation is the waste). Got severity={event.get('severity')!r}."
+        "narrator.cache.both_writes_fired MUST use severity='warn' for the "
+        "warm (cache_read > 0) pathology (lie-detector, not hard error — the "
+        "call already succeeded; the observation is the waste). Got "
+        f"severity={event.get('severity')!r}."
     )
     fields = event.get("fields", {})
-    for key in ("iteration", "cache_write_5m_tokens", "cache_write_1h_tokens", "model"):
+    for key in (
+        "iteration",
+        "cache_write_5m_tokens",
+        "cache_write_1h_tokens",
+        "cache_read_tokens",
+        "model",
+    ):
         assert key in fields, (
             f"GM panel needs '{key}' on narrator.cache.both_writes_fired "
             f"fields; got fields={list(fields)}."
         )
     assert fields["cache_write_5m_tokens"] == 17_000, fields
     assert fields["cache_write_1h_tokens"] == 17_000, fields
+    assert fields["cache_read_tokens"] == 11_988, fields
+
+
+@pytest.mark.asyncio
+async def test_both_writes_fired_cold_start_downgrades_to_info(
+    monkeypatch: pytest.MonkeyPatch,
+    bound_hub: WatcherHub,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """91-6 AC-1 (cold start emits no warning). A cold-start iter
+    (`cache_read == 0` — nothing cached yet, the prefix is being minted
+    for the first time) that writes BOTH tiers is unavoidable and
+    expected, not the churn pathology. It MUST NOT produce a
+    `severity="warn"` watcher event or a `logger.warning` record. It MUST
+    still be observable (severity="info" event — don't go dark on the GM
+    panel, per the OTEL Observability Principle).
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sock = FakeSocket()
+    await bound_hub.subscribe(sock)  # type: ignore[arg-type]
+
+    # Cold start: cache_read=0 (default), both tiers minting first-time.
+    sdk = _Sdk(responses=[_end_turn("done", cache_write_5m=17_000, cache_write_1h=17_000)])
+    client = AnthropicSdkClient(sdk=sdk, cache_ttl="1h")
+
+    with caplog.at_level(logging.INFO, logger="sidequest.agents.anthropic_sdk_client"):
+        await client.complete_with_tools(
+            system_blocks=[CacheableBlock(text="rules", cache=True)],
+            messages=[Message(role="user", content="cold start")],
+            tools=[],
+            model="claude-sonnet-4-6",
+            session_id="91-6-cold-start-test",
+        )
+    await asyncio.sleep(0.05)
+
+    events = [e for e in sock.events if e.get("event_type") == "narrator.cache.both_writes_fired"]
+    warn_events = [e for e in events if e.get("severity") == "warn"]
+    assert len(warn_events) == 0, (
+        "A cold-start dual write (cache_read == 0) MUST NOT emit a "
+        "warn-severity narrator.cache.both_writes_fired event — the dual "
+        "mint is unavoidable on first contact, and a tripwire that cries "
+        f"wolf on every cold start protects nothing. Got {len(warn_events)} "
+        f"warn event(s)."
+    )
+    info_events = [e for e in events if e.get("severity") == "info"]
+    assert len(info_events) == 1, (
+        "The cold-start dual write must still be observable at "
+        "severity='info' (downgrade, not deletion — the GM panel should "
+        f"see it without the false alarm). Got {len(info_events)} info "
+        f"event(s); all both_writes events: {events}."
+    )
+    fields = info_events[0].get("fields", {})
+    assert fields.get("cache_read_tokens") == 0, fields
+
+    warning_records = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "both_writes_fired" in r.getMessage()
+    ]
+    assert len(warning_records) == 0, (
+        "A cold-start dual write MUST NOT produce a logger.warning record "
+        f"for both_writes_fired. Got: {[r.getMessage() for r in warning_records]}"
+    )
 
 
 @pytest.mark.asyncio
@@ -663,12 +751,13 @@ async def test_both_writes_fired_event_emits_per_offending_iter_in_tool_loop(
     bound_hub: WatcherHub,
 ) -> None:
     """AC-5 + AC-7 wiring. In a multi-iter tool loop, the watcher event
-    MUST fire ONCE per iter that exhibits the double-write pattern (not
-    aggregated to a single per-turn emit) — so the GM panel can see
+    MUST fire ONCE per iter that exhibits the WARM double-write pattern
+    (not aggregated to a single per-turn emit) — so the GM panel can see
     exactly which iteration in the loop is wasting writes.
 
-    Setup: iter=1 reports double-write; iter=2 reports clean 1h-only.
-    Expected: exactly one event from iter=1, none from iter=2.
+    Setup: iter=1 reports a warm double-write (cache_read > 0 per the
+    91-6 gate); iter=2 reports clean 1h-only. Expected: exactly one warn
+    event from iter=1, none from iter=2.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     sock = FakeSocket()
@@ -676,7 +765,12 @@ async def test_both_writes_fired_event_emits_per_offending_iter_in_tool_loop(
 
     sdk = _Sdk(
         responses=[
-            _tool_use("toolu_x", cache_write_5m=17_000, cache_write_1h=17_000),
+            _tool_use(
+                "toolu_x",
+                cache_write_5m=17_000,
+                cache_write_1h=17_000,
+                cache_read=9_000,
+            ),
             _end_turn("done", cache_write_5m=0, cache_write_1h=300),
         ]
     )
@@ -692,11 +786,15 @@ async def test_both_writes_fired_event_emits_per_offending_iter_in_tool_loop(
     )
     await asyncio.sleep(0.05)
 
-    events = [e for e in sock.events if e.get("event_type") == "narrator.cache.both_writes_fired"]
+    events = [
+        e
+        for e in sock.events
+        if e.get("event_type") == "narrator.cache.both_writes_fired" and e.get("severity") == "warn"
+    ]
     assert len(events) == 1, (
-        "Exactly one narrator.cache.both_writes_fired event must fire — one "
-        "per offending iter, not aggregated. iter=1 was offending (17K+17K), "
-        f"iter=2 was clean. Got {len(events)} events."
+        "Exactly one warn-severity narrator.cache.both_writes_fired event "
+        "must fire — one per offending iter, not aggregated. iter=1 was "
+        f"offending (17K+17K, warm), iter=2 was clean. Got {len(events)} events."
     )
     fields = events[0].get("fields", {})
     assert fields.get("iteration") == 1, (

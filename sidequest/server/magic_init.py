@@ -177,7 +177,10 @@ def init_world_magic_state(
     Emits a ``magic.world_bound`` watcher event on success so the GM panel
     can confirm the magic subsystem engaged at bind time (OTEL Observability
     Principle), and ``magic.init_skipped`` / ``magic.init_failed`` on the
-    no-op / degrade paths so non-engagement is justified, never silent.
+    no-magic-yaml / no-source-dir / degrade paths so non-engagement is
+    justified, never silent. The idempotent re-bind path (already-populated
+    state) returns False silently — engagement was already signalled by the
+    earlier ``magic.world_bound`` event, so a second emit would be noise.
     """
     # Idempotent: world-bind may re-enter (room re-bind defense). Never
     # rebuild — a fresh state would drop any character bars / debits a peer
@@ -186,6 +189,7 @@ def init_world_magic_state(
         return False
 
     if genre_pack_source_dir is None:
+        logger.info("magic.init_skipped world=%s reason=no_genre_pack_source_dir", world_slug)
         _watcher_publish(
             "magic.init_skipped",
             {"world_slug": world_slug, "reason": "no_genre_pack_source_dir"},
@@ -200,6 +204,12 @@ def init_world_magic_state(
     if not genre_magic.exists() or not world_magic.exists():
         # No magic config for this world — expected, common. Surface to the
         # GM panel so "subsystem invisible" never reads as "subsystem broken".
+        logger.info(
+            "magic.init_skipped world=%s reason=no_magic_yaml genre_exists=%s world_exists=%s",
+            world_slug,
+            genre_magic.exists(),
+            world_magic.exists(),
+        )
         _watcher_publish(
             "magic.init_skipped",
             {

@@ -1,13 +1,14 @@
-"""Story 90-2 (RED) — WWN/ADR-126 magic plugin not instantiated at session-bind.
+"""Story 90-2 — WWN/ADR-126 magic plugin not instantiated at session-bind.
 
-The defect: ``snapshot.magic_state`` is populated only at chargen
-confirmation (``chargen_mixin._chargen_confirmation`` → ``init_magic_state_for_session``)
-and on resume-backfill (``connect._backfill_magic_state_on_resume``). It is
-NEVER populated at world-bind. So for the window between slug-connect and the
-first chargen commit — and for any narrator cast path that fires before a PC
-commits — ``snapshot.magic_state is None`` and the magic_working pipeline
-silently gates. The world ships a perfectly good magic.yaml; the engine just
-never instantiates it.
+The defect (now fixed by this change): ``snapshot.magic_state`` was populated
+only at chargen confirmation (``chargen_mixin._chargen_confirmation`` →
+``init_magic_state_for_session``) and on resume-backfill
+(``connect._backfill_magic_state_on_resume``) — NEVER at world-bind. So for the
+window between slug-connect and the first chargen commit — and for any narrator
+cast path that fired before a PC committed — ``snapshot.magic_state`` was None
+and the magic_working pipeline silently gated. The world ships a perfectly good
+magic.yaml; the engine just never instantiated it until ``init_world_magic_state``
+(added in this change) wired it into ``SessionRoom.bind_world``.
 
 The fix (per context-story-90-2.md, Option A): a world-scope initializer
 ``init_world_magic_state`` that builds ``MagicState.from_config`` WITHOUT a
@@ -40,12 +41,8 @@ from sidequest.game.character import Character, CreatureCore
 from sidequest.game.persistence import GameMode
 from sidequest.game.repository import SaveRepository
 from sidequest.game.session import GameSnapshot
+from sidequest.server.magic_init import init_world_magic_state
 from sidequest.server.session_room import SessionRoom
-
-# RED: this symbol does not exist yet. Dev introduces it in GREEN. Until then
-# the import raises and every test in the module reports RED — the honest
-# failing state for "the world-bind initializer is not implemented."
-from sidequest.server.magic_init import init_world_magic_state  # noqa: E402
 
 CONTENT_ROOT = Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
 GENRE_SLUG = "space_opera"
@@ -208,10 +205,13 @@ def test_init_world_magic_state_skips_world_without_magic_yaml(
     )
 
 
-def test_init_world_magic_state_skips_when_source_dir_none() -> None:
+def test_init_world_magic_state_skips_when_source_dir_none(
+    captured_magic_init_events,
+) -> None:
     """Packs loaded from a non-disk source carry source_dir=None. The magic
     loader needs file paths, so world-bind skips rather than guessing — and
-    leaves magic_state None without raising.
+    leaves magic_state None without raising, surfacing a ``magic.init_skipped``
+    event so the skip is GM-panel-visible (OTEL Observability Principle).
     """
     snap = GameSnapshot()
     ok = init_world_magic_state(
@@ -221,6 +221,9 @@ def test_init_world_magic_state_skips_when_source_dir_none() -> None:
     )
     assert ok is False
     assert snap.magic_state is None
+    skipped = [e for e in captured_magic_init_events if e["event_type"] == "magic.init_skipped"]
+    assert skipped, "source_dir=None must surface a magic.init_skipped watcher event"
+    assert skipped[0]["fields"]["reason"] == "no_genre_pack_source_dir"
 
 
 def test_init_world_magic_state_logs_loader_error_without_raising(
@@ -251,9 +254,10 @@ def test_init_world_magic_state_logs_loader_error_without_raising(
 
     assert ok is False
     assert snap.magic_state is None
-    assert any("magic.init_failed" in rec.message for rec in caplog.records), (
-        "LoaderError must be logged loud (CLAUDE.md No Silent Fallbacks)"
-    )
+    assert any(
+        "magic.init_failed" in rec.message and rec.levelname == "ERROR"
+        for rec in caplog.records
+    ), "LoaderError must be logged at ERROR level (CLAUDE.md No Silent Fallbacks)"
     failed = [e for e in captured_magic_init_events if e["event_type"] == "magic.init_failed"]
     assert failed, "malformed config must emit a magic.init_failed watcher event"
 
@@ -272,11 +276,19 @@ def test_init_world_magic_state_idempotent_does_not_clobber() -> None:
     pack_dir = _coyote_star_pack_dir()
     snap = GameSnapshot(genre_slug=GENRE_SLUG, world_slug=WORLD_SLUG)
 
-    init_world_magic_state(snapshot=snap, genre_pack_source_dir=pack_dir, world_slug=WORLD_SLUG)
+    first_ok = init_world_magic_state(
+        snapshot=snap, genre_pack_source_dir=pack_dir, world_slug=WORLD_SLUG
+    )
+    assert first_ok is True
     first = snap.magic_state
     assert first is not None
 
-    init_world_magic_state(snapshot=snap, genre_pack_source_dir=pack_dir, world_slug=WORLD_SLUG)
+    second_ok = init_world_magic_state(
+        snapshot=snap, genre_pack_source_dir=pack_dir, world_slug=WORLD_SLUG
+    )
+    assert second_ok is False, (
+        "second world-bind must return False (already-populated state, no fresh build)"
+    )
     assert snap.magic_state is first, (
         "second world-bind must reuse the existing magic_state, not rebuild it"
     )
@@ -328,9 +340,9 @@ def test_chargen_after_world_bind_is_a_reuse_commit(captured_magic_init_events) 
     """AC2/AC4 OTEL — once world-bind has run, the chargen commit is a
     REUSE, not a first commit. ``init_magic_state_for_session`` emits its
     ``magic.init`` event with ``first_commit=False`` on the reuse path. This
-    is RED today (world-bind never runs, so chargen is always the first
-    commit) and proves, via the lie-detector, that the world-bound state was
-    actually threaded into chargen.
+    proves, via the lie-detector, that the world-bound state was actually
+    threaded into chargen (before the fix, world-bind never ran so chargen
+    was always the first commit).
     """
     from sidequest.server.magic_init import init_magic_state_for_session
 
@@ -433,10 +445,15 @@ def test_bind_world_instantiates_magic_state(captured_magic_init_events) -> None
     assert bound, "bind_world's magic init must emit magic.world_bound"
 
 
-def test_bind_world_leaves_nonmagic_world_state_none(tmp_path: Path) -> None:
+def test_bind_world_leaves_nonmagic_world_state_none(
+    tmp_path: Path,
+    captured_magic_init_events,
+) -> None:
     """Binding a world with no magic.yaml must NOT crash and must leave
     magic_state None — the common case for non-magic settings. Guards
     against the world-bind hook failing loud on every non-magic connect.
+    The skip is GM-panel-visible via ``magic.init_skipped`` (justified
+    non-engagement, not silence).
     """
     world_dir = tmp_path / "plain_pack" / "worlds" / "plain_world"
     world_dir.mkdir(parents=True)
@@ -452,3 +469,5 @@ def test_bind_world_leaves_nonmagic_world_state_none(tmp_path: Path) -> None:
 
     assert room.snapshot is not None
     assert room.snapshot.magic_state is None
+    skipped = [e for e in captured_magic_init_events if e["event_type"] == "magic.init_skipped"]
+    assert skipped, "non-magic world bind must surface a magic.init_skipped watcher event"

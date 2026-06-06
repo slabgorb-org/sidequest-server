@@ -73,6 +73,14 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_DECOMPOSE] = SpanRoute(
         # turn from a turn where the spine never executed. (Span routing is a live
         # hub broadcast, not a turn_telemetry write.)
         "degraded": (span.attributes or {}).get("degraded", False),
+        # Replay-suppression marker (Story 91-2): True when this decompose span
+        # records an INTENTIONAL router skip on a dice-resolution replay
+        # re-entry of ``_execute_narration_turn`` — the dice outcome adds no new
+        # player intent to classify, and re-classifying it was the structural
+        # driver of the [COST-1] 8x/turn Haiku volume. Same doctrine as
+        # ``degraded``: the GM panel must distinguish "router intentionally
+        # skipped (replay)" from "router dark" (never a silent skip).
+        "replay_suppressed": (span.attributes or {}).get("replay_suppressed", False),
     },
 )
 
@@ -204,6 +212,52 @@ def intent_router_dispatch_gated_span(
         {"subsystem": subsystem, "idempotency_key": idempotency_key, "reason": reason, **attrs},
         tracer_override=_tracer,
     ) as span:
+        yield span
+
+
+SPAN_INTENT_ROUTER_CALL_BUDGET_BREACH = "intent_router.call_budget.breach"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_CALL_BUDGET_BREACH] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.call_budget.breach",
+        "turn_id": (span.attributes or {}).get("turn_id", 0),
+        "observed": (span.attributes or {}).get("observed", 0),
+        "budget": (span.attributes or {}).get("budget", 0),
+    },
+)
+
+
+@contextmanager
+def intent_router_call_budget_breach_span(
+    *,
+    turn_id: int,
+    observed: int,
+    budget: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Per-turn classification call budget breached (Story 91-2, epic 91
+    "Dark Spend") — ERROR-level.
+
+    Fires when a single pre-narrator pass spent more Haiku SDK round-trips
+    than ``intent_router_pass.INTENT_ROUTER_CALL_BUDGET_PER_TURN`` allows.
+    The [COST-1] forensics measured ~8 classification calls per turn against
+    a design expectation of ~1; the budget assertion is the GM-panel
+    lie-detector that surfaces a recurrence in production, not just in CI.
+    ERROR status matches the register ``intent_router.failed`` uses — a
+    breach is a contract violation, not a breadcrumb. The breach is evidence,
+    NOT a circuit breaker: the turn continues (hard-kill is ADR-134's job).
+    """
+    with Span.open(
+        SPAN_INTENT_ROUTER_CALL_BUDGET_BREACH,
+        {"turn_id": turn_id, "observed": observed, "budget": budget, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        span.set_status(
+            StatusCode.ERROR,
+            description=f"classification calls {observed} > budget {budget}",
+        )
         yield span
 
 

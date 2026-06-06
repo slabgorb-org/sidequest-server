@@ -46,12 +46,32 @@ from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.spans.intent_router import (
+    intent_router_call_budget_breach_span,
     intent_router_confrontation_vocabulary_span,
     intent_router_witnessed_act_classified_span,
     intent_router_witnessed_act_vocabulary_span,
 )
 
 logger = logging.getLogger(__name__)
+
+# Story 91-2 (epic 91 "Dark Spend"): the documented per-turn Haiku
+# classification call budget. The [COST-1] forensics (2026-06-05) measured
+# ~8 classification calls/turn against a design expectation of ~1; this
+# budget is the per-turn assertion that a recurrence cannot pass silently.
+#
+# Why 2: one pre-narrator pass per turn makes exactly ONE ``decompose`` call,
+# and ``decompose`` is bounded at ``_MAX_TOTAL_ATTEMPTS = 2`` SDK round-trips
+# (first attempt + one informed retry on timeout/transport/empty/schema). Two
+# round-trips is therefore the maximum a LEGITIMATE turn can spend; a third
+# cannot come from the retry loop and means a structural multiplier returned
+# (e.g. the dice-replay re-entry this story removed). The legitimate retry
+# already surfaces its own ERROR evidence via ``intent_router.failed`` — the
+# budget breach is reserved for structurally impossible counts.
+#
+# Read LATE-BOUND (module attribute at call time) so tests and operators
+# diagnosing a storm can patch it — same contract as 91-1's
+# ``build_async_anthropic`` choke-point seam.
+INTENT_ROUTER_CALL_BUDGET_PER_TURN: int = 2
 
 
 def build_intent_router_for_session(*, session_id: str | None) -> IntentRouter:
@@ -329,6 +349,37 @@ async def execute_intent_router_pre_narrator_pass(
             state_summary=state_summary,
         )
 
+        # Per-turn call-budget assertion (Story 91-2). ``observed`` counts SDK
+        # ROUND-TRIPS, not decompose invocations — the real ``IntentRouter``
+        # reports first-attempt + bounded-retry via
+        # ``sdk_round_trips_last_decompose``, so a retry storm (the [COST-1]
+        # "2x floor" suspect) is visible to the budget. A router that does not
+        # report the metric (test stubs, future alternate producers) counts as
+        # the minimum truth of one round-trip for the decompose that just
+        # returned. The breach is LOUD evidence (ERROR span + log), never a
+        # circuit breaker — the player's turn continues; hard-kill is the
+        # ADR-134 detector's job (story 91-4).
+        _round_trips = getattr(intent_router, "sdk_round_trips_last_decompose", None)
+        observed = _round_trips if isinstance(_round_trips, int) and _round_trips > 0 else 1
+        budget = INTENT_ROUTER_CALL_BUDGET_PER_TURN
+        if observed > budget:
+            with intent_router_call_budget_breach_span(
+                turn_id=turn_number,
+                observed=observed,
+                budget=budget,
+            ):
+                pass
+            logger.error(
+                "intent_router.call_budget.breach turn_id=%s observed=%d budget=%d "
+                "player=%s — per-turn Haiku classification call count exceeded the "
+                "documented budget (epic 91 Dark Spend; see "
+                "INTENT_ROUTER_CALL_BUDGET_PER_TURN)",
+                turn_number,
+                observed,
+                budget,
+                player_name,
+            )
+
         # Story 59-30 — normalize the LLM-emitted per_player player_id to the real
         # submitting seat id BEFORE the gates/bank, so the normalized id rides into
         # the package the caller assigns to ``turn_context.dispatch_package`` (the
@@ -426,6 +477,7 @@ async def execute_intent_router_pre_narrator_pass(
 
 
 __all__ = [
+    "INTENT_ROUTER_CALL_BUDGET_PER_TURN",
     "_normalize_per_player_ids",
     "effective_dispatch_turn_number",
     "execute_intent_router_pre_narrator_pass",

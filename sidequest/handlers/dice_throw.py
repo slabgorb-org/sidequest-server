@@ -260,7 +260,12 @@ class DiceThrowHandler:
                     sd, lore_context=lore_context, room=session._room
                 )
             turn_context.phase_timings = timings
-            return await session._execute_narration_turn(sd, replay_text, turn_context)
+            # Story 91-2: the replay carries a mechanical outcome already
+            # applied above — no new player intent to classify. Suppress the
+            # pre-narrator router pass (the [COST-1] 8x/turn driver).
+            return await session._execute_narration_turn(
+                sd, replay_text, turn_context, suppress_intent_router=True
+            )
 
         room_broadcast = None
         emit_confrontation = None
@@ -410,10 +415,14 @@ class DiceThrowHandler:
                 room=session._room,
             )
         turn_context.phase_timings = timings
+        # Story 91-2: the dice dispatch above already applied the beat — the
+        # replay text is a mechanical result, not a new player intent.
+        # Suppress the pre-narrator router pass (the [COST-1] 8x/turn driver).
         return await session._execute_narration_turn(
             sd,
             outcome.replay_action_text,
             turn_context,
+            suppress_intent_router=True,
         )
 
 

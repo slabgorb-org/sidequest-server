@@ -731,6 +731,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         turn_context: TurnContext,
         *,
         is_opening_turn: bool = False,
+        suppress_intent_router: bool = False,
     ) -> list[object]:
         """Run one narration turn: orchestrator call, snapshot mutation,
         persistence, NARRATION + NARRATION_END message build.
@@ -743,6 +744,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         ``record_interaction()`` so post-chargen state stays at exactly
         ``(round=1, interaction=1)`` and the 45-11 round_invariant still holds.
         The first PLAYER_ACTION turn advances both counters in lockstep.
+
+        ``suppress_intent_router`` (Story 91-2, epic 91 "Dark Spend"): the
+        dice-resolution replay path re-enters this method with a synthesized
+        ``[BEAT_RESOLVED]``/``[DOGFIGHT_SHOT_RESOLVED]`` replay text whose only
+        new information is a mechanical outcome the dice dispatch already
+        applied — there is no new player intent to classify, and re-running
+        the pre-narrator pass was the structural driver of the [COST-1]
+        8x/turn Haiku volume. ``True`` skips the router + dispatch bank for
+        this turn (with LOUD span/log evidence — never a silent skip) while
+        the replay narration itself still runs. Only the dice replay re-entry
+        sets this; a normal player action MUST classify (ADR-113).
         """
         snapshot = sd.snapshot
         snapshot_before_hash = _hash_snapshot(snapshot)
@@ -836,110 +848,151 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 # build_narrator_prompt sees the freshly drawn seeds.
                 turn_context.snapshot = snapshot
 
-                # Intent Router pre-narrator pass (Story 59-4, ADR-113): the
-                # router classifies the action and the dispatch bank engages
-                # engines on the canonical snapshot BEFORE the narrator runs, so
-                # the narrator narrates already-real state. IntentRouterFailure
-                # (after bounded retry) propagates to the turn-failure path — NO
-                # silent narrator-only fallback. The factory call is module-level
-                # so tests can monkeypatch it (must not spawn a real Claude client).
-                _acting_player_name = snapshot.player_seats.get(sd.player_id, "") or sd.player_id
-                _additional_player_names = [
-                    name
-                    for pid, name in snapshot.player_seats.items()
-                    if pid != sd.player_id and name and name != _acting_player_name
-                ]
-                # Story 91-4: the router's Haiku spend is keyed to the same
-                # canonical session id the narrator's cost machinery uses
-                # (room slug / sd.game_slug — the seed_session_id resolution
-                # above), so it runs the ADR-134 detector and counts against
-                # the per-session cumulative ceiling.
-                _intent_router = intent_router_pass.build_intent_router_for_session(
-                    session_id=seed_session_id
-                )
-                # Opt-in degraded path: when SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL
-                # is set, an IntentRouterFailure is logged LOUDLY and the turn
-                # continues with dispatch_package=None (pre-ADR-113 behavior, an
-                # operator opt-in, NOT a silent fallback). Default preserves the
-                # ADR-113 fail-loud contract.
-                try:
-                    # Movement subsystem context: the dungeon graph store +
-                    # palette + worker handle live on the lookahead handle (set
-                    # for beneath_sunden, None elsewhere). None on non-procedural
-                    # worlds → handler fails loud with no_dungeon_store.
-                    _lookahead_handle = getattr(sd, "lookahead_handle", None)
-                    _dungeon_store = (
-                        _lookahead_handle.persistence if _lookahead_handle is not None else None
+                if suppress_intent_router:
+                    # Story 91-2 (epic 91 "Dark Spend"): dice-resolution replay
+                    # re-entry — the pre-narrator pass is INTENTIONALLY skipped.
+                    # The dice dispatch already applied the mechanical outcome;
+                    # the replay text carries no new player intent to classify,
+                    # and re-classifying it was the structural driver of the
+                    # [COST-1] 8x/turn Haiku volume. LOUD evidence, never a
+                    # silent skip: the routed intent_router.decompose span fires
+                    # with replay_suppressed=True / dispatch_count=0 (same
+                    # GM-panel pattern as the 71-29 degrade marker) so the
+                    # dashboard distinguishes "intentionally skipped (replay)"
+                    # from "spine dark".
+                    logger.info(
+                        "intent_router.replay_suppressed genre=%s world=%s "
+                        "player_id=%s action_len=%d — dice-replay re-entry, "
+                        "no new player intent to classify (story 91-2)",
+                        sd.genre_slug,
+                        sd.world_slug,
+                        sd.player_id,
+                        len(action),
                     )
-                    _dungeon_palette = (
-                        _lookahead_handle.palette if _lookahead_handle is not None else None
+                    with intent_router_decompose_span(
+                        action_length=len(action),
+                        model=_INTENT_ROUTER_MODEL,
+                    ) as _suppress_span:
+                        _suppress_span.set_attribute("dispatch_count", 0)
+                        _suppress_span.set_attribute("replay_suppressed", True)
+                    # The locals feed both turn_context AND the later
+                    # post-narration consumers (e.g. the engagement census at
+                    # the dispatch-summary emit) — bind them here too.
+                    _dispatch_package = None
+                    _bank_result = None
+                    turn_context.dispatch_package = None
+                    turn_context.bank_result = None
+                    turn_context.npcs = list(snapshot.npcs)
+                else:
+                    # Intent Router pre-narrator pass (Story 59-4, ADR-113): the
+                    # router classifies the action and the dispatch bank engages
+                    # engines on the canonical snapshot BEFORE the narrator runs, so
+                    # the narrator narrates already-real state. IntentRouterFailure
+                    # (after bounded retry) propagates to the turn-failure path — NO
+                    # silent narrator-only fallback. The factory call is module-level
+                    # so tests can monkeypatch it (must not spawn a real Claude client).
+                    _acting_player_name = (
+                        snapshot.player_seats.get(sd.player_id, "") or sd.player_id
                     )
-                    # Stamp the dispatch-bank/equip spans with the turn number
-                    # turn_complete WILL emit (interaction+1 for a player turn —
-                    # record_interaction() runs below, after this pass). Without
-                    # it the spans grid one column to the left and the GM panel
-                    # shows intent_router/inventory dark on the resolving turn
-                    # (off-by-one, DRIVER 2026-06-04).
-                    _dispatch_turn_number = intent_router_pass.effective_dispatch_turn_number(
-                        snapshot.turn_manager, is_opening_turn=is_opening_turn
+                    _additional_player_names = [
+                        name
+                        for pid, name in snapshot.player_seats.items()
+                        if pid != sd.player_id and name and name != _acting_player_name
+                    ]
+                    # Story 91-4: the router's Haiku spend is keyed to the same
+                    # canonical session id the narrator's cost machinery uses
+                    # (room slug / sd.game_slug — the seed_session_id resolution
+                    # above), so it runs the ADR-134 detector and counts against
+                    # the per-session cumulative ceiling.
+                    _intent_router = intent_router_pass.build_intent_router_for_session(
+                        session_id=seed_session_id
                     )
-                    _dispatch_package, _bank_result = await execute_intent_router_pre_narrator_pass(
-                        intent_router=_intent_router,
-                        snapshot=snapshot,
-                        pack=sd.genre_pack,
-                        action=action,
-                        player_name=_acting_player_name,
-                        additional_player_names=_additional_player_names or None,
-                        dungeon_store=_dungeon_store,
-                        palette=_dungeon_palette,
-                        lookahead_handle=_lookahead_handle,
-                        phase_timings=timings,
-                        turn_number=_dispatch_turn_number,
-                    )
-                except IntentRouterFailure as exc:
-                    if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):
-                        logger.warning(
-                            "intent_router.degraded_continue genre=%s world=%s "
-                            "player=%s action_len=%d reason=%s — env "
-                            "SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL set; "
-                            "continuing turn with dispatch_package=None "
-                            "(yesterday's narrator-only behavior). NOT a "
-                            "silent fallback — operator opt-in.",
-                            sd.genre_slug,
-                            sd.world_slug,
-                            _acting_player_name,
-                            len(action),
-                            exc,
+                    # Opt-in degraded path: when SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL
+                    # is set, an IntentRouterFailure is logged LOUDLY and the turn
+                    # continues with dispatch_package=None (pre-ADR-113 behavior, an
+                    # operator opt-in, NOT a silent fallback). Default preserves the
+                    # ADR-113 fail-loud contract.
+                    try:
+                        # Movement subsystem context: the dungeon graph store +
+                        # palette + worker handle live on the lookahead handle (set
+                        # for beneath_sunden, None elsewhere). None on non-procedural
+                        # worlds → handler fails loud with no_dungeon_store.
+                        _lookahead_handle = getattr(sd, "lookahead_handle", None)
+                        _dungeon_store = (
+                            _lookahead_handle.persistence if _lookahead_handle is not None else None
                         )
-                        # GM-panel coverage on the degrade path (Story 71-29):
-                        # decompose() raised before reaching its own
-                        # intent_router.decompose span, so the happy-path span
-                        # never fired. Mirror it here with dispatch_count=0 and
-                        # degraded=True so the routed intent_router.decompose
-                        # state_transition event still reaches the live GM
-                        # dashboard via WatcherSpanProcessor → hub.publish — the
-                        # SAME broadcast path the happy path uses, no
-                        # reimplementation. (This is a live-dashboard event, not
-                        # a durable turn_telemetry row: span routing broadcasts
-                        # through the hub, it does not call publish_event.)
-                        # Without this the GM panel sees NO decompose event on a
-                        # degraded turn and cannot tell a degrade from a turn
-                        # where the spine never ran.
-                        with intent_router_decompose_span(
-                            action_length=len(action),
-                            model=_INTENT_ROUTER_MODEL,
-                        ) as _degrade_span:
-                            _degrade_span.set_attribute("dispatch_count", 0)
-                            _degrade_span.set_attribute("degraded", True)
-                        _dispatch_package = None
-                        _bank_result = None
-                    else:
-                        raise
-                turn_context.dispatch_package = _dispatch_package
-                turn_context.bank_result = _bank_result
-                # The dispatch bank may have mutated snapshot.npcs; refresh so
-                # build_narrator_prompt sees post-dispatch state.
-                turn_context.npcs = list(snapshot.npcs)
+                        _dungeon_palette = (
+                            _lookahead_handle.palette if _lookahead_handle is not None else None
+                        )
+                        # Stamp the dispatch-bank/equip spans with the turn number
+                        # turn_complete WILL emit (interaction+1 for a player turn —
+                        # record_interaction() runs below, after this pass). Without
+                        # it the spans grid one column to the left and the GM panel
+                        # shows intent_router/inventory dark on the resolving turn
+                        # (off-by-one, DRIVER 2026-06-04).
+                        _dispatch_turn_number = intent_router_pass.effective_dispatch_turn_number(
+                            snapshot.turn_manager, is_opening_turn=is_opening_turn
+                        )
+                        (
+                            _dispatch_package,
+                            _bank_result,
+                        ) = await execute_intent_router_pre_narrator_pass(
+                            intent_router=_intent_router,
+                            snapshot=snapshot,
+                            pack=sd.genre_pack,
+                            action=action,
+                            player_name=_acting_player_name,
+                            additional_player_names=_additional_player_names or None,
+                            dungeon_store=_dungeon_store,
+                            palette=_dungeon_palette,
+                            lookahead_handle=_lookahead_handle,
+                            phase_timings=timings,
+                            turn_number=_dispatch_turn_number,
+                        )
+                    except IntentRouterFailure as exc:
+                        if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):
+                            logger.warning(
+                                "intent_router.degraded_continue genre=%s world=%s "
+                                "player=%s action_len=%d reason=%s — env "
+                                "SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL set; "
+                                "continuing turn with dispatch_package=None "
+                                "(yesterday's narrator-only behavior). NOT a "
+                                "silent fallback — operator opt-in.",
+                                sd.genre_slug,
+                                sd.world_slug,
+                                _acting_player_name,
+                                len(action),
+                                exc,
+                            )
+                            # GM-panel coverage on the degrade path (Story 71-29):
+                            # decompose() raised before reaching its own
+                            # intent_router.decompose span, so the happy-path span
+                            # never fired. Mirror it here with dispatch_count=0 and
+                            # degraded=True so the routed intent_router.decompose
+                            # state_transition event still reaches the live GM
+                            # dashboard via WatcherSpanProcessor → hub.publish — the
+                            # SAME broadcast path the happy path uses, no
+                            # reimplementation. (This is a live-dashboard event, not
+                            # a durable turn_telemetry row: span routing broadcasts
+                            # through the hub, it does not call publish_event.)
+                            # Without this the GM panel sees NO decompose event on a
+                            # degraded turn and cannot tell a degrade from a turn
+                            # where the spine never ran.
+                            with intent_router_decompose_span(
+                                action_length=len(action),
+                                model=_INTENT_ROUTER_MODEL,
+                            ) as _degrade_span:
+                                _degrade_span.set_attribute("dispatch_count", 0)
+                                _degrade_span.set_attribute("degraded", True)
+                            _dispatch_package = None
+                            _bank_result = None
+                        else:
+                            raise
+                    turn_context.dispatch_package = _dispatch_package
+                    turn_context.bank_result = _bank_result
+                    # The dispatch bank may have mutated snapshot.npcs; refresh so
+                    # build_narrator_prompt sees post-dispatch state.
+                    turn_context.npcs = list(snapshot.npcs)
 
                 with orchestrator_process_action_span(action_len=len(action)):
                     result = await sd.orchestrator.run_narration_turn(

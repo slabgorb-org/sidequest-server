@@ -775,6 +775,7 @@ def _build_turn_context(
     sd: _SessionData,
     *,
     opening_directive: str | None = None,
+    opening_seed_shown: bool = False,
     lore_context: str | None = None,
     entity_retrieval: RetrievedEntities | None = None,
     room: SessionRoom | None = None,
@@ -782,9 +783,13 @@ def _build_turn_context(
     """Assemble :class:`TurnContext` for one narration turn (Slice H).
 
     ``opening_directive`` is consumed turn 0 only (caller clears the
-    session field). ``lore_context`` is the pre-rendered <lore> block.
-    ``room`` provides the seat map so MP can identify the acting PC by
-    player_id rather than guessing snapshot.characters[0].
+    session field). ``opening_seed_shown`` marks the seeded-opening case
+    where the action IS the already-cold-opened ``first_turn_invitation``
+    (pingpong 2026-06-05 [BAR-1] — the prompt builder reframes the
+    recency action block so the narrator does not restate it).
+    ``lore_context`` is the pre-rendered <lore> block. ``room`` provides
+    the seat map so MP can identify the acting PC by player_id rather
+    than guessing snapshot.characters[0].
     """
     from sidequest.agents.encounter_render import render_encounter_summary
     from sidequest.server.dispatch.confrontation import find_confrontation_def
@@ -1336,6 +1341,7 @@ def _build_turn_context(
         ),
         party_peers=party_peers,
         opening_directive=opening_directive,
+        opening_seed_shown=opening_seed_shown,
         world_context=sd.world_context,
         lore_context=lore_context,
         retrieved_entity_npcs=retrieved_entity_npcs,

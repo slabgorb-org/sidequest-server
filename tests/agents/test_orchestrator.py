@@ -425,6 +425,26 @@ async def test_build_narrator_prompt_merged_actions_render_per_pc_block():
     assert "Do NOT generate dialogue" in prompt
 
 
+async def test_build_narrator_prompt_seeded_opening_marks_invitation_already_shown():
+    """Pingpong 2026-06-05 [BAR-1]: a seeded opening turn passes the authored
+    ``first_turn_invitation`` (already cold-opened to the player) as the
+    action. The recency block must mark it already-displayed and forbid
+    restating — the prior ``"<PC> says: <invitation>"`` framing cued the
+    narrator's action-rewrite contract to novelize the invitation back,
+    doubling every seeded opening's prose.
+    """
+    client = make_canned_client("narration")
+    orch = Orchestrator(client=client)
+    context = TurnContext(character_name="Groucho", opening_seed_shown=True)
+    invitation = "The wind off the desert is thin and hard at this height."
+    prompt, _ = await orch.build_narrator_prompt(invitation, context)
+    assert "ALREADY been shown to the player" in prompt
+    assert "do NOT repeat" in prompt
+    assert f"<already-shown-invitation>\n{invitation}\n</already-shown-invitation>" in prompt
+    # The invitation is NOT framed as the player speaking.
+    assert f"Groucho says: {invitation}" not in prompt
+
+
 async def test_build_narrator_prompt_solo_action_unchanged():
     """Single-player turns keep the existing 'X says: ...' framing.
 

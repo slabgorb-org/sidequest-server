@@ -171,6 +171,37 @@ class CoreInvariantStage:
                 source="invariant:visibility_gated",
             )
 
+        # 1c. NARRATION with an explicit list-valued ``_visibility.visible_to``
+        #     (pingpong 2026-06-05 [BAR-1] — solo cold-open seed leaked to an
+        #     MP joiner). The visibility classifier always writes the sentinel
+        #     ``"all"``; an explicit player_id LIST is an opt-in, deliberate
+        #     recipient restriction (today: the solo-fired cold-open
+        #     ``first_turn_invitation``, second-person prose anchored to one
+        #     player). Four packs ship no projection.yaml, so the pack-level
+        #     VisibilityTagRule cannot be the firewall for it (ADR-105 B1:
+        #     exclusion is structural, a pack cannot weaken it by omission).
+        #     ASYMMETRIC on purpose: only the EXCLUSION is terminal — members,
+        #     ``"all"``, absent, or malformed sidecars all fall through so the
+        #     GenreRuleStage's redact/fidelity rules still run for included
+        #     recipients. NOT fail-closed: NARRATION without a usable list is
+        #     ordinary broadcast prose, unlike SECRET_NOTE.
+        if envelope.kind == "NARRATION":
+            payload = json.loads(envelope.payload_json)
+            viz = payload.get("_visibility")
+            visible_to = viz.get("visible_to") if isinstance(viz, dict) else None
+            if isinstance(visible_to, list) and player_id not in visible_to:
+                _publish_narration_visibility_excluded(
+                    player_id=player_id,
+                    visible_to_count=len(visible_to),
+                    tx=tx,
+                    event_seq=event_seq,
+                )
+                return InvariantOutcome(
+                    terminal=True,
+                    decision=FilterDecision(include=False, payload_json=""),
+                    source="invariant:narration_visibility_list",
+                )
+
         # 2. Self-authored: echo to author only.
         if envelope.kind in SELF_AUTHORED_KINDS:
             payload = json.loads(envelope.payload_json)
@@ -203,6 +234,43 @@ def _match_to_field(to_value: object, player_id: str) -> bool:
     if isinstance(to_value, list):
         return player_id in to_value
     return False
+
+
+def _publish_narration_visibility_excluded(
+    *,
+    player_id: str,
+    visible_to_count: int,
+    tx: SaveTransaction | None = None,
+    event_seq: int | None = None,
+) -> None:
+    """Emit the ``invariant.narration_visibility_excluded`` watcher event.
+
+    Lie-detector for the 1c NARRATION list-gate (pingpong 2026-06-05
+    [BAR-1]): without a per-recipient decision event the GM panel cannot
+    prove a joiner was excluded from a player-anchored cold-open. Same
+    tx-threading rules as :func:`_publish_secret_routed`. Telemetry must
+    never crash a projection fan-out.
+    """
+    try:
+        from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "invariant.narration_visibility_excluded",
+                "kind": "NARRATION",
+                "player_id": player_id,
+                "visible_to_count": visible_to_count,
+            },
+            component="projection",
+            tx=tx,
+            event_seq=event_seq,
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never crash projection
+        logger.warning(
+            "invariant.narration_visibility_excluded watcher publish failed player=%s",
+            player_id,
+        )
 
 
 def _publish_secret_routed(

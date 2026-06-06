@@ -693,6 +693,19 @@ class TurnContext:
     # after consumption), matching Rust's `opening_directive.take()`.
     opening_directive: str | None = None
 
+    # Pingpong 2026-06-05 [BAR-1] (MP doubled-opening): True only on an
+    # opening turn whose ``action`` is the authored
+    # ``first_turn_invitation`` that the cold-open path has ALREADY
+    # emitted to the player as a NARRATION. The prompt builder then
+    # frames the recency-zone action block as "already shown — continue,
+    # do not restate" instead of ``"<PC> says: <invitation>"``, which
+    # cued the narrator (via the action-rewrite contract) to novelize
+    # the invitation back into its narration — every seeded opening
+    # rendered near-duplicate prose twice. False for joiner-orientation
+    # openings and the no-seed fallback (their actions are not
+    # already-displayed prose).
+    opening_seed_shown: bool = False
+
     # Persistent narrator world context (Valley zone, every turn).
     # Story 41-11 / ADR-082 Phase 2.2 IOU: resolved once at connect time
     # in the session handler. Currently contains the ``AVAILABLE
@@ -2800,6 +2813,27 @@ class Orchestrator:
                     "decisions, or new physical actions for any PC listed "
                     "above — only what their player declared. NPCs may speak "
                     "and react. PCs may not be made to speak."
+                )
+            elif context.opening_seed_shown:
+                # Pingpong 2026-06-05 [BAR-1]: the action on a seeded opening
+                # turn is the authored first_turn_invitation, ALREADY emitted
+                # to the player verbatim by the cold-open path. Framing it as
+                # `"<PC> says: <invitation>"` told the narrator the player
+                # spoke that prose, and the action-rewrite contract dutifully
+                # novelized it back — every seeded opening doubled its prose
+                # (barsoom MP turn 1: seed + near-verbatim restatement). Keep
+                # the invitation in recency for continuity, but mark it as
+                # already-displayed authored prose, not player input.
+                player_action_text = (
+                    "OPENING TURN. The authored invitation below has ALREADY "
+                    "been shown to the player verbatim — do NOT repeat, "
+                    "restate, or paraphrase any sentence of it. Begin your "
+                    "narration at the moment it ends and move the scene "
+                    "forward. The player has not yet acted; do not invent "
+                    "actions or dialogue for them.\n"
+                    "<already-shown-invitation>\n"
+                    f"{action}\n"
+                    "</already-shown-invitation>"
                 )
             else:
                 player_action_text = f"{context.character_name} says: {action}"

@@ -2718,6 +2718,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         turn_context = _build_turn_context(
             sd,
             opening_directive=sd.opening_directive,
+            # Pingpong 2026-06-05 [BAR-1]: only the seeded branch hands the
+            # already-cold-opened invitation down as `action`; the joiner-
+            # orientation and fallback branches build genuine prompts that
+            # were never displayed, so they keep the plain framing.
+            opening_seed_shown=bool(sd.opening_seed) and action == sd.opening_seed,
             lore_context=lore_context,
             entity_retrieval=entity_retrieval,
             room=self._room,
@@ -2761,8 +2766,31 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             else []
         )
         _cold_open_author = sd.player_id if len(_opening_connected) > 1 else None
+        # Pingpong 2026-06-05 [BAR-1]: a SOLO-fired cold-open seed is the
+        # authored second-person ``first_turn_invitation`` for THIS player.
+        # Journaled without a visibility sidecar, a later MP joiner's
+        # lazy_fill/replay handed them the host's "you" prose raw (the
+        # ADR-105 leak half of the doubled-opening finding). Anchor it:
+        # visible_to=[author] rides the existing VisibilityTagRule (packs
+        # with projection.yaml) and the structural 1c NARRATION list-gate
+        # (CoreInvariantStage) for packs without one. MP-fired openings
+        # (>1 connected — the group invitation) keep today's broadcast.
+        _cold_open_sidecar: dict | None = None
+        if _cold_open_author is None:
+            _cold_open_sidecar = {
+                "visible_to": [sd.player_id],
+                "fidelity": {},
+                "anchor_pc": sd.snapshot.player_seats.get(sd.player_id) or sd.player_name,
+                "pov_strategy": "private",
+            }
         emitted_cold_open = [
-            self._emit_event("NARRATION", m.payload, author_player_id=_cold_open_author)
+            self._emit_event(
+                "NARRATION",
+                m.payload.model_copy(update={"visibility_sidecar": _cold_open_sidecar})
+                if _cold_open_sidecar is not None
+                else m.payload,
+                author_player_id=_cold_open_author,
+            )
             for m in cold_open_messages
         ]
         messages = emitted_cold_open + list(narrator_messages)

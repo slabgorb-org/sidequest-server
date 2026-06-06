@@ -1355,9 +1355,15 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         if isinstance(archetypes_raw, list)
         else []
     )
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # char_creation is a world-tier CAST/CATALOG surface, not a genre mechanic.
+    # The genre tier MAY ship a shared default, but absence is valid — the world
+    # tier is authoritative. Absent → []; a malformed file still raises (the
+    # *_optional helper only returns None on absence). The per-world resolution
+    # invariant below fails loud if a world resolves no chargen from either tier.
     char_creation_path = path / "char_creation.yaml"
     char_creation: list[CharCreationScene] = _parse_char_creation_scenes(
-        _load_yaml_raw(char_creation_path), path=char_creation_path
+        _load_yaml_raw_optional(char_creation_path), path=char_creation_path
     )
     # Pack-level visual_style is optional (2026-05-29 directive — visual
     # prompts live at world level). Absent → None; the daemon resolves style
@@ -1375,8 +1381,14 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     )
     prompts = _load_yaml(path / "prompts.yaml", Prompts)
 
-    # Load required genre-level tropes
-    genre_tropes_raw = _load_yaml_raw(path / "tropes.yaml")
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # tropes are a world-tier CAST surface, not a genre mechanic — a genre's
+    # tropes authored for one world are wrong for its siblings (the
+    # the_real_mccoy vs dust_and_lead problem). The genre tier MAY ship tropes
+    # to serve as an inheritance base; absence is valid (mechanics-only genre).
+    # Absent → []; a malformed file still raises. World tropes are authoritative
+    # (each world ships its own tropes.yaml per the world required-file contract).
+    genre_tropes_raw = _load_yaml_raw_optional(path / "tropes.yaml")
     genre_tropes: list[TropeDefinition] = (
         [TropeDefinition.model_validate(t) for t in genre_tropes_raw]
         if isinstance(genre_tropes_raw, list)
@@ -1539,6 +1551,23 @@ def load_genre_pack(path: Path | str) -> GenrePack:
                     f"World {slug!r} resolves no theme — neither worlds/{slug}/theme.yaml "
                     f"nor the genre theme.yaml is present. Theme is world-authoritative "
                     "(epic 74); every world must supply or inherit a theme."
+                ),
+            )
+
+    # Genre/world boundary correction: char_creation is world-authoritative with
+    # an optional genre default (see the genre-tier load above). Now that the
+    # genre file is optional, guard against a world that resolves NO chargen from
+    # either tier — a world you cannot build a character in is broken, not empty.
+    # Mirrors the theme invariant; fails loud, named (No Silent Fallbacks).
+    for slug, w in worlds.items():
+        if not w.char_creation and not char_creation:
+            raise GenreLoadError(
+                path=path / "worlds" / slug / "char_creation.yaml",
+                detail=(
+                    f"World {slug!r} resolves no character creation — neither "
+                    f"worlds/{slug}/char_creation.yaml nor the genre char_creation.yaml "
+                    "is present. char_creation is world-authoritative with an optional "
+                    "genre default; every world must supply or inherit one."
                 ),
             )
 

@@ -10,6 +10,11 @@ Span names:
 * ``intent_router.decompose`` (INFO) — fires once per successful ``decompose``
   call. Attributes: ``action_length``, ``model``, ``dispatch_count``,
   ``latency_ms``, ``retry_count``, ``confidence_global``.
+* ``intent_router.cache_floor`` (INFO on pass, ERROR on refusal) — fires once
+  per ``build_intent_router_llm`` call (story 91-3): the build-time guard
+  decision against Haiku 4.5's 4,096-token cacheable-prefix floor.
+  Attributes: ``passed``, ``floor_tokens``, ``estimated_tokens``,
+  ``prefix_chars``.
 * ``intent_router.failed`` (ERROR) — fires once per failed attempt (including
   the first attempt of a retry-success turn, so the GM panel sees the
   contract violation even when the turn recovered). Attributes: ``reason``,
@@ -68,6 +73,24 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_DECOMPOSE] = SpanRoute(
         # turn from a turn where the spine never executed. (Span routing is a live
         # hub broadcast, not a turn_telemetry write.)
         "degraded": (span.attributes or {}).get("degraded", False),
+    },
+)
+
+SPAN_INTENT_ROUTER_CACHE_FLOOR = "intent_router.cache_floor"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_CACHE_FLOOR] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.cache_floor",
+        # Story 91-3 (epic 91 "Dark Spend"): the build-time floor-guard
+        # decision. The GM panel reads this to verify the guard ENGAGED —
+        # below Haiku 4.5's 4,096-token cacheable floor the cache_control
+        # marker is accepted by the API and silently never caches, so a
+        # refused build (passed=False) is a real fail-loud event, not noise.
+        "passed": (span.attributes or {}).get("passed", False),
+        "floor_tokens": (span.attributes or {}).get("floor_tokens", 0),
+        "estimated_tokens": (span.attributes or {}).get("estimated_tokens", 0),
+        "prefix_chars": (span.attributes or {}).get("prefix_chars", 0),
     },
 )
 
@@ -334,6 +357,43 @@ def intent_router_decompose_span(
         {"action_length": action_length, "model": model, **attrs},
         tracer_override=_tracer,
     ) as span:
+        yield span
+
+
+@contextmanager
+def intent_router_cache_floor_span(
+    *,
+    passed: bool,
+    floor_tokens: int,
+    estimated_tokens: int,
+    prefix_chars: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Build-time cache-floor guard decision (story 91-3).
+
+    Fires once per ``build_intent_router_llm`` call, pass or fail, so the GM
+    panel can verify the guard engaged rather than trusting that it exists.
+    A refusal (``passed=False``) marks the span ERROR — the build is about to
+    raise ``IntentRouterCacheFloorError`` and the session will die loudly at
+    the next turn; the telemetry trail names why.
+    """
+    with Span.open(
+        SPAN_INTENT_ROUTER_CACHE_FLOOR,
+        {
+            "passed": passed,
+            "floor_tokens": floor_tokens,
+            "estimated_tokens": estimated_tokens,
+            "prefix_chars": prefix_chars,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        if not passed:
+            span.set_status(
+                StatusCode.ERROR,
+                description="intent router cacheable prefix below floor",
+            )
         yield span
 
 

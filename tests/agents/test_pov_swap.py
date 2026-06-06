@@ -671,3 +671,79 @@ def test_npc_name_after_and_verb_not_conjugated():
     out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
     assert "Maria calls" in out, repr(out)
     assert "Maria call " not in out
+
+
+# ---------------------------------------------------------------------------
+# [BAR-2] Descriptive comma-clause corruption (sq-playtest 2026-06-06
+# heavy_metal/barsoom, solo, "Zanzibar Jones"). After a name-driven subject
+# swap, Pass 8/9's stranded-verb passes treated ANY -s word following a
+# comma/"and" as a 3rd-person verb and de-conjugated it. In rich narration
+# the post-comma material is overwhelmingly an absolute / appositive /
+# participial phrase headed by a PLURAL NOUN or POSSESSIVE PRONOUN, not a
+# coordinated verb — so "four arms"→"four arm", "ivory tusks"→"ivory tusk",
+# "turning its"→"turning it", and (retro-explaining #708) "his"→"hi".
+#
+# The fix radically constrains the adverb-skip branch to REAL adverbs
+# ("then" / -ly) and adds the missing pronoun guard the 2026-05-23 Pass
+# 5/6/7 retirement implied (pronouns are never verbs and must never be
+# conjugated). The legit verb-coordination cases above
+# (test_comma_coordinated_verb_continuation_conjugates, test_*_adverb_verb_*)
+# still pass — only the non-verb over-fire is removed.
+# ---------------------------------------------------------------------------
+
+
+def test_number_plural_noun_after_comma_not_conjugated():
+    """', four arms loose at its sides' — 'arms' is a plural noun in an
+    absolute phrase, NOT a coordinated verb. 'four' is a number, not a
+    skippable adverb."""
+    text = "Zanzibar Jones holds still, four arms loose at its sides."
+    out, _ = swap_to_second_person(text, target_name="Zanzibar Jones", pronouns="he/him")
+    assert "four arms loose" in out, repr(out)
+    assert "four arm loose" not in out
+
+
+def test_adjective_plural_noun_absolute_after_comma_not_conjugated():
+    """', ivory tusks catching the light' — 'tusks' is a plural noun;
+    'ivory' is an adjective, not a skippable adverb."""
+    text = "The shape waits, ivory tusks catching the light."
+    out, _ = swap_to_second_person(text, target_name="Zanzibar Jones", pronouns="he/him")
+    # No subject swap happened (Zanzibar not present) → returned unchanged,
+    # but this also pins that the bare descriptive clause is never touched.
+    assert "ivory tusks catching" in out, repr(out)
+    assert "ivory tusk catching" not in out
+
+
+def test_possessive_its_after_comma_not_de_pluralized():
+    """', turning its eyeless gaze' — 'its' is a possessive pronoun, never a
+    verb; the stranded-verb pass must not strip it to 'it'."""
+    text = "Zanzibar Jones freezes, turning its eyeless gaze across the moss."
+    out, _ = swap_to_second_person(text, target_name="Zanzibar Jones", pronouns="he/him")
+    assert "turning its eyeless gaze" in out, repr(out)
+    assert "turning it eyeless" not in out
+
+
+def test_possessive_his_after_comma_not_de_pluralized():
+    """[#708 retro] ', his copper face' — the possessive 'his' must survive
+    the comma-continuation pass intact, not be stripped to 'hi'."""
+    text = "Zanzibar Jones turns, his copper face hard."
+    out, _ = swap_to_second_person(text, target_name="Zanzibar Jones", pronouns="he/him")
+    assert "his copper face" in out, repr(out)
+    assert "hi copper" not in out
+
+
+def test_barsoom_journal_sentence_renders_clean():
+    """End-to-end: the verbatim turn-2 barsoom journal sentence must render
+    with zero de-pluralization corruption after the 2nd-person swap."""
+    text = (
+        "Zanzibar Jones presses flat against the column's cold stone, the green "
+        "camp's firelight painting the broken marble amber behind him — and the "
+        "great shape on the plain holds still, four arms loose at its sides, "
+        "ivory tusks catching the light, turning its eyeless gaze across the moss."
+    )
+    out, _ = swap_to_second_person(text, target_name="Zanzibar Jones", pronouns="he/him")
+    # The subject swap still fires.
+    assert out.startswith("You press flat"), repr(out)
+    # None of the four documented corruptions survive.
+    assert "four arms loose" in out and "four arm loose" not in out, repr(out)
+    assert "ivory tusks catching" in out and "ivory tusk catching" not in out, repr(out)
+    assert "turning its eyeless" in out and "turning it eyeless" not in out, repr(out)

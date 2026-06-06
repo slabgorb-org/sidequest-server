@@ -134,7 +134,8 @@ def classification_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     router.decompose = _counting_decompose
     monkeypatch.setattr(
         "sidequest.server.intent_router_pass.build_intent_router_for_session",
-        lambda: router,
+        # 91-4 threads session_id= through the factory; accept and ignore it.
+        lambda **_kwargs: router,
     )
     return calls
 
@@ -378,7 +379,8 @@ async def test_retry_sdk_calls_count_toward_budget(
     real_router = IntentRouter(llm=_flaky_then_valid_llm(sdk_calls))
     monkeypatch.setattr(
         "sidequest.server.intent_router_pass.build_intent_router_for_session",
-        lambda: real_router,
+        # 91-4 threads session_id= through the factory; accept and ignore it.
+        lambda **_kwargs: real_router,
     )
 
     sd, handler = _arm_combat_session(session_handler_factory, with_room=False)

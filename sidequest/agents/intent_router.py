@@ -284,6 +284,14 @@ class IntentRouter:
 
     def __init__(self, *, llm: IntentRouterLLM) -> None:
         self._llm = llm
+        # Story 91-2 (epic 91 "Dark Spend"): SDK round-trips spent by the most
+        # recent ``decompose`` call — first attempt plus any bounded retry,
+        # counting attempts that raised (a timed-out call is still a spent
+        # round-trip). The pre-narrator pass reads this after ``decompose``
+        # returns to enforce ``INTENT_ROUTER_CALL_BUDGET_PER_TURN``; a counter
+        # that only saw decompose invocations would be structurally blind to a
+        # retry storm (the [COST-1] "steady 2x floor" suspect).
+        self.sdk_round_trips_last_decompose: int = 0
 
     async def decompose(
         self,
@@ -319,12 +327,16 @@ class IntentRouter:
         # self-correct instead of reproducing the same malformed shape.
         last_schema_error: str | None = None
 
+        self.sdk_round_trips_last_decompose = 0
         for attempt_index in range(_MAX_TOTAL_ATTEMPTS):
             retry_count = attempt_index  # 0 on first try, 1 on retry.
             user_prompt = base_user_prompt
             if last_schema_error is not None:
                 user_prompt += _schema_correction_suffix(last_schema_error)
             try:
+                # Counted BEFORE the call so an attempt that raises (timeout,
+                # transport) is still a spent round-trip (Story 91-2 budget).
+                self.sdk_round_trips_last_decompose += 1
                 sdk_start_ns = time.perf_counter_ns()
                 tool_input = await self._llm.emit_tool(
                     system=_SYSTEM_PROMPT,

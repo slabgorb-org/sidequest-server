@@ -435,8 +435,15 @@ async def test_dice_throw_completes_pending_shot(
             return None
 
         async def _execute_narration_turn(
-            self, sd: object, action: str, turn_context: object
+            self,
+            sd: object,
+            action: str,
+            turn_context: object,
+            *,
+            suppress_intent_router: bool = False,
         ) -> list[object]:
+            # Story 91-2: the dogfight replay re-entry must suppress the router.
+            assert suppress_intent_router is True
             captured["action"] = action
             return []
 

@@ -229,7 +229,9 @@ async def test_dice_throw_stashes_pending_roll_outcome(session_handler_factory):
     # the narration turn, BEFORE the turn's beat-apply consumes it.
     stashed: list[object] = []
 
-    async def _capture_and_skip(sd_, action, ctx):  # noqa: ANN001
+    async def _capture_and_skip(sd_, action, ctx, *, suppress_intent_router=False):  # noqa: ANN001
+        # Story 91-2: the dice replay re-entry must suppress the router pass.
+        assert suppress_intent_router is True
         stashed.append(sd_.pending_roll_outcome)
         return []
 

@@ -9,6 +9,7 @@ uniform per-call usage accounting (log line + ``llm.request`` span attributes
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Literal
@@ -20,6 +21,7 @@ from sidequest.agents.anthropic_sdk_client import (
 )
 from sidequest.agents.claude_client import LlmClient, LlmClientError
 from sidequest.agents.tooling_protocol import ToolingLlmClient
+from sidequest.telemetry.spans.intent_router import intent_router_cache_floor_span
 from sidequest.telemetry.spans.llm_request import llm_request_span
 
 if TYPE_CHECKING:
@@ -248,6 +250,67 @@ _INTENT_ROUTER_MODEL = "claude-haiku-4-5-20251001"
 _INTENT_ROUTER_CACHE_TTL = "1h"
 
 
+# Story 91-3 (epic 91 "Dark Spend"): Haiku 4.5's minimum cacheable prompt
+# length. Below this floor a ``cache_control`` marker is accepted by the API
+# and *silently never caches* — the request succeeds, the bill re-charges the
+# full prefix every turn, and nothing reports the no-op. The build-time guard
+# below turns that silent trap into a loud build failure.
+HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS = 4096
+
+# Offline chars→tokens calibration for the floor guard. Measured against the
+# live ``count_tokens`` endpoint on 2026-06-05: the combined tools+system
+# prefix was 15,425 chars / 4,730 tokens = 3.261 chars/token. 3.2 keeps the
+# guard's threshold (~13.1k chars) just BELOW the CI tripwire in
+# ``test_haiku_cache_control.py`` (13,500 chars), so a shrinking prefix fails
+# in CI before this runtime guard would start killing live turns. The
+# authoritative re-measure after any prompt/schema change is the opt-in
+# ``test_intent_router_prefix_token_floor_live`` (count_tokens — exact).
+_PREFIX_CHARS_PER_TOKEN = 3.2
+
+
+class IntentRouterCacheFloorError(LlmClientError):
+    """The Intent Router's combined cacheable prefix is below Haiku's floor.
+
+    Story 91-3: raised at client-build time by :func:`build_intent_router_llm`
+    when the estimated tools+system prefix drops under
+    :data:`HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS`. Never ship a ``cache_control``
+    marker that silently doesn't cache (No Silent Fallbacks) — the epic-91
+    incident was exactly this trap: 100% uncached Haiku at full price, every
+    turn, invisible until cost forensics.
+    """
+
+
+def _estimate_intent_router_prefix_tokens() -> tuple[int, int]:
+    """Estimate the combined tools+system cacheable prefix, offline.
+
+    Returns ``(prefix_chars, estimated_tokens)``. The prefix is everything the
+    ``cache_control`` marker on the system block covers (canonical cache order
+    tools → system → messages): the system prompt PLUS the DispatchPackage
+    tool name/description/schema. Measuring the system block alone was the
+    original defect — it is sub-floor by itself; the margin comes entirely
+    from bundling the schema.
+
+    Reads the production prompt/schema LATE-BOUND through the
+    ``sidequest.agents.intent_router`` module at call time (same monkeypatch
+    doctrine as :func:`build_async_anthropic`). The import is function-level
+    because ``intent_router`` imports this module at module scope.
+
+    Offline by design: the adapter is rebuilt once per turn
+    (``build_intent_router_for_session``), so a ``count_tokens`` network call
+    here would add a per-turn round-trip for a value that only changes when
+    code changes.
+    """
+    import sidequest.agents.intent_router as intent_router
+
+    prefix_chars = (
+        len(intent_router._SYSTEM_PROMPT)
+        + len(json.dumps(intent_router._dispatch_tool_schema()))
+        + len(intent_router._TOOL_NAME)
+        + len(intent_router._TOOL_DESCRIPTION)
+    )
+    return prefix_chars, int(prefix_chars / _PREFIX_CHARS_PER_TOKEN)
+
+
 class IntentRouterEmptyResponse(LlmClientError):
     """Haiku returned a response with no ``tool_use`` block.
 
@@ -343,5 +406,45 @@ class _IntentRouterLlm:
 
 
 def build_intent_router_llm() -> _IntentRouterLlm:
-    """Build the Haiku-tier LLM for the Intent Router producer (ADR-113)."""
+    """Build the Haiku-tier LLM for the Intent Router producer (ADR-113).
+
+    Story 91-3 fail-loud floor guard: validates the combined tools+system
+    cacheable prefix against Haiku 4.5's
+    :data:`HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS` BEFORE constructing the
+    adapter, and raises :class:`IntentRouterCacheFloorError` if the estimate
+    is sub-floor — below the floor the adapter's ``cache_control`` marker is
+    accepted by the API and silently never caches (the epic-91 dark-spend
+    incident). The decision is emitted as an ``intent_router.cache_floor``
+    span on both paths so the GM panel can verify the guard engaged (OTEL
+    Observability Principle).
+    """
+    prefix_chars, estimated_tokens = _estimate_intent_router_prefix_tokens()
+    passed = estimated_tokens >= HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS
+    with intent_router_cache_floor_span(
+        passed=passed,
+        floor_tokens=HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS,
+        estimated_tokens=estimated_tokens,
+        prefix_chars=prefix_chars,
+    ):
+        pass
+    if not passed:
+        logger.error(
+            "intent_router.cache_floor REFUSED build: estimated_tokens=%d "
+            "floor_tokens=%d prefix_chars=%d",
+            estimated_tokens,
+            HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS,
+            prefix_chars,
+        )
+        raise IntentRouterCacheFloorError(
+            f"Intent Router combined tools+system prefix is ~{estimated_tokens} "
+            f"tokens ({prefix_chars} chars at ~{_PREFIX_CHARS_PER_TOKEN} "
+            f"chars/token) — below Haiku 4.5's "
+            f"{HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS}-token cacheable floor. "
+            "Below the floor the cache_control marker is accepted by the API "
+            "and silently never caches, re-billing the full prefix every turn "
+            "(the epic-91 dark-spend incident). Refusing to build (No Silent "
+            "Fallbacks). Either grow the prompt/schema back above the floor or "
+            "deliberately remove the cache marker; re-verify with "
+            "test_intent_router_prefix_token_floor_live (count_tokens)."
+        )
     return _IntentRouterLlm()

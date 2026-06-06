@@ -262,9 +262,7 @@ def test_passing_build_emits_cache_floor_span(
 
     build_intent_router_llm()
 
-    spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.cache_floor"
-    ]
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == "intent_router.cache_floor"]
     assert spans, "build must emit an intent_router.cache_floor span"
     attrs = spans[-1].attributes
     assert attrs.get("passed") is True
@@ -293,9 +291,7 @@ def test_failing_build_emits_cache_floor_span_before_raising(
     with pytest.raises(IntentRouterCacheFloorError):
         build_intent_router_llm()
 
-    spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.cache_floor"
-    ]
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == "intent_router.cache_floor"]
     assert spans, "the refused build must still emit intent_router.cache_floor"
     attrs = spans[-1].attributes
     assert attrs.get("passed") is False

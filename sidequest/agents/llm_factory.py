@@ -580,9 +580,17 @@ class _OllamaIntentRouterLlm:
             f"{json.dumps(tool_schema)}\n"
             f"No prose, no markdown fences — the JSON object only."
         )
-        resp = await self._client.send_stateless(
+        # Review rework [SEC HIGH]: route through ``send_with_session`` (role-
+        # separated ``/api/chat`` messages array) NOT ``send_stateless`` (which
+        # flattens system+user into one undivided prompt). Player-authored text
+        # must stay in the ``role: user`` turn, never adjacent to the JSON-
+        # coercion instructions — the flattened form raised both the prompt-
+        # injection surface and the misclassification rate. ``session_id=None``
+        # keeps each classification a fresh stateless turn.
+        resp = await self._client.send_with_session(
+            prompt=user,
             system_prompt=system + coercion,
-            user_message=user,
+            session_id=None,
             model=LOCAL_CLASSIFIER_MODEL,
         )
         return _extract_json_object(resp.text)

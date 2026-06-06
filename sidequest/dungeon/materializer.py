@@ -1219,9 +1219,14 @@ async def _stage_curate(
         from sidequest.agents.model_routing import classification_backend
 
         if classification_backend() == "ollama":
-            resp = await build_local_classifier_client().send_stateless(
+            # Review rework [SEC HIGH]: ``send_with_session`` (role-separated
+            # /api/chat messages) NOT ``send_stateless`` (flattens system+user).
+            # The curate instruction is the ``role: system`` turn; the manifest
+            # INPUT is the ``role: user`` turn — never folded together.
+            resp = await build_local_classifier_client().send_with_session(
+                prompt=prompt,
                 system_prompt=system_blocks[0].text,
-                user_message=prompt,
+                session_id=None,
                 model=resolve_model(CallType.SCRATCH),
             )
             return _parse_curation_verdict(resp.text)

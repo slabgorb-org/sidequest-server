@@ -158,6 +158,18 @@ class World(BaseModel):
     authored_npcs: list[AuthoredNpc] = Field(default_factory=list)
     char_creation: list[CharCreationScene] = Field(default_factory=list)
     chassis_instances: list[ChassisInstanceConfig] = Field(default_factory=list)
+    chassis_classes: ChassisClassesConfig | None = None
+    """World-tier rig CAST/CATALOG (``worlds/<slug>/chassis_classes.yaml``), epic
+    94. Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    chassis classes are the cast of rigs a world ships, NOT a genre mechanic — the
+    genre tier is the rulebook only. ``None`` when the world authors no rigs (a
+    valid choice, not a fallback). Consumers read this world-first; the old
+    genre-tier ``GenrePack.chassis_classes`` is now ``None`` for migrated packs."""
+    seed_tropes: list[SeedTrope] = Field(default_factory=list)
+    """World-tier seed-trope deck (``worlds/<slug>/seed_tropes.yaml``), epic 94.
+    Genre/world boundary correction: the seeds a world plants are CAST/CATALOG,
+    not a genre mechanic. Empty list when the world authors no deck — no silent
+    fallback to a shared default. Consumers read this world-first."""
     magic_register: str = ""
     items: WorldItemsCatalog | None = None
     scenarios: dict[str, ScenarioPack] = Field(default_factory=dict)

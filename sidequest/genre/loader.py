@@ -959,6 +959,52 @@ def _emit_world_lore_loaded(*, world_slug: str, source: Path, fragment_count: in
     )
 
 
+def _emit_world_chassis_classes_loaded(*, world_slug: str, source: Path, class_count: int) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier chassis load.
+
+    Epic 94 (genre/world boundary correction): chassis classes are a world-tier
+    CAST/CATALOG surface, not a genre mechanic. The load fires a span — mirroring
+    the ``world_items`` / ``world_lore`` spans — so the GM panel can prove the
+    rig cast was read from the world tier rather than improvised from a removed
+    genre default.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_chassis_classes",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "class_count": class_count,
+            "source": str(source),
+        },
+        component="genre",
+    )
+
+
+def _emit_world_seed_tropes_loaded(*, world_slug: str, source: Path, seed_count: int) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier seed-deck load.
+
+    Epic 94 (genre/world boundary correction): the seed-trope deck is world-tier
+    CAST/CATALOG (the seeds a world plants), not a genre mechanic. The load fires
+    a span so the GM panel can prove the deck was read from the world tier.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_seed_tropes",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "seed_count": seed_count,
+            "source": str(source),
+        },
+        component="genre",
+    )
+
+
 def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
@@ -1237,6 +1283,46 @@ def _load_single_world(
             world_slug=world_path.name,
         )
 
+    # === World-tier chassis_classes.yaml — OPTIONAL (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # chassis classes are a world-tier CAST/CATALOG surface — the cast of rigs a
+    # world ships — not a genre mechanic. The genre tier is the rulebook only.
+    # Worlds that don't use the rig framework omit the file → None (distinguishes
+    # "world has no rigs" from "empty config"; no silent fallback to a genre
+    # default). Station cross-validation runs at load (same as the old genre-tier
+    # path) so a malformed chassis fails loud, world-scoped.
+    chassis_classes: ChassisClassesConfig | None = _load_yaml_optional(
+        world_path / "chassis_classes.yaml", ChassisClassesConfig
+    )
+    if chassis_classes is not None:
+        from sidequest.interior.loader import validate_chassis_stations
+
+        for cc in chassis_classes.classes:
+            validate_chassis_stations(cc)
+        _emit_world_chassis_classes_loaded(
+            world_slug=world_path.name,
+            source=world_path / "chassis_classes.yaml",
+            class_count=len(chassis_classes.classes),
+        )
+
+    # === World-tier seed_tropes.yaml — OPTIONAL (epic 94) ===
+    # Genre/world boundary correction: the seed-trope deck is world-tier CAST/
+    # CATALOG (the seeds a world plants), not a genre mechanic. Absent file →
+    # empty list (no silent fallback to a shared default deck — per "No Silent
+    # Fallbacks"; missing file is fine, the field reflects reality).
+    seed_tropes_raw = _load_yaml_raw_optional(world_path / "seed_tropes.yaml")
+    world_seed_tropes: list[SeedTrope] = (
+        [SeedTrope.model_validate(s) for s in seed_tropes_raw]
+        if isinstance(seed_tropes_raw, list)
+        else []
+    )
+    if world_seed_tropes:
+        _emit_world_seed_tropes_loaded(
+            world_slug=world_path.name,
+            source=world_path / "seed_tropes.yaml",
+            seed_count=len(world_seed_tropes),
+        )
+
     return World(
         config=config,
         lore=lore,
@@ -1256,6 +1342,8 @@ def _load_single_world(
         authored_npcs=authored_npcs,
         char_creation=char_creation,
         chassis_instances=chassis_instances,
+        chassis_classes=chassis_classes,
+        seed_tropes=world_seed_tropes,
         magic_register=magic_register,
         items=items,
         scenarios=world_scenarios,

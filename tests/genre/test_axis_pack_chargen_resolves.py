@@ -57,12 +57,21 @@ def test_axis_pack_chargen_produces_resolvable_archetype_pair(pack_name: str) ->
         "archetype_constraints — fix the list or the pack."
     )
 
+    # Epic 94 (genre/world boundary): char_creation is a world-tier CAST/CATALOG
+    # surface. Read it world-first — the genre-tier list is empty for migrated
+    # packs (e.g. space_opera). Aggregate the genre scenes (legacy, still present
+    # on some packs) with every world's scenes so the gate is satisfied as long
+    # as ANY playable path exists at the world the player actually binds.
+    chargen_scenes = list(pack.char_creation)
+    for world in pack.worlds.values():
+        chargen_scenes.extend(world.char_creation)
+
     # Collect every (jungian, rpg_role) hint pair the canned choices can set.
     # The builder pairs the LAST jungian_hint with the LAST rpg_role_hint
     # across scenes, but any choice that carries BOTH is a self-contained
     # pair the player can pick — that's the minimum bar for a playable path.
     paired_choices: list[tuple[str, str, str]] = []
-    for scene in pack.char_creation:
+    for scene in chargen_scenes:
         for choice in scene.choices:
             me = choice.mechanical_effects
             if me is None:

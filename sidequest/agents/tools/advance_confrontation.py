@@ -70,7 +70,7 @@ Sequential-per-session execution is provided by the Registry's
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -80,6 +80,7 @@ from sidequest.agents.tool_registry import (
     ToolResult,
     tool,
 )
+from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 
 class AdvanceConfrontationArgs(BaseModel):
@@ -112,6 +113,23 @@ class AdvanceConfrontationArgs(BaseModel):
         default="",
         description="One-line narrator note for OTEL / GM-panel audit.",
     )
+
+
+def _find_active_cdef(genre_pack: Any, encounter_type: str) -> Any:
+    """Resolve the active encounter's ConfrontationDef from the pack rules.
+
+    Inline exact-type match (the same contract as
+    ``sidequest.server.dispatch.confrontation.find_confrontation_def`` —
+    not imported because ``sidequest.agents`` must not depend on
+    ``sidequest.server``). Returns ``None`` when the pack is absent, has no
+    rules, or no def matches; the caller decides (here: the guard stands
+    down — the dial engine remains the narrator's channel).
+    """
+    rules = getattr(genre_pack, "rules", None)
+    for d in getattr(rules, "confrontations", None) or []:
+        if d.confrontation_type == encounter_type:
+            return d
+    return None
 
 
 @tool(
@@ -171,6 +189,34 @@ async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext
             recoverable=True,
         )
 
+    # Opposed-check guard (RW-2 road_warrior chase, playtest 2026-06-05).
+    # On a ``resolution_mode: opposed_check`` confrontation the DICE ENGINE
+    # owns every dial delta: the player's stashed DICE_THROW d20 is paired
+    # with the narrator-picked OPPONENT beat by
+    # ``narration_apply._resolve_opposed_check_branch``, which derives the
+    # tier and applies both sides. The playtest measured the narrator
+    # free-handing this tool with invented deltas instead (sep +0 on a crit,
+    # pursuit +2 from nowhere) — convincing narration, zero mechanical
+    # backing. Refuse loudly (recoverable — the turn proceeds on prose) and
+    # steer the narrator to the sanctioned channel. Mirrors the zombie-dial
+    # guard above. ``genre_pack=None`` (legacy fixtures / un-wired call
+    # sites) stands down — the mode cannot be determined without the pack.
+    cdef = _find_active_cdef(ctx.genre_pack, encounter.encounter_type)
+    if cdef is not None and str(getattr(cdef, "resolution_mode", "")) == "opposed_check":
+        ctx.otel_span.set_attribute("tool.confrontation.refused_opposed_check", True)
+        ctx.otel_span.set_attribute("tool.confrontation.encounter_type", encounter.encounter_type)
+        ctx.otel_span.set_attribute("tool.confrontation.axis", args.axis)
+        ctx.otel_span.set_attribute("tool.confrontation.delta", args.delta)
+        return ToolResult.error(
+            f"encounter {encounter.encounter_type!r} resolves via opposed_check — "
+            "the dice engine derives every dial delta from the paired rolls; "
+            "this tool must not move the dial. Emit the OPPONENT's "
+            "beat_selection (actor + beat_id from the confrontation's beat "
+            "list) in the game_patch instead; the engine rolls the opponent's "
+            "d20 and applies both sides.",
+            recoverable=True,
+        )
+
     metric = encounter.player_metric if args.axis == "player" else encounter.opponent_metric
     value_before = metric.current
     metric.current = value_before + args.delta
@@ -192,6 +238,28 @@ async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext
     # canonical snapshot (which the end-of-turn save persists), not a doomed
     # fresh-load copy. The GM panel uses this to confirm the dial move is real.
     ctx.otel_span.set_attribute("tool.confrontation.canonical", True)
+
+    # RW-2: surface the narrator-driven dial move on the GM TIMELINE, not
+    # just the tool span attrs — the playtest DRIVER could not attribute a
+    # pursuit 4→5 tick because narrator moves were invisible next to the
+    # engine's own state_transition events (OTEL Observability Principle).
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "encounter",
+            "op": "narrator_dial_advance",
+            "encounter_type": encounter.encounter_type,
+            "axis": args.axis,
+            "delta": args.delta,
+            "reason": args.reason,
+            "value_before": value_before,
+            "value_after": value_after,
+            "threshold": metric.threshold,
+            "crossed_threshold": crossed_threshold,
+            "source": "advance_confrontation",
+        },
+        component="encounter",
+    )
 
     return ToolResult.ok(
         {

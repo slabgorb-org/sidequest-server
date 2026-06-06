@@ -53,6 +53,7 @@ from sidequest.game.room_movement import (
 from sidequest.game.session import (
     GameSnapshot,
 )
+from sidequest.game.vessel_tags import find_vessel_item
 from sidequest.game.world_materialization import (
     CampaignMaturity,
     HistoryParseError,
@@ -712,6 +713,41 @@ class CharGenMixin:
             world=sd.snapshot.world_slug,
             player_id=player_id,
         )
+
+        # Playtest 2026-06-05 (RW-2): the rig-name half of the name scene
+        # ("What do they call the rig?"). When the player named their vessel,
+        # rename the loadout's vessel-tagged item to match — tags (and thus
+        # the rig-pool binding) are untouched; only the display name changes.
+        # The content itself promises this (inventory.yaml: "The player names
+        # their rig at chargen"). Both outcomes are observable (OTEL
+        # Observability Principle): the rename, and the warn when a vessel
+        # name was given but no vessel item exists in the loadout.
+        vessel_name = builder.vessel_name()
+        if vessel_name:
+            vessel_item = find_vessel_item(character.core.inventory.items)
+            if vessel_item is not None:
+                template_name = str(vessel_item.get("name", ""))
+                vessel_item["name"] = vessel_name
+                span.add_event(
+                    "character_creation.vessel_named",
+                    {
+                        "event": "vessel_named",
+                        "item_id": str(vessel_item.get("id", "")),
+                        "template_name": template_name,
+                        "vessel_name": vessel_name,
+                        "player_id": player_id,
+                    },
+                )
+            else:
+                span.add_event(
+                    "character_creation.vessel_name_unbound",
+                    {
+                        "event": "vessel_name_unbound",
+                        "vessel_name": vessel_name,
+                        "severity": "warn",
+                        "player_id": player_id,
+                    },
+                )
 
         # MP: peer may have already committed on the same slug. The
         # ADR-037 Python port has every WS session on a slug share the

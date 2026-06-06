@@ -8,6 +8,7 @@ construction and consumption are the boundaries.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -370,6 +371,12 @@ class SceneResult:
     # scene list (e.g. the_story's StoryInput dispatch). Older paths leave
     # this as None — scene order is implicit in the results list.
     scene_id: str | None = None
+    # Name-scene followup correction (playtest 2026-06-05 RW-2). When the
+    # name-entry scene has a hook_prompt, the followup answer is the player's
+    # name correction — stored here so character_name()/vessel_name() can
+    # merge it over the original parse. Non-name scenes keep the legacy
+    # followup-as-wound-hook behavior and leave this None.
+    followup_text: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +862,102 @@ def indefinite_article(word: str) -> str:
     return "a"
 
 
+# A proper-noun-ish token ("Zeppo", "V8", "D'Arcy") and a 1-4 token phrase
+# ("Mad Max", "Duck Soup", "Snake Plissken"). Deliberately case-SENSITIVE —
+# the keyword prefixes below match case-insensitively via scoped (?i:) groups,
+# but the captured name itself must look like a proper noun, which is what
+# terminates the capture at the first lowercase word ("Duck Soup — because…"
+# stops after "Soup").
+_NAME_TOKEN = r"[A-Z0-9][\w'’\-]*"
+_NAME_PHRASE = rf"{_NAME_TOKEN}(?: {_NAME_TOKEN}){{0,3}}"
+
+# Rider-name patterns, priority order. The generic "name:" form excludes a
+# preceding "rig " / "rig's " so "Rig name: Duck Soup" never bleeds into the
+# rider half.
+_RIDER_NAME_PATTERNS = (
+    re.compile(rf"(?i:\b(?:road|rider)\s+name\s*(?:is|[:=])\s*)({_NAME_PHRASE})"),
+    re.compile(rf"(?i:(?<!rig )(?<!rig's )\bname\s*(?:is|[:=])\s*)({_NAME_PHRASE})"),
+    re.compile(
+        rf"(?i:\b(?:they call me|call me|i'?m called|i am called|i go by|go by|known as|name's)\s+)"
+        rf"({_NAME_PHRASE})"
+    ),
+)
+
+# Vessel/rig-name patterns, priority order.
+_VESSEL_NAME_PATTERNS = (
+    re.compile(rf"(?i:\brig(?:'s)?\s+name\s*(?:is|[:=])\s*)({_NAME_PHRASE})"),
+    re.compile(rf"(?i:\b(?:the\s+)?rig\s*[:=]\s*)({_NAME_PHRASE})"),
+    re.compile(rf"(?i:\b(?:the\s+)?rig\s+is(?:\s+called)?\s+)({_NAME_PHRASE})"),
+)
+
+# Whole-text fallbacks: a bare name ("Kara", "Mad Max") and the two-part
+# comma answer to the two-part question ("Zeppo, Duck Soup").
+_PLAIN_NAME_RE = re.compile(rf"^({_NAME_PHRASE})[.!]?$")
+_COMMA_PAIR_RE = re.compile(rf"^({_NAME_PHRASE}),\s*({_NAME_PHRASE})[.!]?$")
+# Leading short segment before sentence punctuation ("Zeppo. The rig: …").
+# Only consulted when a vessel name was found — the two-part answer shape —
+# so arbitrary prose never gets its first sentence promoted to a name.
+_LEADING_NAME_RE = re.compile(rf"^({_NAME_PHRASE})\s*[.!;,]")
+
+
+def extract_freeform_names(text: str) -> tuple[str | None, str | None]:
+    """Parse a freeform name-scene answer into (character_name, vessel_name).
+
+    The name-entry scene can ask a two-part question (road_warrior the_name:
+    "What do they call you? And what do they call the rig?") and players
+    answer in prose. Deterministic best-effort extraction of the observed
+    phrasings (playtest 2026-06-05 RW-2):
+
+      "They call me Zeppo. The rig is Duck Soup — because…"  → both halves
+      "Road name: Zeppo. Rig name: Duck Soup."               → both halves
+      "Zeppo. The rig: Duck Soup."                           → both halves
+      "Zeppo, Duck Soup"                                     → both halves
+      "Kara"                                                 → name only
+
+    Returns (None, None) when nothing name-like is recognized — the caller
+    decides the fallback (``character_name()`` keeps the legacy verbatim
+    text) rather than this helper guessing silently.
+    """
+    trimmed = text.strip()
+    if not trimmed:
+        return (None, None)
+
+    name: str | None = None
+    vessel: str | None = None
+    for pattern in _RIDER_NAME_PATTERNS:
+        m = pattern.search(trimmed)
+        if m:
+            name = m.group(1)
+            break
+    for pattern in _VESSEL_NAME_PATTERNS:
+        m = pattern.search(trimmed)
+        if m:
+            vessel = m.group(1)
+            break
+
+    # Two-part comma answer — fill only the missing halves.
+    if name is None and vessel is None:
+        m = _COMMA_PAIR_RE.match(trimmed)
+        if m:
+            return (m.group(1), m.group(2))
+
+    # Bare name.
+    if name is None:
+        m = _PLAIN_NAME_RE.match(trimmed)
+        if m:
+            name = m.group(1)
+
+    # Two-part answer where the rider half is an unprefixed leading segment
+    # ("Zeppo. The rig: Duck Soup.") — gated on the vessel half having
+    # matched so plain prose never promotes its first words to a name.
+    if name is None and vessel is not None:
+        m = _LEADING_NAME_RE.match(trimmed)
+        if m:
+            name = m.group(1)
+
+    return (name, vessel)
+
+
 # ---------------------------------------------------------------------------
 # CharacterBuilder — the state machine
 # ---------------------------------------------------------------------------
@@ -1167,25 +1270,67 @@ class CharacterBuilder:
         """
         return self._default_class
 
+    def _name_scene_inputs(self) -> tuple[str | None, str | None]:
+        """(original_freeform, followup_correction) from the name-entry scene.
+
+        The name scene is the last scene with no choices; once answered, its
+        result is the last result. Returns (None, None) when the scene
+        hasn't been answered with freeform text.
+        """
+        if not self._scenes:
+            return (None, None)
+        last_scene = self._scenes[-1]
+        if last_scene.choices:
+            return (None, None)
+        if not self._results:
+            return (None, None)
+        last_result = self._results[-1]
+        if not isinstance(last_result.input_type, FreeformInput):
+            return (None, None)
+        return (last_result.input_type.text, last_result.followup_text)
+
     def character_name(self) -> str | None:
         """Extract the character name from the name-entry scene.
 
-        The name scene is the last scene with no choices — if the player
-        typed freeform text there, that's the name. Blank text falls
-        through to None so callers can substitute the lobby name.
+        The name scene is the last scene with no choices. The freeform
+        answer is parsed via ``extract_freeform_names`` (playtest 2026-06-05
+        RW-2: "They call me Zeppo. The rig is Duck Soup — …" must yield
+        "Zeppo", not the whole sentence), with the hook_prompt followup
+        correction winning per-field over the original answer. When neither
+        parses, the legacy verbatim text is kept (correction first — the
+        player's latest word) so a wrong-but-present name beats a blank one.
+        Blank text falls through to None so callers can substitute the
+        lobby name.
         """
-        if not self._scenes:
+        original, correction = self._name_scene_inputs()
+        if original is None:
             return None
-        last_scene = self._scenes[-1]
-        if last_scene.choices:
+        base_name, _ = extract_freeform_names(original)
+        corr_name: str | None = None
+        if correction is not None:
+            corr_name, _ = extract_freeform_names(correction)
+        name = corr_name or base_name
+        if name:
+            return name
+        fallback = (correction or "").strip() or original.strip()
+        return fallback if fallback else None
+
+    def vessel_name(self) -> str | None:
+        """The player-given vessel/rig name from the name-entry scene, if any.
+
+        The second half of a two-part name question ("What do they call you?
+        And what do they call the rig?"). Same parse-and-merge rules as
+        ``character_name()``; no verbatim fallback — an unparsed vessel half
+        is simply absent.
+        """
+        original, correction = self._name_scene_inputs()
+        if original is None:
             return None
-        if not self._results:
-            return None
-        last_result = self._results[-1]
-        if not isinstance(last_result.input_type, FreeformInput):
-            return None
-        trimmed = last_result.input_type.text.strip()
-        return trimmed if trimmed else None
+        _, base_vessel = extract_freeform_names(original)
+        corr_vessel: str | None = None
+        if correction is not None:
+            _, corr_vessel = extract_freeform_names(correction)
+        return corr_vessel or base_vessel
 
     # --- Accumulated view ---
 
@@ -1720,6 +1865,26 @@ class CharacterBuilder:
             )
         )
 
+        # Playtest 2026-06-05 (RW-2): the name-entry scene (last scene, no
+        # choices) parses the freeform answer into name + vessel halves.
+        # Emit the extraction decision so the GM panel can see what the
+        # parser did with the player's words (the reported OTEL gap: "no
+        # extraction span fired on either submit").
+        if self._is_name_scene(scene_index):
+            extracted_name, extracted_vessel = extract_freeform_names(text)
+            trace.get_current_span().add_event(
+                "chargen.names_extracted",
+                {
+                    "action": "names_extracted",
+                    "scene_id": scene.id,
+                    "raw_len": len(text),
+                    "extracted_name": extracted_name or "",
+                    "extracted_vessel_name": extracted_vessel or "",
+                    "fallback_verbatim": extracted_name is None,
+                    "severity": "info" if extracted_name else "warn",
+                },
+            )
+
         if scene.hook_prompt is not None:
             self._phase = AwaitingFollowup(
                 scene_index=scene_index,
@@ -1728,6 +1893,11 @@ class CharacterBuilder:
         else:
             self._advance_scene(scene_index)
 
+    def _is_name_scene(self, scene_index: int) -> bool:
+        """True when ``scene_index`` is the name-entry scene (the last scene
+        with no choices — same identification ``character_name()`` uses)."""
+        return scene_index == len(self._scenes) - 1 and not self._scenes[scene_index].choices
+
     def answer_followup(self, text: str) -> None:
         """Answer a followup prompt while in AwaitingFollowup state.
 
@@ -1735,14 +1905,35 @@ class CharacterBuilder:
         followup answer is the player's primary hook (trauma description,
         motive elaboration, backstory beat). Advances to the next scene
         (or Confirmation).
+
+        Name-scene exception (playtest 2026-06-05 RW-2): when the followup
+        belongs to the name-entry scene, the answer is the player's NAME
+        CORRECTION ("Road name: Zeppo. Rig name: Duck Soup."), not a trauma
+        hook. It's stored on the result's ``followup_text`` so
+        ``character_name()``/``vessel_name()`` re-parse it (correction wins
+        per-field) — previously the correction was buried as a WOUND hook
+        and the re-prompt was a dead input.
         """
         if not isinstance(self._phase, AwaitingFollowup):
             raise WrongPhaseError(expected="AwaitingFollowup", actual=self._phase_name())
         scene_index = self._phase.scene_index
         scene_id = self._scenes[scene_index].id
 
-        # Insert the followup hook at position 0 on the most recent result.
-        if self._results:
+        if self._is_name_scene(scene_index) and self._results:
+            self._results[-1].followup_text = text
+            corr_name, corr_vessel = extract_freeform_names(text)
+            trace.get_current_span().add_event(
+                "chargen.name_followup_correction",
+                {
+                    "action": "name_followup_correction",
+                    "scene_id": scene_id,
+                    "extracted_name": corr_name or "",
+                    "extracted_vessel_name": corr_vessel or "",
+                    "severity": "info" if (corr_name or corr_vessel) else "warn",
+                },
+            )
+        elif self._results:
+            # Insert the followup hook at position 0 on the most recent result.
             self._results[-1].hooks_added.insert(
                 0,
                 NarrativeHook(

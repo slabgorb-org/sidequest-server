@@ -524,29 +524,58 @@ class AnthropicSdkClient:
                 # marker defaulting to 5m while a 1h marker covers overlapping
                 # content) — the waste pattern 60-7 eliminated. Fires per
                 # offending iter (not aggregated per turn) so the GM panel can
-                # pin which iteration leaks. severity=warn (lie-detector, not
-                # hard error — the call already succeeded; the observation is
-                # the waste).
+                # pin which iteration leaks.
+                #
+                # Story 91-6 — Gate the WARN on `cache_read > 0`. A cold start
+                # (cache_read == 0) has nothing to read back, so a dual write
+                # is the unavoidable first mint of both tiers — not the churn
+                # pathology. The genuine signal is the conjunction: the prefix
+                # IS being read back (cache_read > 0) yet the 1h tier is being
+                # re-minted anyway. Cold-start dual writes downgrade to
+                # severity=info / logger.info (not deleted — the GM panel
+                # still sees them, per the OTEL Observability Principle) and
+                # the warm pathology stays loud (severity=warn, lie-detector,
+                # not hard error — the call already succeeded; the observation
+                # is the waste).
                 if cache_write_5m > 0 and cache_write_1h > 0:
                     both_writes_fields: dict[str, Any] = {
                         "iteration": iteration,
                         "cache_write_5m_tokens": cache_write_5m,
                         "cache_write_1h_tokens": cache_write_1h,
+                        "cache_read_tokens": cache_read,
                         "model": response.model,
                     }
-                    logger.warning(
-                        "narrator.cache.both_writes_fired iter=%d 5m=%d 1h=%d model=%s",
-                        iteration,
-                        cache_write_5m,
-                        cache_write_1h,
-                        response.model,
-                    )
-                    _watcher_publish_event(
-                        "narrator.cache.both_writes_fired",
-                        both_writes_fields,
-                        component="narrator.sdk",
-                        severity="warn",
-                    )
+                    if cache_read > 0:
+                        logger.warning(
+                            "narrator.cache.both_writes_fired iter=%d 5m=%d 1h=%d "
+                            "cache_read=%d model=%s",
+                            iteration,
+                            cache_write_5m,
+                            cache_write_1h,
+                            cache_read,
+                            response.model,
+                        )
+                        _watcher_publish_event(
+                            "narrator.cache.both_writes_fired",
+                            both_writes_fields,
+                            component="narrator.sdk",
+                            severity="warn",
+                        )
+                    else:
+                        logger.info(
+                            "narrator.cache.both_writes_fired (cold-start mint, "
+                            "expected) iter=%d 5m=%d 1h=%d model=%s",
+                            iteration,
+                            cache_write_5m,
+                            cache_write_1h,
+                            response.model,
+                        )
+                        _watcher_publish_event(
+                            "narrator.cache.both_writes_fired",
+                            both_writes_fields,
+                            component="narrator.sdk",
+                            severity="info",
+                        )
 
                 # Story 61-4 — Cost-runaway fingerprint detector. Check the
                 # just-observed call against the rolling baselines (or warmup

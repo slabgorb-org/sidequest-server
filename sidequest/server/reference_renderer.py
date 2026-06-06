@@ -149,8 +149,10 @@ def render_node(
 
     Handles: dict (recursive nested <section>), list (ul for scalars, sectioned
     for dicts), scalar (str/int/float/bool/None). When ``depth`` reaches
-    ``_DEPTH_CAP`` for a non-empty container, the subtree is dumped as YAML
-    inside a ``<pre>`` block instead of recursing into runaway markup.
+    ``_DEPTH_CAP`` for a non-empty container, the subtree is SUPPRESSED (emits
+    nothing) rather than dumped as raw YAML/dict text — a player reference page
+    must never leak a config blob (ADR-135). The suppression fires the
+    unknown-field OTEL span (when ``ctx`` is present) so the GM panel sees it.
 
     ``kind`` is threaded from ``_render_file`` to namespace list-of-dict anchor
     ids. Top-level dict keys and recursively nested keys always use flat slugs;
@@ -162,8 +164,23 @@ def render_node(
     render via the generic fallback.
     """
     if depth >= _DEPTH_CAP and isinstance(node, (dict, list)) and node:
-        dumped = yaml.safe_dump(node, sort_keys=False, default_flow_style=False)
-        return f"<pre>{escape(dumped)}</pre>"
+        # A player reference page must NEVER emit a raw YAML/dict re-dump
+        # (ADR-135 — reference pages are a clean table tool, not a config
+        # dump). The live glenross bug: a `time_precision: {registers: {...}}`
+        # blob deeper than the cap landed verbatim on the lore page. Suppress
+        # the over-cap subtree instead of str()-dumping it. Loud-drop via the
+        # existing unknown-field observability so the GM panel still sees the
+        # suppression (No Silent Fallbacks).
+        if ctx is not None:
+            with reference_unknown_field_span(
+                pack=ctx.pack,
+                world=ctx.world,
+                file_stem=ctx.file_stem,
+                key_path=ctx.key_path,
+            ):
+                pass
+            _log_unknown_once(ctx.file_stem, ctx.key_path)
+        return ""
     if isinstance(node, dict):
         return _render_dict(node, depth, kind=kind, ctx=ctx) if node else "<p><em>(empty)</em></p>"
     if isinstance(node, list):

@@ -24,6 +24,7 @@ runtime-type interrogation, and behavioral mocks against the SDK boundary.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -173,6 +174,17 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
         {"type": "tool_use", "name": "emit_dispatch_package", "input": {"ok": True}},
     )()
     fake_response.content = [tool_block]
+    # Story 91-1: every SDK call is cost-accounted through
+    # ``_record_usage_telemetry`` — the fake must carry a real usage shape
+    # and model id (an auto-mocked attribute would str() into a garbage
+    # model and fail the pricing lookup loudly, by design).
+    fake_response.model = "claude-haiku-4-5-20251001"
+    fake_response.usage = SimpleNamespace(
+        input_tokens=1,
+        output_tokens=1,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
     fake_client_instance.messages.create = AsyncMock(return_value=fake_response)
 
     with patch("anthropic.AsyncAnthropic", return_value=fake_client_instance):

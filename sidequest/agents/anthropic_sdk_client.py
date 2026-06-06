@@ -211,9 +211,15 @@ class AnthropicSdkClient:
         self.cache_ttl: CacheTtl = resolved_ttl  # type: ignore[assignment]
 
         if sdk is None:
-            from anthropic import AsyncAnthropic
+            # Story 91-1: route through the single SDK construction seam.
+            # Function-level import dodges the llm_factory → this-module
+            # circular import; attribute access (not ``from … import``) keeps
+            # the lookup late-bound so the wiring test's monkeypatched fake
+            # is what this client receives. An explicit ``sdk=`` injection
+            # (the fake-SDK test fleet) never consults the seam.
+            from sidequest.agents import llm_factory
 
-            sdk = AsyncAnthropic(api_key=self._api_key)
+            sdk = llm_factory.build_async_anthropic()
         self._sdk = sdk
 
         # Story 61-followup-A — per-session_id rolling baselines for the
@@ -466,6 +472,10 @@ class AnthropicSdkClient:
                 cumulative_cost_usd += cost
                 span.set_attributes(
                     {
+                        # Story 91-1: caller tag on every llm.request span so
+                        # span-based attribution can split narrator from
+                        # dungeon-curate (and any future tool-caller) traffic.
+                        "llm.caller": caller,
                         "llm.input_tokens": input_tokens,
                         "llm.output_tokens": output_tokens,
                         "llm.cached_input_read_tokens": cache_read,
@@ -474,11 +484,18 @@ class AnthropicSdkClient:
                         "llm.cost_usd": cost,
                     }
                 )
-                # Per-iter ledger to /tmp/sidequest-server.log so cache
-                # hit/miss is visible without a WS tap (Task B3).
+                # Per-iter ledger to the server log so cache hit/miss is
+                # visible without a WS tap (Task B3). Story 91-1: the line
+                # carries ``caller`` and ``model`` so log-based cost
+                # accounting (the /sq-llm-costs Layer-1 reconciliation) can
+                # attribute every call — pre-91-1 it was caller- and
+                # model-blind.
                 logger.info(
-                    "narrator.sdk.usage iter=%d input=%d output=%d "
-                    "cache_read=%d cache_write=%d 5m=%d 1h=%d cost_usd=%.6f",
+                    "narrator.sdk.usage caller=%s model=%s iter=%d input=%d "
+                    "output=%d cache_read=%d cache_write=%d 5m=%d 1h=%d "
+                    "cost_usd=%.6f",
+                    caller,
+                    response.model,
                     iteration,
                     input_tokens,
                     output_tokens,

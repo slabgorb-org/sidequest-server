@@ -21,6 +21,19 @@ from sidequest.agents.anthropic_sdk_client import (
     AnthropicSdkClient,
 )
 from sidequest.agents.claude_client import LlmClient, LlmClientError
+
+# ENV_CLASSIFICATION_BACKEND is re-exported on purpose (explicit `as` alias):
+# operators and tests reach the classification seam through this factory
+# module, alongside ENV_BACKEND / ENV_OLLAMA_URL.
+from sidequest.agents.model_routing import (
+    ENV_CLASSIFICATION_BACKEND as ENV_CLASSIFICATION_BACKEND,
+)
+from sidequest.agents.model_routing import (
+    LOCAL_CLASSIFIER_MODEL,
+    UnknownClassificationBackend,
+    classification_backend,
+)
+from sidequest.agents.ollama_client import DEFAULT_OLLAMA_URL, OllamaClient
 from sidequest.agents.tooling_protocol import ToolingLlmClient
 from sidequest.telemetry.spans.intent_router import intent_router_cache_floor_span
 from sidequest.telemetry.spans.llm_request import llm_request_span
@@ -481,13 +494,115 @@ class _IntentRouterLlm:
         )
 
 
-def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm:
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Parse the single JSON object out of a prompt-coerced completion.
+
+    Story 92-2 production twin of the harness extractor: a missing or
+    unparseable object RAISES — the router's retry/failure taxonomy owns
+    the failure. Never silently substitute an empty package.
+    """
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        raise IntentRouterEmptyResponse(f"local classifier returned no JSON object: {text[:160]!r}")
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise IntentRouterEmptyResponse(f"local classifier JSON failed to parse: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise IntentRouterEmptyResponse(
+            f"local classifier JSON is {type(parsed).__name__}, expected object"
+        )
+    return parsed
+
+
+def build_local_classifier_client() -> OllamaClient:
+    """Build the OllamaClient serving the local classification rung (92-2).
+
+    Shared by the Intent Router adapter (CLASSIFICATION) and the dungeon
+    curate stage (SCRATCH — ``materializer.py``): base URL from
+    ``SIDEQUEST_OLLAMA_URL``, model map pinned to the identity entry for
+    :data:`LOCAL_CLASSIFIER_MODEL` (the ladder hands callers a concrete
+    model id, not a sonnet/haiku hint, so the hint resolves to itself).
+    Transport errors surface as ``OllamaClientError`` — fail loud, no
+    fallback to Anthropic.
+    """
+    base_url = os.environ.get(ENV_OLLAMA_URL, DEFAULT_OLLAMA_URL)
+    return OllamaClient(
+        base_url=base_url,
+        model_map={LOCAL_CLASSIFIER_MODEL: LOCAL_CLASSIFIER_MODEL},
+    )
+
+
+class _OllamaIntentRouterLlm:
+    """Production Ollama-backed ``IntentRouterLLM`` adapter (story 92-2).
+
+    The promised production twin of the harness's measurement-only
+    ``QwenRouterLlm`` (its docstring names this story). qwen has no native
+    forced-tool path (``OllamaClient.capabilities()`` reports
+    ``supports_tools=False``), so the tool schema is embedded in the system
+    prompt and the raw completion is parsed as a single JSON object — the
+    same prompt-coercion the 92-1 A/B gate evidence measured.
+
+    Reuses the existing ``ollama_client`` transport (Don't Reinvent — Wire
+    Up What Exists): base URL from ``SIDEQUEST_OLLAMA_URL``, model pinned to
+    :data:`LOCAL_CLASSIFIER_MODEL` (the A/B-validated id). Transport errors
+    surface as ``OllamaClientError`` — an unreachable Ollama fails the turn
+    LOUDLY; there is NO fallback to Haiku, ever (a silent fallback would
+    recreate the exact dark spend epic 92 eliminates, by design). The
+    Anthropic construction site (:func:`build_async_anthropic`) is never
+    touched on this path — no ``ANTHROPIC_API_KEY`` required.
+
+    ``session_id`` is carried for signature parity with the Haiku adapter
+    (story 91-4 keyword-only contract) but the ADR-134 cost ledger is not
+    wired: local calls bill $0, and the ceiling protects money, not compute.
+    OTEL: the underlying ``OllamaClient`` emits ``agent.backend=ollama``
+    spans on every call — story 92-4's playtest verification consumes them.
+    """
+
+    def __init__(self, *, session_id: str | None) -> None:
+        self._session_id = session_id
+        self._client = build_local_classifier_client()
+
+    async def emit_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool_name: str,
+        tool_description: str,
+        tool_schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        coercion = (
+            f"\n\nYou cannot call tools. Instead, respond with ONLY a single "
+            f"JSON object that is a valid input for the `{tool_name}` tool "
+            f"({tool_description}). The JSON Schema is:\n"
+            f"{json.dumps(tool_schema)}\n"
+            f"No prose, no markdown fences — the JSON object only."
+        )
+        resp = await self._client.send_stateless(
+            system_prompt=system + coercion,
+            user_message=user,
+            model=LOCAL_CLASSIFIER_MODEL,
+        )
+        return _extract_json_object(resp.text)
+
+
+def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm | _OllamaIntentRouterLlm:
     """Build the Haiku-tier LLM for the Intent Router producer (ADR-113).
 
     Story 91-4: ``session_id`` is required keyword-only — supply the
     canonical session id (the room slug) or opt out explicitly with
     ``None``. Omission is a ``TypeError``: the router is the highest-
     frequency Haiku caller and must never silently run uncovered.
+
+    Story 92-2 local rung: when ``SIDEQUEST_CLASSIFICATION_BACKEND=ollama``
+    (explicit config — the default is unchanged Haiku), returns the
+    Ollama-backed :class:`_OllamaIntentRouterLlm` instead. An unknown env
+    value raises :class:`UnknownBackend` naming the env var (No Silent
+    Fallbacks — a typo must never silently mean Haiku). The 91-3 cache-floor
+    guard below is HAIKU-ONLY: it protects an Anthropic cache, and the local
+    path has none (this is also what frees 82-10's prompt slimming).
 
     Story 91-3 fail-loud floor guard: validates the combined tools+system
     cacheable prefix against Haiku 4.5's
@@ -500,6 +615,14 @@ def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm:
     Observability Principle). The guard runs BEFORE the adapter is built so a
     sub-floor prefix fails loud regardless of ``session_id``.
     """
+    try:
+        backend = classification_backend()
+    except UnknownClassificationBackend as exc:
+        # Re-raise in the factory's typed error family so config failures
+        # at this boundary are uniformly LlmClientError (same as ENV_BACKEND).
+        raise UnknownBackend(str(exc)) from exc
+    if backend == "ollama":
+        return _OllamaIntentRouterLlm(session_id=session_id)
     prefix_chars, estimated_tokens = _estimate_intent_router_prefix_tokens()
     passed = estimated_tokens >= HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS
     with intent_router_cache_floor_span(

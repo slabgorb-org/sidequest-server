@@ -1205,6 +1205,26 @@ async def _stage_curate(
     started = time.monotonic()
 
     async def _one_attempt() -> dict[str, Any]:
+        # Story 92-2: SCRATCH consults the classification seam. With
+        # SIDEQUEST_CLASSIFICATION_BACKEND=ollama the curate one-shot routes
+        # to the local rung — the call is a plain completion (tools=[]), so
+        # ``send_stateless`` serves it. ``OllamaClientError`` is an
+        # ``LlmClientError``, so a transport failure flows the SAME loud
+        # retry→degrade ladder below — never a silent fallback to Anthropic
+        # (the injected ``claude_client`` is untouched on this path). The
+        # seam is consulted per attempt and fails loud on an unknown value
+        # (``UnknownClassificationBackend`` is a ``ValueError``, outside the
+        # ladder's catch — a config typo aborts, it does not degrade).
+        from sidequest.agents.llm_factory import build_local_classifier_client
+        from sidequest.agents.model_routing import classification_backend
+
+        if classification_backend() == "ollama":
+            resp = await build_local_classifier_client().send_stateless(
+                system_prompt=system_blocks[0].text,
+                user_message=prompt,
+                model=resolve_model(CallType.SCRATCH),
+            )
+            return _parse_curation_verdict(resp.text)
         result = await claude_client.complete_with_tools(
             system_blocks=system_blocks,
             messages=[Message(role="user", content=prompt)],

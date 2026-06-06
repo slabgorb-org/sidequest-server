@@ -40,6 +40,7 @@ from sidequest.agents.intent_router import (
     IntentRouterLLM,
     _serialize_state_summary,
 )
+from sidequest.agents.model_routing import LOCAL_CLASSIFIER_MODEL
 from sidequest.agents.ollama_client import OllamaClientError
 from sidequest.corpus.router_corpus import (
     ROUTER_CORPUS_SCHEMA_VERSION,
@@ -50,11 +51,12 @@ from sidequest.protocol.dispatch import DispatchPackage, SubsystemDispatch
 
 logger = logging.getLogger(__name__)
 
-# Model hints handed to send_stateless. The harness compares whatever each
-# backend's factory/config resolves these to; the strings themselves are not
-# load-bearing for the comparison.
+# Model hints handed to send_stateless. The Claude hint is not load-bearing;
+# OLLAMA_MODEL is — story 92-2's production rung serves exactly the model this
+# harness evaluated, so the id is imported from the ladder (single source of
+# truth: ``model_routing.LOCAL_CLASSIFIER_MODEL``) rather than re-spelled here.
 CLAUDE_MODEL = "sonnet"
-OLLAMA_MODEL = "qwen2.5:7b-instruct"
+OLLAMA_MODEL = LOCAL_CLASSIFIER_MODEL
 
 
 def _split_narration_and_patch(text: str) -> tuple[str, str | None]:

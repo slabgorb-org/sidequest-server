@@ -362,9 +362,7 @@ def test_cache_floor_guard_not_applied_to_local_path(
     from sidequest.agents.llm_factory import build_intent_router_llm
 
     monkeypatch.setattr(ir, "_SYSTEM_PROMPT", "tiny system prompt")
-    monkeypatch.setattr(
-        ir, "_dispatch_tool_schema", lambda: {"type": "object", "properties": {}}
-    )
+    monkeypatch.setattr(ir, "_dispatch_tool_schema", lambda: {"type": "object", "properties": {}})
     _enable_local_rung(monkeypatch)
     adapter = build_intent_router_llm(session_id=None)  # must not raise
     assert adapter is not None
@@ -399,13 +397,14 @@ async def test_emit_tool_raises_on_prose_only_response(
     package (the router's retry/failure taxonomy owns the failure, same
     doctrine as the harness's ``_extract_json_object``)."""
     import sidequest.agents.ollama_client as ollama_client
+    from sidequest.agents.claude_client import LlmClientError
     from sidequest.agents.llm_factory import build_intent_router_llm
 
     monkeypatch.setattr(ollama_client, "urlopen", _fake_urlopen_prose_only)
     _enable_local_rung(monkeypatch)
     adapter = build_intent_router_llm(session_id=None)
 
-    with pytest.raises(Exception):
+    with pytest.raises(LlmClientError):
         await adapter.emit_tool(**_TOOL_KWARGS)
 
 
@@ -420,8 +419,8 @@ async def test_unreachable_ollama_raises_ollama_client_error(
     """Connection refused surfaces as the typed Ollama transport error —
     the turn fails loudly and visibly, exactly per the epic doctrine."""
     import sidequest.agents.ollama_client as ollama_client
-    from sidequest.agents.ollama_client import OllamaClientError
     from sidequest.agents.llm_factory import build_intent_router_llm
+    from sidequest.agents.ollama_client import OllamaClientError
 
     monkeypatch.setattr(ollama_client, "urlopen", _fake_urlopen_unreachable)
     _enable_local_rung(monkeypatch)
@@ -439,8 +438,8 @@ async def test_unreachable_ollama_never_falls_back_to_haiku(
     the failing call. A silent fallback to Haiku would recreate the exact
     dark spend this epic eliminates, by design."""
     import sidequest.agents.ollama_client as ollama_client
-    from sidequest.agents.ollama_client import OllamaClientError
     from sidequest.agents.llm_factory import build_intent_router_llm
+    from sidequest.agents.ollama_client import OllamaClientError
 
     calls = _install_anthropic_sentinel(monkeypatch)
     monkeypatch.setattr(ollama_client, "urlopen", _fake_urlopen_unreachable)
@@ -478,9 +477,7 @@ async def test_emit_tool_emits_backend_ollama_span(
         dict(span.attributes or {}).get("agent.backend")
         for span in otel_capture.get_finished_spans()
     ]
-    assert "ollama" in backends, (
-        f"no span carried agent.backend=ollama; saw backends={backends!r}"
-    )
+    assert "ollama" in backends, f"no span carried agent.backend=ollama; saw backends={backends!r}"
 
 
 # ---------------------------------------------------------------------------

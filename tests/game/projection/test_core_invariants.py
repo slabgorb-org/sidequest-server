@@ -153,3 +153,68 @@ def test_thinking_is_player_excluded_never_routed_to_players() -> None:
     # Pin the OTEL source label the GM panel reads — a typo here would
     # silently mislabel the firewall decision (CLAUDE.md OTEL mandate).
     assert outcome.source == "invariant:player_excluded_kind"
+
+
+# ---------------------------------------------------------------------------
+# 1c — NARRATION explicit visible_to list (pingpong 2026-06-05 [BAR-1]:
+# solo cold-open seed leaked second-person prose to an MP joiner).
+# ---------------------------------------------------------------------------
+
+
+def _narration_with_visible_to(visible_to: object) -> MessageEnvelope:
+    payload = json.dumps(
+        {
+            "text": "The wind is thin and hard at this height.",
+            "_visibility": {
+                "visible_to": visible_to,
+                "fidelity": {},
+                "anchor_pc": "Groucho",
+                "pov_strategy": "private",
+            },
+        }
+    )
+    return MessageEnvelope(kind="NARRATION", payload_json=payload, origin_seq=9)
+
+
+def test_narration_visible_to_list_excludes_non_member_terminally() -> None:
+    """A NARRATION carrying an explicit player_id LIST is structurally
+    withheld from non-members — pack projection.yaml cannot weaken it by
+    omission (four packs ship none)."""
+    stage = CoreInvariantStage()
+    env = _narration_with_visible_to(["alice"])
+    out_bob = stage.evaluate(envelope=env, view=_view(), player_id="bob")
+    assert out_bob.terminal is True
+    assert out_bob.decision is not None
+    assert out_bob.decision.include is False
+    assert out_bob.decision.payload_json == ""
+    assert out_bob.source == "invariant:narration_visibility_list"
+
+
+def test_narration_visible_to_list_member_falls_through_to_genre_rules() -> None:
+    """ASYMMETRY is load-bearing: a member is NOT terminally included —
+    the stage yields so GenreRuleStage redact/fidelity rules still run."""
+    stage = CoreInvariantStage()
+    env = _narration_with_visible_to(["alice"])
+    out_alice = stage.evaluate(envelope=env, view=_view(), player_id="alice")
+    assert out_alice.terminal is False
+    assert out_alice.decision is None
+
+
+def test_narration_visible_to_all_sentinel_falls_through() -> None:
+    """The classifier's standing ``"all"`` sentinel keeps today's
+    behavior — no structural decision, broadcast prose."""
+    stage = CoreInvariantStage()
+    env = _narration_with_visible_to("all")
+    outcome = stage.evaluate(envelope=env, view=_view(), player_id="bob")
+    assert outcome.terminal is False
+    assert outcome.decision is None
+
+
+def test_narration_without_sidecar_falls_through() -> None:
+    """NARRATION is NOT fail-closed (unlike SECRET_NOTE): no sidecar is
+    ordinary broadcast prose."""
+    stage = CoreInvariantStage()
+    env = MessageEnvelope(kind="NARRATION", payload_json='{"text":"hi"}', origin_seq=10)
+    outcome = stage.evaluate(envelope=env, view=_view(), player_id="bob")
+    assert outcome.terminal is False
+    assert outcome.decision is None

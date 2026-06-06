@@ -753,3 +753,105 @@ async def test_render_queued_frame_not_persisted_as_narration(
         f"render_id {poison_render_id!r} must never be persisted to the events "
         "table — render cues are not event-sourced (fire-and-forget)."
     )
+
+
+@pytest.mark.asyncio
+async def test_solo_cold_open_seed_journaled_author_anchored_and_joiner_excluded(
+    handler: WebSocketSessionHandler,  # noqa: F811
+) -> None:
+    """Pingpong 2026-06-05 [BAR-1] — end-to-end wiring through the REAL
+    ``_run_opening_turn_narration`` (no fake): the SOLO-fired cold-open
+    seed (the authored second-person ``first_turn_invitation``) must be
+    journaled WITH an explicit ``visible_to=[author]`` sidecar, and a
+    later MP joiner must be excluded from it — both by the pack's
+    VisibilityTagRule AND structurally (empty genre rules) so the four
+    packs shipping no projection.yaml stay firewalled. Live repro:
+    barsoom MP slug ``2026-06-05-barsoom-mp`` seq=3 — Harpo's replay
+    handed him Groucho's "you account for yourself" prose raw.
+    """
+    from sidequest.game.projection.composed import ComposedFilter
+    from sidequest.game.projection.envelope import MessageEnvelope
+    from sidequest.server import views
+
+    # Stay SOLO; drive the REAL confirmation flow (real cold-open emit,
+    # canned narrator). caverns_sunden resolves no canned opening, so
+    # inject the seed at the populate seam — everything downstream
+    # (_run_opening_turn_narration -> cold-open _emit_event) is production
+    # code, unfaked.
+    await _connect(handler)
+    await _walk_to_confirmation(handler)
+    sd = handler._session_data  # type: ignore[attr-defined]
+    assert sd is not None
+
+    original_populate = chargen_mixin._populate_opening_directive_on_chargen_complete
+
+    def _seeding_populate(*, session_data, **kw):
+        result = original_populate(session_data=session_data, **kw)
+        session_data.opening_seed = SEED_TEXT
+        return result
+
+    chargen_mixin._populate_opening_directive_on_chargen_complete = _seeding_populate
+    try:
+        out = await handler.handle_message(
+            CharacterCreationMessage(  # pyright: ignore[reportArgumentType]
+                payload=CharacterCreationPayload(phase="confirmation"),
+                player_id="pid",
+            )
+        )
+    finally:
+        chargen_mixin._populate_opening_directive_on_chargen_complete = original_populate
+    narrations = [m for m in out if isinstance(m, NarrationMessage)]
+    assert len(narrations) >= 2, (
+        f"expected cold-open + narrator narrations, got {len(narrations)} — "
+        "did caverns_sunden lose its opening hook?"
+    )
+
+    # The journaled cold-open row must carry the author-anchored sidecar.
+    event_log = handler._event_log  # type: ignore[attr-defined]
+    assert event_log is not None
+    import json as _json
+
+    cold_open_row = None
+    for row in event_log.read_since(since_seq=0):
+        if row.kind != "NARRATION":
+            continue
+        payload = _json.loads(row.payload_json)
+        viz = payload.get("_visibility")
+        if isinstance(viz, dict) and isinstance(viz.get("visible_to"), list):
+            cold_open_row = row
+            break
+    assert cold_open_row is not None, (
+        "no journaled NARRATION carries a list-valued _visibility.visible_to — "
+        "the solo cold-open seed was journaled unanchored (the BAR-1 leak)"
+    )
+    viz = _json.loads(cold_open_row.payload_json)["_visibility"]
+    assert viz["visible_to"] == [sd.player_id]
+    assert viz["pov_strategy"] == "private"
+
+    # Joiner exclusion — (a) via the handler's REAL pack-rule filter…
+    envelope = MessageEnvelope(
+        kind=cold_open_row.kind,
+        payload_json=cold_open_row.payload_json,
+        origin_seq=cold_open_row.seq,
+    )
+    view = views.build_game_state_view(handler)
+    real_filter = handler._projection_filter  # type: ignore[attr-defined]
+    assert real_filter is not None
+    joiner_decision = real_filter.project(
+        envelope=envelope, view=view, player_id="p_joiner_later"
+    )
+    assert joiner_decision.include is False
+
+    # …and (b) STRUCTURALLY with ZERO genre rules (packs without
+    # projection.yaml must still be firewalled by the 1c invariant).
+    bare_filter = ComposedFilter(rules=load_rules_from_yaml_str("rules: []"))
+    structural_decision = bare_filter.project(
+        envelope=envelope, view=view, player_id="p_joiner_later"
+    )
+    assert structural_decision.include is False
+
+    # The author keeps their own seed on reconnect.
+    author_decision = real_filter.project(
+        envelope=envelope, view=view, player_id=sd.player_id
+    )
+    assert author_decision.include is True

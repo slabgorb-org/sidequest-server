@@ -40,6 +40,7 @@ from sidequest.agents.intent_router import (
     IntentRouterLLM,
     _serialize_state_summary,
 )
+from sidequest.agents.model_routing import LOCAL_CLASSIFIER_MODEL
 from sidequest.agents.ollama_client import OllamaClientError
 from sidequest.corpus.router_corpus import (
     ROUTER_CORPUS_SCHEMA_VERSION,
@@ -50,11 +51,12 @@ from sidequest.protocol.dispatch import DispatchPackage, SubsystemDispatch
 
 logger = logging.getLogger(__name__)
 
-# Model hints handed to send_stateless. The harness compares whatever each
-# backend's factory/config resolves these to; the strings themselves are not
-# load-bearing for the comparison.
+# Model hints handed to send_stateless. The Claude hint is not load-bearing;
+# OLLAMA_MODEL is — story 92-2's production rung serves exactly the model this
+# harness evaluated, so the id is imported from the ladder (single source of
+# truth: ``model_routing.LOCAL_CLASSIFIER_MODEL``) rather than re-spelled here.
 CLAUDE_MODEL = "sonnet"
-OLLAMA_MODEL = "qwen2.5:7b-instruct"
+OLLAMA_MODEL = LOCAL_CLASSIFIER_MODEL
 
 
 def _split_narration_and_patch(text: str) -> tuple[str, str | None]:
@@ -712,9 +714,16 @@ class QwenRouterLlm:
             f"{json.dumps(tool_schema)}\n"
             f"No prose, no markdown fences — the JSON object only."
         )
-        resp = await self._client.send_stateless(
+        # Story 92-2 review rework: mirror the PRODUCTION adapter
+        # (``_OllamaIntentRouterLlm``) — role-separated ``send_with_session``,
+        # NOT the flattening ``send_stateless``. The A/B flip evidence (92-1
+        # corpus, 92-4 playtest) must measure the shape the production rung
+        # actually ships, or the agreement/latency numbers describe a prompt
+        # form we never run. ``session_id=None`` keeps each capture stateless.
+        resp = await self._client.send_with_session(
+            prompt=user,
             system_prompt=system + coercion,
-            user_message=user,
+            session_id=None,
             model=self._model,
         )
         return _extract_json_object(resp.text)

@@ -179,6 +179,17 @@ class World(BaseModel):
     Genre/world boundary correction: the seeds a world plants are CAST/CATALOG,
     not a genre mechanic. Empty list when the world authors no deck — no silent
     fallback to a shared default. Consumers read this world-first."""
+    wwn_spell_catalog: WwnSpellCatalog | None = None
+    """World-tier WWN spell CATALOG (``worlds/<slug>/spells_wwn.yaml``), epic 94.
+    Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"): a
+    world's spell catalog is the CAST/CATALOG of magic a world ships, NOT a genre
+    mechanic — the genre tier is the rulebook only (resolution rules, the WWN
+    magic block on ``rules.wwn``). ``None`` when the world ships no catalog (a
+    valid choice for a pack that keeps a shared catalog at the genre tier — both
+    elemental_harmony worlds share one). Consumers read this world-first via
+    ``resolve_wwn_spell_catalog``; the genre-tier ``GenrePack.wwn_spell_catalog``
+    is the shared default for packs that have not migrated the catalog down (no
+    silent fallback to a fabricated catalog)."""
     magic_register: str = ""
     items: WorldItemsCatalog | None = None
     scenarios: dict[str, ScenarioPack] = Field(default_factory=dict)

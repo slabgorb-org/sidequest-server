@@ -271,3 +271,64 @@ def test_wwn_caster_class_with_unknown_starting_prepared_id_fails_loud(tmp_path:
 
     with pytest.raises(GenreLoadError, match="no_such_spell_id"):
         load_genre_pack(pack_dir)
+
+
+# --- Epic 94: world-tier spell catalog load + aggregation -------------------
+
+
+def _world_dirs(pack_dir: Path) -> list[Path]:
+    worlds_root = pack_dir / "worlds"
+    return [p for p in worlds_root.iterdir() if p.is_dir()] if worlds_root.is_dir() else []
+
+
+@pytest.mark.skipif(not _EH_AVAILABLE, reason="sidequest-content not on disk")
+def test_world_tier_spell_catalog_loads_and_aggregates_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Epic 94: when the genre tier ships NO spells_wwn.yaml but a world does, the
+    world catalog loads onto ``World.wwn_spell_catalog``, aggregates up into
+    ``GenrePack.wwn_spell_catalog``, and the world-tier load emits a
+    ``world_spell_catalog`` OTEL span (the GM-panel lie-detector)."""
+    captured: list[dict] = []
+
+    def _capture(event_type, fields, *, component="sidequest-server", severity="info"):
+        captured.append({"event_type": event_type, "fields": fields, "component": component})
+
+    from sidequest.telemetry import watcher_hub as hub_mod
+
+    monkeypatch.setattr(hub_mod, "publish_event", _capture)
+
+    pack_dir = _clone_pack(_EH_PACK_DIR, tmp_path / "eh_world_catalog")
+    # Remove the genre-tier catalog + classes so the world tier is the only source.
+    (pack_dir / "spells_wwn.yaml").unlink(missing_ok=True)
+    (pack_dir / "classes.yaml").unlink(missing_ok=True)
+    _strip_class_filter_from_cast_spell(pack_dir)
+    # Drop the catalog into the first world dir only.
+    worlds = _world_dirs(pack_dir)
+    assert worlds, "cloned elemental_harmony has no worlds"
+    target_world = worlds[0]
+    (target_world / "spells_wwn.yaml").write_text(_MINIMAL_SPELL_CATALOG, encoding="utf-8")
+
+    pack = load_genre_pack(pack_dir)
+
+    # World model carries the world-tier catalog.
+    world = pack.worlds[target_world.name]
+    assert world.wwn_spell_catalog is not None
+    assert {s.id for s in world.wwn_spell_catalog.spells} >= {"cinder_lance", "river_step"}
+
+    # Genre-tier aggregate is the union of world catalogs (genre shipped none).
+    assert pack.wwn_spell_catalog is not None
+    assert {s.id for s in pack.wwn_spell_catalog.spells} >= {"cinder_lance", "river_step"}
+
+    # World-tier load fired its OTEL span for the bound world.
+    spans = [
+        e
+        for e in captured
+        if e["event_type"] == "state_transition"
+        and e["fields"].get("field") == "world_spell_catalog"
+        and e["fields"].get("op") == "loaded"
+        and e["fields"].get("world_slug") == target_world.name
+    ]
+    assert spans, "no world_spell_catalog load span emitted for the world tier"
+    assert spans[-1]["component"] == "genre"
+    assert spans[-1]["fields"]["spell_count"] >= 3

@@ -89,6 +89,13 @@ def _make_wwn_pack(*, with_catalog: bool = True):
         confrontations=[cdef],
         wwn=wwn_cfg,
     )
+    # Epic 94 world-first spell-catalog resolution: the cast pipeline resolves the
+    # catalog via resolve_wwn_spell_catalog(pack, world_slug). This fixture
+    # exercises the genre-tier path (catalog on pack.wwn_spell_catalog), so the
+    # bound world must ship NO catalog — give the mock an empty worlds map so the
+    # resolver falls through to the genre tier rather than auto-vivifying a
+    # MagicMock world catalog.
+    pack.worlds = {}
     if with_catalog:
         pack.wwn_spell_catalog = WwnSpellCatalog(
             spells=[

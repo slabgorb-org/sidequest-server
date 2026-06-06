@@ -18,7 +18,7 @@ mirroring the CWN adjust_system_strain pattern. The tests verify:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -84,6 +84,11 @@ class _FakePack:
 
     rules: _FakeRules = None  # type: ignore[assignment]
     wwn_spell_catalog: WwnSpellCatalog | None = None
+    # Epic 94 world-first catalog resolution: resolve_wwn_spell_catalog reads
+    # pack.worlds first. This fixture exercises the genre-tier path, so the
+    # bound world ships no catalog → empty worlds map falls through to the
+    # genre-tier wwn_spell_catalog above.
+    worlds: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.rules is None:

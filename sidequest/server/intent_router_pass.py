@@ -38,16 +38,18 @@ from sidequest.agents.dispatch_precondition_gate import (
     run_dispatch_precondition_gate,
     run_unregistered_subsystem_gate,
 )
-from sidequest.agents.intent_router import IntentRouter
+from sidequest.agents.intent_router import IntentRouter, _serialize_state_summary
 from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch_bank
 from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
+from sidequest.server.snapshot_slimming import apply_snapshot_slimming
 from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.spans.intent_router import (
     intent_router_call_budget_breach_span,
     intent_router_confrontation_vocabulary_span,
+    intent_router_state_summary_slimmed_span,
     intent_router_witnessed_act_classified_span,
     intent_router_witnessed_act_vocabulary_span,
 )
@@ -146,18 +148,39 @@ def _build_state_summary(
 ) -> dict[str, Any]:
     """Build the slimmed JSON-able state summary the router consumes.
 
-    Mirrors the Valley-zone slimming applied to the narrator prompt
-    (ADR-110 Phase A): ``model_dump`` with ``exclude_defaults`` and
+    ADR-110 Phase A: ``model_dump`` with ``exclude_defaults`` and
     ``exclude_none`` drops empty/zero pydantic defaults so the
-    router's Haiku call doesn't pay for noise.
+    router's classification call doesn't pay for noise.
 
-    Story 59-4 keeps this local to avoid coupling the router pass to
-    the much heavier ``session_helpers._build_turn_context`` (which
-    does sealed-letter handshakes, party-peer assembly, notorious-party
-    gating, etc. — orthogonal concerns the router does not care
-    about). If the router's needs grow in 59-5+ (richer state for
-    magic_working / scenario_clue dispatches), revisit centralizing
-    the slimmer.
+    Story 82-10 / ADR-110 amendment ("extract-and-reuse, not a second
+    slimmer"): the dump now also gets the shared
+    ``apply_snapshot_slimming`` cut — Phase B field-pruning drop +
+    Phase C projections (npcs → in-scene only, room_states → current
+    room, known_facts tail-K, clues cap) — the same audited cut the
+    narrator's ``_build_turn_context`` applies. The 2026-06-06 router
+    corpus (295 real rows) measured the unslimmed summary at p50 34.9KB
+    / p95 54.3KB with ``npcs`` up to 82% of the payload; the router only
+    *picks dispatch handlers*, a strictly weaker need than the
+    narrator's anti-confabulation contract, so every narrator-safe drop
+    is router-safe (ADR-110 amendment §"Why this is safe for the
+    router"). Actor location resolves in party-consensus mode
+    (``party_location()`` with no perspective) — on a split party it
+    returns ``None`` and the room/NPC projections pass through, loud,
+    per the gaslighting doctrine.
+
+    Router-specific extra drop (82-10, corpus-measured): ``world_history``
+    — full chapter prose, 15KB median where populated, zero dispatch
+    value. The narrator keeps it (anti-confabulation anchor for citing
+    campaign history); the router never reads it. This is one targeted
+    negative drop, NOT the deferred positive-allowlist follow-up the
+    amendment scopes out.
+
+    Story 59-4 kept this builder local to avoid coupling the router
+    pass to the much heavier ``session_helpers._build_turn_context``
+    (sealed-letter handshakes, party-peer assembly, notorious-party
+    gating — orthogonal concerns the router does not care about); the
+    82-10 extraction honors that by sharing only the consumer-agnostic
+    cut via ``sidequest.server.snapshot_slimming``.
 
     Story 59-10: when ``pack`` is provided, appends a compact
     ``confrontation_types`` projection so the Haiku router knows the
@@ -185,6 +208,26 @@ def _build_state_summary(
         exclude_defaults=True,
         exclude_none=True,
     )
+    bytes_before = len(_serialize_state_summary(summary).encode("utf-8"))
+
+    # Shared ADR-110 Phase B + C cut (Story 82-10). Consensus-mode actor
+    # location: with no ``perspective`` the call returns the party's agreed
+    # location, or ``None`` on a split party / pre-chargen — in which case
+    # the room/NPC projections pass through (bigger prompt, never a
+    # gaslit-empty one) and the span below records projection_skipped=True.
+    current_room_id = snapshot.party_location()
+    if not current_room_id:
+        logger.warning(
+            "intent_router.state_summary_slimmed projection_skipped "
+            "reason=actor_location_unresolved interaction=%d",
+            snapshot.turn_manager.interaction,
+        )
+    counts = apply_snapshot_slimming(snapshot, summary, current_room_id=current_room_id)
+
+    # Router-specific drop (82-10, corpus-measured — see docstring): full
+    # chapter prose with zero dispatch-selection value. Narrator payload
+    # unaffected (its builder never pops this field).
+    summary.pop("world_history", None)
 
     if pack is not None:
         confrontation_defs = pack.rules.confrontations if pack.rules else []
@@ -241,6 +284,19 @@ def _build_state_summary(
             genre_slug=snapshot.genre_slug or "",
         ):
             pass
+
+    # 82-10 before/after evidence — fires once per pass, AFTER the
+    # router-specific additions so bytes_after is what actually ships to
+    # the model (the ADR-110 amendment's mandated GM-panel contract).
+    bytes_after = len(_serialize_state_summary(summary).encode("utf-8"))
+    with intent_router_state_summary_slimmed_span(
+        bytes_before=bytes_before,
+        bytes_after=bytes_after,
+        npcs_dropped=counts["npcs_dropped"],
+        room_states_dropped=counts["room_states_dropped"],
+        projection_skipped=not current_room_id,
+    ):
+        pass
 
     return summary
 

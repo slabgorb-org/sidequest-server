@@ -532,3 +532,53 @@ def intent_router_lethality_arbitrate_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+SPAN_INTENT_ROUTER_STATE_SUMMARY_SLIMMED = "intent_router.state_summary_slimmed"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_STATE_SUMMARY_SLIMMED] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.state_summary_slimmed",
+        "bytes_before": (span.attributes or {}).get("bytes_before", 0),
+        "bytes_after": (span.attributes or {}).get("bytes_after", 0),
+        "npcs_dropped": (span.attributes or {}).get("npcs_dropped", 0),
+        "room_states_dropped": (span.attributes or {}).get("room_states_dropped", 0),
+        "projection_skipped": (span.attributes or {}).get("projection_skipped", False),
+    },
+)
+
+
+@contextmanager
+def intent_router_state_summary_slimmed_span(
+    *,
+    bytes_before: int,
+    bytes_after: int,
+    npcs_dropped: int,
+    room_states_dropped: int,
+    projection_skipped: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """ADR-110 amendment / Story 82-10 — the router's state_summary got the
+    shared Phase B + C slimming cut. ``bytes_before``/``bytes_after`` is the
+    GM-panel before/after evidence the amendment mandates ("the slimming
+    story must show the before/after on state_summary_bytes"). A pass where
+    ``bytes_after`` tracks ``bytes_before`` (no cut) with
+    ``projection_skipped=True`` means actor location was unresolvable
+    (party split / pre-chargen) and the room/NPC projections passed through
+    — degraded, loud, never silent.
+    """
+    with Span.open(
+        SPAN_INTENT_ROUTER_STATE_SUMMARY_SLIMMED,
+        {
+            "bytes_before": bytes_before,
+            "bytes_after": bytes_after,
+            "npcs_dropped": npcs_dropped,
+            "room_states_dropped": room_states_dropped,
+            "projection_skipped": projection_skipped,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span

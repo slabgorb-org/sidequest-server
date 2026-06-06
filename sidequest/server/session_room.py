@@ -270,6 +270,22 @@ class SessionRoom:
             self._snapshot = snapshot
             self._store = store
             self._session = Session(snapshot, orbital_content=orbital_content, ruleset=ruleset)
+            # Story 90-2: instantiate world-scope magic_state at bind time so
+            # the narrator has a valid MagicState to validate against from the
+            # first turn — even before any character commits. Idempotent and a
+            # clean no-op for non-magic worlds. ``world_dir`` is
+            # ``<pack>/worlds/<world_slug>``, so the pack source dir and world
+            # slug derive directly from it. Local import avoids an import cycle
+            # (session_room is imported very early; magic_init pulls in genre +
+            # magic modules).
+            if world_dir is not None:
+                from sidequest.server.magic_init import init_world_magic_state
+
+                init_world_magic_state(
+                    snapshot=snapshot,
+                    genre_pack_source_dir=world_dir.parent.parent,
+                    world_slug=world_dir.name,
+                )
 
     @property
     def snapshot(self) -> GameSnapshot | None:

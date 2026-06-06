@@ -95,6 +95,179 @@ def _load_class_def(genre_pack_source_dir: Path | None, character_class: str) ->
     return None
 
 
+def _load_world_confrontations(
+    state: MagicState,
+    *,
+    genre_pack_source_dir: Path,
+    world_slug: str,
+) -> None:
+    """Load the world's named magic confrontations into ``state``.
+
+    The file is optional — worlds without ``confrontations.yaml`` keep an
+    empty list, so the auto-fire evaluator is a no-op for them. When the
+    file exists but fails to load, this follows the same graceful-degrade
+    pattern as the magic.yaml LoaderError catch: log at ERROR + emit a
+    watcher event, then proceed with ``state.confrontations = []``. The
+    watcher event surfaces the degradation to the GM panel so it is not
+    invisible.
+
+    Shared by ``init_magic_state_for_session`` (first-commit branch) and
+    ``init_world_magic_state`` (world-bind) so the two entry points load
+    confrontations identically.
+    """
+    confrontations_yaml = genre_pack_source_dir / "worlds" / world_slug / "confrontations.yaml"
+    if not confrontations_yaml.exists():
+        return
+    try:
+        state.confrontations = load_confrontations(confrontations_yaml)
+    except ConfrontationLoaderError as conf_exc:
+        # Explicit reset — defends against any future code path that
+        # pre-populates the field on ``MagicState.from_config``.
+        state.confrontations = []
+        logger.error(
+            "magic.confrontations_init_failed world=%s yaml=%s error=%s",
+            world_slug,
+            confrontations_yaml,
+            conf_exc,
+        )
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "magic_state",
+                "op": "confrontations_load_failed",
+                "world_slug": world_slug,
+                "yaml": str(confrontations_yaml),
+                "error": str(conf_exc),
+            },
+            component="magic",
+            severity="error",
+        )
+
+
+def init_world_magic_state(
+    *,
+    snapshot: GameSnapshot,
+    genre_pack_source_dir: Path | None,
+    world_slug: str,
+) -> bool:
+    """Instantiate world-scope ``snapshot.magic_state`` at session-bind.
+
+    Story 90-2: ``init_magic_state_for_session`` only ran at chargen
+    confirmation and resume-backfill — never at world-bind. So a session
+    that connected before any character committed (and any narrator cast
+    path firing in that window) saw ``snapshot.magic_state is None`` and
+    silently gated. This is the missing wire path: at world-bind, build the
+    world's ``MagicState`` from its magic.yaml pair with **world-scope bars
+    only** (no character ledger — chargen hasn't happened yet), so the
+    narrator has a valid state to validate against from the first turn.
+
+    Chargen confirmation then REUSES this state via
+    ``init_magic_state_for_session``'s idempotent reuse branch (it sees
+    ``snapshot.magic_state`` already populated and only calls
+    ``add_character``).
+
+    Returns True iff a fresh world-scope state was loaded and assigned.
+    Returns False (no-op) when:
+      - ``snapshot.magic_state`` is already populated (idempotent re-bind —
+        never clobber a state a peer/chargen already committed against);
+      - ``genre_pack_source_dir`` is None (pack from a non-disk source);
+      - the genre or world ``magic.yaml`` is absent (non-magic world);
+      - the loader raised LoaderError (logged at ERROR; snapshot untouched).
+
+    Emits a ``magic.world_bound`` watcher event on success so the GM panel
+    can confirm the magic subsystem engaged at bind time (OTEL Observability
+    Principle), and ``magic.init_skipped`` / ``magic.init_failed`` on the
+    no-op / degrade paths so non-engagement is justified, never silent.
+    """
+    # Idempotent: world-bind may re-enter (room re-bind defense). Never
+    # rebuild — a fresh state would drop any character bars / debits a peer
+    # already committed against the canonical snapshot.
+    if snapshot.magic_state is not None:
+        return False
+
+    if genre_pack_source_dir is None:
+        _watcher_publish(
+            "magic.init_skipped",
+            {"world_slug": world_slug, "reason": "no_genre_pack_source_dir"},
+            component="magic",
+            severity="info",
+        )
+        return False
+
+    genre_magic = genre_pack_source_dir / "magic.yaml"
+    world_magic = genre_pack_source_dir / "worlds" / world_slug / "magic.yaml"
+
+    if not genre_magic.exists() or not world_magic.exists():
+        # No magic config for this world — expected, common. Surface to the
+        # GM panel so "subsystem invisible" never reads as "subsystem broken".
+        _watcher_publish(
+            "magic.init_skipped",
+            {
+                "world_slug": world_slug,
+                "reason": "no_magic_yaml",
+                "genre_magic_exists": genre_magic.exists(),
+                "world_magic_exists": world_magic.exists(),
+            },
+            component="magic",
+            severity="info",
+        )
+        return False
+
+    try:
+        config = load_world_magic(genre_yaml=genre_magic, world_yaml=world_magic)
+    except LoaderError as exc:
+        # Authoring bug — log loud per CLAUDE.md, don't crash session-bind.
+        logger.error(
+            "magic.init_failed world=%s genre_yaml=%s world_yaml=%s error=%s",
+            world_slug,
+            genre_magic,
+            world_magic,
+            exc,
+        )
+        _watcher_publish(
+            "magic.init_failed",
+            {
+                "world_slug": world_slug,
+                "genre_yaml": str(genre_magic),
+                "world_yaml": str(world_magic),
+                "error": str(exc),
+            },
+            component="magic",
+            severity="error",
+        )
+        return False
+
+    # World-scope build: from_config eagerly instantiates world-scope bars
+    # (e.g. coyote_star's hegemony_heat). No add_character — there is no PC
+    # at bind time. Character bars arrive at chargen confirmation via the
+    # reuse branch of init_magic_state_for_session.
+    state = MagicState.from_config(config)
+    _load_world_confrontations(
+        state, genre_pack_source_dir=genre_pack_source_dir, world_slug=world_slug
+    )
+    snapshot.magic_state = state
+
+    plugins = list(config.active_plugins)
+    bar_count = len(state.ledger)
+    logger.info(
+        "magic.world_bound world=%s plugins=%s bars=%d",
+        world_slug,
+        plugins,
+        bar_count,
+    )
+    _watcher_publish(
+        "magic.world_bound",
+        {
+            "world_slug": world_slug,
+            "active_plugins": plugins,
+            "bar_count": bar_count,
+        },
+        component="magic",
+        severity="info",
+    )
+    return True
+
+
 def init_magic_state_for_session(
     *,
     snapshot: GameSnapshot,
@@ -201,53 +374,13 @@ def init_magic_state_for_session(
     if snapshot.magic_state is None:
         state = MagicState.from_config(config)
         # Phase 5 (Story 47-3): on first commit, also load the world's
-        # named magic confrontations. The file is optional — worlds
-        # without ``confrontations.yaml`` simply have an empty list, so
-        # the auto-fire evaluator (called inside ``apply_magic_working``)
-        # is a no-op for them.
-        #
-        # When the file exists but fails to load (malformed YAML, missing
-        # branch, schema error), this function follows the same
-        # graceful-degrade pattern as the magic.yaml LoaderError catch
-        # above: log at ERROR + emit a watcher event, then proceed with
-        # ``state.confrontations = []``. This is a deliberate design
-        # decision (chargen has already produced a character; refusing
-        # to confirm would orphan the commit), NOT compliance with
-        # CLAUDE.md "no silent fallback" — the subsystem visibly
-        # degrades, which is a fallback. The watcher event surfaces the
-        # degradation to the GM panel so it is not invisible. A
-        # follow-up story should consider promoting this to a hard
-        # failure once chargen rollback is wired.
-        confrontations_yaml = genre_pack_source_dir / "worlds" / world_slug / "confrontations.yaml"
-        if confrontations_yaml.exists():
-            try:
-                state.confrontations = load_confrontations(confrontations_yaml)
-            except ConfrontationLoaderError as conf_exc:
-                # Explicit reset — the comment above promises
-                # ``state.confrontations = []`` on this path; defends
-                # against any future code path that pre-populates the
-                # field on ``MagicState.from_config`` (Westley round 2
-                # comment-analyzer finding: comment claimed an explicit
-                # assignment that did not exist).
-                state.confrontations = []
-                logger.error(
-                    "magic.confrontations_init_failed world=%s yaml=%s error=%s",
-                    world_slug,
-                    confrontations_yaml,
-                    conf_exc,
-                )
-                _watcher_publish(
-                    "state_transition",
-                    {
-                        "field": "magic_state",
-                        "op": "confrontations_load_failed",
-                        "world_slug": world_slug,
-                        "yaml": str(confrontations_yaml),
-                        "error": str(conf_exc),
-                    },
-                    component="magic",
-                    severity="error",
-                )
+        # named magic confrontations. The file is optional; a load failure
+        # degrades gracefully (logged + watcher event) rather than orphaning
+        # the chargen commit. Shared with the world-bind path (Story 90-2)
+        # via ``_load_world_confrontations``.
+        _load_world_confrontations(
+            state, genre_pack_source_dir=genre_pack_source_dir, world_slug=world_slug
+        )
         snapshot.magic_state = state
         first_commit = True
     else:

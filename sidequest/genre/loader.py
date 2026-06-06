@@ -1005,6 +1005,32 @@ def _emit_world_seed_tropes_loaded(*, world_slug: str, source: Path, seed_count:
     )
 
 
+def _emit_world_classes_loaded(*, world_slug: str, source: Path, class_count: int) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier class load.
+
+    Epic 94 (genre/world boundary correction): a world's classes/callings are a
+    world-tier CAST/CATALOG surface — the roster of playable archetypes a world
+    ships (C&C kits, Victoria callings) — not a genre mechanic. The genre tier is
+    the rulebook only. The load fires a span (mirroring the chassis_classes /
+    seed_tropes spans) so the GM panel can prove the class roster the chargen
+    pipeline picked up was read from the world tier, not improvised from a
+    removed genre default.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_classes",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "class_count": class_count,
+            "source": str(source),
+        },
+        component="genre",
+    )
+
+
 def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
@@ -1323,6 +1349,34 @@ def _load_single_world(
             seed_count=len(world_seed_tropes),
         )
 
+    # === World-tier classes.yaml — OPTIONAL (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # a world's classes/callings are a world-tier CAST/CATALOG surface (C&C kits,
+    # Victoria callings), not a genre mechanic — the genre tier is the rulebook
+    # only. Absent file → empty list (a world may be axis-archetype-only). A
+    # malformed file still fails loud, world-scoped (no silent fallback). The
+    # genre-tier ``classes_list`` remains the shared default for packs that have
+    # not migrated classes down.
+    world_classes_path = world_path / "classes.yaml"
+    world_classes: list[ClassDef] = []
+    if world_classes_path.exists():
+        raw_world_classes = _load_yaml_raw_optional(world_classes_path)
+        if raw_world_classes is not None and not isinstance(raw_world_classes, list):
+            raise GenreLoadError(
+                path=world_classes_path,
+                detail="expected a list of class definitions",
+            )
+        world_classes = [
+            ClassDef.model_validate(item)
+            for item in (raw_world_classes if isinstance(raw_world_classes, list) else [])
+        ]
+    if world_classes:
+        _emit_world_classes_loaded(
+            world_slug=world_path.name,
+            source=world_classes_path,
+            class_count=len(world_classes),
+        )
+
     return World(
         config=config,
         lore=lore,
@@ -1341,6 +1395,7 @@ def _load_single_world(
         openings=openings,
         authored_npcs=authored_npcs,
         char_creation=char_creation,
+        classes=world_classes,
         chassis_instances=chassis_instances,
         chassis_classes=chassis_classes,
         seed_tropes=world_seed_tropes,
@@ -1658,6 +1713,58 @@ def load_genre_pack(path: Path | str) -> GenrePack:
                     "genre default; every world must supply or inherit one."
                 ),
             )
+
+    # === Pack-level class roster — world-first aggregation (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # classes/callings are a world-tier CAST/CATALOG surface. When the genre tier
+    # ships no classes.yaml (tea_and_murder, which moved its callings down to
+    # blackthorn_moor/glenross), the pack-level ``GenrePack.classes`` roster is
+    # the union of every world's classes — that roster is what the chargen
+    # builder, confrontation, dice, and views consumers read to resolve a
+    # ``char_class`` → ClassDef. Worlds that share a calling (identical id) must
+    # agree on its definition; a genuine divergence fails loud rather than
+    # silently picking one (No Silent Fallbacks). When the genre tier DOES ship
+    # classes (space_opera, heavy_metal, C&C), that genre roster is authoritative
+    # and worlds are not aggregated up — the genre default is intentional.
+    if not classes_list:
+        aggregated_classes: dict[str, ClassDef] = {}
+        for slug, w in worlds.items():
+            for cls in w.classes:
+                existing = aggregated_classes.get(cls.id)
+                if existing is not None and existing != cls:
+                    raise GenreLoadError(
+                        path=path / "worlds" / slug / "classes.yaml",
+                        detail=(
+                            f"class id {cls.id!r} is defined differently across worlds "
+                            f"in this pack — world-tier class rosters that share an id "
+                            f"must agree on its definition (epic 94 genre/world "
+                            f"boundary). Reconcile the divergent definitions or give "
+                            f"them distinct ids."
+                        ),
+                    )
+                aggregated_classes.setdefault(cls.id, cls)
+        classes_list = list(aggregated_classes.values())
+
+    # === Pack-level chargen scenes — world-first aggregation (epic 94) ===
+    # Same boundary correction for char_creation: when the genre tier ships no
+    # char_creation.yaml (spaghetti_western, tea_and_murder — both moved chargen
+    # down to the world tier), the pack-level ``GenrePack.char_creation`` is the
+    # union of every world's scenes. Production reads chargen world-first via
+    # ``resolve_char_creation_scenes``; this aggregate keeps pack-level
+    # introspection (and the reputation_bonus / archetype-hint drift consumers)
+    # honest about what the migrated pack actually offers. The genre default,
+    # when present, stays authoritative (no aggregation).
+    if not char_creation:
+        aggregated_scenes: list[CharCreationScene] = []
+        seen_scene_keys: set[tuple[str, int]] = set()
+        for w in worlds.values():
+            for idx, scene in enumerate(w.char_creation):
+                key = (scene.id, idx)
+                if key in seen_scene_keys:
+                    continue
+                seen_scene_keys.add(key)
+                aggregated_scenes.append(scene)
+        char_creation = aggregated_scenes
 
     scenarios: dict[str, ScenarioPack] = _load_subdirectories(
         path, "scenarios", _load_single_scenario

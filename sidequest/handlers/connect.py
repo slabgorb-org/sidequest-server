@@ -46,6 +46,7 @@ from sidequest.protocol.types import NonBlankString
 from sidequest.server import views
 from sidequest.server.asset_urls import rewrite_theme_css_asset_urls
 from sidequest.server.dispatch.char_creation_resolve import resolve_char_creation_scenes
+from sidequest.server.dispatch.class_resolve import resolve_classes
 from sidequest.server.dispatch.culture_context import resolve_culture_reference
 from sidequest.server.image_pacing import ImagePacingThrottle
 from sidequest.server.magic_init import init_magic_state_for_session
@@ -736,8 +737,14 @@ class ConnectHandler:
                 builder = builder.with_pack_id(row.genre_slug)
                 if genre_pack.equipment_tables is not None:
                     builder = builder.with_equipment_tables(genre_pack.equipment_tables)
-                if genre_pack.classes:
-                    builder = builder.with_classes(genre_pack.classes)
+                # Epic 94 (genre/world boundary): classes/callings are a
+                # world-tier CAST surface. Resolve the roster world-first so a
+                # migrated pack (tea_and_murder → blackthorn_moor/glenross
+                # callings) feeds the chargen builder the world's cast, with the
+                # genre roster as the shared default for unmigrated packs.
+                chargen_classes = resolve_classes(genre_pack, row.world_slug)
+                if chargen_classes:
+                    builder = builder.with_classes(chargen_classes)
 
             # Opening-hook + world-context resolution (matches legacy branch).
             # Resolved once at connect time so chargen confirmation and the

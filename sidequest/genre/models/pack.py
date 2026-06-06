@@ -157,6 +157,15 @@ class World(BaseModel):
     openings: list[Opening] = Field(default_factory=list)
     authored_npcs: list[AuthoredNpc] = Field(default_factory=list)
     char_creation: list[CharCreationScene] = Field(default_factory=list)
+    classes: list[ClassDef] = Field(default_factory=list)
+    """World-tier class/calling CAST/CATALOG (``worlds/<slug>/classes.yaml``),
+    epic 94. Genre/world boundary correction (supersedes ADR-120
+    "mechanics-in-genre"): a world's classes (C&C kits, Victoria callings) are
+    the cast a world ships, NOT a genre mechanic — the genre tier is the rulebook
+    only. Empty list when the world authors no classes (e.g. an axis-archetype
+    world). Consumers read this world-first; the genre-tier
+    ``GenrePack.classes`` is the shared default for packs that have not migrated
+    classes down to the world tier (no silent fallback to a fabricated roster)."""
     chassis_instances: list[ChassisInstanceConfig] = Field(default_factory=list)
     chassis_classes: ChassisClassesConfig | None = None
     """World-tier rig CAST/CATALOG (``worlds/<slug>/chassis_classes.yaml``), epic

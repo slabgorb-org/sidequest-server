@@ -780,3 +780,108 @@ def test_wiring_router_harness_importable_and_cli_consumes_it() -> None:
         "scripts/router_ab_eval_cli.py must import RouterAbEvalHarness — a "
         "harness with no non-test consumer is not wired"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Round-trip 1 (Reviewer [HIGH]): RouterCorpusCapturer must be WIRED — the CLI
+# needs a capture mode so an operator can PRODUCE the AC1 corpus, not just
+# evaluate one. Prompt rows are JSONL objects:
+#   {"action": str, "state_summary": str|object, "genre": str, "world": str,
+#    "round_number": int, "source_save": str, "event_seq": int|null}
+# --------------------------------------------------------------------------- #
+
+
+def _prompt_row(idx: int = 0) -> dict[str, Any]:
+    return {
+        "action": f"I kick over the brazier ({idx}).",
+        "state_summary": {"region": "ropefoot", "present_npcs": ["goblin chief"]},
+        "genre": "caverns_and_claudes",
+        "world": "beneath_sunden",
+        "round_number": idx,
+        "source_save": "real.db",
+        "event_seq": idx,
+    }
+
+
+def _write_prompt_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    import json as _json
+
+    path.write_text(
+        "".join(_json.dumps(r) + "\n" for r in rows),
+        encoding="utf-8",
+    )
+
+
+def test_cli_capture_mode_end_to_end_with_real_capturer(tmp_path: Path, monkeypatch: Any) -> None:
+    """The strong wiring test (Reviewer [HIGH]): drive cli.main() --capture
+    through the REAL RouterCorpusCapturer — only the env/network boundary
+    (the Haiku LLM factory consumed by the CLI) is substituted. The output
+    must be a valid RouterCapture JSONL re-readable by read_captures, with
+    baseline packages from the (fake) router call."""
+    cli = _load_cli_module()
+    assert getattr(cli, "RouterCorpusCapturer", None) is not None, (
+        "scripts/router_ab_eval_cli.py must import RouterCorpusCapturer — a "
+        "capturer with no non-test consumer is not wired (CLAUDE.md)"
+    )
+
+    prompts = tmp_path / "prompts.jsonl"
+    _write_prompt_rows(prompts, [_prompt_row(0), _prompt_row(1)])
+    out = tmp_path / "corpus.jsonl"
+
+    fake = FakeRouterLLM(payloads=[_package_dict(MOVEMENT_DEEPER)])
+    monkeypatch.setattr(cli, "build_intent_router_llm", lambda: fake)
+
+    rc = cli.main(["--capture", "--prompts-jsonl", str(prompts), "--out", str(out)])
+
+    assert rc == cli.EXIT_PASS
+    from sidequest.corpus.router_corpus import read_captures
+
+    rows = list(read_captures(out))
+    assert len(rows) == 2
+    assert rows[0].action == "I kick over the brazier (0)."
+    assert rows[1].round_number == 1
+    assert rows[0].genre == "caverns_and_claudes"
+    assert rows[0].provenance.source_save == "real.db"
+    # The baseline came from the (substituted) router call, proving the real
+    # capturer ran the production decompose path.
+    subsystems = {d.subsystem for pd in rows[0].baseline_package.per_player for d in pd.dispatch}
+    assert subsystems == {"movement"}
+    # state_summary stored as the serialized string the prompt used.
+    assert isinstance(rows[0].state_summary, str)
+    assert "ropefoot" in rows[0].state_summary
+
+
+def test_cli_capture_missing_prompts_file_is_config_error() -> None:
+    cli = _load_cli_module()
+    rc = cli.main(["--capture", "--prompts-jsonl", "/not/here.jsonl", "--out", "/tmp/x.jsonl"])
+    assert rc == cli.EXIT_CONFIG_ERROR
+
+
+def test_cli_capture_malformed_prompt_row_is_config_error(tmp_path: Path) -> None:
+    """Rule #8/#11: a corrupt or wrong-shape prompt row surfaces as a clean
+    config error — never a traceback, never a silently skipped row (a
+    quietly shrunk corpus lies about coverage)."""
+    cli = _load_cli_module()
+    bad = tmp_path / "prompts.jsonl"
+    bad.write_text('{"action": ""}\n{ broken\n', encoding="utf-8")
+    rc = cli.main(["--capture", "--prompts-jsonl", str(bad), "--out", str(tmp_path / "o.jsonl")])
+    assert rc == cli.EXIT_CONFIG_ERROR
+
+
+def test_cli_capture_backend_failure_is_loud(tmp_path: Path, monkeypatch: Any) -> None:
+    """A Haiku-side failure mid-capture (after N successful rows) must fail
+    the run loudly with a non-zero exit — half a corpus written silently
+    would masquerade as full coverage. The atomic writer guarantees the
+    output file is either complete or absent."""
+    cli = _load_cli_module()
+    prompts = tmp_path / "prompts.jsonl"
+    _write_prompt_rows(prompts, [_prompt_row(0), _prompt_row(1)])
+    out = tmp_path / "corpus.jsonl"
+
+    fake = FakeRouterLLM(raises=RuntimeError("haiku API 500"))
+    monkeypatch.setattr(cli, "build_intent_router_llm", lambda: fake)
+
+    rc = cli.main(["--capture", "--prompts-jsonl", str(prompts), "--out", str(out)])
+
+    assert rc != cli.EXIT_PASS
+    assert not out.exists(), "a failed capture run must not leave a partial corpus file"

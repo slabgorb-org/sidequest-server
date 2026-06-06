@@ -244,6 +244,9 @@ class SessionRoom:
         ``room.session.orbital_content``. Worlds without an orbital
         tier (no ``orbits.yaml``) bind cleanly with
         ``orbital_content=None``; malformed orbital data fails loud.
+        ``world_dir`` also drives ``init_world_magic_state`` (Story 90-2)
+        so ``snapshot.magic_state`` is populated for magic worlds before
+        any character commits — idempotent and a no-op for non-magic worlds.
 
         ``ruleset`` is the bound pack's ruleset slug (``pack.rules.ruleset``,
         e.g. ``"wwn"``). Threaded onto the ``Session`` so scene-end can
@@ -270,6 +273,26 @@ class SessionRoom:
             self._snapshot = snapshot
             self._store = store
             self._session = Session(snapshot, orbital_content=orbital_content, ruleset=ruleset)
+            # Story 90-2: instantiate world-scope magic_state at bind time so
+            # the narrator has a valid MagicState to validate against from the
+            # first turn — even before any character commits. Idempotent and a
+            # clean no-op for non-magic worlds. ``world_dir`` is
+            # ``<pack>/worlds/<world_slug>``, so the pack source dir and world
+            # slug derive directly from it. The import is function-local to
+            # avoid a startup-order hazard: session_room is imported very early,
+            # while magic_init transitively reaches sidequest.game.ruleset.native
+            # → sidequest.server.dispatch (a cross-layer chain). It is NOT a
+            # strict module cycle (magic_init does not import session_room), so
+            # if startup import order is later proven safe this can move to the
+            # top level.
+            if world_dir is not None:
+                from sidequest.server.magic_init import init_world_magic_state
+
+                init_world_magic_state(
+                    snapshot=snapshot,
+                    genre_pack_source_dir=world_dir.parent.parent,
+                    world_slug=world_dir.name,
+                )
 
     @property
     def snapshot(self) -> GameSnapshot | None:

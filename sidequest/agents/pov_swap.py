@@ -154,10 +154,18 @@ def _looks_like_verb(word: str) -> bool:
 
 def _is_pronoun(word: str) -> bool:
     """Check if a word is a pronoun (subject, object, or possessive form).
-    
-    Used in Pass 8 and Pass 9 to avoid treating pronouns as adverbs.
-    When word1 is a pronoun, we're not in an adverb-stranded-verb situation;
-    we're in a clause about a different character (an NPC or other actor).
+
+    Used in Pass 8 and Pass 9 to avoid treating pronouns as verbs/adverbs.
+    A pronoun following a comma/"and" is never a coordinated verb of the
+    swapped subject — it heads a clause about a different referent (an NPC
+    or other actor), OR (for possessives like "its"/"his") modifies a noun.
+    Either way it must never be conjugated/de-pluralized.
+
+    Possessive forms that end in -s ("its", "hers", "ours", "yours",
+    "theirs") are explicitly included: they otherwise satisfy the naive
+    ``_looks_like_verb`` -s test and were being stripped to "it"/"her"/…
+    ([BAR-2] 2026-06-06: "turning its eyeless gaze" → "turning it eyeless
+    gaze"; #708 "his copper face" → "hi copper face").
     """
     if not word:
         return False
@@ -166,14 +174,36 @@ def _is_pronoun(word: str) -> bool:
     pronouns = {
         # he/him set
         "he", "him", "his",
-        # she/her set  
+        # she/her set
         "she", "her",
         # they/them set
         "they", "them", "their",
         # Generic/other pronouns that should block Pass 8/9
         "i", "me", "we", "us", "you", "it",
+        # Possessive / absolute forms that end in -s (would otherwise trip
+        # the naive _looks_like_verb -s test).
+        "its", "hers", "ours", "yours", "theirs", "mine",
     }
     return lower in pronouns
+
+
+def _is_skippable_adverb(word: str) -> bool:
+    """Whether ``word`` is a leading adverb the Pass 8/9 stranded-verb
+    passes may skip over to reach the real coordinated verb.
+
+    Deliberately narrow: only ``then`` and -ly adverbs qualify. The legacy
+    test (``lowercase and not a pronoun``) admitted numbers ("four"),
+    adjectives ("ivory"), and participles ("turning") as "adverbs", so the
+    *next* word — a plural noun heading an absolute phrase — got conjugated
+    ([BAR-2] "four arms"→"four arm", "ivory tusks"→"ivory tusk"). Regex
+    cannot POS-tag, so the safe set is restricted to the two surface forms
+    the Story 71-6 adverb-skip was actually built for ("…, then fires" /
+    "…and slowly raises"). Anything else leaves the following word alone.
+    """
+    if not word:
+        return False
+    lower = word.lower()
+    return lower == "then" or (lower.endswith("ly") and len(lower) > 2)
 
 
 def _split_by_dialogue(text: str) -> list[tuple[str, str]]:
@@ -446,8 +476,9 @@ def _rewrite_sentence(
             word1 = m.group(1)
             word2 = m.group(2)
             if word2 is None:
-                # Single word after "and" — original behaviour.
-                if not _looks_like_verb(word1):
+                # Single word after "and" — original behaviour. Pronouns are
+                # never verbs ("and his …"/"and its …" must not be stripped).
+                if not _looks_like_verb(word1) or _is_pronoun(word1):
                     return m.group(0)
                 conjugated = _conjugate(word1)
                 if conjugated == word1:
@@ -455,17 +486,23 @@ def _rewrite_sentence(
                 count += 1
                 return f"and {conjugated}"
             # Two words captured: "and <word1> <word2>".
-            if _looks_like_verb(word1):
+            if _looks_like_verb(word1) and not _is_pronoun(word1):
                 # word1 is the verb (no adverb before it).
                 conjugated = _conjugate(word1)
                 if conjugated == word1:
                     return m.group(0)
                 count += 1
                 return f"and {conjugated} {word2}"
-            if _looks_like_verb(word2) and not _is_pronoun(word1) and word1[0:1].islower():
-                # word1 is a leading adverb/then (lowercase, not a pronoun) — skip it,
-                # conjugate word2. The islower() guard prevents NPC names (capitalised)
-                # from being mis-classified as skippable adverbs.
+            if (
+                _is_skippable_adverb(word1)
+                and _looks_like_verb(word2)
+                and not _is_pronoun(word2)
+            ):
+                # word1 is a leading adverb/"then" — skip it, conjugate word2.
+                # Restricting to real adverbs (not "any lowercase non-pronoun")
+                # stops numbers/adjectives/participles ("four arms", "ivory
+                # tusks", "turning its") from being mistaken for adverbs and
+                # their following plural noun de-pluralized ([BAR-2]).
                 conjugated = _conjugate(word2)
                 if conjugated == word2:
                     return m.group(0)
@@ -507,8 +544,10 @@ def _rewrite_sentence(
             if word1.lower() == "and":
                 return m.group(0)
             if word2 is None:
-                # Single word after comma — original behaviour.
-                if not _looks_like_verb(word1):
+                # Single word after comma — original behaviour. Pronouns are
+                # never verbs (", his …"/", its …" must not be stripped to
+                # "hi"/"it" — [BAR-2] / #708).
+                if not _looks_like_verb(word1) or _is_pronoun(word1):
                     return m.group(0)
                 conjugated = _conjugate(word1)
                 if conjugated == word1:
@@ -519,17 +558,23 @@ def _rewrite_sentence(
             if word2.lower() == "and":
                 # ", word and …" — let Pass 8 handle the "and <verb>" part.
                 return m.group(0)
-            if _looks_like_verb(word1):
+            if _looks_like_verb(word1) and not _is_pronoun(word1):
                 # word1 is the verb (no adverb before it).
                 conjugated = _conjugate(word1)
                 if conjugated == word1:
                     return m.group(0)
                 count += 1
                 return f", {conjugated} {word2}"
-            if _looks_like_verb(word2) and not _is_pronoun(word1) and word1[0:1].islower():
-                # word1 is a leading adverb/then (lowercase, not a pronoun) — skip it,
-                # conjugate word2. The islower() guard prevents NPC names (capitalised)
-                # from being mis-classified as skippable adverbs.
+            if (
+                _is_skippable_adverb(word1)
+                and _looks_like_verb(word2)
+                and not _is_pronoun(word2)
+            ):
+                # word1 is a leading adverb/"then" — skip it, conjugate word2.
+                # Restricting to real adverbs (not "any lowercase non-pronoun")
+                # stops a number/adjective/participle ("four arms", "ivory
+                # tusks", "turning its") from being read as an adverb and its
+                # following plural noun / possessive de-pluralized ([BAR-2]).
                 conjugated = _conjugate(word2)
                 if conjugated == word2:
                     return m.group(0)

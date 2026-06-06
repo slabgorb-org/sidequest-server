@@ -324,9 +324,7 @@ async def test_eval_corpus_deterministic_rerun() -> None:
 
 def test_agreement_true_for_same_subsystem_sets() -> None:
     a = DispatchPackage.model_validate(_package_dict(CONFRONTATION_MELEE, NPC_AGENCY))
-    b = DispatchPackage.model_validate(
-        _package_dict(NPC_AGENCY, CONFRONTATION_MELEE, turn_id="t2")
-    )
+    b = DispatchPackage.model_validate(_package_dict(NPC_AGENCY, CONFRONTATION_MELEE, turn_id="t2"))
     assert dispatch_selection_agreement(a, b) is True
 
 

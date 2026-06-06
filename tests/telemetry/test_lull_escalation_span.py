@@ -314,7 +314,6 @@ def test_fire_gives_seed_fired_span_its_first_engine_consumer(otel_capture) -> N
     in this path). The panel then attributes the fired Bang to the seed id.
     """
     from sidequest.game.lull_escalation import apply_lull_escalation
-
     from sidequest.telemetry.spans import SPAN_SEED_FIRED
 
     snap = _snapshot([_active("alpha")])

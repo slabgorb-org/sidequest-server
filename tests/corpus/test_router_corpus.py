@@ -104,9 +104,7 @@ def test_router_capture_carries_the_full_triple() -> None:
     assert cap.action.startswith("I draw my sword")
     assert "present_npcs" in cap.state_summary
     assert isinstance(cap.baseline_package, DispatchPackage)
-    subsystems = {
-        d.subsystem for pd in cap.baseline_package.per_player for d in pd.dispatch
-    }
+    subsystems = {d.subsystem for pd in cap.baseline_package.per_player for d in pd.dispatch}
     assert subsystems == {"confrontation", "npc_agency"}
 
 
@@ -158,9 +156,7 @@ def test_router_capture_json_roundtrip_preserves_baseline() -> None:
     assert back.action == cap.action
     assert back.state_summary == cap.state_summary
     assert back.baseline_package.turn_id == cap.baseline_package.turn_id
-    back_subsystems = {
-        d.subsystem for pd in back.baseline_package.per_player for d in pd.dispatch
-    }
+    back_subsystems = {d.subsystem for pd in back.baseline_package.per_player for d in pd.dispatch}
     assert back_subsystems == {"movement"}
 
 
@@ -201,7 +197,7 @@ def test_read_captures_rejects_wrong_shape_line(tmp_path: Path) -> None:
     bad = tmp_path / "corpus.jsonl"
     bad.write_text('{"this": "is not a RouterCapture"}\n', encoding="utf-8")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="invalid RouterCapture"):
         list(read_captures(bad))
 
 

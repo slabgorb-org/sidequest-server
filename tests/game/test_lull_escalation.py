@@ -366,7 +366,6 @@ def test_fires_again_after_cooldown_window_elapses() -> None:
     the governor, not a hardcoded number.)
     """
     from sidequest.game.lull_escalation import apply_lull_escalation
-
     from sidequest.game.trope_tuning import FIRE_COOLDOWN_TURNS
 
     thresholds = DramaThresholds(escalation_streak=3)

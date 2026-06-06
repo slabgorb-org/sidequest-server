@@ -243,7 +243,6 @@ def test_fired_directive_replaces_generic_escalation_beat_next_turn(_loader) -> 
     ``_build_turn_context`` has no directive override.
     """
     from sidequest.game.lull_escalation import apply_lull_escalation
-
     from sidequest.server.session_handler import _build_turn_context
 
     sd = _make_real_sd(_loader, "caverns_and_claudes", "sunken_keep")

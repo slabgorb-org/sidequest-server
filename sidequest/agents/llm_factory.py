@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
+from sidequest.agents import cost_safety
 from sidequest.agents.anthropic_cost import compute_cost_usd
 from sidequest.agents.anthropic_sdk_client import (
     _EXTENDED_CACHE_TTL_BETA,
@@ -77,13 +78,25 @@ def build_async_anthropic() -> AsyncAnthropic:
     return AsyncAnthropic(api_key=api_key)
 
 
+class _UsageSummary(NamedTuple):
+    """The accounted shape of one SDK call — returned by
+    ``_record_usage_telemetry`` so the cost-safety pass (story 91-4)
+    reuses the figures already computed for the books instead of
+    re-deriving them."""
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
 def _record_usage_telemetry(
     span: Any,
     resp: Any,
     *,
     caller: str,
     request_model: str,
-) -> None:
+) -> _UsageSummary:
     """Uniform per-call usage accounting (story 91-1, OTEL Observability
     Principle applied to money): stamp token/cost/caller attributes onto the
     ``llm.request`` span AND emit the uniform ``llm.sdk.usage`` INFO line so
@@ -140,6 +153,12 @@ def _record_usage_telemetry(
         cache_write,
         cost,
     )
+    return _UsageSummary(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost,
+    )
 
 
 def build_llm_client(
@@ -195,10 +214,20 @@ class _AsideLlm:
     Obtains its SDK through :func:`build_async_anthropic` — the single
     construction site (story 91-1). Fails loudly if ``ANTHROPIC_API_KEY``
     is unset — No Silent Fallbacks.
+
+    Story 91-4: carries the session identity so its Haiku spend runs the
+    ADR-134 detector and feeds the per-session cumulative ceiling.
+    ``session_id`` is REQUIRED keyword-only at every construction surface —
+    a sessionless caller must opt out explicitly with ``session_id=None``
+    (the ADR-134 hard bypass), never by omission. The ceiling env is
+    parsed (fail-loud) at construction with the same validation the
+    narrator client applies.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, session_id: str | None) -> None:
         self._sdk = build_async_anthropic()
+        self._session_id = session_id
+        self._session_cost_ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
 
     async def complete(self, *, system: str, user: str) -> str:
         # ``system`` stays a BARE string — NOT a cached content block. The
@@ -212,6 +241,14 @@ class _AsideLlm:
         # Story 91-1: the call runs inside an ``llm.request`` span with the
         # uniform usage accounting — pre-91-1 this path emitted NO telemetry
         # at all and was structurally invisible to cost forensics.
+        #
+        # Story 91-4: pre-flight ceiling refusal (a killed session must not
+        # bill another Haiku token) + post-call safety pass (detector +
+        # cumulative). ``session_id=None`` bypasses both, never the books.
+        if self._session_id is not None:
+            cost_safety.ledger().check_ceiling(
+                self._session_id, ceiling_usd=self._session_cost_ceiling_usd
+            )
         with llm_request_span(model=_ASIDE_MODEL) as span:
             resp = await self._sdk.messages.create(
                 model=_ASIDE_MODEL,
@@ -219,13 +256,29 @@ class _AsideLlm:
                 messages=[{"role": "user", "content": user}],
                 max_tokens=512,
             )
-            _record_usage_telemetry(span, resp, caller="aside", request_model=_ASIDE_MODEL)
+            usage = _record_usage_telemetry(span, resp, caller="aside", request_model=_ASIDE_MODEL)
+        if self._session_id is not None:
+            cost_safety.ledger().record_call(
+                session_id=self._session_id,
+                caller="aside",
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cost_usd=usage.cost_usd,
+                ceiling_usd=self._session_cost_ceiling_usd,
+            )
         return "".join(block.text for block in resp.content if block.type == "text")
 
 
-def build_aside_llm() -> _AsideLlm:
-    """Build the Haiku-tier LLM for out-of-band aside resolution (ADR-107)."""
-    return _AsideLlm()
+def build_aside_llm(*, session_id: str | None) -> _AsideLlm:
+    """Build the Haiku-tier LLM for out-of-band aside resolution (ADR-107).
+
+    Story 91-4: ``session_id`` is required keyword-only — the caller must
+    either supply the canonical session id (the room slug) or explicitly
+    opt out with ``None``. Omission is a ``TypeError`` so a future call
+    site cannot silently construct an uncovered Haiku spender.
+    """
+    return _AsideLlm(session_id=session_id)
 
 
 # ADR-113 Intent Router producer: pre-narrator classification call. Mirrors
@@ -267,11 +320,16 @@ class _IntentRouterLlm:
     Same shape as :class:`_AsideLlm` — eagerly obtains its SDK through
     :func:`build_async_anthropic` (the single construction site, story 91-1)
     so the build-time environment check fires loudly (memory rule
-    ``feedback_no_fallbacks_hard``).
+    ``feedback_no_fallbacks_hard``), and carries the session identity
+    (story 91-4) so the every-turn router spend — the #1 dark spender in
+    the [COST-1] forensics — runs the ADR-134 detector and feeds the
+    per-session cumulative ceiling.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, session_id: str | None) -> None:
         self._sdk = build_async_anthropic()
+        self._session_id = session_id
+        self._session_cost_ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
 
     async def emit_tool(
         self,
@@ -298,6 +356,12 @@ class _IntentRouterLlm:
         Fallbacks). The call runs inside an ``llm.request`` span so the GM
         panel can confirm the cache is live (OTEL Observability Principle).
         """
+        # Story 91-4: pre-flight ceiling refusal — a session killed by ANY
+        # call site (narrator included) must not bill another router token.
+        if self._session_id is not None:
+            cost_safety.ledger().check_ceiling(
+                self._session_id, ceiling_usd=self._session_cost_ceiling_usd
+            )
         with llm_request_span(model=_INTENT_ROUTER_MODEL) as span:
             resp = await self._sdk.messages.create(
                 model=_INTENT_ROUTER_MODEL,
@@ -323,8 +387,20 @@ class _IntentRouterLlm:
                 max_tokens=2048,
                 extra_headers={"anthropic-beta": _EXTENDED_CACHE_TTL_BETA},
             )
-            _record_usage_telemetry(
+            usage = _record_usage_telemetry(
                 span, resp, caller="intent_router", request_model=_INTENT_ROUTER_MODEL
+            )
+        # Story 91-4: post-call safety pass — detector against the
+        # (session, intent_router) rolling baselines + cumulative ceiling.
+        if self._session_id is not None:
+            cost_safety.ledger().record_call(
+                session_id=self._session_id,
+                caller="intent_router",
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cost_usd=usage.cost_usd,
+                ceiling_usd=self._session_cost_ceiling_usd,
             )
         for block in resp.content:
             if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
@@ -342,6 +418,12 @@ class _IntentRouterLlm:
         )
 
 
-def build_intent_router_llm() -> _IntentRouterLlm:
-    """Build the Haiku-tier LLM for the Intent Router producer (ADR-113)."""
-    return _IntentRouterLlm()
+def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm:
+    """Build the Haiku-tier LLM for the Intent Router producer (ADR-113).
+
+    Story 91-4: ``session_id`` is required keyword-only — supply the
+    canonical session id (the room slug) or opt out explicitly with
+    ``None``. Omission is a ``TypeError``: the router is the highest-
+    frequency Haiku caller and must never silently run uncovered.
+    """
+    return _IntentRouterLlm(session_id=session_id)

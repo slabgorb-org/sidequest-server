@@ -54,7 +54,7 @@ from sidequest.telemetry.spans.intent_router import (
 logger = logging.getLogger(__name__)
 
 
-def build_intent_router_for_session() -> IntentRouter:
+def build_intent_router_for_session(*, session_id: str | None) -> IntentRouter:
     """Construct the production IntentRouter for a turn.
 
     Extracted module-level so tests can monkeypatch this factory with
@@ -70,13 +70,19 @@ def build_intent_router_for_session() -> IntentRouter:
     (the SDK client is lightweight; per-turn construction matches the
     transient AnthropicAsync client lifecycle and avoids stale
     connection state across long-lived sessions).
+
+    Story 91-4: ``session_id`` is required keyword-only and flows into
+    the Haiku adapter so the router's every-turn spend runs the ADR-134
+    detector and feeds the per-session cumulative ceiling. The caller
+    has the canonical id (room slug / ``sd.game_slug``) — passing
+    ``None`` is the explicit sessionless opt-out, never a default.
     """
     # Lazy import — keeps the helper module importable in test envs
     # that have not set ANTHROPIC_API_KEY (the SDK client validates the
     # key at construction).
     from sidequest.agents.llm_factory import build_intent_router_llm
 
-    return IntentRouter(llm=build_intent_router_llm())
+    return IntentRouter(llm=build_intent_router_llm(session_id=session_id))
 
 
 def _present_npc_names(snapshot: GameSnapshot) -> list[str]:

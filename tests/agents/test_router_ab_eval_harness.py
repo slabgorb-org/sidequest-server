@@ -829,7 +829,7 @@ def test_cli_capture_mode_end_to_end_with_real_capturer(tmp_path: Path, monkeypa
     out = tmp_path / "corpus.jsonl"
 
     fake = FakeRouterLLM(payloads=[_package_dict(MOVEMENT_DEEPER)])
-    monkeypatch.setattr(cli, "build_intent_router_llm", lambda: fake)
+    monkeypatch.setattr(cli, "build_intent_router_llm", lambda **_kwargs: fake)
 
     rc = cli.main(["--capture", "--prompts-jsonl", str(prompts), "--out", str(out)])
 
@@ -879,7 +879,7 @@ def test_cli_capture_backend_failure_is_loud(tmp_path: Path, monkeypatch: Any) -
     out = tmp_path / "corpus.jsonl"
 
     fake = FakeRouterLLM(raises=RuntimeError("haiku API 500"))
-    monkeypatch.setattr(cli, "build_intent_router_llm", lambda: fake)
+    monkeypatch.setattr(cli, "build_intent_router_llm", lambda **_kwargs: fake)
 
     rc = cli.main(["--capture", "--prompts-jsonl", str(prompts), "--out", str(out)])
 

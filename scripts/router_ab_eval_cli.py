@@ -165,7 +165,10 @@ def _run_capture(args: argparse.Namespace) -> int:
     # Eager construction here (48-4 doctrine): capture is Haiku-only and the
     # missing-credentials check should fire before any API spend.
     try:
-        capturer = RouterCorpusCapturer(llm=build_intent_router_llm())
+        # Story 91-4: explicit sessionless opt-out — the eval CLI runs
+        # outside any game session, so ADR-134 detector/ceiling coverage
+        # does not apply (the spend is operator-initiated and bounded).
+        capturer = RouterCorpusCapturer(llm=build_intent_router_llm(session_id=None))
     except LlmClientError as exc:
         print(f"config error: backend construction failed: {exc}")
         return EXIT_CONFIG_ERROR

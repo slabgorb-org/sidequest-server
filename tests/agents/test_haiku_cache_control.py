@@ -67,7 +67,7 @@ def _build_intent_adapter(monkeypatch: pytest.MonkeyPatch, create_mock: AsyncMoc
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     from sidequest.agents.llm_factory import _IntentRouterLlm
 
-    adapter = _IntentRouterLlm()
+    adapter = _IntentRouterLlm(session_id=None)
     adapter._sdk = SimpleNamespace(messages=SimpleNamespace(create=create_mock))
     return adapter
 
@@ -199,7 +199,7 @@ async def test_aside_system_prompt_stays_uncached_subfloor(
 
     from sidequest.agents.llm_factory import _AsideLlm
 
-    adapter = _AsideLlm()
+    adapter = _AsideLlm(session_id=None)
     adapter._sdk = SimpleNamespace(messages=SimpleNamespace(create=create))
 
     await adapter.complete(system="ASIDE-SYS", user="U")

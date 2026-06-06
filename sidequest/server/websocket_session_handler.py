@@ -849,7 +849,14 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     for pid, name in snapshot.player_seats.items()
                     if pid != sd.player_id and name and name != _acting_player_name
                 ]
-                _intent_router = intent_router_pass.build_intent_router_for_session()
+                # Story 91-4: the router's Haiku spend is keyed to the same
+                # canonical session id the narrator's cost machinery uses
+                # (room slug / sd.game_slug — the seed_session_id resolution
+                # above), so it runs the ADR-134 detector and counts against
+                # the per-session cumulative ceiling.
+                _intent_router = intent_router_pass.build_intent_router_for_session(
+                    session_id=seed_session_id
+                )
                 # Opt-in degraded path: when SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL
                 # is set, an IntentRouterFailure is logged LOUDLY and the turn
                 # continues with dispatch_package=None (pre-ADR-113 behavior, an

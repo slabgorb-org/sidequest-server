@@ -240,3 +240,79 @@ class TestNameSceneFollowupCorrection:
         results = b.scene_results()
         assert results[0].hooks_added[0].hook_type == HookType.WOUND
         assert results[0].hooks_added[0].text == "A thin white line across her palm."
+
+
+# ===========================================================================
+# Terminal DISPLAY scene must not be mistaken for a name-entry scene
+# [BAR-1] chargen-confirm-prose — heavy_metal & 8 sibling packs end on a
+# `confirmation`/display scene (no choices, allows_freeform: false), NOT a
+# name-entry scene (no choices, allows_freeform: true — only road_warrior).
+# The "last scene with no choices" heuristic mis-tagged the display scene as
+# the name scene, so character_name() returned the PRIOR scene's freeform
+# answer and the confirmation prose rendered "you can see your name —
+# I walk toward Helium, to find the princess —".
+# ===========================================================================
+
+
+def _confirm_scene(narration: str) -> CharCreationScene:
+    """A terminal display/confirmation scene: no choices, allows_freeform off."""
+    return CharCreationScene(
+        id="confirmation",
+        title="The Book Is Closed",
+        narration=narration,
+        choices=[],
+        allows_freeform=False,
+        hook_prompt=None,
+    )
+
+
+def _heavy_metal_shape(confirm_narration: str) -> CharacterBuilder:
+    """origins/crucible/the_road choice scenes (freeform-allowed) + a terminal
+    display confirmation scene — the heavy_metal/barsoom all-freeform shape."""
+    scenes = [
+        make_scene("origins", choices=[make_choice("O", race_hint="Servant")], allows_freeform=True),
+        make_scene("crucible", choices=[make_choice("C", class_hint="Warrior")], allows_freeform=True),
+        make_scene("the_road", choices=[make_choice("R", goals="reach_helium")], allows_freeform=True),
+        _confirm_scene(confirm_narration),
+    ]
+    return CharacterBuilder(scenes=scenes, rules=simple_rules())
+
+
+class TestTerminalDisplaySceneNotNameScene:
+    def test_display_scene_is_not_a_name_scene(self) -> None:
+        b = _heavy_metal_shape("Confirmation narration.")
+        b.apply_freeform("born in the dust, nobody")
+        b.apply_freeform("void took my old life on Earth")
+        b.apply_freeform("I walk toward Helium, to find the princess")
+        # The terminal scene (index 3) is allows_freeform=False → display, not name.
+        assert b._is_name_scene(3) is False
+
+    def test_character_name_is_none_so_lobby_name_wins(self) -> None:
+        """With no real name scene, character_name() must yield None so callers
+        fall back to the lobby name — NOT leak the_road's freeform answer."""
+        b = _heavy_metal_shape("Confirmation narration.")
+        b.apply_freeform("born in the dust, nobody")
+        b.apply_freeform("void took my old life on Earth")
+        b.apply_freeform("I walk toward Helium, to find the princess")
+        assert b.character_name() is None
+
+    def test_confirmation_prose_fills_name_from_lobby(self) -> None:
+        """The headline symptom: the {name} prose slot must render the lobby
+        name, not the motivation freeform."""
+        narration = "you can see your name — {name} — And so it is that {name} rises."
+        b = _heavy_metal_shape(narration)
+        b.with_lobby_name("Groucho")
+        b.apply_freeform("born in the dust, nobody")
+        b.apply_freeform("void took my old life on Earth")
+        b.apply_freeform("I walk toward Helium, to find the princess")
+        rendered = b.interpolate_scene_narration(narration)
+        assert "I walk toward Helium" not in rendered
+        assert "you can see your name — Groucho —" in rendered
+
+    def test_real_terminal_name_scene_still_extracts(self) -> None:
+        """Regression guard: road_warrior's genuine terminal name scene
+        (allows_freeform=True) must still parse the name."""
+        b = name_scene_builder()  # class scene + the_name (allows_freeform=True)
+        b.apply_freeform(_REPRO_SENTENCE)
+        assert b._is_name_scene(1) is True
+        assert b.character_name() == "Zeppo"

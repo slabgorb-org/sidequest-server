@@ -251,10 +251,12 @@ class MpRoomHarness:
         self._room.broadcast = _spy_broadcast  # type: ignore[method-assign]
 
         # Real factory seams: build_aside_llm (imported at call time inside
-        # the handler branch) and the OTEL tracer.
+        # the handler branch) and the OTEL tracer. The fake factory accepts
+        # the production signature's kwargs (story 91-4: the handler passes
+        # session_id=<room slug>).
         self._orig_build = _llm_factory.build_aside_llm
         self._orig_tracer = _telemetry_setup.tracer
-        _llm_factory.build_aside_llm = lambda: self._llm_aside
+        _llm_factory.build_aside_llm = lambda **_kwargs: self._llm_aside
         _telemetry_setup.tracer = lambda: self._tracer
 
     # --- introspection (all read REAL state) --------------------------- #

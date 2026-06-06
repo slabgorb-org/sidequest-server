@@ -158,7 +158,7 @@ def deterministic_combat_router(monkeypatch):
     fake_router.decompose = AsyncMock(side_effect=_fake_decompose)
     monkeypatch.setattr(
         "sidequest.server.intent_router_pass.build_intent_router_for_session",
-        lambda: fake_router,
+        lambda **_kwargs: fake_router,
     )
 
 

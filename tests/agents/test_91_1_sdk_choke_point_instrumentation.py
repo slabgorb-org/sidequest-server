@@ -190,7 +190,7 @@ def _build_aside_adapter(monkeypatch: pytest.MonkeyPatch, sdk: Any) -> Any:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     from sidequest.agents.llm_factory import _AsideLlm
 
-    adapter = _AsideLlm()
+    adapter = _AsideLlm(session_id=None)
     adapter._sdk = sdk
     return adapter
 
@@ -199,7 +199,7 @@ def _build_router_adapter(monkeypatch: pytest.MonkeyPatch, sdk: Any) -> Any:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     from sidequest.agents.llm_factory import _IntentRouterLlm
 
-    adapter = _IntentRouterLlm()
+    adapter = _IntentRouterLlm(session_id=None)
     adapter._sdk = sdk
     return adapter
 
@@ -300,7 +300,7 @@ def test_aside_adapter_obtains_sdk_through_factory_seam(
     sentinel = _fake_sdk([])
     monkeypatch.setattr(llm_factory, "build_async_anthropic", lambda: sentinel)
 
-    adapter = llm_factory.build_aside_llm()
+    adapter = llm_factory.build_aside_llm(session_id=None)
     assert adapter._sdk is sentinel, (
         "_AsideLlm constructed its own SDK instead of calling llm_factory.build_async_anthropic()"
     )
@@ -315,7 +315,7 @@ def test_intent_router_adapter_obtains_sdk_through_factory_seam(
     sentinel = _fake_sdk([])
     monkeypatch.setattr(llm_factory, "build_async_anthropic", lambda: sentinel)
 
-    adapter = llm_factory.build_intent_router_llm()
+    adapter = llm_factory.build_intent_router_llm(session_id=None)
     assert adapter._sdk is sentinel, (
         "_IntentRouterLlm constructed its own SDK instead of calling "
         "llm_factory.build_async_anthropic()"
@@ -594,7 +594,7 @@ async def test_aside_production_path_emits_log_line_and_span(
     sentinel = _fake_sdk([resp])
     monkeypatch.setattr(llm_factory, "build_async_anthropic", lambda: sentinel)
 
-    resolver = AsideResolver(llm=llm_factory.build_aside_llm())
+    resolver = AsideResolver(llm=llm_factory.build_aside_llm(session_id=None))
     res = await resolver.resolve(
         question="how big is my pack?",
         read_view=AsideReadView(

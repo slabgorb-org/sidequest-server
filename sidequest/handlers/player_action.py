@@ -365,9 +365,26 @@ class PlayerActionHandler:
                 rulebook_summary=rulebook,
                 recent_narration=recent,
             )
+            # Story 91-4: key the aside's Haiku spend to the canonical
+            # session id (room slug first, sd.game_slug fallback — the same
+            # resolution the narrator's cost machinery uses) so it runs the
+            # ADR-134 detector and counts against the per-session cumulative
+            # ceiling. Both None should be unreachable for a connected
+            # player; fail loud rather than silently constructing an
+            # uncovered Haiku spender (No Silent Fallbacks).
+            if session._room is not None:
+                aside_session_id = session._room.slug
+            elif sd_aside.game_slug is not None:
+                aside_session_id = sd_aside.game_slug
+            else:
+                raise RuntimeError(
+                    "aside resolve fired without a bound session id (no room "
+                    "and no sd.game_slug) — refusing to construct an "
+                    "uncovered Haiku caller (story 91-4, No Silent Fallbacks)."
+                )
             with tracer().start_as_current_span(SPAN_ASIDE_RESOLVE) as span:
                 t0 = time.monotonic()
-                res = await AsideResolver(llm=build_aside_llm()).resolve(
+                res = await AsideResolver(llm=build_aside_llm(session_id=aside_session_id)).resolve(
                     question=question, read_view=read_view
                 )
                 span.set_attribute("asker_id", sd_aside.player_id or "")

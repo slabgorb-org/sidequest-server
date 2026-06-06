@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import inspect
 import logging
-import math
 import os
 from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
+from sidequest.agents import cost_safety
 from sidequest.agents.anthropic_cost import compute_cost_usd
 from sidequest.agents.claude_client import LlmClientError
 from sidequest.agents.tooling_protocol import (
@@ -47,53 +47,25 @@ logger = logging.getLogger(__name__)
 # pattern. Calls with ``session_id=None`` (non-narrator codepaths like
 # the dungeon materializer one-shot curate) are detector no-ops — no
 # read, no append.
-
-_BASELINE_WINDOW_K: int = 10
-_WARMUP_COST_USD_FLOOR: float = 0.03
-_WARMUP_INPUT_TOKENS_FLOOR: int = 12_000
-_COST_TRIGGER_MULTIPLE: float = 5.0
-_IO_FINGERPRINT_INPUT_MULTIPLE: float = 2.0
-_IO_FINGERPRINT_OUTPUT_CEILING: int = 50
-# Architect spec-check A: absolute ceiling that fires REGARDLESS of the
-# rolling baseline. The rolling baseline can self-train onto a sustained
-# runaway — if 10 consecutive turns bill at $0.12 each, the baseline
-# averages to ~$0.12 and call 11 at $0.18 is only 1.5x baseline (sub-5x
-# threshold → silent). The May-23 incident, if it had run continuously,
-# would have calibrated the alarm into silence within 10 calls. The
-# absolute floor at $0.30/call (10x the $0.03 healthy-turn target) is the
-# safety net for that case. Symmetric with the I/O fingerprint trigger,
-# which already has an absolute output<50 floor.
-_ABSOLUTE_COST_USD_FLOOR: float = 0.30
-
-# Story 61-followup-D — trained-into-silence mitigations layered onto the
-# 61-4 detector surface.
 #
-# (A) Baseline ceiling: clamp the rolling-mean baseline used in the
-# comparator at 3× the warmup floors. The 5×-cost-multiple and
-# 2×-I/O-fingerprint rules then have hard upper trip thresholds
-# (5×$0.09=$0.45 for cost; 2×36_000=72_000 tokens for input) regardless
-# of how high the rolling mean has drifted under sustained runaway. The
-# 60-7 annees_folles ramp (11 turns at $0.165 sustained, no 5x alarm)
-# is the specific shape this clamp catches on the input axis.
-_BASELINE_COST_CEILING: float = 3.0 * _WARMUP_COST_USD_FLOOR
-_BASELINE_INPUT_CEILING: int = 3 * _WARMUP_INPUT_TOKENS_FLOOR
+# Story 91-4 — the constants, the trigger comparator, the ceiling-env
+# parsing, and the cross-call-site ledger moved to
+# ``sidequest.agents.cost_safety`` so the Haiku adapters (``_AsideLlm``,
+# ``_IntentRouterLlm``) run the SAME detector and feed the SAME
+# per-session cumulative. Re-bound here (assignment, not import-as) for
+# the pre-91-4 importers — semantics and values unchanged.
 
-# (B) Absolute input_tokens floor: fires regardless of baseline AND
-# regardless of output_tokens. Catches the high-output sibling of the
-# 60K-in/12-out fingerprint — a 50K-in/800-out call slips past the I/O
-# fingerprint (output≥50) but is still a strong canary for snapshot
-# bloat / section misroute. Halfway between ~20K healthy steady-state
-# and 60K runaway fingerprint (story body §B).
-_ABSOLUTE_INPUT_TOKENS_FLOOR: int = 40_000
-
-# (C) Session-cumulative HARD KILL: per-session_id cumulative cost
-# capped at $10.00. Sized at ~333 healthy turns ($0.03 target) — generous
-# headroom for a real long session, tight enough that a 60-7-class
-# regression at $0.165/turn caps at ~60 turns / one playtest evening,
-# not a weekend. Overridable via SIDEQUEST_SESSION_COST_CEILING_USD for
-# the manual-playtest closure step (operator lowers to $0.50 to validate
-# end-to-end termination without running up a real bill).
-_SESSION_COST_CEILING_USD: float = 10.0
+_BASELINE_WINDOW_K = cost_safety._BASELINE_WINDOW_K
+_WARMUP_COST_USD_FLOOR = cost_safety._WARMUP_COST_USD_FLOOR
+_WARMUP_INPUT_TOKENS_FLOOR = cost_safety._WARMUP_INPUT_TOKENS_FLOOR
+_COST_TRIGGER_MULTIPLE = cost_safety._COST_TRIGGER_MULTIPLE
+_IO_FINGERPRINT_INPUT_MULTIPLE = cost_safety._IO_FINGERPRINT_INPUT_MULTIPLE
+_IO_FINGERPRINT_OUTPUT_CEILING = cost_safety._IO_FINGERPRINT_OUTPUT_CEILING
+_ABSOLUTE_COST_USD_FLOOR = cost_safety._ABSOLUTE_COST_USD_FLOOR
+_BASELINE_COST_CEILING = cost_safety._BASELINE_COST_CEILING
+_BASELINE_INPUT_CEILING = cost_safety._BASELINE_INPUT_CEILING
+_ABSOLUTE_INPUT_TOKENS_FLOOR = cost_safety._ABSOLUTE_INPUT_TOKENS_FLOOR
+_SESSION_COST_CEILING_USD = cost_safety._SESSION_COST_CEILING_USD
 
 
 class AnthropicSdkClientError(LlmClientError):
@@ -244,41 +216,25 @@ class AnthropicSdkClient:
         # Story 61-followup-D — per-session_id cumulative cost tracker
         # and the configurable ceiling. ``None`` session_ids bypass the
         # tracker (non-narrator codepaths). Env var override is parsed
-        # at construction with the same no-silent-fallback discipline as
-        # the cache TTL above — non-parseable or non-positive values
-        # raise AnthropicSdkConfigError immediately.
-        ceiling_env = os.environ.get("SIDEQUEST_SESSION_COST_CEILING_USD")
-        if ceiling_env is None:
-            self.session_cost_ceiling_usd: float = _SESSION_COST_CEILING_USD
-        else:
-            try:
-                parsed = float(ceiling_env)
-            except ValueError as exc:
-                raise AnthropicSdkConfigError(
-                    f"SIDEQUEST_SESSION_COST_CEILING_USD={ceiling_env!r} "
-                    "could not be parsed as a float."
-                ) from exc
-            # Reject NaN, ±inf, and non-positive values. Python's float()
-            # accepts 'inf', 'nan', 'infinity' silently — and NaN comparisons
-            # return False so `cumulative >= nan` never fires, which would
-            # silently disable the entire hard-kill feature. inf likewise
-            # produces an unreachable ceiling. Reviewer 2026-05-23 finding
-            # (security + rule-checker §11 + edge-hunter).
-            if not math.isfinite(parsed) or parsed <= 0.0:
-                raise AnthropicSdkConfigError(
-                    f"SIDEQUEST_SESSION_COST_CEILING_USD={ceiling_env!r} "
-                    "must be a finite positive number."
-                )
-            self.session_cost_ceiling_usd = parsed
+        # at construction with no-silent-fallback discipline — the
+        # validation (NaN/inf/non-positive → AnthropicSdkConfigError,
+        # Reviewer 2026-05-23 finding) moved to
+        # ``cost_safety.parse_session_cost_ceiling_usd`` (91-4) so the
+        # Haiku adapters apply the identical check at THEIR construction.
+        self.session_cost_ceiling_usd: float = cost_safety.parse_session_cost_ceiling_usd()
 
-        # Per-session_id cumulative cost. Populated after every successful
-        # call in ``complete_with_tools``; consulted at the next call's
-        # entry to short-circuit if the ceiling has already been crossed.
-        self._session_cumulative_cost_usd: dict[str, float] = {}
-        # Per-session "ceiling already announced" tracker. Prevents
-        # duplicate ``session.cost_ceiling_exceeded`` emits when the same
-        # session keeps trying to make calls after the kill.
-        self._session_ceiling_announced: set[str] = set()
+        # Per-session_id cumulative cost + announce set. Story 91-4:
+        # these are ALIASES onto the process-level ``SessionCostLedger``
+        # dicts — narrator, aside, and intent-router spend all land in
+        # ONE pot per session, so the running-total pulse reports the
+        # combined figure and a ceiling kill on any call site terminally
+        # refuses every other call site for that session. The instance
+        # attrs are kept (rather than reading the ledger inline) because
+        # the 61-followup-D machinery and its test suite address them
+        # here; aliasing changes sharing, not behavior.
+        _ledger = cost_safety.ledger()
+        self._session_cumulative_cost_usd: dict[str, float] = _ledger.cumulative_cost_usd
+        self._session_ceiling_announced: set[str] = _ledger.ceiling_announced
 
     @property
     def api_key_present(self) -> bool:
@@ -609,6 +565,7 @@ class AnthropicSdkClient:
                     cost_usd=cost,
                     model=response.model,
                     session_id=session_id,
+                    caller=caller,
                 )
 
                 # Story 61-followup-D §C.2 — per-iter cumulative update +
@@ -797,6 +754,12 @@ class AnthropicSdkClient:
         """
         self._cost_baseline.pop(session_id, None)
         self._input_tokens_baseline.pop(session_id, None)
+        # Story 91-4: the Haiku adapters keep their own rolling baselines
+        # in the process-level ledger (keyed (session_id, caller)); the
+        # same close_store eviction drops those too. Ledger cumulative/
+        # announce state is intentionally NOT cleared — same scope as the
+        # instance windows above (ADR-134 flagged follow-up).
+        cost_safety.ledger().reset_baselines(session_id)
 
     def _maybe_emit_cost_runaway(
         self,
@@ -806,6 +769,7 @@ class AnthropicSdkClient:
         cost_usd: float,
         model: str,
         session_id: str | None,
+        caller: str = "narrator",
     ) -> None:
         """Fire ``cost_runaway_suspected`` if any trigger matches.
 
@@ -861,106 +825,22 @@ class AnthropicSdkClient:
         if session_id is None:
             return
 
-        cost_window = self._cost_baseline.get(session_id)
-        input_window = self._input_tokens_baseline.get(session_id)
-        # Warmup uses floors when EITHER window hasn't accumulated K
-        # observations yet. Both windows are populated together at the
-        # append site, so they advance in lock-step; the OR is a
-        # defensive read against a partial-init race that today can't
-        # occur but would be a silent comparator bug if it ever did.
-        warmup = (
-            cost_window is None or input_window is None or len(cost_window) < _BASELINE_WINDOW_K
+        # Story 91-4 — the warmup/clamp/trigger/priority comparator and
+        # the event emit moved to ``cost_safety.check_and_emit_runaway``
+        # so the Haiku adapters fire the SAME detector. This method keeps
+        # the narrator's window storage (per-instance, keyed on plain
+        # session_id — the 61-followup-A contract) and the append-after-
+        # check ordering; only the evaluation is shared.
+        cost_safety.check_and_emit_runaway(
+            cost_window=self._cost_baseline.get(session_id),
+            input_window=self._input_tokens_baseline.get(session_id),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            model=model,
+            session_id=session_id,
+            caller=caller,
         )
-        if warmup:
-            baseline_cost = _WARMUP_COST_USD_FLOOR
-            baseline_input: float = _WARMUP_INPUT_TOKENS_FLOOR
-        else:
-            # Story 61-followup-D §A — clamp the rolling baseline at the
-            # ceiling so the comparator cannot self-train into silence
-            # under sustained ramps. The clamp is a CEILING (min, not
-            # fixed): healthy steady-state baselines below the ceiling
-            # are unchanged; only drifted baselines are clipped down.
-            # ``cost_window`` and ``input_window`` are non-None here
-            # because warmup is False (asserts on pyright path).
-            assert cost_window is not None and input_window is not None
-            observed_cost = sum(cost_window) / len(cost_window)
-            observed_input = sum(input_window) / len(input_window)
-            baseline_cost = min(observed_cost, _BASELINE_COST_CEILING)
-            baseline_input = min(observed_input, float(_BASELINE_INPUT_CEILING))
-
-        # Note: cost-multiple trigger erodes if a sustained runaway trains
-        # the baseline. The 61-followup-D §A clamp now lowers the trip
-        # threshold (5×$0.09=$0.45) against the drifted-baseline case;
-        # the absolute floor (>$0.30/call) remains the per-call safety
-        # net.
-        cost_triggered = cost_usd > _COST_TRIGGER_MULTIPLE * baseline_cost
-        io_triggered = (
-            input_tokens > _IO_FINGERPRINT_INPUT_MULTIPLE * baseline_input
-            and output_tokens < _IO_FINGERPRINT_OUTPUT_CEILING
-        )
-        # Story 61-followup-D §B — absolute input_tokens floor. Catches
-        # the high-output sibling of the 60K-in/12-out fingerprint
-        # (50K-in/800-out slips past io_fingerprint at output≥50 but is
-        # still a strong canary for snapshot bloat).
-        input_absolute_triggered = input_tokens > _ABSOLUTE_INPUT_TOKENS_FLOOR
-        # Architect spec-check A: absolute floor — fires regardless of how
-        # high the rolling baseline has self-trained. Safety net for the
-        # "trained-into-silence" case where a sustained runaway calibrates
-        # the rolling baseline upward.
-        absolute_triggered = cost_usd > _ABSOLUTE_COST_USD_FLOOR
-        any_triggered = (
-            cost_triggered or io_triggered or input_absolute_triggered or absolute_triggered
-        )
-
-        if any_triggered:
-            # Priority order (decision C, extended by 61-followup-D §B):
-            # 1. io_fingerprint (most diagnostic; matches 2026-05-23 shape)
-            # 2. input_absolute (input-axis canary independent of output)
-            # 3. cost_multiple (rolling-baseline-relative; existing trigger)
-            # 4. cost_absolute (safety net for trained-into-silence baseline)
-            if io_triggered:
-                trigger = "io_fingerprint"
-            elif input_absolute_triggered:
-                trigger = "input_absolute"
-            elif cost_triggered:
-                trigger = "cost_multiple"
-            else:
-                trigger = "cost_absolute"
-            fields: dict[str, Any] = {
-                "trigger": trigger,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost_usd": cost_usd,
-                "baseline_cost_usd": baseline_cost,
-                "baseline_input_tokens": baseline_input,
-                "warmup": warmup,
-                "model": model,
-                # Story 61-followup-A: GM-panel attribution for interleaved
-                # multi-session events. session_id is non-None here (the
-                # bypass returned early above).
-                "session_id": session_id,
-            }
-            logger.error(
-                "narrator.cost_runaway_suspected trigger=%s input=%d "
-                "output=%d cost_usd=%.6f baseline_cost_usd=%.6f "
-                "baseline_input_tokens=%.1f warmup=%s model=%s "
-                "session_id=%s",
-                trigger,
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                baseline_cost,
-                baseline_input,
-                warmup,
-                model,
-                session_id,
-            )
-            _watcher_publish_event(
-                "cost_runaway_suspected",
-                fields,
-                component="narrator.sdk",
-                severity="warn",
-            )
 
         # Story 61-followup-A — append AFTER the check so the comparator
         # always sees PRIOR observations. The append happens whether or
@@ -987,16 +867,13 @@ class AnthropicSdkClient:
         cumulative: float,
     ) -> AnthropicSdkCostCeilingExceeded:
         """Construct the typed ceiling-exceeded exception with the
-        canonical message + actionable fields. Centralized so the
-        three raise sites (pre-flight, already-announced re-raise,
-        first-crossing raise) cannot drift in wording or field shape.
+        canonical message + actionable fields. Centralized (now in
+        ``cost_safety.build_ceiling_exceeded``, 91-4) so no raise site —
+        narrator or adapter — can drift in wording or field shape.
         """
-        return AnthropicSdkCostCeilingExceeded(
-            f"Session {session_id!r} has exceeded its "
-            f"${self.session_cost_ceiling_usd:.2f} ceiling "
-            f"(cumulative=${cumulative:.4f}).",
+        return cost_safety.build_ceiling_exceeded(
             session_id=session_id,
-            cumulative_cost_usd=cumulative,
+            cumulative=cumulative,
             ceiling_usd=self.session_cost_ceiling_usd,
         )
 
@@ -1004,15 +881,14 @@ class AnthropicSdkClient:
         """Pre-flight check at the entry of ``complete_with_tools``.
 
         Raises ``AnthropicSdkCostCeilingExceeded`` if the session's
-        cumulative has already crossed the ceiling on a prior call.
-        Terminal: the announce-set entry from the first crossing keeps
-        subsequent refusals silent on the watcher (single emit per
-        session), but the exception still re-raises so callers cannot
-        accidentally swallow the kill.
+        cumulative has already crossed the ceiling on a prior call —
+        on ANY call site (story 91-4: the ledger pot is shared with the
+        Haiku adapters). Terminal: the announce-set entry from the first
+        crossing keeps subsequent refusals silent on the watcher (single
+        emit per session), but the exception still re-raises so callers
+        cannot accidentally swallow the kill.
         """
-        cumulative = self._session_cumulative_cost_usd.get(session_id, 0.0)
-        if cumulative >= self.session_cost_ceiling_usd:
-            raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
+        cost_safety.ledger().check_ceiling(session_id, ceiling_usd=self.session_cost_ceiling_usd)
 
     def _update_session_cumulative(
         self,
@@ -1028,47 +904,16 @@ class AnthropicSdkClient:
         raise ``AnthropicSdkCostCeilingExceeded``. The iter that crossed
         has ALREADY billed Anthropic — we cannot un-bill it. The kill
         is "no further calls", not "no further tokens for this call".
+        Implementation lives in ``cost_safety.SessionCostLedger`` (91-4)
+        so adapter spend feeds the same pot and the announce-once dedup
+        spans call sites.
         """
-        cumulative = self._session_cumulative_cost_usd.get(session_id, 0.0) + cost_usd
-        self._session_cumulative_cost_usd[session_id] = cumulative
-
-        if cumulative < self.session_cost_ceiling_usd:
-            return
-        # Already announced? Then we're in a re-raise path; do not emit
-        # again (single emit per session). This branch is only reachable
-        # when the same call's later iter crosses AFTER an earlier iter
-        # already crossed and the event already fired — should not
-        # happen in practice (the loop raises on first cross) but the
-        # guard is cheap.
-        if session_id in self._session_ceiling_announced:
-            raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
-
-        logger.error(
-            "session.cost_ceiling_exceeded session_id=%s "
-            "cumulative_cost_usd=%.6f ceiling_usd=%.2f model=%s",
-            session_id,
-            cumulative,
-            self.session_cost_ceiling_usd,
-            model,
+        cost_safety.ledger().update_cumulative(
+            session_id=session_id,
+            cost_usd=cost_usd,
+            model=model,
+            ceiling_usd=self.session_cost_ceiling_usd,
         )
-        _watcher_publish_event(
-            "session.cost_ceiling_exceeded",
-            {
-                "session_id": session_id,
-                "cumulative_cost_usd": cumulative,
-                "ceiling_usd": self.session_cost_ceiling_usd,
-                "model": model,
-            },
-            component="narrator.sdk",
-            severity="error",
-        )
-        # State cleanup ordering (lang-review §14): announce-set add
-        # MUST be after the side-effecting emit. If _watcher_publish_event
-        # raised, an earlier add would poison the announced set and the
-        # GM-panel event would be permanently lost on retry. Reviewer
-        # 2026-05-23 rule-checker finding.
-        self._session_ceiling_announced.add(session_id)
-        raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
 
     def _emit_cache_write_split(
         self,

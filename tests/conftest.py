@@ -12,6 +12,23 @@ from typing import Any
 import pytest
 import yaml
 
+
+@pytest.fixture(autouse=True)
+def _reset_cost_safety_ledger() -> Iterator[None]:
+    """Story 91-4: the cross-call-site cost ledger
+    (``sidequest.agents.cost_safety``) is process-global by design — one
+    cumulative pot per session shared by narrator, aside, and intent-router
+    spend. In production its lifetime IS the contract (ADR-122 never-evict);
+    in the suite it must not leak per-session cumulative/baseline state
+    between tests that happen to reuse a session id within an xdist worker.
+    Cleared BEFORE each test (not after, so post-mortem inspection of a
+    failed test's state stays possible)."""
+    from sidequest.agents.cost_safety import ledger
+
+    ledger().reset_for_tests()
+    yield
+
+
 # ---------------------------------------------------------------------------
 # Ephemeral real-Postgres fixtures (ADR-115). Defined at the tests/ root so
 # the few non-persistence suites that drive real PG (e.g.

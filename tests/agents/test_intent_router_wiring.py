@@ -64,7 +64,7 @@ def test_intent_router_constructible_with_sdk_haiku_adapter(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-only")
     with patch("anthropic.AsyncAnthropic") as sdk_class:
         sdk_class.return_value = object()
-        llm = build_intent_router_llm()
+        llm = build_intent_router_llm(session_id=None)
         router = IntentRouter(llm=llm)
         assert router is not None
 
@@ -146,7 +146,7 @@ def test_build_intent_router_llm_fails_loud_without_api_key(
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(LlmClientError):
-        build_intent_router_llm()
+        build_intent_router_llm(session_id=None)
 
 
 @pytest.mark.asyncio
@@ -188,7 +188,7 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
     fake_client_instance.messages.create = AsyncMock(return_value=fake_response)
 
     with patch("anthropic.AsyncAnthropic", return_value=fake_client_instance):
-        llm = build_intent_router_llm()
+        llm = build_intent_router_llm(session_id=None)
         result = await llm.emit_tool(
             system="sys",
             user="usr",

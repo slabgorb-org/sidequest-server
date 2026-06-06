@@ -494,7 +494,7 @@ def _stub_intent_router_factory(monkeypatch):
 
     monkeypatch.setattr(
         "sidequest.server.intent_router_pass.build_intent_router_for_session",
-        lambda: stub_router,
+        lambda **_kwargs: stub_router,
     )
 
 

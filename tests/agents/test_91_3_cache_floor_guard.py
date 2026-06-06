@@ -125,7 +125,7 @@ def test_build_raises_cache_floor_error_below_floor(
     )
 
     with pytest.raises(IntentRouterCacheFloorError):
-        build_intent_router_llm()
+        build_intent_router_llm(session_id=None)
 
 
 def test_cache_floor_error_is_llm_client_error() -> None:
@@ -152,7 +152,7 @@ def test_cache_floor_error_message_names_floor_and_trap(
     )
 
     with pytest.raises(IntentRouterCacheFloorError) as exc_info:
-        build_intent_router_llm()
+        build_intent_router_llm(session_id=None)
 
     message = str(exc_info.value)
     assert _FLOOR_PATTERN.search(message), (
@@ -177,7 +177,7 @@ def test_build_succeeds_with_production_prefix(
 
     from sidequest.agents.llm_factory import build_intent_router_llm
 
-    adapter = build_intent_router_llm()
+    adapter = build_intent_router_llm(session_id=None)
     assert hasattr(adapter, "emit_tool"), (
         "build must return the IntentRouterLLM-shaped adapter on a passing prefix"
     )
@@ -200,7 +200,7 @@ def test_guard_measures_combined_prefix_not_system_alone(
 
     from sidequest.agents.llm_factory import build_intent_router_llm
 
-    adapter = build_intent_router_llm()  # must not raise
+    adapter = build_intent_router_llm(session_id=None)  # must not raise
     assert hasattr(adapter, "emit_tool")
 
 
@@ -216,7 +216,7 @@ def test_aside_build_is_not_floor_guarded(
 
     from sidequest.agents.llm_factory import build_aside_llm
 
-    adapter = build_aside_llm()  # must not raise despite sub-floor env
+    adapter = build_aside_llm(session_id=None)  # must not raise despite sub-floor env
     assert hasattr(adapter, "complete")
 
 
@@ -241,7 +241,7 @@ def test_production_session_build_path_is_floor_guarded(
     from sidequest.server.intent_router_pass import build_intent_router_for_session
 
     with pytest.raises(IntentRouterCacheFloorError):
-        build_intent_router_for_session()
+        build_intent_router_for_session(session_id=None)
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +260,7 @@ def test_passing_build_emits_cache_floor_span(
 
     from sidequest.agents.llm_factory import build_intent_router_llm
 
-    build_intent_router_llm()
+    build_intent_router_llm(session_id=None)
 
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "intent_router.cache_floor"]
     assert spans, "build must emit an intent_router.cache_floor span"
@@ -289,7 +289,7 @@ def test_failing_build_emits_cache_floor_span_before_raising(
     )
 
     with pytest.raises(IntentRouterCacheFloorError):
-        build_intent_router_llm()
+        build_intent_router_llm(session_id=None)
 
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "intent_router.cache_floor"]
     assert spans, "the refused build must still emit intent_router.cache_floor"
@@ -347,7 +347,7 @@ async def test_intent_router_live_cache_write_then_read(otel_capture) -> None:
     )
     from sidequest.agents.llm_factory import build_intent_router_llm
 
-    adapter = build_intent_router_llm()
+    adapter = build_intent_router_llm(session_id=None)
     salted_system = _SYSTEM_PROMPT + f"\n<!-- cache-proof nonce: {uuid.uuid4()} -->"
     tool_schema = _dispatch_tool_schema()
 

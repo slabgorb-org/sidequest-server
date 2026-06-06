@@ -240,22 +240,26 @@ def test_render_list_item_name_priority_skips_falsy_intermediate():
     assert "<h3>Fallback Id</h3>" in html
 
 
-def test_render_at_depth_cap_falls_back_to_pre():
-    # Build a 7-deep nested dict, one level past the cap (6).
+def test_render_at_depth_cap_suppresses_raw_dump():
+    # Build a 7-deep nested dict, one level past the cap (6). A player
+    # reference page must NEVER emit a raw YAML/dict <pre> dump — the
+    # over-cap subtree is suppressed (emits nothing) instead.
     deep = {"k": "leaf"}
     for _ in range(7):
         deep = {"k": deep}
     html = render_node(deep)
-    assert "<pre>" in html
-    assert "</pre>" in html
+    assert "<pre>" not in html
+    assert "</pre>" not in html
 
 
-def test_pre_fallback_contains_yaml_redump():
+def test_depth_cap_suppression_emits_no_raw_yaml_text():
+    # The deepest over-cap subtree must not leak its raw YAML re-dump
+    # (e.g. "leaf: ..." / "g:") onto the page.
     deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": "leaf"}}}}}}}
     html = render_node(deep)
-    # The yaml redump should appear inside the <pre> for the deepest sub-tree
-    assert "leaf" in html
-    # Sanity check that the redump is valid yaml (uses the _yaml alias).
+    assert "<pre>" not in html
+    assert "g:" not in html
+    # Sanity check that the yaml alias is still importable.
     assert _yaml.safe_load("leaf: 1") == {"leaf": 1}
 
 
@@ -463,3 +467,44 @@ def test_assemble_handles_malformed_yaml_with_loud_marker(tmp_path):
     with pytest.raises(ValueError) as exc:
         assemble_rules_page("demo", pack_dir)
     assert "archetypes.yaml" in str(exc.value)
+
+
+def test_glenross_time_precision_renders_without_raw_dict_text():
+    """Regression: the live glenross calendar bug. A deeply-nested
+    `time_precision` value (a dict-of-dict-of-dict deeper than the cap)
+    must never dump a raw `{registers: {...}}` / `registers:` blob onto the
+    player-facing page; the over-cap subtree is suppressed instead."""
+    time_precision = {
+        "registers": {
+            "gentry": {"level": "minute", "example": "tea at four"},
+            "staff": {"level": "hour", "example": "dawn chores"},
+        }
+    }
+    # Wrap so `registers`/`level`/`example` cross the depth cap (6).
+    node = {"time_precision": time_precision}
+    for _ in range(6):
+        node = {"calendar": node}
+    html = render_node(node)
+    # No raw dict-repr or YAML-dump text leaks.
+    assert "<pre>" not in html
+    assert "{'" not in html
+    assert "registers:" not in html
+    assert "{registers:" not in html
+    assert "level: minute" not in html
+
+
+def test_suppression_preserves_scalars_and_list_of_dicts():
+    """The suppression path must only eat the raw-dump case. Ordinary
+    scalars and shallow list-of-dicts (rendered as cards) still render."""
+    node = {
+        "tagline": "A quiet manor.",
+        "people": [
+            {"name": "Ada", "role": "butler"},
+            {"name": "Boris", "role": "cook"},
+        ],
+    }
+    html = render_node(node)
+    assert "<p>A quiet manor.</p>" in html
+    assert "<h3>Ada</h3>" in html
+    assert "<p>butler</p>" in html
+    assert "<h3>Boris</h3>" in html

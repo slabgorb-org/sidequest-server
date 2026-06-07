@@ -833,6 +833,16 @@ class CharGenMixin:
             # Discard the "Adventurer" placeholder the fresh chapter may
             # author — the chargen-built character owns that slot.
             materialized.characters = [character]
+            # Playtest 2026-06-07 (No Silent Fallbacks): a chapter-seeded
+            # trope id with no definition in genre OR world tropes.yaml is
+            # a content bug — fail loud ONCE here at seed time (ERROR log +
+            # watcher event) instead of entity_sync warn-spamming
+            # ``project_failed error=no_definition`` every turn forever.
+            from sidequest.server.dispatch.entity_sync import (
+                audit_seeded_trope_definitions,
+            )
+
+            audit_seeded_trope_definitions(sd, materialized)
             # Story 77-1 (ADR-137 Option A): seed the campaign spine —
             # quest_log + quest_anchors + active_stakes — from the chargen
             # PC's drive/calling so the session starts with a non-empty

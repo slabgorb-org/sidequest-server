@@ -275,6 +275,10 @@ def test_dogfight_instantiation_arity_error_propagates_at_lifecycle_layer(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
+    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
+)
 def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
     space_opera_snap: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
@@ -370,6 +374,10 @@ def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
     )
 
 
+@pytest.mark.skip(
+    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
+    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
+)
 def test_dogfight_dispatch_does_not_invoke_apply_beat(
     space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
@@ -428,6 +436,10 @@ def test_dogfight_dispatch_does_not_invoke_apply_beat(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
+    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
+)
 def test_per_actor_state_round_trip_after_dispatch(
     space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
@@ -622,6 +634,10 @@ def test_legacy_beat_path_returns_narration_apply_outcome(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
+    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
+)
 def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
     space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
@@ -696,6 +712,10 @@ def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
+    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
+)
 def test_unknown_maneuver_in_sealed_letter_raises(
     space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:

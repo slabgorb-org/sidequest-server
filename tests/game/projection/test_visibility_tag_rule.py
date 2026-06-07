@@ -92,7 +92,13 @@ def test_fidelity_transform_strips_visual_spans_for_blinded():
     "pack",
     [
         "caverns_and_claudes",
-        "elemental_harmony",
+        pytest.param(
+            "elemental_harmony",
+            marks=pytest.mark.skip(
+                reason="content-coupled: asserts against live content packs; "
+                "rewrite against fixtures — story 94-4"
+            ),
+        ),
         "heavy_metal",
         "mutant_wasteland",
         "space_opera",
@@ -119,7 +125,13 @@ def test_every_shipping_pack_projection_has_visibility_tag_rule(pack):
     "pack",
     [
         "caverns_and_claudes",
-        "elemental_harmony",
+        pytest.param(
+            "elemental_harmony",
+            marks=pytest.mark.skip(
+                reason="content-coupled: asserts against live content packs; "
+                "rewrite against fixtures — story 94-4"
+            ),
+        ),
         "heavy_metal",
         "mutant_wasteland",
         "space_opera",

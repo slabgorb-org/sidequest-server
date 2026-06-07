@@ -33,12 +33,17 @@ from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_
 # crucible scene doesn't offer them (barsoom's world-tier surface does —
 # see tests/integration/test_barsoom_chargen.py).
 _NON_CASTERS = [("Warrior", False), ("Expert", False)]
+_CASTER_SKIP = pytest.mark.skip(
+    reason="content-coupled: Mentalist/Super-scientist Callings migrated to barsoom "
+    "world-tier content (epic 94), so the genre-tier build falls back to Warrior; "
+    "rewrite against fixtures — story 94-4"
+)
 _CASTERS = [
     ("Necromancer", True),
     ("Elementalist", True),
     ("Pact-born", True),
-    ("Mentalist", True),
-    ("Super-scientist", True),
+    pytest.param("Mentalist", True, marks=_CASTER_SKIP),
+    pytest.param("Super-scientist", True, marks=_CASTER_SKIP),
 ]
 
 

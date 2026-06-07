@@ -147,7 +147,9 @@ def test_listing_returns_fixture_metadata_fields(
         encoding="utf-8",
     )
 
-    app = _build_app(monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir)
+    app = _build_app(
+        monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
+    )
     client = TestClient(app)
 
     r = client.get("/dev/scenes")
@@ -156,7 +158,9 @@ def test_listing_returns_fixture_metadata_fields(
     assert len(body) == 1, f"expected 1 fixture; got {len(body)}: {body!r}"
 
     item = body[0]
-    assert item["name"] == "test_fixture", f"name must be the fixture file stem; got {item!r}"
+    assert item["name"] == "test_fixture", (
+        f"name must be the fixture file stem; got {item!r}"
+    )
     assert item["genre"] == "test_genre", f"genre field missing or wrong; got {item!r}"
     assert item["world"] == "test_world", f"world field missing or wrong; got {item!r}"
     assert item["description"] == "A test fixture for listing", (
@@ -177,7 +181,9 @@ def test_listing_includes_fixtures_without_description(
         encoding="utf-8",
     )
 
-    app = _build_app(monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir)
+    app = _build_app(
+        monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
+    )
     client = TestClient(app)
 
     r = client.get("/dev/scenes")
@@ -199,10 +205,14 @@ def test_listing_scans_all_valid_yaml_files(
     (fixtures_dir / "alpha.yaml").write_text(
         "name: Alpha\ngenre: g1\nworld: w1\n", encoding="utf-8"
     )
-    (fixtures_dir / "beta.yaml").write_text("name: Beta\ngenre: g2\nworld: w2\n", encoding="utf-8")
+    (fixtures_dir / "beta.yaml").write_text(
+        "name: Beta\ngenre: g2\nworld: w2\n", encoding="utf-8"
+    )
     (fixtures_dir / "readme.txt").write_text("not a fixture", encoding="utf-8")
 
-    app = _build_app(monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir)
+    app = _build_app(
+        monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
+    )
     client = TestClient(app)
 
     r = client.get("/dev/scenes")
@@ -219,10 +229,16 @@ def test_listing_excludes_invalid_yaml_gracefully(
     are excluded from the listing rather than crashing the endpoint."""
     fixtures_dir = tmp_path / "fixtures"
     fixtures_dir.mkdir()
-    (fixtures_dir / "good.yaml").write_text("name: Good\ngenre: g1\nworld: w1\n", encoding="utf-8")
-    (fixtures_dir / "bad.yaml").write_text("this is not valid fixture yaml\n", encoding="utf-8")
+    (fixtures_dir / "good.yaml").write_text(
+        "name: Good\ngenre: g1\nworld: w1\n", encoding="utf-8"
+    )
+    (fixtures_dir / "bad.yaml").write_text(
+        "this is not valid fixture yaml\n", encoding="utf-8"
+    )
 
-    app = _build_app(monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir)
+    app = _build_app(
+        monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
+    )
     client = TestClient(app)
 
     r = client.get("/dev/scenes")
@@ -239,7 +255,9 @@ def test_listing_returns_empty_list_when_no_fixtures(
     fixtures_dir = tmp_path / "fixtures"
     fixtures_dir.mkdir()
 
-    app = _build_app(monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir)
+    app = _build_app(
+        monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
+    )
     client = TestClient(app)
 
     r = client.get("/dev/scenes")
@@ -262,7 +280,9 @@ def test_listing_validates_fixture_names_with_regex(
         "name: Spaced\ngenre: g1\nworld: w1\n", encoding="utf-8"
     )
 
-    app = _build_app(monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir)
+    app = _build_app(
+        monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
+    )
     client = TestClient(app)
 
     r = client.get("/dev/scenes")
@@ -287,7 +307,9 @@ def test_listing_emits_otel_span(
     )
 
     captured = _capture_events(monkeypatch)
-    app = _build_app(monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir)
+    app = _build_app(
+        monkeypatch, save_dir=tmp_path, fixtures_dir=fixtures_dir
+    )
     client = TestClient(app)
 
     r = client.get("/dev/scenes")
@@ -331,7 +353,8 @@ def test_create_app_accepts_fixtures_dir_kwarg(
         "app.state.fixtures_dir must be set when passed as constructor arg"
     )
     assert app.state.fixtures_dir == fixtures_dir, (
-        f"app.state.fixtures_dir must match the constructor arg; got {app.state.fixtures_dir!r}"
+        f"app.state.fixtures_dir must match the constructor arg; "
+        f"got {app.state.fixtures_dir!r}"
     )
 
 
@@ -383,5 +406,6 @@ def test_listing_returns_canonical_fixtures_from_real_dir(
     expected = {"combat_brawl_wasteland", "social_poker_wasteland"}
     missing = expected - names
     assert not missing, (
-        f"canonical fixtures missing from listing: {missing!r}; returned names: {sorted(names)!r}"
+        f"canonical fixtures missing from listing: {missing!r}; "
+        f"returned names: {sorted(names)!r}"
     )

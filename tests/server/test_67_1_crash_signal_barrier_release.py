@@ -61,9 +61,7 @@ from sidequest.protocol.messages import PlayerActionMessage, PlayerActionPayload
 from sidequest.protocol.types import NonBlankString
 
 
-def _build_crash_message(
-    player_id: str, *, reason: str = "render_crash", component: str = "GameBoard"
-):
+def _build_crash_message(player_id: str, *, reason: str = "render_crash", component: str = "GameBoard"):
     """Construct the planned CLIENT_ERROR message.
 
     Imported inside the helper so a missing protocol class raises inside the
@@ -188,7 +186,9 @@ async def test_crash_signal_releases_barrier_and_dispatches_remaining(
         f"the turn with p1's submission. The narrator was called "
         f"{len(captured)} times — the table's turn is orphaned."
     )
-    assert "I bar the door" in captured[0], "The dispatched turn must carry p1's submitted action."
+    assert "I bar the door" in captured[0], (
+        "The dispatched turn must carry p1's submitted action."
+    )
 
 
 @pytest.mark.asyncio
@@ -253,9 +253,7 @@ async def test_crash_release_in_three_player_room_then_remaining_submit_fires(
     # p1 submits — 1 of 3, barrier waits.
     r1 = await handler1._handle_player_action(
         PlayerActionMessage(
-            payload=PlayerActionPayload(
-                action=NonBlankString.model_validate("I take point"), round=0
-            ),
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I take point"), round=0),
             player_id="p1",
         )
     )
@@ -272,9 +270,7 @@ async def test_crash_release_in_three_player_room_then_remaining_submit_fires(
     # p3 submits — {p1, p3} now satisfies the crash-reduced denominator (2).
     await handler3._handle_player_action(
         PlayerActionMessage(
-            payload=PlayerActionPayload(
-                action=NonBlankString.model_validate("I cover the rear"), round=0
-            ),
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I cover the rear"), round=0),
             player_id="p3",
         )
     )
@@ -478,9 +474,7 @@ async def test_crash_signal_for_already_submitted_player_is_noop(
 
     await handler._handle_player_action(
         PlayerActionMessage(
-            payload=PlayerActionPayload(
-                action=NonBlankString.model_validate("I submit first"), round=0
-            ),
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I submit first"), round=0),
             player_id="p1",
         )
     )

@@ -168,7 +168,9 @@ def test_situational_modifier_can_turn_a_loss_into_a_catch() -> None:
 def test_negative_situational_modifier_can_turn_a_catch_into_an_escape() -> None:
     """Losing sight of the quarry (−2) drops a would-be catch under the
     pace: 16 − 2 = 14 < 15."""
-    result = resolve_pursuit(pursuer_total=16, pace=15, situational_modifier=PURSUER_CANNOT_SEE)
+    result = resolve_pursuit(
+        pursuer_total=16, pace=15, situational_modifier=PURSUER_CANNOT_SEE
+    )
     assert result.pursuer_effective == 14
     assert result.outcome is PursuitOutcome.EVADED
 

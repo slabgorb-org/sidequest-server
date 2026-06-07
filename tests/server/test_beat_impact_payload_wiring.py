@@ -38,22 +38,10 @@ def _cdef() -> ConfrontationDef:
         opponent_metric=MetricDef(name="barbs", starting=0, threshold=7),
         beats=[
             BeatDef.model_validate(
-                {
-                    "id": "concede",
-                    "label": "Concede Gracefully",
-                    "kind": "push",
-                    "base": 1,
-                    "stat_check": "Humour",
-                }
+                {"id": "concede", "label": "Concede Gracefully", "kind": "push", "base": 1, "stat_check": "Humour"}
             ),
             BeatDef.model_validate(
-                {
-                    "id": "barb",
-                    "label": "Sharp Barb",
-                    "kind": "strike",
-                    "base": 2,
-                    "stat_check": "Wit",
-                }
+                {"id": "barb", "label": "Sharp Barb", "kind": "strike", "base": 2, "stat_check": "Wit"}
             ),
         ],
     )
@@ -73,13 +61,7 @@ def _enc() -> StructuredEncounter:
 
 def _push_beat() -> BeatDef:
     return BeatDef.model_validate(
-        {
-            "id": "concede",
-            "label": "Concede Gracefully",
-            "kind": "push",
-            "base": 1,
-            "stat_check": "Humour",
-        }
+        {"id": "concede", "label": "Concede Gracefully", "kind": "push", "base": 1, "stat_check": "Humour"}
     )
 
 
@@ -124,13 +106,7 @@ def test_payload_impact_is_player_side_not_opponent():
         enc,
         enc.find_actor("Pryce"),
         BeatDef.model_validate(
-            {
-                "id": "set_up",
-                "label": "Set Up",
-                "kind": "angle",
-                "target_tag": "Off-Balance",
-                "stat_check": "Cunning",
-            }
+            {"id": "set_up", "label": "Set Up", "kind": "angle", "target_tag": "Off-Balance", "stat_check": "Cunning"}
         ),
         RollOutcome.Success,
     )

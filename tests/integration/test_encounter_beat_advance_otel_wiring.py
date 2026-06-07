@@ -134,7 +134,8 @@ async def _wait_for_beat_event(captured: list[dict], *, timeout_s: float = 1.0) 
     phase chooses. Thin wrapper over the shared ``wait_for_state_transition``."""
     return await wait_for_state_transition(
         captured,
-        lambda evt: "beat_from" in evt.get("fields", {}) and "beat_to" in evt.get("fields", {}),
+        lambda evt: "beat_from" in evt.get("fields", {})
+        and "beat_to" in evt.get("fields", {}),
         timeout_s=timeout_s,
         describe="carrying beat_from/beat_to",
     )

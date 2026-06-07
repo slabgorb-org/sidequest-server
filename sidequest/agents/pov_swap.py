@@ -150,6 +150,8 @@ def _looks_like_verb(word: str) -> bool:
     return lower.endswith("s") and not lower.endswith("ss")
 
 
+
+
 def _is_pronoun(word: str) -> bool:
     """Check if a word is a pronoun (subject, object, or possessive form).
 
@@ -171,31 +173,16 @@ def _is_pronoun(word: str) -> bool:
     # All canonical pronouns across all three pronoun sets
     pronouns = {
         # he/him set
-        "he",
-        "him",
-        "his",
+        "he", "him", "his",
         # she/her set
-        "she",
-        "her",
+        "she", "her",
         # they/them set
-        "they",
-        "them",
-        "their",
+        "they", "them", "their",
         # Generic/other pronouns that should block Pass 8/9
-        "i",
-        "me",
-        "we",
-        "us",
-        "you",
-        "it",
+        "i", "me", "we", "us", "you", "it",
         # Possessive / absolute forms that end in -s (would otherwise trip
         # the naive _looks_like_verb -s test).
-        "its",
-        "hers",
-        "ours",
-        "yours",
-        "theirs",
-        "mine",
+        "its", "hers", "ours", "yours", "theirs", "mine",
     }
     return lower in pronouns
 
@@ -327,7 +314,7 @@ def _rewrite_sentence(
         nonlocal count
         count += 1
         at_start = (m.start() == 0) or _is_sentence_start_in(text, m.start())
-        rest = text[m.end() :]
+        rest = text[m.end():]
         stripped = rest.lstrip()
         is_predicate = (
             not stripped  # end of string
@@ -506,7 +493,11 @@ def _rewrite_sentence(
                     return m.group(0)
                 count += 1
                 return f"and {conjugated} {word2}"
-            if _is_skippable_adverb(word1) and _looks_like_verb(word2) and not _is_pronoun(word2):
+            if (
+                _is_skippable_adverb(word1)
+                and _looks_like_verb(word2)
+                and not _is_pronoun(word2)
+            ):
                 # word1 is a leading adverb/"then" — skip it, conjugate word2.
                 # Restricting to real adverbs (not "any lowercase non-pronoun")
                 # stops numbers/adjectives/participles ("four arms", "ivory
@@ -574,7 +565,11 @@ def _rewrite_sentence(
                     return m.group(0)
                 count += 1
                 return f", {conjugated} {word2}"
-            if _is_skippable_adverb(word1) and _looks_like_verb(word2) and not _is_pronoun(word2):
+            if (
+                _is_skippable_adverb(word1)
+                and _looks_like_verb(word2)
+                and not _is_pronoun(word2)
+            ):
                 # word1 is a leading adverb/"then" — skip it, conjugate word2.
                 # Restricting to real adverbs (not "any lowercase non-pronoun")
                 # stops a number/adjective/participle ("four arms", "ivory

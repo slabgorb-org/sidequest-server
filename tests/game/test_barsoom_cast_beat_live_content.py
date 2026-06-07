@@ -68,7 +68,9 @@ def _spellcasting(prepared: list[str]):
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 @pytest.mark.parametrize("display_name,seed_spell", _BARSOOM_CASTERS)
-def test_barsoom_caster_sees_cast_spell_in_live_combat(display_name: str, seed_spell: str) -> None:
+def test_barsoom_caster_sees_cast_spell_in_live_combat(
+    display_name: str, seed_spell: str
+) -> None:
     """A live-content Barsoom caster with casts + prepared sees cast_spell."""
     from sidequest.game.beat_filter import beats_available_for
 
@@ -112,4 +114,6 @@ def test_live_warrior_still_excluded_from_cast_spell() -> None:
         spellcasting=_spellcasting(["phantom_bowmen"]),
     )
     beat_ids = [b.id for b in out]
-    assert "cast_spell" not in beat_ids, f"Warrior must never see cast_spell; got {beat_ids}"
+    assert "cast_spell" not in beat_ids, (
+        f"Warrior must never see cast_spell; got {beat_ids}"
+    )

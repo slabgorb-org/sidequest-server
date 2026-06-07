@@ -146,9 +146,13 @@ class TestPartyMemberRigPoolExtraction:
 
     def test_party_member_from_character_no_rig_is_none(self) -> None:
         """PartyMember from a character without rig_pool has None composure."""
-        pytest.skip("Needs fixture infrastructure — Dev implements in GREEN")
+        pytest.skip(
+            "Needs fixture infrastructure — Dev implements in GREEN"
+        )
 
     def test_party_member_from_character_crash_injuries_in_tags(self) -> None:
         """PartyMember from a crashed character carries injury statuses
         in injury_tags."""
-        pytest.skip("Needs fixture infrastructure — Dev implements in GREEN")
+        pytest.skip(
+            "Needs fixture infrastructure — Dev implements in GREEN"
+        )

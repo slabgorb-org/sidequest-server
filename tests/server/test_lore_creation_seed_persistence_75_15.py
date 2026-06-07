@@ -112,7 +112,8 @@ def _pg_lore_rows(slug: str) -> list[tuple]:
     repo = _pg_repo_for_slug(slug)
     with db_pool.get_pool().connection() as conn:
         return conn.execute(
-            "SELECT id, category, source FROM lore_fragments WHERE session_id = %s ORDER BY id",
+            "SELECT id, category, source FROM lore_fragments "
+            "WHERE session_id = %s ORDER BY id",
             (repo.session_id,),
         ).fetchall()
 

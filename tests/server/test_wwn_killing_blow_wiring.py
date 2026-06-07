@@ -82,8 +82,8 @@ def _make_wwn_pack(*, shock_weapon: bool = False):
     if shock_weapon:
         damage_override = DamageSpec(
             dice="1d6",
-            shock=3,  # chip amount X
-            shock_ac=15,  # AC ceiling Y; opponent AC (10) <= 15 → chip applies on miss
+            shock=3,       # chip amount X
+            shock_ac=15,   # AC ceiling Y; opponent AC (10) <= 15 → chip applies on miss
         )
     else:
         damage_override = DamageSpec(dice="1d6")
@@ -294,7 +294,8 @@ def test_wwn_warrior_strike_emits_killing_blow_span(otel_capture):
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert "wwn.killing_blow" in span_names, (
-        f"wwn.killing_blow span must fire when a WWN Warrior strikes; got spans: {span_names}"
+        f"wwn.killing_blow span must fire when a WWN Warrior strikes; "
+        f"got spans: {span_names}"
     )
     # Assert correct bonus in span attributes.
     kb_spans = [s for s in otel_capture.get_finished_spans() if s.name == "wwn.killing_blow"]
@@ -330,13 +331,8 @@ def test_wwn_warrior_strike_adds_bonus_to_hp_damage(otel_capture, monkeypatch):
     hp_before_w = target_w.hp.current
 
     _drive_strike(
-        snap=snap_w,
-        enc=enc_w,
-        pack=pack_warrior,
-        attacker="Torvin",
-        request_id="kb-hp-warrior",
-        round_number=1,
-        face=20,
+        snap=snap_w, enc=enc_w, pack=pack_warrior, attacker="Torvin",
+        request_id="kb-hp-warrior", round_number=1, face=20,
     )
     warrior_dmg = hp_before_w - target_w.hp.current
 
@@ -348,13 +344,8 @@ def test_wwn_warrior_strike_adds_bonus_to_hp_damage(otel_capture, monkeypatch):
     hp_before_s = target_s.hp.current
 
     _drive_strike(
-        snap=snap_s,
-        enc=enc_s,
-        pack=pack_sage,
-        attacker="Mira",
-        request_id="kb-hp-nonwarrior",
-        round_number=1,
-        face=20,
+        snap=snap_s, enc=enc_s, pack=pack_sage, attacker="Mira",
+        request_id="kb-hp-nonwarrior", round_number=1, face=20,
     )
     non_warrior_dmg = hp_before_s - target_s.hp.current
 
@@ -376,18 +367,14 @@ def test_wwn_non_warrior_strike_no_killing_blow_span(otel_capture):
     snap, enc = _make_snapshot_and_encounter("Mira", "Boneyard", char_class="Sage")
 
     _drive_strike(
-        snap=snap,
-        enc=enc,
-        pack=pack,
-        attacker="Mira",
-        request_id="kb-nonwarrior",
-        round_number=1,
-        face=20,
+        snap=snap, enc=enc, pack=pack, attacker="Mira",
+        request_id="kb-nonwarrior", round_number=1, face=20,
     )
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert "wwn.killing_blow" not in span_names, (
-        f"wwn.killing_blow span must NOT fire for a wwn non-Warrior; got spans: {span_names}"
+        f"wwn.killing_blow span must NOT fire for a wwn non-Warrior; "
+        f"got spans: {span_names}"
     )
 
 
@@ -439,14 +426,8 @@ def _make_native_pack():
     pack = MagicMock()
     pack.rules = RulesConfig(
         ruleset="native",
-        ability_score_names=[
-            "STRENGTH",
-            "DEXTERITY",
-            "CONSTITUTION",
-            "INTELLIGENCE",
-            "WISDOM",
-            "CHARISMA",
-        ],
+        ability_score_names=["STRENGTH", "DEXTERITY", "CONSTITUTION",
+                             "INTELLIGENCE", "WISDOM", "CHARISMA"],
         confrontations=[cdef],
     )
     pack.inventory = None
@@ -471,10 +452,8 @@ def test_non_wwn_warrior_no_killing_blow_span(otel_capture):
     pack = _make_native_pack()
 
     # Use the native pack's stat names for the character.
-    atk_stats = {
-        s: 12
-        for s in ["STRENGTH", "DEXTERITY", "CONSTITUTION", "INTELLIGENCE", "WISDOM", "CHARISMA"]
-    }
+    atk_stats = {s: 12 for s in ["STRENGTH", "DEXTERITY", "CONSTITUTION",
+                                  "INTELLIGENCE", "WISDOM", "CHARISMA"]}
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.game.encounter import (
@@ -497,24 +476,17 @@ def test_non_wwn_warrior_no_killing_blow_span(otel_capture):
         level=4,
     )
     attacker_char = Character(
-        core=atk_core,
-        char_class="Fighter",
-        race="Human",
-        backstory="Soldier.",
-        stats=dict(atk_stats),
+        core=atk_core, char_class="Fighter", race="Human",
+        backstory="Soldier.", stats=dict(atk_stats),
     )
     opp_core = CreatureCore(
-        name="Foe",
-        description="A foe",
-        personality="hostile",
+        name="Foe", description="A foe", personality="hostile",
         inventory=Inventory(),
         hp={"current": 20, "max": 20, "base_max": 20},
         armor_class=10,
     )
 
-    snap = GameSnapshot(
-        genre_slug="caverns_and_claudes", world_slug="test", turn_manager=TurnManager()
-    )
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="test", turn_manager=TurnManager())
     snap.characters.append(attacker_char)
     snap.npcs.append(Npc(core=opp_core))
 
@@ -522,17 +494,12 @@ def test_non_wwn_warrior_no_killing_blow_span(otel_capture):
         encounter_type="combat",
         player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=7),
         opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=7),
-        beat=0,
-        structured_phase=EncounterPhase.Setup,
-        secondary_stats=None,
+        beat=0, structured_phase=EncounterPhase.Setup, secondary_stats=None,
         actors=[
             EncounterActor(name="Aldric", role="combatant", side="player"),
             EncounterActor(name="Foe", role="combatant", side="opponent"),
         ],
-        outcome=None,
-        resolved=False,
-        mood_override=None,
-        narrator_hints=[],
+        outcome=None, resolved=False, mood_override=None, narrator_hints=[],
     )
 
     dispatch_dice_throw(
@@ -588,13 +555,8 @@ def test_wwn_warrior_shock_adds_killing_blow_bonus(otel_capture):
     hp_before_w = target_w.hp.current
 
     _drive_strike(
-        snap=snap_w,
-        enc=enc_w,
-        pack=pack_warrior,
-        attacker="Torvin",
-        request_id="kb-shock-warrior",
-        round_number=1,
-        face=1,  # MISS
+        snap=snap_w, enc=enc_w, pack=pack_warrior, attacker="Torvin",
+        request_id="kb-shock-warrior", round_number=1, face=1,  # MISS
     )
     warrior_shock_dmg = hp_before_w - target_w.hp.current
 
@@ -606,13 +568,8 @@ def test_wwn_warrior_shock_adds_killing_blow_bonus(otel_capture):
     hp_before_s = target_s.hp.current
 
     _drive_strike(
-        snap=snap_s,
-        enc=enc_s,
-        pack=pack_sage,
-        attacker="Mira",
-        request_id="kb-shock-nonwarrior",
-        round_number=1,
-        face=1,  # MISS
+        snap=snap_s, enc=enc_s, pack=pack_sage, attacker="Mira",
+        request_id="kb-shock-nonwarrior", round_number=1, face=1,  # MISS
     )
     non_warrior_shock_dmg = hp_before_s - target_s.hp.current
 
@@ -625,5 +582,6 @@ def test_wwn_warrior_shock_adds_killing_blow_bonus(otel_capture):
     # At least one wwn.killing_blow span must have fired (for the Shock path).
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert "wwn.killing_blow" in span_names, (
-        f"wwn.killing_blow span must fire on the WWN Warrior Shock path; got spans: {span_names}"
+        f"wwn.killing_blow span must fire on the WWN Warrior Shock path; "
+        f"got spans: {span_names}"
     )

@@ -164,7 +164,9 @@ async def test_two_pool_armor_reduces_then_crosses_zero(
     await asyncio.sleep(0.05)
 
     deltas = [
-        e for e in captured if e.get("component") == "rig" and e["fields"].get("op") == "delta"
+        e
+        for e in captured
+        if e.get("component") == "rig" and e["fields"].get("op") == "delta"
     ]
     assert len(deltas) == 1, f"expected one rig delta (got {len(deltas)})"
     f = deltas[0]["fields"]

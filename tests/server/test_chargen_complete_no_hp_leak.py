@@ -189,7 +189,9 @@ class TestChargenCompleteNoHpLeak:
                 attrs = dict(ev.attributes or {})
                 # ADR-114 fields must be present so the dashboard can show
                 # the actual schema.
-                assert "hp_current" in attrs, f"character_built event missing hp_current: {attrs!r}"
+                assert "hp_current" in attrs, (
+                    f"character_built event missing hp_current: {attrs!r}"
+                )
                 assert "hp_max" in attrs, f"character_built event missing hp_max: {attrs!r}"
                 assert attrs.get("schema") == "adr-114"
 

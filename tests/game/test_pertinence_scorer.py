@@ -174,7 +174,9 @@ class TestWeightedSum:
         sig = _signals(mention=1.0, here=1.0, recency=0.5, sim=0.25, present_scene=False)
         result = score_card(card, sig, w)
 
-        expected = w.w_mention * 1.0 + w.w_location * 1.0 + w.w_recency * 0.5 + w.w_sim * 0.25
+        expected = (
+            w.w_mention * 1.0 + w.w_location * 1.0 + w.w_recency * 0.5 + w.w_sim * 0.25
+        )
         assert result.score == pytest.approx(expected), (
             "score must be the weighted sum of the applicable signal values"
         )
@@ -193,8 +195,12 @@ class TestWeightedSum:
         named = _card(EntityType.NPC, "borin")
         similar = _card(EntityType.NPC, "stranger")
 
-        named_score = score_card(named, _signals(mention=1.0, here=0.0, recency=0.0, sim=0.0))
-        similar_score = score_card(similar, _signals(mention=0.0, here=0.0, recency=0.0, sim=1.0))
+        named_score = score_card(
+            named, _signals(mention=1.0, here=0.0, recency=0.0, sim=0.0)
+        )
+        similar_score = score_card(
+            similar, _signals(mention=0.0, here=0.0, recency=0.0, sim=1.0)
+        )
 
         assert named_score.score > similar_score.score, (
             "a named entity must outrank a merely-topically-similar one (mention ≫ sim)"

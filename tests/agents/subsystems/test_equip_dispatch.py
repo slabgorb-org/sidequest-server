@@ -39,9 +39,7 @@ from sidequest.protocol.dispatch import (
 # ---------------------------------------------------------------------------
 
 
-def _item(
-    name: str, *, id: str | None = None, equipped: bool = False, state: str = "Carried"
-) -> dict:
+def _item(name: str, *, id: str | None = None, equipped: bool = False, state: str = "Carried") -> dict:
     return {
         "id": id or f"narrator:{name.lower().replace(' ', '_')}",
         "name": name,

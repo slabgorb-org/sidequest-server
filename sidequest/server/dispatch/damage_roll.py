@@ -80,7 +80,8 @@ def damage_request_from_spec(
     sides = DieSides.from_wire(faces)
     if sides is DieSides.Unknown:
         raise ValueError(
-            f"damage_request_from_spec: unsupported die face count d{faces} in {spec.dice!r}"
+            f"damage_request_from_spec: unsupported die face count d{faces} "
+            f"in {spec.dice!r}"
         )
     # One DieSpec per die so the overlay renders individual dice.
     dice_pool = [DieSpec(sides=sides, count=1) for _ in range(count)]
@@ -142,7 +143,9 @@ def resolve_damage_spec_from_beat_and_actor(
     if actor_core is None:
         return None
 
-    inventory_items: list[dict] = getattr(getattr(actor_core, "inventory", None), "items", [])
+    inventory_items: list[dict] = getattr(
+        getattr(actor_core, "inventory", None), "items", []
+    )
     if not inventory_items:
         return None
 

@@ -119,7 +119,7 @@ class _PinnedRoomHandler:
         self._cleanup_behavior = cleanup_behavior
         self.cleanup_calls = 0
         self.last_save_failure: Exception | None = None
-        for player_id, socket_id in prewire or ():
+        for player_id, socket_id in (prewire or ()):
             room.connect(player_id, socket_id=socket_id)
 
     async def cleanup(self) -> None:
@@ -484,8 +484,7 @@ async def test_ws_endpoint_logs_and_skips_close_store_when_cleanup_raises(caplog
     # log key is policy — Dev may pick `ws.cleanup_failed` or similar —
     # but it MUST include the slug so operator tails can correlate.
     error_records = [
-        r
-        for r in caplog.records
+        r for r in caplog.records
         if r.levelno >= logging.ERROR and "slug-wire-cleanup-raises" in r.getMessage()
     ]
     assert error_records, (
@@ -502,9 +501,9 @@ async def test_ws_endpoint_logs_and_skips_close_store_when_cleanup_raises(caplog
     # (the No-Silent-Fallbacks teardown-skip breadcrumb this story explicitly
     # delivers) cannot silently regress without failing the suite.
     skipped_records = [
-        r
-        for r in caplog.records
-        if "ws.room_teardown_skipped" in r.getMessage() and "cleanup_raised" in r.getMessage()
+        r for r in caplog.records
+        if "ws.room_teardown_skipped" in r.getMessage()
+        and "cleanup_raised" in r.getMessage()
     ]
     assert skipped_records, (
         "ws.room_teardown_skipped reason=cleanup_raised breadcrumb must fire "

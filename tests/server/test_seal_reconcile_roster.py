@@ -62,7 +62,8 @@ def test_reconcile_marks_sealed_peer_submitted_during_input_collection() -> None
 
     by_id = {e.player_id.as_str(): e.status for e in roster}
     assert by_id == {"adam": "submitted", "eve": "pending"}, (
-        "reconcile during InputCollection must mirror _submitted exactly — Adam sealed, Eve not"
+        "reconcile during InputCollection must mirror _submitted exactly — "
+        "Adam sealed, Eve not"
     )
 
 

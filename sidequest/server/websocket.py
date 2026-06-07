@@ -232,7 +232,11 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
         # (real disconnect, empty room) is the outer guard; the
         # cleanup/save state decides between teardown and a loud skip log.
         save_failure = getattr(handler, "last_save_failure", None)
-        if room is not None and left_player is not None and not room.connected_player_ids():
+        if (
+            room is not None
+            and left_player is not None
+            and not room.connected_player_ids()
+        ):
             if not cleanup_failed and save_failure is None:
                 room.close_store()
                 logger.info("ws.room_teardown_close_store slug=%s", room.slug)

@@ -145,9 +145,5 @@ def test_nonempty_achievements_still_renders():
     assert _PACKS_ROOT is not None
     html = assemble_rules_page("tea_and_murder", _PACKS_ROOT / "tea_and_murder")
 
-    assert '<section id="achievements">' in html, (
-        "tea_and_murder Achievements was wrongly suppressed"
-    )
-    assert 'href="#achievements"' in html, (
-        "tea_and_murder Achievements TOC link was wrongly dropped"
-    )
+    assert '<section id="achievements">' in html, "tea_and_murder Achievements was wrongly suppressed"
+    assert 'href="#achievements"' in html, "tea_and_murder Achievements TOC link was wrongly dropped"

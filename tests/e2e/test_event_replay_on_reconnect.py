@@ -61,11 +61,8 @@ def _seed_with_events(tmp_path: Path, slug: str) -> None:
     from sidequest.server.session_state import _build_pg_repos_for_slug
 
     repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug=slug,
-        mode=str(GameMode.SOLO),
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
+        db_pool.get_pool(), slug=slug, mode=str(GameMode.SOLO),
+        genre_slug=_GENRE, world_slug=_WORLD,
     )
     log = EventLog(repo)
     for i in range(3):

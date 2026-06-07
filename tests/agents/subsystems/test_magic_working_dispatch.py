@@ -220,7 +220,9 @@ async def test_magic_working_handler_applies_working_on_snapshot() -> None:
         "magical state when it runs after dispatch bank"
     )
     record = snap.magic_state.working_log[0]
-    assert record.actor == "Alice", f"working record actor mismatch; got {record.actor!r}"
+    assert record.actor == "Alice", (
+        f"working record actor mismatch; got {record.actor!r}"
+    )
     assert record.plugin == "innate"
     assert record.mechanism == "native"
     assert record.domain == "elemental"
@@ -502,7 +504,8 @@ def test_magic_working_handler_registered_with_dispatch_bank() -> None:
     )
     fn = registry["magic_working"]
     assert callable(fn) and getattr(fn, "__name__", "") == "run_magic_working_dispatch", (
-        f"registered magic_working handler should be run_magic_working_dispatch; got {fn!r}"
+        f"registered magic_working handler should be run_magic_working_dispatch; "
+        f"got {fn!r}"
     )
 
 

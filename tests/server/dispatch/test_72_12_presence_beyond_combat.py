@@ -230,7 +230,9 @@ def test_opposed_check_presence_stamp_rides_npc_edge_published_span(
 
     _drive_opposed_duel(snap, monkeypatch)
 
-    edge_spans = [s for s in otel_capture.get_finished_spans() if s.name == "npc.edge_published"]
+    edge_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "npc.edge_published"
+    ]
     assert edge_spans, (
         "opposed_check presence stamp never emitted a npc.edge_published span; "
         f"finished spans={[s.name for s in otel_capture.get_finished_spans()]!r}"
@@ -238,7 +240,9 @@ def test_opposed_check_presence_stamp_rides_npc_edge_published_span(
     # ``npc_edge_published_span`` stores the NPC name under ``npc_name`` (not
     # ``name``) — filter on the real key and fail loud if no span matches the
     # opponent, rather than silently falling back to "any edge span".
-    stamped = [s for s in edge_spans if (dict(s.attributes or {})).get("npc_name") == _OPPONENT]
+    stamped = [
+        s for s in edge_spans if (dict(s.attributes or {})).get("npc_name") == _OPPONENT
+    ]
     assert stamped, (
         "no npc.edge_published span carried npc_name=={!r}; emitted npc_names={!r}".format(
             _OPPONENT,
@@ -367,7 +371,9 @@ def test_participant_joined_stamp_rides_participant_joined_span(otel_capture) ->
         genre_slug="tea_and_murder",
     )
 
-    joined = [s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"]
+    joined = [
+        s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"
+    ]
     assert joined, (
         "no participant.joined span fired; "
         f"finished={[s.name for s in otel_capture.get_finished_spans()]!r}"
@@ -461,7 +467,9 @@ def test_participant_joined_router_named_stamps_location(otel_capture) -> None:
 
     # Span layer (OTEL lie-detector) — discriminating because the NPC started at
     # _STALE_LOC, so the span carrying _HALL proves the WRITTEN value reached it.
-    joined = [s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"]
+    joined = [
+        s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"
+    ]
     iain = [s for s in joined if (dict(s.attributes or {})).get("name") == _OPPONENT]
     assert iain, (
         "no participant.joined span for the router-named opponent; "

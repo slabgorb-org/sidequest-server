@@ -124,7 +124,9 @@ async def test_degrade_branch_not_taken_without_env_reraises(
         await handler._execute_narration_turn(sd, "I look around.", turn_context)
 
     degraded = [
-        a for a in span_attrs_by_name(otel_exporter, _DECOMPOSE_SPAN) if a.get("degraded") is True
+        a
+        for a in span_attrs_by_name(otel_exporter, _DECOMPOSE_SPAN)
+        if a.get("degraded") is True
     ]
     assert not degraded, (
         "fail-loud default must not emit a degraded decompose span — the "

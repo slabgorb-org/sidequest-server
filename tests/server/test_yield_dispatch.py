@@ -164,10 +164,7 @@ def test_yield_with_two_pcs_first_yield_keeps_encounter_active(snapshot_with_pac
     snap.characters.append(
         Character(
             core=CreatureCore(
-                name="Sam",
-                description="x",
-                personality="x",
-                hp=HpPool(current=10, max=10, base_max=10),
+                name="Sam", description="x", personality="x", hp=HpPool(current=10, max=10, base_max=10)
             ),
             backstory="x",
             char_class="Rogue",
@@ -177,10 +174,7 @@ def test_yield_with_two_pcs_first_yield_keeps_encounter_active(snapshot_with_pac
     snap.characters.append(
         Character(
             core=CreatureCore(
-                name="Alex",
-                description="x",
-                personality="x",
-                hp=HpPool(current=10, max=10, base_max=10),
+                name="Alex", description="x", personality="x", hp=HpPool(current=10, max=10, base_max=10)
             ),
             backstory="x",
             char_class="Warrior",

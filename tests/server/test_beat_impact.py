@@ -44,9 +44,7 @@ def _enc(*, p_thresh: int = 10, o_thresh: int = 10, p_cur: int = 0, o_cur: int =
     return StructuredEncounter(
         encounter_type="social_duel",
         player_metric=EncounterMetric(name="barbs", current=p_cur, starting=0, threshold=p_thresh),
-        opponent_metric=EncounterMetric(
-            name="barbs", current=o_cur, starting=0, threshold=o_thresh
-        ),
+        opponent_metric=EncounterMetric(name="barbs", current=o_cur, starting=0, threshold=o_thresh),
         actors=[
             EncounterActor(name="Pryce", role="duelist", side="player"),
             EncounterActor(name="Hamish", role="duelist", side="opponent"),
@@ -57,13 +55,7 @@ def _enc(*, p_thresh: int = 10, o_thresh: int = 10, p_cur: int = 0, o_cur: int =
 
 def _push_beat(beat_id: str = "concede") -> BeatDef:
     return BeatDef.model_validate(
-        {
-            "id": beat_id,
-            "label": "Concede Gracefully",
-            "kind": "push",
-            "base": 1,
-            "stat_check": "Humour",
-        }
+        {"id": beat_id, "label": "Concede Gracefully", "kind": "push", "base": 1, "stat_check": "Humour"}
     )
 
 
@@ -75,13 +67,7 @@ def _strike_beat(beat_id: str = "barb", base: int = 2) -> BeatDef:
 
 def _angle_beat(beat_id: str = "set_up", target_tag: str = "Off-Balance") -> BeatDef:
     return BeatDef.model_validate(
-        {
-            "id": beat_id,
-            "label": "Set Up",
-            "kind": "angle",
-            "target_tag": target_tag,
-            "stat_check": "Cunning",
-        }
+        {"id": beat_id, "label": "Set Up", "kind": "angle", "target_tag": target_tag, "stat_check": "Cunning"}
     )
 
 
@@ -98,9 +84,7 @@ def _deltas(kind: BeatKind, outcome: RollOutcome, *, base: int = 1, target_tag: 
 
 def test_impact_is_a_beat_impact_dataclass():
     impact = describe_beat_impact(
-        _deltas(BeatKind.push, RollOutcome.CritSuccess),
-        kind=BeatKind.push,
-        outcome=RollOutcome.CritSuccess,
+        _deltas(BeatKind.push, RollOutcome.CritSuccess), kind=BeatKind.push, outcome=RollOutcome.CritSuccess
     )
     assert isinstance(impact, BeatImpact)
 
@@ -111,9 +95,7 @@ def test_impact_is_a_beat_impact_dataclass():
 def test_push_critsuccess_is_resolution_not_inert():
     # The reported bug: own=0/opponent=0 but resolution=True + "Clean Exit".
     impact = describe_beat_impact(
-        _deltas(BeatKind.push, RollOutcome.CritSuccess),
-        kind=BeatKind.push,
-        outcome=RollOutcome.CritSuccess,
+        _deltas(BeatKind.push, RollOutcome.CritSuccess), kind=BeatKind.push, outcome=RollOutcome.CritSuccess
     )
     assert impact.effect == "resolution"
     assert impact.dial_moved is False
@@ -256,17 +238,13 @@ def test_brace_success_drain_is_a_favorable_dial_move():
 
 def test_three_zeroish_cases_are_distinguishable():
     resolution = describe_beat_impact(
-        _deltas(BeatKind.push, RollOutcome.CritSuccess),
-        kind=BeatKind.push,
-        outcome=RollOutcome.CritSuccess,
+        _deltas(BeatKind.push, RollOutcome.CritSuccess), kind=BeatKind.push, outcome=RollOutcome.CritSuccess
     )
     inert = describe_beat_impact(
         _deltas(BeatKind.push, RollOutcome.Fail), kind=BeatKind.push, outcome=RollOutcome.Fail
     )
     setback = describe_beat_impact(
-        _deltas(BeatKind.push, RollOutcome.CritFail),
-        kind=BeatKind.push,
-        outcome=RollOutcome.CritFail,
+        _deltas(BeatKind.push, RollOutcome.CritFail), kind=BeatKind.push, outcome=RollOutcome.CritFail
     )
     # All three move the *player's* dial by 0/0/-1 — but they are NOT the same.
     assert resolution.effect == "resolution"

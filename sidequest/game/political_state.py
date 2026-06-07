@@ -72,9 +72,14 @@ class PoliticalState(BaseModel):
             return None
         return cls(
             premises={
-                p.premise_id: PremiseState(premise_id=p.premise_id, belief_reserve=p.belief_reserve)
+                p.premise_id: PremiseState(
+                    premise_id=p.premise_id, belief_reserve=p.belief_reserve
+                )
                 for p in premises
             },
-            blocs={b.bloc_id: BlocState(bloc_id=b.bloc_id, defiance=b.defiance) for b in blocs},
+            blocs={
+                b.bloc_id: BlocState(bloc_id=b.bloc_id, defiance=b.defiance)
+                for b in blocs
+            },
             ledger=[],
         )

@@ -205,9 +205,7 @@ def test_underscore_prefixed_key_suppressed(tmp_path):
     heading and its value. It must be suppressed."""
     pack_dir, world_dir = _write_lore_pack(
         tmp_path,
-        lore_yaml=(
-            "genre_conventions:\n  _dev_note: 'internal scaffolding only'\n  setting: 'A real fact.'\n"
-        ),
+        lore_yaml=("genre_conventions:\n  _dev_note: 'internal scaffolding only'\n  setting: 'A real fact.'\n"),
     )
     html = assemble_lore_page("demo", "demoworld", pack_dir, world_dir)
     assert "internal scaffolding only" not in html
@@ -243,9 +241,7 @@ def test_devnote_list_item_suppression_fires_span(tmp_path, otel_capture):
     so it must fire the same span and be visible on the GM panel."""
     pack_dir, world_dir = _write_lore_pack(
         tmp_path,
-        lore_yaml=(
-            "genre_conventions:\n  notes:\n    - 'FIXME: rebalance this'\n    - 'Keeps rendering'\n"
-        ),
+        lore_yaml=("genre_conventions:\n  notes:\n    - 'FIXME: rebalance this'\n    - 'Keeps rendering'\n"),
     )
     html = assemble_lore_page("demo", "demoworld", pack_dir, world_dir)
     assert "FIXME" not in html

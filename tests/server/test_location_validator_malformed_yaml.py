@@ -85,7 +85,11 @@ def _make_world(
 
 
 def _malformed_issues(result, *, file_contains: str) -> list:
-    return [i for i in result.errors if i.code == "MALFORMED_YAML" and file_contains in i.file]
+    return [
+        i
+        for i in result.errors
+        if i.code == "MALFORMED_YAML" and file_contains in i.file
+    ]
 
 
 def _assert_clean_malformed_issue(result, *, file_contains: str) -> None:

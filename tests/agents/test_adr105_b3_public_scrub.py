@@ -147,7 +147,9 @@ def test_scrub_emits_public_scrub_watcher(monkeypatch: pytest.MonkeyPatch):
         "publish_event",
         lambda et, fields, **kw: events.append({"et": et, "fields": fields, "kw": kw}),
     )
-    _scrub_public_prose("Public.\n\n⚠ Aside — Private (Willes only): leaked secret here.", [])
+    _scrub_public_prose(
+        "Public.\n\n⚠ Aside — Private (Willes only): leaked secret here.", []
+    )
     scrub = [e for e in events if e["fields"].get("field") == "narration.public_scrub"]
     assert len(scrub) == 1
     assert scrub[0]["fields"]["labelled_blocks_removed"] == 1

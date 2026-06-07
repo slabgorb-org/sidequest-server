@@ -95,7 +95,8 @@ def test_publish_outside_any_block_does_not_ride_a_turn(repo_and_sink):
         with pool.connection() as conn:
             row = tuple(
                 conn.execute(
-                    "SELECT event_seq, round, component FROM turn_telemetry WHERE session_id = %s",
+                    "SELECT event_seq, round, component FROM turn_telemetry "
+                    "WHERE session_id = %s",
                     (sid,),
                 ).fetchone()
             )

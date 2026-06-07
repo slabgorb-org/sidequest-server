@@ -58,9 +58,7 @@ def _oz_pack():
     return SimpleNamespace(
         worlds={"oz": _oz_world()},
         witnessed_acts=[
-            WitnessedActArchetype(
-                id="expose_the_humbug", label="Expose the Humbug", description="x"
-            ),
+            WitnessedActArchetype(id="expose_the_humbug", label="Expose the Humbug", description="x"),
         ],
         rules=None,
     )
@@ -69,9 +67,7 @@ def _oz_pack():
 def _npc(name: str, *, location: str) -> Npc:
     return Npc(
         core=CreatureCore(
-            name=name,
-            description="A Munchkin villager.",
-            personality="Hopeful.",
+            name=name, description="A Munchkin villager.", personality="Hopeful.",
             hp=HpPool(current=10, max=10, base_max=10),
         ),
         belief_state=BeliefState(),

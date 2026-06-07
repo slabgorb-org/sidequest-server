@@ -86,9 +86,7 @@ def test_connected_recipient_without_queue_emits_loud_watcher_event(
     )
     fields, kwargs = drops[0]
     assert fields["recipient_player_id"] == "eve"
-    assert fields["type"] == "TURN_STATUS", (
-        "the dropped frame's type must be carried for the GM panel"
-    )
+    assert fields["type"] == "TURN_STATUS", "the dropped frame's type must be carried for the GM panel"
     assert kwargs.get("severity") == "warning"
     assert kwargs.get("component") in {"multiplayer", "broadcast"}
 

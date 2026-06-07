@@ -69,9 +69,7 @@ def test_elemental_harmony_loads_clean_under_wwn() -> None:
     assert isinstance(get_ruleset_module(pack.rules.ruleset), WwnRulesetModule)
 
     # 3. wwn_spell_catalog is present and non-empty
-    assert pack.wwn_spell_catalog is not None, (
-        "wwn_spell_catalog is None — spells_wwn.yaml not loaded"
-    )
+    assert pack.wwn_spell_catalog is not None, "wwn_spell_catalog is None — spells_wwn.yaml not loaded"
     assert len(pack.wwn_spell_catalog.spells) > 0, "wwn_spell_catalog has no spells"
 
     # 4. Every caster class's starting_prepared id resolves in the catalog

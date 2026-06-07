@@ -93,7 +93,9 @@ def test_core_invariant_stage_never_emits_gm_sees_all() -> None:
     (server-side), never in a per-player projection.
     """
     try:
-        view = SessionGameStateView(player_id_to_character={"alice": "alice_char", "gm": "gm_char"})
+        view = SessionGameStateView(
+            player_id_to_character={"alice": "alice_char", "gm": "gm_char"}
+        )
     except TypeError as exc:
         pytest.fail(f"gm_player_id is still a constructor parameter: {exc}")
 

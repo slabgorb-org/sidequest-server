@@ -593,9 +593,7 @@ class TestOtelSpan:
         )
 
         fired = [s for s in otel_capture.get_finished_spans() if s.name == _RETRIEVAL_SPAN_NAME]
-        assert len(fired) == 1, (
-            f"expected exactly one {_RETRIEVAL_SPAN_NAME!r} span; got {len(fired)}"
-        )
+        assert len(fired) == 1, f"expected exactly one {_RETRIEVAL_SPAN_NAME!r} span; got {len(fired)}"
         attrs = dict(fired[0].attributes or {})
         missing = {name for name in UNIVERSAL_RETRIEVAL_SPAN_ATTRS if name not in attrs}
         assert not missing, f"span is missing D5 attributes: {sorted(missing)}"
@@ -895,14 +893,18 @@ class TestRetrievalPipelineWiring:
 
             result = await handler.handle_message(
                 PlayerActionMessage(
-                    payload=PlayerActionPayload(action="I gaze at the dockside spire", round=0),
+                    payload=PlayerActionPayload(
+                        action="I gaze at the dockside spire", round=0
+                    ),
                     player_id="pid",
                 )
             )
             assert result, "player action must produce outbound messages"
 
             # (1) The universal-retrieval span fired on the live turn.
-            fired = [s for s in otel_capture.get_finished_spans() if s.name == _RETRIEVAL_SPAN_NAME]
+            fired = [
+                s for s in otel_capture.get_finished_spans() if s.name == _RETRIEVAL_SPAN_NAME
+            ]
             assert fired, (
                 "retrieve_turn_context must be wired into the live turn-build "
                 f"path and emit the {_RETRIEVAL_SPAN_NAME!r} span"

@@ -121,7 +121,9 @@ def test_legacy_string_quest_log_migrates_on_load() -> None:
 
 
 def test_world_state_patch_quest_log_is_structured() -> None:
-    patch = WorldStatePatch(quest_log={"q1": QuestEntry(title="t", objective="o", status="active")})
+    patch = WorldStatePatch(
+        quest_log={"q1": QuestEntry(title="t", objective="o", status="active")}
+    )
     assert patch.quest_log is not None
     assert isinstance(patch.quest_log["q1"], QuestEntry)
 

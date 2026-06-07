@@ -129,9 +129,7 @@ def test_preload_emits_authored_loaded_span_per_crew_on_fresh() -> None:
     with patch.object(Span, "open", wraps=Span.open) as span_open:
         preload_authored_npcs(snap, crew)
 
-    loaded_spans = [
-        c for c in span_open.call_args_list if c.args and c.args[0] == SPAN_NPC_AUTHORED_LOADED
-    ]
+    loaded_spans = [c for c in span_open.call_args_list if c.args and c.args[0] == SPAN_NPC_AUTHORED_LOADED]
     assert len(loaded_spans) == len(crew), (
         f"expected {len(crew)} '{SPAN_NPC_AUTHORED_LOADED}' spans on fresh load, "
         f"got {len(loaded_spans)}"
@@ -186,11 +184,5 @@ def test_resumed_session_still_skips_but_emits_reason_span() -> None:
         f"resumed-session skip emitted no '{SKIP_SPAN_NAME}' span — silent fallback "
         f"(CLAUDE.md forbids). Spans seen: {[c.args[0] for c in span_open.call_args_list if c.args]!r}"
     )
-    attrs = (
-        skip_calls[0].args[1]
-        if len(skip_calls[0].args) > 1
-        else (skip_calls[0].kwargs.get("attrs") or {})
-    )
-    assert attrs.get("reason"), (
-        f"skip span must carry a non-empty 'reason' attribute; got {attrs!r}"
-    )
+    attrs = skip_calls[0].args[1] if len(skip_calls[0].args) > 1 else (skip_calls[0].kwargs.get("attrs") or {})
+    assert attrs.get("reason"), f"skip span must carry a non-empty 'reason' attribute; got {attrs!r}"

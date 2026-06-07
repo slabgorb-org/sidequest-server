@@ -36,21 +36,19 @@ def _oz_snapshot() -> GameSnapshot:
     snap.player_seats = {"seat-1": "Dorothy"}
     snap.character_locations = {"Dorothy": "munchkin_country"}
     snap.npcs = [
-        _npc("Boq", location="munchkin_country"),  # present
+        _npc("Boq", location="munchkin_country"),     # present
         _npc("Glinda", location="quadling_country"),  # elsewhere
     ]
-    snap.political_state = PoliticalState(premises={}, blocs={}, ledger=[])
+    snap.political_state = PoliticalState(
+        premises={}, blocs={}, ledger=[]
+    )
     return snap
 
 
 def _acts() -> list[WitnessedActArchetype]:
     return [
-        WitnessedActArchetype(
-            id="expose_the_humbug", label="Expose the Humbug", description="Pull the curtain."
-        ),
-        WitnessedActArchetype(
-            id="refuse_the_premise", label="Refuse the Premise", description="Decline the rule."
-        ),
+        WitnessedActArchetype(id="expose_the_humbug", label="Expose the Humbug", description="Pull the curtain."),
+        WitnessedActArchetype(id="refuse_the_premise", label="Refuse the Premise", description="Decline the rule."),
     ]
 
 
@@ -128,8 +126,7 @@ def test_vocabulary_injection_emits_span(otel_capture):
     snap = _oz_snapshot()
     _build_state_summary(snap, pack=_FakePack(_acts()))
     spans = [
-        s
-        for s in otel_capture.get_finished_spans()
+        s for s in otel_capture.get_finished_spans()
         if s.name == "intent_router.witnessed_act_vocabulary"
     ]
     assert len(spans) == 1
@@ -143,8 +140,7 @@ def test_no_vocabulary_span_in_non_political_world(otel_capture):
     snap.political_state = None
     _build_state_summary(snap, pack=_FakePack(_acts()))
     spans = [
-        s
-        for s in otel_capture.get_finished_spans()
+        s for s in otel_capture.get_finished_spans()
         if s.name == "intent_router.witnessed_act_vocabulary"
     ]
     assert len(spans) == 0

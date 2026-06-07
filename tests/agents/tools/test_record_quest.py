@@ -110,7 +110,9 @@ def test_record_quest_and_set_stakes_wired_via_barrel_subprocess() -> None:
         "assert not missing, f'not registered via barrel: {missing}'\n"
         "print('OK')\n"
     )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
     assert result.returncode == 0, (
         f"barrel did not register the new tools.\nstdout={result.stdout}\nstderr={result.stderr}"
     )
@@ -192,7 +194,9 @@ async def test_update_existing_quest_changes_status_and_fires_quest_updated(
 ) -> None:
     snap = _build_snapshot(
         quest_log={
-            "q_witch": QuestEntry(title="Defeat the Witch", objective="reach Oz", status="active")
+            "q_witch": QuestEntry(
+                title="Defeat the Witch", objective="reach Oz", status="active"
+            )
         }
     )
     store = _store_with(snap)
@@ -228,7 +232,9 @@ async def test_update_does_not_fire_quest_created(otel_capture) -> None:
     ctx = _make_ctx(store)
 
     await default_registry.dispatch(
-        ToolUseBlock(id="t-upd2", name="record_quest", arguments={**_MINT, "status": "resolved"}),
+        ToolUseBlock(
+            id="t-upd2", name="record_quest", arguments={**_MINT, "status": "resolved"}
+        ),
         ctx,
     )
     created = [s for s in otel_capture.get_finished_spans() if s.name == "quest.created"]
@@ -242,7 +248,8 @@ async def test_update_does_not_fire_quest_created(otel_capture) -> None:
 
 def _full_quest_log(n: int = 32) -> dict[str, QuestEntry]:
     return {
-        f"q{i}": QuestEntry(title=f"t{i}", objective=f"o{i}", status="active") for i in range(n)
+        f"q{i}": QuestEntry(title=f"t{i}", objective=f"o{i}", status="active")
+        for i in range(n)
     }
 
 

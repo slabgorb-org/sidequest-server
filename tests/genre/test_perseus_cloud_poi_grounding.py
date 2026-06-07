@@ -104,7 +104,9 @@ def test_new_kowloon_is_declared_as_a_typed_entity(
     declared entities, matchable on the resolver's normalized label
     (article-stripped, lowercased)."""
     labels = {_normalize(e.label) for e in yula_entities}
-    assert _NEW_KOWLOON in labels, f"New Kowloon not declared in yula; have labels {sorted(labels)}"
+    assert _NEW_KOWLOON in labels, (
+        f"New Kowloon not declared in yula; have labels {sorted(labels)}"
+    )
 
 
 def test_declared_entities_satisfy_tier_binding_invariant(
@@ -116,9 +118,13 @@ def test_declared_entities_satisfy_tier_binding_invariant(
     chose for New Kowloon."""
     for e in yula_entities:
         if e.tier == "real_object":
-            assert e.binding is not None, f"entity {e.id!r} is real_object but has no binding"
+            assert e.binding is not None, (
+                f"entity {e.id!r} is real_object but has no binding"
+            )
         if e.tier == "flavor_only":
-            assert e.binding is None, f"entity {e.id!r} is flavor_only but carries a binding"
+            assert e.binding is None, (
+                f"entity {e.id!r} is flavor_only but carries a binding"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +141,8 @@ def test_authored_entities_for_surfaces_yula_pois(perseus_pack) -> None:
     ctx = _build_ctx_with_real_pack(perseus_pack)
     resolved = _authored_entities_for(ctx, _REGION)
     assert resolved is not None, (
-        "_authored_entities_for returned None — the consumption path cannot see yula's manifest"
+        "_authored_entities_for returned None — the consumption path "
+        "cannot see yula's manifest"
     )
     assert resolved, "_authored_entities_for returned an empty manifest for yula"
     labels = {_normalize(e.label) for e in resolved}

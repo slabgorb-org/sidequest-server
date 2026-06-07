@@ -235,11 +235,7 @@ async def test_dice_midturn_delivers_one_filtered_frame_per_socket_no_overlay(
     sd, _handler, _queues = await _seated_dice_turn(
         session_handler_factory,
         slug=_SLUG + "-one",
-        seats=[
-            ("carl", "Carl", "Fighter"),
-            ("donut", "Donut", "Cleric"),
-            ("katia", "Katia", "Thief"),
-        ],
+        seats=[("carl", "Carl", "Fighter"), ("donut", "Donut", "Cleric"), ("katia", "Katia", "Thief")],
         roller="katia",
         capture_mid_turn=mid_turn,
     )
@@ -293,11 +289,7 @@ async def test_dice_midturn_no_union_reaches_any_socket(
     _sd, _handler, queues = await _seated_dice_turn(
         session_handler_factory,
         slug=_SLUG + "-nounion",
-        seats=[
-            ("carl", "Carl", "Fighter"),
-            ("donut", "Donut", "Cleric"),
-            ("katia", "Katia", "Thief"),
-        ],
+        seats=[("carl", "Carl", "Fighter"), ("donut", "Donut", "Cleric"), ("katia", "Katia", "Thief")],
         roller="katia",
     )
 
@@ -529,9 +521,9 @@ async def test_dice_midturn_unseated_socket_gets_nothing_silently(
         f"dice path (supplier returns None → skip); got {len(watcher_frames)} frame(s)."
     )
     unresolved = span_attrs_by_name(otel_capture, "confrontation.recipient_unresolved")
-    assert not any(a.get("player_id") == "watcher" for a in unresolved), (
-        "an unseated/lobby socket is NOT an error — no recipient_unresolved span may fire for it."
-    )
+    assert not any(
+        a.get("player_id") == "watcher" for a in unresolved
+    ), "an unseated/lobby socket is NOT an error — no recipient_unresolved span may fire for it."
 
 
 # ---------------------------------------------------------------------------

@@ -93,8 +93,12 @@ def _make_encounter_with_actors(player_name: str, opponent_name: str):
 
     return StructuredEncounter(
         encounter_type="combat",
-        player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
-        opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
+        player_metric=EncounterMetric(
+            name="momentum", current=0, starting=0, threshold=10
+        ),
+        opponent_metric=EncounterMetric(
+            name="momentum", current=0, starting=0, threshold=10
+        ),
         beat=0,
         structured_phase=EncounterPhase.Setup,
         secondary_stats=None,
@@ -232,7 +236,8 @@ def test_strike_beat_reduces_opponent_hp(otel_capture):
     # (a) Opponent HP decreased — damage_override is 1d6 so at least 1 HP off.
     hp_after = opponent_core.hp.current
     assert hp_after < hp_before, (
-        f"opponent HP should have decreased after strike beat; before={hp_before} after={hp_after}"
+        f"opponent HP should have decreased after strike beat; "
+        f"before={hp_before} after={hp_after}"
     )
 
     # (b) state_patch.hp span fired
@@ -240,7 +245,8 @@ def test_strike_beat_reduces_opponent_hp(otel_capture):
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert SPAN_STATE_PATCH_HP in span_names, (
-        f"state_patch.hp span must fire on strike beat; got spans: {span_names}"
+        f"state_patch.hp span must fire on strike beat; "
+        f"got spans: {span_names}"
     )
 
     # (c) A DICE_RESULT for the damage roll was broadcast.
@@ -253,9 +259,8 @@ def test_strike_beat_reduces_opponent_hp(otel_capture):
         f"got {len(damage_dice_results)}: {[type(m).__name__ for m in broadcasts]}"
     )
     # The damage DICE_RESULT must have a different request_id than the check.
-    damage_req_ids = {
-        m.payload.request_id for m in damage_dice_results if m.payload.request_id != "check-req-1"
-    }
+    damage_req_ids = {m.payload.request_id for m in damage_dice_results
+                     if m.payload.request_id != "check-req-1"}
     assert damage_req_ids, (
         "damage DICE_RESULT must have a new request_id distinct from the check roll"
     )
@@ -356,5 +361,6 @@ def test_strike_beat_with_no_damage_spec_skips_damage(otel_capture):
     # HP must NOT have changed — no damage spec to roll
     hp_after = opponent_core.hp.current
     assert hp_after == hp_before, (
-        f"HP must not change when no DamageSpec is resolvable; before={hp_before} after={hp_after}"
+        f"HP must not change when no DamageSpec is resolvable; "
+        f"before={hp_before} after={hp_after}"
     )

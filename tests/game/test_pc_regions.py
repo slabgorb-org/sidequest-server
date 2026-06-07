@@ -391,7 +391,9 @@ def test_current_region_anchor_no_seated_pc_fires_single_sentinel_transition() -
         "no-seated-PC spawn bootstrap must fire exactly one sentinel transition"
     )
     assert snap.current_region == "entrance"
-    assert "__anchor__" not in snap.pc_regions, "the sentinel pc_name must NOT leak into pc_regions"
+    assert "__anchor__" not in snap.pc_regions, (
+        "the sentinel pc_name must NOT leak into pc_regions"
+    )
     assert snap.pc_regions == {}, "no seated PC / character → nothing to seed"
 
 

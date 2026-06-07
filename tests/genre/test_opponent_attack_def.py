@@ -78,13 +78,7 @@ def test_confrontation_def_opponent_attack_defaults_none():
             "player_metric": {"name": "leverage", "starting": 0, "threshold": 7},
             "opponent_metric": {"name": "leverage", "starting": 0, "threshold": 7},
             "beats": [
-                {
-                    "id": "persuade",
-                    "label": "Persuade",
-                    "kind": "strike",
-                    "base": 2,
-                    "stat_check": "Cunning",
-                }
+                {"id": "persuade", "label": "Persuade", "kind": "strike", "base": 2, "stat_check": "Cunning"}
             ],
         }
     )

@@ -972,9 +972,7 @@ class TestMPJoinerThirdPlusPCPerPCAnchor:
                 )
                 sd.snapshot.characters.append(pc)
                 sd.snapshot.player_seats[pid] = name
-                sd.snapshot.character_locations[name] = (
-                    "Ashgate ridge road, the Recovery Bench at dawn"
-                )
+                sd.snapshot.character_locations[name] = "Ashgate ridge road, the Recovery Bench at dawn"
 
             claude_mock.send_stateless.reset_mock()
             await _walk_and_confirm(handler)
@@ -985,7 +983,8 @@ class TestMPJoinerThirdPlusPCPerPCAnchor:
                 "narrator turn so we can inspect the prompt"
             )
             opening_prompt = " ".join(
-                str(calls[0].kwargs.get(k, "")) for k in ("system_prompt", "user_message")
+                str(calls[0].kwargs.get(k, ""))
+                for k in ("system_prompt", "user_message")
             )
 
             # The just-committed PC is the connecting session's PC.
@@ -993,7 +992,9 @@ class TestMPJoinerThirdPlusPCPerPCAnchor:
             # the snapshot rather than hard-coding "Katia" so the test
             # is robust to fixture renames.
             seated = [n for n in sd.snapshot.player_seats.values() if n]
-            assert len(seated) == 3, f"Expected 3 seated PCs after Katia commits; got {seated}"
+            assert len(seated) == 3, (
+                f"Expected 3 seated PCs after Katia commits; got {seated}"
+            )
             joiner_name = sd.snapshot.characters[-1].core.name
             assert joiner_name not in ("Carl", "Donut"), (
                 "Joiner must be the just-committed PC (not the pre-seeded host pair)"

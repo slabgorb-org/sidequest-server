@@ -164,9 +164,13 @@ class TestAliasRetrievalWiring:
         from sidequest.agents.npc_context import player_referenced_npcs_from_action
 
         referenced = player_referenced_npcs_from_action(snap, "what happened to the old man?")
-        ws = build_npc_working_set(snap, current_turn=20, player_referenced_npcs=referenced)
+        ws = build_npc_working_set(
+            snap, current_turn=20, player_referenced_npcs=referenced
+        )
 
-        brief_names = {(n.core.name if isinstance(n, Npc) else n.name) for n in ws.brief_entries}
+        brief_names = {
+            (n.core.name if isinstance(n, Npc) else n.name) for n in ws.brief_entries
+        }
         assert "Thorn" in brief_names, (
             "an alias reference must flip the off-stage NPC to BRIEF on the live "
             "working-set path — proving alias-resolved mention is wired in (§A4 / AC-7)"

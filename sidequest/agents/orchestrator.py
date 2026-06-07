@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 # path does not depend on the registry.
 import sidequest.agents.tools  # noqa: F401  (registration side effect)
 from sidequest.agents.anthropic_cost import cost_band
+from sidequest.agents.aside_resolver import AsidePromptStash
 from sidequest.agents.claude_client import (
     ClaudeClient,
     ClaudeResponse,
@@ -1590,6 +1591,28 @@ class Orchestrator:
         # attach onto the NarrationTurnResult so the session handler can route
         # them as SECRET_NOTE events (Task 6).
         self._last_secret_routes: list[object] = []
+
+        # Aside-rides-the-cache (playtest 2026-06-07): the most recent SDK
+        # turn's exact system blocks + tools + model, refreshed every
+        # ``_run_narration_turn_sdk`` call. None until the first SDK turn —
+        # the player_action handler falls back to the legacy thin read-view
+        # (logged) in that window.
+        self._aside_prompt_stash: AsidePromptStash | None = None
+
+    @property
+    def aside_prompt_stash(self) -> AsidePromptStash | None:
+        """The narrator's stashed SDK prompt artifacts (read-only surface)."""
+        return self._aside_prompt_stash
+
+    @property
+    def aside_cache_client(self) -> ToolingLlmClient | None:
+        """The tooling client a narrator-cache aside can ride, or ``None``.
+
+        ``None`` when the configured backend has no tool loop (legacy
+        ``claude -p`` / Ollama) — the aside handler falls back to the thin
+        read-view path in that case.
+        """
+        return self._client if isinstance(self._client, ToolingLlmClient) else None
 
     # ------------------------------------------------------------------
     # Group G Task 7 — entity token resolver for the leak audit
@@ -3615,6 +3638,21 @@ class Orchestrator:
             messages = [Message(role="user", content=user_message)]
 
             model = resolve_model(CallType.NARRATION)
+
+            # Aside-rides-the-cache (playtest 2026-06-07, ADR-107 re-scope):
+            # stash the EXACT system blocks + tools + model this turn ships,
+            # so an out-of-band aside can re-present the identical prefix to
+            # the API and read it from cache (caches are per-model and
+            # byte-exact — any drift is a miss, which the aside's cache_hit
+            # span attribute surfaces as the lie-detector). The stash is a
+            # reference copy, not a rebuild: rebuilding would risk byte
+            # drift. Refreshed every SDK turn; None until the first turn
+            # (the handler's legacy thin read-view covers that window).
+            self._aside_prompt_stash = AsidePromptStash(
+                system_blocks=list(system_blocks),
+                tools=list(advertised_tool_defs),
+                model=model,
+            )
 
             # Phase E now plumbs world_id/session_id/store/lore_store/
             # monster_manual onto TurnContext via _build_turn_context (off

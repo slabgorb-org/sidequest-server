@@ -259,6 +259,7 @@ class AnthropicSdkClient:
         max_tokens: int = 4096,
         session_id: str | None = None,
         caller: str = "narrator",
+        tool_choice: dict[str, Any] | None = None,
     ) -> ToolingResult:
         # Story 61-followup-D §C.2 — pre-flight ceiling check. A session
         # whose cumulative has already crossed the ceiling on a prior call
@@ -337,6 +338,15 @@ class AnthropicSdkClient:
                 running_messages,
                 is_continuation=len(running_messages) > initial_message_count,
             )
+            # Aside-rides-the-cache (2026-06-07): forward tool_choice only
+            # when explicitly set — passing the kwarg at all on the narrator
+            # path would change the request payload that the cached prefix
+            # was minted against for no benefit. ``{"type": "none"}`` lets
+            # the read-only aside present the narrator's exact tools array
+            # (cache-prefix preservation) while forbidding tool calls.
+            create_kwargs: dict[str, Any] = {}
+            if tool_choice is not None:
+                create_kwargs["tool_choice"] = tool_choice
             with llm_request_span(model=model, iteration=iteration) as span:
                 response = await self._sdk.messages.create(
                     model=model,
@@ -345,6 +355,7 @@ class AnthropicSdkClient:
                     tools=sdk_tools,
                     max_tokens=max_tokens,
                     extra_headers=extra_headers,
+                    **create_kwargs,
                 )
                 usage = response.usage
                 input_tokens = int(getattr(usage, "input_tokens", 0))

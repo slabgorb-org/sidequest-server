@@ -227,3 +227,18 @@ async def test_orchestrator_routes_narration_through_sdk(
     assert isinstance(ctx_seen.perception_filter, NarratorPerceptionFilter)
     assert ctx_seen.perspective_pc == "Kael"
     assert ctx_seen.turn_number == 2
+
+    # 6. Aside-rides-the-cache (playtest 2026-06-07): the SDK turn stashed
+    #    its exact prompt artifacts so an out-of-band aside can re-present
+    #    the identical prefix. The stash must reference the SAME tool defs
+    #    the turn advertised (byte-identity is the cache key) and carry the
+    #    resolved narration model.
+    stash = orch.aside_prompt_stash
+    assert stash is not None, "SDK turn must populate the aside prompt stash"
+    assert len(stash.tools) == len(default_registry.list_names())
+    assert stash.system_blocks, "stash must carry the turn's system blocks"
+    assert stash.system_blocks[0].cache is True  # the cached stable prefix
+    assert stash.model  # the resolve_model(NARRATION) choice
+    # The handler's path gate: a tooling-backed orchestrator exposes its
+    # client for the narrator-cache aside path.
+    assert orch.aside_cache_client is client

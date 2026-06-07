@@ -97,11 +97,27 @@ class _RecordingSpan:
 class _RecordingTracer:
     def __init__(self) -> None:
         self.span_names: list[str] = []
+        self.spans: list[tuple[str, _RecordingSpan]] = []
 
     @contextlib.contextmanager
     def start_as_current_span(self, name: str):
         self.span_names.append(name)
-        yield _RecordingSpan()
+        span = _RecordingSpan()
+        self.spans.append((name, span))
+        yield span
+
+
+class StubOrchestrator:
+    """Minimal orchestrator surface the aside branch reads.
+
+    Default ``None``/``None`` routes the handler down the legacy thin
+    read-view path (no SDK turn has run). A test exercising the
+    narrator-cache path passes a stash + tooling client.
+    """
+
+    def __init__(self, *, aside_prompt_stash: Any = None, aside_cache_client: Any = None):
+        self.aside_prompt_stash = aside_prompt_stash
+        self.aside_cache_client = aside_cache_client
 
 
 class _StubSession:
@@ -163,7 +179,12 @@ def _character(name: str) -> Character:
 
 
 class MpRoomHarness:
-    def __init__(self, players: list[str], llm_aside: _FakeAsideLlm) -> None:
+    def __init__(
+        self,
+        players: list[str],
+        llm_aside: _FakeAsideLlm,
+        orchestrator: Any = None,
+    ) -> None:
         self._names = list(players)
         self._pid = {n: f"player:{n}" for n in players}
         self._name_by_pid = {v: k for k, v in self._pid.items()}
@@ -230,7 +251,9 @@ class MpRoomHarness:
                 dungeon_repository=MagicMock(),
                 telemetry_sink=MagicMock(),
                 genre_pack=genre_pack,
-                orchestrator=object(),  # never called on aside/barrier paths
+                # The aside branch reads aside_prompt_stash/aside_cache_client
+                # off this; default stub routes the legacy read-view path.
+                orchestrator=orchestrator if orchestrator is not None else StubOrchestrator(),
                 _room=self._room,
             )
             self._sessions[name] = _StubSession(sd, self._room, sid)
@@ -291,14 +314,26 @@ class MpRoomHarness:
     def spans_named(self, name: str) -> bool:
         return name in self._tracer.span_names
 
+    def span_attributes(self, name: str) -> dict[str, Any]:
+        """Attributes of the most recent recorded span with ``name``."""
+        for span_name, span in reversed(self._tracer.spans):
+            if span_name == name:
+                return dict(span.attributes)
+        raise AssertionError(f"no span named {name!r} recorded")
+
     def teardown(self) -> None:
         _llm_factory.build_aside_llm = self._orig_build
         _telemetry_setup.tracer = self._orig_tracer
         GameSnapshot.apply_world_patch = self._orig_apply_world_patch  # type: ignore[method-assign]
 
 
-def make_mp_room(*, players: list[str], llm_aside: _FakeAsideLlm) -> MpRoomHarness:
-    return MpRoomHarness(players, llm_aside)
+def make_mp_room(
+    *,
+    players: list[str],
+    llm_aside: _FakeAsideLlm,
+    orchestrator: Any = None,
+) -> MpRoomHarness:
+    return MpRoomHarness(players, llm_aside, orchestrator=orchestrator)
 
 
 async def submit(harness: MpRoomHarness, player: str, text: str, *, aside: bool) -> list[Any]:

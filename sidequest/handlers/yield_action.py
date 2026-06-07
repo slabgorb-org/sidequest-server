@@ -160,6 +160,8 @@ class YieldHandler:
                     portrait_resolver=make_confrontation_portrait_resolver(
                         snapshot=sd.snapshot, genre_pack=sd.genre_pack, genre_slug=sd.genre_slug
                     ),
+                    # Story 97-3: server-authored per-beat difficulty on the offer.
+                    rules=sd.genre_pack.rules,
                 )
                 # Seat-aware count: NPC companions on the player side are
                 # excluded so the log line matches the actual yield gate

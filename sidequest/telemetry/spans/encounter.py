@@ -433,6 +433,26 @@ SPAN_ROUTES[SPAN_CONFRONTATION_STAKES_ATTACHED] = SpanRoute(
     },
 )
 
+# Story 97-3 — fires when build_confrontation_payload authors the per-beat
+# pre-roll difficulty onto the beat offer (the TARGET banner source). The
+# GM-panel lie-detector for the single-DC-author fix: the offered numbers here
+# must match the difficulty dice resolution later reports; absence of this
+# span on a confrontation frame means the offer went out without
+# server-authored DCs and the client has nothing legitimate to display.
+SPAN_CONFRONTATION_BEAT_DC_AUTHORED = "confrontation.beat_dc_authored"
+SPAN_ROUTES[SPAN_CONFRONTATION_BEAT_DC_AUTHORED] = SpanRoute(
+    event_type="state_transition",
+    component="confrontation",
+    extract=lambda span: {
+        "field": "confrontation.beat_dc_authored",
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+        "confrontation_type": (span.attributes or {}).get("confrontation_type", ""),
+        "ruleset": (span.attributes or {}).get("ruleset", ""),
+        "target_name": (span.attributes or {}).get("target_name", ""),
+        "beat_difficulties": (span.attributes or {}).get("beat_difficulties", ""),
+    },
+)
+
 
 @contextmanager
 def confrontation_recipient_unresolved_span(
@@ -480,6 +500,36 @@ def confrontation_unfiltered_delivery_span(
             "actor": actor,
             "reason": reason,
             "confrontation_type": confrontation_type,
+            **attrs,
+        },
+    ) as span:
+        yield span
+
+
+@contextmanager
+def confrontation_beat_dc_authored_span(
+    *,
+    genre_slug: str,
+    confrontation_type: str,
+    ruleset: str,
+    target_name: str,
+    beat_difficulties: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open the ``confrontation.beat_dc_authored`` span (Story 97-3). Fires once
+    per ``build_confrontation_payload`` call that authors per-beat pre-roll
+    difficulties onto the beat offer. ``beat_difficulties`` is a compact
+    ``"beat_id=dc,..."`` string so the GM panel can compare the offered numbers
+    against the resolution-time ``dice.request_sent`` difficulty."""
+    with Span.open(
+        SPAN_CONFRONTATION_BEAT_DC_AUTHORED,
+        {
+            "genre_slug": genre_slug,
+            "confrontation_type": confrontation_type,
+            "ruleset": ruleset,
+            "target_name": target_name,
+            "beat_difficulties": beat_difficulties,
             **attrs,
         },
     ) as span:

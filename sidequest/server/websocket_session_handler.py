@@ -1919,6 +1919,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 genre_pack=sd.genre_pack,
                                 genre_slug=sd.genre_slug,
                             ),
+                            # Story 97-3: server-authored per-beat difficulty
+                            # on the offer (the TARGET banner source).
+                            rules=sd.genre_pack.rules,
                         )
                         confrontation_payload = ConfrontationPayload(**payload_dict)
                         confrontation_event_attrs = {

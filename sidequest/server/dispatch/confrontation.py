@@ -21,7 +21,12 @@ from sidequest.game.session import GameSnapshot
 from sidequest.game.table.types import TableState
 from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.models.character import ClassDef
-from sidequest.genre.models.rules import ConfrontationDef
+from sidequest.genre.models.rules import (
+    BeatDef,
+    ConfrontationDef,
+    ResolutionMode,
+    RulesConfig,
+)
 from sidequest.magic.confrontations import BranchName
 from sidequest.magic.outputs import apply_mandatory_outputs
 
@@ -113,6 +118,7 @@ def build_confrontation_payload(
     spellcasting: SpellcastingState | None = None,
     active_stakes: str | None = None,
     portrait_resolver: Callable[[str], str | None] | None = None,
+    rules: RulesConfig | None = None,
 ) -> dict[str, Any]:
     """Assemble the CONFRONTATION payload the UI overlay consumes.
 
@@ -167,6 +173,18 @@ def build_confrontation_payload(
     (they get portraits via PARTY_STATUS). The resolved URL rides the serialized
     actor dict under ``portrait_url``. Build the resolver at call sites with
     ``make_confrontation_portrait_resolver``.
+
+    Story 97-3: ``rules``, when supplied (the pack's ``RulesConfig``), makes
+    this function the single author of the pre-roll DC — every serialized
+    beat dict gains a ``difficulty`` key carrying the number the matching
+    resolver will use: opposed_check → the per-side native-formula DC
+    (``_opposed_dc``), cwn hacking → security-tier DC + alert escalation,
+    everything else → ``ruleset.offer_difficulty`` (native: beat DC;
+    SWN family: target armor class, single-sourced with ``attack_params``).
+    When ``None`` (legacy/bootstrap callers with no pack in hand — e.g.
+    slug-resume ConfrontationPayload reconstruction), no ``difficulty`` keys
+    are emitted and the UI treats the offer as uncommittable rather than
+    silently computing a client-side number.
     """
     if encounter.mood_override is not None:
         mood = encounter.mood_override
@@ -269,6 +287,98 @@ def build_confrontation_payload(
         "active": not encounter.resolved,
         "stakes": stakes_value,
     }
+
+    # Story 97-3 — server-authored pre-roll difficulty on every offered beat.
+    # The TARGET banner used to be a CLIENT-side formula (App.tsx rawDc =
+    # clamp(10 + |base|*2)) while resolution used ruleset.attack_params —
+    # two sources of truth that diverge under SWN/hp_depletion, where the
+    # effective DC is the opponent's armor class (a number the client cannot
+    # know). The server is now the only DC author: each beat dict carries the
+    # ``difficulty`` resolution will use, single-sourced through the ruleset's
+    # ``offer_difficulty`` seam (SWN's ``attack_params`` reads the same
+    # method, so offer and resolution are structurally one number). The UI
+    # renders ``beat.difficulty`` and refuses loudly when it is absent.
+    # ``rules=None`` (legacy/bootstrap callers that have no pack in hand —
+    # e.g. slug-resume ConfrontationPayload reconstruction) keeps the prior
+    # payload shape: no ``difficulty`` keys, which the UI treats as an
+    # uncommittable offer rather than silently inventing a number.
+    if rules is not None:
+        from sidequest.game.beat_kinds import _opposite_side_first_actor
+        from sidequest.game.ruleset import get_ruleset_module
+        from sidequest.telemetry.spans import confrontation_beat_dc_authored_span
+
+        ruleset_module = get_ruleset_module(rules.ruleset)
+        target_name = _opposite_side_first_actor(encounter, "player")
+        target_core = (
+            core_resolver(target_name)
+            if (target_name is not None and core_resolver is not None)
+            else None
+        )
+        # Resolution-mode dispatch (rework round 1, review HIGH-1/MEDIUM):
+        # the number the offer advertises must be the number the matching
+        # RESOLVER will use — and which resolver runs depends on the cdef,
+        # not just the ruleset:
+        #
+        #  - opposed_check resolves each side's d20 vs the per-side
+        #    ``_opposed_dc(beat)`` (narration_apply) — the native dial
+        #    formula — for EVERY ruleset (road_warrior=cwn ships live
+        #    opposed_check defs). Author via the native module's
+        #    ``compute_dc``, the formula ``_opposed_dc`` documents itself
+        #    as mirroring.
+        #  - cwn hacking (net_run) resolves 2d6+mods vs the security-tier
+        #    DC + alert escalation (dispatch ``is_net_run`` branch) — never
+        #    vs AC. Mirror that arithmetic; a hacking cdef with no
+        #    resolvable tier is the same lifecycle bug the dispatch branch
+        #    refuses, so fail loud here too (No Silent Fallbacks).
+        #  - everything else (beat_selection / dial attacks) resolves via
+        #    ``ruleset.attack_params`` — author through the ruleset's
+        #    ``offer_difficulty`` seam (single-sourced with attack_params).
+        is_net_run_offer = rules.ruleset == "cwn" and cdef.category == "hacking"
+        if cdef.resolution_mode == ResolutionMode.opposed_check:
+            native_module = get_ruleset_module("native")
+
+            def _offer_dc(beat_def: BeatDef) -> int:
+                return native_module.compute_dc(beat_def)
+        elif is_net_run_offer:
+            from sidequest.genre.models.rules import CwnConfig
+
+            cfg = rules.ruleset_config()
+            if (
+                not isinstance(cfg, CwnConfig)
+                or cfg.hacking is None
+                or encounter.security_tier is None
+                or encounter.security_tier not in cfg.hacking.security_tiers
+            ):
+                raise ValueError(
+                    "hacking beat offer reached without a resolvable security "
+                    f"tier (tier={encounter.security_tier!r}); the lifecycle "
+                    "seam should have stamped it (No Silent Fallbacks)"
+                )
+            net_run_dc = cfg.hacking.security_tiers[encounter.security_tier] + int(
+                encounter.opponent_metric.current
+            )
+
+            def _offer_dc(beat_def: BeatDef) -> int:
+                return net_run_dc
+        else:
+
+            def _offer_dc(beat_def: BeatDef) -> int:
+                return ruleset_module.offer_difficulty(beat=beat_def, target_core=target_core)
+
+        for beat_def, beat_dict in zip(beats_for_payload, payload["beats"], strict=True):
+            beat_dict["difficulty"] = _offer_dc(beat_def)
+        # GM-panel lie-detector (CLAUDE.md OTEL discipline): the offered
+        # numbers here must match the resolution-time dice.request_sent
+        # difficulty; an offer frame with no preceding beat_dc_authored span
+        # means the banner had nothing legitimate to display.
+        with confrontation_beat_dc_authored_span(
+            genre_slug=genre_slug,
+            confrontation_type=encounter.encounter_type,
+            ruleset=rules.ruleset,
+            target_name=target_name or "",
+            beat_difficulties=",".join(f"{b['id']}={b['difficulty']}" for b in payload["beats"]),
+        ):
+            pass
 
     # Story 85-3 — GM-panel lie-detector for the stakes wiring (CLAUDE.md OTEL
     # discipline). Fires on EVERY build; has_stakes=False distinguishes a
@@ -577,6 +687,11 @@ def make_confrontation_frame_supplier(
             core_resolver=snapshot.find_creature_core,
             active_stakes=snapshot.active_stakes,
             portrait_resolver=_portrait_for,
+            # Story 97-3: server-authored per-beat difficulty on the offer.
+            # Direct attribute access (review rework-1): live packs ALWAYS
+            # have .rules (validated at load) — a missing attribute is a bug
+            # that must fail loud, not degrade to a difficulty-less offer.
+            rules=genre_pack.rules,
         )
         # Free-for-all N-seat table: attach a per-seat private projection so
         # each socket sees only its own hand (+ public state) until showdown.

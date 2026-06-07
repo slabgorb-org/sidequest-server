@@ -174,6 +174,90 @@ def test_dispatch_package_parses_from_llm_style_json():
     assert pkg.turn_id == "turn-x"
 
 
+def test_dispatch_package_coerces_stringified_per_player():
+    """Coercion: a JSON-encoded-STRING per_player parses as the list it encodes.
+
+    Regression (sq-playtest 2026-06-07, 5× ``intent_router.failed
+    reason=schema_invalid`` across spaghetti_western + heavy_metal): Haiku
+    emits ``per_player`` as ``'[{"player_id": ...}]'`` — a string — instead of
+    a list. One turn (five_points-4 t22) failed BOTH attempts and the whole
+    mechanical spine dropped. The content is well-formed; only the encoding
+    is wrong — coerce instead of burning a retry.
+    """
+    stringified = json.dumps(
+        [
+            {
+                "player_id": "player:John",
+                "raw_action": "I draw on the deacon",
+                "resolved": [],
+                "dispatch": [],
+                "lethality": [],
+                "narrator_instructions": [],
+            }
+        ]
+    )
+    pkg = DispatchPackage.model_validate(
+        {
+            "turn_id": "turn-22",
+            "per_player": stringified,
+            "cross_player": [],
+            "confidence_global": 0.8,
+        }
+    )
+    assert len(pkg.per_player) == 1
+    assert pkg.per_player[0].player_id == "player:John"
+
+
+def test_dispatch_package_coerces_stringified_cross_player():
+    """Same coercion covers cross_player — both fields hit the failure mode."""
+    stringified = json.dumps(
+        [
+            {
+                "participants": ["player:Alice", "npc:bandit"],
+                "witnesses": ["player:Alice"],
+                "dispatch": [],
+            }
+        ]
+    )
+    pkg = DispatchPackage.model_validate(
+        {
+            "turn_id": "turn-23",
+            "per_player": [],
+            "cross_player": stringified,
+            "confidence_global": 0.7,
+        }
+    )
+    assert len(pkg.cross_player) == 1
+    # The downstream after-validator still runs on the coerced value.
+    assert set(pkg.cross_player[0].witnesses) >= set(pkg.cross_player[0].participants)
+
+
+def test_dispatch_package_rejects_unparseable_string_per_player():
+    """A string that is not valid JSON still fails loudly — no silent default."""
+    with pytest.raises(ValidationError):
+        DispatchPackage.model_validate(
+            {
+                "turn_id": "turn-24",
+                "per_player": "not json at all",
+                "cross_player": [],
+                "confidence_global": 0.5,
+            }
+        )
+
+
+def test_dispatch_package_rejects_string_encoding_a_non_list():
+    """A JSON string that parses to a dict/scalar is NOT coerced — reject loudly."""
+    with pytest.raises(ValidationError):
+        DispatchPackage.model_validate(
+            {
+                "turn_id": "turn-25",
+                "per_player": json.dumps({"player_id": "player:X"}),
+                "cross_player": [],
+                "confidence_global": 0.5,
+            }
+        )
+
+
 def test_cross_action_normalizes_participants_into_witnesses():
     """Validator NORMALIZES (does not reject) when a participant is missing
     from witnesses — every participant witnesses their own interaction.

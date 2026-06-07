@@ -1031,6 +1031,35 @@ def _emit_world_classes_loaded(*, world_slug: str, source: Path, class_count: in
     )
 
 
+def _emit_world_inventory_loaded(
+    *, world_slug: str, source: Path, catalog_count: int, class_kit_count: int
+) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier inventory load.
+
+    Epic 94 (genre/world boundary correction, supersedes ADR-120
+    "mechanics-in-genre"): a world's item catalog, class starting-kits, gold, and
+    currency are a world-tier CAST/CATALOG surface — the loot a world ships — not
+    a genre mechanic. The genre tier is the rulebook only. The load fires a span
+    (mirroring the world_classes / world_spell_catalog spans) so the GM panel can
+    prove the loadout the chargen pipeline picked up was read from the world tier,
+    not improvised from a removed genre default.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_inventory",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "catalog_count": catalog_count,
+            "class_kit_count": class_kit_count,
+            "source": str(source),
+        },
+        component="genre",
+    )
+
+
 def _emit_world_spell_catalog_loaded(*, world_slug: str, source: Path, spell_count: int) -> None:
     """Emit a ``state_transition`` watcher event for a world-tier spell-catalog load.
 
@@ -1437,6 +1466,27 @@ def _load_single_world(
             spell_count=len(world_spell_catalog.spells),
         )
 
+    # === World-tier inventory.yaml — OPTIONAL (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # a world's item catalog, class starting-kits, gold, and currency are a
+    # world-tier CAST/CATALOG surface — the loot a world ships — NOT a genre
+    # mechanic. The genre tier is the rulebook only. Absent file → None (a valid
+    # choice for a pack that keeps a shared catalog at the genre tier, e.g.
+    # caverns_and_claudes). A malformed file fails loud, world-scoped (no silent
+    # fallback). The genre-tier ``GenrePack.inventory`` remains the shared default
+    # for packs that have not migrated the catalog down; consumers resolve
+    # world-first via ``server.dispatch.inventory_resolve.resolve_inventory``.
+    world_inventory: InventoryConfig | None = _load_yaml_optional(
+        world_path / "inventory.yaml", InventoryConfig
+    )
+    if world_inventory is not None:
+        _emit_world_inventory_loaded(
+            world_slug=world_path.name,
+            source=world_path / "inventory.yaml",
+            catalog_count=len(world_inventory.item_catalog),
+            class_kit_count=len(world_inventory.starting_equipment),
+        )
+
     return World(
         config=config,
         lore=lore,
@@ -1462,6 +1512,7 @@ def _load_single_world(
         seed_tropes=world_seed_tropes,
         magic_register=magic_register,
         items=items,
+        inventory=world_inventory,
         bestiary=world_bestiary,
         scenarios=world_scenarios,
         premises=world_premises,

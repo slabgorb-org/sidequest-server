@@ -158,6 +158,9 @@ def test_party_member_from_character_populates_advancement_after_level_up() -> N
     genre_pack = MagicMock()
     genre_pack.classes = []
     genre_pack.inventory = None
+    # Epic 94: resolve_inventory traverses pack.worlds world-first; stub empty so
+    # the MagicMock pack falls through to the (None) genre-tier inventory.
+    genre_pack.worlds = {}
     genre_pack.rules.survivability_pool_label = None
     genre_pack.progression.wealth_tiers = []
 
@@ -239,6 +242,9 @@ def test_party_member_advancement_is_none_without_a_level_up() -> None:
     genre_pack = MagicMock()
     genre_pack.classes = []
     genre_pack.inventory = None
+    # Epic 94: resolve_inventory traverses pack.worlds world-first; stub empty so
+    # the MagicMock pack falls through to the (None) genre-tier inventory.
+    genre_pack.worlds = {}
     genre_pack.rules.survivability_pool_label = None
     genre_pack.progression.wealth_tiers = []
 

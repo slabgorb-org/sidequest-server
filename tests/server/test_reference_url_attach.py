@@ -237,6 +237,9 @@ def test_party_member_from_character_attaches_class_reference_url() -> None:
     genre_pack = MagicMock()
     genre_pack.classes = [class_def]
     genre_pack.inventory = None
+    # Epic 94: resolve_inventory traverses pack.worlds world-first; stub empty so
+    # the MagicMock pack falls through to the (None) genre-tier inventory.
+    genre_pack.worlds = {}
     # Story 68-1: party_member_from_character now reads the genre survivability
     # label; pin it to None on the synthetic pack so PartyMember validates.
     genre_pack.rules.survivability_pool_label = None
@@ -310,6 +313,9 @@ def test_party_member_from_character_skips_url_when_class_not_in_pack() -> None:
     genre_pack = MagicMock()
     genre_pack.classes = []
     genre_pack.inventory = None
+    # Epic 94: resolve_inventory traverses pack.worlds world-first; stub empty so
+    # the MagicMock pack falls through to the (None) genre-tier inventory.
+    genre_pack.worlds = {}
     # Story 68-1: party_member_from_character now reads the genre survivability
     # label; pin it to None on the synthetic pack so PartyMember validates.
     genre_pack.rules.survivability_pool_label = None

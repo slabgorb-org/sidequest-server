@@ -192,6 +192,20 @@ class World(BaseModel):
     silent fallback to a fabricated catalog)."""
     magic_register: str = ""
     items: WorldItemsCatalog | None = None
+    inventory: InventoryConfig | None = None
+    """World-tier inventory CATALOG (``worlds/<slug>/inventory.yaml``), epic 94.
+    Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"): a
+    world's item catalog, class starting-kits, starting gold, and currency are
+    CAST/CATALOG — the loot a world ships — NOT a genre mechanic. The genre tier
+    is the rulebook only. ``None`` when the world authors no inventory (a valid
+    choice for a pack that keeps a shared catalog at the genre tier — e.g.
+    caverns_and_claudes). Consumers read this world-first via
+    ``resolve_inventory``; the genre-tier ``GenrePack.inventory`` is the shared
+    default for packs that have not migrated the catalog down to the world tier.
+    A world's inventory REPLACES the genre's wholesale — it is not merged (same
+    world-over-genre rule as classes; see ``resolve_inventory``). Distinct from
+    ``items`` (``WorldItemsCatalog``), which is a separate named-artifact flavor
+    list, not the chargen loadout/catalog surface."""
     bestiary: Bestiary | None = None
     """World-tier ``worlds/<slug>/bestiary.yaml`` (genre/world repoint): SRD-
     aligned combat-layer stat blocks specific to this world. When present it

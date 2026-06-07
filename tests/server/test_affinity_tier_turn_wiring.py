@@ -151,6 +151,9 @@ def _synthetic_sd(character: Character) -> _SessionData:
     genre_pack = MagicMock()
     genre_pack.classes = []
     genre_pack.inventory = None
+    # Epic 94: resolve_inventory traverses pack.worlds world-first; stub empty so
+    # the MagicMock pack falls through to the (None) genre-tier inventory.
+    genre_pack.worlds = {}
     genre_pack.rules.survivability_pool_label = None
     genre_pack.progression.wealth_tiers = []
 

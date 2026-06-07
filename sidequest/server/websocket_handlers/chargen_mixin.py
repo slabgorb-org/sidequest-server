@@ -706,9 +706,17 @@ class CharGenMixin:
         # Story 45-12: pass session identity so the dedup-evaluated /
         # dedup-fired spans carry genre/world/player_id for GM-panel
         # attribution. Snapshot slugs are populated at connect time.
+        # Epic 94: inventory is a world-tier CAST/CATALOG surface. Resolve
+        # world-first (worlds/<slug>/inventory.yaml) with genre-tier fallback —
+        # the genre-tier ``sd.genre_pack.inventory`` is ``None`` for migrated
+        # packs (space_opera, heavy_metal, spaghetti_western), so reading it
+        # directly silently shipped empty loadouts (playtest 2026-06-06: blank
+        # inventory tab in coyote_star + evropi).
+        from sidequest.server.dispatch.inventory_resolve import resolve_inventory
+
         apply_starting_loadout(
             character,
-            sd.genre_pack.inventory,
+            resolve_inventory(sd.genre_pack, sd.snapshot.world_slug),
             genre=sd.snapshot.genre_slug,
             world=sd.snapshot.world_slug,
             player_id=player_id,
@@ -1574,5 +1582,13 @@ class CharGenMixin:
         own them.
         """
         if builder.is_confirmation():
-            return [render_confirmation_summary(builder, sd.genre_pack, sd.player_name, player_id)]
+            return [
+                render_confirmation_summary(
+                    builder,
+                    sd.genre_pack,
+                    sd.player_name,
+                    player_id,
+                    world_slug=sd.snapshot.world_slug,
+                )
+            ]
         return [builder.to_scene_message(player_id)]

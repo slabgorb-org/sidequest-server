@@ -156,3 +156,62 @@ class Session:
     def party_body_id(self) -> str | None:
         """Party's orbital body id (from ``orbits.yaml``), or ``None``."""
         return self._snapshot.party_body_id
+
+    def bind_region_scope(self, region_id: str, *, trigger: str) -> bool:
+        """Re-center the orrery on the body matching ``region_id``.
+
+        Story 95-1: the per-location orrery follows the party's location. The
+        join is an identity join — a body whose id equals the cartography
+        region id (region ``yula`` -> body ``yula``), by construction of the
+        sector ``orbits.yaml`` (content#383). The anchor body is typically a
+        system star in a sector world (perseus_cloud), but may be any body
+        type the region centers on (coyote_star's ``far_landing`` is a
+        ``habitat``) — the mechanism centers on the location, not on a star
+        specifically.
+
+        On a MATCH the party's ``party_body_id`` and ``orbital_scope`` re-center
+        on that body and an ``orbital.scope_bind`` span fires (the GM-panel
+        lie-detector record that the chart moved); returns ``True``.
+
+        ``trigger`` is ``"init"`` (bind-on-connect from
+        ``cartography.starting_region``) or ``"relocation"`` (a pc_region
+        change). The two differ only on the NO-MATCH path:
+
+          - ``"init"`` raises :class:`RegionScopeBindError` — a blank/foreign
+            starting_region must fail loud (No Silent Fallbacks), never silently
+            fall back to the system root and leave the chart un-centered.
+          - ``"relocation"`` leaves scope/``party_body_id`` unchanged, emits an
+            ``orbital.scope_bind_skipped`` span (a loud skip, never a silent
+            miss), and returns ``False``.
+
+        A world with no orbital tier (``orbital_content is None``) is a clean
+        no-op skip (returns ``False``, no crash) — caverns_and_claudes /
+        tea_and_murder etc. relocate normally with no chart to re-center.
+        """
+        from sidequest.orbital.render import Scope
+        from sidequest.orbital.scope_bind import RegionScopeBindError
+        from sidequest.telemetry.spans.scope_bind import (
+            emit_scope_bind,
+            emit_scope_bind_skipped,
+        )
+
+        if self._orbital_content is None:
+            # Non-orbital world: nothing to re-center. Clean no-op.
+            return False
+
+        if region_id in self._orbital_content.orbits.bodies:
+            self._snapshot.party_body_id = region_id
+            self.orbital_scope = Scope(center_body_id=region_id)
+            emit_scope_bind(region_id=region_id, body_id=region_id, trigger=trigger)
+            return True
+
+        # No body matching the region id.
+        reason = f"no orbital body matching region {region_id!r}"
+        if trigger == "init":
+            raise RegionScopeBindError(
+                f"starting region {region_id!r} has no matching orbital body in "
+                "the bound content; refusing to silently fall back to the system "
+                "root (No Silent Fallbacks)"
+            )
+        emit_scope_bind_skipped(region_id=region_id, reason=reason)
+        return False

@@ -97,6 +97,7 @@ from .render import *  # noqa: F401, F403
 from .rig import *  # noqa: F401, F403
 from .room_state import *  # noqa: F401, F403
 from .scenario import *  # noqa: F401, F403
+from .scope_bind import *  # noqa: F401, F403
 from .scrapbook import *  # noqa: F401, F403
 from .script_tool import *  # noqa: F401, F403
 from .seed import *  # noqa: F401, F403

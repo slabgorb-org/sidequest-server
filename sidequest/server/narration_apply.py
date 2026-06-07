@@ -3208,6 +3208,17 @@ def _apply_narration_result_to_snapshot(
                         },
                         component="location",
                     )
+                    # Story 95-1 — Site B: re-center the per-location orrery on
+                    # the party's new system. The identity join (region id ==
+                    # star body id) means the region we just advanced into names
+                    # the star the chart should center on. A no-op for non-orbital
+                    # region-mode worlds (oz/wonderland: orbital_content is None);
+                    # a loud-skip for an orbital region with no star body (emits
+                    # orbital.scope_bind_skipped). MANDATORY here: orbital
+                    # region-mode worlds (perseus_cloud) relocate at THIS seam —
+                    # movement.py defers region-mode moves to this path — so the
+                    # chart cannot follow the party without it.
+                    room.session.bind_region_scope(known_region_id, trigger="relocation")
                 if known_region_id != result.location:
                     with region_entry_canonicalized_dedup_span(
                         entry=result.location,

@@ -296,6 +296,14 @@ class NarrationEndPayload(ProtocolBase):
     state_delta: StateDelta | None = None
     """Optional state changes at end of narration."""
 
+    round: int | None = None
+    """The round this turn RESOLVED (pre-``record_interaction()`` bump) —
+    matches the ``round`` on the turn's ACTION_REVEAL entries. Ping-pong
+    2026-06-07 ("stale peer quote pinned at the bottom"): the UI anchors
+    persisted peer-action quotes by round, and dice-driven turns carry no
+    own PLAYER_ACTION round, so NARRATION_END is the anchor that works for
+    every turn shape. ``None`` on legacy frames."""
+
 
 # ---------------------------------------------------------------------------
 # ThinkingPayload

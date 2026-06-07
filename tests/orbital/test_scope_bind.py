@@ -99,6 +99,22 @@ def test_bind_relocation_match_recenters_from_prior_scope(sector_session) -> Non
     assert sector_session.orbital_scope.center_body_id == "vorn"
 
 
+def test_bind_relocation_match_non_star_body_centers(sector_session) -> None:
+    """The join is region-id -> *any* body, not region -> star. A region whose
+    id matches a non-star body (``yula_anchorage`` is a ``habitat``) still
+    centers the chart on it.
+
+    Locks the coyote_star regression behavior (its ``starting_region``
+    ``far_landing`` is a habitat): a star-only filter would break that world,
+    so the mechanism must be body-type-agnostic. Without this test a regression
+    to star-only matching would pass the rest of the unit suite."""
+    bound = sector_session.bind_region_scope("yula_anchorage", trigger="relocation")
+
+    assert bound is True
+    assert sector_session.party_body_id == "yula_anchorage"
+    assert sector_session.orbital_scope.center_body_id == "yula_anchorage"
+
+
 # ===========================================================================
 # No match — init fails loud, relocation skips loud (No Silent Fallbacks)
 # ===========================================================================
@@ -146,6 +162,35 @@ def test_bind_emits_scope_bind_span(sector_session, otel_capture) -> None:
     assert attrs["region_id"] == "yula"
     assert attrs["body_id"] == "yula"
     assert attrs["trigger"] == "relocation"
+
+
+def test_bind_init_match_emits_span_with_init_trigger(sector_session, otel_capture) -> None:
+    """The init MATCH path must emit ``orbital.scope_bind`` carrying
+    ``trigger="init"`` — not a hard-coded ``"relocation"``. The other span
+    test only exercises the relocation trigger, so a hard-coded or mangled
+    init-trigger would slip through. The GM panel splits init vs relocation
+    binds, so the attribute value is load-bearing."""
+    sector_session.bind_region_scope("yula", trigger="init")
+
+    spans = _spans_named(otel_capture, "orbital.scope_bind")
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert attrs["region_id"] == "yula"
+    assert attrs["body_id"] == "yula"
+    assert attrs["trigger"] == "init"
+
+
+def test_bind_init_fail_loud_emits_no_scope_bind_span(sector_session, otel_capture) -> None:
+    """The init fail-loud path raises BEFORE the bind succeeds, so it must NOT
+    emit an ``orbital.scope_bind`` span. A span on the fail-loud path would be a
+    lie-detector false positive — the GM panel would show the chart re-centered
+    when it actually raised. ``ceron`` has no matching body."""
+    err_cls = _bind_error_cls()
+
+    with pytest.raises(err_cls):
+        sector_session.bind_region_scope("ceron", trigger="init")
+
+    assert _spans_named(otel_capture, "orbital.scope_bind") == []
 
 
 def test_bind_skip_emits_scope_bind_skipped_span(sector_session, otel_capture) -> None:

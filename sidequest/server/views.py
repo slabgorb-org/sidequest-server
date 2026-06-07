@@ -393,9 +393,17 @@ def party_member_from_character(
     # Currency noun from inventory.yaml::currency.name (pingpong
     # 2026-04-24 fantasy-leak bug). None → UI neutral fallback;
     # no silent default to "gold".
+    # Epic 94: inventory (incl. the currency noun) is a world-tier CAST/CATALOG
+    # surface — resolve world-first with genre fallback. Reading
+    # ``sd.genre_pack.inventory`` directly returned None for migrated packs and
+    # silently leaked the UI's "coin" fallback into worlds that declare credits /
+    # marks / dollars.
+    from sidequest.server.dispatch.inventory_resolve import resolve_inventory
+
+    resolved_inventory = resolve_inventory(sd.genre_pack, sd.world_slug)
     currency_name: str | None = None
-    if sd.genre_pack.inventory is not None and sd.genre_pack.inventory.currency is not None:
-        currency_name = sd.genre_pack.inventory.currency.name
+    if resolved_inventory is not None and resolved_inventory.currency is not None:
+        currency_name = resolved_inventory.currency.name
 
     # Wealth tier (ADR-021 track 3): resolve the gold balance against the
     # pack's authored ``progression.wealth_tiers`` into a player-facing label,

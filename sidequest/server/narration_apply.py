@@ -3735,11 +3735,16 @@ def _apply_narration_result_to_snapshot(
             # No match → bare mint (prior behaviour). Each decision fires an
             # OTEL event (the lie-detector: did this gained item bind to
             # authored mechanics, or was it improvised flavor?).
-            catalog = (
-                pack.inventory.item_catalog
-                if (pack is not None and pack.inventory is not None)
-                else None
+            # Epic 94: inventory is a world-tier CAST/CATALOG surface — resolve
+            # world-first (genre fallback). Reading ``pack.inventory`` directly
+            # returned None for migrated packs, so gained items could never bind
+            # to authored mechanics in space_opera / heavy_metal worlds.
+            from sidequest.server.dispatch.inventory_resolve import resolve_inventory
+
+            _gain_inventory = (
+                resolve_inventory(pack, snapshot.world_slug) if pack is not None else None
             )
+            catalog = _gain_inventory.item_catalog if _gain_inventory is not None else None
             resolved = resolve_gained_item_dict(entry, catalog)
             if resolved is not None:
                 item_dict = resolved
@@ -4308,6 +4313,12 @@ def _apply_narration_result_to_snapshot(
                 pc_pilot_skill = int((cdef.player_default_stats or {}).get("pilot_skill", 0))
                 pc_attack_bonus = int((cdef.player_default_stats or {}).get("attack_bonus", 0))
 
+                # Epic 94: resolve inventory world-first so the dogfight weapon
+                # lookup hits the world-tier item_catalog (genre tier is None for
+                # migrated packs like space_opera).
+                from sidequest.server.dispatch.inventory_resolve import resolve_inventory
+
+                _dogfight_inventory = resolve_inventory(pack, snapshot.world_slug)
                 shot_inputs, geo_mods = build_dogfight_shot_inputs(
                     ruleset_slug=pack.rules.ruleset,
                     cdef=cdef,
@@ -4318,7 +4329,11 @@ def _apply_narration_result_to_snapshot(
                     weapon_lookup=lambda wid: next(
                         (
                             i
-                            for i in (pack.inventory.item_catalog if pack.inventory else [])
+                            for i in (
+                                _dogfight_inventory.item_catalog
+                                if _dogfight_inventory is not None
+                                else []
+                            )
                             if i.id == wid
                         ),
                         None,

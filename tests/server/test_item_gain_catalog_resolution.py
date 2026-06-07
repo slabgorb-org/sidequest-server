@@ -101,6 +101,11 @@ def test_apply_narration_resolves_gained_item_against_pack_catalog(
 
     pack = copy.deepcopy(base_pack)
     pack.inventory = InventoryConfig(item_catalog=[_blaster()])
+    # Epic 94: the gained-item path resolves inventory world-first via
+    # resolve_inventory(pack, world_slug); deepcopy of the MagicMock pack does
+    # not preserve the conftest worlds={} stub, so re-stub it here to force the
+    # genre-tier (test-set) catalog rather than a conjured mock world.
+    pack.worlds = {}
 
     result = NarrationTurnResult(
         narration="You snatch the carbine off the rack.",
@@ -117,15 +122,18 @@ def test_apply_narration_resolves_gained_item_against_pack_catalog(
     assert "ranged" in rifle["tags"]
 
 
-def test_apply_narration_mints_bare_when_no_catalog_match(
-    snapshot_with_pack, character_named_sam
-):
+def test_apply_narration_mints_bare_when_no_catalog_match(snapshot_with_pack, character_named_sam):
     snap, base_pack = snapshot_with_pack
     snap.characters.append(character_named_sam)
     snap.turn_manager.record_interaction()
 
     pack = copy.deepcopy(base_pack)
     pack.inventory = InventoryConfig(item_catalog=[_blaster()])
+    # Epic 94: the gained-item path resolves inventory world-first via
+    # resolve_inventory(pack, world_slug); deepcopy of the MagicMock pack does
+    # not preserve the conftest worlds={} stub, so re-stub it here to force the
+    # genre-tier (test-set) catalog rather than a conjured mock world.
+    pack.worlds = {}
 
     result = NarrationTurnResult(
         narration="You pocket a curious bauble.",

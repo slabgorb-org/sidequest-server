@@ -22,11 +22,15 @@ All models inherit `ProtocolBase`:
 
 from __future__ import annotations
 
-from typing import Literal
+import json
+import logging
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
 from sidequest.protocol.base import ProtocolBase
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Visibility
@@ -227,6 +231,42 @@ class DispatchPackage(ProtocolBase):
     # Intent Router producer raises ``IntentRouterFailure`` on retry-fail
     # instead of returning a degraded shape; downstream consumers no longer
     # branch on a "degraded" flag.
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_stringified_lists(cls, data: Any) -> Any:
+        """Coerce JSON-encoded-string list fields back into lists.
+
+        Known Haiku tool-use failure mode (sq-playtest 2026-06-07, 5×
+        ``schema_invalid`` across spaghetti_western + heavy_metal, one fully
+        crunch-dropped turn): the model emits ``per_player`` /
+        ``cross_player`` as a JSON-*encoded string* (``'[{"player_id": ...'``)
+        instead of a list. The content is well-formed — only the encoding is
+        wrong — so rejecting it costs a retry (and on a double miss, the
+        whole turn's mechanical spine). Parse the string; if it yields a
+        list, take it (same normalize-don't-reject doctrine as
+        ``CrossAction._witnesses_include_participants``). Anything else —
+        unparseable, or parses to a non-list — is left as-is for pydantic to
+        reject loudly.
+        """
+        if not isinstance(data, dict):
+            return data
+        for field in ("per_player", "cross_player"):
+            value = data.get(field)
+            if not isinstance(value, str):
+                continue
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                continue  # let pydantic reject the string loudly
+            if isinstance(parsed, list):
+                logger.info(
+                    "dispatch_package.coerced_stringified_list field=%s items=%d",
+                    field,
+                    len(parsed),
+                )
+                data[field] = parsed
+        return data
 
     @model_validator(mode="after")
     def _unique_idempotency_keys(self) -> DispatchPackage:

@@ -789,3 +789,42 @@ def test_intent_router_failure_exception_importable() -> None:
         "IntentRouterFailure must be an Exception subclass so the explicit "
         "fail-loud surface can be caught by the orchestrator (59-4)"
     )
+
+
+@pytest.mark.asyncio
+async def test_intent_router_accepts_stringified_per_player_without_retry(
+    haiku_response_pronoun_resolved: dict,
+) -> None:
+    """sq-playtest 2026-06-07: Haiku emitted ``per_player`` as a JSON-encoded
+    STRING (``'[{"player_id": ...'``) — 5× ``schema_invalid`` across
+    spaghetti_western + heavy_metal, and one turn (five_points-4 t22) failed
+    both attempts → dispatch_package=None → crunchless turn. The content is
+    well-formed; only the encoding is wrong. DispatchPackage now coerces the
+    stringified list, so the package validates on the FIRST attempt — no
+    retry round-trip burned, no turn at risk of a double miss.
+    """
+    import copy
+    import json
+
+    from sidequest.agents.intent_router import IntentRouter
+    from sidequest.protocol.dispatch import DispatchPackage
+
+    stringified = copy.deepcopy(haiku_response_pronoun_resolved)
+    stringified["per_player"] = json.dumps(stringified["per_player"])
+
+    llm = _make_mock_router_llm(stringified)
+    router = IntentRouter(llm=llm)
+
+    pkg = await router.decompose(
+        action="Attack him!",
+        state_summary={"scene": "goblins 1-3"},
+    )
+
+    assert isinstance(pkg, DispatchPackage)
+    assert len(pkg.per_player) == 1
+    assert len(pkg.per_player[0].dispatch) == 1, (
+        "the dispatch must survive the stringified-list coercion intact"
+    )
+    assert llm.emit_tool.await_count == 1, (
+        "coercion must succeed on the FIRST attempt — no retry burned"
+    )

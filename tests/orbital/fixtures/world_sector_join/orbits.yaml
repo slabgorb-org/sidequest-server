@@ -1,0 +1,42 @@
+version: "0.1.0"
+# Synthetic sector tree for Story 95-1 region->orbital-scope binding tests.
+# Mirrors the perseus_cloud shape: one parent-less hub -> system stars ->
+# planets. Star body-ids are chosen to equal the cartography region ids
+# the binding joins against (region 'yula' -> star body 'yula'). The region
+# 'ceron' deliberately has NO matching star body (the no-match / loud-skip
+# case). This is a TEST fixture, not shipped content.
+clock:
+  epoch_days: 0
+travel:
+  realism: orbital
+  travel_speed_factor: 1.0
+  danger_density: 0.012
+  hazard_arc_density: 0.10
+bodies:
+  cloud:
+    type: star
+    label: "SECTOR HUB"
+    label_color: white
+  yula:
+    type: star
+    parent: cloud
+    semi_major_au: 10.0
+    period_days: 5000
+    epoch_phase_deg: 0
+    label: YULA
+    label_color: amber
+  vorn:
+    type: star
+    parent: cloud
+    semi_major_au: 18.0
+    period_days: 9000
+    epoch_phase_deg: 120
+    label: VORN
+    label_color: blue
+  yula_anchorage:
+    type: habitat
+    parent: yula
+    semi_major_au: 0.5
+    period_days: 40
+    epoch_phase_deg: 0
+    label: "YULA ANCHORAGE"

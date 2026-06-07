@@ -412,6 +412,102 @@ def intent_router_confrontation_classified_span(
         yield span
 
 
+# sq-playtest 2026-06-07 (Reroute Power): a party character's ADR-097
+# signature ability was declared VERBATIM in the action text and produced zero
+# ability/dispatch/gate spans — the ADR-123 dispatch bank has no ability
+# subsystem, so the declaration has no mechanical route, and nothing recorded
+# the decline. This span is the lie-detector: ``ability``/``character`` name
+# the declared-but-unrouted invocation. When an ability subsystem lands, this
+# span is the measure of what it must absorb.
+SPAN_INTENT_ROUTER_ABILITY_INVOCATION_UNROUTED = "intent_router.ability_invocation_unrouted"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_ABILITY_INVOCATION_UNROUTED] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.ability_invocation_unrouted",
+        "ability": (span.attributes or {}).get("ability", ""),
+        "character": (span.attributes or {}).get("character", ""),
+        "in_confrontation": (span.attributes or {}).get("in_confrontation", False),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_ability_invocation_unrouted_span(
+    *,
+    ability: str,
+    character: str,
+    in_confrontation: bool,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """A party character's ADR-097 ability name appeared word-boundary in the
+    action text, and no dispatch route exists for abilities — the declared
+    invocation could not be mechanically engaged. ``in_confrontation`` records
+    whether a live encounter was active at declaration time (the only context
+    some abilities can legally fire in)."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_ABILITY_INVOCATION_UNROUTED,
+        {
+            "ability": ability,
+            "character": character,
+            "in_confrontation": in_confrontation,
+            "genre_slug": genre_slug,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# sq-playtest 2026-06-07 (Size Up outside the standoff): a confrontation-only
+# beat invoked BY NAME with no confrontation active was freehanded as prose
+# with zero gate telemetry — no unregistered gate, no precondition gate, no
+# refusal. Fires only for MULTI-WORD beat labels (single-word labels like
+# "Shoot" are ordinary verbs, not invocations) and only when the router
+# emitted no confrontation dispatch this turn (a seated confrontation makes
+# the beat playable — not a decline).
+SPAN_INTENT_ROUTER_BEAT_OUTSIDE_CONFRONTATION = "intent_router.beat_invoked_outside_confrontation"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_BEAT_OUTSIDE_CONFRONTATION] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.beat_invoked_outside_confrontation",
+        "beat_id": (span.attributes or {}).get("beat_id", ""),
+        "confrontation_type": (span.attributes or {}).get("confrontation_type", ""),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_beat_outside_confrontation_span(
+    *,
+    beat_id: str,
+    confrontation_type: str,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """A multi-word beat label from the pack's confrontation defs appeared in
+    the action text while no confrontation was active and none was seated this
+    turn — the invocation had no playable surface and the decline must be
+    visible to the GM panel."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_BEAT_OUTSIDE_CONFRONTATION,
+        {
+            "beat_id": beat_id,
+            "confrontation_type": confrontation_type,
+            "genre_slug": genre_slug,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 SPAN_INTENT_ROUTER_WITNESSED_ACT_CLASSIFIED = "intent_router.witnessed_act_classified"
 SPAN_ROUTES[SPAN_INTENT_ROUTER_WITNESSED_ACT_CLASSIFIED] = SpanRoute(
     event_type="state_transition",

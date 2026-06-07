@@ -56,6 +56,9 @@ from sidequest.protocol.messages import (
     DiceResultMessage,
 )
 from sidequest.protocol.types import Stat
+from sidequest.server.ability_invocation_telemetry import (
+    emit_ability_invocation_unrouted,
+)
 from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
     make_confrontation_frame_supplier,
@@ -313,6 +316,15 @@ def dispatch_dice_throw(
             f"unknown beat_id {payload.beat_id!r} for encounter "
             f"{encounter.encounter_type!r} — available: [{available}]"
         )
+
+    # Ability-invocation decline evidence (sq-playtest 2026-06-07 Reroute
+    # Power): in-confrontation actions ride ``payload.player_action`` straight
+    # into a router-SUPPRESSED replay turn (story 91-2) — the intent-router
+    # pass never sees them, so the scan must happen HERE, at beat commit, on
+    # the raw typed text. Shared emit seam with the router pass (one span name,
+    # one GM-panel query).
+    if payload.player_action and payload.player_action.strip():
+        emit_ability_invocation_unrouted(action=payload.player_action, snapshot=snapshot)
 
     # Canonicalize the stat BEFORE applying the beat so a malformed
     # stat_check doesn't leave the encounter half-applied with no dice

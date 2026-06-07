@@ -489,6 +489,12 @@ def test_unmatched_mention_still_mints_a_valid_culture_name(otel_capture, monkey
     RED: TypeError (missing mention_name param on _resolve_invented_naming_context,
     called indirectly via _apply_npc_mentions with pack=).
     Once param added, this should PASS — it protects the shuffle fallback.
+
+    Fixture updated for the epithet mint guard (sq-playtest 2026-06-07): the
+    original "A Wandering Stranger" is article-led — exactly the descriptive-
+    epithet shape that is now preserved verbatim, never culture-routed (see
+    tests/server/test_npc_epithet_mint_guard.py). The shuffle-fallback contract
+    this test pins applies to NAME-shaped unmatched mentions.
     """
     from sidequest.genre.names.generator import NameGenerator
 
@@ -501,7 +507,7 @@ def test_unmatched_mention_still_mints_a_valid_culture_name(otel_capture, monkey
     snapshot = GameSnapshot()
     _apply_npc_mentions(
         snapshot=snapshot,
-        mentions=[_mention("A Wandering Stranger")],  # matches no culture
+        mentions=[_mention("Wendell Strange")],  # name-shaped, matches no culture
         turn_num=1,
         pack=pack,
         world="oz",

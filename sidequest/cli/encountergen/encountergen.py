@@ -39,6 +39,7 @@ from sidequest.genre import (
     NpcArchetype,
     load_genre_pack,
 )
+from sidequest.genre.models.bestiary import Bestiary
 from sidequest.genre.models.character import spawnable_archetypes
 from sidequest.genre.models.narrative import PowerTier
 from sidequest.genre.names import build_from_culture
@@ -346,18 +347,20 @@ def creature_to_enemy_block(creature: dict[str, Any], rng: random.Random) -> Ene
 
 def generate_enemy_from_bestiary(
     pack: GenrePack,
+    bestiary: Bestiary,
     args: argparse.Namespace,
     rng: random.Random,
 ) -> EnemyBlock:
-    """Generate an enemy from the pack-root bestiary (``ruleset != native``).
+    """Generate an enemy from the resolved bestiary (``ruleset != native``).
 
     The bestiary entry supplies the combat layer (level / hp / armor_class /
     attack_bonus, SRD-aligned per the bound ruleset); encountergen composes
     the narrative layers (OCEAN, visual prompt) the same way the
-    creatures.yaml path does. Caller guarantees ``pack.bestiary`` is set.
+    creatures.yaml path does. ``bestiary`` is the world-over-genre resolution
+    from :meth:`GenrePack.effective_bestiary` (guaranteed non-None by main()'s
+    fail-loud branch); ``pack`` still supplies the genre visual style.
     """
-    assert pack.bestiary is not None  # guarded by main()'s fail-loud branch
-    entries = pack.bestiary.entries
+    entries = bestiary.entries
 
     tier = args.tier if args.tier is not None else rng.randint(1, 3)
     level_min, level_max = tier_to_level_range(tier)
@@ -798,17 +801,20 @@ def main(argv: list[str] | None = None) -> int:
     # loud when the bestiary is absent: silently seeding an empty Monster
     # Manual pool was the 87-4 bug this branch retires.
     if pack.rules.ruleset != "native":
-        if pack.bestiary is None:
+        bestiary, _source = pack.effective_bestiary(args.world)
+        if bestiary is None:
+            world_clause = f" world '{args.world}'" if args.world else ""
             print(
-                f"sidequest-encountergen: genre '{args.genre}' binds ruleset "
-                f"'{pack.rules.ruleset}' but ships no bestiary.yaml at the pack "
-                "root — ruleset-module packs REQUIRE a bestiary (90-1 fail-loud "
-                "contract; author SRD-aligned combat stat blocks)",
+                f"sidequest-encountergen: genre '{args.genre}'{world_clause} binds ruleset "
+                f"'{pack.rules.ruleset}' but resolves no bestiary — ruleset-module packs "
+                "REQUIRE one (90-1 fail-loud contract). The genre/world repoint moved "
+                "creature rosters to the world tier: author SRD-aligned combat stat blocks "
+                "in worlds/<world>/bestiary.yaml (or keep a genre-tier bestiary.yaml)",
                 file=sys.stderr,
             )
             return 1
         for _ in range(args.count):
-            enemies.append(generate_enemy_from_bestiary(pack, args, rng))
+            enemies.append(generate_enemy_from_bestiary(pack, bestiary, args, rng))
         return _emit(enemies)
 
     # Native packs: humanoid NPCs from rules.yaml allowed_classes

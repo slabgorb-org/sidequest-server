@@ -1209,6 +1209,15 @@ def _load_single_world(
     # docs/research/items-as-confrontation-modifiers.md.
     items = _load_world_items(world_path / "items.yaml", world_slug=world_path.name)
 
+    # === World-tier bestiary.yaml — OPTIONAL (genre/world repoint) ===
+    # "Genre is rulebook only, world owns cast/catalog": creature rosters moved
+    # to the world tier. Ruleset-module packs (wwn/cwn/swn/awn) author their
+    # hostiles here; the world set REPLACES the genre-tier pool via
+    # GenrePack.effective_bestiary (world-over-genre, like cultures/archetypes).
+    # Absent file → None (the genre-tier bestiary serves; encountergen fails loud
+    # only when NEITHER tier supplies one for a ruleset-module pack).
+    world_bestiary = _load_yaml_optional(world_path / "bestiary.yaml", Bestiary)
+
     # ADR-079: optional world-level theme override (worlds/<slug>/client_theme.css).
     # When present, this CSS replaces the genre-level theme at connect time.
     client_theme_css = _load_text_optional(world_path / "client_theme.css")
@@ -1258,6 +1267,7 @@ def _load_single_world(
         chassis_instances=chassis_instances,
         magic_register=magic_register,
         items=items,
+        bestiary=world_bestiary,
         scenarios=world_scenarios,
         premises=world_premises,
         blocs=world_blocs,

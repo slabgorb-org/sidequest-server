@@ -308,6 +308,7 @@ class PlayerActionHandler:
             from sidequest.agents.aside_resolver import (
                 AsideReadView,
                 AsideResolver,
+                resolve_aside_on_narrator_cache,
             )
             from sidequest.agents.llm_factory import build_aside_llm
             from sidequest.protocol.messages import (
@@ -319,59 +320,13 @@ class PlayerActionHandler:
 
             sd_aside = session._session_data
             snap = sd_aside.snapshot
-            # Mirror the normal-path guard (Reviewer RT1): an aside must
-            # degrade like a real action if acting-name resolution raises,
-            # not crash the handler.
-            try:
-                char_name = _resolve_acting_character_name(sd_aside, session._room)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "session.aside_acting_name_resolve_failed error=%s falling_back_to=%s",
-                    exc,
-                    sd_aside.player_name,
-                )
-                char_name = sd_aside.player_name
-            core = next(
-                (c.core for c in snap.characters if c.core.name == char_name),
-                None,
-            )
-            character_summary = (
-                f"{core.name}: {core.description}" if core is not None else char_name
-            )
-            inventory: list[str] = []
-            if core is not None:
-                for item in core.inventory.items:
-                    name = item.get("name") if isinstance(item, dict) else None
-                    inventory.append(str(name) if name else str(item))
-            region = (
-                snap.party_location(perspective=char_name)
-                or snap.party_location()
-                or "(location unstated)"
-            )
-            confrontations = (
-                sd_aside.genre_pack.rules.confrontations if sd_aside.genre_pack.rules else []
-            )
-            rulebook = (
-                f"Genre {sd_aside.genre_slug}. Confrontations: "
-                + ", ".join(c.label for c in confrontations)
-                if confrontations
-                else f"Genre {sd_aside.genre_slug}."
-            )
-            recent = " ".join(e.content for e in snap.narrative_log[-4:] if e.content)
-            read_view = AsideReadView(
-                character_summary=character_summary,
-                region_summary=region,
-                inventory=inventory,
-                rulebook_summary=rulebook,
-                recent_narration=recent,
-            )
-            # Story 91-4: key the aside's Haiku spend to the canonical
+            # Story 91-4: key the aside's LLM spend to the canonical
             # session id (room slug first, sd.game_slug fallback — the same
             # resolution the narrator's cost machinery uses) so it runs the
             # ADR-134 detector and counts against the per-session cumulative
             # ceiling. Both None should be unreachable for a connected
             # player; fail loud rather than silently constructing an
-            # uncovered Haiku spender (No Silent Fallbacks).
+            # uncovered spender (No Silent Fallbacks).
             if session._room is not None:
                 aside_session_id = session._room.slug
             elif sd_aside.game_slug is not None:
@@ -380,17 +335,89 @@ class PlayerActionHandler:
                 raise RuntimeError(
                     "aside resolve fired without a bound session id (no room "
                     "and no sd.game_slug) — refusing to construct an "
-                    "uncovered Haiku caller (story 91-4, No Silent Fallbacks)."
+                    "uncovered LLM caller (story 91-4, No Silent Fallbacks)."
                 )
+            # Aside-rides-the-cache (playtest 2026-06-07, ADR-107 re-scope):
+            # prefer re-presenting the narrator's exact cached prompt prefix
+            # (stashed by the orchestrator every SDK turn) so the aside
+            # knows everything the narrator knows. Fall back to the legacy
+            # thin read-view when no SDK turn has run yet or the backend
+            # has no tool loop.
+            orch = sd_aside.orchestrator
+            stash = orch.aside_prompt_stash
+            cache_client = orch.aside_cache_client
             with tracer().start_as_current_span(SPAN_ASIDE_RESOLVE) as span:
                 t0 = time.monotonic()
-                res = await AsideResolver(llm=build_aside_llm(session_id=aside_session_id)).resolve(
-                    question=question, read_view=read_view
-                )
+                if stash is not None and cache_client is not None:
+                    res, cache_read_tokens = await resolve_aside_on_narrator_cache(
+                        client=cache_client,
+                        stash=stash,
+                        question=question,
+                        session_id=aside_session_id,
+                    )
+                    span.set_attribute("path", "narrator_cache")
+                    span.set_attribute("cache_hit", cache_read_tokens > 0)
+                    span.set_attribute("cache_read_tokens", cache_read_tokens)
+                    span.set_attribute("model", stash.model)
+                else:
+                    reason = "no_narrator_prompt_stash" if stash is None else "non_tooling_client"
+                    logger.info("aside.legacy_read_view reason=%s", reason)
+                    # Mirror the normal-path guard (Reviewer RT1): an aside
+                    # must degrade like a real action if acting-name
+                    # resolution raises, not crash the handler.
+                    try:
+                        char_name = _resolve_acting_character_name(sd_aside, session._room)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "session.aside_acting_name_resolve_failed error=%s falling_back_to=%s",
+                            exc,
+                            sd_aside.player_name,
+                        )
+                        char_name = sd_aside.player_name
+                    core = next(
+                        (c.core for c in snap.characters if c.core.name == char_name),
+                        None,
+                    )
+                    character_summary = (
+                        f"{core.name}: {core.description}" if core is not None else char_name
+                    )
+                    inventory: list[str] = []
+                    if core is not None:
+                        for item in core.inventory.items:
+                            name = item.get("name") if isinstance(item, dict) else None
+                            inventory.append(str(name) if name else str(item))
+                    region = (
+                        snap.party_location(perspective=char_name)
+                        or snap.party_location()
+                        or "(location unstated)"
+                    )
+                    confrontations = (
+                        sd_aside.genre_pack.rules.confrontations
+                        if sd_aside.genre_pack.rules
+                        else []
+                    )
+                    rulebook = (
+                        f"Genre {sd_aside.genre_slug}. Confrontations: "
+                        + ", ".join(c.label for c in confrontations)
+                        if confrontations
+                        else f"Genre {sd_aside.genre_slug}."
+                    )
+                    recent = " ".join(e.content for e in snap.narrative_log[-4:] if e.content)
+                    read_view = AsideReadView(
+                        character_summary=character_summary,
+                        region_summary=region,
+                        inventory=inventory,
+                        rulebook_summary=rulebook,
+                        recent_narration=recent,
+                    )
+                    res = await AsideResolver(
+                        llm=build_aside_llm(session_id=aside_session_id)
+                    ).resolve(question=question, read_view=read_view)
+                    span.set_attribute("path", "legacy_read_view")
+                    span.set_attribute("model", "haiku")
                 span.set_attribute("asker_id", sd_aside.player_id or "")
                 span.set_attribute("outcome", res.outcome)
                 span.set_attribute("grounded_on", ",".join(res.grounded_on))
-                span.set_attribute("model", "haiku")
                 span.set_attribute("latency_ms", int((time.monotonic() - t0) * 1000))
             answer_msg = AsideAnswerMessage(
                 payload=AsideAnswerPayload(

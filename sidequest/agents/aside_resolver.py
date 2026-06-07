@@ -12,7 +12,14 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from sidequest.agents.tooling_protocol import (
+        CacheableBlock,
+        ToolDefinition,
+        ToolingLlmClient,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -121,28 +128,150 @@ class AsideResolver:
                 outcome="resolver_error",
                 grounded_on=(),
             )
-        try:
-            data = json.loads(_extract_json(raw))
-            outcome = str(data.get("outcome", ""))
-            if outcome not in _VALID_OUTCOMES:
-                raise ValueError(f"invalid outcome {outcome!r}")
-            grounded = tuple(str(g) for g in data.get("grounded_on", []))
-            answer = str(data.get("answer", "")).strip()
-            if not answer:
-                raise ValueError("empty answer")
-            return AsideResolution(answer=answer, outcome=outcome, grounded_on=grounded)
-        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
-            # No Silent Fallbacks: loud, honest, never invents lore.
-            # Narrow + precise so a real programming bug (e.g.
-            # AttributeError) still propagates instead of masquerading
-            # as a resolver_error (Reviewer RT1 guidance).
-            logger.error(
-                "aside.resolver_error reason=malformed_output raw=%r",
-                (raw or "")[:200],
-                exc_info=True,
-            )
-            return AsideResolution(
+        return _parse_resolution(raw)
+
+
+def _parse_resolution(raw: str) -> AsideResolution:
+    """Parse + validate the resolver's compact-JSON contract.
+
+    Shared by both resolver paths (thin read-view Haiku and the
+    narrator-cache path). Malformed output is the loud-but-degraded
+    ``resolver_error`` outcome — No Silent Fallbacks: honest, never
+    invents lore.
+    """
+    try:
+        data = json.loads(_extract_json(raw))
+        outcome = str(data.get("outcome", ""))
+        if outcome not in _VALID_OUTCOMES:
+            raise ValueError(f"invalid outcome {outcome!r}")
+        grounded = tuple(str(g) for g in data.get("grounded_on", []))
+        answer = str(data.get("answer", "")).strip()
+        if not answer:
+            raise ValueError("empty answer")
+        return AsideResolution(answer=answer, outcome=outcome, grounded_on=grounded)
+    except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+        # Narrow + precise so a real programming bug (e.g.
+        # AttributeError) still propagates instead of masquerading
+        # as a resolver_error (Reviewer RT1 guidance).
+        logger.error(
+            "aside.resolver_error reason=malformed_output raw=%r",
+            (raw or "")[:200],
+            exc_info=True,
+        )
+        return AsideResolution(
+            answer=_RESOLVER_ERROR_ANSWER,
+            outcome="resolver_error",
+            grounded_on=(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Narrator-cache path (playtest 2026-06-07 re-scope of ADR-107 grounding)
+#
+# The thin read-view above gives the resolver ~500 tokens of state — it
+# cannot answer "what day is it", "who have I met", "what do I know so far".
+# Instead of assembling a parallel game-state slice, the aside re-presents
+# the NARRATOR's exact cached prompt (system blocks + tools + model, stashed
+# by the orchestrator each SDK turn) with the OOC question as the user turn
+# and ``tool_choice={"type":"none"}`` so it structurally cannot mutate
+# anything. Cost ≈ one cache READ of the prefix (play itself keeps the 5m/1h
+# blocks warm) + a short completion. The aside then knows EVERYTHING the
+# narrator knows, with zero new state-assembly code.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AsidePromptStash:
+    """The narrator's exact SDK prompt artifacts, stashed per turn.
+
+    Byte-identity matters: the cache key is exact bytes per model, so the
+    stash holds REFERENCES to the same objects the narrator turn shipped —
+    never a rebuild. ``None`` on the orchestrator until the first SDK turn.
+    """
+
+    system_blocks: list[CacheableBlock]
+    tools: list[ToolDefinition]
+    model: str
+
+
+_NARRATOR_CACHE_ASIDE_USER_TEMPLATE = """\
+[OUT-OF-CHARACTER ASIDE — NOT A TURN]
+
+The player is asking an out-of-character table-talk question. The fiction is \
+FROZEN: do not narrate, do not advance the world, do not call tools. Answer \
+as the GM at the table, grounding ONLY in the game state you already have in \
+your context (the system prompt above: world state, NPCs, calendar, journal, \
+rules, recent narration).
+
+ANSWER (outcome "answered") — 1-3 plain sentences, second-person GM voice — \
+for capability/perception the character would already know, rules/genre \
+mechanics, or recap of established events.
+
+REFUSE with "You'd have to check — that's an action, not a question." \
+(outcome "refused_hidden_state") for hidden world state the character has \
+not earned (traps, unseen stats, behind unopened doors).
+
+If answering honestly would require the world to change, outcome \
+"refused_would_advance" and point back to the action box.
+
+If your context genuinely does not pin the answer down, outcome \
+"ungrounded_declined" and say so — never invent.
+
+grounded_on MUST list the context areas you used (e.g. calendar, npcs, \
+journal, rulebook, inventory, recent_narration). Empty only on a \
+refusal/decline.
+
+Respond ONLY as compact JSON: \
+{{"answer": str, "outcome": str, "grounded_on": [str, ...]}}
+
+PLAYER ASIDE: {question}"""
+
+
+async def resolve_aside_on_narrator_cache(
+    *,
+    client: ToolingLlmClient,
+    stash: AsidePromptStash,
+    question: str,
+    session_id: str,
+) -> tuple[AsideResolution, int]:
+    """Resolve an aside against the narrator's cached prompt prefix.
+
+    Returns ``(resolution, cache_read_tokens)`` — the caller stamps
+    ``cache_hit`` on the aside span from the token count (the lie-detector
+    that the prefix actually came from cache; 0 on a warm-window miss means
+    byte drift between the stash and the live narrator prompt).
+
+    ``tool_choice={"type":"none"}`` presents the narrator's exact tools
+    array (cache-prefix preservation) while forbidding tool calls — the
+    aside structurally cannot mutate state (ADR-107 "no hands"). The
+    ``session_id`` keys the spend into the ADR-134 per-session cumulative
+    ceiling exactly like the narrator's own calls.
+    """
+    from sidequest.agents.tooling_protocol import Message
+
+    user = _NARRATOR_CACHE_ASIDE_USER_TEMPLATE.format(question=question)
+    try:
+        result = await client.complete_with_tools(
+            stash.system_blocks,
+            [Message(role="user", content=user)],
+            stash.tools,
+            None,  # tool_dispatch — unreachable under tool_choice=none; loud if not
+            model=stash.model,
+            max_iterations=1,
+            session_id=session_id,
+            tool_choice={"type": "none"},
+            caller="aside",
+        )
+    except Exception:  # noqa: BLE001 — LLM call-failure boundary (spec §6 parity)
+        logger.error(
+            "aside.resolver_error reason=llm_call_failed path=narrator_cache", exc_info=True
+        )
+        return (
+            AsideResolution(
                 answer=_RESOLVER_ERROR_ANSWER,
                 outcome="resolver_error",
                 grounded_on=(),
-            )
+            ),
+            0,
+        )
+    return _parse_resolution(result.text), result.cached_input_read_tokens

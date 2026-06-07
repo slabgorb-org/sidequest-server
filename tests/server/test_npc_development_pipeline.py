@@ -58,6 +58,10 @@ from sidequest.game.disposition import (
     configure_attitude_thresholds,
     reset_attitude_thresholds,
 )
+from sidequest.game.npc_development import (
+    ACQUAINTANCE_AT,
+    DISPOSITION_DRIFT_PER_MILESTONE,
+)
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.server.narration_apply import _apply_npc_mentions
@@ -501,10 +505,12 @@ def test_disposition_drift_emits_shift_span_with_crossed_true(otel_capture) -> N
 
 
 def test_intra_band_drift_emits_shift_span_with_crossed_false(otel_capture) -> None:
-    """Intra-band drift is still observable: a single small warm from neutral
+    """Intra-band drift is still observable: the first rapport MILESTONE
+    (ping-pong 2026-06-07: drift fires on tier escalation, not per cite)
     fires the span with ``crossed=False`` and a non-zero delta."""
     snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)))
-    _engage(snap, "Boris", turn=1)
+    for t in range(1, ACQUAINTANCE_AT + 1):
+        _engage(snap, "Boris", turn=t)
 
     spans = _shift_spans(otel_capture)
     assert len(spans) == 1, (
@@ -563,3 +569,134 @@ def test_no_engagement_no_tick(otel_capture) -> None:
     _engage(snap, "Stranger", turn=1)  # invented — never resolves to Boris
     assert _dev_spans(otel_capture) == []
     assert snap.npcs[0].non_transactional_interactions == 0
+
+
+# ===========================================================================
+# Ping-pong 2026-06-07 — "Relationships beat-log naive +2-attention model"
+# (operator diagnosis: engagement-count masquerading as valence; firing on
+# the Thari cutter every round rendered it "Warm ↗" while Rifenna — handshake,
+# struck deal — never moved). Attention is INTEREST (ADR-014 coal→diamond),
+# not VALENCE (ADR-020/136): the tier ladder stays attention-driven, but
+# disposition now moves only on rapport MILESTONES (tier escalations) or via
+# the narrator's valenced update_npc_disposition tool — never per-cite.
+# ===========================================================================
+
+
+def _hostile_mention(name: str) -> NpcMention:
+    return NpcMention(name=name, side="opponent")
+
+
+def _seat_as_opponent(snap: GameSnapshot, name: str) -> None:
+    from sidequest.game.encounter import (
+        EncounterActor,
+        EncounterMetric,
+        StructuredEncounter,
+    )
+
+    snap.encounter = StructuredEncounter(
+        encounter_type="combat",
+        category="combat",
+        player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
+        opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
+        actors=[
+            EncounterActor(name="Hero", role="combatant", side="player"),
+            EncounterActor(name=name, role="combatant", side="opponent"),
+        ],
+    )
+
+
+def test_no_disposition_drift_below_a_tier_milestone() -> None:
+    """Two cites (below ACQUAINTANCE_AT=3) tick interest but move NO
+    disposition and write NO beat — bare attention is not valence (the
+    Mrs. Poole case: named once in dialogue, +2 warmer)."""
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)))
+    _engage(snap, "Boris", turn=1)
+    _engage(snap, "Boris", turn=2)
+
+    npc = snap.npcs[0]
+    assert npc.non_transactional_interactions == 2, "interest ladder still counts"
+    assert int(npc.disposition) == 0, (
+        f"disposition moved on bare attention (got {int(npc.disposition)}) — "
+        "engagement-count is masquerading as valence again"
+    )
+    assert npc.disposition_log == [], (
+        f"a beat was written below the milestone: {npc.disposition_log!r}"
+    )
+
+
+def test_milestone_escalation_warms_and_writes_a_named_beat() -> None:
+    """The ACQUAINTANCE_AT-th engagement escalates the tier and earns the
+    rapport milestone: +drift and ONE beat whose reason names the milestone."""
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)))
+    for t in range(1, ACQUAINTANCE_AT + 1):
+        _engage(snap, "Boris", turn=t)
+
+    npc = snap.npcs[0]
+    assert npc.resolution_tier == "acquaintance"
+    assert int(npc.disposition) == DISPOSITION_DRIFT_PER_MILESTONE
+    assert len(npc.disposition_log) == 1, (
+        f"expected exactly one milestone beat, got {npc.disposition_log!r}"
+    )
+    beat = npc.disposition_log[0]
+    assert beat.delta == DISPOSITION_DRIFT_PER_MILESTONE
+    assert "acquaintance" in beat.reason, (
+        f"the beat reason must name the rapport milestone; got {beat.reason!r}"
+    )
+
+
+def test_hostile_side_mention_does_not_develop() -> None:
+    """A mention the narrator marks side='opponent' is combat attention —
+    no interest tick, no warmth, no beat (the Thari-cutter case)."""
+    snap = _snapshot(Npc(core=_core("Cutter"), disposition=Disposition(0)))
+    for t in range(1, 6):
+        _apply_npc_mentions(
+            snapshot=snap,
+            mentions=[_hostile_mention("Cutter")],
+            turn_num=t,
+            acting_character_name="Hero",
+        )
+
+    npc = snap.npcs[0]
+    assert npc.non_transactional_interactions == 0, (
+        "hostile-side cites must not accrue interest credit"
+    )
+    assert int(npc.disposition) == 0, "firing on it every round must not warm it"
+    assert npc.disposition_log == []
+
+
+def test_seated_opponent_does_not_develop_even_on_neutral_mention() -> None:
+    """While the NPC is seated opponent-side in an ACTIVE encounter, even a
+    neutral-side cite is transactional combat attention — no development."""
+    snap = _snapshot(Npc(core=_core("Cutter"), disposition=Disposition(0)))
+    _seat_as_opponent(snap, "Cutter")
+    for t in range(1, 6):
+        _engage(snap, "Cutter", turn=t)
+
+    npc = snap.npcs[0]
+    assert npc.non_transactional_interactions == 0
+    assert int(npc.disposition) == 0
+    assert npc.disposition_log == []
+
+
+def test_resolved_encounter_releases_the_hostile_gate() -> None:
+    """Once the encounter resolves, the same NPC can develop again (a beaten
+    foe can become a rival-turned-contact through genuine engagement)."""
+    snap = _snapshot(Npc(core=_core("Cutter"), disposition=Disposition(0)))
+    _seat_as_opponent(snap, "Cutter")
+    snap.encounter.resolved = True
+    _engage(snap, "Cutter", turn=9)
+
+    assert snap.npcs[0].non_transactional_interactions == 1
+
+
+def test_same_turn_double_apply_develops_once() -> None:
+    """Two _apply_npc_mentions calls in the SAME turn (the blackthorn turn-1
+    double-write: two byte-identical beats per NPC) must develop once."""
+    snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)))
+    _engage(snap, "Boris", turn=1)
+    _engage(snap, "Boris", turn=1)
+
+    npc = snap.npcs[0]
+    assert npc.non_transactional_interactions == 1, (
+        "a second apply pass in the same turn must not double-count interest"
+    )

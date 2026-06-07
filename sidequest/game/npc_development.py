@@ -38,14 +38,23 @@ if TYPE_CHECKING:
 ACQUAINTANCE_AT = 3
 ESTABLISHED_AT = 8
 
-# Per-engagement disposition warm. Small and positive: sustained, non-hostile
-# contact deepens rapport (ADR-020 "evolves through interaction"). Applied via
-# the ``Disposition`` constructor, which clamps to +-100 — no unbounded growth.
-DISPOSITION_DRIFT_PER_ENGAGEMENT = 2
+# Per-MILESTONE disposition warm (ping-pong 2026-06-07 "naive +2-attention
+# model"). The original design warmed +2 on EVERY cite — engagement-count
+# masquerading as valence (operator diagnosis: firing on the Thari cutter
+# every round read as "Warm ↗"; Mrs. Poole warmed by being NAMED in someone
+# else's dialogue). Attention is INTEREST (ADR-014 coal→diamond), not VALENCE
+# (ADR-020/136): the tier ladder stays attention-driven, but disposition now
+# moves only when a rapport MILESTONE is crossed (tier escalation) — sustained
+# engagement still "deepens rapport", just at the earned thresholds, not per
+# mention. Valenced movement is the narrator's ``update_npc_disposition`` tool
+# (signed delta + reason → disposition beat), which this drift must never
+# drown out. Applied via the clamping ``Disposition`` constructor.
+DISPOSITION_DRIFT_PER_MILESTONE = 2
 
-# Label for the engagement-tick disposition beat (ADR-136). The interest tick
-# is a small warm drift from continued player attention (ADR-014/ADR-020).
-ENGAGEMENT_BEAT_REASON = "warmed by your continued attention"
+
+def engagement_beat_reason(tier: str) -> str:
+    """ADR-136 beat reason for a rapport-milestone drift, naming the tier."""
+    return f"rapport deepened — now {tier}"
 
 
 def tier_for_interactions(interactions: int) -> str:
@@ -81,10 +90,12 @@ class DevelopmentTick:
 def develop_npc_on_engagement(npc: Npc) -> DevelopmentTick:
     """Apply one interest-driven development tick to ``npc`` in place.
 
-    Increments the interest counter, escalates ``resolution_tier`` per the
-    named ladder, and warms ``disposition`` through the clamping constructor.
-    Returns the before/after deltas so the caller can emit the development-tick
-    and (when disposition actually moved) the ``disposition.shift`` span.
+    Increments the interest counter and escalates ``resolution_tier`` per the
+    named ladder. Disposition warms ONLY when this tick crosses a rapport
+    milestone (tier escalation) — never per bare cite (ping-pong 2026-06-07:
+    attention is interest, not valence). Returns the before/after deltas so
+    the caller can emit the development-tick and (when disposition actually
+    moved) the ``disposition.shift`` span + the ADR-136 milestone beat.
     """
     tier_before = npc.resolution_tier
     disposition_before = int(npc.disposition)
@@ -92,7 +103,8 @@ def develop_npc_on_engagement(npc: Npc) -> DevelopmentTick:
 
     npc.non_transactional_interactions += 1
     npc.resolution_tier = tier_for_interactions(npc.non_transactional_interactions)
-    npc.disposition = Disposition(disposition_before + DISPOSITION_DRIFT_PER_ENGAGEMENT)
+    if npc.resolution_tier != tier_before:
+        npc.disposition = Disposition(disposition_before + DISPOSITION_DRIFT_PER_MILESTONE)
 
     return DevelopmentTick(
         interactions=npc.non_transactional_interactions,

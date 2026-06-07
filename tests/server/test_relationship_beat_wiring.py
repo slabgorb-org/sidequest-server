@@ -16,7 +16,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import sidequest.telemetry.spans as _spans_module
 from sidequest.game.disposition import Disposition
-from sidequest.game.npc_development import ENGAGEMENT_BEAT_REASON
+from sidequest.game.npc_development import ACQUAINTANCE_AT, engagement_beat_reason
 from sidequest.game.session import Npc
 from sidequest.server.session_handler import (
     _KIND_TO_MESSAGE_CLS,
@@ -28,26 +28,32 @@ from tests.game.test_disposition_beat import _npc
 from tests.server.test_npc_development_pipeline import _core, _engage, _snapshot
 
 
-def test_engagement_reason_constant():
-    assert isinstance(ENGAGEMENT_BEAT_REASON, str) and ENGAGEMENT_BEAT_REASON
+def test_engagement_reason_names_the_milestone():
+    # Ping-pong 2026-06-07: the beat reason is milestone-derived, naming the
+    # tier reached — never the old uniform "warmed by your continued attention".
+    reason = engagement_beat_reason("acquaintance")
+    assert isinstance(reason, str) and "acquaintance" in reason
 
 
 def test_engagement_records_disposition_beat():
-    # Drive the REAL production handler: one npcs_hit engagement of a fresh Npc.
+    # Drive the REAL production handler to the first rapport MILESTONE
+    # (ping-pong 2026-06-07: bare cites tick interest but write no beat;
+    # the ACQUAINTANCE_AT-th engagement escalates the tier and earns one).
     location = "Parlor"
     snap = _snapshot(Npc(core=_core("Boris"), disposition=Disposition(0)), location=location)
     before = int(snap.npcs[0].disposition)
 
-    _engage(snap, "Boris", turn=7)
+    for t in range(1, ACQUAINTANCE_AT + 1):
+        _engage(snap, "Boris", turn=t)
 
     npc = snap.npcs[0]
     # The disposition actually moved (a beat means the standing moved).
     assert int(npc.disposition) > before
     # The beat was persisted via the seam at the real call site.
-    assert npc.disposition_log, "engagement tick recorded no disposition beat"
+    assert npc.disposition_log, "milestone tick recorded no disposition beat"
     beat = npc.disposition_log[-1]
-    assert beat.reason == ENGAGEMENT_BEAT_REASON
-    assert beat.turn == 7
+    assert beat.reason == engagement_beat_reason("acquaintance")
+    assert beat.turn == ACQUAINTANCE_AT
     assert beat.location == location
     assert beat.delta == int(npc.disposition) - before
 

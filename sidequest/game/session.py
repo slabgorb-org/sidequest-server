@@ -210,6 +210,11 @@ class Npc(BaseModel):
     # P2-deferred: ResolutionTier (NPC enrichment system)
     resolution_tier: str = "spawn"
     non_transactional_interactions: int = 0
+    # Ping-pong 2026-06-07 ("turn-1 double-write"): last turn a development
+    # tick was applied. Two _apply_npc_mentions passes in one turn (e.g. the
+    # blackthorn double-apply) must not double-count interest — the per-call
+    # ``developed_this_turn`` set cannot see across calls. 0 = never developed.
+    last_development_turn: int = 0
     # P2-deferred: archetype resolution fields
     jungian_id: str | None = None
     rpg_role_id: str | None = None

@@ -44,7 +44,7 @@ from sidequest.game.morale import (
     OpponentState,
     maybe_check_morale,
 )
-from sidequest.game.npc_development import ENGAGEMENT_BEAT_REASON, develop_npc_on_engagement
+from sidequest.game.npc_development import develop_npc_on_engagement, engagement_beat_reason
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.region_validation import (
     canonicalize_region_name,
@@ -1890,6 +1890,32 @@ def _reconcile_ongoing_threat(
     return best
 
 
+def _engagement_is_hostile_context(snapshot: GameSnapshot, mention: object, npc: object) -> bool:
+    """True when a narrator cite of ``npc`` is combat attention, not interest.
+
+    Ping-pong 2026-06-07 ("naive +2-attention model"): the development tick
+    must not fire for an NPC the party is actively FIGHTING — engagement-count
+    is not valence. Two signals, either suffices:
+
+    - the narrator marked this mention ``side="opponent"``;
+    - the NPC is seated opponent-side (non-withdrawn) in the ACTIVE,
+      unresolved encounter.
+
+    A resolved encounter releases the gate — a beaten foe can become a
+    rival-turned-contact through genuine post-fight engagement.
+    """
+    if (getattr(mention, "side", "") or "").strip().lower() == "opponent":
+        return True
+    enc = snapshot.encounter
+    if enc is None or enc.resolved:
+        return False
+    name_key = npc.core.name.casefold()
+    return any(
+        actor.side == "opponent" and not actor.withdrawn and actor.name.casefold() == name_key
+        for actor in enc.actors
+    )
+
+
 def _apply_npc_mentions(
     *,
     snapshot: GameSnapshot,
@@ -2052,9 +2078,41 @@ def _apply_npc_mentions(
             # Story 72-1: interest-driven development tick. Rides this
             # ``npcs_hit`` engagement signal (ADR-014 coal->diamond on player
             # interest; ADR-020 disposition evolves through interaction).
-            # De-duped per turn so a name cited twice develops once.
-            if name_key not in developed_this_turn:
+            # De-duped per turn so a name cited twice develops once — and
+            # (ping-pong 2026-06-07 turn-1 double-write) across apply CALLS
+            # via ``last_development_turn``, since two passes in one turn
+            # each start a fresh ``developed_this_turn`` set.
+            #
+            # Hostile-context gate (ping-pong 2026-06-07 "naive +2-attention
+            # model"): a cite of an NPC the party is actively FIGHTING —
+            # narrator-marked side="opponent", or seated opponent-side in the
+            # live encounter — is transactional combat attention, not the
+            # non-transactional interest ADR-014 promotes on. Pre-gate, firing
+            # on the Thari cutter every round accrued +2/turn and rendered it
+            # "Warm ↗" on the Relationships tab. Skip the tick entirely and
+            # emit the decision (OTEL lie-detector — the skip must be visible).
+            if name_key not in developed_this_turn and npc_hit.last_development_turn != turn_num:
                 developed_this_turn.add(name_key)
+                if _engagement_is_hostile_context(snapshot, mention, npc_hit):
+                    with Span.open(
+                        "npc.development_skipped",
+                        {
+                            "npc_name": npc_hit.core.name,
+                            "reason": "hostile_context",
+                            "mention_side": mention.side or "",
+                            "turn_number": turn_num,
+                        },
+                    ):
+                        pass
+                    logger.info(
+                        "npc.development_skipped name=%r reason=hostile_context "
+                        "mention_side=%r turn=%d",
+                        npc_hit.core.name,
+                        mention.side,
+                        turn_num,
+                    )
+                    continue
+                npc_hit.last_development_turn = turn_num
                 tick = develop_npc_on_engagement(npc_hit)
                 with npc_developed_span(
                     npc_name=npc_hit.core.name,
@@ -2088,11 +2146,12 @@ def _apply_npc_mentions(
                         },
                     ):
                         pass
-                    # ADR-136: persist the why behind this shift.
+                    # ADR-136: persist the why behind this shift — the rapport
+                    # MILESTONE, named (drift only fires on tier escalation).
                     npc_hit.record_disposition_beat(
                         turn=turn_num,
                         delta=tick.disposition_delta,
-                        reason=ENGAGEMENT_BEAT_REASON,
+                        reason=engagement_beat_reason(tick.tier_after),
                         location=actor_loc,
                     )
             continue

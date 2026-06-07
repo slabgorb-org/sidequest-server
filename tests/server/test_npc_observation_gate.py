@@ -1334,3 +1334,101 @@ def test_assert_guard_passes_silently_when_no_pending_survives(otel_capture):
         "No violation span may fire when the pool holds zero pending members — "
         "a ratified pool member is not an ordering violation."
     )
+
+
+# ===========================================================================
+# Group F — Prose re-citation ratifies (sq-playtest 2026-06-07 purge/mint
+# deadlock, five_points-4 turns 28-31 "Mother Demus"/"Son")
+# ===========================================================================
+
+
+def test_gate_promotes_pending_member_named_in_prose(otel_capture):
+    """A pending member whose name appears in THIS turn's narration prose
+    is ratified even when ``npcs_present`` omits them. Pre-fix the gate
+    purged her while the narration named her — composing with the
+    auto-minter's ambiguity skip into a four-turn deadlock where the NPC
+    existed in prose and nowhere in state.
+    """
+    from sidequest.server.session_helpers import _apply_npc_observation_gate
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Mother Demus", role=None, pronouns="she/her"))
+
+    _apply_npc_observation_gate(
+        snapshot=snapshot,
+        emitted_mentions=[],  # narrator omitted her from npcs_present
+        turn_num=29,
+        narration_text="Mother Demus bars the door while her son watches the street.",
+    )
+
+    survivor = next((m for m in snapshot.npc_pool if m.name == "Mother Demus"), None)
+    assert survivor is not None, (
+        "prose re-citation must ratify, not purge; pool after gate: "
+        f"{[m.name for m in snapshot.npc_pool]}"
+    )
+    assert survivor.observation_pending is False
+
+    promoted = _spans_named(otel_capture, PROMOTED_SPAN_NAME)
+    assert promoted, "promotion span must fire on the prose-ratification path"
+    assert _attr(promoted[0], "ratified_by") == "prose"
+
+
+def test_gate_still_purges_when_name_absent_from_prose_and_mentions(otel_capture):
+    """Prose ratification must not weaken the phantom cleanup: a pending
+    member named nowhere this turn (neither structured nor prose) is
+    still purged."""
+    from sidequest.server.session_helpers import _apply_npc_observation_gate
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Mother Demus", role=None, pronouns="she/her"))
+
+    _apply_npc_observation_gate(
+        snapshot=snapshot,
+        emitted_mentions=[],
+        turn_num=30,
+        narration_text="The street is empty. Rain pools in the wheel ruts.",
+    )
+
+    assert all(m.name != "Mother Demus" for m in snapshot.npc_pool), (
+        "a member named nowhere this turn must still purge"
+    )
+    assert _spans_named(otel_capture, PURGED_SPAN_NAME)
+
+
+def test_gate_prose_match_is_word_boundary(otel_capture):
+    """Substring hits must not ratify — 'Son' must not match 'Sonia'."""
+    from sidequest.server.session_helpers import _apply_npc_observation_gate
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Son", role="son", pronouns="he/him"))
+
+    _apply_npc_observation_gate(
+        snapshot=snapshot,
+        emitted_mentions=[],
+        turn_num=31,
+        narration_text="Sonia counts the take behind the bar.",
+    )
+
+    assert all(m.name != "Son" for m in snapshot.npc_pool), (
+        "substring 'Son' inside 'Sonia' must not ratify"
+    )
+
+
+def test_gate_structured_mention_reports_ratified_by_structured(otel_capture):
+    """The pre-existing structured path stamps ratified_by=structured_mention
+    so the GM panel can distinguish the two ratification sources."""
+    from sidequest.server.session_helpers import _apply_npc_observation_gate
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Father", role="father", pronouns="he/him"))
+
+    _apply_npc_observation_gate(
+        snapshot=snapshot,
+        emitted_mentions=[_mention(name="Father")],
+        turn_num=6,
+        narration_text="",
+    )
+
+    promoted = _spans_named(otel_capture, PROMOTED_SPAN_NAME)
+    assert promoted
+    assert _attr(promoted[0], "ratified_by") == "structured_mention"

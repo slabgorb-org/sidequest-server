@@ -4350,6 +4350,10 @@ def _apply_narration_result_to_snapshot(
         snapshot=snapshot,
         emitted_mentions=list(result.npcs_present),
         turn_num=turn_num,
+        # Prose re-citation ratifies (sq-playtest 2026-06-07 purge/mint
+        # deadlock) — a pending member named in this turn's narration is
+        # observed, not phantom, even when npcs_present omits them.
+        narration_text=result.narration or "",
     )
 
     # Story 72-10: ordering invariant. The gate above resolves every prior-turn

@@ -1001,9 +1001,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     turn_context.npcs = list(snapshot.npcs)
 
                 with orchestrator_process_action_span(action_len=len(action)):
-                    result = await sd.orchestrator.run_narration_turn(
-                        action, turn_context, room=self._room
-                    )
+                    result = await sd.orchestrator.run_narration_turn(action, turn_context)
 
                 logger.info(
                     "session.narration_complete genre=%s world=%s degraded=%s duration_ms=%s",

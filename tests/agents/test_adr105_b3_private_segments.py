@@ -9,7 +9,7 @@ CoreInvariant (B1).
 These prove the durable plumbing:
   - the game_patch extractor parses + sanitizes ``private_segments``
   - both result assemblers carry ``private_prose_segments`` (the
-    firewall must hold on the SDK path AND the streaming path — they
+    firewall must hold on the SDK path AND the sync path — they
     build the result differently)
   - NARRATION_SEGMENT round-trips through the replay rebuilder
   - a NARRATION_SEGMENT projected through the PRODUCTION ComposedFilter
@@ -88,10 +88,14 @@ def test_extract_no_private_segments_key_is_empty_list():
 
 
 def test_both_assemblers_carry_private_prose_segments():
-    """The SDK path uses _presentation_and_untooled_fields (shared); the
-    streaming path builds NarrationTurnResult by hand. Source-level proof
-    that neither silently drops the firewall field — a regression here
-    re-opens the leak on one backend only (the hardest kind to catch).
+    """Both the SDK and sync assemblers source their presentation fields
+    from _presentation_and_untooled_fields (shared). Source-level proof
+    that the shared helper carries the firewall field and that BOTH
+    assemblers actually route through it — a regression here re-opens
+    the leak on one backend only (the hardest kind to catch).
+
+    (The by-hand streaming assembler this test previously pinned was
+    removed with narrator-text streaming, 2026-06-07.)
     """
     import inspect
 
@@ -100,10 +104,16 @@ def test_both_assemblers_carry_private_prose_segments():
     shared = inspect.getsource(orch.Orchestrator._presentation_and_untooled_fields)
     assert '"private_prose_segments": extraction["private_segments"]' in shared
 
-    src = inspect.getsource(orch.Orchestrator)
-    # The streaming assembler builds the result by hand — it must pass
-    # the field explicitly (the shared helper does not cover it there).
-    assert 'private_prose_segments=extraction["private_segments"]' in src
+    for assembler in (
+        orch.Orchestrator._assemble_turn_result,
+        orch.Orchestrator._assemble_turn_result_sdk,
+    ):
+        src = inspect.getsource(assembler)
+        assert "_presentation_and_untooled_fields" in src, (
+            f"{assembler.__name__} no longer routes through the shared "
+            "presentation helper — the private_prose_segments firewall "
+            "field may be dropped on that backend"
+        )
 
 
 # ---------------------------------------------------------------------------

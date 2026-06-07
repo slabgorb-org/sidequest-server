@@ -347,7 +347,6 @@ def _bypass_prompt_builder(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _run_turn(monkeypatch: pytest.MonkeyPatch, ruleset: str) -> _Sdk:
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     _bypass_prompt_builder(monkeypatch)
     sdk = _single_prose_sdk()

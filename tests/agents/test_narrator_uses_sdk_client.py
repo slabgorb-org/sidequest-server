@@ -108,8 +108,6 @@ async def test_orchestrator_routes_narration_through_sdk(
     funnel through complete_with_tools with the full tool catalog and
     populate the narration.turn span rollup attributes.
     """
-    # Make sure streaming is disabled — the SDK path is on the sync route.
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     fake_response_text = "The wind rises across the salt flats."
@@ -229,69 +227,3 @@ async def test_orchestrator_routes_narration_through_sdk(
     assert isinstance(ctx_seen.perception_filter, NarratorPerceptionFilter)
     assert ctx_seen.perspective_pc == "Kael"
     assert ctx_seen.turn_number == 2
-
-
-@pytest.mark.asyncio
-async def test_tooling_client_takes_sdk_path_even_when_streaming_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: SIDEQUEST_NARRATOR_STREAMING=1 must NOT route a
-    ToolingLlmClient into the streaming path.
-
-    Before the fix, ``run_narration_turn`` gated the SDK path on
-    ``not is_streaming_enabled()``. With streaming on, the default
-    ``AnthropicSdkClient`` (a ``ToolingLlmClient``) fell through to
-    ``_run_narration_turn_streaming``, which asserts the client is *not* a
-    ToolingLlmClient — crashing every turn with AssertionError
-    ("streaming path must not see a ToolingLlmClient, got
-    AnthropicSdkClient") and a dead, narration-less turn for the player.
-    SDK streaming is Phase D Task 7 (unimplemented), so a tooling client
-    must always take the SDK path until then, regardless of the flag.
-    """
-    monkeypatch.setenv("SIDEQUEST_NARRATOR_STREAMING", "1")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-    client = AnthropicSdkClient(sdk=_Sdk(responses=[]))
-    orch = Orchestrator(client=client)
-
-    routed: list[str] = []
-
-    async def _spy_sdk(
-        self: Orchestrator,
-        action: str,
-        context: TurnContext,
-        *,
-        room: object | None = None,
-    ) -> str:
-        # Story 71-23: _run_narration_turn_sdk now accepts room for delta fan-out.
-        routed.append("sdk")
-        return "sentinel-sdk-result"
-
-    async def _spy_streaming(
-        self: Orchestrator,
-        action: str,
-        context: TurnContext,
-        *,
-        room: object | None = None,
-    ) -> str:
-        routed.append("streaming")
-        return "sentinel-streaming-result"
-
-    monkeypatch.setattr(Orchestrator, "_run_narration_turn_sdk", _spy_sdk)
-    monkeypatch.setattr(Orchestrator, "_run_narration_turn_streaming", _spy_streaming)
-
-    ctx = TurnContext(
-        character_name="Kael",
-        genre="caverns_and_claudes",
-        turn_number=1,
-    )
-
-    result = await orch.run_narration_turn("look around", ctx)
-
-    # The tooling client took the SDK path; the streaming path (which would
-    # have raised AssertionError on the real method) was never entered.
-    assert routed == ["sdk"], (
-        f"ToolingLlmClient must take the SDK path even with "
-        f"SIDEQUEST_NARRATOR_STREAMING=1; routed={routed}"
-    )
-    assert result == "sentinel-sdk-result"

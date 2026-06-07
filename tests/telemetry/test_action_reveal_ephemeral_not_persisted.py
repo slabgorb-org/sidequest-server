@@ -5,9 +5,8 @@ Playtest forensics (session 894): 507 of 1689 turn_telemetry rows (30%) were
 ``multiplayer|action_reveal.composing`` — one durable Postgres INSERT per
 debounced keystroke, with zero audience in solo. Keith's call: composing is
 ephemeral keystroke/UI state, not a forensic or mechanical event, and must NOT
-be event-sourced in ANY mode (parallels the "ephemeral streaming delta — not
-event-sourced" concept). The live GM-panel push is fine; durable persistence
-is the defect.
+be event-sourced in ANY mode. The live GM-panel push is fine; durable
+persistence is the defect.
 
 These tests pin the contract at the persistence seam (``publish_event`` →
 ``_persist_turn_telemetry``), not the handler→publish wiring (covered by
@@ -188,8 +187,7 @@ async def test_handler_composing_reaches_live_but_not_persisted(sink_and_live) -
     await ActionRevealHandler().handle(session, msg)
 
     assert sink.records == [], (
-        "the handler's composing publish must not durably persist; got "
-        f"{sink.records}"
+        f"the handler's composing publish must not durably persist; got {sink.records}"
     )
     composing_pushes = [e for e in live if e["event_type"] == "action_reveal.composing"]
     assert len(composing_pushes) == 1, "composing must still reach the live hub"

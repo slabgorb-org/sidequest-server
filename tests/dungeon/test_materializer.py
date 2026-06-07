@@ -1295,7 +1295,6 @@ def _reflecting_sdk_client(**_: Any) -> Any:
             model: str,
             max_iterations: int = 8,
             max_tokens: int = 4096,
-            on_text_delta: Any = None,
             # Absorb forward-added client kwargs the curate call now passes
             # (Story 82-9: caller="dungeon_curate"; also iteration_cap/session_id)
             # so this reflecting double keeps tracking the real signature.

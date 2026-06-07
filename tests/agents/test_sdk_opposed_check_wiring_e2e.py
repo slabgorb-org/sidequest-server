@@ -135,7 +135,6 @@ class _FakeRegistry:
 
 
 async def _run_sdk_turn(monkeypatch: pytest.MonkeyPatch) -> NarrationTurnResult:
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     client = FakeAnthropicSdkClient(

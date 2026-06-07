@@ -38,7 +38,6 @@ class ScriptedResponse:
     cached_input_write_tokens: int
     model: str
     tool_uses: list[ToolUseBlock] = field(default_factory=list)
-    stream_deltas: list[str] = field(default_factory=list)
     cached_input_write_5m_tokens: int = 0
     cached_input_write_1h_tokens: int = 0
 
@@ -71,7 +70,6 @@ class FakeAnthropicSdkClient:
         *,
         model: str,
         max_iterations: int = 8,
-        on_text_delta: Callable[[str], Awaitable[None] | None] | None = None,
         session_id: str | None = None,  # noqa: ARG002 — Story 61-followup-D protocol surface; fake does not track per-session cost
         # Absorb forward-added client kwargs (Story 82-9: iteration_cap, caller)
         # so this shared fake tracks the real complete_with_tools signature.
@@ -101,15 +99,6 @@ class FakeAnthropicSdkClient:
                     tools=list(tools),
                 )
             )
-            if on_text_delta is not None:
-                for chunk in response.stream_deltas:
-                    # Story 71-23: the sink may be sync or async (the
-                    # orchestrator's sink awaits broadcast_delta). Mirror the
-                    # real client: await an awaitable result.
-                    maybe = on_text_delta(chunk)
-                    if inspect.isawaitable(maybe):
-                        await maybe
-
             # Mirror production: accumulate per-iter cost so consumers
             # that assert on ToolingResult.cumulative_cost_usd (Task B1)
             # see a realistic value through the fake. Scripted responses

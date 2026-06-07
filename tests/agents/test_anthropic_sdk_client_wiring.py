@@ -2,7 +2,7 @@
 
 Exercises every Phase A primitive together: protocol dataclasses, the
 SDK client, cost math, llm.request span emission, cache_control on
-system blocks, the tool loop, and streaming text deltas.
+system blocks, and the tool loop.
 """
 
 from __future__ import annotations
@@ -53,48 +53,6 @@ class _Response:
     model: str
 
 
-@dataclass
-class _StreamTextDelta:
-    text: str
-    type: str = "text_delta"
-
-
-@dataclass
-class _StreamEvent:
-    type: str
-    delta: _StreamTextDelta
-
-
-class _StreamCtx:
-    """Story 71-23: minimal messages.stream() stand-in. Yields each text block
-    as a single content_block_delta event (token granularity is exercised in
-    test_sdk_narration_streaming.py; here we only prove on_text_delta is wired
-    through the streaming path)."""
-
-    def __init__(self, response: _Response) -> None:
-        self._response = response
-
-    async def __aenter__(self) -> _StreamCtx:
-        return self
-
-    async def __aexit__(self, *exc: object) -> bool:
-        return False
-
-    def __aiter__(self):
-        async def _events():
-            for block in self._response.content:
-                if getattr(block, "type", None) == "text":
-                    yield _StreamEvent(
-                        type="content_block_delta",
-                        delta=_StreamTextDelta(text=block.text),
-                    )
-
-        return _events()
-
-    async def get_final_message(self) -> _Response:
-        return self._response
-
-
 class _Messages:
     def __init__(self, responses: list[_Response]) -> None:
         self._responses = responses
@@ -103,10 +61,6 @@ class _Messages:
     async def create(self, **kwargs: Any) -> _Response:
         self.received.append(kwargs)
         return self._responses.pop(0)
-
-    def stream(self, **kwargs: Any) -> _StreamCtx:
-        self.received.append(kwargs)
-        return _StreamCtx(self._responses.pop(0))
 
 
 class _Sdk:
@@ -161,8 +115,6 @@ async def test_combat_shaped_turn_wiring(
     )
     client = AnthropicSdkClient(sdk=sdk)
 
-    deltas: list[str] = []
-
     def dispatch(block: ToolUseBlock) -> ToolResultBlock:
         assert block.name == "roll_dice"
         return ToolResultBlock(tool_use_id=block.id, content="17")
@@ -189,7 +141,6 @@ async def test_combat_shaped_turn_wiring(
         ],
         tool_dispatch=dispatch,
         model="claude-sonnet-4-6",
-        on_text_delta=deltas.append,
     )
 
     # 1. Final narration came through.
@@ -205,10 +156,7 @@ async def test_combat_shaped_turn_wiring(
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].name == "roll_dice"
 
-    # 4. Streaming callback got the final-turn text.
-    assert deltas == ["The strike lands; the bandit reels."]
-
-    # 5. Default path is now 1h: the real request payload carries
+    # 4. Default path is now 1h: the real request payload carries
     #    ttl:"1h" on the cache_control marker, and the extended-cache-ttl
     #    beta header rides every messages.create call (without it the API
     #    400s the 1h request — see test_anthropic_sdk_client.py).
@@ -217,13 +165,13 @@ async def test_combat_shaped_turn_wiring(
     assert sys_array[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     assert first_call["extra_headers"]["anthropic-beta"] == "extended-cache-ttl-2025-04-11"
 
-    # 6. Two llm.request spans emitted (one per iteration).
+    # 5. Two llm.request spans emitted (one per iteration).
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "llm.request"]
     assert len(spans) == 2
     iter_attrs = sorted(int(str((s.attributes or {})["llm.iteration"])) for s in spans)
     assert iter_attrs == [1, 2]
 
-    # 7. Cost attribute non-zero and computed against the cost module.
+    # 6. Cost attribute non-zero and computed against the cost module.
     first_attrs = dict(spans[0].attributes or {})
     cost_usd = first_attrs["llm.cost_usd"]
     assert isinstance(cost_usd, float) and cost_usd > 0

@@ -327,8 +327,7 @@ def _resolve_out_of_frame_sink() -> TelemetrySink | None:
 # forensic or mechanical value; event-sourcing them is pure write-amplification
 # (perseus_cloud session 894: action_reveal.composing was 30% of all telemetry
 # rows — one Postgres INSERT per debounced keystroke, zero audience in solo).
-# Mirrors the "ephemeral streaming delta — not event-sourced" stance. The
-# property is intrinsic to the event TYPE — it holds regardless of which call
+# The property is intrinsic to the event TYPE — it holds regardless of which call
 # site publishes it or whether a turn tx is open (Keith, 2026-05-29: "must NOT
 # be persisted in ANY mode"). Discrete events with diagnostic value
 # (action_reveal.submitted) are deliberately NOT here and keep persisting.

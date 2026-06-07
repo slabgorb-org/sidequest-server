@@ -43,8 +43,8 @@ if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
 
 # Importing this package wires the 26 tool adapters onto default_registry at
-# module import time. Required for the SDK path; the streaming/sync ClaudeClient
-# paths do not depend on the registry.
+# module import time. Required for the SDK path; the sync ClaudeClient
+# path does not depend on the registry.
 import sidequest.agents.tools  # noqa: F401  (registration side effect)
 from sidequest.agents.anthropic_cost import cost_band
 from sidequest.agents.claude_client import (
@@ -57,7 +57,6 @@ from sidequest.agents.claude_client import (
 )
 from sidequest.agents.narrator import (
     NarratorAgent,
-    is_streaming_enabled,
     resolve_narrator_iteration_cap,
 )
 from sidequest.agents.narrator_guardrails import (
@@ -126,26 +125,6 @@ _CACHED_ZONE_VALUES: frozenset[str] = frozenset(
 def _content_digest(text: str) -> str:
     """Short content digest used for per-turn cache-drift detection."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
-
-
-def _room_is_solo(room: object) -> bool:
-    """Story 71-23: is this a solo session (<= 1 connected player)?
-
-    The room arrives typed as ``object`` (agents must not import the server's
-    SessionRoom — that would invert the layer dependency), so duck-type the
-    ``connected_player_ids()`` accessor. Returns True only when the room
-    affirmatively reports <= 1 connected player; if the count cannot be
-    determined, returns False so the SOLO-only delta-streaming gate fails
-    CLOSED (no raw fan-out into a possibly-multiplayer room — the safe default
-    for an ADR-104/105 firewall boundary, not a silent fallback that masks
-    config).
-    """
-    accessor = getattr(room, "connected_player_ids", None)
-    if not callable(accessor):
-        return False
-    ids = accessor()
-    # connected_player_ids() returns a list[str]; anything else → fail closed.
-    return isinstance(ids, list) and len(ids) <= 1
 
 
 def _section_rides_cache(name: str, zone_value: str) -> bool:
@@ -573,7 +552,7 @@ class NarrationTurnResult:
     # narrator can no longer "wing it" — a state change with no ledger entry
     # is a lie). Each entry is ``{"id", "name", "arguments"}`` mirroring the
     # ``ToolUseBlock`` the SDK emitted. EMPTY on every non-SDK path
-    # (ClaudeClient sync/streaming) — no tool loop runs there, so there is
+    # (sync ClaudeClient) — no tool loop runs there, so there is
     # nothing to ledger.
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
@@ -1580,8 +1559,8 @@ class Orchestrator:
         Args:
             client: LlmClient or ToolingLlmClient for LLM invocations.
                     If None, creates a default ClaudeClient. When the client
-                    is a ToolingLlmClient (AnthropicSdkClient) and streaming
-                    is disabled, ``run_narration_turn`` routes through
+                    is a ToolingLlmClient (AnthropicSdkClient),
+                    ``run_narration_turn`` routes through
                     ``complete_with_tools`` with the registered tool catalog.
             soul_data: Optional SoulData for SOUL.md principle injection.
                        If None, SOUL.md is loaded from CWD (if present).
@@ -2934,20 +2913,17 @@ class Orchestrator:
         action: str,
         context: TurnContext,
         *,
-        room: object | None = None,
         extra_directive: str | None = None,
     ) -> NarrationTurnResult:
         """Process a player action through the Phase 1 narration pipeline.
 
-        Routes to the streaming path when SIDEQUEST_NARRATOR_STREAMING=1,
-        otherwise delegates to the synchronous path (default, flag-off behavior
-        is byte-identical to prior implementation).
+        Routes to the SDK tool-loop path when the client is tooling-capable,
+        otherwise delegates to the synchronous path. Narration is delivered
+        complete-only — narrator-text streaming was removed (2026-06-07).
 
         Args:
             action: Raw player input text.
             context: Turn context (world state, genre prompts, etc.).
-            room: Optional SessionRoom for streaming delta fan-out. Only
-                  consumed by the streaming path; the sync path ignores it.
             extra_directive: Per-call reprompt directive injected by the
                   reprompt loop (spec 2026-05-20 step 7). When set, the
                   directive is stored on context so build_narrator_prompt
@@ -2963,379 +2939,13 @@ class Orchestrator:
         # Phase D Task 1: when the configured client is a tooling-capable
         # LLM (AnthropicSdkClient — the ADR-101 default), route through
         # complete_with_tools so the 26-tool registry is exposed to the
-        # model. This check MUST take precedence over the SIDEQUEST_NARRATOR_
-        # STREAMING flag: the legacy _run_narration_turn_streaming path is
-        # claude -p only and asserts the client is NOT a ToolingLlmClient, so
-        # letting the flag win here routed the default backend into it and
-        # crashed every turn with AssertionError. The tooling client always
-        # takes the SDK path; the flag-gated streaming path remains for
-        # non-tooling clients (claude -p ClaudeClient) only.
-        #
-        # Story 71-23: the SDK path now streams prose deltas natively (no flag)
-        # — _run_narration_turn_sdk fans NarrationDelta out via broadcast_delta
-        # when a live ``room`` is threaded through. ``room`` flows in below.
+        # model. Non-tooling clients (claude -p ClaudeClient, Ollama) take
+        # the synchronous path. Narrator-text streaming was removed entirely
+        # (playtest 2026-06-07, operator-directed): narration is delivered
+        # complete-only — no partial-narration chunks ride the WebSocket.
         if isinstance(self._client, ToolingLlmClient):
-            return await self._run_narration_turn_sdk(action, context, room=room)
-        if is_streaming_enabled():
-            return await self._run_narration_turn_streaming(action, context, room=room)
+            return await self._run_narration_turn_sdk(action, context)
         return await self._run_narration_turn_synchronous(action, context)
-
-    async def _run_narration_turn_streaming(
-        self,
-        action: str,
-        context: TurnContext,
-        *,
-        room: object | None = None,
-    ) -> NarrationTurnResult:
-        """Streaming variant — broadcasts prose deltas live, emits canonical
-        NarrationTurnResult at end-of-stream using the same extraction path
-        as the synchronous variant.
-
-        Pipeline:
-          action → build_narrator_prompt → send_stream (ClaudeClient)
-               → StreamFenceParser (prose deltas → broadcast_delta)
-               → extract_structured_from_response on full_text
-               → NarrationTurnResult (same shape as sync path)
-
-        Falls back to the synchronous path if the client does not support
-        streaming (e.g. Ollama or a test double that only has send_with_session).
-        """
-        import asyncio
-        import uuid
-
-        from sidequest.agents.claude_client import (
-            StreamComplete,
-            StreamError,
-            TextDelta,
-        )
-        from sidequest.agents.stream_fence import StreamFenceParser
-        from sidequest.server.emitters import broadcast_delta
-        from sidequest.telemetry.spans import (
-            narrator_stream_complete_span,
-            narrator_stream_error_span,
-            narrator_stream_fence_detected,
-            narrator_stream_first_token,
-            narrator_stream_start_span,
-        )
-
-        # Narrow self._client back to LlmClient for the streaming path —
-        # run_narration_turn gates the SDK path on isinstance(...,
-        # ToolingLlmClient), so by the time we reach the streaming path the
-        # client is guaranteed NOT to be a ToolingLlmClient. The assert
-        # pins that invariant for pyright (the union widening landed in
-        # Phase D Task 1) and fails loudly if a future caller bypasses
-        # run_narration_turn. We deliberately do NOT assert isinstance
-        # against LlmClient — Protocol runtime-checks reject AsyncMock and
-        # other structural test doubles that nevertheless work at runtime.
-        assert not isinstance(self._client, ToolingLlmClient), (
-            f"streaming path must not see a ToolingLlmClient, got {type(self._client).__name__}"
-        )
-        client: LlmClient = self._client  # type: ignore[assignment]
-
-        # Degrade to synchronous if the client doesn't support send_stream
-        # (e.g. Ollama or legacy test doubles). No silent fallback — we log
-        # loudly so the discrepancy is visible in the GM panel.
-        if not hasattr(client, "send_stream"):
-            logger.warning(
-                "orchestrator.streaming_unsupported — client=%r lacks send_stream; "
-                "falling back to synchronous path",
-                type(self._client).__name__,
-            )
-            return await self._run_narration_turn_synchronous(action, context)
-
-        with orchestrator_process_action_span(action_len=len(action)):
-            agent_name = self._narrator.name()
-
-            prompt_text, _registry = await self.build_narrator_prompt(action, context)
-
-            # ADR-098: stateless — no persistent session; every turn is a fresh call.
-            current_session_id: str | None = None
-            system_prompt_for_establish = prompt_text
-            send_prompt = action
-
-            # Mint a turn_id for delta sequencing.  Use the interaction counter
-            # when available so deltas are correlated with the canonical event.
-            turn_id: str = str(context.turn_number) if context.turn_number else str(uuid.uuid4())
-
-            seq = 0
-            delta_count = 0
-            prose_chunks: list[str] = []
-            first_token_time: float | None = None
-
-            async def on_prose_delta(chunk: str) -> None:
-                nonlocal seq
-                prose_chunks.append(chunk)
-                if room is not None:
-                    await broadcast_delta(
-                        turn_id=turn_id,
-                        chunk=chunk,
-                        seq=seq,
-                        room=room,
-                    )
-                seq += 1
-
-            call_start = time.monotonic()
-
-            async def on_fence(prose_bytes: int) -> None:
-                narrator_stream_fence_detected(
-                    turn_id=turn_id,
-                    prose_bytes_at_fence=prose_bytes,
-                    seconds_to_fence=time.monotonic() - call_start,
-                )
-
-            parser = StreamFenceParser(on_prose_delta=on_prose_delta, on_fence_detected=on_fence)
-            terminal: StreamComplete | StreamError | None = None
-
-            with narrator_stream_start_span(
-                turn_id=turn_id,
-                prompt_tokens=len(send_prompt) // 4,
-                model=NARRATOR_MODEL,
-                session_id=current_session_id,
-            ):
-                try:
-                    with (
-                        context.phase_timings.phase("narrator_subprocess"),
-                        turn_agent_llm_inference_span(
-                            model=NARRATOR_MODEL,
-                            prompt_len=len(send_prompt),
-                        ),
-                    ):
-                        async for event in client.send_stream(
-                            prompt=send_prompt,
-                            model=NARRATOR_MODEL,
-                            session_id=current_session_id,
-                            system_prompt=system_prompt_for_establish,
-                            allowed_tools=[],
-                            env_vars={},
-                        ):
-                            if isinstance(event, TextDelta):
-                                if first_token_time is None:
-                                    first_token_time = time.monotonic() - call_start
-                                    narrator_stream_first_token(
-                                        turn_id=turn_id, ttft_seconds=first_token_time
-                                    )
-                                delta_count += 1
-                                await parser.feed(event.text)
-                            elif isinstance(event, (StreamComplete, StreamError)):
-                                terminal = event
-                except asyncio.CancelledError:
-                    elapsed_s = time.monotonic() - call_start
-                    from sidequest.telemetry.spans import narrator_stream_cancelled_span
-
-                    narrator_stream_cancelled_span(
-                        turn_id=turn_id,
-                        reason="task_cancelled",
-                        partial_prose_bytes=len("".join(prose_chunks)),
-                    )
-                    logger.warning(
-                        "CLAUDE CLI STREAMING CANCELLED turn_id=%s elapsed_s=%.2f",
-                        turn_id,
-                        elapsed_s,
-                    )
-                    raise
-                except Exception as e:
-                    elapsed_ms = int((time.monotonic() - call_start) * 1000)
-                    narrator_stream_error_span(
-                        turn_id=turn_id,
-                        error_kind=type(e).__name__,
-                        partial_prose_bytes=len("".join(prose_chunks)),
-                        total_seconds=elapsed_ms / 1000.0,
-                        detail=str(e),
-                    )
-                    logger.error(
-                        "CLAUDE CLI STREAMING FAILED — returning degraded response (ADR-005) "
-                        "agent=%s duration_ms=%d error=%s",
-                        agent_name,
-                        elapsed_ms,
-                        e,
-                    )
-                    return NarrationTurnResult(
-                        narration=(
-                            f"**{context.current_location}**\n\n"
-                            "The world holds its breath for a moment... "
-                            "something shifts in the distance, but the moment passes."
-                        ),
-                        is_degraded=True,
-                        agent_name=agent_name,
-                        agent_duration_ms=elapsed_ms,
-                        prompt_tier="",  # ADR-098: tier system removed
-                        prompt_text=prompt_text,
-                        secret_routes=list(self._last_secret_routes),
-                    )
-
-                elapsed_ms = int((time.monotonic() - call_start) * 1000)
-                result = await parser.finalize()
-
-                # On StreamError, return degraded response with whatever partial
-                # prose we collected before the failure.
-                if isinstance(terminal, StreamError):
-                    narrator_stream_error_span(
-                        turn_id=turn_id,
-                        error_kind=terminal.kind,
-                        partial_prose_bytes=len(result.prose),
-                        total_seconds=elapsed_ms / 1000.0,
-                        detail=terminal.detail,
-                    )
-                    logger.error(
-                        "CLAUDE CLI STREAM ERROR — returning degraded response "
-                        "agent=%s kind=%s duration_ms=%d detail=%s",
-                        agent_name,
-                        terminal.kind,
-                        elapsed_ms,
-                        terminal.detail,
-                    )
-                    partial_prose = (
-                        result.prose
-                        or terminal.partial_text
-                        or (
-                            f"**{context.current_location}**\n\n"
-                            "The world holds its breath for a moment... "
-                            "something shifts in the distance, but the moment passes."
-                        )
-                    )
-                    return NarrationTurnResult(
-                        narration=partial_prose,
-                        is_degraded=True,
-                        agent_name=agent_name,
-                        agent_duration_ms=elapsed_ms,
-                        prompt_tier="",  # ADR-098: tier system removed
-                        prompt_text=prompt_text,
-                        secret_routes=list(self._last_secret_routes),
-                    )
-
-            # Emit complete span for successful streaming turn.
-            input_tokens = terminal.input_tokens if isinstance(terminal, StreamComplete) else None
-            output_tokens = terminal.output_tokens if isinstance(terminal, StreamComplete) else None
-            narrator_stream_complete_span(
-                turn_id=turn_id,
-                total_seconds=elapsed_ms / 1000.0,
-                ttft_seconds=first_token_time,
-                prose_bytes=len(result.prose),
-                delta_count=delta_count,
-                json_parse_status=result.status,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-            )
-
-            # Use the full_text from StreamComplete for extraction (authoritative
-            # source — avoids double-reconstruction from chunk list).
-            raw_response = (
-                terminal.full_text
-                if isinstance(terminal, StreamComplete)
-                else result.prose
-                + (
-                    f"\n```game_patch\n{result.game_patch_json}\n```"
-                    if result.game_patch_json
-                    else ""
-                )
-            )
-
-            logger.info(
-                "Claude CLI returned streaming narration len=%d duration_ms=%d "
-                "delta_count=%d fence_status=%s",
-                len(raw_response),
-                elapsed_ms,
-                seq,
-                result.status,
-            )
-
-            # Parse narrator response using the same helper as the sync path.
-            with context.phase_timings.phase("narrator_extraction"):
-                extraction = extract_structured_from_response(raw_response)
-
-            prose = extraction["prose"]
-
-            # Group G Task 7 — canonical-leak audit (safety net).
-            if context.dispatch_package is not None:
-                audit_canonical_prose(
-                    prose=prose,
-                    package=context.dispatch_package,
-                    entity_tokens_by_id=self._entity_tokens_for_registry(context),
-                )
-
-            if extraction["action_rewrite"] is None:
-                logger.warning("action_rewrite absent from extraction (streaming) — using default")
-
-            if extraction["confrontation"]:
-                logger.info(
-                    "encounter.confrontation_initiated confrontation_type=%s",
-                    extraction["confrontation"],
-                )
-
-            for bs_dict in extraction["beat_selections"]:
-                if isinstance(bs_dict, dict):
-                    logger.info(
-                        "encounter.agent_beat_selection actor=%s beat_id=%s target=%r",
-                        bs_dict.get("actor"),
-                        bs_dict.get("beat_id"),
-                        bs_dict.get("target"),
-                    )
-
-            npc_mentions = [NpcMention.from_value(v) for v in extraction["npcs_present"]]
-            beat_selections = [
-                BeatSelection.from_dict(d)
-                for d in extraction["beat_selections"]
-                if isinstance(d, dict)
-            ]
-            visual_scene: VisualScene | None = None
-            if extraction["visual_scene"] and isinstance(extraction["visual_scene"], dict):
-                visual_scene = VisualScene.from_dict(extraction["visual_scene"])
-            action_rewrite: ActionRewrite | None = None
-            if isinstance(extraction["action_rewrite"], dict):
-                action_rewrite = ActionRewrite.from_dict(extraction["action_rewrite"])
-
-            return NarrationTurnResult(
-                narration=prose,
-                is_degraded=False,
-                location=extraction["location"],
-                scene_mood=extraction["scene_mood"],
-                visual_scene=visual_scene,
-                confrontation=extraction["confrontation"],
-                beat_selections=beat_selections,
-                npcs_present=npc_mentions,
-                items_gained=extraction["items_gained"]
-                if isinstance(extraction["items_gained"], list)
-                else [],
-                items_lost=extraction.get("items_lost", []),
-                items_discarded=extraction.get("items_discarded", []),
-                items_consumed=extraction.get("items_consumed", []),
-                footnotes=extraction["footnotes"]
-                if isinstance(extraction["footnotes"], list)
-                else [],
-                sfx_triggers=extraction["sfx_triggers"]
-                if isinstance(extraction["sfx_triggers"], list)
-                else [],
-                action_rewrite=action_rewrite,
-                # ADR-105 B3 — firewall must hold on the streaming
-                # backend too (this assembler builds the result by hand;
-                # the shared helper is not used here).
-                private_prose_segments=extraction["private_segments"]
-                if isinstance(extraction["private_segments"], list)
-                else [],
-                affinity_progress=extraction["affinity_progress"],
-                gold_change=extraction["gold_change"],
-                lore_established=extraction["lore_established"],
-                status_changes=extraction["status_changes"]
-                if isinstance(extraction["status_changes"], list)
-                else [],
-                magic_working=(
-                    extraction["magic_working"]
-                    if isinstance(extraction.get("magic_working"), dict)
-                    else None
-                ),
-                companions_added=extraction.get("companions_added", []),
-                companions_dismissed=extraction.get("companions_dismissed", []),
-                days_advanced=extraction.get("days_advanced", 0),
-                game_patch_dict=_extract_game_patch_json(raw_response),
-                agent_name=agent_name,
-                agent_duration_ms=elapsed_ms,
-                token_count_in=input_tokens,
-                token_count_out=output_tokens,
-                prompt_tier="",  # ADR-098: tier system removed
-                prompt_text=prompt_text,
-                raw_response_text=raw_response,
-                secret_routes=list(self._last_secret_routes),
-            )
 
     async def _invoke_with_retry_once(
         self,
@@ -3349,12 +2959,11 @@ class Orchestrator:
         Returns (response, elapsed_ms). On unrecoverable failure returns
         (None, elapsed_ms) — caller renders the degraded in-fiction stall.
         """
-        # Same narrowing rationale as _run_narration_turn_streaming —
         # _invoke_with_retry_once is only reached on the synchronous
         # LlmClient path, never the SDK path. The assert pins that
         # invariant for pyright and fails loudly if it's ever violated.
-        # See the streaming-path comment for why we assert "not Tooling"
-        # instead of "is LlmClient" (AsyncMock / test doubles).
+        # We assert "not Tooling" instead of "is LlmClient" because test
+        # doubles (AsyncMock) don't satisfy an isinstance LlmClient check.
         assert not isinstance(self._client, ToolingLlmClient), (
             f"synchronous path must not see a ToolingLlmClient, got {type(self._client).__name__}"
         )
@@ -3506,7 +3115,7 @@ class Orchestrator:
         )
 
         # Non-SDK-only observability — these log lines belong to the
-        # sync/streaming sidecar path (the SDK path's mechanics are
+        # sync sidecar path (the SDK path's mechanics are
         # tool-driven, so the tools' own spans carry the equivalent).
         if extraction["confrontation"]:
             logger.info(
@@ -3575,7 +3184,7 @@ class Orchestrator:
         shared helper provably cannot emit a tool-owned key), which is what
         makes the SDK-path fail-loud invariant a backstop rather than the
         only guard. ``_assemble_turn_result`` adds the tool-owned keys back
-        (it is the single applier on the sync/streaming path);
+        (it is the single applier on the sync path);
         ``_assemble_turn_result_sdk`` adds only ``tool_calls``.
         """
         prose = extraction["prose"]
@@ -3671,7 +3280,7 @@ class Orchestrator:
         """SDK-path NarrationTurnResult assembly — the hybrid split (Task E1.5-B).
 
         Distinct from :meth:`_assemble_turn_result` (the ClaudeClient
-        sync/streaming assembler, which stays byte-for-byte unchanged for
+        sync assembler, which stays byte-for-byte unchanged for
         its callers). On the SDK path the 26 WRITE tools already mutated AND
         persisted (``ctx.repository.save``) game state during the tool-dispatch
         loop, so re-applying the narrator's sidecar would double-apply.
@@ -3845,8 +3454,6 @@ class Orchestrator:
         self,
         action: str,
         context: TurnContext,
-        *,
-        room: object | None = None,
     ) -> NarrationTurnResult:
         """SDK-backed narration path (Phase D Task 1).
 
@@ -3855,15 +3462,6 @@ class Orchestrator:
         ``complete_with_tools`` with the full 26-tool registry. The call is
         wrapped in a ``narration.turn`` cost-rollup span so the GM panel sees
         token totals, tool-call count, and model choice for the turn.
-
-        Story 71-23 (solo narration streaming): when ``room`` is provided, an
-        ``on_text_delta`` sink fans each streamed prose chunk out to the room as
-        an ephemeral ``NarrationDelta`` via ``broadcast_delta`` (stamped with
-        ``turn_id = str(turn_number)`` + a monotonic seq), so the player sees
-        prose fill in token-by-token before the canonical narration lands. The
-        ``narration.turn`` span carries ``delta_count`` so the GM panel can
-        confirm streaming engaged. ``room=None`` (no live session) skips fan-out
-        entirely — byte-identical to the pre-71-23 non-streaming path.
 
         Sidecar parsing (ADR-039) still runs against the resulting prose via
         ``_assemble_turn_result_sdk`` — but the hybrid split (Task E1.5-B)
@@ -3876,7 +3474,7 @@ class Orchestrator:
         # dependencies stay co-located with the method that uses them,
         # which makes Phase D Tasks 4 (sidecar retirement) and 6 (three-zone
         # cache split) easier to refactor without disturbing module-level
-        # imports used by the streaming/sync paths.
+        # imports used by the sync path.
         from sidequest.agents.model_routing import CallType, resolve_model
         from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
         from sidequest.agents.tool_registry import ToolContext, default_registry
@@ -4150,72 +3748,6 @@ class Orchestrator:
                 async def dispatch(block: ToolUseBlock) -> ToolResultBlock:
                     return await default_registry.dispatch(block, tool_ctx)
 
-                # Story 71-23: solo narration streaming. When a live SOLO room is
-                # present, fan each streamed prose chunk out as an ephemeral
-                # NarrationDelta so the player sees prose fill token-by-token
-                # before the canonical narration lands. turn_id mirrors the
-                # claude -p streaming path (str(turn_number)) so the UI reducer
-                # — which routes deltas by turn_id and the canonical NARRATION
-                # carries none — correlates them.
-                #
-                # SOLO-ONLY GATE (Reviewer F1): raw deltas are unfiltered,
-                # non-POV-swapped prose. The canonical path
-                # (websocket_session_handler.py: merged-MP author threading)
-                # treats this raw fan-out as a firewall+POV breach for
-                # ``len(connected) > 1`` and routes MP through projection +
-                # per-recipient POV-swap instead. Per-recipient MP delta
-                # streaming is out of scope (this story is solo). So stream ONLY
-                # when the room reports <= 1 connected player. room=None (no live
-                # session) also skips fan-out — byte-identical to pre-71-23.
-                import uuid
-
-                from sidequest.agents.stream_fence import StreamFenceParser
-                from sidequest.server.emitters import broadcast_delta
-                from sidequest.telemetry.spans import sdk_stream_fence_suppressed
-
-                turn_id: str = (
-                    str(context.turn_number) if context.turn_number else str(uuid.uuid4())
-                )
-                seq = 0
-                delta_count = 0
-                stream_solo = room is not None and _room_is_solo(room)
-
-                async def _emit_delta(chunk: str) -> None:
-                    nonlocal seq, delta_count
-                    # Advance seq per attempt so ordering stays monotonic even if
-                    # a broadcast fails.
-                    current_seq = seq
-                    seq += 1
-                    try:
-                        await broadcast_delta(
-                            turn_id=turn_id, chunk=chunk, seq=current_seq, room=room
-                        )
-                    except Exception:
-                        # Reviewer F2: a dead / mid-detach socket (or any room-API
-                        # failure) must NOT abort the narrator turn. Log loud and
-                        # continue — the canonical NARRATION still lands.
-                        logger.warning(
-                            "sdk_stream.delta_broadcast_failed turn_id=%s seq=%d",
-                            turn_id,
-                            current_seq,
-                            exc_info=True,
-                        )
-                        return
-                    delta_count += 1
-
-                # Playtest fix 2026-06-05 (RW-2): the narrator can fall back to
-                # the ADR-013 text-embedded ```game_patch fence (tool_calls=0
-                # turns happen in production). Raw pass-through streamed that
-                # JSON verbatim into the narration card. Route the SDK delta
-                # stream through the SAME StreamFenceParser the legacy claude -p
-                # streaming path uses (_run_narration_turn_streaming) so fence
-                # bytes are withheld from broadcast. The canonical NARRATION is
-                # already stripped post-hoc (game_patch.extracted) — only the
-                # live deltas were leaking.
-                fence_parser = (
-                    StreamFenceParser(on_prose_delta=_emit_delta) if stream_solo else None
-                )
-
                 result = await self._client.complete_with_tools(
                     system_blocks=system_blocks,
                     messages=messages,
@@ -4232,13 +3764,6 @@ class Orchestrator:
                     # tracker cleanly; do NOT substitute the "adhoc"
                     # sentinel here.
                     session_id=context.session_id,
-                    # Story 71-23 — delta sink; wired ONLY for a live solo room
-                    # (None otherwise → SDK client takes the non-streaming path,
-                    # AC2 byte-identical; MP is handled by the canonical path).
-                    # The sink is the fence parser's feed(), NOT _emit_delta
-                    # directly — prose chunks reach _emit_delta only once
-                    # confirmed to be outside a game_patch fence.
-                    on_text_delta=fence_parser.feed if fence_parser is not None else None,
                     # Story 82-9 — forward the operator's soft tool-loop cap
                     # (SIDEQUEST_NARRATOR_ITERATION_CAP; None = off) and tag the
                     # tool_loop summary span as a narrator solo-turn so the GM
@@ -4246,25 +3771,6 @@ class Orchestrator:
                     iteration_cap=resolve_narrator_iteration_cap(),
                     caller="narrator",
                 )
-
-                # Playtest fix 2026-06-05 (RW-2): flush the parser's held-back
-                # lookahead tail (prose) and, when a fence was buffered, emit
-                # the GM-panel lie-detector span for the suppression. Skipped
-                # on exception — the deltas already shipped and the degraded
-                # path replaces the narration anyway.
-                if fence_parser is not None:
-                    fence_result = await fence_parser.finalize()
-                    if fence_result.game_patch_json is not None:
-                        sdk_stream_fence_suppressed(
-                            turn_id=turn_id,
-                            fence_offset=fence_result.fence_offset,
-                            suppressed_json_bytes=len(fence_result.game_patch_json),
-                            parse_status=fence_result.status,
-                        )
-
-                # Story 71-23 — GM-panel lie-detector signal: how many prose
-                # deltas actually fanned out this turn (0 when room=None).
-                span.set_attribute("narration.turn.delta_count", delta_count)
 
                 # Cost-rollup attributes — names per cost.py docstring.
                 span.set_attribute("narration.turn.model_chosen", result.model)

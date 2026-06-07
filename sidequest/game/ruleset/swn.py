@@ -73,16 +73,22 @@ class SwnRulesetModule(RulesetModule):
             "SWN resolves attacks vs target AC via attack_params; compute_dc is native-only."
         )
 
+    def offer_difficulty(self, *, beat, target_core) -> int:
+        """SWN attacks resolve vs the target's armor class — advertise exactly
+        that on the beat offer (Story 97-3: server is the only DC author).
+        Single-sourced with ``attack_params`` below, so the TARGET banner and
+        the resolution can never disagree."""
+        return int(getattr(target_core, "armor_class", 10)) if target_core is not None else 10
+
     def attack_params(
         self, *, beat, attacker_stats, attacker_core, target_core
     ) -> AttackRollParams:
         attr_mod = self.stat_modifier(attacker_stats, beat.stat_check)
         combat_skill = int(getattr(beat, "combat_skill", 0) or 0)
         attack_bonus = int(getattr(beat, "attack_bonus", 0) or 0)
-        target_ac = int(getattr(target_core, "armor_class", 10)) if target_core is not None else 10
         return AttackRollParams(
             modifier=attack_bonus + combat_skill + attr_mod,
-            target_number=target_ac,
+            target_number=self.offer_difficulty(beat=beat, target_core=target_core),
         )
 
     def resolve_opponent_attack(

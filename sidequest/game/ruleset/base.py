@@ -68,6 +68,22 @@ class RulesetModule(ABC):
         """Modifier + target number for one attack. native: stat mod vs beat DC.
         SWN: attack_bonus + skill + attr-mod vs target AC."""
 
+    def offer_difficulty(self, *, beat: BeatDef, target_core: object | None) -> int:
+        """The pre-roll target number to advertise on the beat OFFER (Story 97-3).
+
+        This is the number the TARGET banner shows the player BEFORE they
+        roll, so it MUST equal the ``attack_params(...).target_number``
+        resolution will later use — the server is the only DC author; the
+        client renders this and computes nothing. Unlike ``attack_params``
+        it needs no attacker stats (the target number never depends on the
+        attacker in any module), so the offer path can author it with only
+        the beat + the opposing side's core in hand.
+
+        Default: the ruleset's beat DC (native dial formula). SWN-family
+        overrides with the target's armor class.
+        """
+        return self.compute_dc(beat)
+
     def ship_attack_params(
         self,
         *,

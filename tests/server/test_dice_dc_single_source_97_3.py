@@ -88,7 +88,7 @@ def _native_pack() -> object:
                 {
                     "id": "shove",
                     "label": "Shove",
-                    "kind": "press",
+                    "kind": "push",
                     "stat_check": "STRENGTH",
                 }
             ),
@@ -358,9 +358,7 @@ class TestOfferedDifficultyMatchesResolution:
         the target AC. The offered (banner) number must equal it — today the
         client banner shows the native formula instead and the player watches
         a roll 'succeed' against the number on screen yet come back Fail."""
-        monkeypatch.setattr(
-            "sidequest.server.dispatch.dice.random.randint", lambda a, b: a
-        )
+        monkeypatch.setattr("sidequest.server.dispatch.dice.random.randint", lambda a, b: a)
         pack = _swn_pack()
         snap, enc = _swn_snapshot_and_encounter()
         cdef = pack.rules.confrontations[0]
@@ -394,16 +392,12 @@ class TestOfferedDifficultyMatchesResolution:
             "two sources of truth (AC2)"
         )
 
-    def test_swn_unseated_opponent_offer_still_matches_resolution(
-        self, monkeypatch
-    ) -> None:
+    def test_swn_unseated_opponent_offer_still_matches_resolution(self, monkeypatch) -> None:
         """Degenerate seating (no opponent core resolvable): whatever default
         the server resolves against (SWN unarmored AC 10), the offer must say
         the same number. Consistency must hold even in the edge, or the banner
         lies precisely when the engine is already in a weird state."""
-        monkeypatch.setattr(
-            "sidequest.server.dispatch.dice.random.randint", lambda a, b: a
-        )
+        monkeypatch.setattr("sidequest.server.dispatch.dice.random.randint", lambda a, b: a)
         pack = _swn_pack()
         snap, enc = _swn_snapshot_and_encounter(seat_opponent=False)
         cdef = pack.rules.confrontations[0]

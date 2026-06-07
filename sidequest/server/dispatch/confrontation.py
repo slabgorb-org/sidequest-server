@@ -21,7 +21,7 @@ from sidequest.game.session import GameSnapshot
 from sidequest.game.table.types import TableState
 from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.models.character import ClassDef
-from sidequest.genre.models.rules import ConfrontationDef
+from sidequest.genre.models.rules import ConfrontationDef, RulesConfig
 from sidequest.magic.confrontations import BranchName
 from sidequest.magic.outputs import apply_mandatory_outputs
 
@@ -113,6 +113,7 @@ def build_confrontation_payload(
     spellcasting: SpellcastingState | None = None,
     active_stakes: str | None = None,
     portrait_resolver: Callable[[str], str | None] | None = None,
+    rules: RulesConfig | None = None,
 ) -> dict[str, Any]:
     """Assemble the CONFRONTATION payload the UI overlay consumes.
 
@@ -269,6 +270,49 @@ def build_confrontation_payload(
         "active": not encounter.resolved,
         "stakes": stakes_value,
     }
+
+    # Story 97-3 — server-authored pre-roll difficulty on every offered beat.
+    # The TARGET banner used to be a CLIENT-side formula (App.tsx rawDc =
+    # clamp(10 + |base|*2)) while resolution used ruleset.attack_params —
+    # two sources of truth that diverge under SWN/hp_depletion, where the
+    # effective DC is the opponent's armor class (a number the client cannot
+    # know). The server is now the only DC author: each beat dict carries the
+    # ``difficulty`` resolution will use, single-sourced through the ruleset's
+    # ``offer_difficulty`` seam (SWN's ``attack_params`` reads the same
+    # method, so offer and resolution are structurally one number). The UI
+    # renders ``beat.difficulty`` and refuses loudly when it is absent.
+    # ``rules=None`` (legacy/bootstrap callers that have no pack in hand —
+    # e.g. slug-resume ConfrontationPayload reconstruction) keeps the prior
+    # payload shape: no ``difficulty`` keys, which the UI treats as an
+    # uncommittable offer rather than silently inventing a number.
+    if rules is not None:
+        from sidequest.game.beat_kinds import _opposite_side_first_actor
+        from sidequest.game.ruleset import get_ruleset_module
+        from sidequest.telemetry.spans import confrontation_beat_dc_authored_span
+
+        ruleset_module = get_ruleset_module(rules.ruleset)
+        target_name = _opposite_side_first_actor(encounter, "player")
+        target_core = (
+            core_resolver(target_name)
+            if (target_name is not None and core_resolver is not None)
+            else None
+        )
+        for beat_def, beat_dict in zip(beats_for_payload, payload["beats"], strict=True):
+            beat_dict["difficulty"] = ruleset_module.offer_difficulty(
+                beat=beat_def, target_core=target_core
+            )
+        # GM-panel lie-detector (CLAUDE.md OTEL discipline): the offered
+        # numbers here must match the resolution-time dice.request_sent
+        # difficulty; an offer frame with no preceding beat_dc_authored span
+        # means the banner had nothing legitimate to display.
+        with confrontation_beat_dc_authored_span(
+            genre_slug=genre_slug,
+            confrontation_type=encounter.encounter_type,
+            ruleset=rules.ruleset,
+            target_name=target_name or "",
+            beat_difficulties=",".join(f"{b['id']}={b['difficulty']}" for b in payload["beats"]),
+        ):
+            pass
 
     # Story 85-3 — GM-panel lie-detector for the stakes wiring (CLAUDE.md OTEL
     # discipline). Fires on EVERY build; has_stakes=False distinguishes a
@@ -577,6 +621,8 @@ def make_confrontation_frame_supplier(
             core_resolver=snapshot.find_creature_core,
             active_stakes=snapshot.active_stakes,
             portrait_resolver=_portrait_for,
+            # Story 97-3: server-authored per-beat difficulty on the offer.
+            rules=getattr(genre_pack, "rules", None),
         )
         # Free-for-all N-seat table: attach a per-seat private projection so
         # each socket sees only its own hand (+ public state) until showdown.

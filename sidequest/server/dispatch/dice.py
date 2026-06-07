@@ -921,6 +921,8 @@ def dispatch_dice_throw(
                     portrait_resolver=make_confrontation_portrait_resolver(
                         snapshot=snapshot, genre_pack=pack, genre_slug=genre_slug
                     ),
+                    # Story 97-3: server-authored per-beat difficulty on the offer.
+                    rules=pack.rules,
                 )
             )
             with encounter_momentum_broadcast_span(

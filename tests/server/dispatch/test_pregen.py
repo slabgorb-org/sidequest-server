@@ -199,6 +199,12 @@ def _stub_pack(cultures: list[str], *, constraints: ArchetypeConstraints | None 
     # ``.name``. The stub has no world layer, so it ignores ``world`` and
     # returns its own culture list tagged ``"stub"``.
     pack.effective_cultures = lambda _world: (culture_objs, "stub")
+    # seed_manual gates namegen on ``spawnable_archetypes(pack.
+    # effective_archetypes(world))`` (playtest 2026-06-07, blackthorn_moor):
+    # an all-named_individual (or empty) pool skips minting entirely. Give
+    # the stub one spawnable archetype so the mint loop stays exercised.
+    spawnable = SimpleNamespace(name="Drifter", named_individual=False)
+    pack.effective_archetypes = lambda _world: ([spawnable], "stub")
     return pack
 
 

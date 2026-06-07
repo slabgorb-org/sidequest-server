@@ -289,24 +289,32 @@ def legacy_axis_fallback(
     pack: GenrePack, args: argparse.Namespace, rng: random.Random
 ) -> tuple[str, str, str | None, str, str]:
     """Populate axis fields from the old-style archetype selection."""
+    # World-over-genre resolution (the SAME rule the main path uses at
+    # generate_npc_block): a world that declares its own archetypes REPLACES
+    # the genre set. Reading ``pack.archetypes`` raw here validated explicit
+    # ``--archetype`` requests and random spawns against the GENRE tier even
+    # when ``--world`` was passed — a tier mismatch with every other archetype
+    # consumer (playtest 2026-06-07, blackthorn_moor).
+    effective, _source = pack.effective_archetypes(args.world)
     if args.archetype:
         archetype = next(
-            (a for a in pack.archetypes if a.name.lower() == args.archetype.lower()),
+            (a for a in effective if a.name.lower() == args.archetype.lower()),
             None,
         )
         if archetype is None:
-            available = ", ".join(a.name for a in pack.archetypes)
+            available = ", ".join(a.name for a in effective)
             print(
                 f"Archetype '{args.archetype}' not found. Available: {available}",
                 file=sys.stderr,
             )
             sys.exit(1)
     else:
-        spawnable = spawnable_archetypes(pack.archetypes)
+        spawnable = spawnable_archetypes(effective)
         if not spawnable:
+            world_clause = f" world '{args.world}'" if args.world else ""
             print(
-                f"sidequest-namegen: no spawnable archetypes for genre '{args.genre}' "
-                "— all archetypes are named_individual (specific people)",
+                f"sidequest-namegen: no spawnable archetypes for genre '{args.genre}'"
+                f"{world_clause} — all archetypes are named_individual (specific people)",
                 file=sys.stderr,
             )
             sys.exit(1)

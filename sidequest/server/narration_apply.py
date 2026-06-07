@@ -1229,6 +1229,10 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
         pronouns=member.pronouns,
         appearance=member.appearance,
         pool_origin=member.name,
+        # sq-playtest 2026-06-07 double-mint: the original→mint binding must
+        # survive promotion or the narrator's next "Varra" misses the Npc and
+        # re-mints at the pool tier.
+        invented_from=member.invented_from,
         # Story 72-2: carry the scaffold's recorded disposition through
         # promotion. A bartender the table befriended (e.g. +18) promotes
         # friendly instead of silently flattening to neutral. Narrator-
@@ -1995,6 +1999,18 @@ def _apply_npc_mentions(
                     npc_hit = npc
                     npc_match_form = "comma_normalized"
                     break
+        if npc_hit is None:
+            # Invented-name alias leg (original→mint binding cache): a pool
+            # member minted under a culture name and later PROMOTED carries
+            # ``invented_from`` — the narrator may still be calling the NPC by
+            # its original invented name (sq-playtest 2026-06-07 double-mint).
+            for npc in snapshot.npcs:
+                if npc.invented_from is not None and (
+                    _npc_name_match_keys(npc.invented_from) & mention_keys
+                ):
+                    npc_hit = npc
+                    npc_match_form = "invented_from"
+                    break
         if npc_hit is not None:
             # ``Npc`` has no string ``role`` field (only the archetype-id
             # ``npc_role_id``, which is not narrator-cited prose). Pass
@@ -2082,7 +2098,12 @@ def _apply_npc_mentions(
             continue
 
         # Step 2: pool member match. Exact first, comma-normalized fallback
-        # (same precedence as Step 1).
+        # (same precedence as Step 1), then the invented-name alias (the
+        # original→mint binding cache — sq-playtest 2026-06-07 perseus
+        # double-mint: the narrator keeps saying "Varra" while the member is
+        # stored under its minted name "Rifenna Muse"; without this leg every
+        # re-narration of the original falls through to Step 3 and mints a
+        # fresh identity).
         pool_hit: NpcPoolMember | None = None
         pool_match_form = "exact"
         for member in snapshot.npc_pool:
@@ -2094,6 +2115,14 @@ def _apply_npc_mentions(
                 if _npc_name_match_keys(member.name) & mention_keys:
                     pool_hit = member
                     pool_match_form = "comma_normalized"
+                    break
+        if pool_hit is None:
+            for member in snapshot.npc_pool:
+                if member.invented_from is not None and (
+                    _npc_name_match_keys(member.invented_from) & mention_keys
+                ):
+                    pool_hit = member
+                    pool_match_form = "invented_from"
                     break
         if pool_hit is not None:
             # Story 72-7: narrator drift is authoritative for narrator-sourced
@@ -2340,6 +2369,11 @@ def _apply_npc_mentions(
             archetype_id=None,
             drawn_from="narrator_invented",
             is_creature=mention.is_creature,
+            # sq-playtest 2026-06-07 (perseus double-mint): bind the narrator's
+            # original to the mint so a re-narration of "Varra" reconciles to
+            # this member (Step 1/2 alias matching) instead of re-minting a
+            # second identity per turn.
+            invented_from=(original_name if minted_name != original_name else None),
             # Story 83-1: embed MM creature data when the name matched a
             # pre-generated bestiary entry so the promotion seam receives a
             # real stat block (source="mm"). None for person members and for

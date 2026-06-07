@@ -822,3 +822,109 @@ def test_watcher_fixture_round_trip_through_real_pipeline() -> None:
         f"real-pipeline fixture should emit exactly one confrontation mismatch "
         f"span; got spans: {[s.name for s in spans]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Playtest 2026-06-07 — null-valued required params and watcher non-fatality.
+# params["npc_name"] = None (key PRESENT, value None) crashed
+# _check_npc_agency_engaged at .lower(); the exception propagated from the
+# bare call site in _execute_narration_turn and tore down the WebSocket
+# mid-turn (turn never persisted). Two contracts pinned here:
+#   1. A present-but-null/non-string required param is MALFORMED evidence
+#      (same loud mismatch span as a missing key), never a crash.
+#   2. run_dispatch_engagement_watcher is non-fatal: a raising witness is
+#      caught, logged, and surfaced as dispatch_engagement.watcher.crashed.
+# ---------------------------------------------------------------------------
+
+
+def test_npc_agency_null_npc_name_is_malformed_mismatch_not_crash() -> None:
+    """params={"npc_name": None} — key present, value None — must surface the
+    malformed-dispatch mismatch span, not raise AttributeError on .lower()."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        run_dispatch_engagement_watcher,
+    )
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_make_dispatch(subsystem="npc_agency", params={"npc_name": None}))
+    snap = _snapshot()
+
+    # MUST NOT raise (the 2026-06-07 five_points crash).
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert len(spans) == 1, f"expected 1 malformed-dispatch mismatch span, got {len(spans)}"
+    assert spans[0].name == "dispatch_engagement.npc_agency.mismatch"
+    evidence = str(dict(spans[0].attributes or {}).get("evidence", ""))
+    assert "params['npc_name']" in evidence, (
+        "mismatch evidence must name the nulled required param key so the GM "
+        "panel shows exactly what the router nulled"
+    )
+
+
+def test_all_required_str_params_null_value_is_malformed_not_crash() -> None:
+    """Same null-value contract for the other three guarded witnesses:
+    confrontation/type, magic_working/actor, scenario_clue/fact_id."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        detect_dispatch_engagement_mismatch,
+    )
+
+    cases = [
+        ("confrontation", "type"),
+        ("magic_working", "actor"),
+        ("scenario_clue", "fact_id"),
+    ]
+    for subsystem, key in cases:
+        package = _package_with(_make_dispatch(subsystem=subsystem, params={key: None}))
+        mismatches = detect_dispatch_engagement_mismatch(package=package, snapshot=_snapshot())
+        assert len(mismatches) == 1, f"{subsystem}: expected 1 mismatch, got {mismatches}"
+        assert f"params['{key}']" in mismatches[0].evidence, (
+            f"{subsystem}: evidence must name the nulled key; got {mismatches[0].evidence!r}"
+        )
+
+
+def test_non_string_required_param_is_malformed_not_crash() -> None:
+    """A non-string param value (e.g. the router emitting an int or a list)
+    is malformed for witnesses that compare strings — same loud evidence."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        detect_dispatch_engagement_mismatch,
+    )
+
+    package = _package_with(_make_dispatch(subsystem="npc_agency", params={"npc_name": 42}))
+    mismatches = detect_dispatch_engagement_mismatch(package=package, snapshot=_snapshot())
+    assert len(mismatches) == 1
+    assert "params['npc_name']" in mismatches[0].evidence
+
+
+def test_watcher_crash_is_caught_logged_and_surfaced_as_crashed_span(
+    monkeypatch: Any,
+) -> None:
+    """Non-fatality wiring: a witness that raises must NOT propagate out of
+    run_dispatch_engagement_watcher (the WS pipeline calls it bare post-
+    narration); the crash is surfaced as dispatch_engagement.watcher.crashed.
+    """
+    import sidequest.agents.dispatch_engagement_watcher as watcher_mod
+
+    def _boom(dispatch: Any, snapshot: Any, player_id: Any) -> str | None:
+        raise RuntimeError("synthetic witness explosion")
+
+    monkeypatch.setitem(watcher_mod._WITNESSES, "confrontation", _boom)
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(
+        _make_dispatch(subsystem="confrontation", params={"type": "negotiation"})
+    )
+
+    # MUST NOT raise — this is the architectural contract (b) from the
+    # 2026-06-07 playtest entry: the lie detector never aborts the turn.
+    watcher_mod.run_dispatch_engagement_watcher(
+        package=package, snapshot=_snapshot(), tracer=tracer
+    )
+
+    spans = [s for s in exporter.get_finished_spans()]
+    crashed = [s for s in spans if s.name == "dispatch_engagement.watcher.crashed"]
+    assert len(crashed) == 1, (
+        f"expected exactly one watcher-crashed span; got {[s.name for s in spans]}"
+    )
+    attrs = dict(crashed[0].attributes or {})
+    assert attrs.get("error_type") == "RuntimeError"
+    assert "synthetic witness explosion" in str(attrs.get("error", ""))

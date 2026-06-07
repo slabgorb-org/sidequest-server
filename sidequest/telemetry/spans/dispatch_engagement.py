@@ -39,6 +39,15 @@ SPAN_DISPATCH_ENGAGEMENT_REFLECT_ABSENCE_MISMATCH = "dispatch_engagement.reflect
 SPAN_DISPATCH_ENGAGEMENT_WITNESSED_ACT_MISMATCH = "dispatch_engagement.witnessed_act.mismatch"
 SPAN_DISPATCH_ENGAGEMENT_MOVEMENT_MISMATCH = "dispatch_engagement.movement.mismatch"
 
+# The watcher itself crashed (playtest 2026-06-07: params["npc_name"]=None →
+# AttributeError propagated from the bare call site in
+# _execute_narration_turn, tore down the WebSocket mid-turn, and the turn
+# never persisted). A pure-observability lie-detector must NEVER abort the
+# turn pipeline — the wrapper catches, logs ERROR, and emits this span so
+# the GM panel shows "the lie detector itself is broken" loudly instead of
+# a dead socket.
+SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED = "dispatch_engagement.watcher.crashed"
+
 
 def _extract(span: Any) -> dict[str, Any]:
     attrs = span.attributes or {}
@@ -78,6 +87,22 @@ _SUBSYSTEM_TO_SPAN_NAME: dict[str, str] = {
     "witnessed_act": SPAN_DISPATCH_ENGAGEMENT_WITNESSED_ACT_MISMATCH,
     "movement": SPAN_DISPATCH_ENGAGEMENT_MOVEMENT_MISMATCH,
 }
+
+
+def _extract_crashed(span: Any) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "dispatch_engagement.watcher_crashed",
+        "error_type": attrs.get("error_type", ""),
+        "error": attrs.get("error", ""),
+    }
+
+
+SPAN_ROUTES[SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=_extract_crashed,
+)
 
 
 def span_name_for_subsystem(subsystem: str) -> str:
@@ -120,6 +145,28 @@ def dispatch_engagement_mismatch_span(
         yield span
 
 
+@contextmanager
+def dispatch_engagement_watcher_crashed_span(
+    *,
+    error_type: str,
+    error: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """Emit a ``dispatch_engagement.watcher.crashed`` span.
+
+    Fired by ``run_dispatch_engagement_watcher``'s catch-all when the
+    watcher (a pure-observability post-narration pass) raises. The turn
+    pipeline continues — this span is the loud record that the lie
+    detector itself failed and its mismatch coverage was lost this turn.
+    """
+    with Span.open(
+        SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED,
+        {"error_type": error_type, "error": error},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 __all__ = [
     "SPAN_DISPATCH_ENGAGEMENT_CONFRONTATION_MISMATCH",
     "SPAN_DISPATCH_ENGAGEMENT_MAGIC_WORKING_MISMATCH",
@@ -129,6 +176,8 @@ __all__ = [
     "SPAN_DISPATCH_ENGAGEMENT_REFLECT_ABSENCE_MISMATCH",
     "SPAN_DISPATCH_ENGAGEMENT_WITNESSED_ACT_MISMATCH",
     "SPAN_DISPATCH_ENGAGEMENT_MOVEMENT_MISMATCH",
+    "SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED",
     "dispatch_engagement_mismatch_span",
+    "dispatch_engagement_watcher_crashed_span",
     "span_name_for_subsystem",
 ]

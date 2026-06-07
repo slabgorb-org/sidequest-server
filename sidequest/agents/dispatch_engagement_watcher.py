@@ -46,6 +46,7 @@ the GM panel).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -55,7 +56,10 @@ from sidequest.game.session import GameSnapshot
 from sidequest.protocol.dispatch import DispatchPackage, SubsystemDispatch
 from sidequest.telemetry.spans.dispatch_engagement import (
     dispatch_engagement_mismatch_span,
+    dispatch_engagement_watcher_crashed_span,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -91,20 +95,37 @@ class DispatchMismatch:
 # ---------------------------------------------------------------------------
 
 
-# Evidence string for a dispatch missing its required identifying param.
-# A missing key is a router defect the watcher SURFACES (mismatch span),
-# not an exception it raises — raising would crash post-narration WS
-# delivery (see module docstring). The evidence names the missing key so
-# the GM panel shows exactly what the router omitted.
-_MALFORMED_EVIDENCE = "malformed dispatch: router omitted required params['{key}'] for {subsystem}"
+# Evidence string for a dispatch missing (or nulling) its required
+# identifying param. A missing key OR a non-string value (None, int, …) is
+# a router defect the watcher SURFACES (mismatch span), not an exception it
+# raises — raising would crash post-narration WS delivery (see module
+# docstring; playtest 2026-06-07: params["npc_name"]=None → .lower() crash
+# → WS teardown mid-turn, turn never persisted). The evidence names the
+# offending key so the GM panel shows exactly what the router omitted or
+# nulled.
+_MALFORMED_EVIDENCE = (
+    "malformed dispatch: router omitted or nulled required params['{key}'] for {subsystem}"
+)
+
+
+def _required_str_param(dispatch: SubsystemDispatch, key: str) -> str | None:
+    """Return ``params[key]`` when it is a string; ``None`` when absent/non-string.
+
+    The watcher's witnesses compare these values against snapshot state
+    (often case-insensitively via ``.lower()``), so anything that is not a
+    ``str`` — including an explicit ``None`` with the key present — is
+    malformed, not merely missing.
+    """
+    value = dispatch.params.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _check_confrontation_engaged(
     dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
 ) -> str | None:
-    if "type" not in dispatch.params:
+    dispatched_type = _required_str_param(dispatch, "type")
+    if dispatched_type is None:
         return _MALFORMED_EVIDENCE.format(subsystem="confrontation", key="type")
-    dispatched_type: str = dispatch.params["type"]
     encounter = snapshot.encounter
     if encounter is None:
         return "snapshot.encounter is None"
@@ -119,9 +140,9 @@ def _check_confrontation_engaged(
 def _check_magic_working_engaged(
     dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
 ) -> str | None:
-    if "actor" not in dispatch.params:
+    actor = _required_str_param(dispatch, "actor")
+    if actor is None:
         return _MALFORMED_EVIDENCE.format(subsystem="magic_working", key="actor")
-    actor: str = dispatch.params["actor"]
     magic_state = snapshot.magic_state
     if magic_state is None:
         return "snapshot.magic_state is None (world has no magic config loaded)"
@@ -133,9 +154,9 @@ def _check_magic_working_engaged(
 def _check_scenario_clue_engaged(
     dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
 ) -> str | None:
-    if "fact_id" not in dispatch.params:
+    fact_id = _required_str_param(dispatch, "fact_id")
+    if fact_id is None:
         return _MALFORMED_EVIDENCE.format(subsystem="scenario_clue", key="fact_id")
-    fact_id: str = dispatch.params["fact_id"]
     scenario = snapshot.scenario_state
     if scenario is None:
         return "snapshot.scenario_state is None"
@@ -147,9 +168,9 @@ def _check_scenario_clue_engaged(
 def _check_npc_agency_engaged(
     dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
 ) -> str | None:
-    if "npc_name" not in dispatch.params:
+    npc_name = _required_str_param(dispatch, "npc_name")
+    if npc_name is None:
         return _MALFORMED_EVIDENCE.format(subsystem="npc_agency", key="npc_name")
-    npc_name: str = dispatch.params["npc_name"]
     needle = npc_name.lower()
     # npc_agency resolves against the authored roster (snapshot.npcs) first,
     # then the present-in-scene npc_pool (playtest #C1). The engagement check
@@ -348,14 +369,39 @@ def run_dispatch_engagement_watcher(
     No-op when ``package is None`` (the live SDK path between 59-3 ship
     and 59-4 ship — ``turn_context.dispatch_package`` stays None until
     59-4 wires the producer onto the live turn pipeline).
+
+    **Non-fatal by contract** (playtest 2026-06-07): this is a pure
+    observability pass running POST-narration in the WS turn pipeline. A
+    crash here previously propagated to ``ws_endpoint`` and tore down the
+    connection AFTER narration broadcast but BEFORE ``session.persisted`` —
+    the player lost the turn to a lie-detector bug. Any exception is caught,
+    logged at ERROR, and surfaced as a loud
+    ``dispatch_engagement.watcher.crashed`` span; the turn pipeline
+    continues. The trade: that turn loses mismatch coverage — acceptable,
+    because the alternative was losing the turn itself.
     """
-    mismatches = detect_dispatch_engagement_mismatch(package=package, snapshot=snapshot)
-    for m in mismatches:
-        with dispatch_engagement_mismatch_span(
-            subsystem=m.subsystem,
-            idempotency_key=m.idempotency_key,
-            dispatched_type=m.dispatched_type,
-            evidence=m.evidence,
+    try:
+        mismatches = detect_dispatch_engagement_mismatch(package=package, snapshot=snapshot)
+        for m in mismatches:
+            with dispatch_engagement_mismatch_span(
+                subsystem=m.subsystem,
+                idempotency_key=m.idempotency_key,
+                dispatched_type=m.dispatched_type,
+                evidence=m.evidence,
+                _tracer=tracer,
+            ):
+                pass
+    except Exception as exc:  # noqa: BLE001 — observability must never abort the turn
+        logger.error(
+            "dispatch_engagement.watcher_crashed error_type=%s error=%s "
+            "(turn pipeline continues; mismatch coverage lost this turn)",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        with dispatch_engagement_watcher_crashed_span(
+            error_type=type(exc).__name__,
+            error=str(exc),
             _tracer=tracer,
         ):
             pass

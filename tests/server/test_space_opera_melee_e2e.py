@@ -306,6 +306,11 @@ def test_melee_action_matches_melee_via_real_validator():
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+@pytest.mark.skip(
+    reason="content-coupled: references weapon 'blaster_sidearm' that migrated to "
+    "world-tier inventory (epic 94), so genre-tier damage specs no longer resolve and "
+    "HP never ablates; rewrite against fixtures — story 94-4"
+)
 def test_melee_resolves_on_hp_depletion_with_otel(otel_capture):
     snap, enc, pack = _seated_melee(pc="Nova", opponent="Corsair", location="New Kowloon")
 

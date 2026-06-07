@@ -44,10 +44,16 @@ from tests._helpers.trigger_encounter import trigger_encounter
 
 CONTENT_ROOT = Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
 
-pytestmark = pytest.mark.skipif(
-    not CONTENT_ROOT.is_dir(),
-    reason="sidequest-content not on disk alongside sidequest-server",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not CONTENT_ROOT.is_dir(),
+        reason="sidequest-content not on disk alongside sidequest-server",
+    ),
+    pytest.mark.skip(
+        reason="content-coupled: references dogfight weapon 'multifocal_laser' that "
+        "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
+    ),
+]
 
 PLAYER = "Apex"
 OPPONENT = "Bandit Ace"

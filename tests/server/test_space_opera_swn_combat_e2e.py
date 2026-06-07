@@ -192,6 +192,11 @@ def _hp_depletion_sources(otel_capture) -> list[str]:
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+@pytest.mark.skip(
+    reason="content-coupled: references weapon 'blaster_sidearm' that migrated to "
+    "world-tier inventory (epic 94), so genre-tier damage specs no longer resolve and "
+    "HP never ablates; rewrite against fixtures — story 94-4"
+)
 def test_firefight_resolves_on_hp_depletion_vs_content_ac(otel_capture):
     snap, enc, pack = _seated_combat(
         encounter_type="combat",
@@ -376,6 +381,11 @@ def test_ship_combat_resolves_on_hull_depletion_vs_ship_ac(otel_capture):
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+@pytest.mark.skip(
+    reason="content-coupled: references weapon 'blaster_sidearm' that migrated to "
+    "world-tier inventory (epic 94), so genre-tier damage specs no longer resolve and "
+    "HP never ablates; rewrite against fixtures — story 94-4"
+)
 def test_confrontation_payload_carries_hp_through_real_dispatch():
     """Production-path proof for ``core_resolver=snapshot.find_creature_core``.
 

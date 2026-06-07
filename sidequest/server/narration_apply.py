@@ -29,6 +29,7 @@ from sidequest.game.alias_accretion import (
     extract_epithets_for_npc,
 )
 from sidequest.game.alias_resolution import _phrase_matches
+from sidequest.game.disposition import Disposition
 from sidequest.game.dogfight_shot import (
     GunSolution,
     PendingDogfightShot,
@@ -44,7 +45,13 @@ from sidequest.game.morale import (
     OpponentState,
     maybe_check_morale,
 )
-from sidequest.game.npc_development import develop_npc_on_engagement, engagement_beat_reason
+from sidequest.game.npc_development import (
+    ACQUAINTANCE_AT,
+    DISPOSITION_DRIFT_PER_MILESTONE,
+    develop_npc_on_engagement,
+    engagement_beat_reason,
+    tier_for_interactions,
+)
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.region_validation import (
     canonicalize_region_name,
@@ -1257,6 +1264,73 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
     return npc
 
 
+def _promote_engaged_pool_member(
+    *,
+    snapshot: GameSnapshot,
+    member: NpcPoolMember,
+    turn_num: int,
+    trigger: str,
+    actor_loc: str | None,
+) -> Npc:
+    """Story 97-1: promote an ENGAGED pool member to a full ``Npc``.
+
+    Wraps ``_promote_pool_member_to_npc`` (which carries identity,
+    ``invented_from``, and disposition) and additionally carries the
+    97-1 engagement state: interaction count, resolution tier, and the
+    last-seen stamps. For the ``tier`` trigger the ADR-128 acquaintance
+    milestone fires here — disposition warms by the milestone drift and
+    the named milestone beat is recorded (mirroring
+    ``develop_npc_on_engagement``'s escalation leg). The ``valence_beat``
+    trigger leaves disposition/beat authoring to the caller (the
+    ``update_npc_disposition`` handler records the narrator's own beat).
+
+    Per the 97-1 design spec ("one identity, one source") the pool entry
+    is REMOVED — unlike the legacy mechanical-promotion path which
+    shadows it. Deviation tracked in the 97-1 session file.
+
+    Emits ``npc.promoted_from_pool`` (trigger=tier|valence_beat) — the
+    AC-3 lie-detector for the promotion decision.
+    """
+    npc = _promote_pool_member_to_npc(member)
+    npc.non_transactional_interactions = member.non_transactional_interactions
+    npc.resolution_tier = tier_for_interactions(member.non_transactional_interactions)
+    npc.last_seen_turn = turn_num
+    npc.last_seen_location = actor_loc or member.last_seen_location
+
+    if trigger == "tier":
+        npc.disposition = Disposition(int(npc.disposition) + DISPOSITION_DRIFT_PER_MILESTONE)
+        npc.record_disposition_beat(
+            turn=turn_num,
+            delta=DISPOSITION_DRIFT_PER_MILESTONE,
+            reason=engagement_beat_reason(npc.resolution_tier),
+            location=npc.last_seen_location,
+        )
+
+    snapshot.npcs.append(npc)
+    snapshot.npc_pool.remove(member)
+
+    with Span.open(
+        "npc.promoted_from_pool",
+        {
+            "npc_name": npc.core.name,
+            "trigger": trigger,
+            "interactions": npc.non_transactional_interactions,
+            "tier": npc.resolution_tier,
+            "turn_number": turn_num,
+        },
+    ):
+        pass
+    logger.info(
+        "npc.promoted_from_pool name=%r trigger=%s interactions=%d tier=%s turn=%d",
+        npc.core.name,
+        trigger,
+        npc.non_transactional_interactions,
+        npc.resolution_tier,
+        turn_num,
+    )
+    return npc
+
+
 def _seed_invented_npc_identity(
     *,
     npc: Npc,
@@ -1909,7 +1983,10 @@ def _engagement_is_hostile_context(snapshot: GameSnapshot, mention: object, npc:
     enc = snapshot.encounter
     if enc is None or enc.resolved:
         return False
-    name_key = npc.core.name.casefold()
+    # Story 97-1: the gate serves both entity tiers — ``Npc`` names live at
+    # ``.core.name``, ``NpcPoolMember`` names at ``.name``.
+    core = getattr(npc, "core", None)
+    name_key = (core.name if core is not None else npc.name).casefold()
     return any(
         actor.side == "opponent" and not actor.withdrawn and actor.name.casefold() == name_key
         for actor in enc.actors
@@ -2236,6 +2313,53 @@ def _apply_npc_mentions(
                     pool_match_form,
                     turn_num,
                 )
+            # Story 97-1: scene-presence stamp + engagement tick at the pool
+            # tier, mirroring the npcs_hit branch above. Presence is stamped
+            # unconditionally (the cite happened); the INTEREST tick is
+            # deduped per turn (incl. across apply calls — the 97-5
+            # double-apply shape) and suppressed under the #742
+            # hostile-context gate, so a live combat Other never accrues
+            # engagement toward a relationship card or promotion.
+            pool_actor_loc = snapshot.party_location(perspective=acting_character_name)
+            if pool_actor_loc:
+                pool_hit.last_seen_location = pool_actor_loc
+            pool_hit.last_seen_turn = turn_num
+            if name_key not in developed_this_turn and pool_hit.last_development_turn != turn_num:
+                developed_this_turn.add(name_key)
+                if _engagement_is_hostile_context(snapshot, mention, pool_hit):
+                    with Span.open(
+                        "npc.development_skipped",
+                        {
+                            "npc_name": pool_hit.name,
+                            "reason": "hostile_context",
+                            "mention_side": mention.side or "",
+                            "turn_number": turn_num,
+                            "tier": "pool",
+                        },
+                    ):
+                        pass
+                    logger.info(
+                        "npc.development_skipped name=%r reason=hostile_context "
+                        "tier=pool mention_side=%r turn=%d",
+                        pool_hit.name,
+                        mention.side,
+                        turn_num,
+                    )
+                    continue
+                pool_hit.last_development_turn = turn_num
+                pool_hit.non_transactional_interactions += 1
+                # Tier trigger (97-1 design spec): crossing ``acquaintance``
+                # promotes the member to a full Npc — sustained engagement is
+                # the ADR-128 milestone, the promotion is the ADR-014
+                # coal→diamond commitment.
+                if pool_hit.non_transactional_interactions >= ACQUAINTANCE_AT:
+                    _promote_engaged_pool_member(
+                        snapshot=snapshot,
+                        member=pool_hit,
+                        turn_num=turn_num,
+                        trigger="tier",
+                        actor_loc=pool_actor_loc,
+                    )
             continue
 
         # Story 83-3: ongoing-threat reconciliation guard. A creature the narrator

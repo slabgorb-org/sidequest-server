@@ -42,6 +42,14 @@ def _relationships_signature(snapshot: Any) -> str:
         parts.append(
             f"{npc.core.name}:{int(npc.disposition)}:{len(npc.disposition_log)}:{claim_count}"
         )
+    # Story 97-1: pool-derived cards are part of the relationship set — the
+    # signature must move when a pool member's engagement changes, or a
+    # newly-engaged member's card never fans out (the #742 residual-2 gap).
+    for member in getattr(snapshot, "npc_pool", []):
+        parts.append(
+            f"pool:{member.name}:{int(member.disposition)}"
+            f":{member.non_transactional_interactions}:{member.last_seen_turn}"
+        )
     return "|".join(parts)
 
 
@@ -56,7 +64,7 @@ def _maybe_emit_relationships(
     No NPCs → nothing to show (silent; not an error state). Unchanged signature
     → skip (Cost Scales with Drama).
     """
-    if not snapshot.npcs:
+    if not snapshot.npcs and not getattr(snapshot, "npc_pool", []):
         return
 
     sig = _relationships_signature(snapshot)

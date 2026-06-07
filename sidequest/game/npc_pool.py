@@ -100,6 +100,26 @@ class NpcPoolMember(BaseModel):
     re-narration of the SAME original re-cites the existing member instead
     of minting a second identity ("Magel Girilla"). ``None`` when the name
     was never rerouted (no divergence to bind)."""
+    last_seen_turn: int = 0
+    """Story 97-1 (pool relationship projection): scene-presence stamp,
+    parallel to ``Npc.last_seen_turn``. Set by the ``pool_hit`` branch of
+    ``narration_apply._apply_npc_mentions`` on every cite. ``0`` = never
+    scene-present this session (the projection seen-gate's first leg) —
+    a member minted from a dialogue mention of an off-screen figure stays
+    at 0 and never cards."""
+    last_seen_location: str | None = None
+    """Story 97-1: location of the most recent cite, parallel to
+    ``Npc.last_seen_location``. Carried onto the relationship card."""
+    non_transactional_interactions: int = 0
+    """Story 97-1: the ADR-014/ADR-128 interest counter at the pool tier,
+    parallel to ``Npc.non_transactional_interactions``. Deduped per turn
+    (one engagement event per member per turn); suppressed entirely under
+    the #742 hostile-context gate. Crossing ``ACQUAINTANCE_AT`` promotes
+    the member to a full ``Npc`` (the tier trigger), carrying this count."""
+    last_development_turn: int = 0
+    """Story 97-1: per-turn engagement dedupe ACROSS apply calls, parallel
+    to ``Npc.last_development_turn`` (the 97-5 double-apply shape — two
+    ``_apply_npc_mentions`` passes in one turn must tick once)."""
 
 
 def is_projectable(entity: NpcPoolMember | Npc) -> bool:

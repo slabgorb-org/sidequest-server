@@ -343,13 +343,25 @@ def test_band_derivation_honors_genre_configured_thresholds() -> None:
 
 
 def test_disposition_does_not_drift_without_a_stateful_npc() -> None:
-    """A ``pool_hit`` engagement has no ``Npc`` — there is nothing to drift,
-    and no Npc may be spuriously created to carry a disposition."""
+    """A sub-milestone ``pool_hit`` engagement has no ``Npc`` — there is
+    nothing to drift, and no Npc may be spuriously created to carry a
+    disposition.
+
+    Story 97-1 amendment: the original pin drove 5 cites and asserted no
+    ``Npc`` ever appears. The 97-1 design (approved 2026-06-07) makes the
+    ``ACQUAINTANCE_AT``-th deduped interaction a DELIBERATE promotion — the
+    ADR-128 milestone commitment, not a spurious mint. The surviving
+    invariant is below-threshold: engagement short of the milestone mints
+    nothing. (The promotion behavior itself is pinned in
+    ``test_pool_relationship_projection.py``; this test keeps the
+    no-spurious-mint floor.)"""
     snap = _snapshot()
     snap.npc_pool.append(NpcPoolMember(name="Marya", drawn_from="legacy_registry"))
-    for t in range(1, 6):
+    for t in range(1, ACQUAINTANCE_AT):
         _engage(snap, "Marya", turn=t)
     assert snap.npcs == []
+    member = snap.npc_pool[0]
+    assert int(member.disposition) == 0, "sub-milestone cites must not move pool disposition"
 
 
 # ===========================================================================

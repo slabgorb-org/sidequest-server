@@ -3039,6 +3039,14 @@ def _apply_narration_result_to_snapshot(
         old_loc = (
             snapshot.character_locations.get(actor_for_location) if actor_for_location else None
         )
+        # Ping-pong 2026-06-07 ("region-mode location drift kills combat"):
+        # set True by the region-resolution branches below when this turn's
+        # location-string change is a narrator scene-title drift WITHIN the
+        # party's current cartography region (region-mode worlds only) —
+        # e.g. 'New Kowloon, Yula' → 'New Kowloon — Transit Promenade'.
+        # Such a drift is NOT a scene boundary, so the encounter
+        # abandon-on-location-change ladder must not treat it as one.
+        _same_region_drift = False
         # Story 47-4: rig-coupled auto-fire hook. Any narrator-emitted
         # location change runs through process_room_entry, which resolves
         # bare world-name rooms ("Galley") against chassis.interior_rooms
@@ -3200,6 +3208,12 @@ def _apply_narration_result_to_snapshot(
                 # Gated to region-mode worlds (computed above): room-graph
                 # (dungeon) worlds manage current_region via the room graph /
                 # frontier hook.
+                if _is_region_mode_world and snapshot.current_region == known_region_id:
+                    # The heading resolved to the region the party is ALREADY
+                    # in — a same-region scene-title drift, not a region
+                    # change. Flag it so the encounter abandon ladder below
+                    # treats this turn as scene-continuous.
+                    _same_region_drift = True
                 if _is_region_mode_world and snapshot.current_region != known_region_id:
                     _prior_region = snapshot.current_region
                     snapshot.current_region = known_region_id
@@ -3295,6 +3309,12 @@ def _apply_narration_result_to_snapshot(
                         snapshot.current_region,
                         player_name,
                     )
+                # Ping-pong 2026-06-07: the engine just concluded this heading
+                # is a POI WITHIN the current region — the same-region signal
+                # the encounter abandon ladder below must respect (the perseus
+                # repro: combat seated, then deactivated the SAME turn by
+                # 'New Kowloon, Yula' → 'New Kowloon — Transit Promenade').
+                _same_region_drift = True
             else:
                 # Story 45-17: canonical-slug dedup. The narrator emits
                 # surface variants for the same room across turns
@@ -3395,7 +3415,48 @@ def _apply_narration_result_to_snapshot(
             # CONTINUES (real endings still come via dial-threshold/opponent-
             # yield/beat-consequence, all checked first below).
             active_encounter = snapshot.encounter
-            if active_encounter is not None and not active_encounter.resolved:
+            if (
+                active_encounter is not None
+                and not active_encounter.resolved
+                and _same_region_drift
+            ):
+                # Ping-pong 2026-06-07 (region-drift kills combat): in a
+                # region-mode world a scene-title drift WITHIN the same
+                # cartography region is NOT a scene boundary — the party
+                # never left the scene, so none of the location-change
+                # resolution semantics (win-on-leave, yield-on-leave,
+                # abandon) apply. The encounter CONTINUES; real endings
+                # still come via apply_beat / dial thresholds / a genuine
+                # region change (negotiation-walk-out semantics preserved —
+                # a heading resolving to a DIFFERENT region leaves
+                # _same_region_drift False and falls through to the ladder
+                # below). OTEL lie-detector: the GM panel must see the
+                # engine CHOSE to continue, not silently skip the boundary.
+                logger.info(
+                    "encounter.continued_same_region_drift "
+                    "encounter_type=%s current_region=%r old_location=%r "
+                    "new_location=%r player=%s",
+                    active_encounter.encounter_type,
+                    snapshot.current_region,
+                    old_loc,
+                    result.location,
+                    player_name,
+                )
+                _watcher_publish(
+                    "confrontation_continued_same_region_drift",
+                    {
+                        "encounter_type": active_encounter.encounter_type,
+                        "current_region": snapshot.current_region or "",
+                        "old_location": old_loc,
+                        "new_location": result.location,
+                        "player_name": player_name,
+                        "turn_number": snapshot.turn_manager.interaction,
+                        "player_metric": active_encounter.player_metric.current,
+                        "opponent_metric": active_encounter.opponent_metric.current,
+                    },
+                    component="confrontation",
+                )
+            elif active_encounter is not None and not active_encounter.resolved:
                 abandoned_type = active_encounter.encounter_type
                 # A location change at/after a met win threshold is the natural
                 # CONSEQUENCE of winning, not an abandonment — escape/movement

@@ -28,6 +28,7 @@ from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 from sidequest.game.session import GameSnapshot
 from sidequest.game.world_grounding_bootstrap import load_world_grounding
 from sidequest.genre.loader import GenreLoader
+from sidequest.orbital.scope_bind import RegionScopeBindError
 from sidequest.protocol.messages import (
     ChapterMarkerMessage,
     ChapterMarkerPayload,
@@ -304,8 +305,15 @@ def _bind_initial_orbital_scope(
         region = (snapshot.current_region if snapshot is not None else None) or starting_region
         if region:
             session.bind_region_scope(region, trigger="relocation")
-    elif starting_region:
-        session.bind_region_scope(starting_region, trigger="init")
+    else:
+        # Fresh connect to an orbital world: a blank/missing starting_region is
+        # a content misconfiguration, not a legitimate state — fail loud (No
+        # Silent Fallbacks) instead of silently leaving the chart at system
+        # root. ``bind_region_scope(..., trigger="init")`` raises
+        # RegionScopeBindError on a no-match, and the empty string is never a
+        # body id, so passing ``starting_region or ""`` surfaces a blank
+        # starting_region as the same loud failure as a foreign one.
+        session.bind_region_scope(starting_region or "", trigger="init")
 
 
 class ConnectHandler:
@@ -765,13 +773,45 @@ class ConnectHandler:
                 snapshot = room.snapshot  # type: ignore[assignment]
                 # Story 95-1: center the per-location orrery on the world's
                 # starting system. Fails loud if starting_region has no matching
-                # star body (No Silent Fallbacks). No-op for non-orbital worlds.
-                _bind_initial_orbital_scope(
-                    room,
-                    genre_pack=genre_pack,
-                    world_slug=row.world_slug,
-                    is_resume=False,
-                )
+                # body (No Silent Fallbacks). No-op for non-orbital worlds. The
+                # fail-loud is a CONTENT misconfiguration (a region-mode orbital
+                # world with a blank/foreign starting_region), so surface it as a
+                # typed connect error + watcher event — the same graceful-loud
+                # pattern as the genre-pack / world-grounding load failures above
+                # — rather than letting it close the socket with a raw traceback.
+                try:
+                    _bind_initial_orbital_scope(
+                        room,
+                        genre_pack=genre_pack,
+                        world_slug=row.world_slug,
+                        is_resume=False,
+                    )
+                except RegionScopeBindError as exc:
+                    logger.error(
+                        "session.orbital_scope_bind_failed genre=%s world=%s slug=%s error=%s",
+                        row.genre_slug,
+                        row.world_slug,
+                        slug,
+                        exc,
+                    )
+                    _watcher_publish(
+                        "orbital_scope_bind_failed",
+                        {
+                            "genre_slug": row.genre_slug,
+                            "world_slug": row.world_slug,
+                            "slug": slug,
+                            "error": str(exc),
+                        },
+                        component="orbital",
+                        severity="error",
+                    )
+                    return [
+                        _error_msg(
+                            f"World '{row.world_slug}' has an orbital chart but its "
+                            f"starting_region does not match any catalogued body: {exc}",
+                            code="orbital_scope_bind_failed",
+                        )
+                    ]
                 has_character = False
                 logger.info(
                     "session.slug_new_session genre=%s world=%s slug=%s",

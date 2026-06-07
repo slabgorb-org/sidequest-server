@@ -266,6 +266,48 @@ def bind_player_identity(
     )
 
 
+def _bind_initial_orbital_scope(
+    room: SessionRoom,
+    *,
+    genre_pack: GenrePack | None,
+    world_slug: str,
+    is_resume: bool,
+) -> None:
+    """Center the per-location orrery on the party's system at connect (Story 95-1).
+
+    ``orbital_scope`` is transient session state (reset to system-root on every
+    connect), so without this the chart would open at the sector root rather than
+    the party's current system. The identity join (cartography region id == star
+    body id) lets us re-center from the region the party is in.
+
+    - Fresh session: bind from ``cartography.starting_region`` with
+      ``trigger="init"`` — a starting_region with no matching star body fails
+      loud (No Silent Fallbacks), surfacing a broken content join rather than a
+      silently un-centered chart.
+    - Resume: bind from the party's persisted ``current_region`` (falling back to
+      ``starting_region``) with ``trigger="relocation"`` — a star-less region is a
+      legitimate place the party traveled to, a loud-skip, not a fail-loud.
+
+    A no-op for non-orbital worlds (``orbital_content is None``) and for worlds
+    without cartography.
+    """
+    session = room.session
+    if session is None or session.orbital_content is None:
+        return
+    world_obj = genre_pack.worlds.get(world_slug) if genre_pack is not None else None
+    cartography = getattr(world_obj, "cartography", None) if world_obj is not None else None
+    if cartography is None:
+        return
+    starting_region = getattr(cartography, "starting_region", None)
+    if is_resume:
+        snapshot = room.snapshot
+        region = (snapshot.current_region if snapshot is not None else None) or starting_region
+        if region:
+            session.bind_region_scope(region, trigger="relocation")
+    elif starting_region:
+        session.bind_region_scope(starting_region, trigger="init")
+
+
 class ConnectHandler:
     """Handle the ``connect`` sub-event of SESSION_EVENT.
 
@@ -696,6 +738,15 @@ class ConnectHandler:
                     snapshot=snapshot,
                     slug=slug,
                 )
+                # Story 95-1: restore the per-location orrery to the party's
+                # persisted system (orbital_scope is transient and resets each
+                # connect). No-op for non-orbital worlds.
+                _bind_initial_orbital_scope(
+                    room,
+                    genre_pack=genre_pack,
+                    world_slug=row.world_slug,
+                    is_resume=True,
+                )
             else:
                 snapshot = GameSnapshot(
                     genre_slug=row.genre_slug,
@@ -712,6 +763,15 @@ class ConnectHandler:
                     ruleset=(genre_pack.rules.ruleset if genre_pack.rules else None),
                 )
                 snapshot = room.snapshot  # type: ignore[assignment]
+                # Story 95-1: center the per-location orrery on the world's
+                # starting system. Fails loud if starting_region has no matching
+                # star body (No Silent Fallbacks). No-op for non-orbital worlds.
+                _bind_initial_orbital_scope(
+                    room,
+                    genre_pack=genre_pack,
+                    world_slug=row.world_slug,
+                    is_resume=False,
+                )
                 has_character = False
                 logger.info(
                     "session.slug_new_session genre=%s world=%s slug=%s",

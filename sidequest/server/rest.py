@@ -85,6 +85,33 @@ class GameResponse(BaseModel):
     # Echoed back so the lobby can display the typed name without a second
     # round-trip; ``None`` when the request did not send one.
     player_name: str | None = None
+    # Orbital capability — True when the bound world ships an ``orbits.yaml``
+    # (the same opt-in ``bind_world`` reads). The Map tab gates the
+    # OrbitalChartView on this server-announced fact instead of a per-world
+    # frontend hardcode (sq-playtest 2026-06-07: perseus_cloud shipped
+    # orbits.yaml via content#383 + server#728 but the UI allowlist still
+    # only contained coyote_star, so the orrery was unreachable).
+    orbital: bool = False
+
+
+def _world_has_orbits(request: Request, genre_slug: str, world_slug: str) -> bool:
+    """True when ``<pack>/worlds/<world>/orbits.yaml`` exists.
+
+    The same opt-in file ``bind_world`` hands to ``load_orbital_content`` —
+    announced on ``GameResponse.orbital`` so the Map tab can gate the
+    OrbitalChartView on server truth instead of a per-world UI hardcode.
+    Existence only (no parse): a malformed orbits.yaml fails loud at bind,
+    which is the correct place for schema enforcement.
+    """
+    search_paths: list[Path] = getattr(
+        request.app.state,
+        "genre_pack_search_paths",
+        DEFAULT_GENRE_PACK_SEARCH_PATHS,
+    )
+    for sp in search_paths:
+        if sp.exists() and sp.is_dir():
+            return (sp / genre_slug / "worlds" / world_slug / "orbits.yaml").exists()
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +685,7 @@ def create_rest_router() -> APIRouter:
                     world_slug=existing.world_slug,
                     resumed=True,
                     player_name=req.player_name,
+                    orbital=_world_has_orbits(request, existing.genre_slug, existing.world_slug),
                 )
                 return JSONResponse(status_code=200, content=payload.model_dump())
 
@@ -684,6 +712,7 @@ def create_rest_router() -> APIRouter:
                 world_slug=req.world_slug,
                 resumed=False,
                 player_name=req.player_name,
+                orbital=_world_has_orbits(request, req.genre_slug, req.world_slug),
             )
 
     @router.get("/api/sessions/{slug}/encounter_events")
@@ -748,6 +777,7 @@ def create_rest_router() -> APIRouter:
             genre_slug=row.genre_slug,
             world_slug=row.world_slug,
             resumed=True,
+            orbital=_world_has_orbits(request, row.genre_slug, row.world_slug),
         )
 
     @router.get("/api/games/{slug}/hub")

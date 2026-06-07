@@ -152,3 +152,87 @@ def test_get_games_slug_returns_metadata(client: TestClient):
 def test_get_games_slug_404_for_unknown(client: TestClient):
     r = client.get("/api/games/2026-01-01-nowhere")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Orbital capability announcement (sq-playtest 2026-06-07: perseus orrery
+# unreachable because the UI gated the orbital view on a hardcoded world
+# allowlist). GameResponse.orbital must announce "world ships orbits.yaml"
+# so the Map tab gates on server truth.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def orbital_client(tmp_path: Path) -> TestClient:
+    """Client whose genre-pack search path holds one orbital and one
+    non-orbital world."""
+    packs = tmp_path / "genre_packs"
+    orbital_world = packs / "space_opera" / "worlds" / "perseus_cloud"
+    orbital_world.mkdir(parents=True)
+    (orbital_world / "orbits.yaml").write_text("bodies: {}\n", encoding="utf-8")
+    flat_world = packs / "low_fantasy" / "worlds" / "moldharrow-keep"
+    flat_world.mkdir(parents=True)
+
+    app = FastAPI()
+    app.state.save_dir = tmp_path
+    app.state.genre_pack_search_paths = [packs]
+    app.state.today_fn = lambda: date(2026, 4, 22)
+    app.include_router(create_rest_router())
+    return TestClient(app)
+
+
+def test_post_games_announces_orbital_for_orbits_world(orbital_client: TestClient):
+    r = orbital_client.post(
+        "/api/games",
+        json={
+            "genre_slug": "space_opera",
+            "world_slug": "perseus_cloud",
+            "mode": "solo",
+        },
+    )
+    assert r.status_code == 201
+    assert r.json()["orbital"] is True
+
+
+def test_post_games_announces_orbital_false_for_flat_world(orbital_client: TestClient):
+    r = orbital_client.post(
+        "/api/games",
+        json={
+            "genre_slug": "low_fantasy",
+            "world_slug": "moldharrow-keep",
+            "mode": "solo",
+        },
+    )
+    assert r.status_code == 201
+    assert r.json()["orbital"] is False
+
+
+def test_get_games_slug_announces_orbital(orbital_client: TestClient):
+    """The slug-mount metadata fetch — the one AppInner uses to gate the
+    Map tab — must carry the orbital flag on resume too."""
+    orbital_client.post(
+        "/api/games",
+        json={
+            "genre_slug": "space_opera",
+            "world_slug": "perseus_cloud",
+            "mode": "solo",
+        },
+    )
+    r = orbital_client.get("/api/games/2026-04-22-perseus_cloud")
+    assert r.status_code == 200
+    assert r.json()["orbital"] is True
+
+
+def test_get_games_slug_orbital_false_when_packs_missing(client: TestClient):
+    """Empty search path (no packs on disk) → orbital=False, no crash."""
+    client.post(
+        "/api/games",
+        json={
+            "genre_slug": "low_fantasy",
+            "world_slug": "moldharrow-keep",
+            "mode": "solo",
+        },
+    )
+    r = client.get("/api/games/2026-04-22-moldharrow-keep")
+    assert r.status_code == 200
+    assert r.json()["orbital"] is False

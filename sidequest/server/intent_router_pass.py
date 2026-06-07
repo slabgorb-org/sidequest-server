@@ -45,9 +45,13 @@ from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
+from sidequest.server.ability_invocation_telemetry import (
+    emit_ability_invocation_unrouted,
+)
 from sidequest.server.snapshot_slimming import apply_snapshot_slimming
 from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.spans.intent_router import (
+    intent_router_beat_outside_confrontation_span,
     intent_router_call_budget_breach_span,
     intent_router_confrontation_classified_span,
     intent_router_confrontation_vocabulary_span,
@@ -179,6 +183,38 @@ def _confrontation_verb_hits(action: str, pack: GenrePack | None) -> list[str]:
         for verb in getattr(cdef, "intent_verbs", None) or []:
             if re.search(rf"\b{re.escape(verb.casefold())}\b", folded):
                 hits.append(f"{cdef.confrontation_type}:{verb}")
+    return hits
+
+
+def _beat_invocations_outside_confrontation(
+    action: str, pack: GenrePack | None, snapshot: GameSnapshot
+) -> list[tuple[str, str]]:
+    """``(confrontation_type, beat_id)`` hits for MULTI-WORD beat labels
+    invoked by name while no confrontation is active.
+
+    sq-playtest 2026-06-07 (Size Up outside the standoff): a confrontation-only
+    beat invoked by name out of context was freehanded as prose with zero gate
+    telemetry. Single-word labels ("Shoot", "Retreat") are ordinary verbs, not
+    invocations — excluded by design so normal prose stays quiet; single-verb
+    intent is the confrontation classifier's lane (see
+    ``_confrontation_verb_hits``).
+    """
+    enc = snapshot.encounter
+    if enc is not None and not getattr(enc, "resolved", False):
+        return []
+    rules = getattr(pack, "rules", None)
+    confrontations = getattr(rules, "confrontations", None) if rules else None
+    if not confrontations:
+        return []
+    folded = action.casefold()
+    hits: list[tuple[str, str]] = []
+    for cdef in confrontations:
+        for beat in getattr(cdef, "beats", None) or []:
+            label = (getattr(beat, "label", "") or "").strip()
+            if " " not in label:
+                continue
+            if re.search(rf"\b{re.escape(label.casefold())}\b", folded):
+                hits.append((cdef.confrontation_type, str(getattr(beat, "id", ""))))
     return hits
 
 
@@ -513,6 +549,36 @@ async def execute_intent_router_pre_narrator_pass(
                     "intent_verbs but the router emitted no confrontation dispatch",
                     ",".join(verb_hits),
                     action[:120],
+                )
+
+        # Ability-invocation decline evidence (sq-playtest 2026-06-07 Reroute
+        # Power): a party character's ADR-097 ability declared verbatim has NO
+        # dispatch route — the bank has no ability subsystem — and previously
+        # produced zero telemetry. Shared emit seam: the beat-commit dice path
+        # (router-suppressed by story 91-2) calls the same helper, so both
+        # submission paths feed one GM-panel query.
+        emit_ability_invocation_unrouted(action=action, snapshot=snapshot)
+
+        # Beat-out-of-context decline evidence (sq-playtest 2026-06-07 Size Up):
+        # only when no confrontation dispatch was emitted this turn — a seated
+        # confrontation makes the beat playable, which is not a decline.
+        if not conf_types:
+            for _beat_type, _beat_id in _beat_invocations_outside_confrontation(
+                action, pack, snapshot
+            ):
+                with intent_router_beat_outside_confrontation_span(
+                    beat_id=_beat_id,
+                    confrontation_type=_beat_type,
+                    genre_slug=snapshot.genre_slug or "",
+                ):
+                    pass
+                logger.warning(
+                    "intent_router.beat_invoked_outside_confrontation beat_id=%r "
+                    "type=%r — a confrontation-only beat was invoked by name with "
+                    "no confrontation active and none seated this turn; the "
+                    "invocation has no playable surface",
+                    _beat_id,
+                    _beat_type,
                 )
 
         if "witnessed_act_vocabulary" in state_summary:

@@ -160,6 +160,14 @@ class World(BaseModel):
     chassis_instances: list[ChassisInstanceConfig] = Field(default_factory=list)
     magic_register: str = ""
     items: WorldItemsCatalog | None = None
+    bestiary: Bestiary | None = None
+    """World-tier ``worlds/<slug>/bestiary.yaml`` (genre/world repoint): SRD-
+    aligned combat-layer stat blocks specific to this world. When present it
+    REPLACES the genre-tier pool for this world (same world-over-genre rule as
+    cultures/archetypes — see :meth:`GenrePack.effective_bestiary`), so a world
+    with a canonical roster (e.g. barsoom's Martian fauna) is never polluted by
+    the genre's generic creatures. ``None`` when the world authors none, in
+    which case the genre-tier ``GenrePack.bestiary`` serves."""
     scenarios: dict[str, ScenarioPack] = Field(default_factory=dict)
     """ADR-053 scenarios authored at world tier (``worlds/<slug>/scenarios/``).
 
@@ -303,6 +311,25 @@ class GenrePack(BaseModel):
         if world_opt is not None and world_opt.archetypes:
             return list(world_opt.archetypes), "world"
         return list(self.archetypes), "genre"
+
+    def effective_bestiary(self, world: str | None) -> tuple[Bestiary | None, str]:
+        """Resolve the active bestiary for ``world`` (same world-over-genre rule
+        as :meth:`effective_cultures`).
+
+        Returns ``(bestiary, source)`` where ``source`` is ``"world"`` when the
+        named world ships its own ``bestiary.yaml``, else ``"genre"`` (including
+        when ``world`` is ``None`` or unknown). The genre/world repoint moved
+        creature rosters to the world tier ("genre is rulebook only, world owns
+        cast/catalog"); ruleset-module packs now author their hostiles in
+        ``worlds/<slug>/bestiary.yaml``. The world set REPLACES the genre pool so
+        a world with a canonical roster is never polluted by generic genre
+        creatures. ``bestiary`` is ``None`` only when NEITHER tier supplies one —
+        encountergen fails loud on that for ruleset-module packs (No Silent
+        Fallbacks: never a silently-empty encounter pool)."""
+        world_opt = self.worlds.get(world) if world else None
+        if world_opt is not None and world_opt.bestiary is not None:
+            return world_opt.bestiary, "world"
+        return self.bestiary, "genre"
 
 
 # ClassDef.saving_throws uses a TYPE_CHECKING-only import of SavingThrowsTable to

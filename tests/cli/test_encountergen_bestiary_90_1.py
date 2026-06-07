@@ -53,13 +53,20 @@ def _pack_dir_or_skip(slug: str):
 
 def test_ruleset_module_pack_does_not_hard_fail(capsys: pytest.CaptureFixture[str]) -> None:
     """AC1: encountergen on a ``ruleset: wwn`` pack (heavy_metal) must not
-    sys.exit over missing ``allowed_classes`` — it routes to the bestiary."""
+    sys.exit over missing ``allowed_classes`` — it routes to the bestiary.
+
+    Genre/world repoint update: creature rosters moved to the world tier
+    ("genre is rulebook only, world owns cast/catalog"), so the bestiary now
+    resolves per ``--world`` via ``GenrePack.effective_bestiary``. evropi ships
+    ``worlds/evropi/bestiary.yaml``."""
     _pack_dir_or_skip("heavy_metal")
     argv = [
         "--genre-packs-path",
         str(GENRE_PACKS_DIR),
         "--genre",
         "heavy_metal",
+        "--world",
+        "evropi",
         "--tier",
         "1",
         "--count",
@@ -94,6 +101,8 @@ def test_wwn_enemies_carry_bestiary_combat_fields(capsys: pytest.CaptureFixture[
             str(GENRE_PACKS_DIR),
             "--genre",
             "heavy_metal",
+            "--world",
+            "evropi",
             "--tier",
             "1",
             "--count",
@@ -123,14 +132,15 @@ def test_wwn_enemies_carry_bestiary_combat_fields(capsys: pytest.CaptureFixture[
 
 
 def test_heavy_metal_ships_a_wellformed_bestiary() -> None:
-    """90-1 content deliverable: heavy_metal (ruleset: wwn) ships
-    ``bestiary.yaml`` at the pack root with at least one well-formed entry
-    carrying the agreed combat-layer fields."""
+    """90-1 content deliverable (genre/world repoint update): heavy_metal
+    (ruleset: wwn) ships a well-formed ``bestiary.yaml`` — now at the WORLD tier
+    (``worlds/evropi/bestiary.yaml``) after rosters moved off the genre tier.
+    Entries carry the agreed combat-layer fields."""
     pack_dir = _pack_dir_or_skip("heavy_metal")
-    bestiary_path = pack_dir / "bestiary.yaml"
+    bestiary_path = pack_dir / "worlds" / "evropi" / "bestiary.yaml"
     assert bestiary_path.is_file(), (
-        "ruleset-module packs REQUIRE a bestiary.yaml (90-1 fail-loud contract); "
-        f"missing at {bestiary_path}"
+        "ruleset-module worlds REQUIRE a bestiary (90-1 fail-loud contract; genre/"
+        f"world repoint moved it to the world tier); missing at {bestiary_path}"
     )
     data = yaml.safe_load(bestiary_path.read_text(encoding="utf-8"))
     entries = data.get("entries") if isinstance(data, dict) else None
@@ -143,19 +153,21 @@ def test_heavy_metal_ships_a_wellformed_bestiary() -> None:
 
 
 def test_bestiary_requirement_is_ruleset_generic() -> None:
-    """AC6: the bestiary path keys on ``ruleset != native`` — every live
-    ruleset-module pack (wwn/cwn/swn) ships a bestiary, not just heavy_metal.
-    This pins the seam as ruleset-generic rather than a wwn special case."""
+    """AC6 (genre/world repoint update): the bestiary path keys on
+    ``ruleset != native`` and resolves world-over-genre. Every world of a live
+    ruleset-module pack (wwn/cwn/swn/awn) must resolve a non-None
+    ``effective_bestiary`` — from the world tier (``worlds/<slug>/bestiary.yaml``)
+    or the genre tier — so the Monster Manual pool is never silently empty. This
+    pins the seam as ruleset-generic, not a heavy_metal special case."""
     failures: list[str] = []
     found_any = False
-    # mutant_wasteland joined the ruleset-module fleet mid-story (88-2 bound
-    # `ruleset: awn` during 90-1's green phase) — the contract covers it too.
     for slug in (
         "heavy_metal",
         "elemental_harmony",
         "neon_dystopia",
         "space_opera",
         "mutant_wasteland",
+        "road_warrior",
     ):
         try:
             pack_dir = find_pack_path(slug)
@@ -165,14 +177,39 @@ def test_bestiary_requirement_is_ruleset_generic() -> None:
         if pack.rules.ruleset == "native":
             continue
         found_any = True
-        if not (pack_dir / "bestiary.yaml").is_file():
-            failures.append(f"{slug} (ruleset: {pack.rules.ruleset})")
+        for world_slug in pack.worlds:
+            bestiary, source = pack.effective_bestiary(world_slug)
+            if bestiary is None:
+                failures.append(f"{slug}/{world_slug} (ruleset: {pack.rules.ruleset})")
+            else:
+                assert bestiary.entries, (
+                    f"{slug}/{world_slug} resolves an empty bestiary (source={source})"
+                )
     if not found_any:
         pytest.skip("no ruleset-module packs on disk")
     assert not failures, (
-        f"ruleset-module packs missing bestiary.yaml: {failures} — the 90-1 seam is "
-        "ruleset-generic (wwn/cwn/swn), not heavy_metal-only"
+        f"ruleset-module worlds resolve no bestiary: {failures} — the seam is "
+        "ruleset-generic and world-over-genre (worlds/<slug>/bestiary.yaml or genre tier)"
     )
+
+
+def test_effective_bestiary_world_over_genre_resolution() -> None:
+    """Core seam unit test: ``effective_bestiary`` returns the WORLD bestiary
+    (source ``"world"``) when the world ships one, isolating a canonical roster
+    (barsoom) from any genre-tier pool — the world-over-genre rule that keeps
+    barsoom's Martian fauna unpolluted by generic genre creatures."""
+    pack_dir = _pack_dir_or_skip("heavy_metal")
+    pack = load_genre_pack(pack_dir)
+    assert pack.rules.ruleset != "native", "precondition: heavy_metal is a ruleset-module pack"
+    assert "barsoom" in pack.worlds, "precondition: barsoom world present"
+
+    bestiary, source = pack.effective_bestiary("barsoom")
+    assert source == "world", "barsoom ships its own bestiary → world tier must win"
+    assert bestiary is not None and bestiary.entries
+    # Unknown / None world falls back to the genre tier (which the repoint emptied
+    # for heavy_metal) — the resolution path itself is what we pin here.
+    _, none_source = pack.effective_bestiary(None)
+    assert none_source == "genre", "world=None must resolve against the genre tier"
 
 
 # ---------------------------------------------------------------------------

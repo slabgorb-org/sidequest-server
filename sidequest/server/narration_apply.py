@@ -107,6 +107,8 @@ from sidequest.telemetry.spans import (
     npc_creature_preserved_span,
     npc_creature_reconciled_span,
     npc_developed_span,
+    npc_epithet_preserved_span,
+    npc_epithet_reconciled_span,
     npc_identity_seeded_span,
     npc_invented_name_routed_span,
     npc_invented_name_unrouted_span,
@@ -1964,6 +1966,79 @@ def _reconcile_ongoing_threat(
     return best
 
 
+_EPITHET_ARTICLES: tuple[str, ...] = ("the ", "a ", "an ")
+
+
+def _is_descriptive_epithet(name: str) -> bool:
+    """True when a person mention's name is a descriptive epithet, not a name.
+
+    sq-playtest 2026-06-07 (five_points-2 epithet phantom): "The Heavy Man in
+    Broadcloth" is a DESCRIPTION the narrator used for an already-identified
+    roster NPC, yet it reached the Step-3 novel branch and was routed through
+    the culture-bound person namer — minting phantom "Deacon Rutherford Lacy".
+    The deterministic shape signal: real personal names are never article-led;
+    article-led mentions ("The Hooded Stranger", "A Man with No Name") are
+    descriptors by construction.
+    """
+    return name.casefold().lstrip().startswith(_EPITHET_ARTICLES)
+
+
+def _epithet_names_a_culture(name: str, pack: GenrePack | None, world: str | None) -> bool:
+    """Story 83-2 precedence: an article-led mention that NAMES a culture
+    ("The Munchkins") carries real identity signal — it keeps the deterministic
+    culture self-match route through the person namer. The epithet guard only
+    intercepts descriptors with NO culture signal, which would otherwise draw a
+    random culture + a random full name (the phantom shape)."""
+    if pack is None:
+        return False
+    cultures, _ = pack.effective_cultures(world)
+    return any(_culture_mention_matches(c, name) is not None for c in cultures)
+
+
+def _reconcile_epithet_to_person(
+    *, snapshot: GameSnapshot, mention: Any
+) -> tuple[Npc | None, NpcPoolMember | None, str] | None:
+    """Coreference an epithet-shaped person mention against existing person
+    identities (epithet-phantom defect b — the described man was an
+    already-referenced roster NPC).
+
+    Same shape as ``_reconcile_ongoing_threat`` but for the person tier, and
+    STRICTER: requires >=2 shared meaningful tokens with a unique best match
+    (the creature guard accepts >0). A false person-merge misattributes
+    disposition/relationship ledgers onto the wrong human, which is worse than
+    a preserved-verbatim descriptor — so single generic-token overlap ("man")
+    and ties decline, and the caller preserves the epithet instead.
+    """
+    best: tuple[Npc | None, NpcPoolMember | None, str] | None = None
+    best_score = 0
+    tied = False
+    incoming = _creature_tokens(mention.name, mention.role, mention.appearance)
+    for npc in snapshot.npcs:
+        if npc.creature_id is not None:
+            continue
+        # ADR-118 §A4 accreted aliases are coreference evidence — the fiction's
+        # own epithet binding ("the heavy man") made actionable.
+        existing = _creature_tokens(npc.core.name, npc.appearance, *npc.aliases)
+        score = len(incoming & existing)
+        if score > best_score:
+            best_score, best, tied = score, (npc, None, "similarity"), False
+        elif score == best_score and score > 0:
+            tied = True
+    for member in snapshot.npc_pool:
+        if member.is_creature:
+            continue
+        score = _creature_similarity(
+            mention, name=member.name, role=member.role, appearance=member.appearance
+        )
+        if score > best_score:
+            best_score, best, tied = score, (None, member, "similarity"), False
+        elif score == best_score and score > 0:
+            tied = True
+    if best_score < 2 or tied:
+        return None
+    return best
+
+
 def _engagement_is_hostile_context(snapshot: GameSnapshot, mention: object, npc: object) -> bool:
     """True when a narrator cite of ``npc`` is combat attention, not interest.
 
@@ -2458,6 +2533,69 @@ def _apply_npc_mentions(
                     original_name,
                     turn_num,
                     creature_data is not None,
+                )
+        elif _is_descriptive_epithet(original_name) and not _epithet_names_a_culture(
+            original_name, pack, world
+        ):
+            # Epithet guard (sq-playtest 2026-06-07, five_points-2 phantom):
+            # a descriptive epithet is not a mintable name. First try
+            # coreference — the epithet may RE-DESCRIBE an existing person
+            # (defect b: "The Heavy Man in Broadcloth" was roster NPC Isaiah
+            # Rynders, already referenced and present); on a clear overlap,
+            # collapse onto that identity instead of forking a phantom.
+            reconciled = _reconcile_epithet_to_person(snapshot=snapshot, mention=mention)
+            if reconciled is not None:
+                reconciled_npc, reconciled_member, signal = reconciled
+                if reconciled_npc is not None:
+                    actor_loc = snapshot.party_location(perspective=acting_character_name)
+                    if actor_loc:
+                        reconciled_npc.last_seen_location = actor_loc
+                    reconciled_npc.last_seen_turn = turn_num
+                    reconciled_to = reconciled_npc.core.name
+                    target_store = "npcs"
+                else:
+                    # Fill-empty upsert (story 72-7 additive precedent): the
+                    # re-description accretes; existing values win.
+                    assert reconciled_member is not None
+                    if mention.role and not reconciled_member.role:
+                        reconciled_member.role = mention.role
+                    if mention.pronouns and not reconciled_member.pronouns:
+                        reconciled_member.pronouns = mention.pronouns
+                    if mention.appearance and not reconciled_member.appearance:
+                        reconciled_member.appearance = mention.appearance
+                    reconciled_to = reconciled_member.name
+                    target_store = "pool"
+                with npc_epithet_reconciled_span(
+                    incoming=mention.name,
+                    reconciled_to=reconciled_to,
+                    signal=signal,
+                    target_store=target_store,
+                    turn_number=turn_num,
+                ):
+                    logger.info(
+                        "npc.epithet_reconciled incoming=%r reconciled_to=%r "
+                        "signal=%s store=%s turn=%d — described figure collapsed "
+                        "onto the existing person, no phantom mint",
+                        mention.name,
+                        reconciled_to,
+                        signal,
+                        target_store,
+                        turn_num,
+                    )
+                continue
+            # No safe coreference target — preserve the epithet VERBATIM
+            # (defect a: the namer must decline). An honest descriptor in the
+            # registry beats a phantom culture-minted full name with fake
+            # provenance; Step-2 exact match re-cites it on later turns.
+            with npc_epithet_preserved_span(
+                npc_name=original_name,
+                turn_number=turn_num,
+            ):
+                logger.info(
+                    "npc.epithet_preserved name=%r turn=%d — descriptive epithet, "
+                    "person namer declined (not a mintable name)",
+                    original_name,
+                    turn_num,
                 )
         else:
             # Person: route the bare narrator string through the ADR-091

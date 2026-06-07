@@ -347,6 +347,46 @@ SPAN_ROUTES[SPAN_NPC_CREATURE_RECONCILED] = SpanRoute(
     },
 )
 
+# sq-playtest 2026-06-07 (five_points-2 epithet phantom): emitted when the
+# Step-3 novel branch recognizes a PERSON mention whose name is a descriptive
+# epithet ("The Heavy Man in Broadcloth") and DECLINES the culture-bound person
+# namer — the descriptor is kept verbatim as the pool member's name instead of
+# minting a phantom full identity ("Deacon Rutherford Lacy") with fake
+# provenance. Twin of ``npc.creature_preserved`` for the person tier.
+SPAN_NPC_EPITHET_PRESERVED = "npc.epithet_preserved"
+SPAN_ROUTES[SPAN_NPC_EPITHET_PRESERVED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_pool",
+    extract=lambda span: {
+        "field": "npc.epithet_preserved",
+        "op": "epithet_preserved",
+        "name": (span.attributes or {}).get("npc_name", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
+# sq-playtest 2026-06-07 (five_points-2 epithet phantom): emitted when an
+# epithet-shaped person mention coreferences an EXISTING person identity —
+# >=2 shared meaningful tokens against a roster ``Npc`` or pool member's
+# name/role/appearance, unique best — and the guard collapses the
+# re-description onto that identity instead of forking a phantom. Twin of
+# ``npc.creature_reconciled`` for the person tier; stricter threshold because
+# a false person-merge misattributes disposition/relationship ledgers.
+SPAN_NPC_EPITHET_RECONCILED = "npc.epithet_reconciled"
+SPAN_ROUTES[SPAN_NPC_EPITHET_RECONCILED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc.epithet_reconciled",
+        "op": "reconciled",
+        "incoming": (span.attributes or {}).get("incoming", ""),
+        "reconciled_to": (span.attributes or {}).get("reconciled_to", ""),
+        "signal": (span.attributes or {}).get("signal", ""),
+        "target_store": (span.attributes or {}).get("target_store", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # Story 45-21 / 45-52: combat-stats publish onto Npc.core.edge.
 # Fired when an encounter handshake (or other combat-stats emit) writes the
 # dial-derived edge pool onto a matched ``snapshot.npcs`` entry. Renamed from
@@ -618,6 +658,66 @@ def npc_creature_reconciled_span(
     }
     with Span.open(
         SPAN_NPC_CREATURE_RECONCILED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_epithet_preserved_span(
+    *,
+    npc_name: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """sq-playtest 2026-06-07 (epithet phantom): emitted when the Step-3 novel
+    branch recognizes a person mention whose name is a descriptive epithet and
+    DECLINES the culture-bound person namer — the descriptor is preserved
+    verbatim instead of minting a phantom full identity. ``npc_name`` is the
+    preserved epithet; there is deliberately no ``culture`` attribute (twin of
+    ``npc.creature_preserved``)."""
+    attributes: dict[str, Any] = {
+        "npc_name": npc_name,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_EPITHET_PRESERVED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_epithet_reconciled_span(
+    *,
+    incoming: str,
+    reconciled_to: str,
+    signal: str,
+    target_store: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """sq-playtest 2026-06-07 (epithet phantom): emitted when an epithet-shaped
+    person mention coreferences an existing person identity and the guard
+    collapses the re-description onto it instead of forking a phantom.
+    ``incoming`` is the narrator's epithet; ``reconciled_to`` the surviving
+    canonical identity; ``signal`` the lever (``similarity``); ``target_store``
+    ``npcs`` or ``pool`` (twin of ``npc.creature_reconciled``)."""
+    attributes: dict[str, Any] = {
+        "incoming": incoming,
+        "reconciled_to": reconciled_to,
+        "signal": signal,
+        "target_store": target_store,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_EPITHET_RECONCILED,
         attributes,
         tracer_override=_tracer,
     ) as span:

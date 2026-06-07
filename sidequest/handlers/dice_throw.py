@@ -383,6 +383,16 @@ class DiceThrowHandler:
                 "scene_end",
                 turn=snapshot.turn_manager.interaction,
             )
+            # Ping-pong 2026-06-07 ("MP confrontation DESYNC"): stash the
+            # clear for the inline narration re-entry below. The emit seam in
+            # ``_execute_narration_turn`` captures ``prior_live`` after the
+            # narrator runs — too late to see THIS resolution — so without
+            # the stash no ``CONFRONTATION {active: false}`` frame is ever
+            # broadcast and each client is left to its own NARRATION_END
+            # heuristic (which forks per-seat in MP). Take semantics: the
+            # seam consumes it.
+            if encounter is not None:
+                sd.pending_confrontation_clear = encounter.encounter_type
 
         # Persist the resolved outcome so follow-up narrator runs can use it
         # (Rust parity: pending_roll_outcome). Stashed on session_data for

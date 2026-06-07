@@ -321,6 +321,20 @@ class _SessionData:
     # span, and applies both beats. Cleared by the consuming turn.
     pending_opposed_player_d20: int | None = None
     pending_opposed_player_beat_id: str | None = None
+    # Dice-path confrontation clear (ping-pong 2026-06-07 "MP confrontation
+    # DESYNC"). Set by ``DiceThrowHandler`` when ``dispatch_dice_throw``
+    # resolves the encounter mid-turn (hp_depletion / dial threshold /
+    # opponent-reprisal close). The post-narration CONFRONTATION emit seam
+    # captures ``prior_live`` AFTER the narrator runs — by then the dice path
+    # (a separate handler invocation) already flipped ``resolved=True``, so
+    # the live→resolved transition is invisible there and no
+    # ``CONFRONTATION {active: false}`` frame was ever broadcast: every
+    # client fell back to its own NARRATION_END heuristic, which forks
+    # per-seat in MP. Read + cleared (take semantics) by the emit seam,
+    # which broadcasts the deterministic clear to every connected socket.
+    # Holds the resolved encounter's ``encounter_type``; None when no
+    # dice-path resolution is pending.
+    pending_confrontation_clear: str | None = None
     # Dogfight player-throw stash (Task 14). Set by
     # ``_apply_narration_result_to_snapshot`` when a sealed-letter cell yields
     # a player gun solution — the NPC's d20 is server-rolled and held here while

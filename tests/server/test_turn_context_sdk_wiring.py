@@ -232,7 +232,6 @@ async def _run_sdk_and_capture_ctx(
 ) -> ToolContext:
     """Drive ``run_narration_turn`` through the SDK path with a no-tool
     response and return the ``ToolContext`` the production code built."""
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     captured: dict[str, ToolContext] = {}

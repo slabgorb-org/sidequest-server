@@ -19,7 +19,7 @@ that
   STILL sourced from the sidecar parse so images/audio/footnotes/perception
   keep working.
 
-The ClaudeClient sync/streaming path (``_assemble_turn_result``) is
+The ClaudeClient sync path (``_assemble_turn_result``) is
 untouched — it keeps re-applying the sidecar exactly as before, because on
 that path no tool ran during dispatch.
 
@@ -204,7 +204,6 @@ async def _run_sdk_turn(
     confrontation_def: Any = None,
 ) -> NarrationTurnResult:
     """Drive ``run_narration_turn`` through the SDK path with the fixture."""
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     sdk = _make_sdk(prose)
@@ -327,7 +326,7 @@ async def test_sdk_path_populates_tool_calls_ledger(
 
 def test_tool_calls_field_defaults_empty_on_non_sdk_construction() -> None:
     """tool_calls is an SDK-path-only ledger — empty by default so the
-    ClaudeClient sync/streaming paths never carry it.
+    ClaudeClient sync paths never carry it.
     """
     ntr = NarrationTurnResult(narration="x")
     assert ntr.tool_calls == []
@@ -377,7 +376,6 @@ async def test_sdk_tool_calls_ledger_json_is_empty_list_when_no_tools(
     empty JSON list (not absent, not null) so the GM panel can always parse
     it without a missing-key special case.
     """
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     sdk = _Sdk(
@@ -416,7 +414,7 @@ async def test_sdk_tool_calls_ledger_json_is_empty_list_when_no_tools(
 
 
 def test_assemble_turn_result_still_applies_sidecar_on_non_sdk_path() -> None:
-    """``_assemble_turn_result`` (sync/streaming callers) must keep its
+    """``_assemble_turn_result`` (sync callers) must keep its
     exact pre-task behavior: it re-applies the sidecar because no tool ran
     during dispatch on that path. This is the byte-for-byte regression
     guard for the non-SDK seam.

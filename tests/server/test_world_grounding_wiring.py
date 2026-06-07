@@ -289,7 +289,6 @@ async def _run_sdk_and_capture_tool_ctx(
     Mirrors ``test_turn_context_sdk_wiring.py::_run_sdk_and_capture_ctx`` —
     same protocol shape, different tool name. Reused so future grounding
     extensions land here too."""
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     captured: dict[str, ToolContext] = {}

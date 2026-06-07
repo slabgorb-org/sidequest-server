@@ -226,7 +226,6 @@ async def test_env_toggle_drives_cap_hit_on_real_narrator_turn(
     cap reaches ``complete_with_tools`` — so its presence proves the operator
     toggle is wired end-to-end through ``run_narration_turn``, not stranded in a
     parser."""
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv(_ENV, "2")
 
@@ -267,7 +266,6 @@ async def test_no_toggle_means_no_cap_hit_on_real_narrator_turn(
     cap_hit span — the narrator forwards ``iteration_cap=None``, so the soft cap
     stays off and the signal remains meaningful (it only appears when an operator
     opted in)."""
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv(_ENV, raising=False)
 

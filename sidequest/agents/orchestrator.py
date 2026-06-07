@@ -43,8 +43,8 @@ if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
 
 # Importing this package wires the 26 tool adapters onto default_registry at
-# module import time. Required for the SDK path; the streaming/sync ClaudeClient
-# paths do not depend on the registry.
+# module import time. Required for the SDK path; the sync ClaudeClient
+# path does not depend on the registry.
 import sidequest.agents.tools  # noqa: F401  (registration side effect)
 from sidequest.agents.anthropic_cost import cost_band
 from sidequest.agents.claude_client import (
@@ -57,7 +57,6 @@ from sidequest.agents.claude_client import (
 )
 from sidequest.agents.narrator import (
     NarratorAgent,
-    is_streaming_enabled,
     resolve_narrator_iteration_cap,
 )
 from sidequest.agents.narrator_guardrails import (
@@ -553,7 +552,7 @@ class NarrationTurnResult:
     # narrator can no longer "wing it" — a state change with no ledger entry
     # is a lie). Each entry is ``{"id", "name", "arguments"}`` mirroring the
     # ``ToolUseBlock`` the SDK emitted. EMPTY on every non-SDK path
-    # (ClaudeClient sync/streaming) — no tool loop runs there, so there is
+    # (sync ClaudeClient) — no tool loop runs there, so there is
     # nothing to ledger.
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
@@ -1560,8 +1559,8 @@ class Orchestrator:
         Args:
             client: LlmClient or ToolingLlmClient for LLM invocations.
                     If None, creates a default ClaudeClient. When the client
-                    is a ToolingLlmClient (AnthropicSdkClient) and streaming
-                    is disabled, ``run_narration_turn`` routes through
+                    is a ToolingLlmClient (AnthropicSdkClient),
+                    ``run_narration_turn`` routes through
                     ``complete_with_tools`` with the registered tool catalog.
             soul_data: Optional SoulData for SOUL.md principle injection.
                        If None, SOUL.md is loaded from CWD (if present).
@@ -2914,20 +2913,17 @@ class Orchestrator:
         action: str,
         context: TurnContext,
         *,
-        room: object | None = None,
         extra_directive: str | None = None,
     ) -> NarrationTurnResult:
         """Process a player action through the Phase 1 narration pipeline.
 
-        Routes to the streaming path when SIDEQUEST_NARRATOR_STREAMING=1,
-        otherwise delegates to the synchronous path (default, flag-off behavior
-        is byte-identical to prior implementation).
+        Routes to the SDK tool-loop path when the client is tooling-capable,
+        otherwise delegates to the synchronous path. Narration is delivered
+        complete-only — narrator-text streaming was removed (2026-06-07).
 
         Args:
             action: Raw player input text.
             context: Turn context (world state, genre prompts, etc.).
-            room: Optional SessionRoom for streaming delta fan-out. Only
-                  consumed by the streaming path; the sync path ignores it.
             extra_directive: Per-call reprompt directive injected by the
                   reprompt loop (spec 2026-05-20 step 7). When set, the
                   directive is stored on context so build_narrator_prompt
@@ -2948,7 +2944,7 @@ class Orchestrator:
         # (playtest 2026-06-07, operator-directed): narration is delivered
         # complete-only — no partial-narration chunks ride the WebSocket.
         if isinstance(self._client, ToolingLlmClient):
-            return await self._run_narration_turn_sdk(action, context, room=room)
+            return await self._run_narration_turn_sdk(action, context)
         return await self._run_narration_turn_synchronous(action, context)
 
     async def _invoke_with_retry_once(
@@ -2963,12 +2959,11 @@ class Orchestrator:
         Returns (response, elapsed_ms). On unrecoverable failure returns
         (None, elapsed_ms) — caller renders the degraded in-fiction stall.
         """
-        # Same narrowing rationale as _run_narration_turn_streaming —
         # _invoke_with_retry_once is only reached on the synchronous
         # LlmClient path, never the SDK path. The assert pins that
         # invariant for pyright and fails loudly if it's ever violated.
-        # See the streaming-path comment for why we assert "not Tooling"
-        # instead of "is LlmClient" (AsyncMock / test doubles).
+        # We assert "not Tooling" instead of "is LlmClient" because test
+        # doubles (AsyncMock) don't satisfy an isinstance LlmClient check.
         assert not isinstance(self._client, ToolingLlmClient), (
             f"synchronous path must not see a ToolingLlmClient, got {type(self._client).__name__}"
         )
@@ -3120,7 +3115,7 @@ class Orchestrator:
         )
 
         # Non-SDK-only observability — these log lines belong to the
-        # sync/streaming sidecar path (the SDK path's mechanics are
+        # sync sidecar path (the SDK path's mechanics are
         # tool-driven, so the tools' own spans carry the equivalent).
         if extraction["confrontation"]:
             logger.info(
@@ -3189,7 +3184,7 @@ class Orchestrator:
         shared helper provably cannot emit a tool-owned key), which is what
         makes the SDK-path fail-loud invariant a backstop rather than the
         only guard. ``_assemble_turn_result`` adds the tool-owned keys back
-        (it is the single applier on the sync/streaming path);
+        (it is the single applier on the sync path);
         ``_assemble_turn_result_sdk`` adds only ``tool_calls``.
         """
         prose = extraction["prose"]
@@ -3285,7 +3280,7 @@ class Orchestrator:
         """SDK-path NarrationTurnResult assembly — the hybrid split (Task E1.5-B).
 
         Distinct from :meth:`_assemble_turn_result` (the ClaudeClient
-        sync/streaming assembler, which stays byte-for-byte unchanged for
+        sync assembler, which stays byte-for-byte unchanged for
         its callers). On the SDK path the 26 WRITE tools already mutated AND
         persisted (``ctx.repository.save``) game state during the tool-dispatch
         loop, so re-applying the narrator's sidecar would double-apply.
@@ -3459,8 +3454,6 @@ class Orchestrator:
         self,
         action: str,
         context: TurnContext,
-        *,
-        room: object | None = None,
     ) -> NarrationTurnResult:
         """SDK-backed narration path (Phase D Task 1).
 
@@ -3469,15 +3462,6 @@ class Orchestrator:
         ``complete_with_tools`` with the full 26-tool registry. The call is
         wrapped in a ``narration.turn`` cost-rollup span so the GM panel sees
         token totals, tool-call count, and model choice for the turn.
-
-        Story 71-23 (solo narration streaming): when ``room`` is provided, an
-        ``on_text_delta`` sink fans each streamed prose chunk out to the room as
-        an ephemeral ``NarrationDelta`` via ``broadcast_delta`` (stamped with
-        ``turn_id = str(turn_number)`` + a monotonic seq), so the player sees
-        prose fill in token-by-token before the canonical narration lands. The
-        ``narration.turn`` span carries ``delta_count`` so the GM panel can
-        confirm streaming engaged. ``room=None`` (no live session) skips fan-out
-        entirely — byte-identical to the pre-71-23 non-streaming path.
 
         Sidecar parsing (ADR-039) still runs against the resulting prose via
         ``_assemble_turn_result_sdk`` — but the hybrid split (Task E1.5-B)
@@ -3490,7 +3474,7 @@ class Orchestrator:
         # dependencies stay co-located with the method that uses them,
         # which makes Phase D Tasks 4 (sidecar retirement) and 6 (three-zone
         # cache split) easier to refactor without disturbing module-level
-        # imports used by the streaming/sync paths.
+        # imports used by the sync path.
         from sidequest.agents.model_routing import CallType, resolve_model
         from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
         from sidequest.agents.tool_registry import ToolContext, default_registry

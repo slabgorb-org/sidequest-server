@@ -256,7 +256,6 @@ class AnthropicSdkClient:
         max_iterations: int = 8,
         iteration_cap: int | None = None,
         max_tokens: int = 4096,
-        on_text_delta: Callable[[str], Awaitable[None] | None] | None = None,
         session_id: str | None = None,
         caller: str = "narrator",
     ) -> ToolingResult:
@@ -338,45 +337,14 @@ class AnthropicSdkClient:
                 is_continuation=len(running_messages) > initial_message_count,
             )
             with llm_request_span(model=model, iteration=iteration) as span:
-                if on_text_delta is not None:
-                    # Story 71-23: solo narration streaming. When a delta sink
-                    # is wired, route through ``messages.stream`` so prose ships
-                    # token-by-token (each ``text_delta`` event) instead of one
-                    # whole block at end-of-iteration. The completed message
-                    # (content + usage + stop_reason + model) comes off
-                    # ``get_final_message()`` so all downstream cost/tool-loop
-                    # logic below is unchanged. The sink may be sync or async
-                    # (the orchestrator's sink awaits ``broadcast_delta``).
-                    async with self._sdk.messages.stream(
-                        model=model,
-                        system=sdk_system,
-                        messages=payload_messages,
-                        tools=sdk_tools,
-                        max_tokens=max_tokens,
-                        extra_headers=extra_headers,
-                    ) as stream:
-                        async for event in stream:
-                            if getattr(event, "type", None) != "content_block_delta":
-                                continue
-                            delta = getattr(event, "delta", None)
-                            if delta is None or getattr(delta, "type", None) != "text_delta":
-                                continue
-                            piece = getattr(delta, "text", "")
-                            if not piece:
-                                continue
-                            maybe = on_text_delta(piece)
-                            if inspect.isawaitable(maybe):
-                                await maybe
-                        response = await stream.get_final_message()
-                else:
-                    response = await self._sdk.messages.create(
-                        model=model,
-                        system=sdk_system,
-                        messages=payload_messages,
-                        tools=sdk_tools,
-                        max_tokens=max_tokens,
-                        extra_headers=extra_headers,
-                    )
+                response = await self._sdk.messages.create(
+                    model=model,
+                    system=sdk_system,
+                    messages=payload_messages,
+                    tools=sdk_tools,
+                    max_tokens=max_tokens,
+                    extra_headers=extra_headers,
+                )
                 usage = response.usage
                 input_tokens = int(getattr(usage, "input_tokens", 0))
                 output_tokens = int(getattr(usage, "output_tokens", 0))
@@ -583,9 +551,6 @@ class AnthropicSdkClient:
 
             text_chunks, tool_use_blocks = self._split_content(response.content)
             text = "".join(text_chunks)
-            # Story 71-23: deltas are emitted live during ``messages.stream``
-            # above when ``on_text_delta`` is wired — do NOT re-fire the whole
-            # block here (that would double-emit the iteration's prose).
             last_text = text or last_text
 
             if response.stop_reason != "tool_use":

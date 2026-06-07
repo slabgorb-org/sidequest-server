@@ -283,42 +283,6 @@ class ScrapbookEntryPayload(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
-# NarrationDeltaPayload / NarrationDelta — ephemeral streaming message
-# ---------------------------------------------------------------------------
-
-
-class NarrationDeltaPayload(ProtocolBase):
-    """Ephemeral prose-delta payload — broadcast to all sockets, NOT event-sourced.
-
-    Streamed during a single narrator turn, identified by turn_id. Concatenating
-    all chunks for a turn_id in seq order yields the prose-only portion of the
-    canonical narration text. The PART-2 game_patch fence content is excluded
-    from deltas — only PART-1 prose ships live.
-    """
-
-    turn_id: str
-    chunk: str
-    seq: int
-
-
-class NarrationDelta(ProtocolBase):
-    """Streaming narration delta — broadcast to all sockets, NOT event-sourced.
-
-    Companion message type to canonical ``narration`` events. Delivered live as
-    the narrator generates prose, then superseded by the canonical narration
-    event at end-of-stream (which carries the authoritative full text plus
-    per-recipient perception filtering).
-
-    Uses ``kind`` (not ``type``) and carries no ``player_id`` — this message is
-    intentionally outside the ``GameMessage`` discriminated union and does NOT
-    go through ``emit_event()`` or the EventLog.
-    """
-
-    kind: Literal["narration.delta"] = "narration.delta"
-    payload: NarrationDeltaPayload
-
-
-# ---------------------------------------------------------------------------
 # NarrationEndPayload
 # ---------------------------------------------------------------------------
 

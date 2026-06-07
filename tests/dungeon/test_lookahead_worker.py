@@ -274,7 +274,6 @@ def _yielding_concurrency_probe_client(probe: dict[str, int]) -> Any:
             model: str,
             max_iterations: int = 8,
             max_tokens: int = 4096,
-            on_text_delta: Any = None,
             # Absorb forward-added client kwargs (Story 82-9: caller=) so this
             # probe double keeps tracking the real complete_with_tools signature.
             **_kwargs: Any,

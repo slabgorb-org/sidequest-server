@@ -129,7 +129,6 @@ async def test_narrator_turn_tags_tool_loop_caller_narrator(
     """Driving the REAL ``run_narration_turn`` (the production narrator call
     site) must tag the ``narrator.tool_loop`` summary span ``caller="narrator"``
     — the value the GM panel filters solo-turn p95 to."""
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     sdk = _Sdk(responses=[_text_resp()])

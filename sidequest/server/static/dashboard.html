@@ -111,7 +111,6 @@
   <div class="tab" onclick="switchTab(4)">⑤ Console <span class="badge" id="tab4-badge">0</span></div>
   <div class="tab" onclick="switchTab(5)">⑥ Prompt <span class="badge" id="tab5-badge">0</span></div>
   <div class="tab" onclick="switchTab(6)">⑦ Lore <span class="badge" id="tab6-badge">0</span></div>
-  <div class="tab" onclick="switchTab(7)">⑧ Streaming <span class="badge" id="tab7-badge">0</span></div>
 </div>
 
 <!-- Tab 0: Timeline / Flame Chart -->
@@ -216,21 +215,6 @@
   </div>
 </div>
 
-<!-- Tab 7: Streaming Pipeline -->
-<div class="tab-content" id="tc7">
-  <div class="stats-row" id="streaming-summary"></div>
-  <div class="grid-2">
-    <div class="card">
-      <div class="card-title">TTFT Histogram (Time-to-First-Token, seconds)</div>
-      <div class="chart-container" id="ttft-hist-chart"></div>
-    </div>
-    <div class="card">
-      <div class="card-title">JSON Parse-Status Distribution</div>
-      <div class="chart-container" id="parse-status-chart"></div>
-    </div>
-  </div>
-</div>
-
 <script>
 // ── State ──
 const S = {
@@ -238,9 +222,6 @@ const S = {
   selectedTurn: null, paused: false, activeTab: 0, promptEvents: [], loreEvents: [],
   npcSort: { col: 'name', asc: true }, expandedNpcs: {}, expandedItems: {},
   _placeholder: null,
-  // Streaming pipeline spans collected from agent_span_close events
-  streamFirstTokenSpans: [],  // narrator.stream.first_token — carries ttft_seconds
-  streamCompleteSpans: [],    // narrator.stream.complete — carries json_parse_status
   // narration.turn cost-rollup spans, keyed by turn_number. Populated
   // from agent_span_close events; consumed by the Turn Details panel
   // to surface per-turn cache hit-rate + $ spend (Task B2).
@@ -281,7 +262,6 @@ function switchTab(i) {
   if (i===5) renderPrompt();
   if (i===6) renderLore();
   if (i===4) renderConsole();
-  if (i===7) renderStreaming();
 }
 function togglePause() { S.paused = !S.paused; }
 function clearAll() { S.turns.length=0; S.allEvents.length=0; Object.keys(S.componentMap).forEach(k=>delete S.componentMap[k]); Object.keys(S.narrationTurnByNumber).forEach(k=>delete S.narrationTurnByNumber[k]); S.selectedTurn=null; updateAll(); }
@@ -344,18 +324,9 @@ function dispatch(ev) {
     sel.appendChild(opt);
     if (S.activeTab === 6) renderLore();
   }
-  // Collect streaming pipeline spans for the Streaming tab
   if (ev.event_type === 'agent_span_close') {
     const spanName = ev.fields && ev.fields.name;
-    if (spanName === 'narrator.stream.first_token') {
-      S.streamFirstTokenSpans.push(ev.fields);
-      document.getElementById('tab7-badge').textContent = S.streamFirstTokenSpans.length;
-      if (S.activeTab === 7) renderStreaming();
-    } else if (spanName === 'narrator.stream.complete') {
-      S.streamCompleteSpans.push(ev.fields);
-      document.getElementById('tab7-badge').textContent = S.streamFirstTokenSpans.length;
-      if (S.activeTab === 7) renderStreaming();
-    } else if (spanName === 'narration.turn') {
+    if (spanName === 'narration.turn') {
       // Cost-rollup attributes arrive as flat dotted keys via the
       // WatcherSpanProcessor (see server/watcher.py). Key by the
       // seeded `turn_number` attribute so Turn Details can join on
@@ -1025,82 +996,7 @@ function renderLore() {
   document.getElementById('lore-fragments').style.display = 'block';
 }
 
-// ── Tab 7: Streaming Pipeline ──
-function renderStreaming() {
-  // Summary stats
-  const totalFirst = S.streamFirstTokenSpans.length;
-  const totalComplete = S.streamCompleteSpans.length;
-  const ttfts = S.streamFirstTokenSpans.map(s => s.ttft_seconds).filter(v => typeof v === 'number');
-  const sorted = [...ttfts].sort((a,b) => a-b);
-  const p50 = sorted.length ? sorted[Math.floor(sorted.length*0.5)].toFixed(2)+'s' : '—';
-  const p95 = sorted.length ? sorted[Math.min(Math.floor(sorted.length*0.95), sorted.length-1)].toFixed(2)+'s' : '—';
-  document.getElementById('streaming-summary').innerHTML = [
-    ['Streams', totalFirst],
-    ['Completes', totalComplete],
-    ['TTFT p50', p50],
-    ['TTFT p95', p95],
-  ].map(([l,v]) => `<div class="stat-card"><div class="stat-val">${v}</div><div class="stat-lbl">${l}</div></div>`).join('');
-
-  renderTtftHistogram();
-  renderParseStatusPie();
-}
-
-function renderTtftHistogram() {
-  const el = document.getElementById('ttft-hist-chart');
-  el.innerHTML = '';
-  const ttfts = S.streamFirstTokenSpans.map(s => s.ttft_seconds).filter(v => typeof v === 'number');
-  if (!ttfts.length) {
-    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:12px">No data — waiting for narrator.stream.first_token spans.</div>';
-    return;
-  }
-  const w = el.clientWidth || 400, h = 180, m = {t:10,r:20,b:30,l:40};
-  const svg = d3.select(el).append('svg').attr('width',w).attr('height',h);
-  const x = d3.scaleLinear().domain([0, d3.max(ttfts)*1.1]).range([m.l, w-m.r]);
-  const bins = d3.bin().domain(x.domain()).thresholds(x.ticks(12))(ttfts);
-  const y = d3.scaleLinear().domain([0, d3.max(bins, d=>d.length)]).range([h-m.b, m.t]);
-  svg.append('g').attr('transform',`translate(0,${h-m.b})`).call(d3.axisBottom(x).ticks(6).tickFormat(d=>d+'s')).attr('class','axis');
-  svg.append('g').attr('transform',`translate(${m.l},0)`).call(d3.axisLeft(y).ticks(4)).attr('class','axis');
-  svg.selectAll('.bar').data(bins).join('rect').attr('class','bar')
-    .attr('x', d=>x(d.x0)+1).attr('y', d=>y(d.length))
-    .attr('width', d=>Math.max(0,x(d.x1)-x(d.x0)-2))
-    .attr('height', d=>y(0)-y(d.length))
-    .attr('fill','#4fc3f7');
-}
-
-function renderParseStatusPie() {
-  const el = document.getElementById('parse-status-chart');
-  el.innerHTML = '';
-  const counts = {};
-  S.streamCompleteSpans.forEach(s => {
-    const status = s.json_parse_status || 'unknown';
-    counts[status] = (counts[status]||0) + 1;
-  });
-  const data = Object.entries(counts).map(([k,v])=>({label:k, value:v}));
-  if (!data.length) {
-    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:12px">No data — waiting for narrator.stream.complete spans.</div>';
-    return;
-  }
-  const w = 260, h = 200, r = 70;
-  const svg = d3.select(el).append('svg').attr('width',w).attr('height',h);
-  const g = svg.append('g').attr('transform',`translate(${w/2},${h/2})`);
-  // Colors: complete=green, no_fence=amber, others=red/purple
-  const STATUS_COLORS = { complete:'#4caf50', no_fence:'#ff9800' };
-  const fallbackColors = ['#f44336','#bb86fc','#4fc3f7','#f06292','#03dac6'];
-  let fallbackIdx = 0;
-  const colorFor = (label) => STATUS_COLORS[label] || fallbackColors[fallbackIdx++ % fallbackColors.length];
-  const pie = d3.pie().value(d=>d.value);
-  const arc = d3.arc().innerRadius(r*0.45).outerRadius(r);
-  const arcs = pie(data);
-  g.selectAll('path').data(arcs).join('path')
-    .attr('d',arc)
-    .attr('fill', d=>colorFor(d.data.label));
-  g.selectAll('text').data(arcs).join('text')
-    .attr('transform',d=>`translate(${arc.centroid(d)})`)
-    .attr('text-anchor','middle').attr('font-size','10px')
-    .text(d=>d.data.label+' ('+d.data.value+')');
-}
-
-function updateAll() { updateHeader(); renderTurnList(); if(S.activeTab===2)renderHealth(); if(S.activeTab===3)renderTiming(); if(S.activeTab===4)renderConsole(); if(S.activeTab===5)renderPrompt(); if(S.activeTab===6)renderLore(); if(S.activeTab===7)renderStreaming(); }
+function updateAll() { updateHeader(); renderTurnList(); if(S.activeTab===2)renderHealth(); if(S.activeTab===3)renderTiming(); if(S.activeTab===4)renderConsole(); if(S.activeTab===5)renderPrompt(); if(S.activeTab===6)renderLore(); }
 
 // ── WebSocket ──
 function connect() {

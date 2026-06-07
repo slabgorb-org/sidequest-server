@@ -56,7 +56,6 @@ __all__ = [
     "NARRATOR_POV_RULES",
     "NarratorAgent",
     "narrator_output_format_text",
-    "is_streaming_enabled",
     "_render_time_skip_context",
 ]
 
@@ -68,20 +67,6 @@ def narrator_output_format_text() -> str:
     Port of narrator_output_format_text() in narrator.rs.
     """
     return NARRATOR_OUTPUT_ONLY
-
-
-# ---------------------------------------------------------------------------
-# Feature flag
-# ---------------------------------------------------------------------------
-
-
-def is_streaming_enabled() -> bool:
-    """True when the narrator should use the streaming claude_client path.
-
-    Gated by SIDEQUEST_NARRATOR_STREAMING env var. Default off to preserve
-    existing synchronous behavior until the full streaming pipeline ships.
-    """
-    return os.environ.get("SIDEQUEST_NARRATOR_STREAMING", "0") == "1"
 
 
 @functools.cache

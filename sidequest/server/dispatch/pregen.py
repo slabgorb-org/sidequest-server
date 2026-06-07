@@ -34,6 +34,7 @@ from sidequest.cli.encountergen.encountergen import main as encountergen_main
 from sidequest.cli.namegen.namegen import main as namegen_main
 from sidequest.genre import load_genre_pack
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
+from sidequest.genre.models.character import spawnable_archetypes
 from sidequest.telemetry.spans.pregen import SPAN_PREGEN_SEED_MANUAL
 from sidequest.telemetry.spans.span import Span
 
@@ -241,6 +242,19 @@ def seed_manual(
         cultures = [c.name for c in effective]
         constraints = pack.archetype_constraints
 
+    # Roster-only worlds (playtest 2026-06-07, blackthorn_moor): a world
+    # whose effective archetype pool contains ONLY ``named_individual``
+    # templates (a murder-mystery cast of specific people) has nothing
+    # namegen may random-mint — every invocation would fail with
+    # "no spawnable archetypes" (exit 1), once per NPC slot (9× WARN spam).
+    # Detect the empty mint pool ONCE here and skip namegen cleanly,
+    # mirroring the ``pregen.encounters_skipped`` gate below. The world
+    # survives on its authored roster NPCs by design.
+    no_spawnable_archetypes = False
+    if pack is not None:
+        effective_archetypes, _archetypes_source = pack.effective_archetypes(world)
+        no_spawnable_archetypes = not spawnable_archetypes(effective_archetypes)
+
     # ── NPCs: 3 per culture (Rust parity) ─────────────────────
     npc_count = len(cultures) * NPCS_PER_CULTURE if cultures else DEFAULT_NPC_FALLBACK_COUNT
     pairings: list[tuple[str, str, str]] | None = (
@@ -248,7 +262,13 @@ def seed_manual(
     )
     world_opt = world if world else None
 
-    if not cultures:
+    if no_spawnable_archetypes:
+        logger.info(
+            "pregen.namegen_skipped (genre=%s, world=%s, reason=no_spawnable_archetypes)",
+            genre,
+            world,
+        )
+    elif not cultures:
         for i in range(npc_count):
             axes = pairings[i] if pairings is not None and i < len(pairings) else None
             data = _generate_npc(
@@ -363,6 +383,10 @@ def seed_manual(
             "npcs_after": npcs_after,
             "encounters_after": len(manual.encounters),
             "combat_encounters": combat_encounters,
+            # Roster-only worlds: namegen minting was skipped because the
+            # effective archetype pool holds only named_individual templates
+            # (GM-panel proof the skip gate fired instead of 9× WARN spam).
+            "namegen_skipped": no_spawnable_archetypes,
         },
     ):
         pass

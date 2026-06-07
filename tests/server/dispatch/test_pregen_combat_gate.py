@@ -31,6 +31,13 @@ def _stub_pack(*, combat_encounters: bool) -> Any:
         archetype_constraints=None,
         rules=SimpleNamespace(combat_encounters=combat_encounters),
         effective_cultures=lambda _world: ([], "genre"),
+        # One spawnable archetype keeps the namegen mint loop engaged —
+        # seed_manual skips namegen entirely when the spawnable pool is
+        # empty (playtest 2026-06-07, blackthorn_moor roster-only gate).
+        effective_archetypes=lambda _world: (
+            [SimpleNamespace(name="Guest", named_individual=False)],
+            "genre",
+        ),
     )
 
 

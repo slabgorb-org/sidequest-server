@@ -277,7 +277,15 @@ def _resolve_wwn_cast_for_beat(
         )
         return
 
-    catalog = pack.wwn_spell_catalog
+    # Genre/world boundary correction (epic 94, supersedes ADR-120
+    # "mechanics-in-genre"): the spell catalog is a world-tier CAST/CATALOG
+    # surface. Resolve it world-first from the bound world, falling through to the
+    # genre-tier catalog only when the world ships none. The resolver emits a
+    # state_transition (op=resolved, tier=world|genre) span so the GM panel can
+    # prove the cast read the catalog from the world tier, not improvised it.
+    from sidequest.server.dispatch.wwn_spell_catalog_resolve import resolve_wwn_spell_catalog
+
+    catalog = resolve_wwn_spell_catalog(pack, snapshot.world_slug)
     if catalog is None:
         _watcher_publish(
             "wwn.cast_spell_no_catalog",

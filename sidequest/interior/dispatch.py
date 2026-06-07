@@ -47,15 +47,18 @@ def _find_chassis_instance(search_paths: list[Path], instance_id: str):
                     exc,
                 )
                 continue
-            if pack.chassis_classes is None:
-                continue
+            # Epic 94: chassis_classes is a world-tier surface (genre = rulebook
+            # only). Read it world-first off each World; the old genre-tier
+            # pack.chassis_classes is None for migrated packs.
             for world_slug, world in pack.worlds.items():
+                if world.chassis_classes is None:
+                    continue
                 for inst_cfg in world.chassis_instances:
                     if inst_cfg.id == instance_id:
                         chassis_class = next(
                             (
                                 c
-                                for c in pack.chassis_classes.classes
+                                for c in world.chassis_classes.classes
                                 if c.id == inst_cfg.chassis_class_id
                             ),
                             None,

@@ -838,9 +838,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     seed_session_id = sd.game_slug
                 else:
                     seed_session_id = f"{sd.genre_slug}::{sd.world_slug}::{sd.player_id}"
+                # Epic 94: seed_tropes is a world-tier CAST/CATALOG surface
+                # (genre = rulebook only). Resolve the bound World and pass it as
+                # the seed source — both ensure_initial_draw and draw_engaged_seed
+                # read ``.seed_tropes`` via getattr, so the World object is a
+                # drop-in. The migrated pack's genre-tier seed_tropes is [].
+                seed_source = sd.genre_pack.worlds.get(sd.world_slug) or sd.genre_pack
                 ensure_initial_draw(
                     snapshot,
-                    sd.genre_pack,
+                    seed_source,
                     session_id=seed_session_id,
                     now_turn=snapshot.turn_manager.interaction,
                 )
@@ -1279,17 +1285,21 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     # Story 22-5: engagement-triggered seed injection. Draw a
                     # fresh seed when the player engaged a subsystem and fewer
                     # than 2 seeds are active. Same session_id for reproducibility.
+                    # Epic 94: read the seed deck world-first (genre = rulebook
+                    # only). The bound World carries seed_tropes; the migrated
+                    # pack's genre-tier deck is [].
+                    _seed_source = sd.genre_pack.worlds.get(sd.world_slug) or sd.genre_pack
                     if (
                         _dispatch_package is not None
                         and any(pd.dispatch for pd in _dispatch_package.per_player)
                         and len(snapshot.active_seeds) < 2
-                        and getattr(sd.genre_pack, "seed_tropes", None)
+                        and getattr(_seed_source, "seed_tropes", None)
                     ):
                         from sidequest.game.seed_tick import draw_engaged_seed  # noqa: PLC0415
 
                         draw_engaged_seed(
                             snapshot,
-                            sd.genre_pack,
+                            _seed_source,
                             session_id=seed_session_id,
                             engagement_signal="dispatch",
                             now_turn=snapshot.turn_manager.interaction,
@@ -1311,9 +1321,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         DramaThresholds,
                     )
 
+                    # Epic 94: lull escalation draws from the seed deck — read it
+                    # world-first (genre = rulebook only). drama_thresholds stays
+                    # genre-tier (it's a rulebook dial, not cast/catalog).
                     apply_lull_escalation(
                         snapshot,
-                        sd.genre_pack,
+                        sd.genre_pack.worlds.get(sd.world_slug) or sd.genre_pack,
                         tracker=sd.tension_tracker,
                         thresholds=(sd.genre_pack.drama_thresholds or DramaThresholds()),
                         session_id=seed_session_id,

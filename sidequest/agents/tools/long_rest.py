@@ -94,7 +94,17 @@ async def long_rest(args: LongRestArgs, ctx: ToolContext) -> ToolResult:
 
     # Validate reprepare catalog availability before mutating anything.
     if args.reprepare:
-        catalog = getattr(pack, "wwn_spell_catalog", None)
+        # Genre/world boundary correction (epic 94, supersedes ADR-120
+        # "mechanics-in-genre"): the spell catalog is a world-tier CAST/CATALOG
+        # surface. Resolve it world-first from the bound world, falling through to
+        # the genre-tier catalog only when the world ships none. Emits a
+        # state_transition resolve span so the GM panel can prove the reprepare
+        # read the catalog from the world tier.
+        from sidequest.server.dispatch.wwn_spell_catalog_resolve import (
+            resolve_wwn_spell_catalog,
+        )
+
+        catalog = resolve_wwn_spell_catalog(pack, session.meta.world_slug)
         if catalog is None:
             raise ValueError(
                 "long_rest reprepare requires pack.wwn_spell_catalog; "

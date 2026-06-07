@@ -959,6 +959,104 @@ def _emit_world_lore_loaded(*, world_slug: str, source: Path, fragment_count: in
     )
 
 
+def _emit_world_chassis_classes_loaded(*, world_slug: str, source: Path, class_count: int) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier chassis load.
+
+    Epic 94 (genre/world boundary correction): chassis classes are a world-tier
+    CAST/CATALOG surface, not a genre mechanic. The load fires a span — mirroring
+    the ``world_items`` / ``world_lore`` spans — so the GM panel can prove the
+    rig cast was read from the world tier rather than improvised from a removed
+    genre default.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_chassis_classes",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "class_count": class_count,
+            "source": str(source),
+        },
+        component="genre",
+    )
+
+
+def _emit_world_seed_tropes_loaded(*, world_slug: str, source: Path, seed_count: int) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier seed-deck load.
+
+    Epic 94 (genre/world boundary correction): the seed-trope deck is world-tier
+    CAST/CATALOG (the seeds a world plants), not a genre mechanic. The load fires
+    a span so the GM panel can prove the deck was read from the world tier.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_seed_tropes",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "seed_count": seed_count,
+            "source": str(source),
+        },
+        component="genre",
+    )
+
+
+def _emit_world_classes_loaded(*, world_slug: str, source: Path, class_count: int) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier class load.
+
+    Epic 94 (genre/world boundary correction): a world's classes/callings are a
+    world-tier CAST/CATALOG surface — the roster of playable archetypes a world
+    ships (C&C kits, Victoria callings) — not a genre mechanic. The genre tier is
+    the rulebook only. The load fires a span (mirroring the chassis_classes /
+    seed_tropes spans) so the GM panel can prove the class roster the chargen
+    pipeline picked up was read from the world tier, not improvised from a
+    removed genre default.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_classes",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "class_count": class_count,
+            "source": str(source),
+        },
+        component="genre",
+    )
+
+
+def _emit_world_spell_catalog_loaded(*, world_slug: str, source: Path, spell_count: int) -> None:
+    """Emit a ``state_transition`` watcher event for a world-tier spell-catalog load.
+
+    Epic 94 (genre/world boundary correction, supersedes ADR-120
+    "mechanics-in-genre"): a world's WWN spell catalog is a world-tier
+    CAST/CATALOG surface — the catalog of magic a world ships — not a genre
+    mechanic. The genre tier is the rulebook only. The load fires a span
+    (mirroring the world_classes / world_seed_tropes spans) so the GM panel can
+    prove the spell catalog the cast pipeline picked up was read from the world
+    tier, not improvised from a removed genre default.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "world_spell_catalog",
+            "op": "loaded",
+            "world_slug": world_slug,
+            "spell_count": spell_count,
+            "source": str(source),
+        },
+        component="genre",
+    )
+
+
 def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
@@ -1246,6 +1344,99 @@ def _load_single_world(
             world_slug=world_path.name,
         )
 
+    # === World-tier chassis_classes.yaml — OPTIONAL (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # chassis classes are a world-tier CAST/CATALOG surface — the cast of rigs a
+    # world ships — not a genre mechanic. The genre tier is the rulebook only.
+    # Worlds that don't use the rig framework omit the file → None (distinguishes
+    # "world has no rigs" from "empty config"; no silent fallback to a genre
+    # default). Station cross-validation runs at load (same as the old genre-tier
+    # path) so a malformed chassis fails loud, world-scoped.
+    chassis_classes: ChassisClassesConfig | None = _load_yaml_optional(
+        world_path / "chassis_classes.yaml", ChassisClassesConfig
+    )
+    if chassis_classes is not None:
+        from sidequest.interior.loader import validate_chassis_stations
+
+        for cc in chassis_classes.classes:
+            validate_chassis_stations(cc)
+        _emit_world_chassis_classes_loaded(
+            world_slug=world_path.name,
+            source=world_path / "chassis_classes.yaml",
+            class_count=len(chassis_classes.classes),
+        )
+
+    # === World-tier seed_tropes.yaml — OPTIONAL (epic 94) ===
+    # Genre/world boundary correction: the seed-trope deck is world-tier CAST/
+    # CATALOG (the seeds a world plants), not a genre mechanic. Absent file →
+    # empty list (no silent fallback to a shared default deck — per "No Silent
+    # Fallbacks"; missing file is fine, the field reflects reality).
+    seed_tropes_raw = _load_yaml_raw_optional(world_path / "seed_tropes.yaml")
+    world_seed_tropes: list[SeedTrope] = (
+        [SeedTrope.model_validate(s) for s in seed_tropes_raw]
+        if isinstance(seed_tropes_raw, list)
+        else []
+    )
+    if world_seed_tropes:
+        _emit_world_seed_tropes_loaded(
+            world_slug=world_path.name,
+            source=world_path / "seed_tropes.yaml",
+            seed_count=len(world_seed_tropes),
+        )
+
+    # === World-tier classes.yaml — OPTIONAL (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # a world's classes/callings are a world-tier CAST/CATALOG surface (C&C kits,
+    # Victoria callings), not a genre mechanic — the genre tier is the rulebook
+    # only. Absent file → empty list (a world may be axis-archetype-only). A
+    # malformed file still fails loud, world-scoped (no silent fallback). The
+    # genre-tier ``classes_list`` remains the shared default for packs that have
+    # not migrated classes down.
+    world_classes_path = world_path / "classes.yaml"
+    world_classes: list[ClassDef] = []
+    if world_classes_path.exists():
+        raw_world_classes = _load_yaml_raw_optional(world_classes_path)
+        if raw_world_classes is not None and not isinstance(raw_world_classes, list):
+            raise GenreLoadError(
+                path=world_classes_path,
+                detail="expected a list of class definitions",
+            )
+        world_classes = [
+            ClassDef.model_validate(item)
+            for item in (raw_world_classes if isinstance(raw_world_classes, list) else [])
+        ]
+    if world_classes:
+        _emit_world_classes_loaded(
+            world_slug=world_path.name,
+            source=world_classes_path,
+            class_count=len(world_classes),
+        )
+
+    # === World-tier spells_wwn.yaml — OPTIONAL (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # a world's WWN spell catalog is a world-tier CAST/CATALOG surface — the
+    # catalog of magic a world ships — NOT a genre mechanic. The genre tier is
+    # the rulebook only (resolution rules + the WWN magic block on ``rules.wwn``).
+    # Absent file → None (a valid choice for a pack that keeps a shared catalog at
+    # the genre tier). A malformed file fails loud, world-scoped (no silent
+    # fallback). The genre-tier catalog remains the shared default; the
+    # caster-without-catalog and starting_prepared fail-loud invariants are
+    # enforced at pack level where the ruleset and class roster are both in hand.
+    world_spell_catalog_path = world_path / "spells_wwn.yaml"
+    world_spell_catalog: WwnSpellCatalog | None = None
+    if world_spell_catalog_path.exists():
+        from sidequest.genre.models.wwn_spell import load_wwn_spell_catalog as _load_catalog
+
+        try:
+            world_spell_catalog = _load_catalog(world_spell_catalog_path)
+        except Exception as exc:
+            raise GenreLoadError(path=world_spell_catalog_path, detail=str(exc)) from exc
+        _emit_world_spell_catalog_loaded(
+            world_slug=world_path.name,
+            source=world_spell_catalog_path,
+            spell_count=len(world_spell_catalog.spells),
+        )
+
     return World(
         config=config,
         lore=lore,
@@ -1264,7 +1455,11 @@ def _load_single_world(
         openings=openings,
         authored_npcs=authored_npcs,
         char_creation=char_creation,
+        classes=world_classes,
+        wwn_spell_catalog=world_spell_catalog,
         chassis_instances=chassis_instances,
+        chassis_classes=chassis_classes,
+        seed_tropes=world_seed_tropes,
         magic_register=magic_register,
         items=items,
         bestiary=world_bestiary,
@@ -1580,6 +1775,119 @@ def load_genre_pack(path: Path | str) -> GenrePack:
                     "genre default; every world must supply or inherit one."
                 ),
             )
+
+    # === Pack-level class roster — world-first aggregation (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # classes/callings are a world-tier CAST/CATALOG surface. When the genre tier
+    # ships no classes.yaml (tea_and_murder, which moved its callings down to
+    # blackthorn_moor/glenross), the pack-level ``GenrePack.classes`` roster is
+    # the union of every world's classes — that roster is what the chargen
+    # builder, confrontation, dice, and views consumers read to resolve a
+    # ``char_class`` → ClassDef. Worlds that share a calling (identical id) must
+    # agree on its definition; a genuine divergence fails loud rather than
+    # silently picking one (No Silent Fallbacks). When the genre tier DOES ship
+    # classes (space_opera, heavy_metal, C&C), that genre roster is authoritative
+    # and worlds are not aggregated up — the genre default is intentional.
+    if not classes_list:
+        aggregated_classes: dict[str, ClassDef] = {}
+        for slug, w in worlds.items():
+            for cls in w.classes:
+                existing = aggregated_classes.get(cls.id)
+                if existing is not None and existing != cls:
+                    raise GenreLoadError(
+                        path=path / "worlds" / slug / "classes.yaml",
+                        detail=(
+                            f"class id {cls.id!r} is defined differently across worlds "
+                            f"in this pack — world-tier class rosters that share an id "
+                            f"must agree on its definition (epic 94 genre/world "
+                            f"boundary). Reconcile the divergent definitions or give "
+                            f"them distinct ids."
+                        ),
+                    )
+                aggregated_classes.setdefault(cls.id, cls)
+        classes_list = list(aggregated_classes.values())
+
+    # === Pack-level WWN spell catalog — world-first aggregation (epic 94) ===
+    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    # the WWN spell catalog is a world-tier CAST/CATALOG surface. When the genre
+    # tier ships no spells_wwn.yaml, the pack-level ``GenrePack.wwn_spell_catalog``
+    # is the union of every world's catalog — that is what the cast pipeline
+    # (``narration_apply._resolve_wwn_cast_for_beat``) and the long_rest reprepare
+    # tool read to resolve a spell id → spell. Worlds that share a spell id must
+    # agree on its definition; a genuine divergence fails loud (No Silent
+    # Fallbacks). When the genre tier DOES ship a catalog (elemental_harmony keeps
+    # one shared catalog for both worlds), that genre catalog is authoritative and
+    # worlds are not aggregated up — the genre default is intentional.
+    if wwn_catalog is None:
+        from sidequest.genre.models.wwn_spell import WwnSpell
+
+        aggregated_spells: dict[str, WwnSpell] = {}
+        for slug, w in worlds.items():
+            if w.wwn_spell_catalog is None:
+                continue
+            for spell in w.wwn_spell_catalog.spells:
+                existing = aggregated_spells.get(spell.id)
+                if existing is not None and existing != spell:
+                    raise GenreLoadError(
+                        path=path / "worlds" / slug / "spells_wwn.yaml",
+                        detail=(
+                            f"spell id {spell.id!r} is defined differently across worlds "
+                            f"in this pack — world-tier spell catalogs that share an id "
+                            f"must agree on its definition (epic 94 genre/world "
+                            f"boundary). Reconcile the divergent definitions or give "
+                            f"them distinct ids."
+                        ),
+                    )
+                aggregated_spells.setdefault(spell.id, spell)
+        if aggregated_spells:
+            wwn_catalog = WwnSpellCatalog(
+                version="aggregated", spells=list(aggregated_spells.values())
+            )
+
+    # Re-run the WWN fail-loud invariants against the world-first-resolved roster
+    # and catalog. The genre-tier pass at load time only saw the genre roster /
+    # catalog; for a pack that migrated classes + the catalog down to worlds, the
+    # caster-without-catalog and starting_prepared checks must see the aggregated
+    # values (epic 94). No-op for genre-authoritative packs (already validated).
+    if rules.ruleset == "wwn":
+        caster_classes = [
+            c
+            for c in classes_list
+            if c.magic_access == "wwn"
+            and c.wwn_magic is not None
+            and bool(c.wwn_magic.casts_per_day_by_level)
+        ]
+        if caster_classes and wwn_catalog is None:
+            raise GenreLoadError(
+                path=path / "spells_wwn.yaml",
+                detail=(
+                    f"wwn pack has caster classes {[c.id for c in caster_classes]} but no "
+                    "spells_wwn.yaml at the genre tier OR any world tier (epic 94). Author a "
+                    "spell catalog or remove the casts_per_day_by_level entries."
+                ),
+            )
+        _validate_wwn_starting_prepared_refs(classes_list, wwn_catalog)
+
+    # === Pack-level chargen scenes — world-first aggregation (epic 94) ===
+    # Same boundary correction for char_creation: when the genre tier ships no
+    # char_creation.yaml (spaghetti_western, tea_and_murder — both moved chargen
+    # down to the world tier), the pack-level ``GenrePack.char_creation`` is the
+    # union of every world's scenes. Production reads chargen world-first via
+    # ``resolve_char_creation_scenes``; this aggregate keeps pack-level
+    # introspection (and the reputation_bonus / archetype-hint drift consumers)
+    # honest about what the migrated pack actually offers. The genre default,
+    # when present, stays authoritative (no aggregation).
+    if not char_creation:
+        aggregated_scenes: list[CharCreationScene] = []
+        seen_scene_keys: set[tuple[str, int]] = set()
+        for w in worlds.values():
+            for idx, scene in enumerate(w.char_creation):
+                key = (scene.id, idx)
+                if key in seen_scene_keys:
+                    continue
+                seen_scene_keys.add(key)
+                aggregated_scenes.append(scene)
+        char_creation = aggregated_scenes
 
     scenarios: dict[str, ScenarioPack] = _load_subdirectories(
         path, "scenarios", _load_single_scenario

@@ -157,7 +157,39 @@ class World(BaseModel):
     openings: list[Opening] = Field(default_factory=list)
     authored_npcs: list[AuthoredNpc] = Field(default_factory=list)
     char_creation: list[CharCreationScene] = Field(default_factory=list)
+    classes: list[ClassDef] = Field(default_factory=list)
+    """World-tier class/calling CAST/CATALOG (``worlds/<slug>/classes.yaml``),
+    epic 94. Genre/world boundary correction (supersedes ADR-120
+    "mechanics-in-genre"): a world's classes (C&C kits, Victoria callings) are
+    the cast a world ships, NOT a genre mechanic — the genre tier is the rulebook
+    only. Empty list when the world authors no classes (e.g. an axis-archetype
+    world). Consumers read this world-first; the genre-tier
+    ``GenrePack.classes`` is the shared default for packs that have not migrated
+    classes down to the world tier (no silent fallback to a fabricated roster)."""
     chassis_instances: list[ChassisInstanceConfig] = Field(default_factory=list)
+    chassis_classes: ChassisClassesConfig | None = None
+    """World-tier rig CAST/CATALOG (``worlds/<slug>/chassis_classes.yaml``), epic
+    94. Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
+    chassis classes are the cast of rigs a world ships, NOT a genre mechanic — the
+    genre tier is the rulebook only. ``None`` when the world authors no rigs (a
+    valid choice, not a fallback). Consumers read this world-first; the old
+    genre-tier ``GenrePack.chassis_classes`` is now ``None`` for migrated packs."""
+    seed_tropes: list[SeedTrope] = Field(default_factory=list)
+    """World-tier seed-trope deck (``worlds/<slug>/seed_tropes.yaml``), epic 94.
+    Genre/world boundary correction: the seeds a world plants are CAST/CATALOG,
+    not a genre mechanic. Empty list when the world authors no deck — no silent
+    fallback to a shared default. Consumers read this world-first."""
+    wwn_spell_catalog: WwnSpellCatalog | None = None
+    """World-tier WWN spell CATALOG (``worlds/<slug>/spells_wwn.yaml``), epic 94.
+    Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"): a
+    world's spell catalog is the CAST/CATALOG of magic a world ships, NOT a genre
+    mechanic — the genre tier is the rulebook only (resolution rules, the WWN
+    magic block on ``rules.wwn``). ``None`` when the world ships no catalog (a
+    valid choice for a pack that keeps a shared catalog at the genre tier — both
+    elemental_harmony worlds share one). Consumers read this world-first via
+    ``resolve_wwn_spell_catalog``; the genre-tier ``GenrePack.wwn_spell_catalog``
+    is the shared default for packs that have not migrated the catalog down (no
+    silent fallback to a fabricated catalog)."""
     magic_register: str = ""
     items: WorldItemsCatalog | None = None
     bestiary: Bestiary | None = None

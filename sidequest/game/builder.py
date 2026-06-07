@@ -1273,14 +1273,16 @@ class CharacterBuilder:
     def _name_scene_inputs(self) -> tuple[str | None, str | None]:
         """(original_freeform, followup_correction) from the name-entry scene.
 
-        The name scene is the last scene with no choices; once answered, its
-        result is the last result. Returns (None, None) when the scene
-        hasn't been answered with freeform text.
+        The name scene is the terminal name-entry scene (no choices AND
+        ``allows_freeform`` — see ``_is_name_scene``); once answered, its
+        result is the last result. Returns (None, None) when there is no name
+        scene (e.g. heavy_metal & siblings end on a no-choice *display*
+        confirmation scene with ``allows_freeform: false``, which is NOT a
+        name scene) or it hasn't been answered with freeform text.
         """
         if not self._scenes:
             return (None, None)
-        last_scene = self._scenes[-1]
-        if last_scene.choices:
+        if not self._is_name_scene(len(self._scenes) - 1):
             return (None, None)
         if not self._results:
             return (None, None)
@@ -1894,9 +1896,24 @@ class CharacterBuilder:
             self._advance_scene(scene_index)
 
     def _is_name_scene(self, scene_index: int) -> bool:
-        """True when ``scene_index`` is the name-entry scene (the last scene
-        with no choices — same identification ``character_name()`` uses)."""
-        return scene_index == len(self._scenes) - 1 and not self._scenes[scene_index].choices
+        """True when ``scene_index`` is the name-entry scene: the terminal
+        scene with no choices AND ``allows_freeform`` set.
+
+        ``allows_freeform`` is the load-bearing discriminator. A name-entry
+        scene (road_warrior's ``the_name``) has no choices and
+        ``allows_freeform: true`` — it renders ``input_type="name"`` (see
+        ``to_scene_message``). A terminal *display*/confirmation scene
+        (heavy_metal and 8 sibling packs) also has no choices but
+        ``allows_freeform: false`` — it renders ``input_type="continue"`` and
+        is never answered with a name. Treating the latter as a name scene
+        leaked the prior scene's freeform answer into ``character_name()``
+        and the confirmation prose's ``{name}`` slot ([BAR-1])."""
+        scene = self._scenes[scene_index]
+        return (
+            scene_index == len(self._scenes) - 1
+            and not scene.choices
+            and bool(scene.allows_freeform)
+        )
 
     def answer_followup(self, text: str) -> None:
         """Answer a followup prompt while in AwaitingFollowup state.

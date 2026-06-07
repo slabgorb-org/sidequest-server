@@ -32,6 +32,7 @@ state. That is the SOUL Illusionism counter the epic exists to deliver.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from sidequest.agents.dispatch_precondition_gate import (
@@ -48,6 +49,7 @@ from sidequest.server.snapshot_slimming import apply_snapshot_slimming
 from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.spans.intent_router import (
     intent_router_call_budget_breach_span,
+    intent_router_confrontation_classified_span,
     intent_router_confrontation_vocabulary_span,
     intent_router_state_summary_slimmed_span,
     intent_router_witnessed_act_classified_span,
@@ -139,6 +141,45 @@ def _witnessed_act_ids(package: DispatchPackage) -> list[str]:
             if d.subsystem == "witnessed_act":
                 ids.append(str((d.params or {}).get("act_id", "")))
     return ids
+
+
+def _confrontation_types_emitted(package: DispatchPackage) -> list[str]:
+    """Collect the type of every confrontation dispatch in the package."""
+    types: list[str] = []
+    for pd in package.per_player:
+        for d in pd.dispatch:
+            if d.subsystem == "confrontation":
+                types.append(str((d.params or {}).get("type", "")))
+    for ca in package.cross_player:
+        for d in ca.dispatch:
+            if d.subsystem == "confrontation":
+                types.append(str((d.params or {}).get("type", "")))
+    return types
+
+
+def _confrontation_verb_hits(action: str, pack: GenrePack | None) -> list[str]:
+    """Lexical ``type:verb`` matches between the action and authored intent_verbs.
+
+    Word-boundary, case-insensitive — the deterministic half of the
+    standoff-seam decline detector (sq-playtest 2026-06-07). A hit here with
+    zero confrontation dispatches emitted is the loud unrouted shape; the
+    Haiku-judgment half (paraphrased intent, no literal verb) is steered by
+    the pre-combat paragraph in ``CONFRONTATION_TRIGGER_CORE`` and cannot be
+    lexically detected, by construction.
+    """
+    # getattr walk — duck-typed test packs (bare objects, fakes without
+    # ``rules``) pass through, same access style as the witnessed_acts gate.
+    rules = getattr(pack, "rules", None)
+    confrontations = getattr(rules, "confrontations", None) if rules else None
+    if not confrontations:
+        return []
+    folded = action.casefold()
+    hits: list[str] = []
+    for cdef in confrontations:
+        for verb in getattr(cdef, "intent_verbs", None) or []:
+            if re.search(rf"\b{re.escape(verb.casefold())}\b", folded):
+                hits.append(f"{cdef.confrontation_type}:{verb}")
+    return hits
 
 
 def _build_state_summary(
@@ -449,6 +490,31 @@ async def execute_intent_router_pre_narrator_pass(
         # router's front-door decision, "classified as witnessed_act:X" vs "had the
         # vocabulary and declined". Fires before the gates so it reflects the raw
         # router output, not the post-gate package.
+        # Confrontation classification evidence (sq-playtest 2026-06-07
+        # standoff seat seam): record the front-door decision whenever the
+        # action lexically hits an authored intent_verb OR a confrontation
+        # dispatch was emitted. emitted=0 with verb_hits non-empty is the
+        # decline the GM panel could not previously see — turn 5's armed
+        # brace yielded confrontation=None with zero telemetry.
+        conf_types = _confrontation_types_emitted(package)
+        verb_hits = _confrontation_verb_hits(action, pack)
+        if conf_types or verb_hits:
+            with intent_router_confrontation_classified_span(
+                emitted=len(conf_types),
+                types=",".join(conf_types),
+                verb_hits=",".join(verb_hits),
+                genre_slug=snapshot.genre_slug or "",
+            ):
+                pass
+            if verb_hits and not conf_types:
+                logger.warning(
+                    "intent_router.confrontation_verb_unrouted verb_hits=%s "
+                    "action_preview=%r — the action lexically matched authored "
+                    "intent_verbs but the router emitted no confrontation dispatch",
+                    ",".join(verb_hits),
+                    action[:120],
+                )
+
         if "witnessed_act_vocabulary" in state_summary:
             act_ids = _witnessed_act_ids(package)
             with intent_router_witnessed_act_classified_span(

@@ -361,6 +361,57 @@ def intent_router_witnessed_act_vocabulary_span(
         yield span
 
 
+# sq-playtest 2026-06-07 (standoff seat seam): the router had the pack's
+# confrontation vocabulary and the action lexically matched authored
+# intent_verbs, yet no confrontation dispatch was emitted — and NOTHING
+# recorded the decline ("silence indistinguishable from 'feature doesn't
+# exist'"). Fires when the action hits >=1 authored intent_verb token OR a
+# confrontation dispatch was emitted; quiet turns (no verb hit, no dispatch)
+# stay quiet. emitted=0 with verb_hits non-empty is the unrouted shape.
+SPAN_INTENT_ROUTER_CONFRONTATION_CLASSIFIED = "intent_router.confrontation_classified"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_CONFRONTATION_CLASSIFIED] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.confrontation_classified",
+        "emitted": (span.attributes or {}).get("emitted", 0),
+        "types": (span.attributes or {}).get("types", ""),
+        "verb_hits": (span.attributes or {}).get("verb_hits", ""),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_confrontation_classified_span(
+    *,
+    emitted: int,
+    types: str,
+    verb_hits: str,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Front-door confrontation classification evidence (twin of the
+    witnessed_act span below). ``emitted`` counts confrontation dispatches in
+    the package; ``verb_hits`` is the comma-joined ``type:verb`` lexical
+    matches between the action and the pack's authored intent_verbs.
+    ``emitted=0`` with non-empty ``verb_hits`` is the standoff-seam decline
+    the GM panel must be able to see."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_CONFRONTATION_CLASSIFIED,
+        {
+            "emitted": emitted,
+            "types": types,
+            "verb_hits": verb_hits,
+            "genre_slug": genre_slug,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 SPAN_INTENT_ROUTER_WITNESSED_ACT_CLASSIFIED = "intent_router.witnessed_act_classified"
 SPAN_ROUTES[SPAN_INTENT_ROUTER_WITNESSED_ACT_CLASSIFIED] = SpanRoute(
     event_type="state_transition",

@@ -164,9 +164,7 @@ class TestUnifiedScorerProductionWiring:
             assert result, "player action must produce outbound messages"
 
             # (1) The unified retrieval ran on the live turn (span fired).
-            fired = [
-                s for s in otel_capture.get_finished_spans() if s.name == _RETRIEVAL_SPAN_NAME
-            ]
+            fired = [s for s in otel_capture.get_finished_spans() if s.name == _RETRIEVAL_SPAN_NAME]
             assert fired, (
                 "the unified scorer must be wired into the live turn-build path "
                 f"and emit the {_RETRIEVAL_SPAN_NAME!r} span"

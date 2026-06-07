@@ -144,9 +144,7 @@ def test_credit_label_derives_through_classifier_not_hardcoded(monkeypatch) -> N
     ``raising=False``: in RED the symbol isn't in narration_apply's namespace, so
     the patch is inert and the hardcoded emit stays ``player_victory`` → the
     assertion fails (correct RED reason: classifier not wired as producer)."""
-    monkeypatch.setattr(
-        narration_apply, "is_player_victory", lambda _outcome: False, raising=False
-    )
+    monkeypatch.setattr(narration_apply, "is_player_victory", lambda _outcome: False, raising=False)
     captured = _capture_watcher(monkeypatch)
     snap = GameSnapshot(genre_slug="wry_whimsy", world_slug="oz")
     snap.encounter = _encounter(opponents=[_lion(withdrawn=True)])

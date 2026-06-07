@@ -138,8 +138,7 @@ def test_db_pool_opens_and_closes_with_app() -> None:
     app = create_app()
     with TestClient(app):
         assert db_pool._POOL is not None, (
-            "startup hook did not open the PG pool — _open_db_pool wiring in "
-            "app.py did not run"
+            "startup hook did not open the PG pool — _open_db_pool wiring in app.py did not run"
         )
         assert not db_pool._POOL.closed, "pool should be open after startup"
     # On TestClient exit the shutdown hook runs — pool must be closed + discarded.

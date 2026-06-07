@@ -405,9 +405,7 @@ def sync_entity_cards(
         if definition is None:
             result.failed += 1
             result.failed_refs.append(f"trope:{state.id}")
-            logger.warning(
-                "entity_sync.project_failed trope=%r error=no_definition", state.id
-            )
+            logger.warning("entity_sync.project_failed trope=%r error=no_definition", state.id)
             continue
         try:
             card = project_trope_card(state, definition)

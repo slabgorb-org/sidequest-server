@@ -157,9 +157,7 @@ def build_lifecycle_snapshot(
         # skipped by _apply_beat and do not contribute to ongoing
         # combat. Non-withdrawn opponents are "still in the fight".
         opponent_alive_count = sum(
-            1
-            for a in encounter.actors
-            if a.side == "opponent" and not a.withdrawn
+            1 for a in encounter.actors if a.side == "opponent" and not a.withdrawn
         )
 
     return ConfrontationLifecycleSnapshot(

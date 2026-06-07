@@ -165,10 +165,14 @@ def test_ac5_pack_flavor_not_merged_synthetic(tmp_path):
     (pack_dir / "theme.yaml").write_text(_MINIMAL_THEME_YAML)
     # Pack-tier flavor files (the ones 63-7's merge pulled): they carry the sentinel.
     (pack_dir / "lore.yaml").write_text(f"setting_anchor: '{sentinel} banner'\n")
-    (pack_dir / "cultures.yaml").write_text(f"- name: '{sentinel} Culture'\n  summary: pack flavor\n")
+    (pack_dir / "cultures.yaml").write_text(
+        f"- name: '{sentinel} Culture'\n  summary: pack flavor\n"
+    )
     # World-tier files — clean, no sentinel.
     (world_dir / "world.yaml").write_text("description: A clean synthetic world.\n")
-    (world_dir / "lore.yaml").write_text("world_name: Synth World\nhistory: 'Only the world voice here.'\n")
+    (world_dir / "lore.yaml").write_text(
+        "world_name: Synth World\nhistory: 'Only the world voice here.'\n"
+    )
 
     html = assemble_lore_page("synthpack", "synthworld", pack_dir, world_dir)
 

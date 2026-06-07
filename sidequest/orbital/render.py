@@ -1859,9 +1859,7 @@ def _render_engraved_layer(
     for d in decisions:
         if d.strategy == LabelStrategy.TEXTPATH:
             tp_data = textpath_by_body.get(d.body_id)
-            upright_flip_by_body[d.body_id] = (
-                tp_data is not None and tp_data[2][1] > 0
-            )
+            upright_flip_by_body[d.body_id] = tp_data is not None and tp_data[2][1] > 0
 
     # Per-body OTEL spans.
     for d in decisions:

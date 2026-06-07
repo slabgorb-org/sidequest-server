@@ -805,8 +805,11 @@ def pg_repo(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
     db_pool.close_pool()
     repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(), slug="magic-roundtrip", mode="solo",
-        genre_slug="space_opera", world_slug="coyote_star",
+        db_pool.get_pool(),
+        slug="magic-roundtrip",
+        mode="solo",
+        genre_slug="space_opera",
+        world_slug="coyote_star",
     )
     try:
         yield repo

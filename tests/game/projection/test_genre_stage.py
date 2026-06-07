@@ -108,9 +108,7 @@ def test_redact_fields_leaves_unmasked_when_predicate_holds() -> None:
     )
     stage = _stage(yaml)
     # text == the viewer's own character id => is_self(text) holds => unmasked.
-    env = MessageEnvelope(
-        kind="NARRATION", payload_json='{"text":"alice_char"}', origin_seq=5
-    )
+    env = MessageEnvelope(kind="NARRATION", payload_json='{"text":"alice_char"}', origin_seq=5)
     result = stage.evaluate(envelope=env, view=_view(), player_id="alice")
     assert json.loads(result.decision.payload_json) == {"text": "alice_char"}
     # No mask applied (predicate held) — no matched rule.

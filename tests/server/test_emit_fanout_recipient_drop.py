@@ -94,8 +94,7 @@ def test_dropped_recipient_emits_loud_watcher_event(monkeypatch: pytest.MonkeyPa
     drops = [
         (fields, kwargs)
         for (event_type, fields, kwargs) in published
-        if event_type == "state_transition"
-        and fields.get("field") == "broadcast.recipient_dropped"
+        if event_type == "state_transition" and fields.get("field") == "broadcast.recipient_dropped"
     ]
     assert drops, (
         "a recipient whose queue was detached mid-broadcast must emit a "
@@ -157,7 +156,5 @@ def test_excluded_recipient_is_not_a_drop(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     assert not [
-        f
-        for (_t, f, _k) in published
-        if f.get("field") == "broadcast.recipient_dropped"
+        f for (_t, f, _k) in published if f.get("field") == "broadcast.recipient_dropped"
     ], "an intentionally excluded recipient is not a mid-broadcast drop"

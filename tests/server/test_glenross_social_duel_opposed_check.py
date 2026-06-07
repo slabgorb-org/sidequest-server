@@ -39,7 +39,9 @@ from sidequest.server.dispatch.encounter_lifecycle import (
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 from tests._helpers.session_room import room_for
 
-CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
+CONTENT_GENRE_PACKS = (
+    Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
+)
 
 pytestmark = pytest.mark.skipif(
     not (CONTENT_GENRE_PACKS / "tea_and_murder").exists(),

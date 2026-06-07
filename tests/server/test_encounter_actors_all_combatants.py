@@ -258,7 +258,10 @@ def test_handshake_prefers_explicit_npcs_present_when_provided(
     """
     snap, pack = playtest3_snapshot
     trigger_encounter(
-        snap, pack, "combat", "Orin",
+        snap,
+        pack,
+        "combat",
+        "Orin",
         npcs_present=[
             NpcMention(
                 name="Goblin",

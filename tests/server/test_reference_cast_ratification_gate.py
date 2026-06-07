@@ -107,9 +107,7 @@ def test_ratified_cast_member_renders(gated_client: TestClient) -> None:
     the gate must not over-suppress committed content."""
     resp = gated_client.get(f"/reference/lore/{_PACK}/{_RATIFY_WORLD}")
     assert resp.status_code == 200, resp.text
-    assert f'id="cast-{_RATIFIED_SLUG}"' in resp.text, (
-        "ratified Cast member must render her card"
-    )
+    assert f'id="cast-{_RATIFIED_SLUG}"' in resp.text, "ratified Cast member must render her card"
     assert _RATIFIED_NAME in resp.text, "ratified Cast member's name must appear on the page"
 
 

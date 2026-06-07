@@ -6,6 +6,7 @@ comparing narration prose kill-claims against engine state — surfacing
 the disconnect on the GM panel so Sebastien sees when the narrator
 hallucinates a kill not backed by mechanical resolution.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -87,9 +88,7 @@ def _enc(
     else:
         for name, withdrawn in opponents:
             actors.append(
-                EncounterActor(
-                    name=name, role="opponent", side="opponent", withdrawn=withdrawn
-                )
+                EncounterActor(name=name, role="opponent", side="opponent", withdrawn=withdrawn)
             )
     return StructuredEncounter(
         encounter_type=encounter_type,
@@ -124,7 +123,9 @@ def test_snapshot_captures_metrics_and_opponent_count() -> None:
     assert snap.narration_claims_kill is False
 
 
-def test_snapshot_narrator_kill_unbacked_fires_when_prose_claims_kill_but_encounter_still_active() -> None:
+def test_snapshot_narrator_kill_unbacked_fires_when_prose_claims_kill_but_encounter_still_active() -> (
+    None
+):
     """The exact sq-playtest 2026-05-12 repro: narrator says the Chalk Moth
     dies, but no engine resolution fired."""
     enc = _enc(player_current=0, opponent_current=2)  # rolls failing — dial stuck
@@ -237,13 +238,17 @@ def test_websocket_session_handler_imports_lifecycle_detector() -> None:
     site and the GM panel would go dark on the lie-detector dimension."""
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[2] / "sidequest" / "server" / "websocket_session_handler.py"
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "sidequest"
+        / "server"
+        / "websocket_session_handler.py"
+    )
     text = src.read_text()
     assert "build_lifecycle_snapshot" in text, (
         "websocket_session_handler.py must call build_lifecycle_snapshot "
         "on every CONFRONTATION emit (sq-playtest 2026-05-12 lie-detector)"
     )
     assert "confrontation_lifecycle" in text, (
-        "watcher event 'confrontation_lifecycle' must be published from "
-        "the CONFRONTATION emit path"
+        "watcher event 'confrontation_lifecycle' must be published from the CONFRONTATION emit path"
     )

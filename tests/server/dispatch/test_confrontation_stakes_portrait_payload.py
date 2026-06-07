@@ -137,7 +137,9 @@ def test_opponent_actor_carries_resolved_portrait_url():
         encounter=_enc(),
         cdef=_cdef(),
         genre_slug="road_warrior",
-        portrait_resolver=lambda name: f"https://cdn/{name}.png" if name == "Divvie Sergeant" else None,
+        portrait_resolver=lambda name: (
+            f"https://cdn/{name}.png" if name == "Divvie Sergeant" else None
+        ),
     )
     assert _actor(payload, "Divvie Sergeant")["portrait_url"] == "https://cdn/Divvie Sergeant.png"
 
@@ -216,7 +218,9 @@ def test_opponent_portrait_url_survives_protocol_boundary():
         encounter=_enc(),
         cdef=_cdef(),
         genre_slug="road_warrior",
-        portrait_resolver=lambda name: "https://cdn/sergeant.png" if name == "Divvie Sergeant" else None,
+        portrait_resolver=lambda name: (
+            "https://cdn/sergeant.png" if name == "Divvie Sergeant" else None
+        ),
     )
     model = ConfrontationPayload(**payload)
     opp = next(a for a in model.actors if a["name"] == "Divvie Sergeant")

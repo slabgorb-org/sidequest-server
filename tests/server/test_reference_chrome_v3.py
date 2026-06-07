@@ -522,8 +522,7 @@ def test_unknown_pack_falls_back_to_default_toc_and_fires_error_span(
 
     # Rules pages do NOT fire toc_missing span — they use a universal TOC.
     assert not calls, (
-        "Rules page uses DEFAULT_RULES_TOC for all packs — "
-        "toc_missing span should not fire."
+        "Rules page uses DEFAULT_RULES_TOC for all packs — toc_missing span should not fire."
     )
 
 

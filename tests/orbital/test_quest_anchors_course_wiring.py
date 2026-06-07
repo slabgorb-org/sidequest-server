@@ -30,9 +30,7 @@ from sidequest.orbital.models import (
     TravelRealism,
 )
 
-_WORLD_MINIMAL = (
-    Path(__file__).resolve().parent / "fixtures" / "world_minimal"
-)
+_WORLD_MINIMAL = Path(__file__).resolve().parent / "fixtures" / "world_minimal"
 
 
 def _mini_orbits() -> OrbitsConfig:
@@ -40,20 +38,32 @@ def _mini_orbits() -> OrbitsConfig:
     bodies = {
         "coyote": BodyDef(type=BodyType.STAR),
         "near": BodyDef(
-            type=BodyType.HABITAT, parent="coyote", semi_major_au=1.0,
-            period_days=365.0, epoch_phase_deg=0.0,
+            type=BodyType.HABITAT,
+            parent="coyote",
+            semi_major_au=1.0,
+            period_days=365.0,
+            epoch_phase_deg=0.0,
         ),
         "mid": BodyDef(
-            type=BodyType.HABITAT, parent="coyote", semi_major_au=2.0,
-            period_days=720.0, epoch_phase_deg=90.0,
+            type=BodyType.HABITAT,
+            parent="coyote",
+            semi_major_au=2.0,
+            period_days=720.0,
+            epoch_phase_deg=90.0,
         ),
         "far": BodyDef(
-            type=BodyType.HABITAT, parent="coyote", semi_major_au=3.0,
-            period_days=1100.0, epoch_phase_deg=180.0,
+            type=BodyType.HABITAT,
+            parent="coyote",
+            semi_major_au=3.0,
+            period_days=1100.0,
+            epoch_phase_deg=180.0,
         ),
         "edge": BodyDef(
-            type=BodyType.HABITAT, parent="coyote", semi_major_au=4.0,
-            period_days=1500.0, epoch_phase_deg=270.0,
+            type=BodyType.HABITAT,
+            parent="coyote",
+            semi_major_au=4.0,
+            period_days=1500.0,
+            epoch_phase_deg=270.0,
         ),
     }
     return OrbitsConfig(

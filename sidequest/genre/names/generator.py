@@ -258,8 +258,7 @@ def _resolve_corpus_file(filename: str, corpus_dir: Path, fallback_dirs: list[Pa
         if candidate.exists():
             return candidate
     raise FileNotFoundError(
-        f"Corpus file '{filename}' not found in {corpus_dir} "
-        f"or fallback dirs {fallback_dirs}"
+        f"Corpus file '{filename}' not found in {corpus_dir} or fallback dirs {fallback_dirs}"
     )
 
 
@@ -300,9 +299,7 @@ def build_from_culture(
         word_list: list[str] = list(slot_config.word_list or [])
 
         if slot_config.names_file:
-            names_path = _resolve_corpus_file(
-                slot_config.names_file, corpus_dir, _fallbacks
-            )
+            names_path = _resolve_corpus_file(slot_config.names_file, corpus_dir, _fallbacks)
             word_list = [
                 line.strip()
                 for line in names_path.read_text(encoding="utf-8").splitlines()
@@ -313,9 +310,7 @@ def build_from_culture(
             chain = MarkovChain(lookback=lookback, rng=rng)
 
             for corpus_ref in slot_config.corpora:
-                corpus_path = _resolve_corpus_file(
-                    corpus_ref.corpus, corpus_dir, _fallbacks
-                )
+                corpus_path = _resolve_corpus_file(corpus_ref.corpus, corpus_dir, _fallbacks)
 
                 cache_key = (corpus_ref.corpus, lookback)
                 if cache_key not in chain_cache:

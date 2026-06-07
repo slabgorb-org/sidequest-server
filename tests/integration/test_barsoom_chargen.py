@@ -131,8 +131,7 @@ def _walk_and_build(
                 (
                     i
                     for i, c in enumerate(scene.choices)
-                    if c.mechanical_effects
-                    and c.mechanical_effects.race_hint == race_display
+                    if c.mechanical_effects and c.mechanical_effects.race_hint == race_display
                 ),
                 None,
             )
@@ -143,8 +142,7 @@ def _walk_and_build(
                 (
                     i
                     for i, c in enumerate(scene.choices)
-                    if c.mechanical_effects
-                    and c.mechanical_effects.class_hint == class_display
+                    if c.mechanical_effects and c.mechanical_effects.class_hint == class_display
                 ),
                 None,
             )
@@ -177,8 +175,7 @@ def _race_source_leap_abilities(char):
     return [
         a
         for a in char.abilities
-        if a.source == AbilitySource.Race
-        and any(m in a.name.lower() for m in _LEAP_NAME_MARKERS)
+        if a.source == AbilitySource.Race and any(m in a.name.lower() for m in _LEAP_NAME_MARKERS)
     ]
 
 
@@ -257,8 +254,7 @@ def test_earthman_boon_emits_origin_trait_otel_event() -> None:
 
     events = _events_by_name(exporter)
     assert ORIGIN_TRAIT_EVENT in events, (
-        f"{ORIGIN_TRAIT_EVENT} must fire when the boon is applied; "
-        f"saw events: {sorted(events)}"
+        f"{ORIGIN_TRAIT_EVENT} must fire when the boon is applied; saw events: {sorted(events)}"
     )
     attrs = events[ORIGIN_TRAIT_EVENT][0].attributes or {}
     assert attrs.get("origin") == "Earthman", (

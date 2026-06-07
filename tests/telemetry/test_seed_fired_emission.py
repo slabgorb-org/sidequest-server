@@ -175,8 +175,7 @@ def test_seed_fired_does_not_fire_for_empty_state(otel_capture) -> None:
     spans = otel_capture.get_finished_spans()
     fired_spans = [s for s in spans if s.name == SPAN_SEED_FIRED]
     assert len(fired_spans) == 0, (
-        f"Empty-state build should NOT emit {SPAN_SEED_FIRED!r} spans; "
-        f"got {len(fired_spans)}."
+        f"Empty-state build should NOT emit {SPAN_SEED_FIRED!r} spans; got {len(fired_spans)}."
     )
 
 
@@ -204,8 +203,7 @@ def test_seed_fired_with_mixed_actives_and_ghosts(otel_capture) -> None:
     )
     attrs = dict(fired_spans[0].attributes or {})
     assert attrs.get("seed_id") == "alpha", (
-        f"Fired span should carry the active seed's id, not the ghost's; "
-        f"got attrs={attrs}"
+        f"Fired span should carry the active seed's id, not the ghost's; got attrs={attrs}"
     )
 
 

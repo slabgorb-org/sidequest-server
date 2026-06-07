@@ -127,11 +127,7 @@ _ROLL_TOOL = [ToolDefinition(name="roll_dice", description="r", input_schema={"t
 
 
 def _spans_named(otel_capture, name: str) -> list[dict]:
-    return [
-        dict(s.attributes or {})
-        for s in otel_capture.get_finished_spans()
-        if s.name == name
-    ]
+    return [dict(s.attributes or {}) for s in otel_capture.get_finished_spans() if s.name == name]
 
 
 # --- AC4 first half: iterations_used is observable per turn -------------------
@@ -162,8 +158,7 @@ async def test_tool_loop_summary_span_records_iterations_used(
         f"exactly one {_SUMMARY_SPAN} span must fire per successful turn; got {len(summary)}"
     )
     assert summary[0].get("iterations_used") == 2, (
-        "a tool-then-text turn made 2 SDK calls — iterations_used must be 2; "
-        f"got {summary[0]}"
+        f"a tool-then-text turn made 2 SDK calls — iterations_used must be 2; got {summary[0]}"
     )
 
 
@@ -233,8 +228,7 @@ async def test_iteration_cap_fires_cap_hit_span_and_ceiling_still_raises(
         f"cap-hit span must record the cap value (2); got {cap_hits[0]}"
     )
     assert cap_hits[0].get("iterations_used", 0) >= 2, (
-        "cap-hit span must record at least the cap's worth of iterations used; "
-        f"got {cap_hits[0]}"
+        f"cap-hit span must record at least the cap's worth of iterations used; got {cap_hits[0]}"
     )
 
 

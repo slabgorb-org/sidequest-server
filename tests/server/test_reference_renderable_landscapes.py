@@ -249,12 +249,16 @@ def test_underscore_slug_world_renders_poi_with_verbatim_r2_src(client) -> None:
     verbatim_src = resolve_asset_url(
         f"genre_packs/{_PACK}/worlds/{_UNDERSCORE_WORLD}/assets/poi/munchkin_country.png"
     )
-    assert f'src="{verbatim_src}"' in html, "the on-R2 underscore POI must surface its verbatim-key img"
+    assert f'src="{verbatim_src}"' in html, (
+        "the on-R2 underscore POI must surface its verbatim-key img"
+    )
     # Defense against silent re-couple: the hyphen R2 key must NOT be the src.
     hyphen_src = resolve_asset_url(
         f"genre_packs/{_PACK}/worlds/{_UNDERSCORE_WORLD}/assets/poi/munchkin-country.png"
     )
-    assert f'src="{hyphen_src}"' not in html, "the hyphen R2 key is the bug — it must never be the src"
+    assert f'src="{hyphen_src}"' not in html, (
+        "the hyphen R2 key is the bug — it must never be the src"
+    )
 
 
 def test_underscore_world_omits_poi_not_on_r2(client) -> None:
@@ -263,7 +267,9 @@ def test_underscore_world_omits_poi_not_on_r2(client) -> None:
     card. Guards against a fix that drops the R2-existence gate entirely."""
     resp = client.get(f"/reference/lore/{_PACK}/{_UNDERSCORE_WORLD}")
     assert resp.status_code == 200, resp.text
-    assert 'id="landscape-emerald-void"' not in resp.text, "ungated underscore POI must stay omitted"
+    assert 'id="landscape-emerald-void"' not in resp.text, (
+        "ungated underscore POI must stay omitted"
+    )
 
 
 def test_underscore_region_deep_link_still_resolves_via_hyphen_anchor() -> None:
@@ -287,4 +293,6 @@ def test_underscore_region_deep_link_still_resolves_via_hyphen_anchor() -> None:
         known_location_slugs=known_location_slugs,
     )
     assert url is not None, "an authored underscore region must keep its lore-page deep-link"
-    assert url.endswith("#location-munchkin-country"), "deep-link anchor stays the slugify (hyphen) form"
+    assert url.endswith("#location-munchkin-country"), (
+        "deep-link anchor stays the slugify (hyphen) form"
+    )

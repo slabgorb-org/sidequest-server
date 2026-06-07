@@ -122,9 +122,7 @@ def resolve_crash_saves(
 
     major_injury = failed == 2
     if major_injury:
-        core.statuses.append(
-            Status(text=MAJOR_INJURY_STATUS_TEXT, severity=StatusSeverity.Scar)
-        )
+        core.statuses.append(Status(text=MAJOR_INJURY_STATUS_TEXT, severity=StatusSeverity.Scar))
     # Mortally Wounded: both saves failed, or any failure that bottomed the
     # driver out (CWN "may be Mortal" on a single failed save).
     mortal = major_injury or (failed > 0 and hp_after == 0)

@@ -54,8 +54,11 @@ def _seed(tmp_path: Path, slug: str) -> None:
     from sidequest.server.session_state import _build_pg_repos_for_slug
 
     _build_pg_repos_for_slug(
-        db_pool.get_pool(), slug=slug, mode=str(GameMode.MULTIPLAYER),
-        genre_slug=_GENRE, world_slug=_WORLD,
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(GameMode.MULTIPLAYER),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
     )
 
 
@@ -113,8 +116,11 @@ def test_late_joiner_catches_up(tmp_path: Path) -> None:
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD)
     snap.characters = [char]
     _repo, _d, _s = _build_pg_repos_for_slug(
-        db_pool.get_pool(), slug=_SLUG, mode=str(GameMode.MULTIPLAYER),
-        genre_slug=_GENRE, world_slug=_WORLD,
+        db_pool.get_pool(),
+        slug=_SLUG,
+        mode=str(GameMode.MULTIPLAYER),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
     )
     _repo.save(snap)
 

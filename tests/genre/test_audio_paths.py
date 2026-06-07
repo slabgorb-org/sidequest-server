@@ -27,8 +27,7 @@ def test_assets_prefix_resolves_to_shared_bucket_no_slug(
         "assets/audio/classical_pd/Satie - Gymnopedie No.1.ogg", genre_slug="cav"
     )
     assert url == (
-        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/"
-        "Satie - Gymnopedie No.1.ogg"
+        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/Satie - Gymnopedie No.1.ogg"
     )
 
 

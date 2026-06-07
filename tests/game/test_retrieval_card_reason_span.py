@@ -97,9 +97,7 @@ def _install_span_exporter(monkeypatch) -> InMemorySpanExporter:
 
 def _the_span(exporter: InMemorySpanExporter) -> Any:
     spans = [s for s in exporter.get_finished_spans() if s.name == _RETRIEVAL_SPAN_NAME]
-    assert len(spans) == 1, (
-        f"exactly one {_RETRIEVAL_SPAN_NAME} span per turn; got {len(spans)}"
-    )
+    assert len(spans) == 1, f"exactly one {_RETRIEVAL_SPAN_NAME} span per turn; got {len(spans)}"
     assert spans[0].attributes is not None
     return spans[0]
 
@@ -145,9 +143,7 @@ class TestCardReasonSpanAttribute:
 
         span = _the_span(exporter)
         raw = span.attributes.get("retrieval.card.reason")
-        assert raw is not None, (
-            "the span must carry a retrieval.card.reason attribute (§A5)"
-        )
+        assert raw is not None, "the span must carry a retrieval.card.reason attribute (§A5)"
         decoded = json.loads(raw)  # JSON-encoded list of per-card dicts
         assert isinstance(decoded, list) and len(decoded) == 1
         entry = decoded[0]

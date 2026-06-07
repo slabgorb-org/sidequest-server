@@ -17,6 +17,7 @@ from sidequest.game.ruleset.resolution import (
     CheckRollParams,
     OpponentAttackOutcome,
 )
+from sidequest.genre.models.rules import BeatDef
 from sidequest.protocol.models import InitiativeEntry
 
 
@@ -73,7 +74,7 @@ class SwnRulesetModule(RulesetModule):
             "SWN resolves attacks vs target AC via attack_params; compute_dc is native-only."
         )
 
-    def offer_difficulty(self, *, beat, target_core) -> int:
+    def offer_difficulty(self, *, beat: BeatDef, target_core: object | None) -> int:
         """SWN attacks resolve vs the target's armor class — advertise exactly
         that on the beat offer (Story 97-3: server is the only DC author).
         Single-sourced with ``attack_params`` below, so the TARGET banner and

@@ -50,10 +50,22 @@ def _cdef() -> ConfrontationDef:
         opponent_metric=MetricDef(name="barbs", starting=0, threshold=7),
         beats=[
             BeatDef.model_validate(
-                {"id": "concede", "label": "Concede Gracefully", "kind": "push", "base": 1, "stat_check": "Humour"}
+                {
+                    "id": "concede",
+                    "label": "Concede Gracefully",
+                    "kind": "push",
+                    "base": 1,
+                    "stat_check": "Humour",
+                }
             ),
             BeatDef.model_validate(
-                {"id": "barb", "label": "Sharp Barb", "kind": "strike", "base": 2, "stat_check": "Wit"}
+                {
+                    "id": "barb",
+                    "label": "Sharp Barb",
+                    "kind": "strike",
+                    "base": 2,
+                    "stat_check": "Wit",
+                }
             ),
         ],
     )
@@ -73,13 +85,25 @@ def _enc() -> StructuredEncounter:
 
 def _push_beat() -> BeatDef:
     return BeatDef.model_validate(
-        {"id": "concede", "label": "Concede Gracefully", "kind": "push", "base": 1, "stat_check": "Humour"}
+        {
+            "id": "concede",
+            "label": "Concede Gracefully",
+            "kind": "push",
+            "base": 1,
+            "stat_check": "Humour",
+        }
     )
 
 
 def _angle_beat() -> BeatDef:
     return BeatDef.model_validate(
-        {"id": "set_up", "label": "Set Up", "kind": "angle", "target_tag": "Off-Balance", "stat_check": "Cunning"}
+        {
+            "id": "set_up",
+            "label": "Set Up",
+            "kind": "angle",
+            "target_tag": "Off-Balance",
+            "stat_check": "Cunning",
+        }
     )
 
 
@@ -166,7 +190,9 @@ def test_opponent_impact_survives_the_protocol_boundary():
     # opposed-beat turn. Prove the opponent descriptor round-trips through the REAL
     # protocol model, not merely that the builder dict carries the key.
     enc = _drive_both_sides()
-    payload_dict = build_confrontation_payload(encounter=enc, cdef=_cdef(), genre_slug="tea_and_murder")
+    payload_dict = build_confrontation_payload(
+        encounter=enc, cdef=_cdef(), genre_slug="tea_and_murder"
+    )
 
     model = ConfrontationPayload(**payload_dict)  # must NOT raise
     assert model.opponent_last_beat_impact is not None
@@ -178,7 +204,9 @@ def test_protocol_boundary_opponent_none_when_opponent_has_not_acted():
     # forces the model field to default None, not be required.
     enc = _enc()
     apply_beat(enc, enc.find_actor("Pryce"), _push_beat(), RollOutcome.CritSuccess)
-    payload_dict = build_confrontation_payload(encounter=enc, cdef=_cdef(), genre_slug="tea_and_murder")
+    payload_dict = build_confrontation_payload(
+        encounter=enc, cdef=_cdef(), genre_slug="tea_and_murder"
+    )
 
     model = ConfrontationPayload(**payload_dict)
     assert model.opponent_last_beat_impact is None

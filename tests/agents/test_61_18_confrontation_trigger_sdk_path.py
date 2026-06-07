@@ -108,6 +108,13 @@ ANTIDEFER_FINGERPRINT = "Do NOT defer it to the"
 # the combat guidance.
 SOCIAL_FINGERPRINT = "exactly as mechanically binding as a weapon drawn"
 
+# The pre-combat fingerprint (sq-playtest 2026-06-07 standoff seat seam):
+# the THREAT of violence triggers a pre_combat type — an armed display or
+# ultimatum fires the standoff BEFORE iron clears leather. Without this the
+# router only seated standoffs on an actual draw (5 of 6 authored
+# intent_verbs dead, the genre's signature stare-down phase skipped).
+PRE_COMBAT_FINGERPRINT = "fire the pre-combat type at the FIRST show of force"
+
 
 def _live_sdk_confrontation_surfaces() -> dict[str, str]:
     """Every live SDK-path surface where confrontation-trigger steering could
@@ -179,6 +186,21 @@ def test_confrontation_antidefer_steering_reaches_a_live_sdk_surface() -> None:
         "assertion). Migrate the steering to the SDK-path owner (the IntentRouter "
         "confrontation steering, or a confrontation/encounter tool description) so "
         "the 2026-05-03 dead-prose bug class cannot silently reopen."
+    )
+
+
+def test_confrontation_pre_combat_steering_reaches_a_live_sdk_surface() -> None:
+    """sq-playtest 2026-06-07: the trigger core enumerated actual-violence and
+    social triggers but had NO pre-combat paragraph — an armed brace with a
+    veiled ultimatum matched neither bucket and the standoff never seated
+    until the draw. The threat-of-violence steering must reach the model."""
+    surfaces = _live_sdk_confrontation_surfaces()
+    carriers = [name for name, text in surfaces.items() if PRE_COMBAT_FINGERPRINT in text]
+    assert carriers, (
+        f"The pre-combat confrontation steering ({PRE_COMBAT_FINGERPRINT!r}) reaches NO "
+        f"live SDK-path surface. Searched {len(surfaces)} surfaces: {sorted(surfaces)}. "
+        "Without it the router seats pre_combat types only on actual violence and the "
+        "authored stare-down phase (standoff_rules.sizing_up) is unreachable."
     )
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from sidequest.game.disposition import DispositionBeat
+from sidequest.game.npc_pool import NpcPoolMember, is_projectable
 from sidequest.protocol.models import (
     DispositionBeatPayload,
     RelationshipClaimPayload,
@@ -102,7 +103,64 @@ def build_relationship_entries(snapshot: Any) -> list[RelationshipEntry]:
                 ],
             )
         )
+
+    # Story 97-1: engaged npc_pool members project alongside the roster.
+    # Seen-gate (design spec 2026-06-07): ratified (ADR-138 ``is_projectable``)
+    # AND scene-present (last_seen_turn > 0) AND >=1 deduped interaction —
+    # dialogue-only mints (the blackthorn "Captain Hale" shape) and pregen
+    # latents never card; a live combat Other never accrues the interaction
+    # (#742 hostile-context gate at the engagement seam). Every decision
+    # emits, both branches (AC 3 — the GM panel must distinguish
+    # "deliberately not carded" from "projection didn't run").
+    # ``getattr`` default mirrors the duck-typed-test robustness precedent in
+    # relationships_emit._relationships_signature — production snapshots
+    # always carry ``npc_pool``.
+    for member in getattr(snapshot, "npc_pool", []):
+        skip_reason = _pool_projection_skip_reason(member)
+        if skip_reason is not None:
+            with Span.open(
+                "npc.pool_projection_skipped",
+                {"npc_name": member.name, "reason": skip_reason},
+            ):
+                pass
+            continue
+        value = int(member.disposition)
+        with Span.open(
+            "npc.pool_projected",
+            {
+                "npc_name": member.name,
+                "interactions": member.non_transactional_interactions,
+                "last_seen_turn": member.last_seen_turn,
+            },
+        ):
+            pass
+        entries.append(
+            RelationshipEntry(
+                name=member.name,
+                portrait_url=None,
+                band=band_for(value),
+                disposition=value,
+                trend="flat",  # pool tier carries no beat log yet — flat until promoted
+                last_seen_turn=member.last_seen_turn,
+                last_seen_location=member.last_seen_location,
+                beats=[],
+                personality_read=None,  # no OCEAN at the pool tier — absence shown as absence
+                ocean=None,
+                claims=[],
+            )
+        )
     return entries
+
+
+def _pool_projection_skip_reason(member: NpcPoolMember) -> str | None:
+    """Seen-gate predicate for the pool source. ``None`` = projectable."""
+    if not is_projectable(member):
+        return "not_ratified"
+    if member.last_seen_turn <= 0:
+        return "not_present"
+    if member.non_transactional_interactions < 1:
+        return "no_interactions"
+    return None
 
 
 # Narrative descriptors per OCEAN dimension at the high / low pole (ADR-040

@@ -201,6 +201,26 @@ SPAN_ROUTES[SPAN_ENCOUNTER_SEALED_LETTER_ARITY_REJECTED] = SpanRoute(
         "npc_count": (span.attributes or {}).get("npc_count", 0),
     },
 )
+# ADR-139 Invariant 1 (win-condition liveness): emitted by check_hp_depletion
+# whenever a seated actor crosses (or sits past) the 0-HP threshold, whether or
+# not the encounter resolves. sq-playtest 2026-06-07 (perseus_cloud MP): a
+# PRE-EXISTING 0-HP party-mate's first beat commit auto-resolved
+# ``opponent_victory`` while a live PC fought on — the GM panel could not see
+# the (wrong) decision being made. ``terminal_reached=False`` with
+# ``down_actors`` non-empty is the "one downed PC ≠ party defeat" branch.
+SPAN_CONFRONTATION_WIN_CONDITION_EVALUATED = "confrontation.win_condition_evaluated"
+SPAN_ROUTES[SPAN_CONFRONTATION_WIN_CONDITION_EVALUATED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "confrontation.win_condition_evaluated",
+        "win_condition": (span.attributes or {}).get("win_condition", ""),
+        "terminal_reached": (span.attributes or {}).get("terminal_reached", False),
+        "outcome": (span.attributes or {}).get("outcome", ""),
+        "down_actors": (span.attributes or {}).get("down_actors", ""),
+        "standing_actors": (span.attributes or {}).get("standing_actors", ""),
+    },
+)
 SPAN_ENCOUNTER_BEAT_FAILURE_BRANCH = "encounter.beat_failure_branch"
 SPAN_ROUTES[SPAN_ENCOUNTER_BEAT_FAILURE_BRANCH] = SpanRoute(
     event_type="state_transition",
@@ -594,6 +614,39 @@ def encounter_resolved_span(
         span_attrs["outcome"] = outcome
     span_attrs.update(attrs)
     with Span.open(SPAN_ENCOUNTER_RESOLVED, span_attrs, tracer_override=_tracer) as span:
+        yield span
+
+
+@contextmanager
+def win_condition_evaluated_span(
+    *,
+    win_condition: str,
+    terminal_reached: bool,
+    outcome: str,
+    down_actors: str,
+    standing_actors: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """ADR-139 Invariant 1: the win-condition evaluation decision itself.
+
+    Fired by ``check_hp_depletion`` whenever any seated actor sits at or past
+    the 0-HP threshold — resolve and no-resolve branches both emit, so the GM
+    panel can distinguish "fight correctly continued past a downed party-mate"
+    (``terminal_reached=False``) from "side fully down, resolved"
+    (``terminal_reached=True``).
+    """
+    span_attrs = {
+        "win_condition": win_condition,
+        "terminal_reached": terminal_reached,
+        "outcome": outcome,
+        "down_actors": down_actors,
+        "standing_actors": standing_actors,
+    }
+    span_attrs.update(attrs)
+    with Span.open(
+        SPAN_CONFRONTATION_WIN_CONDITION_EVALUATED, span_attrs, tracer_override=_tracer
+    ) as span:
         yield span
 
 

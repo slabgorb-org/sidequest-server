@@ -42,6 +42,16 @@ SPAN_NARRATOR_SEED_CONTEXT = "narrator.seed_context"
 SPAN_NARRATOR_TOOL_LOOP = "narrator.tool_loop"
 SPAN_NARRATOR_TOOL_LOOP_CAP_HIT = "narrator.tool_loop.cap_hit"
 
+# Playtest 2026-06-07 (five_points doubled-narration card): a single
+# assistant message carried MULTIPLE text blocks — a prose draft and a
+# revised retelling around a tool_use — and ``complete_with_tools`` joined
+# them with ``""``, shipping both tellings as one narration (the seam:
+# *"…takes the measure.**Paradise Square…**"*). The join now keeps only the
+# LAST text block of each message and emits this span when earlier blocks
+# are discarded — lie-detector visibility per the house OTEL rule, no
+# silent trimming.
+SPAN_NARRATOR_MULTI_TEXT_BLOCK_DISCARDED = "narrator.multi_text_block_discarded"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_NARRATOR_SEALED_ROUND,
@@ -96,6 +106,23 @@ SPAN_ROUTES[SPAN_NARRATOR_TOOL_LOOP_CAP_HIT] = SpanRoute(
         "iteration_cap": (span.attributes or {}).get("iteration_cap", 0),
         "iterations_used": (span.attributes or {}).get("iterations_used", 0),
         "max_iterations": (span.attributes or {}).get("max_iterations", 0),
+    },
+)
+
+
+# Routed at WARNING grade: discarded prose means the narrator drafted more
+# than one telling in a single message — a prompt-quality signal the operator
+# iterates on, and the audit trail for "where did that paragraph go".
+SPAN_ROUTES[SPAN_NARRATOR_MULTI_TEXT_BLOCK_DISCARDED] = SpanRoute(
+    event_type="state_transition",
+    component="narrator",
+    extract=lambda span: {
+        "field": "narrator.multi_text_block_discarded",
+        "discarded_count": (span.attributes or {}).get("discarded_count", 0),
+        "discarded_chars": (span.attributes or {}).get("discarded_chars", 0),
+        "kept_chars": (span.attributes or {}).get("kept_chars", 0),
+        "iteration": (span.attributes or {}).get("iteration", 0),
+        "caller": (span.attributes or {}).get("caller", "narrator"),
     },
 )
 
@@ -240,8 +267,40 @@ def narrator_tool_loop_cap_hit_span(
         yield span
 
 
+@contextlib.contextmanager
+def narrator_multi_text_block_discarded_span(
+    *,
+    discarded_count: int,
+    discarded_chars: int,
+    kept_chars: int,
+    iteration: int,
+    _tracer: trace.Tracer | None = None,
+    **extra: Any,
+) -> Iterator[trace.Span]:
+    """Playtest 2026-06-07: a single assistant message carried more than one
+    text block; ``complete_with_tools`` kept only the LAST and discarded the
+    rest (a draft telling joined to the revised telling produced the doubled
+    five_points narration card). One span per affected message — the audit
+    trail that prose was dropped, never a silent trim. ``severity="warning"``
+    grades it above routine INFO transitions (prompt-quality signal).
+    """
+    attrs: dict[str, Any] = {
+        "discarded_count": discarded_count,
+        "discarded_chars": discarded_chars,
+        "kept_chars": kept_chars,
+        "iteration": iteration,
+        "severity": "warning",
+        **extra,
+    }
+    with Span.open(
+        SPAN_NARRATOR_MULTI_TEXT_BLOCK_DISCARDED, attrs, tracer_override=_tracer
+    ) as span:
+        yield span
+
+
 __all__ = [
     "SPAN_NARRATOR_LOCATION_DRIFT_REPAIRED",
+    "SPAN_NARRATOR_MULTI_TEXT_BLOCK_DISCARDED",
     "SPAN_NARRATOR_SEALED_ROUND",
     "SPAN_NARRATOR_SEED_CONTEXT",
     "SPAN_NARRATOR_SESSION_ROTATED",
@@ -249,6 +308,7 @@ __all__ = [
     "SPAN_NARRATOR_TOOL_LOOP_CAP_HIT",
     "SPAN_NARRATOR_UNRECOVERABLE",
     "location_drift_repaired_span",
+    "narrator_multi_text_block_discarded_span",
     "narrator_session_rotated_span",
     "narrator_tool_loop_cap_hit_span",
     "narrator_tool_loop_span",

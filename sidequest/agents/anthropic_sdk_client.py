@@ -22,6 +22,7 @@ from sidequest.agents.tooling_protocol import (
 )
 from sidequest.telemetry.spans.llm_request import llm_request_span
 from sidequest.telemetry.spans.narrator import (
+    narrator_multi_text_block_discarded_span,
     narrator_tool_loop_cap_hit_span,
     narrator_tool_loop_span,
 )
@@ -550,7 +551,35 @@ class AnthropicSdkClient:
                     )
 
             text_chunks, tool_use_blocks = self._split_content(response.content)
-            text = "".join(text_chunks)
+            # Playtest 2026-06-07 (five_points doubled-narration card): a
+            # message with MULTIPLE text blocks — e.g. a prose draft, a
+            # tool_use, then a revised retelling — must NOT be joined into one
+            # narration ("".join shipped both tellings back-to-back with the
+            # second scene title jammed inline). The model's LAST text block
+            # is its converged prose for the message; earlier blocks are
+            # drafts. Keep the last, discard the rest, and emit a WARNING-
+            # grade span so the GM panel shows exactly what was dropped — no
+            # silent trimming (house OTEL rule).
+            if len(text_chunks) > 1:
+                discarded_chars = sum(len(c) for c in text_chunks[:-1])
+                logger.warning(
+                    "narrator.multi_text_block_discarded count=%d discarded_chars=%d "
+                    "kept_chars=%d iteration=%d caller=%s",
+                    len(text_chunks) - 1,
+                    discarded_chars,
+                    len(text_chunks[-1]),
+                    iteration,
+                    caller,
+                )
+                with narrator_multi_text_block_discarded_span(
+                    discarded_count=len(text_chunks) - 1,
+                    discarded_chars=discarded_chars,
+                    kept_chars=len(text_chunks[-1]),
+                    iteration=iteration,
+                    caller=caller,
+                ):
+                    pass
+            text = text_chunks[-1] if text_chunks else ""
             last_text = text or last_text
 
             if response.stop_reason != "tool_use":

@@ -117,6 +117,26 @@ SPAN_ROUTES[SPAN_CHARGEN_STARTING_KIT_DEDUP_EVALUATED] = SpanRoute(
         "player_id": (span.attributes or {}).get("player_id", ""),
     },
 )
+# Playtest 2026-06-07 (five_points): a class with NO ``starting_equipment``
+# entry completed chargen silently with an empty inventory — the player
+# discovered the content gap, not the operator. Fires when an inventory
+# config exists but the character's class matches neither
+# ``starting_equipment`` nor ``starting_gold`` (No Silent Fallbacks: the
+# gap is a content defect and must be loud at chargen time).
+SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING = "chargen.starting_equipment_missing"
+SPAN_ROUTES[SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING] = SpanRoute(
+    event_type="state_transition",
+    component="character_creation",
+    extract=lambda span: {
+        "field": "starting_equipment",
+        "op": "missing",
+        "class_name": (span.attributes or {}).get("class_name", ""),
+        "declared_classes": (span.attributes or {}).get("declared_classes", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
 SPAN_CHARGEN_STARTING_KIT_DEDUP_FIRED = "chargen.starting_kit_dedup_fired"
 SPAN_ROUTES[SPAN_CHARGEN_STARTING_KIT_DEDUP_FIRED] = SpanRoute(
     event_type="state_transition",

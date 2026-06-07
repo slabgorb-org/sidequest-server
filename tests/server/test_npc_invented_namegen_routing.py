@@ -665,3 +665,141 @@ def test_creature_preserved_with_no_culture_bound(otel_capture) -> None:
     # Neither the routed nor the unrouted (warning) person-namer span fires.
     assert _attrs_for(otel_capture, ROUTED_SPAN) == []
     assert _attrs_for(otel_capture, UNROUTED_SPAN) == []
+
+
+# ===========================================================================
+# sq-playtest 2026-06-07 (perseus MP double-mint) — original→mint binding
+# cache. The narrator kept saying "Varra"; the pool stored "Rifenna Muse";
+# every re-narration of the original fell through to Step 3 and minted a
+# fresh identity ("Magel Girilla"). The mint must BIND the original so
+# re-mentions reconcile instead of re-minting.
+# ===========================================================================
+
+
+def test_mint_binds_original_name_as_invented_from(otel_capture) -> None:
+    gen = _SeqNameGenerator(["Rifenna Muse"])
+    snapshot = GameSnapshot()
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("Varra", role="freighter captain", pronouns="she/her")],
+        turn_num=2,
+        name_generator=gen,
+        culture_name="Thari",
+        culture_source="world",
+    )
+
+    assert len(snapshot.npc_pool) == 1
+    member = snapshot.npc_pool[0]
+    assert member.name == "Rifenna Muse"
+    assert member.invented_from == "Varra", (
+        "the mint must bind the narrator's original name — the original→mint "
+        f"binding cache; got {member.invented_from!r}"
+    )
+
+
+def test_remention_of_original_does_not_remint(otel_capture) -> None:
+    """Turn 2 mints 'Varra'→'Rifenna Muse'; the narrator keeps saying 'Varra'
+    on turn 3. The mention must reconcile to the existing member (pool_hit via
+    the invented_from alias) — NOT fall through to Step 3 and mint a second
+    identity ('Magel Girilla')."""
+    gen = _SeqNameGenerator(["Rifenna Muse", "Magel Girilla"])
+    snapshot = GameSnapshot()
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("Varra", role="freighter captain", pronouns="she/her")],
+        turn_num=2,
+        name_generator=gen,
+        culture_name="Thari",
+        culture_source="world",
+    )
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("Varra")],
+        turn_num=3,
+        name_generator=gen,
+        culture_name="Thari",
+        culture_source="world",
+    )
+
+    assert len(snapshot.npc_pool) == 1, (
+        "re-narrating the same original must NOT mint a second pool identity; "
+        f"got {[m.name for m in snapshot.npc_pool]!r}"
+    )
+    assert gen.person_calls == 1, "the generator must not run again for a bound original"
+    # Exactly ONE routed (mint) span — the turn-3 mention reconciles instead.
+    assert len(_attrs_for(otel_capture, ROUTED_SPAN)) == 1
+    # The reconciliation is span-visible as a pool_hit via the alias leg.
+    referenced = _attrs_for(otel_capture, REFERENCED_SPAN)
+    alias_hits = [
+        a
+        for a in referenced
+        if a.get("match_strategy") == "pool_hit" and a.get("match_form") == "invented_from"
+    ]
+    assert alias_hits, (
+        "the alias reconciliation must be span-visible "
+        f"(match_form=invented_from); got {referenced!r}"
+    )
+
+
+def test_raw_mint_without_divergence_binds_no_alias(otel_capture) -> None:
+    """When no generator is supplied the mint keeps the narrator's raw string —
+    name and original are identical, so there is no divergence to bind."""
+    snapshot = GameSnapshot()
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("Bob Hegemonic")],
+        turn_num=2,
+    )
+
+    assert len(snapshot.npc_pool) == 1
+    assert snapshot.npc_pool[0].invented_from is None
+
+
+def test_promotion_carries_invented_from_and_npc_reconciles(otel_capture) -> None:
+    """The binding must survive pool→Npc promotion: after 'Rifenna Muse' is
+    promoted, a narrator mention of 'Varra' must reconcile to the Npc (Step 1
+    alias leg) — not re-mint at the pool tier."""
+    from sidequest.server.narration_apply import _promote_pool_member_to_npc
+
+    gen = _SeqNameGenerator(["Rifenna Muse", "Magel Girilla"])
+    snapshot = GameSnapshot()
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("Varra", role="freighter captain", pronouns="she/her")],
+        turn_num=2,
+        name_generator=gen,
+        culture_name="Thari",
+        culture_source="world",
+    )
+    member = snapshot.npc_pool[0]
+    npc = _promote_pool_member_to_npc(member)
+    assert npc.invented_from == "Varra", (
+        f"promotion must carry the binding; got {npc.invented_from!r}"
+    )
+    snapshot.npcs.append(npc)
+
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("Varra")],
+        turn_num=4,
+        name_generator=gen,
+        culture_name="Thari",
+        culture_source="world",
+    )
+
+    assert len(snapshot.npc_pool) == 1, "no pool re-mint after promotion"
+    assert len(snapshot.npcs) == 1
+    assert gen.person_calls == 1
+    referenced = _attrs_for(otel_capture, REFERENCED_SPAN)
+    npc_alias_hits = [
+        a
+        for a in referenced
+        if a.get("match_strategy") == "npcs_hit" and a.get("match_form") == "invented_from"
+    ]
+    assert npc_alias_hits, (
+        f"the Step-1 Npc alias reconciliation must be span-visible; got {referenced!r}"
+    )

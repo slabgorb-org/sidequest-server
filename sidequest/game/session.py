@@ -156,6 +156,13 @@ class Npc(BaseModel):
     # lie-detector signal: per-session counts of ``None`` measure how often
     # the narrator invents off-pool.
     pool_origin: str | None = None
+    # sq-playtest 2026-06-07 (perseus double-mint): the narrator's ORIGINAL
+    # invented name when the ADR-091 culture namer rerouted it — carried
+    # through pool→Npc promotion so the original→mint binding survives and a
+    # later re-narration of the original ("Varra") reconciles to this NPC
+    # instead of minting a duplicate. ``None`` when the name was never
+    # rerouted.
+    invented_from: str | None = None
     # Provenance marker (story 72-3): ``True`` when this NPC was authored by
     # the Monster Manual seeder (ADR-059), ``False`` for narrator-invented
     # NPCs. Lives alongside ``pool_origin`` but answers a different question —

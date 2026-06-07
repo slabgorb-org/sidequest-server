@@ -91,6 +91,15 @@ class NpcPoolMember(BaseModel):
     ``None`` for pool members minted without MM context (narrator-invented
     creatures receive synthetic bestiary identity at promotion time via
     ``_synthetic_creature_dict``)."""
+    invented_from: str | None = None
+    """sq-playtest 2026-06-07 (perseus double-mint): the narrator's ORIGINAL
+    invented name when the ADR-091 culture namer rerouted it (narrator says
+    "Varra", the mint stamps "Rifenna Muse" — ``invented_from="Varra"``).
+    This is the original→mint binding cache: Step-1/2 reconciliation in
+    ``narration_apply`` matches mentions against this alias too, so a later
+    re-narration of the SAME original re-cites the existing member instead
+    of minting a second identity ("Magel Girilla"). ``None`` when the name
+    was never rerouted (no divergence to bind)."""
 
 
 def is_projectable(entity: NpcPoolMember | Npc) -> bool:

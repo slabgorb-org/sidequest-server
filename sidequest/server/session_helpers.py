@@ -1328,22 +1328,71 @@ def _build_cartography_map_message(
     if nav_mode is not None and str(nav_mode) == "room_graph":
         return None
 
+    # Player-map disclosure (sq-playtest 2026-06-07 spoiler leak): under
+    # ``discovery_mode: fog`` only discovered regions ship with full lore;
+    # their undiscovered neighbors ship name-only (the explorable frontier,
+    # flagged ``undiscovered``); everything else never reaches the wire.
+    # ``public`` (default) preserves the full-catalog behavior for worlds
+    # whose map is common knowledge (a town, a neighborhood).
+    discovery_mode = str(getattr(cart, "discovery_mode", "public") or "public")
+    incoming = discovered_regions or []
+    if discovery_mode == "fog":
+        known: set[str] = {rid for rid in incoming if rid in regions}
+        if current_location in regions:
+            # The party is standing there — discovered by definition, even
+            # when the visited-region ledger lags.
+            known.add(current_location)
+        frontier: set[str] = set()
+        for rid in known:
+            for adj in getattr(regions[rid], "adjacent", []):
+                if adj in regions and adj not in known:
+                    frontier.add(adj)
+    else:
+        known = set(regions)
+        frontier = set()
+
     region_dict: dict[str, dict] = {}
     for slug, region in regions.items():
-        region_dict[slug] = {
-            "name": region.name,
-            "description": getattr(region, "description", None) or getattr(region, "summary", None),
-            "adjacent": list(getattr(region, "adjacent", [])),
-        }
+        if slug in known:
+            region_dict[slug] = {
+                "name": region.name,
+                "description": getattr(region, "description", None)
+                or getattr(region, "summary", None),
+                "adjacent": [
+                    a
+                    for a in getattr(region, "adjacent", [])
+                    if discovery_mode != "fog" or a in known or a in frontier
+                ],
+            }
+        elif slug in frontier:
+            # Name-only frontier entry: no description, no lore, no onward
+            # adjacency (edges past the frontier would leak the graph).
+            region_dict[slug] = {
+                "name": region.name,
+                "description": None,
+                "adjacent": [],
+                "undiscovered": True,
+            }
 
     routes_list: list[dict] = []
     for route in getattr(cart, "routes", []):
+        from_id = getattr(route, "from_id", None)
+        to_id = getattr(route, "to_id", None)
+        if discovery_mode == "fog":
+            # A route reaches the wire only when both endpoints are visible
+            # AND at least one is genuinely discovered (two frontier nodes
+            # joined by a route would leak undiscovered topology).
+            endpoints_visible = (from_id in known or from_id in frontier) and (
+                to_id in known or to_id in frontier
+            )
+            if not endpoints_visible or (from_id not in known and to_id not in known):
+                continue
         routes_list.append(
             {
                 "name": route.name,
                 "description": getattr(route, "description", None),
-                "from_id": getattr(route, "from_id", None),
-                "to_id": getattr(route, "to_id", None),
+                "from_id": from_id,
+                "to_id": to_id,
             }
         )
 
@@ -1351,7 +1400,6 @@ def _build_cartography_map_message(
     # scene-title pollution), de-duplicate while preserving first-seen
     # order. The client reads ``id`` (falls back to ``name``) for the
     # visited set; emit both.
-    incoming = discovered_regions or []
     explored: list[dict] = []
     _seen: set[str] = set()
     for rid in incoming:
@@ -1377,6 +1425,11 @@ def _build_cartography_map_message(
         visited_count=len(explored),
         discovered_total=len(incoming),
         dropped_count=len(incoming) - len(explored),
+        # Disclosure accounting (fog mode): the GM panel must be able to see
+        # how much of the catalog reached the wire vs stayed hidden.
+        discovery_mode=discovery_mode,
+        regions_shipped=len(region_dict),
+        regions_total=len(regions),
     ):
         return CartographyMapMessage(
             payload=CartographyMapPayload(

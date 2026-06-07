@@ -256,6 +256,16 @@ class CartographyConfig(BaseModel):
     map_style: str = ""
     map_resolution: list[int] | None = None
     navigation_mode: NavigationMode = NavigationMode.region
+    # Player-map disclosure policy (sq-playtest 2026-06-07: perseus_cloud's
+    # full 35-system sector catalog — secret systems included — rendered at
+    # discovered=1). ``public`` (default): the whole region catalog ships to
+    # the client, correct for small worlds whose map is common knowledge (a
+    # town, a neighborhood). ``fog``: only discovered regions ship with full
+    # lore; regions adjacent to a discovered one ship name-only (the
+    # explorable frontier); everything else is absent from the wire.
+    # Content-expressible per world in cartography.yaml — no engine change
+    # needed to make a new world spoiler-safe.
+    discovery_mode: Literal["public", "fog"] = "public"
     regions: dict[str, Region] = Field(default_factory=dict)
     routes: list[Route] = Field(default_factory=list)
     rooms: list[RoomDef] | None = None

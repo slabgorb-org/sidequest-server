@@ -61,16 +61,67 @@ def _collect_world_factions(sd: _SessionData) -> list[Faction]:
 
 
 def _collect_trope_definitions(sd: _SessionData) -> list[TropeDefinition]:
-    """The bound genre pack's trope DEFINITIONS (Story 84-5, WI-2). The dormant-
-    trope projector joins these (by id) onto each ``TropeState`` to recover the
-    human name/description (``TropeState`` carries only ``id``). Defensive
-    ``getattr`` reads keep an entity-sync sweep from crashing a turn on a
-    partially-built session; an absent pack yields zero definitions (so no dormant
-    trope projects — never a fabricated name)."""
+    """Trope DEFINITIONS from BOTH tiers — genre pack + bound world (Story 84-5,
+    WI-2; playtest 2026-06-07 ADR-140 boundary fix). The dormant-trope projector
+    joins these (by id) onto each ``TropeState`` to recover the human
+    name/description (``TropeState`` carries only ``id``).
+
+    The seeder's chapter tropes are WORLD ids (``resolve_trope_inheritance``
+    emits only world-tier tropes into ``world.tropes``), so reading
+    ``genre_pack.tropes`` alone made every world-authored dormant trope fail
+    ``error=no_definition`` each turn. Merge by id, world tier wins — the same
+    resolution the seeder used. Defensive ``getattr`` reads keep an entity-sync
+    sweep from crashing a turn on a partially-built session; an absent pack
+    yields zero definitions (so no dormant trope projects — never a fabricated
+    name)."""
     genre_pack = getattr(sd, "genre_pack", None)
     if genre_pack is None:
         return []
-    return list(getattr(genre_pack, "tropes", None) or [])
+    by_id: dict[str, TropeDefinition] = {
+        d.id: d for d in (getattr(genre_pack, "tropes", None) or []) if d.id
+    }
+    world_slug = getattr(sd, "world_slug", "") or ""
+    world = genre_pack.worlds.get(world_slug) if world_slug else None
+    if world is not None:
+        for d in getattr(world, "tropes", None) or []:
+            if d.id:
+                by_id[d.id] = d
+    return list(by_id.values())
+
+
+def audit_seeded_trope_definitions(sd: _SessionData, snapshot: object) -> list[str]:
+    """Seed-time loud check (No Silent Fallbacks; playtest 2026-06-07).
+
+    A chapter-seeded trope id with no resolvable definition in EITHER tier
+    (genre pack or bound world) is a content bug. Surface it ONCE here at the
+    materialization seam — ERROR log + watcher event — instead of letting
+    ``entity_sync.project_failed error=no_definition`` warn-spam every turn
+    forever. Returns the missing ids (for tests / callers); empty when clean.
+    """
+    defined = {d.id for d in _collect_trope_definitions(sd)}
+    missing = [t.id for t in getattr(snapshot, "active_tropes", None) or [] if t.id not in defined]
+    if not missing:
+        return []
+    logger.error(
+        "trope.seeded_without_definition genre=%s world=%s missing=%s — chapter "
+        "seeds reference trope ids with no definition in genre or world tropes.yaml",
+        getattr(sd, "genre_slug", ""),
+        getattr(sd, "world_slug", ""),
+        missing,
+    )
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "trope_seed",
+            "op": "missing_definition",
+            "genre": getattr(sd, "genre_slug", ""),
+            "world": getattr(sd, "world_slug", ""),
+            "missing_ids": missing,
+        },
+        component="retrieval",
+        severity="error",
+    )
+    return missing
 
 
 def _resolve_region_view(

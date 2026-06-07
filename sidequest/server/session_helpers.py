@@ -1638,6 +1638,36 @@ _SKIP_REASON_PRONOUNS_HONORIFIC = "ambiguous_pronouns_honorific"
 _SKIP_REASON_PRONOUNS_ROLE = "ambiguous_pronouns_role"
 _SKIP_REASON_GENDER_PAIRED = "gender_paired_conflict"
 
+# Gendered-token pronoun fallback (sq-playtest 2026-06-07 purge/mint
+# deadlock): when the forward-window pronoun scan is ambiguous but the
+# honorific or bare-role token ITSELF declares gender, use the token's
+# pronouns instead of skipping. "Mother Demus" was named in narration four
+# consecutive turns (five_points-4 t28-31) while the minter skipped her
+# every turn on ``ambiguous_pronouns_honorific`` — composing with the
+# observation gate's purge into a deadlock where the NPC existed in prose
+# and nowhere in state. Reading "Mother"/"Mrs."/"Sir" as a pronoun source
+# is not guessing (the AC2 prohibition); it is reading what the narrator
+# wrote. Neutral titles (Dr, Reverend, Captain, Sergeant) and article
+# roles (the doctor, ...) stay window-only and still skip on ambiguity.
+_HONORIFIC_PRONOUN_FALLBACK: dict[str, str] = {
+    "Mrs": "she/her",
+    "Lady": "she/her",
+    "Dame": "she/her",
+    "Mother": "she/her",
+    "Mr": "he/him",
+    "Sir": "he/him",
+    "Lord": "he/him",
+    "Father": "he/him",
+}
+_ROLE_PRONOUN_FALLBACK: dict[str, str] = {
+    "mother": "she/her",
+    "sister": "she/her",
+    "daughter": "she/her",
+    "father": "he/him",
+    "brother": "he/him",
+    "son": "he/him",
+}
+
 
 def _emit_auto_mint_skip(
     *,
@@ -1802,6 +1832,7 @@ def _auto_mint_prose_only_npcs(
         public_name: str,
         role_token: str,
         pronouns: str,
+        pronoun_source: str = "window_inference",
     ) -> None:
         snapshot.npc_pool.append(
             NpcPoolMember(
@@ -1821,13 +1852,15 @@ def _auto_mint_prose_only_npcs(
             pronouns=pronouns,
             source="dialogue_extraction",
             turn_number=turn_num,
+            pronoun_source=pronoun_source,
         ):
             logger.info(
                 "npc.auto_minted_from_prose name=%r role=%r pronouns=%r "
-                "source=dialogue_extraction turn=%d",
+                "source=dialogue_extraction pronoun_source=%s turn=%d",
                 public_name,
                 role_token,
                 pronouns,
+                pronoun_source,
                 turn_num,
             )
 
@@ -1848,6 +1881,13 @@ def _auto_mint_prose_only_npcs(
         if cf_name in pc_names or cf_name in known_names:
             continue
         pronouns = _infer_pronouns_from_role_context(narration_text, end)
+        pronoun_source = "window_inference"
+        if pronouns is None:
+            # Gendered honorific fallback — the title itself declares the
+            # pronouns ("Mother Demus" → she/her). See
+            # ``_HONORIFIC_PRONOUN_FALLBACK`` for the deadlock this breaks.
+            pronouns = _HONORIFIC_PRONOUN_FALLBACK.get(title)
+            pronoun_source = "honorific_fallback"
         if pronouns is None:
             _emit_auto_mint_skip(
                 public_name=public_name,
@@ -1859,7 +1899,12 @@ def _auto_mint_prose_only_npcs(
         # Honorifics carry no canonical role tag (Mrs./Mr./Dr. are titles,
         # not roles). Role is None — narrator may refine via a later
         # structured patch.
-        _mint(public_name=public_name, role_token="", pronouns=pronouns)
+        _mint(
+            public_name=public_name,
+            role_token="",
+            pronouns=pronouns,
+            pronoun_source=pronoun_source,
+        )
 
     # Phase 2 — bare role tokens (Father, mother, the doctor, ...). Process
     # each role at most once per turn; first matching occurrence wins.
@@ -1904,6 +1949,14 @@ def _auto_mint_prose_only_npcs(
             continue
 
         pronouns = _infer_pronouns_from_role_context(narration_text, match.end())
+        pronoun_source = "window_inference"
+        if pronouns is None:
+            # Gendered bare-role fallback — "Father"/"Son" declare their own
+            # pronouns (barsoom-4 t6-9: "Father" skipped 4 consecutive turns
+            # on window ambiguity). Article roles (the doctor, ...) are not
+            # in the map and still skip.
+            pronouns = _ROLE_PRONOUN_FALLBACK.get(cf_role)
+            pronoun_source = "role_fallback"
         if pronouns is None:
             _emit_auto_mint_skip(
                 public_name=public_name,
@@ -1913,7 +1966,12 @@ def _auto_mint_prose_only_npcs(
             )
             continue
 
-        _mint(public_name=public_name, role_token=role_token, pronouns=pronouns)
+        _mint(
+            public_name=public_name,
+            role_token=role_token,
+            pronouns=pronouns,
+            pronoun_source=pronoun_source,
+        )
 
 
 def _apply_npc_observation_gate(
@@ -1921,6 +1979,7 @@ def _apply_npc_observation_gate(
     snapshot: GameSnapshot,
     emitted_mentions: list[NpcMention],
     turn_num: int,
+    narration_text: str = "",
 ) -> None:
     """Story 49-6: ratification gate for prose-mint NPCs.
 
@@ -1946,6 +2005,17 @@ def _apply_npc_observation_gate(
       Emit ``npc.observation_gate_purged`` at severity=warning so the
       GM panel renders the drop as a soft alert.
 
+    A re-citation in THIS turn's **prose** also ratifies (sq-playtest
+    2026-06-07 purge/mint deadlock, five_points-4 t28-31): the narrator
+    kept naming "Mother Demus"/"Son" in narration while omitting them
+    from ``npcs_present``, so the gate purged them every turn while the
+    minter re-skipped them — the NPC existed in prose and nowhere in
+    state for four consecutive turns. Prose recurrence is exactly the
+    observation this gate exists to detect (it is the same signal
+    ``_detect_missed_recurring_npcs`` warns about); a word-boundary
+    name match in ``narration_text`` promotes with
+    ``ratified_by="prose"`` instead of purging.
+
     Pipeline ordering is load-bearing: the gate examines pending
     members from PRIOR turns against THIS turn's mentions. Running
     after the auto-minter would self-cancel — this turn's mints
@@ -1968,6 +2038,8 @@ def _apply_npc_observation_gate(
         if m.role:
             mention_roles.add(m.role.casefold())
 
+    folded_text = narration_text.casefold() if narration_text else ""
+
     survivors: list[NpcPoolMember] = []
     for member in snapshot.npc_pool:
         if not member.observation_pending:
@@ -1977,6 +2049,18 @@ def _apply_npc_observation_gate(
         cf_name = member.name.casefold() if member.name else ""
         cf_role = (member.role or "").casefold()
         matched = (cf_name and cf_name in mention_names) or (cf_role and cf_role in mention_roles)
+        ratified_by = "structured_mention"
+        # Prose re-citation ratifies too — see docstring (2026-06-07
+        # purge/mint deadlock). Word-boundary match, same idiom as
+        # ``_detect_missed_recurring_npcs``.
+        if (
+            not matched
+            and cf_name
+            and folded_text
+            and re.search(rf"\b{re.escape(cf_name)}\b", folded_text)
+        ):
+            matched = True
+            ratified_by = "prose"
 
         if matched:
             member.observation_pending = False
@@ -1985,12 +2069,14 @@ def _apply_npc_observation_gate(
                 npc_name=member.name,
                 role=member.role or "",
                 turn_number=turn_num,
+                ratified_by=ratified_by,
             ):
                 logger.info(
-                    "npc.observation_gate_promoted name=%r role=%r turn=%d",
+                    "npc.observation_gate_promoted name=%r role=%r turn=%d ratified_by=%s",
                     member.name,
                     member.role,
                     turn_num,
+                    ratified_by,
                 )
         else:
             with npc_observation_gate_purged_span(

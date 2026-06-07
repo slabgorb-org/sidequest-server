@@ -164,6 +164,47 @@ def test_unknown_class_is_noop() -> None:
     assert char.core.inventory.gold == 0
 
 
+def test_unknown_class_warns_loudly(caplog) -> None:
+    """Playtest 2026-06-07 (five_points): a class with no loadout entry used
+    to complete chargen SILENTLY with an empty inventory — the player found
+    the content gap. The gap must be loud at chargen time."""
+    import logging
+
+    char = _make_character("Outlaw")
+    config = InventoryConfig(
+        item_catalog=_basic_catalog(),
+        starting_equipment={"Delver": ["rusted_lantern"]},
+        starting_gold={"Delver": 3},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        apply_starting_loadout(char, config, genre="spaghetti_western", world="five_points")
+
+    warns = [r for r in caplog.records if "chargen.starting_equipment_missing" in r.message]
+    assert len(warns) == 1
+    msg = warns[0].getMessage()
+    assert "class=Outlaw" in msg
+    assert "world=five_points" in msg
+    assert "Delver" in msg, "declared classes must ride the warning for triage"
+
+
+def test_known_class_does_not_warn(caplog) -> None:
+    """The missing-loadout warning must not fire when the class matches."""
+    import logging
+
+    char = _make_character("Delver")
+    config = InventoryConfig(
+        item_catalog=_basic_catalog(),
+        starting_equipment={"Delver": ["rusted_lantern"]},
+        starting_gold={"Delver": 3},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        apply_starting_loadout(char, config)
+
+    assert not [r for r in caplog.records if "starting_equipment_missing" in r.message]
+
+
 def test_builder_item_hints_are_preserved() -> None:
     char = _make_character("Delver")
     # Simulate a builder-side item_hint already on the inventory.

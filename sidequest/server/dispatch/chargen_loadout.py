@@ -24,6 +24,7 @@ from sidequest.game.character import Character
 from sidequest.game.vessel_tags import bind_rig_pool_from_inventory
 from sidequest.genre.models.inventory import CatalogItem, InventoryConfig
 from sidequest.telemetry.spans import (
+    SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING,
     SPAN_CHARGEN_STARTING_KIT_DEDUP_EVALUATED,
     SPAN_CHARGEN_STARTING_KIT_DEDUP_FIRED,
 )
@@ -180,6 +181,30 @@ def apply_starting_loadout(
         gold_key = _match_class(list(inventory_config.starting_gold.keys()), class_name)
         equipment_ids = inventory_config.starting_equipment[equipment_key] if equipment_key else []
         gold = inventory_config.starting_gold[gold_key] if gold_key else 0
+
+        # No Silent Fallbacks (playtest 2026-06-07, five_points): an
+        # inventory.yaml that declares no loadout for this class used to
+        # complete chargen silently with an empty inventory — the PLAYER
+        # discovered the content gap. Make it loud at chargen time so the
+        # GM panel surfaces the defect the turn it happens.
+        if equipment_key is None and gold_key is None:
+            declared = sorted(inventory_config.starting_equipment.keys())
+            logger.warning(
+                "chargen.starting_equipment_missing class=%s genre=%s world=%s "
+                "declared_classes=%s — inventory.yaml has no starting_equipment/"
+                "starting_gold entry for this class; character ships with an "
+                "empty loadout (content gap)",
+                class_name,
+                genre,
+                world,
+                declared,
+            )
+            with _tracer.start_as_current_span(SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING) as gap:
+                gap.set_attribute("class_name", class_name)
+                gap.set_attribute("declared_classes", ",".join(declared))
+                gap.set_attribute("genre", genre)
+                gap.set_attribute("world", world)
+                gap.set_attribute("player_id", player_id)
         catalog_by_id = {item.id: item for item in inventory_config.item_catalog}
 
         # Upgrade builder-produced item_hint dicts (from chargen scene

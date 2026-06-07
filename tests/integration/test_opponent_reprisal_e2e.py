@@ -477,3 +477,125 @@ def test_capability_gate_swn_provides_native_fails_loud():
             target_ac=2,
             d20=10,
         )
+
+
+# ---------------------------------------------------------------------------
+# sq-playtest 2026-06-07 SILENT death-spiral — the reprisal must SURFACE what it
+# does: narrator directives, resolution signal, persisted-event ops, INFO logs.
+# (Mechanics were correct; every channel that tells the story/table was silent.)
+# ---------------------------------------------------------------------------
+
+
+def _capture_dice_watcher(monkeypatch):
+    """Capture ``dispatch.dice._watcher_publish`` calls (canonical pattern)."""
+    import sidequest.server.dispatch.dice as dice_mod
+
+    captured: list[dict] = []
+
+    def _capture(event_type, fields, **kwargs):
+        captured.append({"event_type": event_type, **fields})
+
+    monkeypatch.setattr(dice_mod, "_watcher_publish", _capture)
+    return captured
+
+
+def test_reprisal_hit_appends_damage_directive_and_logs(caplog):
+    """A reprisal HIT that does not down the player must (1) append a
+    next-turn directive naming attacker/target/damage so the narrator can
+    narrate the hit, and (2) log an INFO line for text-log forensics."""
+    import logging
+
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    snap = _make_snapshot(player_ac=2, player_hp=12)
+    enc = _make_encounter()
+    with caplog.at_level(logging.INFO, logger="sidequest.server.dispatch.dice"):
+        _drive_player_shoot(snap, enc, pack, broadcasts=[])
+
+    hit_directives = [
+        d for d in snap.next_turn_directives if "struck" in d and PLAYER in d and OPPONENT in d
+    ]
+    assert hit_directives, (
+        f"reprisal hit must append a narrator directive naming the hit; "
+        f"directives={snap.next_turn_directives!r}"
+    )
+    assert any("dice.opponent_reprisal_hit" in r.message for r in caplog.records), (
+        "reprisal hit must INFO-log dice.opponent_reprisal_hit (text-log forensics)"
+    )
+    # Not downed → no resolution signal, no resolution directive.
+    assert snap.pending_resolution_signal is None
+    assert not any("RESOLVED" in d for d in snap.next_turn_directives)
+
+
+def test_reprisal_down_stamps_resolution_signal_and_directive(caplog):
+    """A reprisal that DOWNS the player must stamp pending_resolution_signal
+    (narrator renders the [ENCOUNTER RESOLVED] zone this turn), append a
+    resolution directive, and INFO-log the resolution (hp_depletion +
+    reprisal close lines)."""
+    import logging
+
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    snap = _make_snapshot(player_ac=2, player_hp=1)  # any hit downs the player
+    enc = _make_encounter()
+    with caplog.at_level(logging.INFO):
+        _drive_player_shoot(snap, enc, pack, broadcasts=[])
+
+    assert enc.resolved and enc.outcome == "opponent_victory", (
+        f"precondition: the reprisal must down the 1-HP player; "
+        f"resolved={enc.resolved} outcome={enc.outcome}"
+    )
+    sig = snap.pending_resolution_signal
+    assert sig is not None and sig.outcome == "opponent_victory", (
+        f"reprisal resolution must stamp pending_resolution_signal "
+        f"(sq-playtest 2026-06-07: narrator kept the fight alive); got {sig!r}"
+    )
+    assert any("RESOLVED" in d and "opponent_victory" in d for d in snap.next_turn_directives), (
+        f"resolution directive missing; directives={snap.next_turn_directives!r}"
+    )
+    messages = [r.message for r in caplog.records]
+    assert any("hp_depletion.resolved" in m for m in messages), (
+        "check_hp_depletion must INFO-log the resolution (text-log forensics)"
+    )
+    assert any("dice.opponent_reprisal_resolved_encounter" in m for m in messages), (
+        "the reprisal close must INFO-log dice.opponent_reprisal_resolved_encounter"
+    )
+
+
+def test_reprisal_down_publishes_resolved_watcher_event(monkeypatch):
+    """The reprisal close must publish the op="resolved" watcher event
+    (source=hp_depletion) — _maybe_persist_encounter_row maps it to a persisted
+    ENCOUNTER_RESOLVED row, which the 2026-06-07 forensic timeline lacked."""
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    captured = _capture_dice_watcher(monkeypatch)
+    snap = _make_snapshot(player_ac=2, player_hp=1)
+    _drive_player_shoot(snap, _make_encounter(), pack, broadcasts=[])
+
+    resolved = [
+        e for e in captured if e.get("op") == "resolved" and e.get("source") == "hp_depletion"
+    ]
+    assert len(resolved) == 1, (
+        f"exactly one op=resolved source=hp_depletion watcher event must publish "
+        f"on the reprisal close; got {resolved!r}"
+    )
+    assert resolved[0]["outcome"] == "opponent_victory"
+    assert resolved[0]["down_side"] == "player"
+
+
+def test_reprisal_ops_persist_to_encounter_rows():
+    """The reprisal's watcher ops must be registered for events-table
+    persistence (ADR-124 census needs the HP-authoring events) and the new kind
+    must be replay-skipped (reconnect must not crash on the internal row)."""
+    from sidequest.server.session_handler import _REPLAY_SKIP_KINDS
+    from sidequest.telemetry.watcher_hub import _KIND_BY_OP
+
+    assert _KIND_BY_OP.get("opponent_attack_resolved") == "ENCOUNTER_OPPONENT_ATTACK"
+    assert _KIND_BY_OP.get("opponent_damage_roll_resolved") == "ENCOUNTER_OPPONENT_ATTACK"
+    assert "ENCOUNTER_OPPONENT_ATTACK" in _REPLAY_SKIP_KINDS

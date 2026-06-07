@@ -256,3 +256,103 @@ def test_idempotent_lethal(otel_capture):
     assert core is not None
     downed = [s for s in core.statuses if "Downed" in s.text]
     assert len(downed) == 1, f"lethal flag must not stack; got {len(downed)}"
+
+
+# ---------------------------------------------------------------------------
+# sq-playtest 2026-06-07 SILENT death-spiral — the decision must SURFACE:
+# narrator directive, status_added watcher event, INFO log. (Groucho sat
+# "Downed — dying" in state while the prose had him crewing a boarding action.)
+# ---------------------------------------------------------------------------
+
+
+def _capture_lethality_watcher(monkeypatch) -> list[dict]:
+    import sidequest.server.post_resolution_lethality as prl_mod
+
+    captured: list[dict] = []
+
+    def _capture(event_type, fields, **kwargs):
+        captured.append({"event_type": event_type, **fields})
+
+    monkeypatch.setattr(prl_mod, "_watcher_publish", _capture)
+    return captured
+
+
+def test_lethal_down_appends_narrator_directive(otel_capture):
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+
+    apply_post_resolution_lethality(
+        snapshot=snap, encounter=snap.encounter, pack=_Pack(_policy("dying")), turn=6
+    )
+
+    downed = [d for d in snap.next_turn_directives if "DOWN" in d and PLAYER in d]
+    assert downed, (
+        f"a lethal down must append a narrator directive — the narration is the "
+        f"only channel telling the table the PC is dying; got "
+        f"{snap.next_turn_directives!r}"
+    )
+
+
+def test_non_lethal_recover_appends_narrator_directive(otel_capture):
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+
+    apply_post_resolution_lethality(
+        snapshot=snap, encounter=snap.encounter, pack=_Pack(_policy("defeated")), turn=6
+    )
+
+    assert any("brink" in d and PLAYER in d for d in snap.next_turn_directives), (
+        f"a non-lethal recovery must append a cost directive; got {snap.next_turn_directives!r}"
+    )
+
+
+def test_decision_publishes_status_added_watcher_event(otel_capture, monkeypatch):
+    """op="status_added" → _maybe_persist_encounter_row persists an
+    ENCOUNTER_STATUS_ADDED row: the forensic timeline gains the authoring event
+    for the Downed/Recovering status."""
+    captured = _capture_lethality_watcher(monkeypatch)
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+
+    apply_post_resolution_lethality(
+        snapshot=snap, encounter=snap.encounter, pack=_Pack(_policy("dying")), turn=6
+    )
+
+    rows = [e for e in captured if e.get("op") == "status_added"]
+    assert len(rows) == 1, f"exactly one status_added event; got {captured!r}"
+    assert rows[0]["actor"] == PLAYER
+    assert rows[0]["decision"] == "lethal_down"
+    assert rows[0]["source"] == "post_resolution_lethality"
+    assert rows[0]["field"] == "encounter"
+
+
+def test_decision_logs_info_line(otel_capture, caplog):
+    import logging
+
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+
+    with caplog.at_level(logging.INFO, logger="sidequest.server.post_resolution_lethality"):
+        apply_post_resolution_lethality(
+            snapshot=snap, encounter=snap.encounter, pack=_Pack(_policy("dying")), turn=6
+        )
+
+    assert any("post_resolution_lethality.applied" in r.message for r in caplog.records), (
+        "the decision must INFO-log for text-log forensics"
+    )
+
+
+def test_idempotent_skip_adds_no_second_directive(otel_capture):
+    """The idempotency gate must also cover the surfacing channels — a re-run
+    must not stack duplicate narrator directives."""
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+    pack = _Pack(_policy("dying"))
+
+    apply_post_resolution_lethality(snapshot=snap, encounter=snap.encounter, pack=pack, turn=6)
+    first = list(snap.next_turn_directives)
+    apply_post_resolution_lethality(snapshot=snap, encounter=snap.encounter, pack=pack, turn=7)
+
+    assert snap.next_turn_directives == first, (
+        f"idempotent re-run must not append a second directive; got {snap.next_turn_directives!r}"
+    )

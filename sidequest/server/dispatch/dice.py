@@ -1203,6 +1203,29 @@ def _resolve_opponent_reprisal(
         target_mitigation=0,
         source_beat_id=f"{opponent_beat.id}:opponent_attack",
     )
+    # Text-log forensics line (sq-playtest 2026-06-07 silent death-spiral): the
+    # success path was span/watcher-only — a log grep on the dead session saw
+    # NOTHING for a reprisal that ablated a PC. WARNING-on-skip already existed;
+    # INFO-on-hit completes the pair.
+    logger.info(
+        "dice.opponent_reprisal_hit attacker=%s target=%s beat=%s damage=%s hp_after=%s/%s",
+        opponent_name,
+        player_name,
+        opponent_beat.id,
+        dmg_total,
+        player_core.hp.current,
+        player_core.hp.max,
+    )
+    # The narrator never sees server-rolled reprisal damage (the dice messages
+    # go to the table, not the prompt) — without this directive the prose
+    # narrates around a hit the engine already applied, and state/story diverge
+    # (SOUL: mechanical state must back the story; sq-playtest 2026-06-07).
+    snapshot.next_turn_directives.append(
+        f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
+        f"{opponent_beat.label} struck {player_name} for {dmg_total} damage — "
+        f"{player_name} is now at {player_core.hp.current}/{player_core.hp.max} HP. "
+        "Narrate the hit landing; do not soften or omit it."
+    )
     _watcher_publish(
         "state_transition",
         {
@@ -1234,11 +1257,62 @@ def _resolve_opponent_reprisal(
     # The player may now be at 0 HP — resolve hp_depletion against them so the
     # player can actually lose the fight (emits encounter.resolved source=
     # hp_depletion).
-    check_hp_depletion(
+    depletion = check_hp_depletion(
         encounter,
         snapshot.find_creature_core,
         beat_id=f"{opponent_beat.id}:opponent_attack",
     )
+    if depletion is not None:
+        # sq-playtest 2026-06-07 SILENT death-spiral: the reprisal resolved the
+        # encounter (opponent_victory, PC downed) and NOTHING surfaced it — the
+        # narrator kept the fight alive in prose, the text log was silent, and
+        # the forensic timeline had no ENCOUNTER_RESOLVED row. Three closes:
+        #
+        # 1. Stamp pending_resolution_signal (the same factory the dial-sweep /
+        #    yield paths use) so the narrator's encounter context renders the
+        #    [ENCOUNTER RESOLVED] zone on this turn's narration.
+        # 2. Publish the op="resolved" watcher event — _maybe_persist_encounter_row
+        #    maps it to a persisted ENCOUNTER_RESOLVED row (the dial path at the
+        #    dice_throw_beat close below already does this; the reprisal close
+        #    was the only resolution channel that never published one).
+        # 3. A directive telling the narrator the fight is OVER — the resolution
+        #    zone says what happened; this says "stop narrating a live fight".
+        #
+        # Function-level import: narration_apply imports dispatch modules at
+        # module level (same pattern as apply_post_resolution_lethality below).
+        from sidequest.server.narration_apply import _build_resolution_signal
+
+        snapshot.pending_resolution_signal = _build_resolution_signal(encounter)
+        logger.info(
+            "dice.opponent_reprisal_resolved_encounter encounter=%s outcome=%s "
+            "down_side=%s target=%s hp=%s/%s",
+            encounter.encounter_type,
+            encounter.outcome,
+            depletion.down_side,
+            player_name,
+            player_core.hp.current,
+            player_core.hp.max,
+        )
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "resolved",
+                "encounter_type": encounter.encounter_type,
+                "outcome": encounter.outcome or "",
+                "source": "hp_depletion",
+                "down_side": depletion.down_side,
+                "final_player_metric": encounter.player_metric.current,
+                "final_opponent_metric": encounter.opponent_metric.current,
+            },
+            component="encounter",
+        )
+        snapshot.next_turn_directives.append(
+            f"MECHANICAL TRUTH (weave into the narration): the {encounter.encounter_type} "
+            f"confrontation has RESOLVED — outcome: {encounter.outcome}. "
+            f"{player_name} has been taken out of the fight. Narrate the close of "
+            "the engagement; do NOT continue narrating it as a live, ongoing fight."
+        )
 
     # EH-2 burning_peace playtest (2026-06-05): a PC just dropped to 0 by the
     # reprisal must take the genre lethality policy's mechanical consequence —

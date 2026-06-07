@@ -11,12 +11,15 @@ sides in one call, but a dogfight shot can).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from sidequest.game.encounter import EncounterPhase, StructuredEncounter
 from sidequest.telemetry.spans.encounter import encounter_resolved_span
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,16 @@ def check_hp_depletion(
     enc.resolved = True
     enc.outcome = outcome
     enc.structured_phase = EncounterPhase.Resolution
+    # Text-log forensics line (sq-playtest 2026-06-07 silent death-spiral): the
+    # span below is Jaeger-only — a log grep on the dead session must be able to
+    # see WHO resolved the fight and WHY without a trace store.
+    logger.info(
+        "hp_depletion.resolved encounter=%s outcome=%s down_side=%s extra=%s",
+        enc.encounter_type,
+        outcome,
+        down_side,
+        extra_span_attrs or {},
+    )
     with encounter_resolved_span(
         encounter_type=enc.encounter_type,
         outcome=outcome,

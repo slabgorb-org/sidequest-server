@@ -47,6 +47,7 @@ from sidequest.telemetry.spans.encounter import (
     SPAN_POST_RESOLUTION_LETHALITY,
     post_resolution_lethality_span,
 )
+from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
 
@@ -144,26 +145,76 @@ def apply_post_resolution_lethality(
 
         hp_before = core.hp.current
         if lethal:
+            status_text = f"{_DOWNED_PREFIX} — {verdict} (mortally wounded)"
             core.statuses.append(
                 Status(
-                    text=f"{_DOWNED_PREFIX} — {verdict} (mortally wounded)",
+                    text=status_text,
                     severity=StatusSeverity.Scar,
                     created_turn=turn,
                     created_in_encounter=enc.encounter_type,
                 )
             )
             decision = "lethal_down"
+            # sq-playtest 2026-06-07 SILENT death-spiral: this status was applied
+            # with zero narrator awareness — Groucho sat "Downed — dying" in state
+            # while the prose had him crewing a boarding action. The directive is
+            # the narrator's only channel for a server-applied mechanical truth.
+            snapshot.next_turn_directives.append(
+                f"MECHANICAL TRUTH (weave into the narration): {core.name} is DOWN "
+                f"at 0 HP — status: {status_text!r}. {core.name} is out of the "
+                "action and dying. The narration MUST reflect this; do not "
+                f"narrate {core.name} acting, speaking tactically, or fighting."
+            )
         else:
+            status_text = f"{_RECOVERING_PREFIX} — {verdict}; {policy.default_reversibility}"
             core.hp.current = _RECOVERY_FLOOR_HP
             core.statuses.append(
                 Status(
-                    text=(f"{_RECOVERING_PREFIX} — {verdict}; {policy.default_reversibility}"),
+                    text=status_text,
                     severity=StatusSeverity.Wound,
                     created_turn=turn,
                     created_in_encounter=enc.encounter_type,
                 )
             )
             decision = "non_lethal_recover"
+            snapshot.next_turn_directives.append(
+                f"MECHANICAL TRUTH (weave into the narration): {core.name} was "
+                f"taken to the brink — now at {core.hp.current} HP with status "
+                f"{status_text!r}. Narrate the cost of the defeat."
+            )
+
+        logger.info(
+            "post_resolution_lethality.applied decision=%s actor=%s verdict=%s "
+            "hp_before=%s hp_after=%s encounter=%s outcome=%s",
+            decision,
+            core.name,
+            verdict,
+            hp_before,
+            core.hp.current,
+            enc.encounter_type,
+            enc.outcome,
+        )
+        # op="status_added" → _maybe_persist_encounter_row persists an
+        # ENCOUNTER_STATUS_ADDED row: the forensic timeline gains the authoring
+        # event for the Downed/Recovering status (the 2026-06-07 timeline had
+        # the status in state with no event trail).
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "status_added",
+                "actor": core.name,
+                "status": status_text,
+                "decision": decision,
+                "verdict": verdict,
+                "hp_before": hp_before,
+                "hp_after": core.hp.current,
+                "encounter_type": enc.encounter_type,
+                "outcome": enc.outcome or "",
+                "source": "post_resolution_lethality",
+            },
+            component="encounter",
+        )
 
         with post_resolution_lethality_span(
             decision=decision,

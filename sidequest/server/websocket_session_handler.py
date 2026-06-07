@@ -1016,6 +1016,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 prior_encounter = snapshot.encounter
                 prior_live = prior_encounter is not None and not prior_encounter.resolved
                 prior_type = prior_encounter.encounter_type if prior_encounter else None
+                # Ping-pong 2026-06-07 ("MP confrontation DESYNC"): take the
+                # dice-path clear stash. ``dispatch_dice_throw`` resolves the
+                # encounter in the DICE_THROW handler — BEFORE this capture —
+                # so ``prior_live`` is already False for that transition and
+                # the clear branch below would never fire (no
+                # ``CONFRONTATION {active: false}`` frame, each client left to
+                # its own NARRATION_END heuristic → per-seat MP fork). The
+                # stash carries the live→resolved fact across the handler
+                # boundary. Take semantics: consumed here whether or not the
+                # clear fires (a new live encounter supersedes it).
+                pending_dice_clear_type = sd.pending_confrontation_clear
+                sd.pending_confrontation_clear = None
 
                 # Playtest 2026-05-20: capture current_region pre-apply so the
                 # region-mode LOCATION_DESCRIPTION branch can detect a true
@@ -1906,20 +1918,28 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             "encounter_type": now_encounter.encounter_type,
                             "genre_slug": sd.genre_slug,
                         }
-                    elif prior_live and not now_live:
+                    elif (prior_live or pending_dice_clear_type is not None) and not now_live:
                         from sidequest.server.dispatch.confrontation import (
                             build_clear_confrontation_payload,
                         )
 
-                        assert prior_type is not None  # guaranteed by prior_live=True
+                        # Ping-pong 2026-06-07: ``pending_dice_clear_type``
+                        # carries a live→resolved transition that happened in
+                        # the DICE_THROW handler (before the prior_live capture
+                        # above) — emit the same deterministic clear the
+                        # in-turn transition gets, so every connected socket
+                        # unmounts its overlay instead of relying on the
+                        # per-client NARRATION_END heuristic.
+                        cleared_type = prior_type if prior_live else pending_dice_clear_type
+                        assert cleared_type is not None  # one of the two gates held
                         payload_dict = build_clear_confrontation_payload(
-                            encounter_type=prior_type,
+                            encounter_type=cleared_type,
                             genre_slug=sd.genre_slug,
                         )
                         confrontation_payload = ConfrontationPayload(**payload_dict)
                         confrontation_event_attrs = {
                             "active": False,
-                            "encounter_type": prior_type,
+                            "encounter_type": cleared_type,
                             "genre_slug": sd.genre_slug,
                         }
 

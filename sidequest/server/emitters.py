@@ -455,11 +455,30 @@ def emit_event(
             # emitter's own frame is recovered without calling `_frame_for`
             # (hence the supplier) a second time. A spy/no-op helper returns a
             # falsy value → emitter_msg falls through to the back-compat block.
+            _recipients = room.connected_player_ids()
             built = _deliver_to_connected_recipients(
                 room,
-                room.connected_player_ids(),
+                _recipients,
                 message_builder=_frame_for,
                 kind=kind,
+            )
+            # Ping-pong 2026-06-07 ("MP confrontation DESYNC"): per-recipient
+            # DELIVERY evidence. ``confrontation.peer_projection_broadcast``
+            # logs room PRESENCE — it cannot distinguish "frame enqueued to
+            # this seat" from "supplier silently returned None" (unseated /
+            # unresolved-class skip). The desync was undiagnosable from the
+            # text log for exactly this reason. ``skipped`` = connected pids
+            # the supplier produced no frame for; gone-socket drops are
+            # surfaced separately via emit_event.recipient_dropped.
+            # ``built`` is falsy when a test spy/no-op helper replaced the
+            # delivery dispatch (see emitter_msg fallback below) — guard so
+            # the evidence line never crashes a turn.
+            _delivered = sorted(built.keys()) if built else []
+            logger.info(
+                "confrontation.delivery kind=%s delivered=%s skipped=%s",
+                kind,
+                _delivered,
+                sorted(set(_recipients) - set(_delivered)),
             )
             emitter_msg: object | None = built.get(emitter_player_id) if built else None
 

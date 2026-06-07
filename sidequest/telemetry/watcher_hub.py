@@ -350,6 +350,12 @@ _KIND_BY_OP: dict[str, str] = {
     "yield_received": "ENCOUNTER_YIELD",
     "yield_resolved": "ENCOUNTER_YIELD",
     "resolved": "ENCOUNTER_RESOLVED",
+    # Opponent reprisal (story 71-21 / sq-playtest 2026-06-07 silent
+    # death-spiral): server-rolled enemy attacks ablate PC HP — the forensic
+    # timeline needs the authoring events (ADR-124 census saw an HP
+    # discontinuity with no event trail).
+    "opponent_attack_resolved": "ENCOUNTER_OPPONENT_ATTACK",
+    "opponent_damage_roll_resolved": "ENCOUNTER_OPPONENT_ATTACK",
     # Reserved — no current callsite emits this op (would break ENCOUNTER_RESOLVED-last
     # ordering invariant). Future sites that emit signal-creation outside of resolution
     # may use it.

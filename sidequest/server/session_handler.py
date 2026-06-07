@@ -105,6 +105,7 @@ _REPLAY_SKIP_KINDS: frozenset[str] = frozenset(
         "ENCOUNTER_YIELD",
         "ENCOUNTER_RESOLVED",
         "ENCOUNTER_RESOLUTION_SIGNAL",
+        "ENCOUNTER_OPPONENT_ATTACK",
     }
 )
 

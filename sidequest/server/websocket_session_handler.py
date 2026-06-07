@@ -1198,6 +1198,14 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             },
                             component="encounter",
                         )
+                    # Ping-pong 2026-06-07 ("stale peer quote pinned at the
+                    # bottom"): capture the round THIS turn resolves BEFORE
+                    # record_interaction() bumps it — NARRATION_END stamps it
+                    # so the UI can anchor the round's persisted peer-action
+                    # quotes (dice-driven turns have no own PLAYER_ACTION
+                    # round to anchor by). Matches the round the turn's
+                    # ACTION_REVEAL entries were submitted under.
+                    _resolved_round = snapshot.turn_manager.round
                     # Story 45-5 / ADR-051: the opening narration is the round-1
                     # scene-set and bumps no counter; the first PLAYER_ACTION
                     # turn is the first real exchange.
@@ -2336,6 +2344,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 handshake_delta,
                                 magic_state=magic_state_dict,
                             ),
+                            # Ping-pong 2026-06-07: the round this turn
+                            # resolved (pre-bump) — the UI's peer-quote anchor.
+                            round=_resolved_round,
                         ),
                         player_id=sd.player_id,
                     )

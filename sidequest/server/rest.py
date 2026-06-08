@@ -892,10 +892,10 @@ def create_rest_router() -> APIRouter:
         the GM dashboard Layer 1 panel."""
         from sidequest.agents.cost_safety import ledger as _ledger
 
-        l = _ledger()
+        cost_ledger = _ledger()
         return {
-            "instrumented_usd": l.instrumented_total_usd(),
-            "session_count": len(l.cumulative_cost_usd),
+            "instrumented_usd": cost_ledger.instrumented_total_usd(),
+            "session_count": len(cost_ledger.cumulative_cost_usd),
         }
 
     @router.get("/api/debug/cost/reconciliation")
@@ -923,7 +923,7 @@ def create_rest_router() -> APIRouter:
                     "alert": True,
                 },
                 component="cost_reconcile",
-                severity="warn",
+                severity="error",
             )
         return payload
 

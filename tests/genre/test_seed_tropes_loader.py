@@ -1,20 +1,30 @@
-"""Loader wires seed_tropes.yaml at the WORLD tier (epic 94, was story 22-3).
+"""Loader wires seed_tropes.yaml at BOTH the genre and world tiers.
 
-Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-the seed-trope deck is a world-tier CAST/CATALOG surface — the seeds a world
-plants — NOT a genre mechanic. The genre tier is the rulebook only. Epic 94
-moved ``tea_and_murder/seed_tropes.yaml`` down to the ``glenross`` world.
+The seed-trope deck loads from a pack's own ``seed_tropes.yaml`` (genre tier →
+``GenrePack.seed_tropes``) AND from each ``worlds/<slug>/seed_tropes.yaml``
+(world tier → ``World.seed_tropes``). A world that authors its own deck plants
+those seeds; a pack-level deck is the genre default. Both are optional and both
+fail loud on a malformed entry (``SeedTrope`` is ``extra='forbid'``).
+
+History: epic 94 (was story 22-3) first moved ``tea_and_murder``'s deck down to
+the ``glenross`` world while the genre tier carried none — the "genre tier is
+the rulebook only" reading of ADR-120. That was later relaxed: seed decks were
+authored at the genre tier for every pack (content #398/#399, the 77-7 lull-
+escalation ammunition), and the loader reads them into ``GenrePack.seed_tropes``.
+So the live assertion is no longer "genre tier must be empty" — it is the
+no-silent-default contract: present → loaded, absent → ``[]``. The absence
+cases below anchor on the drift-proof ``test_genre`` FIXTURE pack (which ships
+no seed file at either tier) rather than a live pack whose authored decks move.
 
 Contract under test:
 
 * The loader reads ``seed_tropes.yaml`` from a WORLD's directory and populates
   ``World.seed_tropes`` as a list of
-  :class:`~sidequest.genre.models.tropes.SeedTrope`.
-* Worlds without a ``seed_tropes.yaml`` get an empty list (no silent fallback
-  to a default deck — per CLAUDE.md "No Silent Fallbacks"; missing file is
-  fine, but the field must reflect reality).
-* The migrated ``glenross`` deck is loadable end-to-end with no validation
-  errors — every authored seed round-trips through :class:`SeedTrope`.
+  :class:`~sidequest.genre.models.tropes.SeedTrope` (live ``glenross`` deck).
+* A pack/world without a ``seed_tropes.yaml`` gets an explicit empty list (no
+  silent fallback to a default deck — per CLAUDE.md "No Silent Fallbacks").
+* The ``glenross`` deck is loadable end-to-end with no validation errors —
+  every authored seed round-trips through :class:`SeedTrope`.
 """
 
 from __future__ import annotations
@@ -27,15 +37,27 @@ from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.tropes import SeedTrope
 
 # Anchor the tea_and_murder pack the same way the world-load test anchors
-# its pack (see tests/genre/test_beneath_sunden_world_load.py:19).
+# its pack (see tests/genre/test_beneath_sunden_world_load.py:19). Used only
+# for the live ``glenross`` world-tier deck assertions below.
 _TEA_AND_MURDER = (
     Path(__file__).resolve().parents[3] / "sidequest-content/genre_packs/tea_and_murder"
 )
+
+# Drift-proof fixture pack: ships NO seed_tropes.yaml at the genre tier and
+# its one world (flickering_reach) ships none either — the controlled anchor
+# for the "absent → empty list, no silent default" contract.
+_FIXTURE_GENRE = Path(__file__).resolve().parents[1] / "fixtures/packs/test_genre"
 
 
 @pytest.fixture(scope="module")
 def tea_pack():
     return load_genre_pack(_TEA_AND_MURDER)
+
+
+@pytest.fixture(scope="module")
+def fixture_pack():
+    """A controlled pack with no seed_tropes.yaml at either tier."""
+    return load_genre_pack(_FIXTURE_GENRE)
 
 
 @pytest.fixture(scope="module")
@@ -60,10 +82,13 @@ def test_world_exposes_seed_tropes_attribute(glenross_world):
     )
 
 
-def test_genre_tier_seed_tropes_is_empty(tea_pack):
-    """Epic 94: the genre tier no longer owns the deck — it migrated to the
-    world. GenrePack.seed_tropes is [] for the migrated tea_and_murder pack."""
-    assert tea_pack.seed_tropes == []
+def test_genre_tier_seed_tropes_absent_loads_empty(fixture_pack):
+    """No-silent-default contract at the genre tier: a pack that ships no
+    genre-tier ``seed_tropes.yaml`` exposes ``GenrePack.seed_tropes == []`` —
+    never auto-seeded from a default deck. (Live packs now author genre-tier
+    decks per content #398/#399, so this anchors on the drift-proof fixture
+    pack rather than a live pack whose deck moves.)"""
+    assert fixture_pack.seed_tropes == []
 
 
 def test_glenross_seed_tropes_load_non_empty(glenross_world):
@@ -120,7 +145,7 @@ def test_glenross_seeds_carry_authored_prose(glenross_world):
     assert sealed.narrative_hint, "Authored 'narrative_hint' must round-trip"
 
 
-def test_pack_without_seed_tropes_yaml_loads_with_empty_list(tmp_path: Path):
+def test_pack_without_seed_tropes_yaml_loads_with_empty_list(fixture_pack):
     """No silent fallback: a pack that ships no seed_tropes.yaml must
     load successfully (the file is optional) AND surface an explicitly
     empty list — not omit the attribute, not raise, not auto-seed from
@@ -128,32 +153,24 @@ def test_pack_without_seed_tropes_yaml_loads_with_empty_list(tmp_path: Path):
 
     This is the negative side of the wiring test: prevents a future
     refactor where the loader hard-requires seed_tropes.yaml and breaks
-    every non-tea_and_murder pack at load time.
+    every pack that ships none at load time. Anchored on the ``test_genre``
+    fixture pack — a live pack can grow a genre/world deck at any time
+    (every live pack now ships one), so a live anchor is the prod-rows-in-
+    tests anti-pattern; the fixture is the controlled negative case.
     """
-    # Skeleton pack that load_genre_pack will accept without a seed file.
-    # We don't build a full pack here — instead we use the canonical
-    # caverns_and_claudes pack which (today) has no seed_tropes.yaml.
-    caverns = Path(__file__).resolve().parents[3] / (
-        "sidequest-content/genre_packs/caverns_and_claudes"
-    )
-    if not caverns.exists():
-        pytest.skip(
-            "caverns_and_claudes pack not found — cannot verify no-seed-file fallback contract."
-        )
-    pack = load_genre_pack(caverns)
-    assert hasattr(pack, "seed_tropes"), (
+    assert hasattr(fixture_pack, "seed_tropes"), (
         "Packs without seed_tropes.yaml must still expose the attribute — "
         "the loader sets it to [] explicitly. Missing attribute breaks "
         "every consumer that reads pack.seed_tropes."
     )
-    assert pack.seed_tropes == [], (
+    assert fixture_pack.seed_tropes == [], (
         f"Expected empty seed_tropes list when no seed_tropes.yaml is "
-        f"present; got {len(pack.seed_tropes)} entries. Either the "
-        "loader is auto-populating from another pack (silent fallback) "
-        "or caverns_and_claudes secretly grew a seed file."
+        f"present; got {len(fixture_pack.seed_tropes)} entries — the loader "
+        "is auto-populating from a default (silent fallback)."
     )
-    # Epic 94: the world tier must mirror this — worlds without a
-    # seed_tropes.yaml expose an explicit empty list, no silent fallback.
-    for world in pack.worlds.values():
+    # The world tier must mirror this — worlds without a seed_tropes.yaml
+    # expose an explicit empty list, no silent fallback.
+    assert fixture_pack.worlds, "fixture pack must ship at least one world"
+    for world in fixture_pack.worlds.values():
         assert hasattr(world, "seed_tropes")
         assert world.seed_tropes == []

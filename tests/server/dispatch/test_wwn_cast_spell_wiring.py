@@ -49,6 +49,7 @@ from sidequest.genre.models.rules import (
     BeatKind,
     ConfrontationDef,
     MetricDef,
+    RulesConfig,
 )
 from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
@@ -171,6 +172,12 @@ class _FakeGenrePack:
     def __init__(self, classes: list[ClassDef]) -> None:
         self.classes = classes
         self.worlds: dict[str, object] = {}
+        # Story 97-3: build_confrontation_payload reads genre_pack.rules to
+        # author per-beat offer difficulty. This suite asserts cast_spell
+        # filtering, not ruleset-specific difficulty, so a default native
+        # RulesConfig is the minimal faithful stub — building a full wwn
+        # RulesConfig would require an attribute_map the assertions never read.
+        self.rules = RulesConfig()
 
 
 def _snapshot_with_mage(char: Character, player_id: str = "player_1") -> GameSnapshot:

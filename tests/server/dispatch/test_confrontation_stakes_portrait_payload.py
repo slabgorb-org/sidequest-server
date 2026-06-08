@@ -39,7 +39,7 @@ from sidequest.game.encounter import (
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.character import ClassDef
-from sidequest.genre.models.rules import BeatDef, ConfrontationDef, MetricDef
+from sidequest.genre.models.rules import BeatDef, ConfrontationDef, MetricDef, RulesConfig
 from sidequest.protocol.messages import ConfrontationPayload
 from sidequest.server.dispatch.confrontation import (
     build_confrontation_payload,
@@ -137,7 +137,9 @@ def test_opponent_actor_carries_resolved_portrait_url():
         encounter=_enc(),
         cdef=_cdef(),
         genre_slug="road_warrior",
-        portrait_resolver=lambda name: f"https://cdn/{name}.png" if name == "Divvie Sergeant" else None,
+        portrait_resolver=lambda name: (
+            f"https://cdn/{name}.png" if name == "Divvie Sergeant" else None
+        ),
     )
     assert _actor(payload, "Divvie Sergeant")["portrait_url"] == "https://cdn/Divvie Sergeant.png"
 
@@ -216,7 +218,9 @@ def test_opponent_portrait_url_survives_protocol_boundary():
         encounter=_enc(),
         cdef=_cdef(),
         genre_slug="road_warrior",
-        portrait_resolver=lambda name: "https://cdn/sergeant.png" if name == "Divvie Sergeant" else None,
+        portrait_resolver=lambda name: (
+            "https://cdn/sergeant.png" if name == "Divvie Sergeant" else None
+        ),
     )
     model = ConfrontationPayload(**payload)
     opp = next(a for a in model.actors if a["name"] == "Divvie Sergeant")
@@ -270,6 +274,11 @@ class _FakeGenrePack:
     def __init__(self, classes: list[ClassDef]) -> None:
         self.classes = classes
         self.worlds: dict[str, object] = {}
+        # Story 97-3: build_confrontation_payload reads genre_pack.rules to
+        # author per-beat offer difficulty. A real pack always has it (fail-loud
+        # at the call site); a default native RulesConfig is the faithful stub
+        # for this road_warrior (native) suite, which asserts stakes wiring.
+        self.rules = RulesConfig()
 
 
 def _seated_snapshot(active_stakes: str, *, player_id: str = "player-1") -> GameSnapshot:

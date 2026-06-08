@@ -15,8 +15,9 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from sidequest.server.reference_projection import build_lore_projection
 from sidequest.server.reference_renderer import (
     assemble_lore_page,
     assemble_rules_page,
@@ -129,5 +130,16 @@ def create_reference_router() -> APIRouter:
             _LOG.exception("reference lore page: render failed for %s/%s", pack, world)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return HTMLResponse(content=html)
+
+    @router.get("/api/lore/{pack}/{world}")
+    async def lore_api(request: Request, pack: str, world: str) -> JSONResponse:
+        pack_dir = _resolve_pack_dir(request, pack)
+        world_dir = _resolve_world_dir(pack_dir, world)
+        try:
+            doc = build_lore_projection(pack, world, pack_dir=pack_dir, world_dir=world_dir)
+        except (ValueError, FileNotFoundError, MissingThemeFieldError) as exc:
+            _LOG.exception("reference lore api: projection failed for %s/%s", pack, world)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return JSONResponse(content=doc)
 
     return router

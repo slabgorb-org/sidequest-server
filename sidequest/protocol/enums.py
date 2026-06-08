@@ -134,6 +134,14 @@ class MessageType(StrEnum):
     # set_stakes. Transient broadcast (never event-sourced), consumed by the
     # UI quest/objective panel (Story 77-5).
     QUESTS = "QUESTS"
+    # sq-playtest 2026-06-07 (heavy_metal/barsoom-3, blocking): a PC the genre
+    # lethality policy ruled dead kept full agency for four rounds with no
+    # death surface. Emitted at the moment a PC is taken OUT of play (LETHAL
+    # verdict) and again if a downed seat tries to act. PC-scoped
+    # (payload.character_name); the UI locks that seat's input and surfaces a
+    # death banner / re-roll CTA. The server-side turn-intake gate is the
+    # authority — this message is the player-facing mirror.
+    CHARACTER_INCAPACITATED = "CHARACTER_INCAPACITATED"
 
 
 class NarratorVerbosity(StrEnum):

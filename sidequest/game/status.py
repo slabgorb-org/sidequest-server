@@ -56,6 +56,17 @@ class Status(BaseModel):
     absorbed_shifts: int = 0
     created_turn: int = 0
     created_in_encounter: str | None = None
+    incapacitating: bool = False
+    """True when this status takes the actor OUT of play — a dead/dying PC.
+
+    sq-playtest 2026-06-07 (barsoom-3, blocking): a PC the lethality policy
+    ruled ``dead`` kept full turn agency for four rounds because nothing
+    durable said "this actor is out." String-matching the ``text`` is fragile
+    (CLAUDE.md: structured markers, not source/text scraping); this is the
+    structured signal the turn-intake gate and the death-surface message both
+    key on. Set by ``post_resolution_lethality`` for LETHAL verdicts only — a
+    recoverable ``Recovering`` setback leaves it False (the PC keeps agency).
+    Additive default (False) → existing saves migrate cleanly."""
 
 
 def migrate_legacy_statuses(raw: list[object]) -> list[Status]:

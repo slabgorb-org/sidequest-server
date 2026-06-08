@@ -1334,11 +1334,28 @@ def _resolve_opponent_reprisal(
     # (the player-strike / player-cast paths run the CWN/WWN downed seam for the
     # OPPONENT they drop; nothing handled the PLAYER going down here). No-op
     # unless check_hp_depletion above resolved a PC-down outcome with the PC at 0.
-    from sidequest.server.post_resolution_lethality import apply_post_resolution_lethality
+    from sidequest.server.post_resolution_lethality import (
+        apply_post_resolution_lethality,
+        build_incapacitated_message,
+    )
 
-    apply_post_resolution_lethality(
+    incapacitations = apply_post_resolution_lethality(
         snapshot=snapshot, encounter=encounter, pack=pack, turn=round_number
     )
+    # sq-playtest 2026-06-07 (barsoom-3, blocking): surface the death AT the
+    # moment it happens. The turn-intake gate (handlers.player_action) is the
+    # durable lock for the dead PC's SUBSEQUENT actions, but the kill turn itself
+    # must tell the UI so the seat locks and the death banner / re-roll CTA
+    # appears now — not only after the player tries (and fails) to act again.
+    for event in incapacitations:
+        messages.append(
+            build_incapacitated_message(
+                character_name=event.actor,
+                verdict=event.verdict,
+                status_text=event.status_text,
+                player_id="server",
+            )
+        )
 
     return messages
 

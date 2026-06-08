@@ -205,6 +205,12 @@ def test_message_type_dungeon_map_wire_string() -> None:
     assert MessageType.DUNGEON_MAP == "DUNGEON_MAP"
 
 
+def test_message_type_character_incapacitated_wire_string() -> None:
+    """sq-playtest 2026-06-07 (barsoom-3) — the player-facing death surface.
+    Emitted when a PC is taken out of play; the UI locks that seat's input."""
+    assert MessageType.CHARACTER_INCAPACITATED == "CHARACTER_INCAPACITATED"
+
+
 def test_message_type_complete_count() -> None:
     """All 46 GameMessage variants must be represented.
 
@@ -254,10 +260,15 @@ def test_message_type_complete_count() -> None:
     (quest_log + quest_anchors + active_stakes). Emitted reactively on
     seed/record_quest/set_stakes; transient broadcast, never event-sourced.
     Intentional addition; bumped 54 → 55.
+    sq-playtest 2026-06-07 (barsoom-3) added CHARACTER_INCAPACITATED — the
+    player-facing death surface. Emitted when a PC is taken out of play (LETHAL
+    lethality verdict) so the UI locks that seat's input and shows a death
+    banner / re-roll CTA; the server-side turn-intake gate is the authority.
+    Intentional addition; bumped 55 → 56.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 55
+    assert len(MessageType) == 56
 
 
 # ===========================================================================

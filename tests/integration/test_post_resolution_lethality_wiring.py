@@ -51,7 +51,8 @@ def test_player_kill_fires_post_resolution_lethality(otel_capture):
     snap = _make_snapshot(player_ac=2, player_hp=1)  # guaranteed-hit reprisal drops to 0
     enc = _make_encounter()
 
-    _drive_player_shoot(snap, enc, pack, broadcasts=[])
+    broadcasts: list[object] = []
+    _drive_player_shoot(snap, enc, pack, broadcasts=broadcasts)
 
     player_core = snap.find_creature_core(PLAYER)
     assert player_core is not None
@@ -72,7 +73,28 @@ def test_player_kill_fires_post_resolution_lethality(otel_capture):
 
     # space_opera pc=`dying` → lethal branch: PC stays down + Downed flag.
     assert (spans[0].attributes or {}).get("decision") == "lethal_down"
-    assert any("Downed" in s.text for s in player_core.statuses), (
+    downed = [s for s in player_core.statuses if "Downed" in s.text]
+    assert downed, (
         f"the defeated PC must carry a Downed status (not parked silently at 0/10); "
         f"got {[s.text for s in player_core.statuses]}"
     )
+    # sq-playtest 2026-06-07 barsoom-3: the lethal status must carry the durable
+    # ``incapacitating`` marker the turn-intake gate reads.
+    assert downed[0].incapacitating is True, (
+        "the lethal Downed status must be flagged incapacitating so the "
+        "turn-intake gate locks the dead PC's subsequent actions"
+    )
+    # And the kill-turn dispatch must broadcast the player-facing death surface
+    # (CHARACTER_INCAPACITATED) on the real path — not only after the player tries
+    # to act again.
+    from sidequest.protocol.enums import MessageType
+
+    death_surfaces = [
+        m for m in broadcasts if getattr(m, "type", None) == MessageType.CHARACTER_INCAPACITATED
+    ]
+    assert len(death_surfaces) == 1, (
+        f"the kill turn must broadcast exactly one CHARACTER_INCAPACITATED surface; "
+        f"got {[getattr(m, 'type', m) for m in broadcasts]}"
+    )
+    assert death_surfaces[0].payload.character_name == PLAYER
+    assert death_surfaces[0].payload.verdict == "dying"

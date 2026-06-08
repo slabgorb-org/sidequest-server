@@ -6,6 +6,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from sidequest.game.incapacitation import find_incapacitating_status
 from sidequest.game.turn import TurnPhase
 from sidequest.protocol import sanitize_player_text
 from sidequest.protocol.messages import (
@@ -496,6 +497,64 @@ class PlayerActionHandler:
                 sd.player_name,
             )
             acting_name = sd.player_name
+
+        # Incapacitation gate (sq-playtest 2026-06-07 barsoom-3, blocking): a PC
+        # the genre lethality policy ruled dead/dying must NOT keep submitting
+        # actions to the narrator. post_resolution_lethality stamped an
+        # ``incapacitating`` status on the downed PC; this gate is the durable
+        # lock. It runs BEFORE the TURN_STATUS{active} broadcast and the narrator
+        # dispatch so a dead seat consumes no turn and the band plays on (SOUL.md
+        # The Guitar Solo — only THIS seat locks; peers keep acting). We re-send
+        # the death surface so a reconnecting/confused client re-renders the
+        # banner, and emit the lie-detector span.
+        downed_core = next(
+            (c.core for c in sd.snapshot.characters if c.core.name == acting_name),
+            None,
+        )
+        downed_status = find_incapacitating_status(downed_core) if downed_core is not None else None
+        if downed_status is not None:
+            from sidequest.server.post_resolution_lethality import (
+                build_incapacitated_message,
+                verdict_from_status_text,
+            )
+            from sidequest.telemetry.spans.encounter import (
+                player_action_blocked_incapacitated_span,
+            )
+
+            verdict = verdict_from_status_text(downed_status.text)
+            with player_action_blocked_incapacitated_span(
+                character=acting_name,
+                verdict=verdict,
+                status_text=downed_status.text,
+            ):
+                pass
+            logger.info(
+                "session.player_action_blocked_incapacitated character=%s verdict=%s "
+                "status=%s slug=%s",
+                acting_name,
+                verdict,
+                downed_status.text,
+                session._session_data.game_slug,
+            )
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "session.player_action_blocked_incapacitated",
+                    "character": acting_name,
+                    "verdict": verdict,
+                    "status_text": downed_status.text,
+                },
+                component="encounter",
+            )
+            return [
+                build_incapacitated_message(
+                    character_name=acting_name,
+                    verdict=verdict,
+                    status_text=downed_status.text,
+                    player_id=sd.player_id or "",
+                )
+            ]
+
         if session._room is not None and sd.player_name:
             try:
                 # Canonical roster on the wire — every recipient agrees on

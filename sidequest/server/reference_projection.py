@@ -11,10 +11,13 @@ SVG emission stays behind in that module.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from sidequest.genre.models.world import CartographyConfig
 from sidequest.server.asset_urls import resolve_asset_url
-from sidequest.server.reference_map import _edges_and_dangling, _npc_pins
+from sidequest.server.reference_map import _edges_and_dangling, _npc_pins, load_cartography_config
 from sidequest.server.reference_presenters import portrait_image_key
+from sidequest.server.reference_renderer import _gate_cast_slugs_on_manifest
 from sidequest.telemetry.spans.reference import (
     reference_map_dangling_edge_span,
     reference_map_pin_not_found_span,
@@ -79,3 +82,29 @@ def build_lore_map_section(
         "edges": [list(e) for e in edges],
         "dangling": [list(d) for d in dangling],
     }
+
+
+def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: Path) -> dict:
+    """Assemble the public-projected lore document. This slice emits the map
+    section only; Cast/POI/Timeline/generic-YAML sections land in later slices.
+    """
+    sections: list[dict] = []
+
+    cartography = load_cartography_config(world_dir)
+    if cartography is not None and cartography.regions:
+        map_npc_slugs = frozenset(
+            slug for region in cartography.regions.values() for slug, _label in _npc_pins(region)
+        )
+        gated_map_slugs = _gate_cast_slugs_on_manifest(
+            map_npc_slugs,
+            pack=pack,
+            world=world,
+            pack_dir=pack_dir,
+        )
+        sections.append(
+            build_lore_map_section(
+                cartography, pack=pack, world=world, portrait_on_r2_slugs=gated_map_slugs
+            )
+        )
+
+    return {"schema_version": 1, "pack": pack, "world": world, "sections": sections}

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from sidequest.genre.models.world import CartographyConfig
-from sidequest.server.reference_projection import build_lore_map_section
+from sidequest.server.reference_projection import build_lore_map_section, build_lore_projection
 
 
 def _cart() -> CartographyConfig:
@@ -64,3 +68,35 @@ def test_map_pin_portrait_url_null_when_not_on_r2():
     section = build_lore_map_section(_cart(), pack="p", world="w", portrait_on_r2_slugs=frozenset())
     harbor = next(r for r in section["regions"] if r["id"] == "harbor")
     assert harbor["pins"][0]["portrait_url"] is None
+
+
+def test_lore_projection_includes_map_when_cartography_present(tmp_path: Path):
+    world_dir = tmp_path / "worlds" / "w"
+    world_dir.mkdir(parents=True)
+    (world_dir / "cartography.yaml").write_text(
+        "starting_region: harbor\n"
+        "regions:\n"
+        "  harbor: {name: The Harbor, summary: Salt docks., description: Fog and hulls., adjacent: [market]}\n"
+        "  market: {name: Night Market, summary: Lit stalls., description: Spice and smoke., adjacent: [harbor]}\n",
+        encoding="utf-8",
+    )
+    doc = build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
+    assert doc["schema_version"] == 1
+    assert doc["pack"] == "p"
+    assert doc["world"] == "w"
+    assert [s["id"] for s in doc["sections"]] == ["map"]
+
+
+def test_lore_projection_omits_map_when_no_cartography(tmp_path: Path):
+    world_dir = tmp_path / "worlds" / "w"
+    world_dir.mkdir(parents=True)
+    doc = build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
+    assert doc["sections"] == []
+
+
+def test_lore_projection_raises_on_malformed_cartography(tmp_path: Path):
+    world_dir = tmp_path / "worlds" / "w"
+    world_dir.mkdir(parents=True)
+    (world_dir / "cartography.yaml").write_text("regions: [unclosed\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)

@@ -446,6 +446,16 @@ def _world_dir_with_cast(tmp_path: Path, *, with_phantom: bool = False) -> Path:
             "    observation_pending: true\n"  # unratified — must be withheld
         )
     (world_dir / "portrait_manifest.yaml").write_text(manifest, encoding="utf-8")
+    # The portrait gate (``_gate_cast_slugs_on_manifest``) discovers
+    # ``r2_manifest.json`` at ``pack_dir.parent.parent`` and fails loud on its
+    # absence (Cast-bearing world; No Silent Fallbacks). These wiring tests pass
+    # ``pack_dir=tmp_path`` and assert text-only Cast cards, so seed an empty
+    # manifest at the gate's discovery path (no portraits on R2).
+    from sidequest.server.reference_renderer import load_r2_manifest_keys
+
+    manifest_path = tmp_path.parent.parent / "r2_manifest.json"
+    manifest_path.write_text("[]", encoding="utf-8")
+    load_r2_manifest_keys.cache_clear()
     return world_dir
 
 

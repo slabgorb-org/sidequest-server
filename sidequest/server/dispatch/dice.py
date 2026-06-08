@@ -575,6 +575,28 @@ def dispatch_dice_throw(
                     severity="warning",
                 )
             else:
+                # Lie-detector: when the strike resolved no weapon and fell back
+                # to the genre unarmed floor, emit a span so the GM panel can tell
+                # a real unarmed hit from narrator improvisation. Identity match —
+                # the resolver returns the exact pack.rules.unarmed_damage object.
+                _unarmed_floor = pack.rules.unarmed_damage if pack and pack.rules else None
+                if _unarmed_floor is not None and damage_spec is _unarmed_floor:
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "encounter",
+                            "op": "unarmed_strike_floor",
+                            "beat_id": payload.beat_id,
+                            "actor": character_name,
+                            "dice": damage_spec.dice,
+                            "rationale": (
+                                "strike resolved no weapon/override/catalog damage; "
+                                "fell back to pack.rules.unarmed_damage floor"
+                            ),
+                        },
+                        component="encounter",
+                        severity="info",
+                    )
                 dmg_request_id = str(uuid.uuid4())
                 damage_request_payload = damage_request_from_spec(
                     damage_spec,

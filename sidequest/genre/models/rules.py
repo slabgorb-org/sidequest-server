@@ -1035,6 +1035,16 @@ class RulesConfig(BaseModel):
     # (monster_manual_inject). ``True`` (default) leaves every combat pack
     # unchanged. Declared explicitly per No Silent Fallbacks (extra="forbid").
     combat_encounters: bool = True
+    # Genre-level unarmed-strike damage floor (ping-pong: barsoom Ruximus hit for
+    # 0). When a strike beat resolves no damage_override, no equipped weapon, and
+    # no catalog weapon, ``resolve_damage_spec_from_beat_and_actor`` falls back to
+    # this so an empty-handed hit still deals HP instead of landing weightless.
+    # Priority 4 (last) — an equipped weapon always wins, so authoring this never
+    # clobbers armed actors. None ⇒ no unarmed floor (the pre-existing fail-loud
+    # "damage_spec_missing" skip). Per-pack values are a content decision (WWN
+    # canon = 1d2; EH unarmed-martial benchmark = 1d6). Mirrors ``opponent_damage``
+    # on ConfrontationDef, which already floors the enemy reprisal.
+    unarmed_damage: DamageSpec | None = None
     # Per-pack character-sheet vocabulary. Keys are the canonical chargen
     # field names (``name``, ``race``, ``class``, ``personality``,
     # ``pronouns``, ``stats``, ``mutation``, ``affinity``, ``rig``,

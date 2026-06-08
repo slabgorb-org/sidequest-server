@@ -80,8 +80,7 @@ def damage_request_from_spec(
     sides = DieSides.from_wire(faces)
     if sides is DieSides.Unknown:
         raise ValueError(
-            f"damage_request_from_spec: unsupported die face count d{faces} "
-            f"in {spec.dice!r}"
+            f"damage_request_from_spec: unsupported die face count d{faces} in {spec.dice!r}"
         )
     # One DieSpec per die so the overlay renders individual dice.
     dice_pool = [DieSpec(sides=sides, count=1) for _ in range(count)]
@@ -130,7 +129,10 @@ def resolve_damage_spec_from_beat_and_actor(
     2. Actor's equipped weapon item dict carrying a ``damage`` dict (from inventory).
     3. Pack catalog lookup: find the actor's first equipped weapon item by id,
        then read ``CatalogItem.damage`` from the pack's item catalog.
-    4. No match — returns None; caller must log and skip.
+    4. ``pack.rules.unarmed_damage`` — genre-level unarmed-strike floor so an
+       empty-handed hit still deals HP (mirrors ``opponent_damage`` for the
+       enemy reprisal). None ⇒ no floor; caller logs and skips.
+    5. No match — returns None; caller must log and skip.
 
     ``actor_core`` is the actor's ``CreatureCore`` (may be None for actors without
     a resolved core). ``pack`` is the live genre pack (provides the item catalog).
@@ -139,15 +141,9 @@ def resolve_damage_spec_from_beat_and_actor(
     if beat.damage_override is not None:
         return beat.damage_override
 
-    # Priority 2 & 3: actor's inventory.
-    if actor_core is None:
-        return None
-
-    inventory_items: list[dict] = getattr(
-        getattr(actor_core, "inventory", None), "items", []
-    )
-    if not inventory_items:
-        return None
+    # Priority 2 & 3: actor's inventory (skipped when the actor has no core or
+    # no items — both fall through to the unarmed floor below).
+    inventory_items: list[dict] = getattr(getattr(actor_core, "inventory", None), "items", [])
 
     # Priority 2: item dict already carries a serialised damage field.
     # (This path fires for materialised NPCs whose item dicts were built
@@ -190,5 +186,13 @@ def resolve_damage_spec_from_beat_and_actor(
             catalog_item = catalog_by_id.get(item_id)
             if catalog_item is not None and catalog_item.damage is not None:
                 return catalog_item.damage
+
+    # Priority 4: genre-level unarmed-strike floor. Reached only when no weapon
+    # resolved above, so an equipped weapon always wins and this never caps an
+    # armed actor. None ⇒ no floor (caller logs ``damage_spec_missing`` + skips).
+    rules = getattr(pack, "rules", None) if pack is not None else None
+    unarmed = getattr(rules, "unarmed_damage", None) if rules is not None else None
+    if unarmed is not None:
+        return unarmed
 
     return None

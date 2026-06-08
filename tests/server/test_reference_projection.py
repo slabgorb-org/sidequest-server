@@ -7,6 +7,8 @@ import pytest
 
 from sidequest.genre.models.world import CartographyConfig
 from sidequest.server.reference_projection import build_lore_map_section, build_lore_projection
+from sidequest.telemetry.spans.reference import SPAN_REFERENCE_MAP_RENDERED
+from tests.server.conftest import span_attrs_by_name
 
 
 def _cart() -> CartographyConfig:
@@ -145,3 +147,31 @@ def test_map_projection_leaks_no_entity_internals():
     # Pin carries exactly the public projection keys.
     pin = section["regions"][0]["pins"][0]
     assert set(pin.keys()) == {"slug", "label", "portrait_url"}
+
+
+# ---------------------------------------------------------------------------
+# OTEL wiring test — projection fires map_rendered span (Task 5)
+# ---------------------------------------------------------------------------
+
+
+def test_projection_fires_map_rendered_span(otel_capture) -> None:
+    """OTEL wiring: ``build_lore_map_section`` must emit exactly one
+    ``sidequest.reference.map_rendered`` span carrying the correct census
+    attributes for the ``_cart()`` fixture (2 nodes, 1 edge, 1 npc pin,
+    1 resolved pin).
+
+    This is a behavior/span assertion — not a source-text grep. Per the OTEL
+    Observability Principle (CLAUDE.md) and "every test suite needs a wiring
+    test", this confirms the span fires end-to-end through the real projection
+    path rather than merely existing in the span-definition module.
+    """
+    build_lore_map_section(
+        _cart(), pack="p", world="w", portrait_on_r2_slugs=frozenset({"old_sten"})
+    )
+    spans = span_attrs_by_name(otel_capture, SPAN_REFERENCE_MAP_RENDERED)
+    assert len(spans) == 1, f"expected exactly one map_rendered span, got {len(spans)}"
+    attrs = spans[0]
+    assert attrs.get("reference.map_node_count") == 2
+    assert attrs.get("reference.map_edge_count") == 1
+    assert attrs.get("reference.map_npc_pin_count") == 1
+    assert attrs.get("reference.map_resolved_pin_count") == 1

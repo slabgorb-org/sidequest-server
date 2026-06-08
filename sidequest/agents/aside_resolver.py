@@ -192,7 +192,34 @@ class AsidePromptStash:
     system_blocks: list[CacheableBlock]
     tools: list[ToolDefinition]
     model: str
+    # DRIVER verification failure 2026-06-07: the narrator's per-turn game
+    # state rides the USER bucket (ADR-110 placement), NOT the system blocks
+    # — riding the cache alone gave the aside the rulebook and zero state.
+    # The stash therefore also carries the narrator turn's exact user message
+    # (game-state sections + that turn's action) for re-presentation in the
+    # aside's user turn. User-turn bytes are NOT part of the cached prefix,
+    # so this costs plain input tokens and cannot bust the cache.
+    user_state_text: str = ""
+    # The calendar reaches the narrator only via the get_world_grounding
+    # TOOL (conversation-side), so it is in NO block either way — and tools
+    # are structurally forbidden on the aside. Carried explicitly (compact
+    # JSON of the authored calendar; "" when the world authored none).
+    calendar_summary: str = ""
 
+
+_NARRATOR_CACHE_STATE_SECTION = """\
+[NARRATOR TURN STATE — the game state exactly as the most recent narrated \
+turn saw it; the trailing player action belongs to that PAST turn, not to \
+this aside]
+{user_state_text}
+
+"""
+
+_NARRATOR_CACHE_CALENDAR_SECTION = """\
+[WORLD CALENDAR — authored calendar for this world]
+{calendar_summary}
+
+"""
 
 _NARRATOR_CACHE_ASIDE_USER_TEMPLATE = """\
 [OUT-OF-CHARACTER ASIDE — NOT A TURN]
@@ -200,7 +227,8 @@ _NARRATOR_CACHE_ASIDE_USER_TEMPLATE = """\
 The player is asking an out-of-character table-talk question. The fiction is \
 FROZEN: do not narrate, do not advance the world, do not call tools. Answer \
 as the GM at the table, grounding ONLY in the game state you already have in \
-your context (the system prompt above: world state, NPCs, calendar, journal, \
+your context (the system prompt above, plus the NARRATOR TURN STATE and \
+WORLD CALENDAR sections when present: world state, NPCs, calendar, journal, \
 rules, recent narration).
 
 ANSWER (outcome "answered") — 1-3 plain sentences, second-person GM voice — \
@@ -249,7 +277,18 @@ async def resolve_aside_on_narrator_cache(
     """
     from sidequest.agents.tooling_protocol import Message
 
-    user = _NARRATOR_CACHE_ASIDE_USER_TEMPLATE.format(question=question)
+    # State grounding rides the USER turn (never the system blocks — those
+    # are the byte-exact cache key). Empty sections are omitted entirely: an
+    # empty [WORLD CALENDAR] header invites confabulation.
+    parts: list[str] = []
+    if stash.user_state_text.strip():
+        parts.append(_NARRATOR_CACHE_STATE_SECTION.format(user_state_text=stash.user_state_text))
+    if stash.calendar_summary.strip():
+        parts.append(
+            _NARRATOR_CACHE_CALENDAR_SECTION.format(calendar_summary=stash.calendar_summary)
+        )
+    parts.append(_NARRATOR_CACHE_ASIDE_USER_TEMPLATE.format(question=question))
+    user = "".join(parts)
     try:
         result = await client.complete_with_tools(
             stash.system_blocks,

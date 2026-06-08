@@ -181,6 +181,9 @@ async def test_orchestrator_routes_narration_through_sdk(
         character_name="Kael",
         genre="caverns_and_claudes",
         turn_number=2,
+        # Aside-stash grounding (DRIVER verify-fail 2026-06-07): the stash
+        # must carry the calendar the get_world_grounding tool would read.
+        world_calendar={"starting_date": "0933-04-12"},
     )
 
     result = await orch.run_narration_turn("look around", ctx)
@@ -239,6 +242,11 @@ async def test_orchestrator_routes_narration_through_sdk(
     assert stash.system_blocks, "stash must carry the turn's system blocks"
     assert stash.system_blocks[0].cache is True  # the cached stable prefix
     assert stash.model  # the resolve_model(NARRATION) choice
+    # DRIVER verify-fail 2026-06-07: the per-turn game state rides the USER
+    # bucket, so the stash must carry the turn's exact user message — and the
+    # calendar (tool-only for the narrator) explicitly.
+    assert stash.user_state_text == "user text"
+    assert '"starting_date": "0933-04-12"' in stash.calendar_summary
     # The handler's path gate: a tooling-backed orchestrator exposes its
     # client for the narrator-cache aside path.
     assert orch.aside_cache_client is client

@@ -87,6 +87,66 @@ def test_post_games_same_mode_same_day_same_world_resumes(client: TestClient):
     assert body["resumed"] is True
 
 
+def test_resume_announces_existing_characters(client: TestClient):
+    """sq-playtest 2026-06-07 (silent MP resume masquerade): a same-day
+    same-world "Start or Join" re-attached Charlie to the morning
+    Groucho+Chico session with NO resume signal — the lobby looked 100%
+    like a new game. The resume response must NAME the existing table so
+    the UI can say "resuming existing table — Groucho, Chico" before
+    chargen starts."""
+    import json as _json
+
+    from sidequest.game import db_pool
+
+    first = client.post(
+        "/api/games",
+        json={
+            "genre_slug": "low_fantasy",
+            "world_slug": "moldharrow-keep",
+            "mode": "multiplayer",
+        },
+    )
+    assert first.status_code == 201
+    # A fresh game has no cast yet — empty list, present field.
+    assert first.json()["existing_characters"] == []
+
+    # Seed a persisted snapshot with two characters (raw-SQL idiom from
+    # test_rest_pg_forensic.py — the forensics reader consumes the same row).
+    snapshot = {
+        "characters": [
+            {"core": {"name": "Groucho"}},
+            {"core": {"name": "Chico"}},
+        ]
+    }
+    pool = db_pool.get_pool()
+    with pool.connection() as conn:
+        session_id = conn.execute(
+            "SELECT session_id FROM sessions WHERE session_slug = %s",
+            ("2026-04-22-moldharrow-keep-mp",),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO game_state (session_id, snapshot_json, saved_at) VALUES (%s, %s, now())",
+            (session_id, _json.dumps(snapshot)),
+        )
+
+    second = client.post(
+        "/api/games",
+        json={
+            "genre_slug": "low_fantasy",
+            "world_slug": "moldharrow-keep",
+            "mode": "multiplayer",
+        },
+    )
+    assert second.status_code == 200
+    body = second.json()
+    assert body["resumed"] is True
+    assert body["existing_characters"] == ["Groucho", "Chico"], (
+        "the resume response must carry the existing table's character names "
+        "so the lobby can announce the resume instead of masquerading as a "
+        "fresh creation"
+    )
+
+
 def test_post_games_solo_and_multiplayer_do_not_collide(client: TestClient):
     """Same world + same day in different modes must produce distinct games.
 

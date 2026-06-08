@@ -92,6 +92,37 @@ class GameResponse(BaseModel):
     # orbits.yaml via content#383 + server#728 but the UI allowlist still
     # only contained coyote_star, so the orrery was unreachable).
     orbital: bool = False
+    # Silent-resume masquerade (sq-playtest 2026-06-07): the names of the
+    # characters already in the session when ``resumed=True`` — the lobby
+    # announces "resuming existing table — Groucho, Chico" instead of
+    # presenting a resume as a fresh creation. Empty for fresh games and
+    # for resumed sessions with no persisted snapshot yet.
+    existing_characters: list[str] = []
+
+
+def _existing_character_names(pool: Any, slug: str) -> list[str]:
+    """Character names from the persisted snapshot of ``slug``'s session.
+
+    Read-only, lossy-empty: no session / no snapshot / unparseable snapshot
+    all yield ``[]`` (the forensics reader's documented contract) — the
+    create endpoint must never 500 on a forensic read.
+    """
+    from sidequest.game.pg import sessions as _pg_sessions
+    from sidequest.game.pg.forensic import PgForensicReader
+
+    session_id = _pg_sessions.resolve_session_id(pool, slug=slug)
+    if session_id is None:
+        return []
+    snapshot = PgForensicReader(pool).snapshot_json(session_id)
+    names: list[str] = []
+    for character in (snapshot or {}).get("characters") or []:
+        if not isinstance(character, dict):
+            continue
+        core = character.get("core") or {}
+        name = str(core.get("name") or "").strip() if isinstance(core, dict) else ""
+        if name:
+            names.append(name)
+    return names
 
 
 def _world_has_orbits(request: Request, genre_slug: str, world_slug: str) -> bool:
@@ -686,6 +717,9 @@ def create_rest_router() -> APIRouter:
                     resumed=True,
                     player_name=req.player_name,
                     orbital=_world_has_orbits(request, existing.genre_slug, existing.world_slug),
+                    # Silent-resume masquerade fix: name the existing table so
+                    # the lobby can announce the resume.
+                    existing_characters=_existing_character_names(_pg_pool, slug),
                 )
                 return JSONResponse(status_code=200, content=payload.model_dump())
 

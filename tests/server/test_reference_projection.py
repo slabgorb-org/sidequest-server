@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import json as _json
+from pathlib import Path
+
+import pytest
+
+from sidequest.genre.models.world import CartographyConfig
+from sidequest.server.reference_projection import build_lore_map_section, build_lore_projection
+from sidequest.telemetry.spans.reference import SPAN_REFERENCE_MAP_RENDERED
+from tests.server.conftest import span_attrs_by_name
+
+
+def _cart() -> CartographyConfig:
+    return CartographyConfig.model_validate(
+        {
+            "starting_region": "harbor",
+            "regions": {
+                "harbor": {
+                    "name": "The Harbor",
+                    "summary": "A busy harbor district.",
+                    "description": "Ships come and go.",
+                    "adjacent": ["market", "ghost-isle"],  # ghost-isle is dangling
+                    "entities": [
+                        {
+                            "id": "old-sten",
+                            "label": "Old Sten",
+                            "tier": "real_object",
+                            "binding": {"kind": "npc", "ref": "old-sten"},
+                        },
+                        {
+                            "id": "a-crate",
+                            "label": "A Crate",
+                            "tier": "flavor_only",
+                        },
+                    ],
+                },
+                "market": {
+                    "name": "Night Market",
+                    "summary": "A night market.",
+                    "description": "Stalls and lanterns.",
+                    "adjacent": ["harbor"],
+                },
+            },
+        }
+    )
+
+
+def test_map_section_emits_topology_not_coordinates():
+    section = build_lore_map_section(
+        _cart(), pack="p", world="w", portrait_on_r2_slugs=frozenset({"old_sten"})
+    )
+    assert section["id"] == "map"
+    assert section["label"] == "Map"
+    assert section["starting_region"] == "harbor"
+    assert section["edges"] == [["harbor", "market"]]
+    assert section["dangling"] == [["harbor", "ghost-isle"]]
+    blob = repr(section)
+    assert '"x"' not in blob and "'x'" not in blob
+    regions = {r["id"]: r for r in section["regions"]}
+    assert set(regions["harbor"].keys()) == {"id", "name", "adjacent", "pins"}
+    pins = regions["harbor"]["pins"]
+    assert len(pins) == 1
+    assert pins[0]["slug"] == "old_sten"
+    assert pins[0]["label"] == "Old Sten"
+    assert pins[0]["portrait_url"] is not None
+    assert regions["market"]["pins"] == []
+
+
+def test_map_pin_portrait_url_null_when_not_on_r2():
+    section = build_lore_map_section(_cart(), pack="p", world="w", portrait_on_r2_slugs=frozenset())
+    harbor = next(r for r in section["regions"] if r["id"] == "harbor")
+    assert harbor["pins"][0]["portrait_url"] is None
+
+
+def test_lore_projection_includes_map_when_cartography_present(tmp_path: Path):
+    world_dir = tmp_path / "worlds" / "w"
+    world_dir.mkdir(parents=True)
+    (world_dir / "cartography.yaml").write_text(
+        "starting_region: harbor\n"
+        "regions:\n"
+        "  harbor: {name: The Harbor, summary: Salt docks., description: Fog and hulls., adjacent: [market]}\n"
+        "  market: {name: Night Market, summary: Lit stalls., description: Spice and smoke., adjacent: [harbor]}\n",
+        encoding="utf-8",
+    )
+    doc = build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
+    assert doc["schema_version"] == 1
+    assert doc["pack"] == "p"
+    assert doc["world"] == "w"
+    assert [s["id"] for s in doc["sections"]] == ["map"]
+
+
+def test_lore_projection_omits_map_when_no_cartography(tmp_path: Path):
+    world_dir = tmp_path / "worlds" / "w"
+    world_dir.mkdir(parents=True)
+    doc = build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
+    assert doc["sections"] == []
+
+
+def test_lore_projection_raises_on_malformed_cartography(tmp_path: Path):
+    world_dir = tmp_path / "worlds" / "w"
+    world_dir.mkdir(parents=True)
+    (world_dir / "cartography.yaml").write_text("regions: [unclosed\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
+
+
+def test_map_projection_leaks_no_entity_internals():
+    cart = CartographyConfig.model_validate(
+        {
+            "starting_region": "harbor",
+            "regions": {
+                "harbor": {
+                    "name": "The Harbor",
+                    "summary": "Salt docks.",
+                    "description": "Fog and hulls.",
+                    "adjacent": ["market"],
+                    "entities": [
+                        {
+                            "id": "sten",
+                            "label": "Old Sten",
+                            "tier": "real_object",
+                            # `ref` is the keeper-side link target; it must NOT leak.
+                            "binding": {"kind": "npc", "ref": "npc_sten_secret_id"},
+                        }
+                    ],
+                },
+                "market": {
+                    "name": "Night Market",
+                    "summary": "Lit stalls.",
+                    "description": "Spice and smoke.",
+                    "adjacent": ["harbor"],
+                },
+            },
+        }
+    )
+    section = build_lore_map_section(
+        cart, pack="p", world="w", portrait_on_r2_slugs=frozenset({"old_sten"})
+    )
+    blob = _json.dumps(section)
+    # The secret binding ref value must not cross the JSON boundary.
+    assert "npc_sten_secret_id" not in blob
+    # Binding keys must not appear (quoted-key form — robust vs. substrings that
+    # could legitimately occur inside a portrait URL/domain).
+    assert '"ref"' not in blob
+    assert '"kind"' not in blob
+    # Pin carries exactly the public projection keys.
+    pin = section["regions"][0]["pins"][0]
+    assert set(pin.keys()) == {"slug", "label", "portrait_url"}
+
+
+# ---------------------------------------------------------------------------
+# OTEL wiring test — projection fires map_rendered span (Task 5)
+# ---------------------------------------------------------------------------
+
+
+def test_projection_fires_map_rendered_span(otel_capture) -> None:
+    """OTEL wiring: ``build_lore_map_section`` must emit exactly one
+    ``sidequest.reference.map_rendered`` span carrying the correct census
+    attributes for the ``_cart()`` fixture (2 nodes, 1 edge, 1 npc pin,
+    1 resolved pin).
+
+    This is a behavior/span assertion — not a source-text grep. Per the OTEL
+    Observability Principle (CLAUDE.md) and "every test suite needs a wiring
+    test", this confirms the span fires end-to-end through the real projection
+    path rather than merely existing in the span-definition module.
+    """
+    build_lore_map_section(
+        _cart(), pack="p", world="w", portrait_on_r2_slugs=frozenset({"old_sten"})
+    )
+    spans = span_attrs_by_name(otel_capture, SPAN_REFERENCE_MAP_RENDERED)
+    assert len(spans) == 1, f"expected exactly one map_rendered span, got {len(spans)}"
+    attrs = spans[0]
+    assert attrs.get("reference.map_node_count") == 2
+    assert attrs.get("reference.map_edge_count") == 1
+    assert attrs.get("reference.map_npc_pin_count") == 1
+    assert attrs.get("reference.map_resolved_pin_count") == 1

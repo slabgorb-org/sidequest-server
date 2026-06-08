@@ -131,7 +131,7 @@ def create_reference_router() -> APIRouter:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return HTMLResponse(content=html)
 
-    @router.get("/api/lore/{pack}/{world}")
+    @router.get("/api/lore/{pack}/{world}", response_class=JSONResponse)
     async def lore_api(request: Request, pack: str, world: str) -> JSONResponse:
         pack_dir = _resolve_pack_dir(request, pack)
         world_dir = _resolve_world_dir(pack_dir, world)

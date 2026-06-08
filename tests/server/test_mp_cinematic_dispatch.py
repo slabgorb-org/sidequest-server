@@ -501,6 +501,81 @@ async def test_otel_events_emitted_on_barrier_fire_and_dispatch(
     assert event_names.count("mp.round_dispatched") == 1
 
 
+@pytest.mark.asyncio
+async def test_resolved_encounter_suppresses_initiative_and_emits_lie_detector(
+    session_handler_factory,
+) -> None:
+    """#177 defect (b): a resolved encounter still lingering in
+    ``snapshot.encounter`` with a populated initiative list must NOT stamp the
+    ``[INITIATIVE ORDER]`` scaffold onto the narrator turn, and the decline is
+    surfaced via ``initiative_preamble_suppressed`` so the GM panel can verify
+    the scaffold stopped firing post-resolution (CLAUDE.md OTEL principle)."""
+    from sidequest.game.encounter import EncounterMetric, StructuredEncounter
+    from sidequest.protocol.models import InitiativeEntry
+
+    handler1, sd1, room = session_handler_factory(
+        slug="test-resolved-initiative",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar Jones")],
+        active_player=("p1", "Gladstone"),
+    )
+    handler2, sd2, _ = session_handler_factory(
+        slug="test-resolved-initiative",
+        mode=GameMode.MULTIPLAYER,
+        seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar Jones")],
+        active_player=("p2", "Zanzibar Jones"),
+        existing_room=room,
+    )
+
+    # The fight ended (a kill set resolved=True) but the encounter object
+    # lingers in the snapshot with its initiative list intact.
+    room.snapshot.encounter = StructuredEncounter(
+        encounter_type="firefight",
+        player_metric=EncounterMetric(name="hp", current=3, starting=3, threshold=1),
+        opponent_metric=EncounterMetric(name="hp", current=0, starting=3, threshold=1),
+        initiative=[InitiativeEntry(token_id="Gladstone", value=7)],
+        resolved=True,
+        outcome="player_victory",
+    )
+
+    captured_actions: list[str] = []
+
+    async def fake_execute(sd, action, turn_context):
+        captured_actions.append(action)
+        return []
+
+    handler1._execute_narration_turn = fake_execute  # type: ignore[method-assign]
+    handler2._execute_narration_turn = fake_execute  # type: ignore[method-assign]
+
+    with patch("sidequest.handlers.player_action._watcher_publish") as wp:
+        await handler1._handle_player_action(
+            PlayerActionMessage(
+                payload=PlayerActionPayload(
+                    action=NonBlankString.model_validate("I loot the body"),
+                    round=0,
+                ),
+                player_id="p1",
+            )
+        )
+        await handler2._handle_player_action(
+            PlayerActionMessage(
+                payload=PlayerActionPayload(
+                    action=NonBlankString.model_validate("I keep watch"),
+                    round=0,
+                ),
+                player_id="p2",
+            )
+        )
+
+    event_names = [call.args[0] for call in wp.call_args_list]
+    assert "initiative_preamble_suppressed" in event_names
+    # The scaffold never reached the narrator input.
+    assert captured_actions, "dispatch should have fired"
+    assert all("INITIATIVE ORDER" not in a for a in captured_actions), (
+        f"resolved encounter must not stamp the initiative scaffold; got {captured_actions!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # ADR-036 Fix 1 regression — multi-round CAS must use interaction not round
 # ---------------------------------------------------------------------------

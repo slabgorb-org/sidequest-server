@@ -40,10 +40,20 @@ logger = logging.getLogger(__name__)
 def initiative_preamble(encounter: object | None) -> str | None:
     """SWN P4: the authoritative resolution-order line for the narrator turn.
 
-    Returns None when the encounter has no initiative (native rulesets, non-combat).
-    The 'reduced to 0 HP' clause keeps the prose correct before P5's tool walk
-    mechanically enforces dead_premise.
+    Returns None when the encounter has no initiative (native rulesets, non-combat),
+    OR when the encounter has already resolved. The 'reduced to 0 HP' clause keeps
+    the prose correct before P5's tool walk mechanically enforces dead_premise.
+
+    sq-playtest 2026-06-07 barsoom (#177 defect b): a resolved encounter
+    (``check_hp_depletion`` sets ``resolved=True`` on a kill but leaves
+    ``snapshot.encounter`` populated for forensics) still carried its
+    ``initiative`` list, so the scaffold kept stamping ~10 rounds of looting
+    and resting past the opponent's death. Gate on ``resolved`` to match the
+    "active encounter" semantics used everywhere else
+    (``enc is not None and not enc.resolved``).
     """
+    if getattr(encounter, "resolved", False):
+        return None
     init = getattr(encounter, "initiative", None)
     if not init:
         return None
@@ -216,9 +226,32 @@ async def dispatch_fired_barrier(
     )
 
     combined_action = "\n".join(f"{p.character_name}: {p.action}" for _, p in pending)
-    _preamble = initiative_preamble(getattr(snapshot, "encounter", None))
+    _encounter = getattr(snapshot, "encounter", None)
+    _preamble = initiative_preamble(_encounter)
     if _preamble is not None:
         combined_action = f"{_preamble}\n{combined_action}"
+    elif (
+        _encounter is not None
+        and getattr(_encounter, "resolved", False)
+        and getattr(_encounter, "initiative", None)
+    ):
+        # #177 defect (b) lie-detector: the encounter resolved (a kill set
+        # ``resolved=True``) but still lingers in ``snapshot.encounter`` with a
+        # populated initiative list. We correctly DECLINE to stamp the
+        # [INITIATIVE ORDER] scaffold. Surface it so the GM panel can verify the
+        # scaffold stopped firing post-resolution — and see the deeper smell of a
+        # resolved encounter never cleared from the snapshot.
+        _watcher_publish(
+            "initiative_preamble_suppressed",
+            {
+                "slug": session._room.slug,
+                "round": snapshot.turn_manager.round,
+                "reason": "encounter_resolved",
+                "encounter_type": getattr(_encounter, "encounter_type", ""),
+                "outcome": getattr(_encounter, "outcome", "") or "",
+            },
+            component="confrontation",
+        )
     # Tag the TurnContext so build_narrator_prompt renders a multi-PC
     # declaration block instead of attributing every line to the dispatch
     # winner.

@@ -551,3 +551,139 @@ def test_unarmed_floor_reduces_hp_and_emits_span_via_dispatch(otel_capture, monk
         "unarmed_strike_floor span must fire when the floor engages; "
         f"got: {[s.name for s in otel_capture.get_finished_spans()]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# d2 parity die (the tabletop "no d2 in the bag" move: roll a real die,
+# read parity even=1/odd=2). Backed by a renderable d6 in the overlay.
+# ---------------------------------------------------------------------------
+
+
+def test_damagespec_accepts_1d2_as_parity_die():
+    spec = DamageSpec(dice="1d2")
+    assert spec.is_parity_die is True
+
+
+def test_damagespec_non_parity_dice_report_false():
+    assert DamageSpec(dice="1d6").is_parity_die is False
+    assert DamageSpec(dice="2d8").is_parity_die is False
+
+
+def test_damagespec_rejects_other_unsupported_faces():
+    # d3 is still illegal — only d2 is whitelisted as a parity die.
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DamageSpec(dice="1d3")
+
+
+def test_damagespec_roll_d2_stays_in_range():
+    import random as _random
+
+    rng = _random.Random(12345)
+    spec = DamageSpec(dice="1d2", bonus=0)
+    rolls = {spec.roll(rng) for _ in range(200)}
+    assert rolls == {1, 2}, f"1d2 must roll only 1 or 2; got {sorted(rolls)}"
+
+
+def test_damagespec_roll_2d2_with_bonus_range():
+    import random as _random
+
+    rng = _random.Random(999)
+    spec = DamageSpec(dice="2d2", bonus=1)
+    rolls = {spec.roll(rng) for _ in range(400)}
+    # 2 dice each 1..2, +1 ⇒ 3..5
+    assert rolls == {3, 4, 5}, f"2d2+1 range should be 3..5; got {sorted(rolls)}"
+
+
+def test_damage_request_from_spec_d2_backs_with_d6():
+    from sidequest.server.dispatch.damage_roll import damage_request_from_spec
+
+    req = damage_request_from_spec(DamageSpec(dice="1d2"), request_id="parity-1")
+    assert len(req.dice) == 1
+    assert req.dice[0].sides == DieSides.D6, "d2 must throw a renderable backing d6"
+    assert "d2" in req.context and "even" in req.context, (
+        f"context must explain the parity mapping; got {req.context!r}"
+    )
+
+
+def test_parity_damage_total_maps_even_to_1_odd_to_2():
+    from sidequest.server.dispatch.damage_roll import parity_damage_total
+
+    # even→1, odd→2
+    assert parity_damage_total([2, 4, 6], 0) == 3  # 1+1+1
+    assert parity_damage_total([1, 3, 5], 0) == 6  # 2+2+2
+    assert parity_damage_total([4], 0) == 1
+    assert parity_damage_total([3], 0) == 2
+    assert parity_damage_total([4, 3], 2) == (1 + 2) + 2  # mixed + bonus
+
+
+def test_unarmed_d2_floor_deals_1_or_2_hp_via_dispatch(monkeypatch):
+    """Wiring: a 1d2 unarmed floor through dispatch_dice_throw drops HP by
+    exactly 1 or 2 (never the raw backing-d6 face)."""
+    from unittest.mock import MagicMock
+
+    from sidequest.genre.models.rules import (
+        BeatDef,
+        ConfrontationDef,
+        MetricDef,
+        RulesConfig,
+    )
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
+
+    beat = BeatDef.model_validate(
+        {
+            "id": "punch",
+            "label": "Punch",
+            "kind": "strike",
+            "base": 1,
+            "stat_check": "STRENGTH",
+            "damage_channel": "strike",
+        }
+    )
+    cdef = ConfrontationDef(
+        type="combat",
+        label="Combat",
+        category="combat",
+        player_metric=MetricDef(name="momentum", starting=0, threshold=10),
+        opponent_metric=MetricDef(name="momentum", starting=0, threshold=10),
+        beats=[beat],
+    )
+    rules = RulesConfig(confrontations=[cdef], unarmed_damage=DamageSpec(dice="1d2"))
+    pack = MagicMock()
+    pack.rules = rules
+    pack.inventory = None
+
+    for _ in range(15):  # exercise both parity outcomes across server RNG
+        enc = _make_encounter_with_actors("Puncher", "Victim")
+        snap = _make_snapshot_with_actors("Puncher", "Victim")
+        opponent_core = snap.find_creature_core("Victim")
+        hp_before = opponent_core.hp.current
+
+        dispatch_dice_throw(
+            payload=DiceThrowPayload(
+                request_id="d2-floor-req",
+                throw_params=ThrowParams(
+                    velocity=(0.0, 5.0, -2.0),
+                    angular=(1.0, 1.0, 1.0),
+                    position=(0.5, 0.5),
+                ),
+                face=[17],
+                beat_id="punch",
+            ),
+            rolling_player_id="player-1",
+            character_name="Puncher",
+            character_stats={"STRENGTH": 10},
+            encounter=enc,
+            pack=pack,
+            genre_slug="test",
+            session_id="session-d2-floor",
+            round_number=1,
+            room_broadcast=None,
+            snapshot=snap,
+        )
+
+        dealt = hp_before - opponent_core.hp.current
+        assert dealt in (1, 2), f"1d2 unarmed must deal 1 or 2 HP, got {dealt}"

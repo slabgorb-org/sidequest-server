@@ -64,7 +64,11 @@ from sidequest.server.dispatch.confrontation import (
     make_confrontation_frame_supplier,
     make_confrontation_portrait_resolver,
 )
-from sidequest.server.dispatch.damage_roll import _DAMAGE_THROW_PARAMS, damage_request_from_spec
+from sidequest.server.dispatch.damage_roll import (
+    _DAMAGE_THROW_PARAMS,
+    damage_request_from_spec,
+    parity_damage_total,
+)
 from sidequest.server.dispatch.damage_roll import (
     generate_server_faces as _generate_server_faces,
 )
@@ -611,7 +615,14 @@ def dispatch_dice_throw(
                     damage_request_payload.modifier,
                     damage_request_payload.difficulty,
                 )
-                dmg_total = dmg_resolved.total
+                # A parity (d2) spec threw a backing d6 for the overlay; map the
+                # settled faces to d2 values for the HP total so the raw d6 never
+                # leaks into damage. dmg_resolved.rolls still carries the real d6
+                # faces, so the broadcast/readout shows the physical throw.
+                if damage_spec.is_parity_die:
+                    dmg_total = parity_damage_total(dmg_faces, damage_request_payload.modifier)
+                else:
+                    dmg_total = dmg_resolved.total
                 # CWN Trauma seam (spec 2026-05-28): multiply rolled damage on a
                 # Traumatic Hit, and flag the scene so a 0-HP drop this scene can
                 # roll Major Injury. No-op for native/swn (base passthrough).

@@ -16,6 +16,20 @@ from sidequest.protocol.dice import DieSides
 
 _DICE_RE = re.compile(r"^(?P<count>\d+)d(?P<faces>\d+)$")
 
+# Parity die (the tabletop "no d2 in the bag" move): a d2 is realized by
+# throwing a real, renderable die and reading its parity — even → 1, odd → 2.
+# The 3D overlay (ADR-074/075) only meshes d4/d6/d8/d10/d12/d20/d100, so a
+# literal d2 cannot animate; the backing d6 does. This is the single source of
+# truth for the mapping, shared by ``DamageSpec.roll`` (server-side) and the
+# overlay damage path (``dispatch/damage_roll.py``).
+_PARITY_FACES = 2
+PARITY_BACKING_SIDES = DieSides.D6
+
+
+def parity_value(face: int) -> int:
+    """Map a backing-die face to its d2 value: even → 1, odd → 2."""
+    return 1 if face % 2 == 0 else 2
+
 
 class CurrencyConfig(BaseModel):
     """Currency system definition.
@@ -84,9 +98,19 @@ class DamageSpec(BaseModel):
         count, faces = int(m["count"]), int(m["faces"])
         if count < 1:
             raise ValueError(f"damage dice {v!r} needs at least 1 die")
+        # d2 is a parity die — legal even though it has no overlay mesh; it is
+        # realized by a backing d6 read for parity (see PARITY_BACKING_SIDES).
+        if faces == _PARITY_FACES:
+            return v
         if DieSides.from_wire(faces) is DieSides.Unknown:
             raise ValueError(f"damage dice {v!r} uses unsupported face count d{faces}")
         return v
+
+    @property
+    def is_parity_die(self) -> bool:
+        """True when ``dice`` is an Nd2 parity die (backed by a real d6)."""
+        m = _DICE_RE.match(self.dice.strip())
+        return m is not None and int(m["faces"]) == _PARITY_FACES
 
     @model_validator(mode="after")
     def _shock_requires_ceiling(self) -> DamageSpec:
@@ -105,9 +129,16 @@ class DamageSpec(BaseModel):
 
         Server-side dice for cases where the result isn't a client physics
         throw (e.g. NPC/ship-gunnery damage). ``dice`` is validated NdM at
-        construction, so the parse here is safe."""
+        construction, so the parse here is safe.
+
+        A parity die (Nd2) is rolled as N backing d6 reads mapped even→1/odd→2,
+        matching the overlay path so the two never diverge."""
         m = _DICE_RE.match(self.dice.strip())
         count, faces = int(m["count"]), int(m["faces"])  # type: ignore[union-attr]
+        if faces == _PARITY_FACES:
+            backing = PARITY_BACKING_SIDES.faces()
+            assert backing is not None  # PARITY_BACKING_SIDES is never Unknown
+            return sum(parity_value(rng.randint(1, backing)) for _ in range(count)) + self.bonus
         return sum(rng.randint(1, faces) for _ in range(count)) + self.bonus
 
 

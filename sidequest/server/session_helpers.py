@@ -359,6 +359,32 @@ def _resolve_acting_character_name(sd: _SessionData, room: SessionRoom | None) -
     return snapshot.characters[0].core.name
 
 
+def player_log_content(action: str, merged_player_actions: list[tuple[str, str]] | None) -> str:
+    """The verbatim player text to persist into ``narrative_log``.
+
+    sq-playtest 2026-06-07 barsoom (#177 defect a): the narrative_log
+    player-turn entry recorded the *scaffolded* narrator input — the
+    ``[INITIATIVE ORDER] …`` preamble (``initiative_preamble``) prepended to
+    the ``"Name: action"`` join that ``dispatch_fired_barrier`` hands the
+    narrator. James's actual words were buried (or, in the transcript view,
+    lost entirely) behind the engine's resolution-order scaffold, and the
+    corruption rode through to journal / scrapbook / replay.
+
+    The clean source is ``TurnContext.merged_player_actions`` — the per-PC
+    ``(character_name, raw_action)`` tuples drained from the barrier buffer,
+    which NEVER carry the preamble. Solo (one tuple) → the raw text alone;
+    MP (N tuples) → name-tagged declarations, one per line, so the GM panel
+    keeps per-speaker attribution. When ``merged`` is absent (the room-is-None
+    solo path and the dice-replay re-entry both pass a clean ``action`` with
+    no preamble), fall back to ``action`` verbatim.
+    """
+    if not merged_player_actions:
+        return action
+    if len(merged_player_actions) == 1:
+        return merged_player_actions[0][1]
+    return "\n".join(f"{name}: {act}" for name, act in merged_player_actions)
+
+
 def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object | None:
     """Beneath Sünden BETTER fix (seam 1+2) — per-turn region projection.
 

@@ -132,6 +132,47 @@ class TestPlayerTurnAuthorWiring:
         assert any(e.content == "The torch flickers as you approach." for e in narrator_entries)
 
     @pytest.mark.asyncio
+    async def test_player_entry_strips_initiative_scaffold(self, session_fixture) -> None:
+        """#177 defect (a): in combat, ``dispatch_fired_barrier`` prepends the
+        ``[INITIATIVE ORDER]`` preamble to a ``Name: action`` join and passes
+        THAT scaffold as ``action`` to the narrator. The narrative_log player
+        entry must record the verbatim player text (from
+        ``turn_context.merged_player_actions``), not the scaffold — pre-fix,
+        James's looting/resting words were buried behind the resolution-order
+        preamble in journal / scrapbook / replay."""
+        sd, handler = session_fixture
+
+        sd.orchestrator.run_narration_turn = AsyncMock(
+            return_value=NarrationTurnResult(narration="…", agent_duration_ms=1)
+        )
+        mock_validator = MagicMock()
+        mock_validator.submit = AsyncMock()
+        mock_validator.is_running = MagicMock(return_value=True)
+        handler._validator = mock_validator
+
+        raw = "i loot the body"
+        scaffold = (
+            "[INITIATIVE ORDER] Resolve the committed actions strictly in this "
+            "1d8+DEX order: Ruximus(7). An actor reduced to 0 HP earlier in this "
+            f"order does not act.\nRuximus: {raw}"
+        )
+        turn_context = _build_turn_context_for_test(sd)
+        turn_context.merged_player_actions = [("Ruximus", raw)]
+
+        await handler._execute_narration_turn(sd, scaffold, turn_context)
+
+        entries = _captured_narrative_entries(sd)
+        player_entries = [e for e in entries if e.author == "player"]
+        assert player_entries, "expected a player entry"
+        contents = [e.content for e in player_entries]
+        assert all("INITIATIVE ORDER" not in c for c in contents), (
+            f"player entry must not record the initiative scaffold; got {contents!r}"
+        )
+        assert any(c == raw for c in contents), (
+            f"player entry must carry the verbatim player text; got {contents!r}"
+        )
+
+    @pytest.mark.asyncio
     async def test_player_entry_speaker_is_acting_character(
         self,
         session_fixture,

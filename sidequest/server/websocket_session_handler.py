@@ -97,6 +97,7 @@ from sidequest.server.session_helpers import (
     _resolve_acting_character_name,
     _resolve_location_display,
     build_secret_note_events,
+    player_log_content,
 )
 from sidequest.server.session_state import (
     _build_pc_descriptor,
@@ -1449,11 +1450,19 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 sd,
                                 self._room,
                             )
+                            # #177 defect (a): record the player's verbatim words,
+                            # NOT the [INITIATIVE ORDER] scaffold + "Name: action"
+                            # join that dispatch_fired_barrier hands the narrator in
+                            # ``action``. merged_player_actions is the clean,
+                            # preamble-free source (None on the room-is-None solo
+                            # path and the dice-replay re-entry — fall back to action).
                             player_entry = NarrativeEntry(
                                 timestamp=0,
                                 round=snapshot.turn_manager.interaction,
                                 author="player",
-                                content=action,
+                                content=player_log_content(
+                                    action, turn_context.merged_player_actions
+                                ),
                                 tags=[],
                                 speaker=acting_name,
                             )

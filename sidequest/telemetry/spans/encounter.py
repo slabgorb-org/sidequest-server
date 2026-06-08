@@ -55,6 +55,21 @@ SPAN_ROUTES[SPAN_POST_RESOLUTION_LETHALITY] = SpanRoute(
         "hp_after": (span.attributes or {}).get("hp_after", -1),
     },
 )
+# sq-playtest 2026-06-07 (barsoom-3, blocking): the turn-intake gate refused a
+# downed PC's action (the PC carries an ``incapacitating`` status). Missing span
+# where a dead PC kept submitting → the gate isn't wired and the dead-man-walking
+# is back. ``character`` is the downed PC; ``verdict`` is the lethality verdict.
+SPAN_PLAYER_ACTION_BLOCKED_INCAPACITATED = "session.player_action_blocked_incapacitated"
+SPAN_ROUTES[SPAN_PLAYER_ACTION_BLOCKED_INCAPACITATED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "session.player_action_blocked_incapacitated",
+        "character": (span.attributes or {}).get("character", ""),
+        "verdict": (span.attributes or {}).get("verdict", ""),
+        "status_text": (span.attributes or {}).get("status_text", ""),
+    },
+)
 # SWN P4 initiative spine: the engine rolls initiative and seats the turn
 # order at instantiation. This span is the GM-panel polygraph proving the
 # order is engine-rolled (not narrator improv). ``initiative_order`` is the
@@ -676,6 +691,33 @@ def post_resolution_lethality_span(
             "actor": actor,
             "hp_before": hp_before,
             "hp_after": hp_after,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def player_action_blocked_incapacitated_span(
+    *,
+    character: str,
+    verdict: str,
+    status_text: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """barsoom-3 lie-detector: the turn-intake gate refused a downed PC's action.
+
+    Missing span where a dead PC keeps submitting actions → the gate isn't wired
+    and the dead-man-walking regression is back. ``character`` is the downed PC;
+    ``verdict`` is the lethality verdict (``dead`` | ``dying``)."""
+    with Span.open(
+        SPAN_PLAYER_ACTION_BLOCKED_INCAPACITATED,
+        {
+            "character": character,
+            "verdict": verdict,
+            "status_text": status_text,
             **attrs,
         },
         tracer_override=_tracer,

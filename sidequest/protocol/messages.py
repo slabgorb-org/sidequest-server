@@ -1305,6 +1305,45 @@ class QuestsMessage(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
+# CHARACTER_INCAPACITATED — a PC taken out of play (sq-playtest barsoom-3).
+# ---------------------------------------------------------------------------
+
+
+class CharacterIncapacitatedPayload(ProtocolBase):
+    """A PC has been taken OUT of play by the genre lethality policy.
+
+    Emitted at the moment of death (the kill turn's dispatch) and again if a
+    downed seat tries to submit an action. PC-scoped via ``character_name`` so
+    the UI locks only that seat's input (the rest of the band plays on — SOUL.md
+    The Guitar Solo).
+    """
+
+    character_name: str
+    """The downed PC's name — the UI matches this against the local character."""
+    verdict: str
+    """The lethality verdict: ``dead`` | ``dying`` (the LETHAL partition)."""
+    status_text: str
+    """The applied status, e.g. ``"Downed — dead (mortally wounded)"``."""
+    headline: str
+    """Player-facing death line for the banner, e.g. ``"Abinthe Moridusk has fallen."``"""
+    can_reroll: bool = True
+    """Whether the UI offers a new-character CTA (retention-positive death loop)."""
+
+
+class CharacterIncapacitatedMessage(ProtocolBase):
+    """GameMessage::CharacterIncapacitated — player-facing death surface.
+
+    The durable input lock is server-side (``handlers.player_action`` refuses a
+    downed PC's actions); this message is the UI mirror — death banner, seat
+    input lock, optional re-roll CTA.
+    """
+
+    type: Literal[MessageType.CHARACTER_INCAPACITATED] = MessageType.CHARACTER_INCAPACITATED
+    payload: CharacterIncapacitatedPayload
+    player_id: str = ""
+
+
+# ---------------------------------------------------------------------------
 # DUNGEON_MAP — Beneath Sünden BETTER fix (seam 3). ADR-019 MAP_UPDATE was
 # deleted in the Rust→Python port; this is the NEW ADR-055 map frame (do
 # NOT revive MAP_UPDATE). Shapes mirror the UI ``MapState`` /
@@ -1504,6 +1543,7 @@ _Phase1Variant = Annotated[
     | LocationOverlayChangedMessage
     | RelationshipsMessage
     | QuestsMessage
+    | CharacterIncapacitatedMessage
     | DungeonMapMessage
     | JournalRequestMessage
     | JournalResponseMessage

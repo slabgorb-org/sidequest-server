@@ -25,9 +25,14 @@ consequence per resolution:
     PC keeps agency but HP + status reflect the near-defeat (Genre Truth: the bond
     frays but does not sever). This is the EH/`defeated`, wry_whimsy, c&c case.
   - LETHAL verdict (``dead`` / ``dying``): the PC stays at 0 HP and takes a
-    "Downed" Scar status naming the verdict. (Full death-clock ticking +
-    incapacitation enforcement of the at-0 PC is ADR-114 Part 2 — routed; this
-    seam stops the silent 0/10-with-full-agency state and emits the span.)
+    "Downed" Scar status naming the verdict, flagged ``incapacitating=True``.
+    That marker is now ENFORCED at turn intake: ``handlers.player_action`` reads
+    it and refuses a downed PC's subsequent actions (sq-playtest 2026-06-07
+    barsoom-3 — a dead PC kept full agency for four rounds). The function also
+    returns an :class:`IncapacitationEvent` per LETHAL down so the kill-turn
+    dispatch can broadcast the player-facing CHARACTER_INCAPACITATED surface
+    (death banner / seat lock / re-roll CTA). Full death-clock ticking remains
+    ADR-114 Part 2.
 
 Always emits ``encounter.post_resolution_lethality`` — the OTEL lie-detector for
 "did anything handle the 0-HP exit". Idempotent: a PC already carrying this
@@ -38,11 +43,16 @@ so the production call site(s) can call it without double-applying.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.session import GameSnapshot
 from sidequest.game.status import Status, StatusSeverity
 from sidequest.genre.models.pack import GenrePack
+from sidequest.protocol.messages import (
+    CharacterIncapacitatedMessage,
+    CharacterIncapacitatedPayload,
+)
 from sidequest.telemetry.spans.encounter import (
     SPAN_POST_RESOLUTION_LETHALITY,
     post_resolution_lethality_span,
@@ -51,7 +61,84 @@ from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["SPAN_POST_RESOLUTION_LETHALITY", "apply_post_resolution_lethality"]
+__all__ = [
+    "SPAN_POST_RESOLUTION_LETHALITY",
+    "IncapacitationEvent",
+    "apply_post_resolution_lethality",
+    "build_incapacitated_message",
+    "incapacitation_headline",
+    "verdict_from_status_text",
+]
+
+
+def verdict_from_status_text(status_text: str) -> str:
+    """Recover the lethality verdict from a Downed status this module authored.
+
+    The lethal status text is authored below as ``"Downed — {verdict}
+    (mortally wounded)"``. The turn-intake gate re-surfaces the death banner
+    from the persisted status (which carries no separate verdict field), so it
+    reads the verdict back out of the one place that authored it. Returns ``""``
+    for any text that isn't in the authored shape — a total function, never a
+    guess (``incapacitation_headline`` then degrades to the generic line)."""
+    prefix = f"{_DOWNED_PREFIX} — "
+    if not status_text.startswith(prefix):
+        return ""
+    rest = status_text[len(prefix) :]
+    verdict = rest.split(" (", 1)[0].strip()
+    return verdict if verdict in _LETHAL_VERDICTS else ""
+
+
+def incapacitation_headline(character_name: str, verdict: str) -> str:
+    """Player-facing one-line death notice for the UI banner.
+
+    Genre-agnostic and unambiguous (SOUL.md Genre Truth: a death must land AS a
+    death). The narrator still writes the prose beat from the lethality
+    directive; this is the structural banner line, not a replacement for it."""
+    if verdict == "dying":
+        return f"{character_name} is down and bleeding out."
+    if verdict == "dead":
+        return f"{character_name} has fallen."
+    return f"{character_name} is out of the fight."
+
+
+def build_incapacitated_message(
+    *,
+    character_name: str,
+    verdict: str,
+    status_text: str,
+    player_id: str = "",
+    can_reroll: bool = True,
+) -> CharacterIncapacitatedMessage:
+    """Construct the player-facing CHARACTER_INCAPACITATED wire message. Shared by
+    the kill-turn dispatch surface and the turn-intake gate so both render the
+    same banner."""
+    return CharacterIncapacitatedMessage(
+        payload=CharacterIncapacitatedPayload(
+            character_name=character_name,
+            verdict=verdict,
+            status_text=status_text,
+            headline=incapacitation_headline(character_name, verdict),
+            can_reroll=can_reroll,
+        ),
+        player_id=player_id,
+    )
+
+
+@dataclass(frozen=True)
+class IncapacitationEvent:
+    """A PC was taken OUT of play by a just-resolved confrontation (LETHAL
+    verdict only). Returned by :func:`apply_post_resolution_lethality` so the
+    dispatch caller can broadcast the player-facing death surface
+    (CHARACTER_INCAPACITATED) at the moment of death — the turn-intake gate
+    (``handlers.player_action``) is the durable lock for SUBSEQUENT actions, but
+    the kill turn itself needs the proactive notice."""
+
+    actor: str
+    verdict: str
+    status_text: str
+    encounter_type: str
+    outcome: str
+
 
 # Outcomes where the player SIDE lost (a PC may be at 0 HP). A dial-threshold
 # opponent_victory with the PC still above 0 HP is naturally skipped by the
@@ -88,7 +175,7 @@ def apply_post_resolution_lethality(
     encounter: StructuredEncounter | None,
     pack: GenrePack | None,
     turn: int,
-) -> None:
+) -> list[IncapacitationEvent]:
     """Apply the genre lethality policy's mechanical consequence to any PC left at
     0 HP by a just-resolved PC-down confrontation.
 
@@ -99,12 +186,17 @@ def apply_post_resolution_lethality(
     mandatory) and either recovers the PC to a floor (non-lethal) or flags it
     Downed (lethal). Emits ``encounter.post_resolution_lethality`` per PC handled.
     Idempotent.
+
+    Returns the list of :class:`IncapacitationEvent` for PCs taken OUT of play
+    (LETHAL verdict only) so the dispatch caller can broadcast the player-facing
+    death surface on the kill turn. Empty on a non-lethal recover, a no-op, or a
+    missing policy.
     """
     enc = encounter
     if enc is None or not enc.resolved:
-        return
+        return []
     if (enc.outcome or "") not in _PC_DOWN_OUTCOMES:
-        return
+        return []
 
     policy = pack.lethality_policy if pack is not None else None
     if policy is None:
@@ -127,13 +219,14 @@ def apply_post_resolution_lethality(
             hp_after=-1,
         ):
             pass
-        return
+        return []
 
     verdict = policy.verdicts_on_zero_hp.pc
     lethal = verdict in _LETHAL_VERDICTS
     # Only PCs seated on the player side of THIS encounter are casualties of it.
     player_actor_names = {a.name for a in enc.actors if a.side == "player"}
 
+    incapacitations: list[IncapacitationEvent] = []
     for char in snapshot.characters:
         core = char.core
         if core.name not in player_actor_names:
@@ -152,9 +245,23 @@ def apply_post_resolution_lethality(
                     severity=StatusSeverity.Scar,
                     created_turn=turn,
                     created_in_encounter=enc.encounter_type,
+                    # The durable "this PC is OUT of play" marker — read by the
+                    # turn-intake gate (handlers.player_action) so a dead PC's
+                    # subsequent actions never reach the narrator, and surfaced
+                    # to the UI as CHARACTER_INCAPACITATED. sq-playtest barsoom-3.
+                    incapacitating=True,
                 )
             )
             decision = "lethal_down"
+            incapacitations.append(
+                IncapacitationEvent(
+                    actor=core.name,
+                    verdict=verdict,
+                    status_text=status_text,
+                    encounter_type=enc.encounter_type,
+                    outcome=enc.outcome or "",
+                )
+            )
             # sq-playtest 2026-06-07 SILENT death-spiral: this status was applied
             # with zero narrator awareness — Groucho sat "Downed — dying" in state
             # while the prose had him crewing a boarding action. The directive is
@@ -225,3 +332,5 @@ def apply_post_resolution_lethality(
             hp_after=core.hp.current,
         ):
             pass
+
+    return incapacitations

@@ -356,3 +356,113 @@ def test_idempotent_skip_adds_no_second_directive(otel_capture):
     assert snap.next_turn_directives == first, (
         f"idempotent re-run must not append a second directive; got {snap.next_turn_directives!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# sq-playtest 2026-06-07 (barsoom-3, BLOCKING) — a dead PC kept full agency for
+# four rounds. The lethal verdict must (1) stamp a DURABLE incapacitating marker
+# the turn-intake gate reads, and (2) RETURN an event so the kill-turn dispatch
+# can broadcast the player-facing death surface.
+# ---------------------------------------------------------------------------
+
+
+def test_lethal_down_sets_incapacitating_marker(otel_capture):
+    """The Downed status must carry the structured ``incapacitating`` flag — the
+    durable signal the turn-intake gate keys on (NOT a text match)."""
+    from sidequest.game.incapacitation import find_incapacitating_status, is_incapacitated
+
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+
+    apply_post_resolution_lethality(
+        snapshot=snap, encounter=snap.encounter, pack=_Pack(_policy("dead")), turn=6
+    )
+
+    core = snap.find_creature_core(PLAYER)
+    assert core is not None
+    assert is_incapacitated(core), "a lethal down must mark the PC incapacitated"
+    status = find_incapacitating_status(core)
+    assert status is not None and status.incapacitating is True
+
+
+def test_non_lethal_recover_does_NOT_set_incapacitating_marker(otel_capture):
+    """A recoverable defeat leaves the PC with agency — the marker stays False so
+    the intake gate never locks a still-playing PC."""
+    from sidequest.game.incapacitation import is_incapacitated
+
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+
+    apply_post_resolution_lethality(
+        snapshot=snap, encounter=snap.encounter, pack=_Pack(_policy("defeated")), turn=6
+    )
+
+    core = snap.find_creature_core(PLAYER)
+    assert core is not None
+    assert not is_incapacitated(core), (
+        "a non-lethal recovery must NOT incapacitate — the PC keeps acting"
+    )
+
+
+def test_lethal_down_returns_incapacitation_event(otel_capture):
+    """The kill-turn dispatch surfaces the death from this return value."""
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+
+    events = apply_post_resolution_lethality(
+        snapshot=snap, encounter=snap.encounter, pack=_Pack(_policy("dead")), turn=6
+    )
+
+    assert len(events) == 1, f"one PC down → one event; got {events!r}"
+    assert events[0].actor == PLAYER
+    assert events[0].verdict == "dead"
+    assert "Downed" in events[0].status_text
+
+
+def test_non_lethal_and_noop_return_no_events(otel_capture):
+    snap = _snapshot(player_hp=0)
+    snap.encounter = _resolved_encounter("opponent_victory")
+    assert (
+        apply_post_resolution_lethality(
+            snapshot=snap, encounter=snap.encounter, pack=_Pack(_policy("defeated")), turn=6
+        )
+        == []
+    ), "a non-lethal recover incapacitates no one"
+
+    snap2 = _snapshot(player_hp=0)
+    snap2.encounter = _resolved_encounter("player_victory")
+    assert (
+        apply_post_resolution_lethality(
+            snapshot=snap2, encounter=snap2.encounter, pack=_Pack(_policy("dead")), turn=6
+        )
+        == []
+    ), "a non-PC-down outcome returns no events"
+
+
+def test_build_incapacitated_message_and_headline():
+    from sidequest.server.post_resolution_lethality import (
+        build_incapacitated_message,
+        incapacitation_headline,
+        verdict_from_status_text,
+    )
+
+    assert incapacitation_headline("Abinthe", "dead") == "Abinthe has fallen."
+    assert "bleeding out" in incapacitation_headline("Abinthe", "dying")
+    # unknown verdict degrades to the generic line, never crashes
+    assert incapacitation_headline("Abinthe", "") == "Abinthe is out of the fight."
+
+    assert verdict_from_status_text("Downed — dead (mortally wounded)") == "dead"
+    assert verdict_from_status_text("Downed — dying (mortally wounded)") == "dying"
+    assert verdict_from_status_text("Recovering — defeated; reversible") == ""
+
+    msg = build_incapacitated_message(
+        character_name="Abinthe",
+        verdict="dead",
+        status_text="Downed — dead (mortally wounded)",
+        player_id="p1",
+    )
+    assert msg.type.value == "CHARACTER_INCAPACITATED"
+    assert msg.payload.character_name == "Abinthe"
+    assert msg.payload.headline == "Abinthe has fallen."
+    assert msg.payload.can_reroll is True
+    assert msg.player_id == "p1"

@@ -220,6 +220,47 @@ def test_span_emitted_on_fire_with_reason_fired(otel_capture) -> None:
     )
 
 
+def test_span_carries_session_and_world_attribution(otel_capture) -> None:
+    """sq-playtest 2026-06-07 (77-7 forensics, split item b): the afternoon's
+    ``fired=False reason=none_available`` spans carried NO session/genre/world
+    attribution — the GM could not tell WHICH session's deck was empty without
+    timestamp inference. Every lull span (all three reasons) must carry
+    ``session_slug`` + ``genre_slug`` + ``world_slug``.
+    """
+    from sidequest.game.lull_escalation import apply_lull_escalation
+
+    # none_available — the exact forensics shape.
+    snap = _snapshot([])
+    apply_lull_escalation(
+        snap,
+        _Pack([]),
+        tracker=_tracker_in_lull(3),
+        thresholds=DramaThresholds(escalation_streak=3),
+        session_id="2026-05-30-perseus_cloud",
+        now_turn=10,
+    )
+    # fired — same attribution on the happy path.
+    snap2 = _snapshot([_active("alpha")])
+    apply_lull_escalation(
+        snap2,
+        _Pack([_seedtrope("alpha")]),
+        tracker=_tracker_in_lull(3),
+        thresholds=DramaThresholds(escalation_streak=3),
+        session_id="2026-05-30-perseus_cloud",
+        now_turn=10,
+    )
+
+    spans = _lull_spans(otel_capture)
+    assert len(spans) == 2
+    for span in spans:
+        attrs = dict(span.attributes or {})
+        assert attrs.get("session_slug") == "2026-05-30-perseus_cloud", (
+            f"lull span must carry session attribution; got {attrs}"
+        )
+        assert attrs.get("genre_slug") == "wry_whimsy", attrs
+        assert attrs.get("world_slug") == "gulliver", attrs
+
+
 def test_span_emitted_on_cooldown_skip_with_reason_cooldown(otel_capture) -> None:
     """The cooldown-suppressed turn must STILL emit a span (``fired=False``,
     ``reason='cooldown'``) — silence on cooldown would read as "nothing
@@ -284,6 +325,32 @@ def test_span_emitted_when_none_available(otel_capture) -> None:
     attrs = dict(spans[0].attributes or {})
     assert attrs.get("reason") == "none_available", f"reason must be 'none_available'; got {attrs}"
     assert attrs.get("fired") is False
+
+
+def test_empty_deck_bootstrap_emits_seed_deck_empty_span(otel_capture) -> None:
+    """77-7 split item (c): a session bootstrapping with NO authored seeds
+    must emit ``seed.deck_empty`` once — the GM-panel signal that the
+    lull-escalation engine was armed with an empty deck (No Silent
+    Fallbacks). A deck WITH seeds emits nothing."""
+    from sidequest.game.seed_tick import ensure_initial_draw
+
+    snap = _snapshot()
+    ensure_initial_draw(snap, _Pack([]), session_id="s-empty", now_turn=0)
+
+    empty_spans = [s for s in otel_capture.get_finished_spans() if s.name == "seed.deck_empty"]
+    assert len(empty_spans) == 1, "empty deck at bootstrap must emit seed.deck_empty"
+    attrs = dict(empty_spans[0].attributes or {})
+    assert attrs.get("genre_slug") == "wry_whimsy"
+    assert attrs.get("world_slug") == "gulliver"
+    assert attrs.get("session_slug") == "s-empty"
+
+    # A populated deck stays quiet.
+    snap2 = _snapshot()
+    ensure_initial_draw(snap2, _Pack([_seedtrope("alpha")]), session_id="s-full", now_turn=0)
+    empty_spans_after = [
+        s for s in otel_capture.get_finished_spans() if s.name == "seed.deck_empty"
+    ]
+    assert len(empty_spans_after) == 1, "a populated deck must not emit seed.deck_empty"
 
 
 def test_no_span_below_threshold(otel_capture) -> None:

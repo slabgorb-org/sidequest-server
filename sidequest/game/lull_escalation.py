@@ -99,6 +99,15 @@ def apply_lull_escalation(
 
     boring_streak = tracker.boring_streak()
     drama_weight = hint.drama_weight
+    # sq-playtest 2026-06-07 (77-7 forensics, split item b): the afternoon's
+    # none_available spans carried no session/genre/world attribution — the GM
+    # could not tell WHICH session's deck was empty without timestamp
+    # inference. Every emission below carries the trio via **attrs.
+    _attribution = {
+        "session_slug": session_id,
+        "genre_slug": snapshot.genre_slug or "",
+        "world_slug": snapshot.world_slug or "",
+    }
 
     # AC3: ADR-128 governor — never fire two turns running.
     last = snapshot.last_lull_fire_turn
@@ -109,6 +118,7 @@ def apply_lull_escalation(
             fired=False,
             selected_seed_id="",
             reason="cooldown",
+            **_attribution,
         ):
             pass
         return LullEscalationResult(
@@ -131,6 +141,7 @@ def apply_lull_escalation(
             fired=False,
             selected_seed_id="",
             reason="none_available",
+            **_attribution,
         ):
             pass
         return LullEscalationResult(
@@ -152,6 +163,7 @@ def apply_lull_escalation(
         fired=True,
         selected_seed_id=seed_id,
         reason="fired",
+        **_attribution,
     ):
         pass
     return LullEscalationResult(

@@ -86,6 +86,11 @@ SPAN_ROUTES[SPAN_LULL_ESCALATION] = SpanRoute(
         "fired": (span.attributes or {}).get("fired", False),
         "selected_seed_id": (span.attributes or {}).get("selected_seed_id", ""),
         "reason": (span.attributes or {}).get("reason", ""),
+        # sq-playtest 2026-06-07 (77-7 forensics): session attribution so the
+        # GM panel can tell WHICH session's deck declined, not just that one did.
+        "session_slug": (span.attributes or {}).get("session_slug", ""),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+        "world_slug": (span.attributes or {}).get("world_slug", ""),
     },
 )
 

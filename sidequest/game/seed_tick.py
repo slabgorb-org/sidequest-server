@@ -16,12 +16,25 @@ are immutable.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sidequest.game.seed_deck import SeedDeck
 from sidequest.game.session import GameSnapshot, SeedState
 from sidequest.genre.models.tropes import SeedTrope
-from sidequest.telemetry.spans import SPAN_SEED_DRAWN, SPAN_SEED_EXPIRED, Span
+from sidequest.telemetry.spans import (
+    SPAN_SEED_DECK_EMPTY,
+    SPAN_SEED_DRAWN,
+    SPAN_SEED_EXPIRED,
+    Span,
+)
+
+logger = logging.getLogger(__name__)
+
+# Once-per-session dedup for the empty-deck signal: ``ensure_initial_draw``
+# runs every turn, and an EMPTY deck never latches the active_seeds/seed_ghosts
+# idempotency guard — without this the warning would fire per turn.
+_deck_empty_signaled: set[str] = set()
 
 
 def tick_seeds(
@@ -98,6 +111,34 @@ def ensure_initial_draw(
 
     seeds: list[SeedTrope] = list(getattr(pack, "seed_tropes", []) or [])
     if not seeds:
+        # sq-playtest 2026-06-07 (77-7 forensics, split item c): this used to
+        # be a SILENT no-op — the lull-escalation engine then ran all session
+        # with an empty deck (fired=False reason=none_available every turn),
+        # invisible until forensics. No Silent Fallbacks: emit once at
+        # bootstrap so the GM panel sees the configuration smell up front.
+        # "Once" needs an explicit latch: an empty deck never populates
+        # active_seeds/seed_ghosts, so the fresh-session guard above never
+        # trips and this branch re-runs EVERY turn.
+        if session_id in _deck_empty_signaled:
+            return
+        _deck_empty_signaled.add(session_id)
+        with Span.open(
+            SPAN_SEED_DECK_EMPTY,
+            {
+                "session_slug": session_id,
+                "genre_slug": snapshot.genre_slug or "",
+                "world_slug": snapshot.world_slug or "",
+            },
+        ):
+            pass
+        logger.warning(
+            "seed.deck_empty genre=%s world=%s session=%s — the bound seed "
+            "source authors no seed_tropes; the lull-escalation engine will "
+            "decline (reason=none_available) on every lull this session",
+            snapshot.genre_slug,
+            snapshot.world_slug,
+            session_id,
+        )
         return
 
     deck = SeedDeck(

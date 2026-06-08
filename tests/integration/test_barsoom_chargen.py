@@ -131,8 +131,7 @@ def _walk_and_build(
                 (
                     i
                     for i, c in enumerate(scene.choices)
-                    if c.mechanical_effects
-                    and c.mechanical_effects.race_hint == race_display
+                    if c.mechanical_effects and c.mechanical_effects.race_hint == race_display
                 ),
                 None,
             )
@@ -143,8 +142,7 @@ def _walk_and_build(
                 (
                     i
                     for i, c in enumerate(scene.choices)
-                    if c.mechanical_effects
-                    and c.mechanical_effects.class_hint == class_display
+                    if c.mechanical_effects and c.mechanical_effects.class_hint == class_display
                 ),
                 None,
             )
@@ -177,8 +175,7 @@ def _race_source_leap_abilities(char):
     return [
         a
         for a in char.abilities
-        if a.source == AbilitySource.Race
-        and any(m in a.name.lower() for m in _LEAP_NAME_MARKERS)
+        if a.source == AbilitySource.Race and any(m in a.name.lower() for m in _LEAP_NAME_MARKERS)
     ]
 
 
@@ -257,8 +254,7 @@ def test_earthman_boon_emits_origin_trait_otel_event() -> None:
 
     events = _events_by_name(exporter)
     assert ORIGIN_TRAIT_EVENT in events, (
-        f"{ORIGIN_TRAIT_EVENT} must fire when the boon is applied; "
-        f"saw events: {sorted(events)}"
+        f"{ORIGIN_TRAIT_EVENT} must fire when the boon is applied; saw events: {sorted(events)}"
     )
     attrs = events[ORIGIN_TRAIT_EVENT][0].attributes or {}
     assert attrs.get("origin") == "Earthman", (
@@ -301,9 +297,20 @@ def test_native_build_gets_no_gravity_boon() -> None:
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_earthman_boon_is_world_tier_not_engine_hardcode() -> None:
-    """Injecting race_hint='Earthman' into a GENRE-TIER (non-barsoom) build
-    must NOT conjure the boon: the trait definition lives in barsoom world
-    content. A global `if race == "Earthman"` engine hardcode fails here."""
+    """Injecting race_hint='Earthman' into a non-barsoom WORLD build must NOT
+    conjure the boon: the trait definition lives in barsoom world content. A
+    global `if race == "Earthman"` engine hardcode would fail here.
+
+    World choice (2026-06-08): walk ``evropi`` — a real heavy_metal world whose
+    char_creation genuinely lacks the Earthman origin — rather than
+    ``world_slug=None``. The loader's genre/world boundary correction
+    (``loader.py`` ~1931) now builds the pack-level ``char_creation`` as the
+    UNION of every world's scenes when the genre ships no genre-tier
+    char_creation.yaml (heavy_metal moved chargen to the world tier), so
+    ``world_slug=None`` aggregates barsoom and DOES offer the Earthman origin.
+    evropi is the faithful "a heavy_metal build that doesn't offer the origin"
+    crucible; injecting the bare race string there proves the boon comes from
+    barsoom content, not a race-name hardcode in the engine."""
     pack = _load_heavy_metal()
     provider, exporter = _fresh_otel()
     tracer = provider.get_tracer("test_89_5_tier")
@@ -312,7 +319,7 @@ def test_earthman_boon_is_world_tier_not_engine_hardcode() -> None:
         builder, char, _mr, _mc = _walk_and_build(
             pack,
             "Stranded Elsewhere",
-            world_slug=None,  # genre crucible — evropi/long_foundry path
+            world_slug="evropi",  # real non-barsoom world; no Earthman origin offered
             race_display="Earthman",
             class_display="Warrior",
             inject_race_if_unoffered=True,
@@ -320,11 +327,11 @@ def test_earthman_boon_is_world_tier_not_engine_hardcode() -> None:
 
     assert char.race == "Earthman", "precondition: injected race must stick"
     assert not _race_source_leap_abilities(char), (
-        "a genre-tier build with race 'Earthman' must NOT receive the gravity "
-        "boon — the trait is barsoom WORLD content, not an engine hardcode"
+        "a non-barsoom-world build with race 'Earthman' must NOT receive the "
+        "gravity boon — the trait is barsoom WORLD content, not an engine hardcode"
     )
     assert "STR" not in builder.accumulated().stat_bonuses, (
-        "no world content selected → no stat edge"
+        "no barsoom origin selected → no stat edge"
     )
     assert ORIGIN_TRAIT_EVENT not in _events_by_name(exporter), (
         f"{ORIGIN_TRAIT_EVENT} must not fire outside barsoom"

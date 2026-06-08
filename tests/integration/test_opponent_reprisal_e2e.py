@@ -414,32 +414,42 @@ def test_opponent_attack_emits_otel_to_hit_span(otel_capture):
 def test_opponent_roll_broadcasts_dice_pair(otel_capture):
     """AC5: the opponent's attack roll must be broadcast as a DICE_REQUEST +
     DICE_RESULT pair so Sebastien/Jade see the enemy roll animate (player-facing
-    math). RED today — only the player's own roll is broadcast.
+    math).
 
-    The player's own turn broadcasts a check pair + (on a hit) a damage pair; the
-    opponent's reprisal must add at least one MORE result. We assert the total
-    DICE_RESULT count exceeds what the player-only path produces.
+    Assertion shape (2026-06-08): assert directly on the OPPONENT's pair —
+    a request + result attributed to the opponent NPC. The prior version
+    counted total DICE_RESULTs (>=3, "player check + player damage + opponent
+    to-hit"), but that proxy is coupled to the player's damage roll, which is
+    skipped when the fixture player carries no weapon (``damage_spec_missing``
+    on the ``shoot`` beat — the seeded PC has no inventory weapon and the beat
+    no damage_override). The player's weapon is irrelevant to AC5; what AC5
+    asserts is that the ENEMY's roll reaches the overlay. Even on a miss the
+    opponent rolls to-hit and must broadcast that pair.
     """
-    from sidequest.protocol.messages import DiceResultMessage
+    from sidequest.protocol.messages import DiceRequestMessage, DiceResultMessage
 
     pack = _load_space_opera_pack()
     if pack is None:
         pytest.skip("sidequest-content not on disk in this checkout")
 
-    # Baseline: player-only result count is captured by the AC=30 miss case
-    # (no opponent damage roll), but the opponent STILL rolls to-hit and must
-    # broadcast that roll. So even on a miss there must be an opponent dice pair.
     broadcasts: list[object] = []
-    snap = _make_snapshot(player_ac=30, player_hp=12)  # opponent misses → no opp damage roll
+    snap = _make_snapshot(player_ac=30, player_hp=12)  # opponent misses → still rolls to-hit
     _drive_player_shoot(snap, _make_encounter(), pack, broadcasts=broadcasts)
 
-    results = [m for m in broadcasts if isinstance(m, DiceResultMessage)]
-    # Player check (1) + player damage on a Success hit (1) = 2 player results.
-    # The opponent's to-hit roll must add at least one more → >= 3.
-    assert len(results) >= 3, (
-        f"the opponent's attack roll must be broadcast (DICE_REQUEST+DICE_RESULT) "
-        f"so the table sees the enemy roll; got {len(results)} DICE_RESULTs "
-        f"(expected player check + player damage + opponent to-hit)"
+    opp_requests = [
+        m
+        for m in broadcasts
+        if isinstance(m, DiceRequestMessage) and m.payload.character_name == OPPONENT
+    ]
+    opp_results = [
+        m
+        for m in broadcasts
+        if isinstance(m, DiceResultMessage) and m.payload.character_name == OPPONENT
+    ]
+    assert opp_requests and opp_results, (
+        "the opponent's attack roll must be broadcast as a DICE_REQUEST+DICE_RESULT "
+        "pair attributed to the opponent so the table sees the enemy roll; got "
+        f"requests={[type(m).__name__ for m in broadcasts]}"
     )
 
 

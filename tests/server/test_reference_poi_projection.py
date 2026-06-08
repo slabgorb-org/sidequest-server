@@ -74,6 +74,7 @@ from pathlib import Path
 
 # RED: this import fails until Dev adds the POI-section projection builder.
 from sidequest.server.reference_projection import (
+    build_generic_yaml_section,
     build_lore_projection,
     build_poi_section,
 )
@@ -187,6 +188,7 @@ def test_every_projected_poi_has_a_resolved_image_url():
         world="w",
         poi_on_r2_slugs=frozenset({_anchor("salt_quay")}),
     )
+    assert section is not None, "expected a non-None section with salt_quay on R2"
     for member in section["entries"]:
         assert member["image_url"] is not None, (
             "exclusion model: a projected POI always has a resolved image_url"
@@ -394,9 +396,11 @@ def test_resolved_poi_fires_resolved_span(otel_capture) -> None:
         poi_on_r2_slugs=frozenset({_anchor("salt_quay")}),
     )
     resolved = span_attrs_by_name(otel_capture, SPAN_REFERENCE_POI_IMAGE_RESOLVED)
-    assert resolved, "an on-R2 POI must fire a poi_image_resolved span"
+    # Exactly one POI is on R2 → exactly one resolved span (cardinality is the
+    # GM-panel contract: a double-fire would mean the gate ran twice).
+    assert len(resolved) == 1, f"expected one resolved span, got {len(resolved)}"
     # The 63-8 span carries the anchor slug under the ``reference.slug`` attr.
-    assert any(a.get("reference.slug") == _anchor("salt_quay") for a in resolved)
+    assert resolved[0].get("reference.slug") == _anchor("salt_quay")
 
 
 def test_excluded_poi_fires_not_found_span(otel_capture) -> None:
@@ -410,8 +414,9 @@ def test_excluded_poi_fires_not_found_span(otel_capture) -> None:
         poi_on_r2_slugs=frozenset({_anchor("salt_quay")}),
     )
     not_found = span_attrs_by_name(otel_capture, SPAN_REFERENCE_POI_IMAGE_NOT_FOUND)
-    assert not_found, "an authored-but-not-on-R2 POI must fire poi_image_not_found"
-    assert any(a.get("reference.slug") == _anchor("rust_fields") for a in not_found)
+    # Exactly one POI is off R2 → exactly one not_found span.
+    assert len(not_found) == 1, f"expected one not_found span, got {len(not_found)}"
+    assert not_found[0].get("reference.slug") == _anchor("rust_fields")
 
 
 # ===========================================================================
@@ -422,12 +427,17 @@ def test_excluded_poi_fires_not_found_span(otel_capture) -> None:
 
 
 def _world_dir_with_poi(
-    tmp_path: Path, *, on_r2: bool = True, with_keeper: bool = False
+    tmp_path: Path, *, on_r2: bool = True, with_keeper: bool = False, with_map: bool = True
 ) -> Path:
     """Seed a minimal world with a single POI in history.yaml and an
     r2_manifest.json at the gate's discovery path (``pack_dir.parent.parent``,
     with ``pack_dir=tmp_path``). When ``on_r2`` the manifest carries the POI's
-    verbatim landscape key; otherwise it is empty (authored-but-no-art)."""
+    verbatim landscape key; otherwise it is empty (authored-but-no-art).
+
+    When ``with_map`` (default) a minimal pin-less ``cartography.yaml`` is seeded
+    so the assembled document carries a ``map`` section — this is what makes the
+    AC5 map-then-POI ordering invariant testable (a POI-only world never
+    materialises a map, so the ordering assertion would never run)."""
     world_dir = tmp_path / "worlds" / "w"
     world_dir.mkdir(parents=True)
     history = (
@@ -440,6 +450,21 @@ def _world_dir_with_poi(
     if with_keeper:
         history += "    secret: a cache is buried under the third piling\n"
     (world_dir / "history.yaml").write_text(history, encoding="utf-8")
+
+    if with_map:
+        # Pin-less regions (no npc references) → the map section builds without
+        # needing portrait gating, and `cartography.yaml` is in EXCLUDED_FILES so
+        # it never generic-projects. Mirrors the map fixture in
+        # test_reference_projection.py.
+        (world_dir / "cartography.yaml").write_text(
+            "starting_region: harbor\n"
+            "regions:\n"
+            "  harbor: {name: The Harbor, summary: Salt docks., "
+            "description: Fog and hulls., adjacent: [market]}\n"
+            "  market: {name: Night Market, summary: Lit stalls., "
+            "description: Spice and smoke., adjacent: [harbor]}\n",
+            encoding="utf-8",
+        )
 
     # The gate (``_gate_poi_slugs_on_manifest``) discovers ``r2_manifest.json``
     # at ``pack_dir.parent.parent`` and fails loud on its absence for a
@@ -471,18 +496,18 @@ def test_lore_projection_includes_poi_section(tmp_path: Path):
 
 
 def test_lore_projection_poi_after_map_section(tmp_path: Path):
-    # AC5: the POI section is appended AFTER the map section. (This world authors
-    # no cartography, so map is absent and poi is simply present; when both
-    # exist, poi must follow map — assert the ordering invariant holds whenever
-    # a map section is present.)
-    world_dir = _world_dir_with_poi(tmp_path, on_r2=True)
+    # AC5: the POI section is appended AFTER the map section. The fixture seeds
+    # BOTH cartography (→ map section) and a POI on R2 (→ poi section), so both
+    # ids are present and the ordering assertion actually executes — not a
+    # conditional that silently no-ops when no map exists.
+    world_dir = _world_dir_with_poi(tmp_path, on_r2=True, with_map=True)
     doc = build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
     section_ids = [s["id"] for s in doc["sections"]]
+    assert "map" in section_ids, "fixture must materialise a map section for this AC to be testable"
     assert "poi" in section_ids
-    if "map" in section_ids:
-        assert section_ids.index("poi") > section_ids.index("map"), (
-            "the POI section must be appended after the map section (AC5)"
-        )
+    assert section_ids.index("poi") > section_ids.index("map"), (
+        "the POI section must be appended after the map section (AC5)"
+    )
 
 
 def test_lore_projection_omits_poi_when_no_art_on_r2(tmp_path: Path):
@@ -511,3 +536,87 @@ def test_lore_projection_poi_keeper_field_never_crosses(tmp_path: Path):
     assert "a cache is buried under the third piling" not in blob
     poi = next(s for s in doc["sections"] if s["id"] == "poi")
     assert "secret" not in {k for m in poi["entries"] for k in m}
+
+
+def _world_dir_with_chapters_poi(tmp_path: Path) -> Path:
+    """Seed a world whose POI is nested under ``chapters[]`` (the SECOND authoring
+    shape ``load_points_of_interest`` reads) and carries a keeper ``secret``. The
+    same history.yaml is generic-projected as a node-tree, so without a
+    chapters-nested KEEPER pattern the secret leaks via the generic path even
+    though the dedicated POI section's allowlist is clean."""
+    world_dir = tmp_path / "worlds" / "w"
+    world_dir.mkdir(parents=True)
+    (world_dir / "history.yaml").write_text(
+        "chapters:\n"
+        "  - title: Chapter One\n"
+        "    points_of_interest:\n"
+        "      - name: The Salt Quay\n"
+        "        slug: salt_quay\n"
+        "        region: Harbor District\n"
+        "        description: Brine-stained docks.\n"
+        "        secret: the bridge is rigged to collapse on the third night\n",
+        encoding="utf-8",
+    )
+    from sidequest.server.reference_renderer import load_r2_manifest_keys
+
+    manifest_path = tmp_path.parent.parent / "r2_manifest.json"
+    manifest_path.write_text(
+        '[{"key": "genre_packs/p/worlds/w/assets/poi/salt_quay.png"}]',
+        encoding="utf-8",
+    )
+    load_r2_manifest_keys.cache_clear()
+    return world_dir
+
+
+def test_lore_projection_chapters_nested_poi_keeper_never_crosses(tmp_path: Path):
+    # AC4 / spec C1 for the chapters-nested authoring shape. load_points_of_interest
+    # reads POIs under chapters[] too, and the generic-YAML `history` projection
+    # would leak a chapters-nested POI's keeper field unless classify() carves
+    # ("history", ("chapters","*","points_of_interest","*",<field>)) as KEEPER.
+    world_dir = _world_dir_with_chapters_poi(tmp_path)
+    doc = build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
+    blob = _json.dumps(doc)
+    assert "the bridge is rigged to collapse on the third night" not in blob, (
+        "a keeper field on a chapters-nested POI must NOT cross the JSON boundary "
+        "via the generic-YAML history projection (AC4 / spec C1)"
+    )
+    # The public POI still projects (allowlisted) — the section is not just empty.
+    poi = next((s for s in doc["sections"] if s["id"] == "poi"), None)
+    assert poi is not None
+    assert [m["name"] for m in poi["entries"]] == ["The Salt Quay"]
+
+
+def test_generic_yaml_history_blocks_poi_keeper_fields():
+    # Isolate the classify() generic-YAML gate from the POI allowlist: call
+    # build_generic_yaml_section directly with history data carrying every keeper
+    # POI field, and assert none cross. This proves the KEEPER patterns are wired
+    # in the generic path independently of build_poi_section (the whole-document
+    # blob test passes if EITHER gate fires; this one pins the generic gate alone).
+    data = {
+        "points_of_interest": [
+            {
+                "name": "The Salt Quay",
+                "slug": "salt_quay",
+                "region": "Harbor District",
+                "description": "Brine-stained docks.",
+                "gm_notes": "floods on the third night — strand them here",
+                "secret": "a cache is buried under the third piling",
+                "trap": "pressure plate at the dock gate",
+                "hidden_exit": "a tunnel behind the bait shop",
+                "draft": True,
+            }
+        ]
+    }
+    section = build_generic_yaml_section(data, file_stem="history", pack="p", world="w")
+    assert section is not None
+    blob = _json.dumps(section)
+    for token in (
+        "floods on the third night",
+        "a cache is buried under the third piling",
+        "pressure plate at the dock gate",
+        "a tunnel behind the bait shop",
+    ):
+        assert token not in blob, f"keeper token {token!r} leaked via the generic-YAML history path"
+    # The public POI fields DO survive the generic projection.
+    assert "The Salt Quay" in blob
+    assert "Brine-stained docks." in blob

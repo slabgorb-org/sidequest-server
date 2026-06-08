@@ -327,8 +327,13 @@ def build_generic_yaml_section(
 
 
 def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: Path) -> dict:
-    """Assemble the public-projected lore document. This slice emits the map
-    section only; Cast/POI/Timeline/generic-YAML sections land in later slices.
+    """Assemble the public-projected lore document.
+
+    Emits, in order: the ``map`` section (cartography, when present), the ``poi``
+    section (history.yaml points_of_interest gated on R2 landscape art), the
+    ``cast`` section (ratified NPCs gated on R2 portraits), then one generic-YAML
+    section per present ``LORE_WORLD_FILES`` file. Each section is omitted when it
+    has no public content. The Timeline section is not yet implemented.
     """
     sections: list[dict] = []
 

@@ -881,4 +881,69 @@ def create_rest_router() -> APIRouter:
             "world_save": world_save.model_dump(mode="json"),
         }
 
+    # -----------------------------------------------------------------------
+    # Story 91-5 — Dark-spend reconciliation endpoints
+    # -----------------------------------------------------------------------
+
+    @router.get("/api/debug/cost/instrumented")
+    async def get_instrumented_cost() -> dict[str, Any]:
+        """Return the process-level instrumented Anthropic spend from the
+        SessionCostLedger. Used by the dark-spend reconciliation script and
+        the GM dashboard Layer 1 panel."""
+        from sidequest.agents.cost_safety import ledger as _ledger
+
+        l = _ledger()
+        return {
+            "instrumented_usd": l.instrumented_total_usd(),
+            "session_count": len(l.cumulative_cost_usd),
+        }
+
+    @router.get("/api/debug/cost/reconciliation")
+    async def get_reconciliation() -> dict[str, Any] | None:
+        """Return the latest dark-spend reconciliation result POSTed by the
+        reconciliation script, or null if no reconciliation has run yet."""
+        return _reconciliation_store.get("latest")
+
+    @router.post("/api/debug/cost/reconciliation", status_code=200)
+    async def post_reconciliation(result: _ReconcileResultPayload) -> dict[str, Any]:
+        """Store a reconciliation result from the reconciliation script and
+        fire the dark_spend.gap_detected watcher event if alert=True."""
+        payload = result.model_dump()
+        _reconciliation_store["latest"] = payload
+
+        if result.alert:
+            from sidequest.telemetry.watcher_hub import publish_event as _pub
+
+            _pub(
+                "dark_spend.gap_detected",
+                {
+                    "gap_pct": result.gap_pct,
+                    "billed_usd": result.billed_usd,
+                    "instrumented_usd": result.instrumented_usd,
+                    "alert": True,
+                },
+                component="cost_reconcile",
+                severity="warn",
+            )
+        return payload
+
     return router
+
+
+# ---------------------------------------------------------------------------
+# In-process reconciliation store (process-lifetime, no persistence needed —
+# the script POSTs the result on every run; a server restart is a fresh day).
+# ---------------------------------------------------------------------------
+_reconciliation_store: dict[str, Any] = {}
+
+
+class _ReconcileResultPayload(BaseModel):
+    """Pydantic model for the POST /api/debug/cost/reconciliation body.
+
+    All fields are required — a partial payload makes gap_pct uncomputable.
+    """
+
+    instrumented_usd: float
+    billed_usd: float
+    gap_pct: float
+    alert: bool

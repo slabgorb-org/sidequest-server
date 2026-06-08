@@ -363,6 +363,11 @@ class SessionCostLedger:
 
     # -- eviction / test isolation ---------------------------------------
 
+    def instrumented_total_usd(self) -> float:
+        """Sum all per-session cumulative costs — the Layer 1 figure for the
+        dark-spend reconciliation (story 91-5). Returns 0.0 on an empty ledger."""
+        return sum(self.cumulative_cost_usd.values())
+
     def reset_baselines(self, session_id: str) -> None:
         """Drop the adapter rolling baselines for one session (the
         ``SessionRoom.close_store()`` eviction handle, extended to the

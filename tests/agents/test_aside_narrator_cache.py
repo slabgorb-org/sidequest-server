@@ -101,7 +101,11 @@ class _FakeToolingClient:
         return self._result
 
 
-def _stash() -> AsidePromptStash:
+def _stash(
+    *,
+    user_state_text: str = "GAME STATE: Blackthorn Hall drawing room; Lady Catherine present.",
+    calendar_summary: str = '{"starting_date": "1866-10-18", "months": 12}',
+) -> AsidePromptStash:
     return AsidePromptStash(
         system_blocks=[
             CacheableBlock(text="stable narrator prefix", cache=True),
@@ -115,6 +119,8 @@ def _stash() -> AsidePromptStash:
             )
         ],
         model="claude-sonnet-4-6",
+        user_state_text=user_state_text,
+        calendar_summary=calendar_summary,
     )
 
 
@@ -175,6 +181,61 @@ async def test_stash_forwarded_verbatim_with_tool_choice_none() -> None:
     assert message.role == "user"
     assert "PLAYER ASIDE: what day is it?" in message.content
     assert "OUT-OF-CHARACTER" in message.content
+
+
+@pytest.mark.asyncio
+async def test_user_turn_carries_stashed_game_state_and_calendar() -> None:
+    """DRIVER verification failure 2026-06-07: the narrator's per-turn game
+    state rides the USER bucket (ADR-110 placement), not the stashed system
+    blocks — the cache-ride aside got the rulebook and ZERO state ("we
+    haven't begun play yet" at turn 2). The calendar reaches the narrator
+    only via the get_world_grounding TOOL, so it is in NO block either way.
+    The stash must carry both and the resolver must re-present them in the
+    aside's user turn, BEFORE the OOC contract + question."""
+    client = _FakeToolingClient(result=_tooling_result(_ANSWER_JSON))
+    stash = _stash()
+
+    await resolve_aside_on_narrator_cache(
+        client=client,
+        stash=stash,
+        question="what day is it?",
+        session_id="slug-1",
+    )
+
+    [message] = client.calls[0]["messages"]
+    content = message.content
+    assert "Blackthorn Hall drawing room" in content, (
+        "the stashed narrator user-state must reach the aside's user turn"
+    )
+    assert '"starting_date": "1866-10-18"' in content, (
+        "the world calendar must reach the aside's user turn"
+    )
+    # Ordering: state grounding first, then the OOC contract, then the
+    # question — the system blocks stay byte-identical (cache key).
+    assert content.index("Blackthorn Hall") < content.index("OUT-OF-CHARACTER")
+    assert content.index("OUT-OF-CHARACTER") < content.index("PLAYER ASIDE: what day is it?")
+
+
+@pytest.mark.asyncio
+async def test_empty_state_and_calendar_omit_their_sections() -> None:
+    """A pre-first-turn or calendarless stash must not present empty headers
+    (an empty [WORLD CALENDAR] block invites confabulation)."""
+    client = _FakeToolingClient(result=_tooling_result(_ANSWER_JSON))
+    stash = _stash(user_state_text="", calendar_summary="")
+
+    await resolve_aside_on_narrator_cache(
+        client=client,
+        stash=stash,
+        question="what day is it?",
+        session_id="slug-1",
+    )
+
+    [message] = client.calls[0]["messages"]
+    # Bracketed header forms — the OOC contract legitimately NAMES the
+    # sections in its grounding line; only the empty header blocks must go.
+    assert "[NARRATOR TURN STATE" not in message.content
+    assert "[WORLD CALENDAR" not in message.content
+    assert "PLAYER ASIDE: what day is it?" in message.content
 
 
 @pytest.mark.asyncio

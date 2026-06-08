@@ -3648,10 +3648,23 @@ class Orchestrator:
             # reference copy, not a rebuild: rebuilding would risk byte
             # drift. Refreshed every SDK turn; None until the first turn
             # (the handler's legacy thin read-view covers that window).
+            # DRIVER verification failure 2026-06-07: the per-turn game state
+            # rides user_message (ADR-110 user-bucket placement), not the
+            # system blocks — and the calendar reaches the narrator only via
+            # the get_world_grounding TOOL. Stash both so the aside's user
+            # turn can re-present them (user-turn bytes are outside the cache
+            # prefix; this cannot bust the cache).
+            _stash_calendar = ""
+            if context.world_calendar:
+                _stash_calendar = json.dumps(
+                    context.world_calendar, ensure_ascii=False, default=str
+                )
             self._aside_prompt_stash = AsidePromptStash(
                 system_blocks=list(system_blocks),
                 tools=list(advertised_tool_defs),
                 model=model,
+                user_state_text=user_message,
+                calendar_summary=_stash_calendar,
             )
 
             # Phase E now plumbs world_id/session_id/store/lore_store/

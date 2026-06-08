@@ -70,3 +70,29 @@ async def test_send_skipped_when_application_state_connecting() -> None:
     await _send_message(ws, _msg("PLAYER_PRESENCE"))
 
     ws.send_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_failed_logs_class_and_socket_state_for_empty_str_exc(caplog) -> None:
+    """sq-playtest #7: a send failure whose exception ``str()`` is empty (some
+    disconnect-race exceptions) previously logged ``error=`` with nothing,
+    making a benign disconnect indistinguishable from a real send bug. The
+    WARNING must always carry the exception CLASS and the socket state."""
+
+    class _BlankExc(RuntimeError):
+        def __str__(self) -> str:  # mimic the empty-stringifying disconnect races
+            return ""
+
+    ws = SimpleNamespace(
+        application_state=WebSocketState.CONNECTED,
+        send_text=AsyncMock(side_effect=_BlankExc()),
+    )
+
+    with caplog.at_level("WARNING"):
+        await _send_message(ws, _msg("CONFRONTATION"))
+
+    rec = next(r for r in caplog.records if "ws.send_failed" in r.getMessage())
+    msg = rec.getMessage()
+    assert "error_class=_BlankExc" in msg, msg
+    assert "socket_state=CONNECTED" in msg, msg
+    assert "type=CONFRONTATION" in msg, msg

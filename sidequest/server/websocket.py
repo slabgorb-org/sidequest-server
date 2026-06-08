@@ -232,11 +232,7 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
         # (real disconnect, empty room) is the outer guard; the
         # cleanup/save state decides between teardown and a loud skip log.
         save_failure = getattr(handler, "last_save_failure", None)
-        if (
-            room is not None
-            and left_player is not None
-            and not room.connected_player_ids()
-        ):
+        if room is not None and left_player is not None and not room.connected_player_ids():
             if not cleanup_failed and save_failure is None:
                 room.close_store()
                 logger.info("ws.room_teardown_close_store slug=%s", room.slug)
@@ -282,7 +278,20 @@ async def _send_message(websocket: WebSocket, msg: Any) -> None:
         json_str = msg.model_dump_json()
         await websocket.send_text(json_str)
     except Exception as exc:
-        logger.warning("ws.send_failed type=%s error=%s", getattr(msg, "type", "?"), exc)
+        # sq-playtest 2026-06-07 (#7): several disconnect-race exceptions
+        # (Starlette close-after-send RuntimeError, WebSocketDisconnect)
+        # stringify to "", so ``error=%s`` logged an empty diagnostic and a
+        # benign disconnect was indistinguishable from a real send bug (a
+        # CONFRONTATION payload failing to a live socket would look identical).
+        # Log the exception class + repr (always populated) plus the socket
+        # state at send time so the two cases separate in forensics.
+        logger.warning(
+            "ws.send_failed type=%s error_class=%s error=%r socket_state=%s",
+            getattr(msg, "type", "?"),
+            type(exc).__name__,
+            exc,
+            websocket.application_state.name,
+        )
 
 
 async def _send_error(

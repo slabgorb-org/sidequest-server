@@ -6907,6 +6907,28 @@ def _resolve_opposed_check_branch(
                     severity="warning",
                 )
             else:
+                # Lie-detector: span when the strike fell back to the genre
+                # unarmed floor (no weapon/override/catalog). Identity match —
+                # the resolver returns the exact pack.rules.unarmed_damage object.
+                _unarmed_floor = pack.rules.unarmed_damage if pack.rules else None
+                if _unarmed_floor is not None and dmg_spec is _unarmed_floor:
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "encounter",
+                            "op": "unarmed_strike_floor",
+                            "beat_id": beat_id,
+                            "actor": sel_actor.name,
+                            "source": sel_source,
+                            "dice": dmg_spec.dice,
+                            "rationale": (
+                                "opposed_check strike resolved no weapon/override/"
+                                "catalog damage; fell back to pack.rules.unarmed_damage"
+                            ),
+                        },
+                        component="encounter",
+                        severity="info",
+                    )
                 dmg_request_id = str(uuid.uuid4())
                 dmg_request_payload = _damage_request_from_spec(
                     dmg_spec,

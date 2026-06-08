@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json
 from pathlib import Path
 
 import pytest
@@ -100,3 +101,47 @@ def test_lore_projection_raises_on_malformed_cartography(tmp_path: Path):
     (world_dir / "cartography.yaml").write_text("regions: [unclosed\n", encoding="utf-8")
     with pytest.raises(ValueError):
         build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
+
+
+def test_map_projection_leaks_no_entity_internals():
+    cart = CartographyConfig.model_validate(
+        {
+            "starting_region": "harbor",
+            "regions": {
+                "harbor": {
+                    "name": "The Harbor",
+                    "summary": "Salt docks.",
+                    "description": "Fog and hulls.",
+                    "adjacent": ["market"],
+                    "entities": [
+                        {
+                            "id": "sten",
+                            "label": "Old Sten",
+                            "tier": "real_object",
+                            # `ref` is the keeper-side link target; it must NOT leak.
+                            "binding": {"kind": "npc", "ref": "npc_sten_secret_id"},
+                        }
+                    ],
+                },
+                "market": {
+                    "name": "Night Market",
+                    "summary": "Lit stalls.",
+                    "description": "Spice and smoke.",
+                    "adjacent": ["harbor"],
+                },
+            },
+        }
+    )
+    section = build_lore_map_section(
+        cart, pack="p", world="w", portrait_on_r2_slugs=frozenset({"old_sten"})
+    )
+    blob = _json.dumps(section)
+    # The secret binding ref value must not cross the JSON boundary.
+    assert "npc_sten_secret_id" not in blob
+    # Binding keys must not appear (quoted-key form — robust vs. substrings that
+    # could legitimately occur inside a portrait URL/domain).
+    assert '"ref"' not in blob
+    assert '"kind"' not in blob
+    # Pin carries exactly the public projection keys.
+    pin = section["regions"][0]["pins"][0]
+    assert set(pin.keys()) == {"slug", "label", "portrait_url"}

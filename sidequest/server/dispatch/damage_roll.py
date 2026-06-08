@@ -21,7 +21,11 @@ import logging
 import random
 import re
 
-from sidequest.genre.models.inventory import DamageSpec
+from sidequest.genre.models.inventory import (
+    PARITY_BACKING_SIDES,
+    DamageSpec,
+    parity_value,
+)
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import BeatDef
 from sidequest.protocol.dice import (
@@ -65,6 +69,11 @@ def damage_request_from_spec(
     ``rolling_player_id`` defaults to ``"server"`` for server-originated rolls;
     override when a specific player should animate the throw.
 
+    A parity die (Nd2) has no overlay mesh, so the request throws N backing d6
+    instead (``PARITY_BACKING_SIDES``); the caller maps the settled faces to d2
+    values via ``parity_damage_total`` for the actual damage total. The context
+    string names the mapping so the readout can explain "the d6 shows 4 → 1".
+
     Raises ``ValueError`` if the dice string is malformed or uses an
     unsupported face count (validated at ``DamageSpec`` construction, so this
     is a belt-and-suspenders guard).
@@ -77,11 +86,18 @@ def damage_request_from_spec(
         )
     count = int(m["count"])
     faces = int(m["faces"])
-    sides = DieSides.from_wire(faces)
-    if sides is DieSides.Unknown:
-        raise ValueError(
-            f"damage_request_from_spec: unsupported die face count d{faces} in {spec.dice!r}"
-        )
+    if spec.is_parity_die:
+        # Throw a renderable backing d6 per die; the parity map (even→1/odd→2)
+        # is applied to the total by parity_damage_total at the call site.
+        sides = PARITY_BACKING_SIDES
+        context = "unarmed damage (d2: backing d6, even→1 / odd→2)"
+    else:
+        sides = DieSides.from_wire(faces)
+        if sides is DieSides.Unknown:
+            raise ValueError(
+                f"damage_request_from_spec: unsupported die face count d{faces} in {spec.dice!r}"
+            )
+        context = "weapon damage"
     # One DieSpec per die so the overlay renders individual dice.
     dice_pool = [DieSpec(sides=sides, count=1) for _ in range(count)]
     return DiceRequestPayload(
@@ -92,8 +108,18 @@ def damage_request_from_spec(
         modifier=spec.bonus,
         stat=_DAMAGE_STAT,
         difficulty=1,  # damage rolls have no DC
-        context="weapon damage",
+        context=context,
     )
+
+
+def parity_damage_total(faces: list[int], bonus: int) -> int:
+    """Total a parity (d2) damage roll from its backing-die faces.
+
+    Each backing face maps even→1 / odd→2 (``parity_value``); the mapped
+    values are summed and ``bonus`` added. Used in place of the plain
+    face-sum total for an ``is_parity_die`` DamageSpec so the d6 shown in the
+    overlay never leaks its raw face into the HP math."""
+    return sum(parity_value(f) for f in faces) + bonus
 
 
 def generate_server_faces(dice: list[DieSpec]) -> list[int]:

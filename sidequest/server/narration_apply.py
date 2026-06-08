@@ -6478,6 +6478,9 @@ def _resolve_opposed_check_branch(
         generate_server_faces as _gen_server_faces,
     )
     from sidequest.server.dispatch.damage_roll import (
+        parity_damage_total as _parity_damage_total,
+    )
+    from sidequest.server.dispatch.damage_roll import (
         resolve_damage_spec_from_beat_and_actor as _resolve_dmg_spec,
     )
     from sidequest.telemetry.spans import (
@@ -6943,7 +6946,12 @@ def _resolve_opposed_check_branch(
                     dmg_request_payload.modifier,
                     dmg_request_payload.difficulty,
                 )
-                dmg_total = dmg_resolved.total
+                # Parity (d2) spec threw a backing d6; map faces to d2 values for
+                # the HP total (see dice.py for the rationale). rolls keep the d6.
+                if dmg_spec.is_parity_die:
+                    dmg_total = _parity_damage_total(dmg_faces, dmg_request_payload.modifier)
+                else:
+                    dmg_total = dmg_resolved.total
                 dmg_seed = generate_dice_seed(
                     f"{encounter.encounter_type}-{sel_actor.name}", session_round
                 )

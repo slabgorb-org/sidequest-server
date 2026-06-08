@@ -55,8 +55,6 @@ from __future__ import annotations
 import json as _json
 from pathlib import Path
 
-import pytest
-
 # RED: this import fails until Dev adds the Cast-section projection builder.
 from sidequest.server.reference_projection import (
     build_cast_section,
@@ -68,7 +66,6 @@ from sidequest.telemetry.spans.reference import (
     SPAN_REFERENCE_PORTRAIT_RESOLVED,
 )
 from tests.server.conftest import span_attrs_by_name
-
 
 # ---------------------------------------------------------------------------
 # Fixtures — portrait_manifest.yaml entry dicts (the public Cast source).
@@ -130,9 +127,7 @@ def test_unratified_npc_is_excluded():
         _ratified_entry("Old Sten", role="Dockmaster"),
         _ratified_entry("Phantom Whisper", role="???", observation_pending=True),
     ]
-    section = build_cast_section(
-        entries, pack="p", world="w", portrait_on_r2_slugs=frozenset()
-    )
+    section = build_cast_section(entries, pack="p", world="w", portrait_on_r2_slugs=frozenset())
     assert section is not None
     names = {m["name"] for m in section["members"]}
     assert "Old Sten" in names
@@ -152,9 +147,7 @@ def test_quoted_string_observation_pending_still_withholds():
     # cannot lean on Python truthiness. The HTML path (_cast_entry_is_projectable)
     # routes this through pydantic coercion; the JSON path must match.
     entries = [_ratified_entry("Phantom", observation_pending="true")]
-    section = build_cast_section(
-        entries, pack="p", world="w", portrait_on_r2_slugs=frozenset()
-    )
+    section = build_cast_section(entries, pack="p", world="w", portrait_on_r2_slugs=frozenset())
     # Only the unratified entry exists → nothing projectable → None.
     assert section is None or all(m["name"] != "Phantom" for m in section["members"])
 
@@ -164,26 +157,19 @@ def test_all_unratified_projects_to_none():
         _ratified_entry("Phantom A", observation_pending=True),
         _ratified_entry("Phantom B", observation_pending=True),
     ]
-    section = build_cast_section(
-        entries, pack="p", world="w", portrait_on_r2_slugs=frozenset()
-    )
+    section = build_cast_section(entries, pack="p", world="w", portrait_on_r2_slugs=frozenset())
     assert section is None, "no projectable member → omit the Cast section (None)"
 
 
 def test_empty_entries_projects_to_none():
-    assert (
-        build_cast_section([], pack="p", world="w", portrait_on_r2_slugs=frozenset())
-        is None
-    )
+    assert build_cast_section([], pack="p", world="w", portrait_on_r2_slugs=frozenset()) is None
 
 
 def test_entry_without_name_is_skipped():
     # An entry with no usable name is not a renderable card (parity with
     # present_lore_cast, which skips empty-name entries).
     entries = [_ratified_entry("Old Sten"), {"role": "Nobody", "appearance": "blur"}]
-    section = build_cast_section(
-        entries, pack="p", world="w", portrait_on_r2_slugs=frozenset()
-    )
+    section = build_cast_section(entries, pack="p", world="w", portrait_on_r2_slugs=frozenset())
     assert section is not None
     assert [m["name"] for m in section["members"]] == ["Old Sten"]
     assert "Nobody" not in _json.dumps(section)
@@ -297,9 +283,7 @@ def test_keeper_npc_fields_never_cross_the_boundary():
         appearance="Lean, quick-eyed.",
         **_KEEPER_NPC_FIELDS,
     )
-    section = build_cast_section(
-        [entry], pack="p", world="w", portrait_on_r2_slugs=frozenset()
-    )
+    section = build_cast_section([entry], pack="p", world="w", portrait_on_r2_slugs=frozenset())
     assert section is not None
     member = section["members"][0]
     blob = _json.dumps(section)
@@ -360,7 +344,6 @@ def test_is_projectable_is_the_gate_not_a_reimplementation(monkeypatch):
     of reusing the shipped gate — a security regression because the two would
     drift (the gate also handles quoted-string / null coercion).
     """
-    import sidequest.server.reference_projection as proj
 
     # The projection module must reference is_projectable by name so the patch
     # lands. (Dev may import it directly or via _cast_entry_is_projectable from
@@ -469,9 +452,7 @@ def test_lore_projection_includes_cast_section(tmp_path: Path):
     # The keeper field never crosses into the assembled document.
     blob = _json.dumps(doc)
     assert "is the harbor mole" not in blob
-    assert "secret" not in {
-        k for m in cast["members"] for k in m
-    }
+    assert "secret" not in {k for m in cast["members"] for k in m}
 
 
 def test_lore_projection_cast_withholds_unratified(tmp_path: Path):
@@ -493,9 +474,7 @@ def test_lore_projection_omits_cast_when_no_manifest(tmp_path: Path):
     assert "cast" not in section_ids
 
 
-def test_lore_projection_cast_fires_unratified_skipped_span(
-    tmp_path: Path, otel_capture
-) -> None:
+def test_lore_projection_cast_fires_unratified_skipped_span(tmp_path: Path, otel_capture) -> None:
     # ADR-138 §D4: a world that authors a Cast fires the unratified-skipped span
     # once, carrying the withheld count — the lie-detector that proves the gate
     # ran even when the count is non-zero.
@@ -503,6 +482,6 @@ def test_lore_projection_cast_fires_unratified_skipped_span(
     build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
     spans = span_attrs_by_name(otel_capture, SPAN_REFERENCE_NPC_UNRATIFIED_SKIPPED)
     assert spans, "a Cast-bearing world must fire the npc_unratified_skipped span"
-    assert any(
-        a.get("reference.npc_unratified_skipped_count") == 1 for a in spans
-    ), "the span must record the one withheld phantom (count == 1)"
+    assert any(a.get("reference.npc_unratified_skipped_count") == 1 for a in spans), (
+        "the span must record the one withheld phantom (count == 1)"
+    )

@@ -61,7 +61,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
-
+from tests._helpers.doubles import FakeSocket
 
 # ---------------------------------------------------------------------------
 # App fixture — creates a minimal FastAPI test client
@@ -92,8 +92,6 @@ async def bound_hub() -> WatcherHub:
     return watcher_hub
 
 
-from tests._helpers.doubles import FakeSocket
-
 
 async def _subscribe(bound_hub: WatcherHub) -> FakeSocket:
     sock = FakeSocket()
@@ -122,9 +120,7 @@ def test_get_instrumented_endpoint_exists(client: TestClient) -> None:
         f"({resp.text[:200]})"
     )
     data = resp.json()
-    assert "instrumented_usd" in data, (
-        f"response must contain 'instrumented_usd' key, got: {data}"
-    )
+    assert "instrumented_usd" in data, f"response must contain 'instrumented_usd' key, got: {data}"
 
 
 def test_get_instrumented_reflects_ledger_spend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,17 +129,19 @@ def test_get_instrumented_reflects_ledger_spend(monkeypatch: pytest.MonkeyPatch)
     not a stub or always-0 response."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("SIDEQUEST_DATABASE_URL", "postgresql://localhost/test_notreal")
-    from sidequest.agents.cost_safety import ledger
     from sidequest.agents.anthropic_cost import compute_cost_usd
+    from sidequest.agents.cost_safety import ledger
     from sidequest.server.app import create_app
 
-    l = ledger()
+    cost_ledger = ledger()
     cost = compute_cost_usd(
-        input_tokens=5_000, output_tokens=200, cached_input_read_tokens=0,
-        model="claude-haiku-4-5-20251001"
+        input_tokens=5_000,
+        output_tokens=200,
+        cached_input_read_tokens=0,
+        model="claude-haiku-4-5-20251001",
     )
     with patch("sidequest.agents.cost_safety._watcher_publish_event"):
-        l.update_cumulative(
+        cost_ledger.update_cumulative(
             session_id="91-5-endpoint-wire",
             cost_usd=cost,
             model="claude-haiku-4-5-20251001",
@@ -192,8 +190,7 @@ def test_get_reconciliation_empty_before_any_run(client: TestClient) -> None:
     # "no data yet" representations. What's NOT acceptable: a 500 or
     # a non-null result that never had a POST.
     assert data is None or data == {} or data.get("billed_usd") is None, (
-        "before any reconciliation POST, the GET must return null or empty — "
-        f"got: {data}"
+        f"before any reconciliation POST, the GET must return null or empty — got: {data}"
     )
 
 
@@ -329,9 +326,7 @@ def test_post_reconciliation_missing_billed_usd_rejects(client: TestClient) -> N
         "alert": True,
     }
     resp = client.post("/api/debug/cost/reconciliation", json=bad_payload)
-    assert resp.status_code == 422, (
-        f"missing billed_usd must return 422, got {resp.status_code}"
-    )
+    assert resp.status_code == 422, f"missing billed_usd must return 422, got {resp.status_code}"
 
 
 def test_post_reconciliation_missing_alert_field_rejects(client: TestClient) -> None:
@@ -345,6 +340,4 @@ def test_post_reconciliation_missing_alert_field_rejects(client: TestClient) -> 
         # alert omitted
     }
     resp = client.post("/api/debug/cost/reconciliation", json=bad_payload)
-    assert resp.status_code == 422, (
-        f"missing alert field must return 422, got {resp.status_code}"
-    )
+    assert resp.status_code == 422, f"missing alert field must return 422, got {resp.status_code}"

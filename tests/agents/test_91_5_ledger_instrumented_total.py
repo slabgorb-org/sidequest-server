@@ -40,7 +40,7 @@ from __future__ import annotations
 import pytest
 
 from sidequest.agents.anthropic_cost import compute_cost_usd
-from sidequest.agents.cost_safety import ledger, SessionCostLedger
+from sidequest.agents.cost_safety import ledger
 
 _HAIKU = "claude-haiku-4-5-20251001"
 _SONNET = "claude-sonnet-4-6"
@@ -71,15 +71,17 @@ def test_instrumented_total_empty_ledger() -> None:
 
 def test_instrumented_total_single_session() -> None:
     """One session with update_cumulative must report that session's cost."""
-    l = ledger()
+    cost_ledger = ledger()
     cost = compute_cost_usd(
         input_tokens=5_000,
         output_tokens=200,
         cached_input_read_tokens=0,
         model=_HAIKU,
     )
-    l.update_cumulative(session_id="91-5-single", cost_usd=cost, model=_HAIKU, ceiling_usd=_NO_CEILING)
-    total = l.instrumented_total_usd()
+    cost_ledger.update_cumulative(
+        session_id="91-5-single", cost_usd=cost, model=_HAIKU, ceiling_usd=_NO_CEILING
+    )
+    total = cost_ledger.instrumented_total_usd()
     assert total == pytest.approx(cost, abs=1e-9), (
         f"single-session total must equal the recorded cost {cost:.6f}, got {total}"
     )
@@ -93,17 +95,21 @@ def test_instrumented_total_single_session() -> None:
 def test_instrumented_total_multiple_sessions_sums_all() -> None:
     """Two independent sessions' costs must be summed — the reconciliation
     needs the process-wide total, not one session's spend."""
-    l = ledger()
+    cost_ledger = ledger()
     cost_a = compute_cost_usd(
         input_tokens=3_000, output_tokens=100, cached_input_read_tokens=0, model=_HAIKU
     )
     cost_b = compute_cost_usd(
         input_tokens=11_000, output_tokens=400, cached_input_read_tokens=0, model=_SONNET
     )
-    l.update_cumulative(session_id="91-5-multi-a", cost_usd=cost_a, model=_HAIKU, ceiling_usd=_NO_CEILING)
-    l.update_cumulative(session_id="91-5-multi-b", cost_usd=cost_b, model=_SONNET, ceiling_usd=_NO_CEILING)
+    cost_ledger.update_cumulative(
+        session_id="91-5-multi-a", cost_usd=cost_a, model=_HAIKU, ceiling_usd=_NO_CEILING
+    )
+    cost_ledger.update_cumulative(
+        session_id="91-5-multi-b", cost_usd=cost_b, model=_SONNET, ceiling_usd=_NO_CEILING
+    )
 
-    total = l.instrumented_total_usd()
+    total = cost_ledger.instrumented_total_usd()
     assert total == pytest.approx(cost_a + cost_b, abs=1e-9), (
         f"multi-session total must be sum of all sessions: "
         f"a={cost_a:.6f} + b={cost_b:.6f} = {cost_a + cost_b:.6f}, got {total}"
@@ -120,15 +126,15 @@ def test_record_call_feeds_instrumented_total(monkeypatch: pytest.MonkeyPatch) -
     from 91-4). A call through record_call must show up in instrumented_total.
     Mocking watcher_hub so the detector events don't pollute test infra."""
     from unittest.mock import patch
-    from sidequest.agents.cost_safety import check_and_emit_runaway
 
-    l = ledger()
+
+    cost_ledger = ledger()
     cost = compute_cost_usd(
         input_tokens=2_000, output_tokens=80, cached_input_read_tokens=0, model=_HAIKU
     )
     # Suppress runaway events — not the test subject here
     with patch("sidequest.agents.cost_safety._watcher_publish_event"):
-        l.record_call(
+        cost_ledger.record_call(
             session_id="91-5-record",
             caller="aside",
             model=_HAIKU,
@@ -138,7 +144,7 @@ def test_record_call_feeds_instrumented_total(monkeypatch: pytest.MonkeyPatch) -
             ceiling_usd=_NO_CEILING,
         )
 
-    total = l.instrumented_total_usd()
+    total = cost_ledger.instrumented_total_usd()
     assert total == pytest.approx(cost, abs=1e-9), (
         f"record_call must feed into instrumented_total_usd; got {total}, expected {cost:.6f}"
     )
@@ -152,15 +158,17 @@ def test_record_call_feeds_instrumented_total(monkeypatch: pytest.MonkeyPatch) -
 def test_reset_for_tests_clears_instrumented_total() -> None:
     """The test-isolation hook must zero out the instrumented total so
     xdist tests that share a session ID don't accumulate cross-test spend."""
-    l = ledger()
+    cost_ledger = ledger()
     cost = compute_cost_usd(
         input_tokens=1_000, output_tokens=50, cached_input_read_tokens=0, model=_HAIKU
     )
-    l.update_cumulative(session_id="91-5-reset", cost_usd=cost, model=_HAIKU, ceiling_usd=_NO_CEILING)
-    assert l.instrumented_total_usd() > 0.0, "pre-condition: total is non-zero before reset"
+    cost_ledger.update_cumulative(
+        session_id="91-5-reset", cost_usd=cost, model=_HAIKU, ceiling_usd=_NO_CEILING
+    )
+    assert cost_ledger.instrumented_total_usd() > 0.0, "pre-condition: total is non-zero before reset"
 
-    l.reset_for_tests()
-    total_after = l.instrumented_total_usd()
+    cost_ledger.reset_for_tests()
+    total_after = cost_ledger.instrumented_total_usd()
     assert total_after == 0.0, (
         f"reset_for_tests() must zero instrumented_total_usd; got {total_after!r} after reset"
     )
@@ -174,7 +182,7 @@ def test_reset_for_tests_clears_instrumented_total() -> None:
 def test_instrumented_total_accumulates_within_session() -> None:
     """Multiple calls to the same session must accumulate, not overwrite —
     and must not double-count any single call."""
-    l = ledger()
+    cost_ledger = ledger()
     cost1 = compute_cost_usd(
         input_tokens=1_000, output_tokens=50, cached_input_read_tokens=0, model=_HAIKU
     )
@@ -182,11 +190,16 @@ def test_instrumented_total_accumulates_within_session() -> None:
         input_tokens=1_500, output_tokens=60, cached_input_read_tokens=0, model=_HAIKU
     )
     from unittest.mock import patch
-    with patch("sidequest.agents.cost_safety._watcher_publish_event"):
-        l.update_cumulative(session_id="91-5-acc", cost_usd=cost1, model=_HAIKU, ceiling_usd=_NO_CEILING)
-        l.update_cumulative(session_id="91-5-acc", cost_usd=cost2, model=_HAIKU, ceiling_usd=_NO_CEILING)
 
-    total = l.instrumented_total_usd()
+    with patch("sidequest.agents.cost_safety._watcher_publish_event"):
+        cost_ledger.update_cumulative(
+            session_id="91-5-acc", cost_usd=cost1, model=_HAIKU, ceiling_usd=_NO_CEILING
+        )
+        cost_ledger.update_cumulative(
+            session_id="91-5-acc", cost_usd=cost2, model=_HAIKU, ceiling_usd=_NO_CEILING
+        )
+
+    total = cost_ledger.instrumented_total_usd()
     expected = cost1 + cost2
     assert total == pytest.approx(expected, abs=1e-9), (
         f"two calls to the same session must accumulate; expected {expected:.6f}, got {total}"
@@ -200,7 +213,7 @@ def test_instrumented_total_does_not_double_count_narrator_and_adapter() -> None
     is additive, not max-of-two."""
     from unittest.mock import patch
 
-    l = ledger()
+    cost_ledger = ledger()
     narrator_cost = compute_cost_usd(
         input_tokens=11_000, output_tokens=400, cached_input_read_tokens=0, model=_SONNET
     )
@@ -209,14 +222,14 @@ def test_instrumented_total_does_not_double_count_narrator_and_adapter() -> None
     )
     # Both writes go to the same session bucket
     with patch("sidequest.agents.cost_safety._watcher_publish_event"):
-        l.update_cumulative(
+        cost_ledger.update_cumulative(
             session_id="91-5-dedup", cost_usd=narrator_cost, model=_SONNET, ceiling_usd=_NO_CEILING
         )
-        l.update_cumulative(
+        cost_ledger.update_cumulative(
             session_id="91-5-dedup", cost_usd=aside_cost, model=_HAIKU, ceiling_usd=_NO_CEILING
         )
 
-    total = l.instrumented_total_usd()
+    total = cost_ledger.instrumented_total_usd()
     expected = narrator_cost + aside_cost
     assert total == pytest.approx(expected, abs=1e-9), (
         f"narrator + aside for same session must sum (no double-count); "

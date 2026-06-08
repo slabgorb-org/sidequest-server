@@ -47,7 +47,8 @@ from pathlib import Path
 
 import yaml
 
-from sidequest.game.npc_pool import NpcPoolMember, is_projectable
+from sidequest.game import npc_pool
+from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.server.reference_map import load_cartography_config, present_lore_map
 from sidequest.server.reference_presenters import (
     PresenterContext,
@@ -1355,7 +1356,7 @@ def _cast_entry_is_projectable(entry: dict) -> bool:
         drawn_from="world_authored",
         observation_pending=False if raw_pending is None else raw_pending,
     )
-    return is_projectable(member)
+    return npc_pool.is_projectable(member)
 
 
 def _gate_cast_slugs_on_manifest(

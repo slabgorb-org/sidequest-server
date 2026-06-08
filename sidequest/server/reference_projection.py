@@ -18,13 +18,15 @@ import yaml
 from sidequest.genre.models.world import CartographyConfig
 from sidequest.server.asset_urls import resolve_asset_url
 from sidequest.server.reference_map import _edges_and_dangling, _npc_pins, load_cartography_config
-from sidequest.server.reference_presenters import portrait_image_key
+from sidequest.server.reference_presenters import cast_portrait_slug, portrait_image_key
 from sidequest.server.reference_renderer import (
     EXCLUDED_FILES,
     LORE_WORLD_FILES,
+    _cast_entry_is_projectable,
     _gate_cast_slugs_on_manifest,
     _humanize_label,
     _is_devnote,
+    load_cast_entries,
 )
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_visibility import Visibility, classify
@@ -34,6 +36,9 @@ from sidequest.telemetry.spans.reference import (
     reference_map_pin_not_found_span,
     reference_map_pin_resolved_span,
     reference_map_rendered_span,
+    reference_npc_unratified_skipped_span,
+    reference_portrait_not_found_span,
+    reference_portrait_resolved_span,
     reference_unknown_field_span,
 )
 
@@ -96,6 +101,60 @@ def build_lore_map_section(
     }
 
 
+def build_cast_section(
+    entries: list[dict],
+    *,
+    pack: str,
+    world: str,
+    portrait_on_r2_slugs: frozenset[str],
+) -> dict | None:
+    """Project the RATIFIED NPC cast into the public ``cast`` section dict.
+
+    The data-shaping analog of ``present_lore_cast``. Mirrors
+    ``build_lore_map_section``: the caller pre-computes the R2 slug set; this
+    function does not load the manifest. Membership is gated through the shared
+    ADR-138 §D4 ratification predicate (``_cast_entry_is_projectable`` →
+    :func:`sidequest.game.npc_pool.is_projectable`) — never re-derived — and
+    empty-name entries are skipped (parity with ``present_lore_cast``). The
+    portrait URL is resolved server-side via ``resolve_asset_url`` over the
+    world-scoped ``portrait_image_key`` when the slug is on R2, else ``None``;
+    the client never sees a raw key/path. Only the public allowlist keys cross
+    the boundary — keeper fields are never splatted in. Returns ``None`` when no
+    projectable member survives.
+    """
+    members: list[dict] = []
+    for entry in entries:
+        if not _cast_entry_is_projectable(entry):
+            continue
+        name = str(entry.get("name", "")).strip()
+        if not name:
+            continue
+        slug = cast_portrait_slug(entry)
+        if slug in portrait_on_r2_slugs:
+            with reference_portrait_resolved_span(slug=slug, pack=pack, world=world):
+                pass
+            portrait_url: str | None = resolve_asset_url(portrait_image_key(pack, world, slug))
+        else:
+            with reference_portrait_not_found_span(slug=slug, pack=pack, world=world):
+                pass
+            portrait_url = None
+        role = entry.get("role")
+        appearance = entry.get("appearance")
+        members.append(
+            {
+                "slug": slug,
+                "name": name,
+                "role": role if role is None else str(role),
+                "appearance": appearance if appearance is None else str(appearance),
+                "portrait_url": portrait_url,
+            }
+        )
+
+    if not members:
+        return None
+    return {"id": "cast", "label": "Cast", "members": members}
+
+
 def _project_node(
     value: object,
     *,
@@ -142,9 +201,7 @@ def _project_node(
                 child, file_stem=file_stem, key_path=child_path, pack=pack, world=world
             )
             if child_node is not None:
-                entries.append(
-                    {"key": str(key), "label": _humanize_label(key), "node": child_node}
-                )
+                entries.append({"key": str(key), "label": _humanize_label(key), "node": child_node})
         if not entries:
             return None
         return {"type": "dict", "entries": entries}
@@ -187,9 +244,7 @@ def build_generic_yaml_section(
     if vis_root is Visibility.KEEPER:
         return None
     if vis_root is Visibility.UNKNOWN:
-        with reference_unknown_field_span(
-            pack=pack, world=world, file_stem=file_stem, key_path=()
-        ):
+        with reference_unknown_field_span(pack=pack, world=world, file_stem=file_stem, key_path=()):
             pass
         return None
 
@@ -222,6 +277,38 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
             )
         )
 
+    # Cast section — public NPC cast from portrait_manifest.yaml, AFTER the map
+    # section. The ADR-138 §D4 ratification gate withholds unratified phantoms;
+    # the withheld count is recorded on a per-render span (fires even when 0, but
+    # only when the world authors a Cast) so the skip is observable, never silent.
+    cast_entries = load_cast_entries(world_dir)
+    if cast_entries:
+        ratified_entries = [e for e in cast_entries if _cast_entry_is_projectable(e)]
+        with reference_npc_unratified_skipped_span(
+            pack=pack,
+            world=world,
+            count=len(cast_entries) - len(ratified_entries),
+        ):
+            pass
+        if ratified_entries:
+            authored_portrait_slugs = frozenset(
+                cast_portrait_slug(e) for e in ratified_entries if str(e.get("name", "")).strip()
+            )
+            gated_portrait_slugs = _gate_cast_slugs_on_manifest(
+                authored_portrait_slugs,
+                pack=pack,
+                world=world,
+                pack_dir=pack_dir,
+            )
+            cast_section = build_cast_section(
+                ratified_entries,
+                pack=pack,
+                world=world,
+                portrait_on_r2_slugs=gated_portrait_slugs,
+            )
+            if cast_section is not None:
+                sections.append(cast_section)
+
     # Generic-YAML sections — one per present LORE_WORLD_FILES file, AFTER the
     # map section. EXCLUDED_FILES (and file-root KEEPER stems) never project.
     for filename in LORE_WORLD_FILES:
@@ -234,9 +321,7 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
             data = yaml.safe_load(fh)
         if data is None:
             continue
-        section = build_generic_yaml_section(
-            data, file_stem=path.stem, pack=pack, world=world
-        )
+        section = build_generic_yaml_section(data, file_stem=path.stem, pack=pack, world=world)
         if section is not None:
             sections.append(section)
 

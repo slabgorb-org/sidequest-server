@@ -29,7 +29,16 @@ def _vessel_item(*extra_tags: str, item_id: str = "rig_tier_2_road_captain") -> 
     """A minimally-valid vessel item dict carrying composure + extra tags."""
     return {
         "id": item_id,
-        "tags": ["vessel", "rig", "composure:6", "composure_max:6", *extra_tags],
+        # 86-5: speed + mount_slots are now required (full stat block).
+        "tags": [
+            "vessel",
+            "rig",
+            "composure:6",
+            "composure_max:6",
+            "speed:4",
+            "mount_slots:2",
+            *extra_tags,
+        ],
     }
 
 

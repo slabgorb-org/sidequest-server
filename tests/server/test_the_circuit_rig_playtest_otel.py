@@ -93,8 +93,7 @@ def test_the_circuit_pack_binds_cwn_no_silent_fallback() -> None:
 
     pack = _load_road_warrior()
     assert pack.rules.ruleset == "cwn", (
-        f"the_circuit must run the cwn ruleset for rig combat to fire; got "
-        f"{pack.rules.ruleset!r}"
+        f"the_circuit must run the cwn ruleset for rig combat to fire; got {pack.rules.ruleset!r}"
     )
     assert isinstance(get_ruleset_module(pack.rules.ruleset), CwnRulesetModule)
 
@@ -139,9 +138,7 @@ def test_the_circuit_rig_damage_emits_rig_pool_delta_span(otel_capture) -> None:
     result = pool.apply_delta(-3)
     assert result.new_current == 1, "a -3 hit on a 4-composure rig leaves 1"
 
-    delta_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == SPAN_RIG_POOL_DELTA
-    ]
+    delta_spans = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_RIG_POOL_DELTA]
     assert delta_spans, (
         f"applying rig damage must emit a {SPAN_RIG_POOL_DELTA!r} span so the GM "
         f"panel can verify the rig subsystem engaged; got span names "

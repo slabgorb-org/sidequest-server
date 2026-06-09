@@ -206,9 +206,7 @@ def test_starting_mounted_weapons_fit_in_starting_rig_slots() -> None:
 
     for class_name, item_ids in starting.items():
         rig_ids = [i for i in item_ids if "vessel" in (catalog.get(i, {}).get("tags") or [])]
-        assert len(rig_ids) == 1, (
-            f"{class_name} must start with exactly one rig; got {rig_ids}"
-        )
+        assert len(rig_ids) == 1, f"{class_name} must start with exactly one rig; got {rig_ids}"
         slots = parse_vessel_tags(catalog[rig_ids[0]]).mount_slots
         mounted = [
             i

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import yaml
 
+from sidequest.genre.models.legends import Legend
 from sidequest.genre.models.world import CartographyConfig
 from sidequest.server.asset_urls import resolve_asset_url
 from sidequest.server.reference_map import _edges_and_dangling, _npc_pins, load_cartography_config
@@ -36,7 +37,14 @@ from sidequest.server.reference_renderer import (
     load_points_of_interest,
 )
 from sidequest.server.reference_slug import slugify
+from sidequest.server.reference_timeline import (
+    _temporal_of,
+    _year_key,
+    load_legends,
+    load_lore_history,
+)
 from sidequest.server.reference_visibility import Visibility, classify
+from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import (
     reference_devnote_suppressed_span,
     reference_map_dangling_edge_span,
@@ -48,6 +56,7 @@ from sidequest.telemetry.spans.reference import (
     reference_poi_image_resolved_span,
     reference_portrait_not_found_span,
     reference_portrait_resolved_span,
+    reference_timeline_rendered_span,
     reference_unknown_field_span,
 )
 
@@ -227,6 +236,71 @@ def build_poi_section(
     return {"id": "poi", "label": "Points of Interest", "entries": members}
 
 
+def build_timeline_section(legends: list[Legend], *, history_prose: str | None) -> dict | None:
+    """Project the world's legends into the public ``timeline`` section dict.
+
+    The data-shaping analog of ``present_lore_timeline`` (``reference_timeline.py``,
+    Story 65-12). Unlike POI/Cast there is no R2 art gate — legends emit no images.
+    Returns ``None`` when there are no legends (the section is purely additive).
+
+    **Allowlist firewall.** Each :class:`Legend` is projected through a fixed public
+    allowlist — ``slug`` / ``name`` / ``summary`` / ``temporal`` only. A naive
+    ``legend.model_dump()`` splat would carry the keeper-side typed fields
+    (``related_tropes`` dormant-trope spoiler seeds per ADR-135 D1, plus
+    ``notable_figures``, ``faction_grudges``, …); those never cross. The SAME
+    ``legends.yaml`` is also projected via the generic-YAML path, where
+    :func:`classify` carves ``related_tropes`` KEEPER (spec C1) — see
+    ``reference_visibility.py``.
+
+    **Honest conditional sort.** The temporal value (``era`` falling back to
+    ``period``) is free-text. The dated spine sorts ascending ONLY when EVERY dated
+    entry is a clean signed-integer year (``_year_key``); otherwise authored order is
+    preserved rather than fabricating a cross-dialect chronology. Undated legends
+    (no era and no period) always follow the dated spine, in authored order. The
+    ``sort_mode`` is recorded on the SHIPPED Story 65-12 ``timeline_rendered`` span
+    (reuse, not a new span) so the GM/dev panel knows whether a chronology was
+    computed or fell back.
+    """
+    if not legends:
+        return None
+
+    entries: list[dict] = [
+        {
+            "slug": slugify_player_name(lg.name),
+            "name": lg.name,
+            "summary": lg.summary,
+            "temporal": _temporal_of(lg),
+        }
+        for lg in legends
+    ]
+    dated = [e for e in entries if e["temporal"] is not None]
+    undated = [e for e in entries if e["temporal"] is None]
+
+    # Honest conditional sort: only when EVERY dated entry is a clean year.
+    if dated and all(_year_key(e["temporal"] or "") is not None for e in dated):
+        sort_mode = "sorted"
+        # `or 0` is unreachable (all keys parse here); it only narrows the type.
+        ordered_dated = sorted(dated, key=lambda e: _year_key(e["temporal"] or "") or 0)
+    else:
+        sort_mode = "authored_order"
+        ordered_dated = list(dated)
+
+    with reference_timeline_rendered_span(
+        entry_count=len(entries),
+        undated_count=len(undated),
+        sort_mode=sort_mode,
+    ):
+        pass
+
+    return {
+        "id": "timeline",
+        "label": "Timeline",
+        "sort_mode": sort_mode,
+        "preamble": history_prose,
+        "entries": ordered_dated + undated,
+    }
+
+
 def _project_node(
     value: object,
     *,
@@ -329,11 +403,12 @@ def build_generic_yaml_section(
 def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: Path) -> dict:
     """Assemble the public-projected lore document.
 
-    Emits, in order: the ``map`` section (cartography, when present), the ``poi``
-    section (history.yaml points_of_interest gated on R2 landscape art), the
+    Emits, in order: the ``map`` section (cartography, when present), the
+    ``timeline`` section (the world's legends with an honest conditional sort), the
+    ``poi`` section (history.yaml points_of_interest gated on R2 landscape art), the
     ``cast`` section (ratified NPCs gated on R2 portraits), then one generic-YAML
     section per present ``LORE_WORLD_FILES`` file. Each section is omitted when it
-    has no public content. The Timeline section is not yet implemented.
+    has no public content.
     """
     sections: list[dict] = []
 
@@ -353,6 +428,19 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
                 cartography, pack=pack, world=world, portrait_on_r2_slugs=gated_map_slugs
             )
         )
+
+    # Timeline section — the world-historical spine from the world's legends, AFTER
+    # the map section. No R2 gate (legends emit no images); the honest conditional
+    # sort records its mode on the timeline_rendered span. Omitted when the world
+    # authors no legends. The keeper related_tropes field is firewalled both here
+    # (allowlist) and on the generic-YAML legends path (classify() KEEPER, spec C1).
+    timeline_legends = load_legends(world_dir)
+    if timeline_legends:
+        timeline_section = build_timeline_section(
+            timeline_legends, history_prose=load_lore_history(world_dir)
+        )
+        if timeline_section is not None:
+            sections.append(timeline_section)
 
     # POI section — public points of interest from history.yaml, AFTER the map
     # section. Gallery semantics: only POIs whose landscape is on R2 project

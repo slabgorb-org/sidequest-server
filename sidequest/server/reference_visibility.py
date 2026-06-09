@@ -134,6 +134,16 @@ KEEPER: frozenset[Entry] = frozenset(
         ("history", ("chapters", "*", "points_of_interest", "*", "trap")),
         ("history", ("chapters", "*", "points_of_interest", "*", "hidden_exit")),
         ("history", ("chapters", "*", "points_of_interest", "*", "draft")),
+        # legends.related_tropes keeper field (Story 100-5). The Timeline section
+        # (build_timeline_section) projects legends through a public allowlist, but
+        # the SAME legends.yaml is also projected as a generic-YAML node-tree, where
+        # classify() is the only gate. related_tropes carries dormant-trope spoiler
+        # seeds (ADR-135 D1) and must be KEEPER so it never crosses via the generic
+        # path (spec C1). load_legends reads BOTH authoring forms — a flat top-level
+        # Vec<Legend> (item path ('*', 'related_tropes')) AND a {legends: [...]} map
+        # (item path ('legends', '*', 'related_tropes')) — so both are carved here.
+        ("legends", ("*", "related_tropes")),
+        ("legends", ("legends", "*", "related_tropes")),
     }
 )
 

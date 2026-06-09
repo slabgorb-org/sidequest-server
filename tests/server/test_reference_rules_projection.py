@@ -243,7 +243,9 @@ def test_generic_yaml_rules_blocks_narrator_hint():
 
 def test_generic_yaml_power_tiers_blocks_npc():
     data = yaml.safe_load(_POWER_TIERS_YAML)
-    section = build_generic_yaml_section(data, file_stem="power_tiers", pack="space_opera", world="")
+    section = build_generic_yaml_section(
+        data, file_stem="power_tiers", pack="space_opera", world=""
+    )
     assert section is not None
     blob = _json.dumps(section)
     assert _KEEPER_POWER_TIER_NPC not in blob, (
@@ -309,6 +311,7 @@ def test_raw_splat_would_leak_narrator_hint_but_projection_does_not(tmp_path: Pa
 def test_rules_api_endpoint_returns_sections(tmp_path: Path):
     # The production HTTP path: GET /reference/api/rules/{pack} → rules_api →
     # build_rules_projection.
+    _seed_pack(tmp_path)
     resp = _client(tmp_path).get("/reference/api/rules/space_opera")
     assert resp.status_code == 200
     doc = resp.json()
@@ -330,6 +333,7 @@ def test_rules_api_endpoint_scrubs_keeper_fields(tmp_path: Path):
     # AC5 (firewall end-to-end): the production endpoint, pointed at a synthetic
     # pack mirroring space_opera's keeper-field shapes, returns JSON with EVERY
     # keeper value scrubbed and the public siblings intact.
+    _seed_pack(tmp_path)
     resp = _client(tmp_path).get("/reference/api/rules/space_opera")
     assert resp.status_code == 200
     blob = _json.dumps(resp.json())

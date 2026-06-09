@@ -1,4 +1,4 @@
-"""Tool: stabilize_mortal_injury — narrator-driven CWN Mortal Injury stabilization.
+"""Tool: stabilize_mortal_injury — narrator-driven CWN-family (cwn/awn) Mortal Injury stabilization.
 
 This is the PRODUCTION CALLER that lets the narrator resolve a stabilization
 attempt against a CWN Mortal Injury (the Scar Status that CwnRulesetModule.

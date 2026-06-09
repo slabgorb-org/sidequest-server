@@ -1,4 +1,4 @@
-"""Shared CWN/WWN 0-HP downed seam (spec 2026-05-28 Task 11; WWN content Plan 3 Task 7).
+"""Shared CWN-family/WWN 0-HP downed seam — cwn, awn, wwn (spec 2026-05-28 Task 11; WWN content Plan 3 Task 7).
 
 Both the strike path (``dispatch.dice.dispatch_dice_throw``) and the WWN cast
 path (``server.narration_apply._resolve_wwn_cast_for_beat``) must run the SAME

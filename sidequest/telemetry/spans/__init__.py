@@ -46,10 +46,10 @@ from .command_points import *  # noqa: F401, F403
 from .compose import *  # noqa: F401, F403
 from .confrontation_intent import *  # noqa: F401, F403
 from .content import *  # noqa: F401, F403
-from .crisis import *  # noqa: F401, F403
 from .continuity import *  # noqa: F401, F403
 from .cookbook import *  # noqa: F401, F403
 from .course import *  # noqa: F401, F403
+from .crisis import *  # noqa: F401, F403
 from .cwn import *  # noqa: F401, F403
 from .dice import *  # noqa: F401, F403
 from .dispatch_engagement import *  # noqa: F401, F403
@@ -104,6 +104,7 @@ from .script_tool import *  # noqa: F401, F403
 from .seed import *  # noqa: F401, F403
 from .span import Span  # noqa: F401
 from .state_patch import *  # noqa: F401, F403
+from .system_resolve import *  # noqa: F401, F403
 from .table import *  # noqa: F401, F403
 from .trope import *  # noqa: F401, F403
 from .turn import *  # noqa: F401, F403

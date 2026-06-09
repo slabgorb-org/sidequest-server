@@ -229,6 +229,7 @@ class SessionRoom:
         store: SaveRepository,
         world_dir: Path | None = None,
         ruleset: str | None = None,
+        region_id: str | None = None,
     ) -> None:
         """Bind canonical snapshot + store to the room. Idempotent.
 
@@ -239,11 +240,17 @@ class SessionRoom:
         defense for any path that does retry the bind.
 
         ``world_dir`` is the resolved path to the bound world. When
-        provided, attempts to load the orbital tier (``orbits.yaml`` +
-        optional ``chart.yaml``) and exposes it via
-        ``room.session.orbital_content``. Worlds without an orbital
-        tier (no ``orbits.yaml``) bind cleanly with
+        provided, attempts to load the orbital tier and exposes it via
+        ``room.session.orbital_content``. Worlds without an orbital tier
+        (no ``systems/`` dir and no ``orbits.yaml``) bind cleanly with
         ``orbital_content=None``; malformed orbital data fails loud.
+
+        ``region_id`` selects the per-system file for a two-scale world
+        (ADR-141 / Story 98-2): ``systems/<region_id>.yaml`` is loaded for
+        the party's current system. When ``None``, it falls back to
+        ``snapshot.current_region`` (set on resume; empty on a fresh snapshot,
+        in which case the connect handler passes ``cartography.starting_region``
+        explicitly). Single-system worlds ignore it.
         ``world_dir`` also drives ``init_world_magic_state`` (Story 90-2)
         so ``snapshot.magic_state`` is populated for magic worlds before
         any character commits — idempotent and a no-op for non-magic worlds.
@@ -255,8 +262,9 @@ class SessionRoom:
         """
         orbital_content: OrbitalContent | None = None
         if world_dir is not None:
+            resolved_region = region_id or (snapshot.current_region or None)
             try:
-                orbital_content = load_orbital_content(world_dir)
+                orbital_content = load_orbital_content(world_dir, region_id=resolved_region)
             except OrbitalContentMissingError:
                 # Orbital tier is optional — caverns_and_claudes,
                 # tea_and_murder, etc. have no orbits.yaml. Bind without

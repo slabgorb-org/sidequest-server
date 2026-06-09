@@ -94,3 +94,12 @@ def test_negative_attr_penalty_floor() -> None:
 def test_unknown_positive_id_raises() -> None:
     with pytest.raises(KeyError, match="not in catalog"):
         _catalog().positive_by_id("exotic/wings")
+
+
+def test_stigma_wrong_size_rejected() -> None:
+    with pytest.raises(ValidationError, match="d6/d6/d12"):
+        StigmaTables(
+            body_part=["a"] * 5,
+            nature=["b"] * 6,
+            flavor=["c"] * 12,
+        )

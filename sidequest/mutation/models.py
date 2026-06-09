@@ -14,8 +14,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-CATEGORIES = ("structure", "sense", "hybrid", "cognition", "pseudo_psychic", "exotic")
-
 _ID_RE = re.compile(r"^[a-z_]+/[a-z0-9_]+$")
 
 
@@ -156,7 +154,12 @@ class MutationCatalog(BaseModel):
     def unique_ids(self) -> MutationCatalog:
         ids = [m.id for m in self.negatives] + [m.id for m in self.positives]
         seen: set[str] = set()
-        dupes = {i for i in ids if i in seen or seen.add(i)}  # type: ignore[func-returns-value]
+        dupes: set[str] = set()
+        for i in ids:
+            if i in seen:
+                dupes.add(i)
+            else:
+                seen.add(i)
         if dupes:
             raise ValueError(f"duplicate mutation ids: {sorted(dupes)}")
         return self

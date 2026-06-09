@@ -63,12 +63,13 @@ def _require_str(value: Any, key_path: str, pack: str) -> str:
     return str(value)
 
 
-def load_reference_theme(pack_dir: Path) -> ReferenceTheme:
-    """Load ``<pack_dir>/theme.yaml`` and return a ReferenceTheme.
+def _read_theme_yaml(pack_dir: Path) -> tuple[Any, str]:
+    """Load ``<pack_dir>/theme.yaml`` and return ``(parsed_data, pack_name)``.
 
-    Raises ``MissingThemeFieldError`` if the file is absent, unparseable, or
-    missing any of: archetype, primary, accent, background, web_font_family,
-    display_font_family, dinkus.glyph.{light,medium,heavy}.
+    The shared file-load boundary for every theme consumer (``load_reference_theme``
+    chrome metadata and ``build_theme_tokens`` CSS-var projection). Every
+    absent/malformed path surfaces as ``MissingThemeFieldError`` with a
+    ``sidequest.reference.theme_missing`` ERROR span — never a silent fallback.
     """
     pack = pack_dir.name
     theme_path = pack_dir / "theme.yaml"
@@ -79,12 +80,23 @@ def load_reference_theme(pack_dir: Path) -> ReferenceTheme:
         try:
             data = yaml.safe_load(fh) or {}
         except yaml.YAMLError as exc:
-            # Honor the docstring contract: every missing/broken theme.yaml
-            # path surfaces as MissingThemeFieldError, not the raw yaml error.
+            # Honor the contract: every missing/broken theme.yaml path surfaces
+            # as MissingThemeFieldError, not the raw yaml error.
             with reference_theme_missing_span(pack=pack, field="theme.yaml"):
                 raise MissingThemeFieldError(
                     f"theme.yaml for pack {pack!r} is malformed: {exc}"
                 ) from exc
+    return data, pack
+
+
+def load_reference_theme(pack_dir: Path) -> ReferenceTheme:
+    """Load ``<pack_dir>/theme.yaml`` and return a ReferenceTheme.
+
+    Raises ``MissingThemeFieldError`` if the file is absent, unparseable, or
+    missing any of: archetype, primary, accent, background, web_font_family,
+    display_font_family, dinkus.glyph.{light,medium,heavy}.
+    """
+    data, pack = _read_theme_yaml(pack_dir)
     glyph = (data.get("dinkus") or {}).get("glyph") or {}
     return ReferenceTheme(
         archetype=_require_str(data.get("archetype"), "archetype", pack),

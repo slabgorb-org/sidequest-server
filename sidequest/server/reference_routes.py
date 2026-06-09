@@ -19,7 +19,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from sidequest.server.reference_projection import build_lore_projection, build_rules_projection
+from sidequest.server.reference_projection import (
+    build_lore_projection,
+    build_rules_projection,
+    build_theme_tokens,
+)
 from sidequest.server.reference_renderer import (
     assemble_lore_page,
     assemble_rules_page,
@@ -139,6 +143,9 @@ def create_reference_router() -> APIRouter:
         world_dir = _resolve_world_dir(pack_dir, world)
         try:
             doc = build_lore_projection(pack, world, pack_dir=pack_dir, world_dir=world_dir)
+            # Story 100-7: the session-free theme token set rides on the same
+            # projection doc the React injector consumes (top-level "theme").
+            doc["theme"] = build_theme_tokens(pack, pack_dir=pack_dir)
         except (ValueError, FileNotFoundError, MissingThemeFieldError) as exc:
             _LOG.exception("reference lore api: projection failed for %s/%s", pack, world)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -149,6 +156,10 @@ def create_reference_router() -> APIRouter:
         pack_dir = _resolve_pack_dir(request, pack)
         try:
             doc = build_rules_projection(pack, pack_dir=pack_dir)
+            # Story 100-7: attach the CSS-var theme token set at the route layer
+            # (not inside build_rules_projection — that would break the empty-pack
+            # omits-absent-files contract). Same top-level "theme" key as lore.
+            doc["theme"] = build_theme_tokens(pack, pack_dir=pack_dir)
         except (ValueError, MissingThemeFieldError) as exc:
             _LOG.exception("reference rules api: projection failed for %s", pack)
             raise HTTPException(status_code=500, detail=str(exc)) from exc

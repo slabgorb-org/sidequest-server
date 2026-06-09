@@ -519,6 +519,22 @@ def _client(tmp_path: Path) -> TestClient:
     pack_dir = tmp_path / "pulp_noir"
     world_dir = pack_dir / "worlds" / "annees_folles"
     world_dir.mkdir(parents=True)
+    # Story 100-7: the lore endpoint attaches a CSS-var theme token set; a real
+    # pack always carries theme.yaml, so the synthetic pack seeds one or it 500s.
+    (pack_dir / "theme.yaml").write_text(
+        "archetype: parchment\n"
+        "primary: '#1A1A1A'\n"
+        "secondary: '#3A3A3A'\n"
+        "accent: '#B08D57'\n"
+        "background: '#0E0E0E'\n"
+        "surface: '#161616'\n"
+        "text: '#D8D2C4'\n"
+        "web_font_family: Lora\n"
+        "display_font_family: Cinzel\n"
+        "dinkus:\n"
+        "  glyph: {light: '·', medium: '· · ·', heavy: '◆ ◆ ◆'}\n",
+        encoding="utf-8",
+    )
     (world_dir / "legends.yaml").write_text(
         "- name: The Sundering\n"
         "  summary: The sky cracked and the old empire fell.\n"

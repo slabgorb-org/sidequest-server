@@ -93,11 +93,10 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from sidequest.server.reference_routes import create_reference_router
-from sidequest.server.reference_theme import MissingThemeFieldError
-
 # RED: this import fails until Dev adds the theme-token projection builder.
 from sidequest.server.reference_projection import build_theme_tokens
+from sidequest.server.reference_routes import create_reference_router
+from sidequest.server.reference_theme import MissingThemeFieldError
 
 # ---------------------------------------------------------------------------
 # Synthetic theme.yaml mirroring space_opera's real shape. Carries BOTH the
@@ -354,7 +353,9 @@ def test_rules_api_theme_has_no_internal_leak(tmp_path: Path):
     assert resp.status_code == 200
     blob = _blob(resp.json()["theme"])
     for sentinel in _INTERNAL_SENTINELS:
-        assert sentinel not in blob, f"internal config {sentinel!r} leaked through the live HTTP path"
+        assert sentinel not in blob, (
+            f"internal config {sentinel!r} leaked through the live HTTP path"
+        )
 
 
 def test_rules_api_500_on_malformed_theme(tmp_path: Path):

@@ -209,6 +209,9 @@ def test_resolution_miss_emits_system_resolve_span_with_hit_false(otel_capture) 
     assert len(spans) == 1
     attrs = spans[0].attributes
     assert attrs.get("region_id") == "amanta"
+    assert "amanta.yaml" in str(attrs.get("system_file")), (
+        "miss span must record the attempted file, not just hit=False"
+    )
     assert attrs.get("hit") is False
 
 
@@ -238,3 +241,119 @@ def test_single_system_world_ignores_a_supplied_region_key() -> None:
     content = load_orbital_content(SINGLE_SYSTEM, region_id="coyote")
 
     assert "coyote" in content.orbits.bodies
+
+
+def test_single_system_world_emits_no_resolve_span(otel_capture) -> None:
+    """The single-system collapse path must NOT emit ``orbital.system_resolve``.
+    That span is the multi-system lie-detector; firing it on the lone-orrery
+    path would pollute the GM panel's miss-rate metrics. (Review round-trip 1,
+    test-analyzer #5.)"""
+    load_orbital_content(SINGLE_SYSTEM, region_id="coyote")
+
+    assert _spans_named(otel_capture, "orbital.system_resolve") == []
+
+
+# ===========================================================================
+# Round-trip 1 — Reviewer findings (path traversal + uncovered guards)
+# ===========================================================================
+#
+# Reviewer (REJECTED) found a NEW path-traversal surface and two untested
+# guards. These tests drive the fix:
+#   - [HIGH/BLOCKING] region_id is interpolated raw into a filesystem path
+#     (loader.py `_resolve_system_file`). Its runtime source is
+#     ``snapshot.current_region`` — a narrator-patchable field — so a path-like
+#     region must be rejected (No Silent Fallbacks: a path-like region is
+#     INVALID input), never used to escape ``systems/``.
+#   - [MED] the explicit ``region_id=`` kwarg branch of bind_world (the
+#     fresh-connect production path) and the blank/None fail-loud guard had no
+#     coverage.
+
+
+def test_path_traversal_does_not_load_sibling_orbits_stub() -> None:
+    """AIRTIGHT traversal proof: in ``world_two_scale_stub`` the sibling
+    ``orbits.yaml`` stub (body ``legacy_monolith_marker``) EXISTS, so
+    ``region_id="../orbits"`` resolves ``systems/../orbits.yaml`` to a real file
+    OUTSIDE ``systems/``. Because the target exists, a raise here can ONLY come
+    from a path-segment guard — not from a missing file. The loader must reject
+    the path-like region, not silently load the escaped file.
+
+    RED until the guard lands: today the loader loads the stub and returns it
+    (traversal succeeds).
+    """
+    with pytest.raises((ValueError, OrbitalContentMissingError)):
+        load_orbital_content(TWO_SCALE_STUB, region_id="../orbits")
+
+
+def test_parent_ref_region_id_rejected_before_filesystem_probe(otel_capture) -> None:
+    """A ``..`` region must be rejected BEFORE the loader builds and probes a
+    path — so no ``orbital.system_resolve`` span fires for it. RED until the
+    guard lands: today ``region_id="../orbits"`` against ``world_two_scale``
+    (no sibling orbits.yaml) emits a miss span for ``systems/../orbits.yaml``
+    then raises a generic miss; the guard must short-circuit before that span.
+    """
+    with pytest.raises((ValueError, OrbitalContentMissingError)):
+        load_orbital_content(TWO_SCALE, region_id="../orbits")
+
+    assert _spans_named(otel_capture, "orbital.system_resolve") == [], (
+        "a path-like region must be rejected before any path is built/probed"
+    )
+
+
+def test_separator_region_id_rejected_before_filesystem_probe(otel_capture) -> None:
+    """A bare path separator (no ``..``) must also be rejected before probing —
+    the guard rejects the whole class of path-like region ids, not just parent
+    refs. RED until the guard lands: ``"sub/yula"`` currently emits a miss span
+    for ``systems/sub/yula.yaml`` then raises a generic miss.
+    """
+    with pytest.raises((ValueError, OrbitalContentMissingError)):
+        load_orbital_content(TWO_SCALE, region_id="sub/yula")
+
+    assert _spans_named(otel_capture, "orbital.system_resolve") == [], (
+        "a region id containing a path separator must be rejected before probing"
+    )
+
+
+def test_blank_region_none_fails_loud_for_multi_system() -> None:
+    """The blank-region fail-loud guard (``region_id=None`` on a multi-system
+    world) had no coverage — a refactor turning it into a silent fallback would
+    have passed the suite. Pin it. (Review round-trip 1, test-analyzer #2.)"""
+    with pytest.raises(OrbitalContentMissingError, match="blank region"):
+        load_orbital_content(TWO_SCALE, region_id=None)
+
+
+def test_blank_region_empty_string_fails_loud_for_multi_system() -> None:
+    """Empty-string region is as invalid as ``None`` — both must fail loud, not
+    collapse to a single-system read. (Review round-trip 1, test-analyzer #2.)"""
+    with pytest.raises(OrbitalContentMissingError, match="blank region"):
+        load_orbital_content(TWO_SCALE, region_id="")
+
+
+def test_explicit_region_id_kwarg_resolves_via_bind_world() -> None:
+    """WIRING gap (test-analyzer #1): the existing wiring test only exercises
+    the ``snapshot.current_region`` fallback branch of ``bind_world``. The
+    fresh-connect production path passes ``region_id=`` EXPLICITLY (snapshot has
+    a blank ``current_region``). Prove that branch resolves the per-system file
+    — a regression in ``_starting_region_for``/the kwarg thread would otherwise
+    leave ``orbital_content=None`` on a fresh multi-system connect with no test
+    failing.
+    """
+    from sidequest.game.persistence import GameMode
+    from sidequest.game.repository import SaveRepository
+    from sidequest.game.session import GameSnapshot
+    from sidequest.server.session_room import SessionRoom
+
+    snap = GameSnapshot()  # fresh: current_region == "" (no fallback available)
+
+    room = SessionRoom(slug="two_scale_explicit_region", mode=GameMode.SOLO)
+    room.bind_world(
+        snapshot=snap,
+        store=MagicMock(spec=SaveRepository),
+        world_dir=TWO_SCALE,
+        region_id="vorn",
+    )
+
+    content = room.session.orbital_content
+    assert content is not None, "explicit region_id kwarg did not resolve a per-system file"
+    assert "vorn" in content.orbits.bodies
+    assert "yula" not in content.orbits.bodies
+    assert _resolve_scope_center(content.orbits, Scope.system_root()) == "vorn"

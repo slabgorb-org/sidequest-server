@@ -26,6 +26,14 @@ import random
 
 from sidequest.game.table.registry import TableGame, register_table_game
 from sidequest.game.table.types import TableCommit, TablePot, TableSeat, TableState
+from sidequest.game.war_rig_combat import WarRigHull
+from sidequest.game.war_rig_command import (
+    CP_ACTION_COSTS,
+    CommandPointPool,
+    deal_with_crisis,
+    roll_crisis,
+    spend_command_points,
+)
 from sidequest.telemetry.spans import table_commit_span, table_seat_seeded_span
 
 # SWN departments → rig stations (spec §4.3). Dealt round-robin onto crew seats;
@@ -34,6 +42,23 @@ WAR_RIG_STATIONS: tuple[str, ...] = ("driver", "gunner", "wrench", "spotter", "r
 
 # The concurrent station verbs the kind resolves through the custom-beat seam.
 WAR_RIG_STATION_VERBS: frozenset[str] = frozenset({"steer", "shoot", "repair", "scan"})
+
+# The road_boss command layer (Story 86-7): the spendable CP actions and the
+# Deal-With-a-Crisis verb resolve through custom_beat alongside the station verbs.
+WAR_RIG_COMMAND_VERBS: frozenset[str] = frozenset(CP_ACTION_COSTS)
+WAR_RIG_DEAL_WITH_CRISIS: str = "deal_with_crisis"
+
+# Starting Command Points seeded for a crewed vessel (minimal playable per spec §6;
+# full per-vessel calibration is 86-5). Stored in TableState.shared_state, shared
+# by the whole crew and persistent across the hand's decision points.
+WAR_RIG_DEFAULT_COMMAND_POINTS: int = 4
+_SHARED_CP_KEY = "command_points"
+
+# Starting shared Hull seeded for the crewed vessel (minimal playable; full vessel
+# stat blocks are 86-5). Stored alongside the CP pool in TableState.shared_state so a
+# failed continuing crisis damages the SAME Hull across the hand's decision points.
+WAR_RIG_DEFAULT_HULL: int = 6
+_SHARED_HULL_KEY = "war_rig_hull"
 
 
 class WarRigCrewTableGame(TableGame):
@@ -75,6 +100,52 @@ class WarRigCrewTableGame(TableGame):
         """
         return 0
 
+    def _vessel_id(self, state: TableState) -> str:
+        """A non-blank vessel identifier for the crewed Hull/CP attribution.
+
+        The table model carries no first-class vessel id (the Hull is
+        vessel-scoped in :mod:`sidequest.game.war_rig_combat`, separate from the
+        table). Derive a stable one from the dealer seat so CP/crisis OTEL is
+        attributable; a richer binding to the actual vessel is 86-5's job.
+        """
+        return f"war_rig_crew:{state.dealer_seat}"
+
+    def _shared_cp_pool(self, state: TableState) -> CommandPointPool:
+        """Get-or-seed the crew's SHARED Command Point pool on the table state.
+
+        One pool per vessel, shared by every seat and persistent across the
+        hand's decision points (stored in ``TableState.shared_state``)."""
+        existing = state.shared_state.get(_SHARED_CP_KEY)
+        if isinstance(existing, CommandPointPool):
+            return existing
+        pool = CommandPointPool(
+            current=WAR_RIG_DEFAULT_COMMAND_POINTS,
+            max=WAR_RIG_DEFAULT_COMMAND_POINTS,
+            vessel_id=self._vessel_id(state),
+        )
+        state.shared_state[_SHARED_CP_KEY] = pool
+        return pool
+
+    def _shared_hull(self, state: TableState) -> WarRigHull:
+        """Get-or-seed the crew's SHARED vessel Hull on the table state.
+
+        The same vessel-scoped :class:`~sidequest.game.war_rig_combat.WarRigHull`
+        used by 86-2's two-pool model, stored on ``TableState.shared_state`` so a
+        failed continuing crisis (``deal_with_crisis``) damages the crew's actual
+        Hull across the hand's decision points — not a throwaway. Minimal-playable
+        starting Hull; the real vessel stat block is 86-5."""
+        existing = state.shared_state.get(_SHARED_HULL_KEY)
+        if isinstance(existing, WarRigHull):
+            return existing
+        hull = WarRigHull(
+            current=WAR_RIG_DEFAULT_HULL,
+            max=WAR_RIG_DEFAULT_HULL,
+            base_max=WAR_RIG_DEFAULT_HULL,
+            vessel_id=self._vessel_id(state),
+        )
+        state.shared_state[_SHARED_HULL_KEY] = hull
+        return hull
+
     def custom_beat(
         self,
         state: TableState,
@@ -83,18 +154,40 @@ class WarRigCrewTableGame(TableGame):
         *,
         rng: random.Random,
     ) -> None:
-        """Resolve a crew station verb through the engine's custom-beat seam.
+        """Resolve a crew station / command verb through the custom-beat seam.
 
-        Fails loud on an unrecognized verb (No Silent Fallbacks). Each resolved
-        station action emits a ``table.commit`` span — the GM panel's proof the
+        Fails loud on an unrecognized verb (No Silent Fallbacks). Every resolved
+        action emits a ``table.commit`` span; command verbs additionally drive the
+        ``command_points.*`` / ``crisis.*`` span families — the GM panel's proof the
         cooperative round actually fired, not improvised prose.
         """
         verb = commit.beat_id
-        if verb not in WAR_RIG_STATION_VERBS:
+        if verb in WAR_RIG_STATION_VERBS:
+            pass  # station verb — table.commit below is the whole resolution
+        elif verb in WAR_RIG_COMMAND_VERBS:
+            pool = self._shared_cp_pool(state)
+            spend_command_points(pool, verb, seat=seat.seat_id, rng=rng)
+        elif verb == WAR_RIG_DEAL_WITH_CRISIS:
+            vessel_id = self._vessel_id(state)
+            # Pass the crew's SHARED Hull so a failed continuing crisis actually
+            # escalates into 86-2's two-pool damage model in a live round (AC2) —
+            # not just a span. ability_mod=0 (character-stat binding is 86-5).
+            hull = self._shared_hull(state)
+            rolled = roll_crisis(rng, vessel_id=vessel_id)
+            deal_with_crisis(
+                rolled.entry,
+                seat=seat.seat_id,
+                ability_mod=0,
+                rng=rng,
+                vessel_id=vessel_id,
+                hull=hull,
+            )
+        else:
             raise ValueError(
                 f"war_rig_crew has no station verb {verb!r} for seat {seat.seat_id!r} "
-                f"(known verbs: {sorted(WAR_RIG_STATION_VERBS)})"
+                f"(known verbs: {sorted(WAR_RIG_STATION_VERBS | WAR_RIG_COMMAND_VERBS | {WAR_RIG_DEAL_WITH_CRISIS})})"
             )
+
         with table_commit_span(
             seat=seat.seat_id,
             beat_id=verb,
@@ -107,6 +200,8 @@ class WarRigCrewTableGame(TableGame):
 register_table_game(WarRigCrewTableGame())
 
 __all__ = [
+    "WAR_RIG_COMMAND_VERBS",
+    "WAR_RIG_DEAL_WITH_CRISIS",
     "WAR_RIG_STATIONS",
     "WAR_RIG_STATION_VERBS",
     "WarRigCrewTableGame",

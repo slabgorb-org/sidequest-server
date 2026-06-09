@@ -42,9 +42,11 @@ from .chart import *  # noqa: F401, F403
 from .chase import *  # noqa: F401, F403
 from .clock import *  # noqa: F401, F403
 from .combat import *  # noqa: F401, F403
+from .command_points import *  # noqa: F401, F403
 from .compose import *  # noqa: F401, F403
 from .confrontation_intent import *  # noqa: F401, F403
 from .content import *  # noqa: F401, F403
+from .crisis import *  # noqa: F401, F403
 from .continuity import *  # noqa: F401, F403
 from .cookbook import *  # noqa: F401, F403
 from .course import *  # noqa: F401, F403

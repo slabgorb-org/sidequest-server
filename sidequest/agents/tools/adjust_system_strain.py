@@ -1,4 +1,4 @@
-"""Tool: adjust_system_strain — narrator-driven CWN System Strain changes.
+"""Tool: adjust_system_strain — narrator-driven CWN-family (cwn/awn) System Strain changes.
 
 This is the PRODUCTION CALLER that makes the strain engine reachable in a
 real game. It is a THIN wrapper — all rules (gating, permanent floor, rest

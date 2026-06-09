@@ -64,8 +64,10 @@ class NativeRulesetModule(RulesetModule):
             damage_resolver=damage_resolver,
         )
 
-    def resolve_damage(self, *, beat, actor_core, pack):
-        return resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor_core, pack=pack)
+    def resolve_damage(self, *, beat, actor_core, pack, world_slug=None):
+        return resolve_damage_spec_from_beat_and_actor(
+            beat=beat, actor_core=actor_core, pack=pack, world_slug=world_slug
+        )
 
     def attack_params(self, *, beat, attacker_stats, attacker_core, target_core):
         # native ignores attacker_core/target_core: its modifier is the stat mod and its

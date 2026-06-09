@@ -1,0 +1,69 @@
+name: Yellow Martian
+summary: Bearded men of the frozen north who keep hothouse cities of glass under
+  the ice, behind the deadly Carrion Caves — proud, isolationist, and ruled by the
+  jeddak of jeddaks at Kadabra
+description: >-
+  The yellow men of Barsoom are the survivors of the far north, where
+  the ochre desert gives way to a waste of eternal ice and the air grows
+  too cold and thin for any other race to cross. Tall, fair-skinned, and
+  black-bearded — the only bearded people of a hairless world — they live
+  in great cities roofed over with crystal domes, hothouses of warmth and
+  cultivated green held against the polar cold by buried heat and the old
+  science. The chief of these is Kadabra, seat of Salensus Oll, who styles
+  himself jeddak of jeddaks and means to rule the whole of Okar and, in
+  time, the world below. They are a proud, suspicious, inward people, sure
+  that the rest of Barsoom forgot them long ago and content to have it so;
+  they take prisoners rather than guests, set them to the pits and the
+  arenas, and guard the one road into their country — the Carrion Caves,
+  where the dead of the north lie heaped — against any who would find the
+  ice-cities behind it. Not all of them love the tyrant: the rival dome of
+  Marentina keeps a quieter, freer court that the jeddak of jeddaks has
+  never quite been able to break.
+slots:
+  given_name:
+    corpora:
+      - corpus: barsoom_yellow_martian.txt
+        weight: 1.0
+    lookback: 3
+  family_name:
+    corpora:
+      - corpus: barsoom_yellow_martian.txt
+        weight: 1.0
+    lookback: 3
+  rank:
+    word_list:
+      - Jeddak of Jeddaks
+      - Jeddak
+      - Jed
+      - Prince
+      - Dwar
+      - Padwar
+      - Guardsman
+      - Noble of the North
+  place_noun:
+    word_list:
+      - dome
+      - city
+      - cave
+      - pit
+      - hothouse
+      - gate
+      - hall
+      - throne
+  adjective:
+    word_list:
+      - frozen
+      - crystal
+      - northern
+      - bearded
+      - walled
+      - buried
+      - eternal
+      - hidden
+person_patterns:
+  - '{given_name} {family_name}'
+  - '{given_name} {family_name}, {rank}'
+  - '{rank} {given_name}'
+place_patterns:
+  - '{adjective} {place_noun}'
+  - 'the {place_noun} of {given_name}'

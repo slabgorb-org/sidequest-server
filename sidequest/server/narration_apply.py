@@ -6894,6 +6894,7 @@ def _resolve_opposed_check_branch(
                 beat=sel_beat,
                 actor_core=actor_core,
                 pack=pack,
+                world_slug=snapshot.world_slug,
             )
             if dmg_spec is None:
                 logger.warning(

@@ -21,13 +21,13 @@ Two tests:
 
 Reuses:
   - ``make_dogfight_playtest_state`` from tests/fixtures/dogfight_playtest_encounter.py
-    (production-path instantiation with a seeded player Character, real content).
+    (production-path instantiation with a seeded player Character, driving the
+    ``swn_test_pack`` fixture per story 96-1).
   - OTEL capture fixture pattern from test_dogfight_playtest_smoke.py.
   - ``_roll_d20_server_side`` + ``_roll_damage_dice`` monkeypatches from
     test_dogfight_shot_wiring.py (Tasks 13/14).
 
-Skips when ``sidequest-content`` is not checked out alongside the server repo
-(same sentinel as every other integration test in this suite).
+Story 96-1: no environment skip — the fixture pack ships with the suite.
 """
 
 from __future__ import annotations
@@ -41,27 +41,16 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from tests.fixtures.dogfight_playtest_encounter import (
-    DEFAULT_CONTENT_ROOT,
     make_dogfight_playtest_state,
 )
-
-pytestmark = [
-    pytest.mark.skipif(
-        not DEFAULT_CONTENT_ROOT.is_dir(),
-        reason="sidequest-content not on disk alongside sidequest-server",
-    ),
-    pytest.mark.skip(
-        reason="content-coupled: references dogfight weapon 'multifocal_laser' that "
-        "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-    ),
-]
 
 # Maneuver pair that yields a mutual gunline (both pilots get a gun solution).
 # Confirmed in test_dogfight_shot_wiring.py and test_dogfight_playtest_smoke.py.
 _GUN_SOLUTION_RED_MANEUVER = "loop"
 _GUN_SOLUTION_BLUE_MANEUVER = "kill_rotation"
 
-# frame_hp = 8 (per space_opera rules.yaml opponent/player_default_stats).
+# frame_hp = 8 (per swn_test_pack rules.yaml opponent/player_default_stats —
+# the fixture freezes the values the live space_opera pack shipped with).
 _EXPECTED_FRAME_HP = 8
 
 # Damage needed to one-shot the opponent: 9 > 8. multifocal_laser has

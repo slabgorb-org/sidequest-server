@@ -53,8 +53,12 @@ class RulesetModule(ABC):
         """Apply a resolved beat's deltas to the encounter. Returns the engine ApplyResult."""
 
     @abstractmethod
-    def resolve_damage(self, *, beat, actor_core, pack) -> DamageSpec | None:
-        """Resolve the DamageSpec for a strike beat (weapon or override), or None."""
+    def resolve_damage(self, *, beat, actor_core, pack, world_slug=None) -> DamageSpec | None:
+        """Resolve the DamageSpec for a strike beat (weapon or override), or None.
+
+        ``world_slug`` drives the world-tier item-catalog resolution (epic 94:
+        world inventory REPLACES genre); None falls through to the genre tier.
+        """
 
     @abstractmethod
     def attack_params(

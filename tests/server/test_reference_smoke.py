@@ -56,21 +56,15 @@ def client(monkeypatch):
     return TestClient(create_app(genre_pack_search_paths=[repo_relative]))
 
 
-@pytest.mark.skip(
-    reason="content-coupled: smoke-asserts the reference page rendered from the live "
-    "tea_and_murder pack contains an archetypes section, which changed in the epic 94 "
-    "genre/world boundary migration; rewrite against fixtures — story 94-4"
-)
-def test_rules_route_against_live_tea_and_murder(client):
-    r = client.get("/reference/rules/tea_and_murder")
-    assert r.status_code == 200
-    assert r.headers["content-type"].startswith("text/html")
-    # Spec ACs: archetypes and classes are non-optional for tea_and_murder.
-    # Task 15: both stems have presenters, so <h1>{filename}</h1> is suppressed;
-    # assert on the stable section anchor ids instead.
-    assert 'id="file-archetypes"' in r.text
-    assert 'id="file-classes"' in r.text
-
+# Story 96-1: ``test_rules_route_against_live_tea_and_murder`` was RETIRED here
+# rather than rewritten. It was doubly stale: (1) content-coupled — it asserted
+# the live tea_and_murder pack ships archetypes/classes sections, which is a
+# content requirement the content validator owns, not a server-test concern;
+# (2) route-retired — it drove the server-rendered HTML route
+# ``/reference/rules/{pack}``, deleted in the 100-12 SPA cutover. The surviving
+# behavior (rules JSON projection renders classes/archetypes sections and
+# firewalls keeper fields) is pinned fixture-first by
+# ``tests/server/test_reference_rules_projection.py`` (story 100-6).
 
 _KEEPER_STEMS = {"npcs", "seed_tropes", "tropes", "prompts"}
 

@@ -269,18 +269,27 @@ def _validate_projection(path: Path, label: str) -> list[str]:
     Imports are lazy (mirroring loader.py l.1145-1146 — the loader also defers
     the projection import) and live inside the try so an import failure is
     reported as an error tied to the file rather than crashing the whole run.
+
+    Story 96-1: also runs ``validate_visibility_coverage`` — a pack that ships
+    projection rules must route NARRATION + SECRET_NOTE through visibility_tag
+    (the ADR-104/-105 structural-hiding pair). Content-gate severity only: the
+    loader does NOT enforce it, so minimal fixture packs still load. Absent
+    projection.yaml stays valid (early return above).
     """
     if not path.is_file():
         return []
     try:
         from sidequest.game.projection.rules import load_rules_from_yaml_path
-        from sidequest.game.projection.validator import validate_projection_rules
+        from sidequest.game.projection.validator import (
+            validate_projection_rules,
+            validate_visibility_coverage,
+        )
 
         rules = load_rules_from_yaml_path(path)
         validate_projection_rules(rules)
     except Exception as exc:  # noqa: BLE001 — surface any import/loader/validator failure
         return [f"{label}: {path.name} failed projection validation: {exc}"]
-    return []
+    return [f"{label}: {path.name}: {finding}" for finding in validate_visibility_coverage(rules)]
 
 
 def _validate_theme_palette(pack_dir: Path, label: str) -> list[str]:

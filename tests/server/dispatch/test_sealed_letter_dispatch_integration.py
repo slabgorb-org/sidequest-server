@@ -23,8 +23,12 @@ Coverage:
   - Persistence: per_actor_state survives a snapshot model_dump round
     trip after sealed-letter resolution
 
-Skips when ``sidequest-content`` is not checked out alongside
-``sidequest-server`` (matches the pattern in ``test_dogfight_content_loading.py``).
+Story 96-1: the dogfight tests drive the ``swn_test_pack`` FIXTURE
+(world-tier ``multifocal_laser`` catalog in ``test_world``) instead of live
+space_opera content, so content-only changes can never turn them red. Only
+the two legacy beat_selection regression tests still load live
+caverns_and_claudes (and carry their own content skipif) — flagged as a
+follow-up in the 96-1 delivery findings.
 """
 
 from __future__ import annotations
@@ -61,7 +65,7 @@ from tests._helpers.trigger_encounter import trigger_encounter
 
 
 def _make_pilot(name: str) -> Character:
-    """Minimal space_opera PC with the SWN flavor attrs that ship_attack_params needs.
+    """Minimal SWN PC with the flavor attrs that ship_attack_params needs.
 
     Both Reflex and Intellect are 10 (modifier=0) so the to-hit arithmetic is
     deterministic. The character model does not yet carry an SWN Pilot skill, so
@@ -77,13 +81,12 @@ def _make_pilot(name: str) -> Character:
     )
 
 
-# Real space_opera content carries the sealed_letter dogfight ConfrontationDef
-# and the loaded InteractionTable. The fixture pack at tests/fixtures/packs
-# does not — these integration tests are about driving real loaded content
-# through the production code path, so we depend on the sibling repo.
+# Live-content root — used ONLY by the two legacy beat_selection regression
+# tests below (caverns_and_claudes), which carry their own skipif. The
+# dogfight tests drive the swn_test_pack fixture (story 96-1).
 CONTENT_ROOT = Path(__file__).resolve().parents[3].parent / "sidequest-content" / "genre_packs"
 
-pytestmark = pytest.mark.skipif(
+_NEEDS_LIVE_CONTENT = pytest.mark.skipif(
     not CONTENT_ROOT.is_dir(),
     reason="sidequest-content not on disk alongside sidequest-server",
 )
@@ -95,15 +98,21 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def space_opera_pack() -> GenrePack:
-    return load_genre_pack(CONTENT_ROOT / "space_opera")
+def swn_fixture_pack() -> GenrePack:
+    from tests._helpers.fixture_packs import SWN_TEST_PACK, load_fixture_pack
+
+    return load_fixture_pack(SWN_TEST_PACK)
 
 
 @pytest.fixture
-def space_opera_snap(space_opera_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
-    snap = GameSnapshot(genre="space_opera")
-    snap.genre_slug = "space_opera"
-    return snap, space_opera_pack
+def swn_snap(swn_fixture_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
+    from tests._helpers.fixture_packs import SWN_TEST_PACK, TEST_WORLD
+
+    snap = GameSnapshot(genre=SWN_TEST_PACK)
+    snap.genre_slug = SWN_TEST_PACK
+    # Epic 94 production shape: weapon lookup resolves world-tier inventory.
+    snap.world_slug = TEST_WORLD
+    return snap, swn_fixture_pack
 
 
 @pytest.fixture
@@ -148,13 +157,13 @@ def otel_capture():
 
 
 def test_dogfight_instantiation_assigns_red_blue_roles(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """When a dogfight starts, the instantiator must tag actors with
     role="red" (player) and role="blue" (opponent) — NOT "combatant" —
     so the sealed-letter handler can find them by role lookup.
     """
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     trigger_encounter(
         snap,
         pack,
@@ -182,7 +191,7 @@ def test_dogfight_instantiation_assigns_red_blue_roles(
 
 
 def test_dogfight_instantiation_rejects_zero_npcs(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
 ) -> None:
     """Sealed-letter dogfights need exactly one opponent. Playtest
@@ -193,7 +202,7 @@ def test_dogfight_instantiation_rejects_zero_npcs(
     """
     from sidequest.server.dispatch.encounter_lifecycle import SealedLetterArityError
 
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     with pytest.raises(SealedLetterArityError):
         trigger_encounter(snap, pack, "dogfight", "Maverick", npcs_present=[])
     assert snap.encounter is None, "no encounter must instantiate when arity guard fires"
@@ -205,7 +214,7 @@ def test_dogfight_instantiation_rejects_zero_npcs(
 
 
 def test_dogfight_instantiation_rejects_two_npcs(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
 ) -> None:
     """Sealed-letter dogfights are 1v1 — multi-NPC scenes (drift gang
@@ -216,7 +225,7 @@ def test_dogfight_instantiation_rejects_two_npcs(
     """
     from sidequest.server.dispatch.encounter_lifecycle import SealedLetterArityError
 
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     with pytest.raises(SealedLetterArityError):
         trigger_encounter(
             snap,
@@ -243,7 +252,7 @@ def test_dogfight_instantiation_rejects_two_npcs(
 
 
 def test_dogfight_instantiation_arity_error_propagates_at_lifecycle_layer(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """The wrapper at ``_apply_narration_result_to_snapshot`` is what
     grants the graceful skip. The lifecycle helper itself must still
@@ -255,7 +264,7 @@ def test_dogfight_instantiation_arity_error_propagates_at_lifecycle_layer(
         instantiate_encounter_from_trigger,
     )
 
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     with pytest.raises(SealedLetterArityError, match="exactly one opponent"):
         instantiate_encounter_from_trigger(
             snapshot=snap,
@@ -275,12 +284,8 @@ def test_dogfight_instantiation_arity_error_propagates_at_lifecycle_layer(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
 ) -> None:
     """The keystone wiring test.
@@ -291,7 +296,7 @@ def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
     apply_beat), mutate per_actor_state, fire the cell_resolved span,
     and push the narration_hint onto the encounter.
     """
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     snap.characters = [_make_pilot("Vega")]
 
     # Turn 1: instantiate the dogfight encounter
@@ -374,12 +379,8 @@ def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
     )
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 def test_dogfight_dispatch_does_not_invoke_apply_beat(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """Sealed-letter resolution is exclusive of the legacy beat path.
 
@@ -390,7 +391,7 @@ def test_dogfight_dispatch_does_not_invoke_apply_beat(
     Pin: player_metric.current MUST stay at its starting value because
     the sealed-letter path does not move dual-track dials directly.
     """
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     snap.characters = [_make_pilot("Pilot")]
 
     trigger_encounter(
@@ -436,18 +437,14 @@ def test_dogfight_dispatch_does_not_invoke_apply_beat(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 def test_per_actor_state_round_trip_after_dispatch(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """After sealed-letter dispatch mutates per_actor_state, the
     StructuredEncounter must survive model_dump → model_validate without
     losing the cockpit descriptors. This is the save/load contract.
     """
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     snap.characters = [_make_pilot("Lance")]
 
     trigger_encounter(
@@ -495,6 +492,7 @@ def test_per_actor_state_round_trip_after_dispatch(
 # ---------------------------------------------------------------------------
 
 
+@_NEEDS_LIVE_CONTENT
 def test_legacy_beat_selection_path_still_works(
     cac_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
@@ -572,6 +570,7 @@ def test_legacy_beat_selection_path_still_works(
     )
 
 
+@_NEEDS_LIVE_CONTENT
 def test_legacy_beat_path_returns_narration_apply_outcome(
     cac_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
@@ -634,12 +633,8 @@ def test_legacy_beat_path_returns_narration_apply_outcome(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """narrator_hints must hold only the LAST cell's hint, not the history.
 
@@ -649,7 +644,7 @@ def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
     "; " and pastes that into the prompt every turn — accumulation here
     silently degrades narration quality with each round.
     """
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     snap.characters = [_make_pilot("Saber")]
 
     # Turn 1: instantiate the dogfight encounter
@@ -712,16 +707,12 @@ def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 def test_unknown_maneuver_in_sealed_letter_raises(
-    space_opera_snap: tuple[GameSnapshot, GenrePack],
+    swn_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """A beat_id that is not in maneuvers_consumed must surface as a
     ValueError from the dispatch path (CLAUDE.md no-silent-fallback)."""
-    snap, pack = space_opera_snap
+    snap, pack = swn_snap
     snap.characters = [_make_pilot("Apex")]
 
     trigger_encounter(

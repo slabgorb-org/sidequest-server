@@ -1,4 +1,4 @@
-"""Three-turn end-to-end smoke test for the space_opera dogfight engine (T7).
+"""Three-turn end-to-end smoke test for the SWN dogfight engine (T7).
 
 The playtest scaffolding from ADR-077 §duel_01.md, in code. Drives three
 maneuver pairs through the production dispatch path via the reusable
@@ -14,8 +14,10 @@ isolation aren't enough — this one proves the *whole* engine
 (instantiation → commit → dispatch → resolver → state mutation) works
 when invoked through the playtest fixture API.
 
-Skips when sidequest-content is not checked out (matches the pattern in
-``test_sealed_letter_dispatch_integration.py``).
+Story 96-1: drives the ``swn_test_pack`` FIXTURE (with the world-tier
+``multifocal_laser`` catalog entry in ``test_world``) instead of live
+space_opera content, so content-only changes can never turn this red.
+No environment skip — fixture packs ship with the suite.
 """
 
 from __future__ import annotations
@@ -29,21 +31,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from tests.fixtures.dogfight_playtest_encounter import (
-    DEFAULT_CONTENT_ROOT,
     drive_dogfight_turn,
     make_dogfight_playtest_state,
 )
-
-pytestmark = [
-    pytest.mark.skipif(
-        not DEFAULT_CONTENT_ROOT.is_dir(),
-        reason="sidequest-content not on disk alongside sidequest-server",
-    ),
-    pytest.mark.skip(
-        reason="content-coupled: references dogfight weapon 'multifocal_laser' that "
-        "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-    ),
-]
 
 
 @pytest.fixture

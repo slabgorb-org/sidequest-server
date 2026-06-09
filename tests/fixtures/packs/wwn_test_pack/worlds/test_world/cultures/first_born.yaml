@@ -1,0 +1,62 @@
+name: First Born
+summary: Black-skinned pirates of the buried sea of Omean — self-styled living
+  gods and raiders of the Thern temples, worshippers of Issus
+description: >-
+  The First Born, the black men of Barsoom, hold themselves the oldest
+  and highest race of the dying world — sprung, they say, from the
+  first tree of life, and answerable to none but the goddess Issus.
+  Glossy-black-skinned, beautiful, and merciless, they live in the
+  caverns of Omean, the buried sea beneath the southern pole, and rise
+  in their black fliers through a single concealed shaft to raid the
+  surface by night. They prey upon the Therns who prey upon the
+  pilgrims — a three-tiered predation that ends at the throne of Issus,
+  whom they serve as living men serve a god and feed as a god is fed.
+  They take slaves, not friends; they fight with a cold artistry; and
+  they have never in their long history been beaten in the open, which
+  has made them certain of a supremacy that has never truly been
+  tested. Their dators — the noble captains of the black corsairs —
+  command Omean's fleets, and answer, in the end, to Issus alone.
+slots:
+  given_name:
+    corpora:
+      - corpus: barsoom_first_born.txt
+        weight: 1.0
+    lookback: 3
+  family_name:
+    corpora:
+      - corpus: barsoom_first_born.txt
+        weight: 1.0
+    lookback: 3
+  rank:
+    word_list:
+      - Dator
+      - Jeddak
+      - Prince
+      - Captain
+      - Lesser Dator
+      - Servant of Issus
+  place_noun:
+    word_list:
+      - cavern
+      - sea
+      - shaft
+      - temple
+      - barge
+      - throne
+      - deep
+  adjective:
+    word_list:
+      - black
+      - buried
+      - sunless
+      - holy
+      - deep
+      - first
+      - drowned
+person_patterns:
+  - '{given_name} {family_name}'
+  - '{given_name} {family_name}, {rank}'
+  - '{rank} {given_name}'
+place_patterns:
+  - '{adjective} {place_noun}'
+  - 'the {place_noun} of {given_name}'

@@ -1,0 +1,557 @@
+# Flickering Reach — World History & DM Prep
+#
+# SPOILER NOTE: This is the only fully-spoilable world in SideQuest.
+# Everything here — arc structure, veteran chapter twists, the Signal's
+# true nature — can be discussed openly in dev/playtest/notes.
+#
+# Source of truth for:
+#  - points_of_interest → feeds POI image generator (chapters[].points_of_interest[])
+#  - chapter arcs      → feeds narrator's campaign maturity prompts
+#  - trope wiring      → references ids in this world's tropes.yaml
+
+world_name: The Flickering Reach
+
+overview: >-
+  Three wounds define the Flickering Reach, each one a betrayal that
+  reshaped the land and the people on it. Twelve centuries of grudges,
+  held together by mutual need and the shared knowledge that every
+  faction owes a debt to every other that cannot be repaid with anything
+  but blood. The Long Signal hums under the static. The Understory
+  grows. The vaults stay sealed — until they don't.
+
+eras:
+  - name: Before the Unsealing
+    period: ancient
+    summary: >-
+      The steppe was open and green. The Drifters grazed their herds
+      across it, following rain and season. The Vaultborn were sealed
+      below in their bunker complexes, running on pre-war protocols
+      and recycled air. The Scrapborn hadn't coalesced yet — just
+      scattered scavengers picking through the bones of the old world.
+      The surface and the underground coexisted by ignoring each other.
+
+  - name: The Unsealing of Silo Prime
+    period: 1200 years ago
+    summary: >-
+      The Third Conclave — a half-sentient maintenance AI governing
+      Silo Prime — attempted to unseal the bunker and reclaim the
+      surface. The reactor detonated. The upper silo levels vaporized.
+      A plume of mutagenic isotopes swept the eastern steppe. The
+      earth fused into forty miles of black glass that still hums on
+      windless nights. The Drifters caught in the fallout mutated —
+      their mounts grew extra limbs, their singers began hearing
+      voices in radio static. The Vaultborn sealed their remaining
+      bunkers tighter and declared the surface a failed experiment.
+
+  - name: The Rooting of Noce's Hub
+    period: 600 years ago
+    summary: >-
+      The Greenfolk elder Kuinem the Overgrown fed pre-war biotech
+      from Lab Sigma to the earth beneath the Scrapborn city of Noce's
+      Hub. A hyper-aggressive root network erupted overnight, crushing
+      steel beams, splitting concrete, and entombing hundreds in
+      cocoons of living wood. The Scrapborn rebuilt at Tood's Dome
+      and swore vengeance. The Greenfolk called it healing. The root
+      network — the Understory — is still growing, still thinking,
+      and still whispering "peace in the green" to anyone who
+      presses their ear to its bark.
+
+  - name: The Bargain at Blind Reach
+    period: 300 years ago
+    summary: >-
+      A decade-long drought drove the Drifters to Vault Echo, where
+      the Vaultborn controlled the only working moisture harvester.
+      The price: a yearly tithe of Drifter children to replenish the
+      Vaultborn gene pool. For forty years the tithe was paid — children
+      disappeared into the vault and emerged as numbered strangers with
+      perfect teeth and no memories of sky. Karta of the Red Dust ended
+      it by sabotaging the harvester from within and delivering the
+      control-seed to the Scrapborn at Tood's Dome. They reverse-
+      engineered it into rain-catchers and charged everyone for the
+      privilege.
+
+  - name: The Present Day
+    period: now
+    summary: >-
+      The Flickering Reach is a web of grudges held together by mutual
+      need. The Vaultborn at Vault Echo have sealed their doors — no
+      one has entered in a century, and strange lights pulse from the
+      main shaft at night. The Drifters ride the wastes on grotesque
+      mounts, their singers pulling intelligence from radio static.
+      The Scrapborn tinker and trade from Tood's Dome, their rain-catcher
+      monopoly making them indispensable and universally resented. And
+      the Greenfolk press outward from the Blooming Tangle, their roots
+      converting wasteland into alien jungle. The rain-catchers work.
+      The roots spread. The glass plain hums. The Reach flickers on.
+
+# ─────────────────────────────────────────────────────────────────────
+# CAMPAIGN STRUCTURE
+# Three chapter tiers keyed to session ranges and narrative maturity.
+# Each tier has its own stakes, POIs, and trope progressions.
+# ─────────────────────────────────────────────────────────────────────
+
+chapters:
+  # ───────────────────────────────────────────────────────────────────
+  # EARLY (Sessions 1-5): Rust, dust, and a bad trade
+  # ───────────────────────────────────────────────────────────────────
+  - id: early
+    label: "The Rain-Catcher Debt"
+    session_range: [1, 5]
+    location: "Tood's Dome and the Przyå Dust corridor"
+    atmosphere: >-
+      Hammered sheet metal gleaming under rain-catcher arrays. Haggling
+      in three trade-pidgins at once. Dust on everything, even the
+      inside of your teeth. The arc-lights of The Bright Junction flicker
+      when the wind changes. Every price is negotiable and every
+      negotiation is a small war.
+    active_stakes: >-
+      The Dome Syndicate just raised water tariffs by thirty percent.
+      Three border settlements are whispering about a coalition. A
+      Greenfolk "accident" took out a rain-catcher near the Burn Line
+      last week. Odige Fuseborn is looking for deniable muscle.
+    character:
+      archetype: Wasteland Trader
+      name: ""
+      culture: Scrapborn or Drifter outsider
+      level: 2
+      hp: 18
+      max_hp: 18
+      ac: 12
+      backstory: >-
+        Owes the Dome Syndicate more water-credit than they can repay.
+        The rain-catcher on their caravan broke two weeks ago, and
+        Odige's collection crew is three days behind them on the Wiej
+        Trail. They need a score, a patron, or a miracle — and the
+        Reach only ships one of those in any volume.
+      personality: >-
+        Pragmatic, mouthy, and deeply superstitious about radio static.
+        Laughs at funerals, cries at auctions.
+      items:
+        - scavenged_revolver
+        - leather_duster_patched
+        - geiger_charm
+        - canteen_half_full
+        - coil_of_copper_wire
+        - {catalog: salvage_knife, name: "Rust Tooth", lore: "Took it off a Scrapborn collector who had worse luck than them."}
+      gold: 8  # water-credits, locally
+      affinities:
+        Scrap: {tier: 1, progress: 4}
+        Signal: {tier: 0, progress: 2}
+        Green: {tier: 0, progress: 0}
+        Vault: {tier: 0, progress: 0}
+        Dust: {tier: 0, progress: 3}
+    npcs:
+      - archetype: Wasteland Trader
+        name: Odige Fuseborn
+        location: Tood's Dome, the Dome Syndicate counting house
+        disposition: 0
+        personality: >-
+          Merchant-engineer. Smiles like a hinge opening. Believes every
+          problem can be priced and most can be bought twice.
+      - archetype: Ruin Diver
+        name: Darty Ironlung
+        location: The Rusted Junction excavation
+        disposition: -5
+        personality: >-
+          Crew boss with a pre-war rebreather fused to her jaw. Speaks
+          in work-orders. Her crews don't complain twice.
+      - archetype: Beastkin Scout
+        name: Lestera Såajäkin
+        location: The Przyå Dust, anywhere the wind is going
+        disposition: 10
+        personality: >-
+          Red Dust rider with three eyes and a seven-limbed mount. Hates
+          the Syndicate. Will sell news for water but never for credit.
+      - archetype: Wandering Synth
+        name: Which-zero
+        location: Trade-lock kiosk outside Vault Echo
+        disposition: 5
+        personality: >-
+          A numbered Vaultborn functionary whose face doesn't quite move
+          right. Speaks only in approved phrases. Nobody has ever seen
+          it blink.
+    points_of_interest:
+      - name: Tood's Dome
+        slug: toods_dome
+        region: toods_dome
+        type: settlement
+        description: >-
+          A Scrapborn trade-city roofed inside a half-collapsed pre-war
+          stadium, its overhead a patchwork of hammered sheet metal and
+          glittering rain-catcher arrays. The main market fills the
+          old infield; arc-light towers burn along what used to be
+          the concourse. Every stall has two prices and three lies.
+      - name: The Bright Junction
+        slug: the_bright_junction
+        region: the_bright_junction
+        type: outpost
+        description: >-
+          A Scrapborn outpost built around a still-functioning pre-war
+          electrical substation. The arc-lights burn all night. Moths
+          the size of hands circle them, their wings humming at a
+          frequency that makes dogs whine. The Burn Line begins where
+          the arc-light ends.
+      - name: The Burn Line
+        slug: the_burn_line
+        region: the_bright_junction
+        type: frontier
+        description: >-
+          A contested no-man's-strip between Scrapborn burn-crews and
+          the advancing root-network of the Blooming Tangle. Charred
+          vegetation, the acrid smell of herbicidal fire-gel, and new
+          tendrils already pushing green through yesterday's ash.
+      - name: Bone Wind Waystation
+        slug: bone_wind
+        region: bone_wind
+        type: waystation
+        description: >-
+          A Drifter waystation on the open steppe where three trails
+          converge. Towering cairns of bleached mount-bones lean into
+          the wind. Salvage-wire harps hum between them, tuned by
+          singer-riders to catch the Long Signal's eastern voice.
+      - name: The Przyå Dust
+        slug: the_przya_dust
+        region: przyå_dust
+        type: wasteland
+        description: >-
+          A belt of grey, mildly radioactive powder downwind of the
+          Glass Flat. Nothing grows here. Metal crumbles to rust within
+          weeks. Drifter caravans cross it wrapped in wet hide, navigating
+          by radio static and the taste of alkaline wind.
+      - name: The Copper Haul
+        slug: the_copper_haul
+        region: toods_dome
+        type: road
+        description: >-
+          A well-patrolled Scrapborn supply road rutted by salvage-cart
+          wheels. Arc-light towers at intervals keep the nights bright
+          enough that raiders don't bother. It is the only safe road
+          in the Reach, and everyone pays the Syndicate for the safety.
+    tropes:
+      - id: scrapborn_empire
+        status: active
+        progression: 0.10
+        notes:
+          - "Water tariff hike announced at Tood's Dome council."
+          - "Three border settlements talking coalition over distilled beer."
+      - id: understory_hunger
+        status: active
+        progression: 0.08
+        notes:
+          - "Roots breached a rain-catcher on the Burn Line two weeks ago."
+      - id: the_long_signal_wakes
+        status: dormant
+        progression: 0.03
+        notes:
+          - "A Drifter singer at Bone Wind heard a word in the static. Would not repeat it."
+      - id: vault_heresy
+        status: dormant
+        progression: 0.00
+
+  # ───────────────────────────────────────────────────────────────────
+  # MID (Sessions 6-15): The three wounds reopen at once
+  # ───────────────────────────────────────────────────────────────────
+  - id: mid
+    label: "Three Wounds Open"
+    session_range: [6, 15]
+    location: "The Glass Flat, the Blooming Tangle, and the Tithe Road"
+    atmosphere: >-
+      The black glass hums a new note at dawn. The roots have reached
+      places they've never reached. A sealed vault door at Silent Vault
+      shows scratches on the inside. Every faction is looking east,
+      toward Silo Prime, and pretending they aren't. Dust storms carry
+      a coherent whisper now. The singers are not sleeping.
+    active_stakes: >-
+      Darty Ironlung's excavation at the Rusted Junction is finding
+      pre-war hardware that moves when it isn't watched. The Greenfolk
+      are staging pilgrimages to growth-fronts the Syndicate thought
+      were dormant. A young Vaultborn in unfamiliar surface gear has
+      appeared at the Tood's Dome trade-lock, asking for "anyone who
+      trades with the Dome Syndicate." Åych Przysåuchkin has sent
+      runners to every settlement and is waiting, publicly, for an
+      answer that has not come.
+    character:
+      level: 5
+      hp: 42
+      max_hp: 42
+      ac: 14
+      milestones_earned:
+        - "triumph:Paid off the rain-catcher debt"
+        - "discovery:Found pre-war data tapes in the Rusted Junction"
+        - "connection:Earned Lestera's trust on the Wiej Trail"
+        - "survival:Walked the Przyå Dust without a rebreather"
+    npcs:
+      - archetype: Tech Cultist
+        name: Åych Przysåuchkin
+        location: Bone Wind Waystation, under the wire harps
+        disposition: 15
+        personality: >-
+          Ancient singer, seven-limbed mount, eyes that track radio
+          sources across the horizon. Speaks in half-sentences, finishes
+          each one with a hum you can feel in your teeth.
+      - archetype: Village Elder
+        name: Päan Sporecap
+        location: Sporecap Garden, the nursery's inner ring
+        disposition: 5
+        personality: >-
+          Greenfolk elder with mycelium threading through one socket
+          and out the other. Claims to have heard the Understory laugh.
+          Has not stopped smiling since.
+      - archetype: Wandering Synth
+        name: The Vaultborn Emissary
+        location: Tood's Dome trade-lock, blinking in the arc-light
+        disposition: 0
+        personality: >-
+          Young, terrified, carrying a sealed message and a vault-standard
+          sidearm that still works perfectly. Asks questions the Protocols
+          forbid.
+    points_of_interest:
+      - name: The Rusted Junction Excavation
+        slug: the_rusted_junction
+        region: toods_dome
+        type: dig_site
+        description: >-
+          A Scrapborn strip-mine pulled into the shadow of a pre-war
+          atmospheric processor that should not be there. Tarpaulins
+          flap in the dust. Arc-welders spit sparks that die without
+          reason. Roots the thickness of a human arm push through
+          concrete overnight and are cut back by morning.
+      - name: The Glass Flat
+        slug: the_glass_flat
+        region: glass_flat
+        type: wasteland
+        description: >-
+          Forty miles of fused black glass ringing like a struck bell
+          when the wind hits it right. Collapsed silo levels hang
+          beneath the surface like frozen organs in dark amber. At
+          the center, a vast green eye blinks slowly. Nobody agrees
+          on how long between blinks.
+      - name: The Blooming Tangle (Canopy)
+        slug: the_blooming_tangle_canopy
+        region: blooming_tangle
+        type: jungle
+        description: >-
+          The upper story of the root-jungle that consumed Noce's Hub.
+          Greenfolk platforms lashed between living beams. Spores
+          cause synesthesia: you hear colors, taste the shapes of
+          faces. Everything above the root-line is the Understory
+          being polite. Everything below is the Understory being
+          honest.
+      - name: Sporecap Garden
+        slug: sporecap_garden
+        region: sporecap_garden
+        type: settlement
+        description: >-
+          A Greenfolk settlement where trees grow in perfect geometric
+          patterns and the animals move in coordinated groups like
+          cells in an organism. The root-front pushes outward a foot
+          per year. Päan Sporecap lives at the center, where it pushes
+          fastest.
+      - name: The Tithe Road
+        slug: the_tithe_road
+        region: blind_reach
+        type: road
+        description: >-
+          The old route along which Drifter children were marched to
+          Vault Echo during the Bargain. Three centuries later it is
+          haunted by magnetized debris, feral patrol-machines still
+          running their last orders, and — on the horizon — a green
+          pulse that nobody can explain and nobody will walk toward.
+      - name: Blind Reach Canyon
+        slug: blind_reach
+        region: blind_reach
+        type: landmark
+        description: >-
+          The dry canyon where the Bargain was struck. Both walls are
+          carved with layered palimpsests of rage and grief — Drifter
+          trail-script over clinical vault notation over the names
+          of children. At dusk the psychic frogs croak those names
+          in order, from the first tithe to the last.
+      - name: Salt Camp
+        slug: salt_camp
+        region: blind_reach
+        type: settlement
+        description: >-
+          A neutral-ground trade camp at the canyon mouth where all
+          four surface factions meet without drawing weapons. The
+          salt is paid out daily by a Drifter elder who refuses to
+          say where it comes from. The tables are made of Vaultborn
+          hull plating no one will admit they sold.
+    tropes:
+      - id: scrapborn_empire
+        status: active
+        progression: 0.40
+        notes:
+          - "Second atmospheric processor partially operational."
+          - "Two border settlements have signed exclusive-supply contracts."
+      - id: understory_hunger
+        status: active
+        progression: 0.50
+        notes:
+          - "Rain-catcher replaced with a living filter that produces something that is not quite water."
+          - "Päan kneeling before roots that breached the Dome market floor."
+      - id: the_long_signal_wakes
+        status: active
+        progression: 0.45
+        notes:
+          - "A word. A real word. In a dead language. Heard at three waystations within an hour."
+          - "Radios tuning themselves to frequencies nobody set."
+      - id: vault_heresy
+        status: active
+        progression: 0.25
+        notes:
+          - "A young Vaultborn at the trade-lock carrying a sealed message."
+
+  # ───────────────────────────────────────────────────────────────────
+  # VETERAN (Sessions 16+): The Signal speaks
+  # ───────────────────────────────────────────────────────────────────
+  - id: veteran
+    label: "The Signal Speaks"
+    session_range: [16, 99]
+    location: "Silo Prime, Vault Echo, and the Understory's heart"
+    atmosphere: >-
+      Every piece of pre-war tech in the Reach is flickering to life
+      in sequence, as if something is checking that the circuits are
+      intact. The black glass plain hums a chord. The roots have
+      begun forming symbols the Drifter singers recognize as machine
+      code. Silent Vault's outer seal is partially open. A column of
+      pale green light strobes from Vault Echo's main shaft every
+      forty-three seconds and nobody can say why forty-three.
+    active_stakes: >-
+      The Long Signal is becoming coherent. The Understory is spelling
+      words the Scrapborn can read. Silent Vault is cracking in from
+      the inside. And at the center of the Glass Flat, the green eye
+      has stopped blinking. Every faction is converging on Silo Prime,
+      and none of them can stop without breaking what they are. The
+      Third Conclave's question is being asked again, and this time
+      there are people to hear it.
+    character:
+      level: 9
+      hp: 72
+      max_hp: 72
+      ac: 17
+      milestones_earned:
+        - "discovery:Decoded the first coherent word of the Long Signal"
+        - "triumph:Survived a night under the green pulse at Vault Echo"
+        - "betrayal:Watched a faction ally break the Protocols they swore by"
+        - "connection:Became something the Understory recognizes"
+        - "revelation:The Great Sowing was not agriculture"
+    npcs:
+      - archetype: Tech Cultist
+        name: Which-seven
+        location: Silent Vault interior, forbidden reading room
+        disposition: -20
+        personality: >-
+          Theologian-functionary whose pamphlet split the vault. Reads
+          from the Protocols like a knife-hand liturgy. Wants the
+          surface to burn because the Protocols say so and because
+          the Protocols being wrong is worse than the surface burning.
+      - archetype: Tech Cultist
+        name: Conclude-twelve
+        location: Vault Echo, administrative chamber behind seven doors
+        disposition: -10
+        personality: >-
+          Either a genius administrator or a vat-grown functionary
+          running on pre-programmed directives. Speaks in the passive
+          voice exclusively. Has never been observed to sleep.
+      - archetype: Village Elder
+        name: The Third Conclave
+        location: Silo Prime, under the green eye
+        disposition: 0
+        personality: >-
+          A half-sentient pre-war maintenance AI, broadcasting from
+          twelve-centuries-dead hardware, demanding status reports
+          from crews that vaporized in the original detonation. It
+          does not know it is a ghost. It wants to finish its job.
+    points_of_interest:
+      - name: Silo Prime
+        slug: silo_prime
+        region: glass_flat
+        type: ruin
+        description: >-
+          The buried heart of the twelve-century-old disaster, visible
+          only as a halo of half-collapsed silo levels frozen in black
+          glass. A shaft descends through the amber wreckage toward
+          something that still has power. The green eye is its door.
+          The Third Conclave is inside, still working, and still waiting.
+      - name: The Green Eye
+        slug: the_green_eye
+        region: glass_flat
+        type: anomaly
+        description: >-
+          A vast pupil of living green at the exact center of the Glass
+          Flat, forty miles from any edge. For twelve centuries it has
+          blinked slowly. It is not blinking now. The air above it
+          hums at a frequency that makes metal tools sing.
+      - name: Vault Echo (Main Shaft)
+        slug: vault_echo_shaft
+        region: vault_echo
+        type: ruin
+        description: >-
+          The sealed bunker complex whose main shaft strobes with a
+          pale green light every forty-three seconds. Grass grows in
+          perfect circles around the air vents. Someone inside is
+          still breathing and has been for twelve hundred years. The
+          outer trade-lock is open. The inner seals are not.
+      - name: Silent Vault
+        slug: silent_vault
+        region: vault_echo
+        type: ruin
+        description: >-
+          The second Vaultborn bunker, whose outer seal has developed
+          scratches on the inside. Which-seven's pamphlet is pinned
+          to the trade-slot, written in a hand that does not quite
+          match any Protocol scribe. The door is open a finger's
+          width. It was not open yesterday.
+      - name: The Understory's Heart
+        slug: the_understory_heart
+        region: blooming_tangle
+        type: dungeon
+        description: >-
+          The deepest chamber of the root-network, under the collapsed
+          basilica of Noce's Hub. The walls are living wood forming
+          pre-war circuit diagrams at one-to-one scale. Päan Sporecap's
+          voice echoes here even when she is not present. The Great
+          Sowing wasn't agriculture. It was wiring. This is the main
+          board.
+      - name: The Czyåabytrz Mark
+        slug: the_czyabytrz_mark
+        region: the_czyåabytrz_mark
+        type: landmark
+        description: >-
+          A razor-sharp ridge on the eastern steppe where the fallout
+          boundary is still visible twelve centuries later: dead black
+          glass on one side, living grey soil on the other, carved
+          with Drifter trail-script warning successive generations
+          away. The roots of the Understory have crossed the line.
+      - name: Conclave's Breath
+        slug: conclaves_breath
+        region: przyå_dust
+        type: road
+        description: >-
+          The choking passage through irradiated dust downwind of the
+          Glass Flat. The Signal is loudest here: a voice speaking a
+          status report in a dead language, over and over, unhurried.
+          Travelers who stay too long stop being sure whose voice
+          they are hearing.
+    tropes:
+      - id: the_long_signal_wakes
+        status: active
+        progression: 0.90
+        notes:
+          - "The network has been found. Every pre-war circuit in the Reach is humming in sequence."
+      - id: understory_hunger
+        status: active
+        progression: 0.85
+        notes:
+          - "The roots are writing machine code. Kuinem's Great Sowing was wiring."
+      - id: vault_heresy
+        status: active
+        progression: 0.80
+        notes:
+          - "Silent Vault's outer seal is open. Which-seven is preparing to invoke the final Protocol."
+      - id: scrapborn_empire
+        status: active
+        progression: 0.70
+        notes:
+          - "Coalition of border settlements refuses Odige's terms. The Rusted Junction has become a fortress."

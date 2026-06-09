@@ -134,18 +134,24 @@ def _player_character(name: str):
 
 
 def _seated_melee(*, pc: str, opponent: str, location: str):
-    """Seat a real space_opera ``melee`` confrontation via the PRODUCTION path."""
+    """Seat a swn_test_pack ``melee`` confrontation via the PRODUCTION path.
+
+    Story 96-1: the behavioral e2e drives the FIXTURE pack (world-tier
+    ``blaster_sidearm`` catalog in ``test_world``) — the content-contract
+    tests in this module still deliberately read the live pack.
+    """
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
     from sidequest.server.dispatch.encounter_lifecycle import (
         instantiate_encounter_from_trigger,
     )
+    from tests._helpers.fixture_packs import SWN_TEST_PACK, TEST_WORLD, load_fixture_pack
 
-    pack = _load_space_opera()
+    pack = load_fixture_pack(SWN_TEST_PACK)
     snap = GameSnapshot(
-        genre_slug="space_opera",
-        world_slug="perseus_cloud",
+        genre_slug=SWN_TEST_PACK,
+        world_slug=TEST_WORLD,
         turn_manager=TurnManager(interaction=2),
     )
     snap.character_locations[pc] = location
@@ -157,7 +163,7 @@ def _seated_melee(*, pc: str, opponent: str, location: str):
         encounter_type=_MELEE_TYPE,
         player_name=pc,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
-        genre_slug="space_opera",
+        genre_slug=SWN_TEST_PACK,
     )
     assert enc is not None, "seating must produce a melee encounter"
     return snap, enc, pack
@@ -185,7 +191,7 @@ def _throw(*, beat_id: str, pc: str, enc, pack, snap, request_id: str, round_num
         character_stats=_STATS,
         encounter=enc,
         pack=pack,
-        genre_slug="space_opera",
+        genre_slug=snap.genre_slug,
         session_id="so-melee-e2e",
         round_number=round_number,
         room_broadcast=broadcasts.append,
@@ -305,12 +311,6 @@ def test_melee_action_matches_melee_via_real_validator():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-@pytest.mark.skip(
-    reason="content-coupled: references weapon 'blaster_sidearm' that migrated to "
-    "world-tier inventory (epic 94), so genre-tier damage specs no longer resolve and "
-    "HP never ablates; rewrite against fixtures — story 94-4"
-)
 def test_melee_resolves_on_hp_depletion_with_otel(otel_capture):
     snap, enc, pack = _seated_melee(pc="Nova", opponent="Corsair", location="New Kowloon")
 

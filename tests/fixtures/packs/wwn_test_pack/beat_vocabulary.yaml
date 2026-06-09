@@ -1,0 +1,115 @@
+obstacles:
+  - name: Processional in the colonnade
+    description: A priestly procession fills the long arcade — interrupting it is a sacrilege, skirting it costs ground
+    stat_check: Wisdom
+    failure_penalty: Separation -2; the processional pauses and a priest notes the interruption
+    tags: [urban, sacred]
+
+  - name: Offering-yard tally
+    description: A Tally-gate of an Astran temple, where pilgrims are formally counted — pass through and you are on a register, avoid it and you lose distance
+    stat_check: Charisma
+    failure_penalty: Separation -1; an entry under a name you did not wish to offer
+    tags: [urban, sacred]
+
+  - name: Confessional-alley
+    description: A narrow passage between the doors of a Confessor-shrine — private secrets hang in the air like dust and the space itself is disorientingly quiet
+    stat_check: Wisdom
+    failure_penalty: A secret of the character's slips momentarily into the open air, separation -1
+    tags: [urban, sacred]
+
+  - name: Ruin-edge sinkhole
+    description: A thin slab of modern paving over an older Unfed stratum — if it gives, you go down into a place you did not intend to enter
+    stat_check: Dexterity
+    failure_penalty: Fall damage, separation -2, and you are now somewhere older than the chase itself
+    tags: [ruin, terrain]
+
+  - name: Foundry-quarter bellows
+    description: A guild foundry in mid-working — the heat, the noise, the residue in the air
+    stat_check: Constitution
+    failure_penalty: Stamina -1, singed clothing, and a guild foreman who will remember your face
+    tags: [urban, guild]
+
+  - name: Tithe-bridge toll
+    description: A span controlled by a minor feeding cult that takes a specific small offering from each crosser — refuse and the bridge does not cooperate
+    stat_check: Charisma
+    failure_penalty: Separation -1, and a quiet complaint lodged at the bridge's register
+    tags: [urban, sacred]
+
+  - name: Rain-slick consecrated stone
+    description: A wide temple forecourt glazed with rain — the stone is blessed, which is unhelpful when running
+    stat_check: Dexterity
+    failure_penalty: Prone, separation -1, a bruise that will remain for several scenes
+    tags: [urban, sacred, weather]
+
+  - name: Pilgrim-road bottleneck
+    description: A processional of Path-Eater pilgrims moving in single file along a narrow way
+    stat_check: Wisdom
+    failure_penalty: Separation -1; a pilgrim silently notes a face
+    tags: [rural, sacred]
+
+  - name: Old sigil-gate
+    description: A gateway carved with marks from the older strata — crossing it without the correct observance exacts a small price
+    stat_check: Intelligence
+    failure_penalty: A small piece of memory lost, separation -1
+    tags: [ruin, sacred]
+
+  - name: Ledger-hall queue
+    description: A line of petitioners waiting at a scribe's counter — shove through and you disrupt a formal proceeding, go around and you lose ground
+    stat_check: Charisma
+    failure_penalty: Separation -1, and a scribe now has your description in their marginalia
+    tags: [urban, social]
+
+event_flavor:
+  - event: gap_widens
+    descriptions:
+      - Your footfalls find purchase on the consecrated stone and the shouts behind you fade into the shape of the cloister
+      - The colonnade turns and for a moment you are alone with the quiet work of an old devotional — you gain ground in the silence
+      - A side-chapel's door stands open and beyond it lies a way the pursuer does not know — the distance grows
+      - Their steps falter as a rite-keeper passes between you, and for the space of three breaths you move unimpeded
+
+  - event: gap_closes
+    descriptions:
+      - Bootfalls hammering behind you — someone who knows these courtyards better than you have the right to know them is closing
+      - A shortcut you had not seen becomes visible to the pursuer and you hear them gaining in a direction you had not planned for
+      - The crowd of pilgrims parts for them and not for you — the distance halves
+      - You feel the change in the air, the precise weight of someone who has begun to think they will catch you
+
+  - event: obstacle_hit
+    descriptions:
+      - Your cloak snags on a tithe-hook set into a doorframe — the fabric tears, the offering-bell above it rings once, and you lose a step
+      - A loose consecration-stone rolls beneath your foot and you stagger
+      - The processional pauses at exactly the wrong moment and you are suddenly standing still in the middle of a rite you did not enter
+      - You strike your shoulder on the corner of a ledger-stand and a small book falls, opens, and is seen
+
+  - event: shortcut_found
+    descriptions:
+      - A confessional-alley opens on your left, dim and unnaturally quiet — you take it, and the silence closes behind you
+      - A cellarer's door in the temple wall has been left ajar — through the kitchens, the scullery, the yard
+      - A covenant-kin you have never met meets your eye and, without speaking, nods you toward a passage their people use
+      - The buried stairwell of an Unfed ruin opens in the courtyard — dangerous but definitely not where they are looking
+
+  - event: near_catch
+    descriptions:
+      - A hand brushes your collar — you feel the formal coldness of the pursuer's skin
+      - A summons-token strikes the ground at your heel — the next one will be delivered by hand
+      - The pursuer is close enough that you can hear the precise quality of their breath
+      - A fingertip finds your sleeve and you twist away, leaving a thread behind in their hand
+
+  - event: terrain_shift
+    descriptions:
+      - The colonnade opens into an offering-yard and you are suddenly fully visible to every tally-keeper in the place
+      - The cobbles give way to pilgrim-path and your footing changes entirely — the ground is softer and the pursuit is quieter
+      - The alley ends at the unexpected edge of a stratum-pit where old stone shows through and the weight of the air itself changes
+      - The stair beneath you is much older than the building above it — you are running on something that predates the current age
+
+decision_framings:
+  - "The processional fills the colonnade — interrupt the rite or take the long way around?"
+  - "The tithe-bridge demands a small offering — pay it quietly or refuse and push through?"
+  - "Your companion stumbles on the consecrated stone — help them up or keep running?"
+  - "A confessional-alley offers silence but the space itself will want a secret — take it or find another way?"
+  - "The ruin-edge sinkhole leads down into an older stratum — risk it or stay on the current-age level?"
+
+chase_modes:
+  - foot
+  - pilgrim_road
+  - colonnade

@@ -1,0 +1,247 @@
+# Character portraits for Barsoom (heavy_metal genre, world override)
+#
+# Style is inherited from worlds/barsoom/visual_style.yaml: lush
+# painterly heroic OIL in the tradition of Frazetta / Krenkel / Whelan,
+# sun-baked ochre-and-rust palette, hard low-angle light through thin
+# air. Do NOT restate the style/medium here — the daemon injects
+# `positive_suffix` at render time. Per the operator's standing rule,
+# STYLE LIVES ONLY IN THE SUFFIX: appearance fields below describe the
+# SUBJECT only (who, physical detail, harness, bearing, light on them),
+# never the medium ("oil", "painterly", "brushwork" — those belong to
+# the suffix).
+#
+# Each `id` matches the corresponding NPC id in npcs.yaml so the daemon's
+# CharacterCatalog binds the rendered PNG to `npc:<id>`. The render
+# script (scripts/generate_portrait_images.py) reads `id` directly.
+#
+# Barsoom physiology is honored per the design spec and each NPC's
+# authored culture:
+#   - red men   = smooth copper / red-bronze skin, black hair, humanlike
+#   - green men = ~15 ft, FOUR arms, olive-green, ivory tusks, immobile
+#                 antennae-like eyes (chest-up portrait still reads the
+#                 second arm-pair and tusks)
+#   - therns    = white-skinned, bald, hidden under a flowing blond wig
+#   - first born= glossy black skin, handsome, merciless
+#   - yellow men= sallow / fair-yellow skin, BLACK-bearded (the only
+#                 bearded men of a hairless world), fur-trimmed harness
+#   - lotharians= white-skinned, ancient, red or auburn hair, uncanny
+# Modesty clause (covered, dignified, non-sexualized) follows the
+# Barsoom SOUL-safe direction in the design spec; scars are NOT a default.
+
+characters:
+  # ---------------------------------------------------------------------
+  # Story-1 core — red + green (the playable spine)
+  # ---------------------------------------------------------------------
+  - id: helium_jed_host
+    name: "Kantos Vah"
+    role: "Heliumetic dwar (captain) at the landing-stage"
+    type: npc_major
+    appearance: >-
+      A red-Martian captain of Helium in his proud prime — smooth
+      copper-red skin, close-cut black hair, a short trimmed black
+      beard kept to military neatness, level dark eyes set in a calm,
+      measuring, honor-bound expression. Strong even features, the
+      bearing of a man used to judging strangers by a code. He wears a
+      well-made crimson-and-brass leather harness with a jeweled
+      shoulder-strap of office and the navy device of Helium worked in
+      gold at the breast, over fitted dark body-garb, modest and fully
+      covered. A long-sword hilt rises at his shoulder. Chest-up,
+      three-quarter pose, one hand resting where the sword-belt
+      crosses. Hard low side-light, warm ochre shadow.
+    culture_aesthetic: >-
+      Helium officer-class harness: crimson and gold, fine brasswork,
+      the device of the navy — dignified, martial, never gaudy. The kit
+      of a man who keeps the guest-code.
+
+  - id: zodanga_agent
+    name: "Sab Tor"
+    role: "A Zodangan in Helium who is not what his papers say"
+    type: npc_major
+    appearance: >-
+      A red-Martian man of middle years passing as a Helium merchant —
+      copper-red skin, sleek black hair, a thin clean-shaven face with a
+      pleasant, practiced, just-too-easy smile that does not reach his
+      watchful dark eyes. Handsome and forgettable by design. He wears a
+      quietly expensive dark harness with restrained silver fittings and
+      a plain travel-cloak clasped at one shoulder, over fitted dark
+      body-garb, modest and fully covered — nothing that marks a city,
+      nothing a witness would later describe. Chest-up, three-quarter
+      pose, half-turned as if about to step out of frame. Cool even
+      light, soft shadow.
+    culture_aesthetic: >-
+      Deliberate anonymity — muted dark harness, modest silver, a
+      merchant's cloak. The look of a Zodangan agent who wants never to
+      be looked at twice; the assassins' guild kills, never his own
+      hand.
+
+  - id: thark_chieftain
+    name: "Gor Hajus"
+    role: "A lesser chieftain of the Thark horde at Korad"
+    type: npc_major
+    appearance: >-
+      A green-Martian chieftain of the Tharks — a towering olive-green
+      giant, fifteen feet of him implied by the low, looming framing.
+      FOUR arms: a powerful upper pair and a lower pair below the first,
+      all four corded with muscle. A broad hairless head, deep-set
+      immobile eyes far apart on protruding mounts, two great upthrust
+      ivory tusks framing a wide lipless mouth. A cruel, curious,
+      appraising expression. He wears a worn metal-and-leather war-harness
+      of plain straps and battered ornaments across his chest, a long
+      radium-rifle slung and a giant's long-sword at his side; the lower
+      hands rest on weapon-hilts. Modest, functional, savage gear.
+      Chest-up but low-angle so the great scale, the second arm-pair, and
+      the tusks all read. Hard raking ochre light, deep shadow.
+    culture_aesthetic: >-
+      Thark war-harness: scavenged metal and leather, the trophy-marks
+      of rank, weapons sized for a giant. No softness, no ornament for
+      its own sake — only what a horde-warrior earns and carries.
+
+  # ---------------------------------------------------------------------
+  # The South (89-2) — therns, First Born, Issus
+  # ---------------------------------------------------------------------
+  - id: thern_hekkador
+    name: "Sator Throg"
+    role: "Hekkador, Father of Therns, at the Golden Cliffs"
+    type: npc_major
+    appearance: >-
+      The high priest of the southern death-cult — a white-skinned thern,
+      pale almost to marble, smooth-bodied and hairless beneath a long
+      flowing wig of fine golden-blond hair that falls past his
+      shoulders, the wig a fraction too perfect over a face it cannot
+      quite make young. Cold pale eyes, a serene and merciless mouth,
+      the absolute calm of a man certain he is a god. He wears rich
+      priestly harness of pale gold and white over fitted body-garb,
+      modest and fully covered, a circlet of the cult at his brow and the
+      jeweled clasp of the Hekkador at his throat. Chest-up, frontal,
+      composed and still. Cool high light, faint gold rim, deep shadow
+      behind.
+    culture_aesthetic: >-
+      Thern temple-regalia: pale gold and white, the blond wig over
+      hidden baldness, cult jewelry — a fraud's holiness made beautiful
+      and serene, the look of a man who would kill a world to keep a lie.
+
+  - id: first_born_dator
+    name: "Xodar"
+    role: "A dator (noble captain) of the black corsairs of Omean"
+    type: npc_major
+    appearance: >-
+      A dator of the First Born — a glossy-black-skinned man of striking
+      handsome features, the skin catching light like polished jet,
+      close black hair, fine strong bones, dark proud eyes carrying a
+      cold contempt with the first faint crack of private doubt behind
+      it. The bearing of a noble who has never been beaten and has just
+      begun to wonder. He wears ornate dark corsair-harness chased with
+      gold and the device of the black fleets, a jeweled clasp at the
+      shoulder, over fitted dark body-garb, modest and fully covered. A
+      long-sword hilt at his shoulder. Chest-up, three-quarter, chin
+      high. Dim crimson-and-steel light of the buried sea, deep blacks,
+      a hard gold edge.
+    culture_aesthetic: >-
+      First Born corsair-finery: black on black, burnished gold, the
+      device of Omean's fleets — the cold artistry of a self-styled
+      living god, opulent and merciless.
+
+  - id: issus_goddess
+    name: "Issus"
+    role: "The goddess of the First Born, enthroned on Omean"
+    type: npc_major
+    appearance: >-
+      The goddess of the First Born unveiled — not the divinity the
+      faith proclaims but the truth beneath the mask: a very old
+      black-skinned woman, withered and stooped, her glossy skin gone
+      slack and seamed with great age, sparse white hair, sunken eyes
+      bright with cruelty and fear of being seen. She is wrapped in
+      magnificent divine regalia far too grand for the ruin inside it —
+      a towering gold-and-jeweled head-dress, robes of cloth-of-gold and
+      black wreathed about her, the trappings of a god draped on a cruel
+      old woman, modest and fully covered. Chest-up, frontal, the regalia
+      blazing and the face it frames pitiless and small. Dim crimson
+      radium glow, burnished gold catching light, deep oppressive shadow.
+    culture_aesthetic: >-
+      Issus's divine regalia: cloth-of-gold, towering jeweled head-dress,
+      black-and-gold temple finery — the load-bearing lie of the South
+      made gorgeous, hung on the cruel old woman it hides.
+
+  # ---------------------------------------------------------------------
+  # The North & Lothar (89-3) — Okar yellow men + the Lotharian mentalists
+  # ---------------------------------------------------------------------
+  - id: okar_jeddak_of_jeddaks
+    name: "Salensus Oll"
+    role: "Jeddak of jeddaks of Okar, tyrant of the crystal domes"
+    type: npc_major
+    appearance: >-
+      The tyrant of the frozen north — a yellow-Martian of imposing
+      build, sallow fair-yellow skin, and a full, oiled, jet-black beard,
+      the only bearded men of a hairless world. Hard black eyes, a
+      heavy-browed, cold, tyrannical face used to instant obedience. He
+      wears the rich fur-trimmed harness of the jeddak of jeddaks —
+      lustrous dark furs over ornate yellow-gold leather and steel
+      fittings against the polar cold, a crown-circlet of the northern
+      throne at his brow, over fitted body-garb, modest and fully
+      covered. Chest-up, frontal, imperious. Warm green hothouse light
+      from within the dome, cold blue ice-glow behind, hard contrast.
+    culture_aesthetic: >-
+      Okar throne-regalia: lustrous furs, yellow-gold leather and steel,
+      the crown of the jeddak of jeddaks — opulent, cold, and tyrannical,
+      warmth wrested from the killing ice.
+
+  - id: marentina_prince
+    name: "Talu"
+    role: "Prince of Marentina, the free northern dome"
+    type: npc_major
+    appearance: >-
+      The prince of the free dome — a yellow-Martian of dignified
+      bearing, sallow fair-yellow skin, a neatly kept black beard, and
+      steady, guarded, honorable eyes that weigh a stranger and keep
+      their own counsel. A finer, calmer face than the tyrant's, lined
+      by the careful line he walks. He wears fine fur-trimmed northern
+      harness, quieter and older in make than Kadabra's — rich dark furs
+      over restrained yellow-gold leather, the free dome's device at the
+      shoulder, over fitted body-garb, modest and fully covered.
+      Chest-up, three-quarter, composed and watchful. Warm lamplight of a
+      conspirator's hall against cold indigo polar night.
+    culture_aesthetic: >-
+      Marentina court-dress: rich but restrained northern furs and
+      yellow-gold leather, an older and freer make than the tyrant's —
+      quiet dignity, the look of a prince sheltering the throne's enemies.
+
+  - id: lothar_jeddak
+    name: "Tario"
+    role: "Jeddak of Lothar, master of the phantom bowmen"
+    type: npc_major
+    appearance: >-
+      The half-mad ruler of the dreaming city — an ancient white-skinned
+      Lotharian, pale and fine-featured, with long red-auburn hair worn
+      to the shoulders in the manner of his vanished race and burning,
+      uncanny, imperious eyes that seem to look through whatever they
+      fix on. A face beautiful and unsettling, far older than it shows.
+      He wears archaic ceremonial harness of an elder Mars — pale worked
+      leather and tarnished antique gold, strange old devices, a
+      thin circlet at the brow, over fitted body-garb, modest and fully
+      covered. Chest-up, frontal, regal and remote. Eerie, dreamlike
+      light, faint luminous edge, deep shadow.
+    culture_aesthetic: >-
+      Lotharian elder-regalia: archaic pale leather and antique gold, the
+      strange devices of a race that survives by will alone — beautiful,
+      ancient, and uncanny, the dress of a man who conjures armies out of
+      thought.
+
+  - id: lothar_materialist
+    name: "Jav"
+    role: "A Lotharian of the rival faction — courteous, treacherous"
+    type: npc_major
+    appearance: >-
+      A Lotharian courtier of the rival faction — ancient white skin,
+      fine pale features, red-auburn hair, and a smooth, courteous,
+      faintly mocking expression that never quite tells you what he means
+      or which of his courtesies is flesh and which is will. Charming and
+      not to be trusted, his uncanny eyes amused. He wears refined
+      Lotharian harness a touch more ornamented and worldly than the
+      jeddak's — pale worked leather, antique gold, a few jeweled
+      fittings, over fitted body-garb, modest and fully covered.
+      Chest-up, three-quarter, a slight courtier's incline of the head.
+      Eerie, dreamlike light, faint luminous edge, soft deceiving shadow.
+    culture_aesthetic: >-
+      Lotharian courtier-dress: refined pale leather and antique gold
+      with a worldly polish — the silken finery of a flatterer who holds
+      that a believed-in phantom can outlive the thought that shaped it.

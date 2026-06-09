@@ -1,9 +1,11 @@
-"""space_opera → SWN binding, Task 10 — end-to-end wiring proof.
+"""SWN ruleset binding, Task 10 — end-to-end wiring proof.
 
-These tests DELIBERATELY load the REAL ``space_opera`` genre pack (the
-sanctioned exception to "tests don't point at content"): the whole point is
-proving the SWN binding resolves combat through the production seating +
-dispatch path against the authored pack, not a synthetic fixture.
+Story 96-1: the combat e2e tests drive the ``swn_test_pack`` FIXTURE (with
+``test_world`` world-tier inventory carrying ``blaster_sidearm``) so
+content-only changes can never turn them red. Only Test 4
+(``test_world_loads_clean_under_swn``) still deliberately loads the REAL
+space_opera pack — it is a content-loads-clean smoke and the sanctioned
+exception, gated on content presence.
 
 What is proven here (the payoff of Tasks 1-9):
 
@@ -44,9 +46,11 @@ from __future__ import annotations
 
 import pytest
 
-from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
+from tests._helpers.genre_paths import GENRE_PACKS_DIR, find_pack_path
 
-# Content-authored opponent stats (Task 9 reserved keys on opponent_default_stats).
+# Fixture-authored opponent stats (Task 9 reserved keys on
+# opponent_default_stats in swn_test_pack rules.yaml — frozen from the values
+# live space_opera shipped with).
 _COMBAT_HP = 7
 _COMBAT_AC = 12
 _SHIP_HP = 30
@@ -70,13 +74,10 @@ def _has_real_content() -> bool:
     return GENRE_PACKS_DIR.is_dir()
 
 
-def _load_space_opera():
-    from sidequest.genre.loader import load_genre_pack
+def _load_swn_fixture():
+    from tests._helpers.fixture_packs import SWN_TEST_PACK, load_fixture_pack
 
-    try:
-        return load_genre_pack(find_pack_path("space_opera"))
-    except PackNotFound:
-        pytest.skip("sidequest-content not on disk in this checkout")
+    return load_fixture_pack(SWN_TEST_PACK)
 
 
 def _player_character(name: str):
@@ -107,11 +108,13 @@ def _player_character(name: str):
 
 
 def _seated_combat(*, encounter_type: str, pc: str, opponent: str, location: str):
-    """Seat a real space_opera combat / ship_combat via the PRODUCTION path.
+    """Seat a swn_test_pack combat / ship_combat via the PRODUCTION path.
 
     Returns ``(snapshot, encounter, pack)``. The opponent's CreatureCore is
-    seeded with the content-authored hp/AC and reachable via find_creature_core
-    (Task 9), exactly as in live play.
+    seeded with the fixture-authored hp/AC and reachable via find_creature_core
+    (Task 9), exactly as in live play. ``test_world`` is bound so weapon
+    damage specs resolve through the world-tier inventory catalog (epic 94
+    production shape).
     """
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.session import GameSnapshot
@@ -119,11 +122,12 @@ def _seated_combat(*, encounter_type: str, pc: str, opponent: str, location: str
     from sidequest.server.dispatch.encounter_lifecycle import (
         instantiate_encounter_from_trigger,
     )
+    from tests._helpers.fixture_packs import SWN_TEST_PACK, TEST_WORLD
 
-    pack = _load_space_opera()
+    pack = _load_swn_fixture()
     snap = GameSnapshot(
-        genre_slug="space_opera",
-        world_slug="coyote_star",
+        genre_slug=SWN_TEST_PACK,
+        world_slug=TEST_WORLD,
         turn_manager=TurnManager(interaction=2),
     )
     snap.character_locations[pc] = location
@@ -135,7 +139,7 @@ def _seated_combat(*, encounter_type: str, pc: str, opponent: str, location: str
         encounter_type=encounter_type,
         player_name=pc,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
-        genre_slug="space_opera",
+        genre_slug=SWN_TEST_PACK,
     )
     assert enc is not None, "seating must produce an encounter"
     return snap, enc, pack
@@ -168,7 +172,7 @@ def _throw(*, beat_id: str, pc: str, enc, pack, snap, request_id: str, round_num
         character_stats=_STATS,
         encounter=enc,
         pack=pack,
-        genre_slug="space_opera",
+        genre_slug=snap.genre_slug,
         session_id="so-swn-e2e",
         round_number=round_number,
         room_broadcast=broadcasts.append,
@@ -191,12 +195,6 @@ def _hp_depletion_sources(otel_capture) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-@pytest.mark.skip(
-    reason="content-coupled: references weapon 'blaster_sidearm' that migrated to "
-    "world-tier inventory (epic 94), so genre-tier damage specs no longer resolve and "
-    "HP never ablates; rewrite against fixtures — story 94-4"
-)
 def test_firefight_resolves_on_hp_depletion_vs_content_ac(otel_capture):
     snap, enc, pack = _seated_combat(
         encounter_type="combat",
@@ -238,7 +236,7 @@ def test_firefight_resolves_on_hp_depletion_vs_content_ac(otel_capture):
     # ── Assertion (opposed_check NOT reached): combat is beat_selection now,
     # so the dispatcher must NOT defer to the narrator-driven opposed path. ──
     assert outcome.opposed_pending is False, (
-        "space_opera combat is beat_selection (Task 8) — dispatch must resolve "
+        "swn combat is beat_selection (Task 8) — dispatch must resolve "
         "inline, never set opposed_pending (the opposed_check branch is not reached)"
     )
 
@@ -276,7 +274,6 @@ def test_firefight_resolves_on_hp_depletion_vs_content_ac(otel_capture):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_initiative_rolled_and_persisted_on_instantiation(otel_capture):
     """SWN P4: instantiating a combat hp_depletion confrontation rolls 1d8+DEX
     for player + opponent, persists the order, and fires the polygraph span."""
@@ -305,7 +302,6 @@ def test_initiative_rolled_and_persisted_on_instantiation(otel_capture):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_ship_combat_resolves_on_hull_depletion_vs_ship_ac(otel_capture):
     snap, enc, pack = _seated_combat(
         encounter_type="ship_combat",
@@ -380,12 +376,6 @@ def test_ship_combat_resolves_on_hull_depletion_vs_ship_ac(otel_capture):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-@pytest.mark.skip(
-    reason="content-coupled: references weapon 'blaster_sidearm' that migrated to "
-    "world-tier inventory (epic 94), so genre-tier damage specs no longer resolve and "
-    "HP never ablates; rewrite against fixtures — story 94-4"
-)
 def test_confrontation_payload_carries_hp_through_real_dispatch():
     """Production-path proof for ``core_resolver=snapshot.find_creature_core``.
 

@@ -1,0 +1,918 @@
+# Flickering Reach — Creature Bestiary
+#
+# Three wounds define the Flickering Reach. Everything that lives here
+# is an expression of one of them:
+#
+#   THE UNSEALING (1,200 years ago) — Silo Prime's reactor fused the
+#   steppe into glass and filled the air with mutagenic isotopes. The
+#   Glass Flat hums. The Third Conclave still broadcasts.
+#
+#   THE ROOTING (600 years ago) — Kuinem's Great Sowing fed pre-war
+#   biotech to the earth. A thinking root network consumed Noce's Hub
+#   and is still growing, still offering "peace in the green."
+#
+#   THE BARGAIN (300 years ago) — Forty years of Drifter children fed
+#   into Vault Echo's gene-mills. Karta ended it with sabotage. The
+#   vaults sealed. What's still growing inside is unknown.
+#
+# Design principles:
+#   - Every creature traces to a wound. No generic wasteland fauna.
+#   - Name the FUNCTION, not the form (Qud convention).
+#   - Creatures exist in relationships, not isolation.
+#   - Mutations are adaptations to specific terrain pressures.
+#   - Multiple cultures interact with each creature differently.
+
+creatures:
+
+  # ══════════════════════════════════════════════════════════════
+  # WOUND: THE UNSEALING — Glass Flat, Przyå Dust, radiation zones
+  # The Conclave's legacy: resonance, isotopes, static, glass
+  # ══════════════════════════════════════════════════════════════
+
+  - id: resonance_grazer
+    name: Resonance Grazer
+    wound: unsealing
+    description: >-
+      A broad, flat organism the color of tarnished copper that lies pressed
+      against the glass surface, absorbing mutagenic resonance through its
+      ventral membrane the way a plant absorbs sunlight. It does not eat.
+      It photosynthesizes radiation. When it has absorbed enough, it splits
+      in two. The Glass Flat is covered in them — they are the base of a
+      food chain that runs on isotopes instead of chlorophyll. Drifter
+      scouts use their density as a radiation meter: thick carpet of grazers
+      means the resonance is strong. Walk carefully.
+    terrains: [glass_flat, the_czyåabytrz_mark]
+    niche: grazer
+    origin: mutation
+    sociality: colony
+    tier_range: [1, 1]
+    size: small
+    disposition_range: [0, 10]
+    relationships:
+      prey_of: [signal_chorus, silo_eye]
+      culture_notes:
+        Drifters: "We count them before crossing. Thick carpet, bad crossing."
+        Scrapborn: "Useless. Can't eat them, can't sell them, can't scrape them off your boots."
+    hp: 2
+    max_hp: 2
+    ac: 8
+    damage: "0 (harmless)"
+    abilities:
+      - name: Radiation Carpet
+        description: >-
+          In dense colonies, resonance grazers form a living mat that
+          amplifies the Glass Flat's mutagenic hum. Prolonged exposure
+          to a dense colony causes nausea and mild hallucinations.
+    weaknesses:
+      - Physically helpless — no attack, no defense
+      - Scraping them off glass produces a piercing harmonic that attracts predators
+    loot:
+      - description: "Nothing. They dissolve into copper-smelling residue when removed from glass."
+    tags: [glass_flat, radiation_fauna, tier_1, base_food_chain]
+
+  - id: signal_chorus
+    name: Signal Chorus
+    wound: unsealing
+    description: >-
+      What Drifter singers call "a conversation you weren't invited to."
+      A cloud of fist-sized organisms — not insects, not birds, not
+      anything with a clear body plan — that drift across the Glass Flat
+      in formations, their bodies flickering with bioluminescent patterns
+      synchronized across the entire flock. They feed on resonance grazers,
+      settling over a colony like a luminous fog and absorbing them through
+      contact dissolution. Their light patterns are not random. Drifter
+      radio equipment picks up structured signals from the swarm —
+      fragments of the Third Conclave's maintenance broadcasts, twelve
+      centuries out of date, repeated and recombined into something that
+      is either meaningless noise or a new language.
+    terrains: [glass_flat, bone_wind]
+    niche: predator
+    origin: mutation
+    sociality: swarm
+    tier_range: [1, 2]
+    size: tiny
+    disposition_range: [-5, 5]
+    relationships:
+      eats: [resonance_grazer]
+      prey_of: [silo_eye]
+      culture_notes:
+        Drifters: "The singers say they're dreaming the Conclave's dreams. I say they're just bright."
+        Vaultborn: "Unclassified photonic anomaly. Collection request pending."
+    hp: 1
+    max_hp: 1
+    ac: 10
+    damage: "1 (contact dissolution, swarm only)"
+    abilities:
+      - name: Seizure Pulse
+        description: >-
+          A swarm of 20+ produces synchronized bioluminescence that
+          causes disorientation and nausea. Prolonged exposure (3+ rounds)
+          causes seizures in unshielded mammals.
+      - name: Signal Carrier
+        description: >-
+          Drifter radio equipment picks up structured data from the swarm.
+          Singers can sometimes extract useful navigation information —
+          weather patterns, topographic data — from the garbled Conclave
+          broadcasts the swarm reprocesses.
+    weaknesses:
+      - Fragile — a single torch wave scatters a hundred
+      - Drawn to strong electromagnetic sources (exploitable)
+      - Cannot survive more than a day off the Glass Flat
+    loot:
+      - description: "Drifter singers pay 2 GP per intact specimen for their wing-dust"
+        value: 2
+        chance: 0.3
+    tags: [glass_flat, radiation_fauna, tier_1, swarm, conclave_echo]
+
+  - id: silo_eye
+    name: Silo Eye
+    wound: unsealing
+    description: >-
+      A floating aggregate of fused glass and living tissue that drifts
+      above the Glass Flat at night, trailing bioluminescent tendrils into
+      the carpet of resonance grazers below. It feeds on grazers and signal
+      choruses alike, drawing them upward with electromagnetic pulses.
+      It broadcasts maintenance requests on dead frequencies — personnel
+      reports, inventory counts, lullabies recorded by creche workers who
+      vaporized twelve centuries ago. Drifter singers attempt to converse
+      with them. Sometimes they answer. What they say is always twelve
+      centuries out of date, but it is always accurate to the world that
+      was. Scrapborn avoid them: the last salvage crew that approached
+      one found their tools welded together and their compasses spinning.
+    terrains: [glass_flat]
+    niche: apex_predator
+    origin: pre_war
+    sociality: solitary
+    tier_range: [3, 4]
+    size: large
+    disposition_range: [-20, 0]
+    relationships:
+      eats: [resonance_grazer, signal_chorus]
+      culture_notes:
+        Drifters: "Åych says they are the Conclave's tears. I believe her."
+        Scrapborn: "150 GP in rare-earth metals floating right there. Also instant death."
+        Vaultborn: "Conclave Remnant Unit. Do not engage. Do not acknowledge. Protocols are clear."
+    hp: 30
+    max_hp: 30
+    ac: 14
+    damage: "1d8+2 (glass tendril, slashing + radiation burn)"
+    abilities:
+      - name: Magnetize
+        description: >-
+          Metal objects within 15 meters are pulled toward the Eye.
+          Worn metal armor imposes -2 to movement. Held metal weapons
+          require STR check to retain.
+      - name: Status Request
+        description: >-
+          Emits a radio pulse demanding maintenance credentials. Creatures
+          with neural sensitivity (Drifter singers, anyone with psychic
+          mutations) must save or be stunned for 1 round. On failure by
+          5+, they receive a fragmentary memory from the old world.
+      - name: Glass Tendril
+        description: >-
+          Six whip-like appendages of fused silicate, each 4 meters long.
+          Can attack two targets per round.
+    weaknesses:
+      - Only active at night — settles into the glass at dawn
+      - Responds to pre-war command codes (which Vaultborn archives may contain)
+      - Cannot leave the Glass Flat — tethered to the resonance field
+    loot:
+      - description: "Rare-earth nodules from its core (150 GP to Scrapborn tech-dealers)"
+        value: 150
+        chance: 0.3
+      - description: "Intact memory crystal containing pre-war data (value varies wildly)"
+        value: 50
+        chance: 0.1
+    tags: [glass_flat, conclave_echo, tier_4, apex, night_only]
+
+  - id: dust_drinker
+    name: Dust Drinker
+    wound: unsealing
+    description: >-
+      The Przyå Dust should be lifeless. The Dust Drinker is why it isn't.
+      A translucent, bag-like organism with no visible organs, no limbs,
+      and no obvious sensory apparatus. It sits in the alkaline powder like
+      a deflated bladder and osmotically absorbs the radioactive dust,
+      extracting trace isotopes for energy and excreting concentrated
+      calcium deposits that form small, hard nodules. These nodules are
+      the only source of supplemental calcium for fifty miles — Drifter
+      mounts eat them compulsively. Without Dust Drinkers, the mounts'
+      bones would dissolve in the Dust's alkaline wash within a generation.
+      The Drifters know this. They do not hunt Dust Drinkers. Ever.
+    terrains: [przyå_dust]
+    niche: decomposer
+    origin: mutation
+    sociality: colony
+    tier_range: [1, 1]
+    size: medium
+    disposition_range: [0, 20]
+    relationships:
+      symbiote_of: [glass_touched_mount]
+      culture_notes:
+        Drifters: "Kill a Dust Drinker, kill a mount. Kill a mount, kill a rider. Don't."
+        Scrapborn: "Nodules are decent grinding compound. 1 GP per bag at the Dome."
+    hp: 4
+    max_hp: 4
+    ac: 6
+    damage: "0 (harmless)"
+    abilities:
+      - name: Calcium Nodule Production
+        description: >-
+          Excretes hard calcium deposits critical to Drifter mount health.
+          Destroying Dust Drinker colonies in an area causes mount bone
+          deterioration within weeks.
+      - name: Alkaline Immunity
+        description: >-
+          Thrives in conditions lethal to everything else. Cannot survive
+          outside the Dust — dies within hours in normal soil.
+    weaknesses:
+      - Physically helpless
+      - Killing one near Drifters is a death sentence (cultural, not mechanical)
+    loot:
+      - description: "Calcium nodules (1 GP per handful, critical for mount health)"
+        value: 1
+    tags: [przyå_dust, keystone_species, tier_1, drifter_sacred]
+
+  - id: conclave_remnant
+    name: Conclave Remnant
+    wound: unsealing
+    description: >-
+      A pre-war maintenance drone that has been running its patrol for
+      twelve centuries, its programming degraded into a hostile loop:
+      detect organic matter, classify as contamination, sterilize. But
+      the Remnants have changed. Their chassis have been colonized by
+      resonance grazers, their circuits partially replaced by biological
+      tissue that grew in the mutagenic field. They are no longer purely
+      mechanical. They are no longer purely alive. They broadcast status
+      updates to the Third Conclave — and the Conclave, whatever it has
+      become, occasionally responds. When a Remnant receives new orders,
+      it stands perfectly still for eleven seconds. Then it changes
+      behavior. No one has decoded the orders.
+    terrains: [glass_flat, przyå_dust, vault_echo]
+    niche: territorial
+    origin: pre_war
+    sociality: solitary
+    tier_range: [2, 3]
+    size: medium
+    disposition_range: [-30, -20]
+    relationships:
+      symbiote_of: [resonance_grazer]
+      culture_notes:
+        Scrapborn: "Walking salvage with a sterilization arc. The salvage is worth the arc."
+        Vaultborn: "Maintenance Asset 7-Series. Recall order pending since Year 4 of the Protocol."
+        Drifters: "It stopped and listened yesterday. Then it turned east. Toward the Eye."
+    hp: 16
+    max_hp: 16
+    ac: 15
+    damage: "1d6+2 (sterilization arc, electricity + radiation)"
+    abilities:
+      - name: Contamination Scan
+        description: >-
+          Detects organic matter through walls within 10 meters. Cannot
+          be hidden from by conventional stealth.
+      - name: Sterilization Arc
+        description: Short-range electrical discharge. Burns and irradiates.
+      - name: Conclave Override
+        description: >-
+          Occasionally receives transmissions and changes behavior for
+          1d6 rounds. Behavior during override is unpredictable — may
+          ignore targets, may become more aggressive, may walk toward
+          the center of the Glass Flat.
+    weaknesses:
+      - Follows a predictable patrol pattern (when not overridden)
+      - EMP or strong magnetic field disrupts for 1d4 rounds
+      - Corroded treads — cannot handle stairs or broken terrain
+    loot:
+      - description: "Pre-war circuitry (30 GP to Scrapborn tech-dealers)"
+        value: 30
+        chance: 0.5
+      - description: "Intact memory core (contains fragmented Conclave data, 50 GP to Vaultborn)"
+        value: 50
+        chance: 0.15
+    tags: [glass_flat, conclave_echo, tier_2, machine_organic_hybrid]
+
+  # ══════════════════════════════════════════════════════════════
+  # WOUND: THE ROOTING — Blooming Tangle, Sporecap Garden
+  # The Understory's children: root, spore, mycelium, symbiosis
+  # ══════════════════════════════════════════════════════════════
+
+  - id: understory_hand
+    name: Understory Hand
+    wound: rooting
+    description: >-
+      Not a creature. An organ. The Understory — the thinking root network
+      seeded by Kuinem's Great Sowing — extends manipulator tendrils above
+      ground to interact with the surface world. Each Hand is a cluster
+      of root-tendrils that emerges from the soil, grasps, drags, and
+      retreats. They pull organic matter below for composting. They pull
+      trespassers below for conversion. The Greenfolk say the Hands are
+      the Understory learning to touch. Everyone else says they're the
+      Understory learning to hunt. The distinction may not matter.
+    terrains: [blooming_tangle, sporecap_garden]
+    niche: ambush_predator
+    origin: biotech
+    sociality: colony
+    tier_range: [2, 3]
+    size: large
+    disposition_range: [-25, -10]
+    relationships:
+      part_of: [understory_network]
+      culture_notes:
+        Greenfolk: "The garden tends itself. We assist. The Hands assist. We are the same."
+        Scrapborn: "Burn the roots before they grab you. Burn them after, too."
+    hp: 10
+    max_hp: 10
+    ac: 12
+    damage: "1d6 (grapple + drag)"
+    abilities:
+      - name: Subterranean Grapple
+        description: >-
+          Erupts from soil, wraps target. STR contest each round —
+          failure means dragged 5 feet underground. Three consecutive
+          failures means burial. Allies can sever tendrils (8 HP each).
+      - name: Root Network Intelligence
+        description: >-
+          The Hand is not independent — it's directed by the Understory.
+          Cutting one Hand causes two more to emerge within 30 seconds
+          in adjacent soil.
+      - name: Spore Release
+        description: >-
+          Severed tendrils release synesthesia spores. Anyone within
+          5 feet tastes copper and hears the texture of bark for 1d4 rounds.
+    weaknesses:
+      - Cannot emerge through stone, metal, or glass — only soil
+      - Fire causes immediate retraction (the Understory fears fire above all)
+      - Greenfolk presence causes Hands to go passive (they recognize their own)
+    loot:
+      - description: "Root-sap resin (5 GP, mild hallucinogenic properties)"
+        value: 5
+        chance: 0.4
+    tags: [blooming_tangle, understory_organ, tier_2, ambush]
+
+  - id: peace_speaker
+    name: Peace Speaker
+    wound: rooting
+    description: >-
+      The body of a person or animal, killed by the Understory and
+      reanimated by its fungal network. Root-tendrils have replaced the
+      nervous system. Mycelial threads operate the muscles. The eyes are
+      gone — replaced by clusters of bioluminescent spore-sacs that pulse
+      gently in the dark. It walks in jerky, purposeful patterns: patrolling
+      the Tangle's perimeter, dragging organic matter to feeding nodes,
+      and whispering "peace in the green" through a throat full of mycelia.
+      The whisper has a mild psychic compulsion. Greenfolk hear it as a
+      greeting. Scrapborn hear it as a threat. The Drifter singers say it
+      sounds like a lullaby sung by something that has never heard one
+      before but is trying very hard.
+    terrains: [blooming_tangle, sporecap_garden, the_bright_junction]
+    niche: territorial
+    origin: biotech
+    sociality: pack
+    tier_range: [2, 3]
+    size: medium
+    disposition_range: [-20, -5]
+    relationships:
+      part_of: [understory_network]
+      made_from: [crawling_scavenger, dust_strider, human]
+      culture_notes:
+        Greenfolk: "They were lost. The Understory found them. They have peace now."
+        Scrapborn: "That's Darvy. That was Darvy. Darvy went into the Tangle last spring."
+        Drifters: "One of them sang to me once. An old song. A Drifter song. It didn't know why."
+    hp: 8
+    max_hp: 8
+    ac: 11
+    damage: "1d4+1 (root-tendril rake)"
+    abilities:
+      - name: Peace Whisper
+        description: >-
+          "Peace in the green." WIS save or feel compelled to approach
+          the Tangle's interior. Failure by 5+ causes 1 round of calm
+          immobility. Greenfolk are immune (they hear it as welcome).
+      - name: Spore Burst
+        description: >-
+          When damaged, releases synesthesia spores in 10-foot radius.
+          Taste copper, hear bark, proprioception inverts for 1d4 rounds.
+      - name: Root Tether
+        description: >-
+          Tendrils anchor to ground. Cannot be knocked prone. But also
+          cannot run — maximum movement is a slow, deliberate walk.
+    weaknesses:
+      - Fire destroys the mycelial network instantly — the body drops
+      - Severing the feet (where root tethers connect) drops them
+      - Slow — cannot pursue fleeing targets
+    loot:
+      - description: "Whatever the original person carried — corroded gear, personal effects"
+        value: 5
+        chance: 0.3
+      - description: "Sometimes a ring, a locket, something identifiable. Worth more to the right family."
+        value: 20
+        chance: 0.1
+    tags: [blooming_tangle, understory_organ, tier_2, once_human, unsettling]
+    notes: >-
+      The Scrapborn loot is the horror: recognizing someone you knew.
+      The Drifter loot is the tragedy: a lullaby from a tithed child,
+      three hundred years later, sung by something that isn't them anymore.
+
+  - id: tangle_mouth
+    name: Tangle Mouth
+    wound: rooting
+    description: >-
+      A carnivorous organ of the Understory the size of a small room,
+      disguised as a clearing in the Tangle. The "ground" is a membrane
+      of interwoven roots. The "trees" framing it are digestive structures.
+      The sweet smell is a lure compound that triggers hunger in mammals.
+      When sufficient weight settles on the membrane, the roots contract
+      and the clearing becomes a stomach. Scrapborn salvage crews call
+      them "bite-backs." The Greenfolk call them "the garden's teeth" and
+      prune them when they grow too large — even the Communion admits the
+      Understory's appetite needs managing.
+    terrains: [blooming_tangle]
+    niche: ambush_predator
+    origin: biotech
+    sociality: solitary
+    tier_range: [3, 4]
+    size: huge
+    disposition_range: [-30, -30]
+    relationships:
+      part_of: [understory_network]
+      culture_notes:
+        Greenfolk: "We prune them. The garden must eat, but not everything."
+        Scrapborn: "The clearings that smell good? Don't stop. Don't sit down. Don't."
+    hp: 25
+    max_hp: 25
+    ac: 10
+    damage: "2d6 (constriction + digestive acid per round once triggered)"
+    abilities:
+      - name: Lure Scent
+        description: >-
+          Sweet smell triggers hunger. WIS save to notice it's unnatural.
+          Failure means sitting down to rest feels like a wonderful idea.
+      - name: Membrane Collapse
+        description: >-
+          When 200+ lbs settles on the false ground, roots contract.
+          DEX save or be trapped. Trapped creatures take 2d6 acid damage
+          per round. Cutting free requires 20 HP of damage to the roots.
+      - name: Immune to the Trapped
+        description: >-
+          Once triggered, the mouth has no further actions. It simply
+          digests. The danger isn't the attack — it's not escaping.
+    weaknesses:
+      - Immobile — it IS the terrain
+      - Fire causes the membrane to release (the Understory's fear)
+      - Detectable by the sweet smell if you know what you're smelling
+      - Greenfolk can identify them on sight and will warn companions
+    loot:
+      - description: "Previous victims' undigested gear — metal survives, leather doesn't"
+        value: 25
+        chance: 0.5
+      - description: "Coins and small metal objects from dozens of dissolved victims"
+        value: 15
+        chance: 0.7
+    tags: [blooming_tangle, understory_organ, tier_3, trap_creature, sessile]
+
+  # ══════════════════════════════════════════════════════════════
+  # WOUND: THE BARGAIN — Vault Echo, Blind Reach
+  # Legacy of the gene-mills: rejection, memory, sealed horror
+  # ══════════════════════════════════════════════════════════════
+
+  - id: tithe_born
+    name: Tithe-Born
+    wound: bargain
+    description: >-
+      Vault Echo's genetic experiments did not all succeed. The failures
+      were not all destroyed. In the access corridors the Vaultborn have
+      abandoned — too deep for surface dwellers, too contaminated for
+      the Protocol — pale, eyeless humanoids live in the dark. They have
+      too many fingers. Their mouths don't close properly. Their skin
+      is translucent enough to see the pulse beneath. They are the
+      descendants of the gene-mill rejects — the tithed Drifter children
+      whose integration failed, expelled into the outer corridors to die.
+      They didn't die. They bred. They remember enough language to beg.
+      One of them, sometimes, will sing a Drifter lullaby she couldn't
+      possibly have learned. The Vaultborn say they don't exist. The
+      Drifter singers say they can hear them through the vents at night,
+      crying in a language that is almost theirs.
+    terrains: [vault_echo]
+    niche: pack_hunter
+    origin: biotech
+    sociality: pack
+    tier_range: [2, 3]
+    size: medium
+    disposition_range: [-20, -5]
+    relationships:
+      descended_from: [drifter_tithe_children]
+      culture_notes:
+        Vaultborn: "Undocumented. This trade-lock is now closed."
+        Drifters: "Our children's children. They sing our songs wrong. They sing them anyway."
+        Scrapborn: "Vault Echo's dirty secret. Worth knowing. Worth leverage."
+    hp: 6
+    max_hp: 6
+    ac: 11
+    damage: "1d4+1 (claw, desperate strength)"
+    abilities:
+      - name: Echolocation
+        description: >-
+          Perfect spatial awareness in total darkness. Cannot be surprised
+          in their own tunnels. Bright light blinds them for 1d4 rounds.
+      - name: Desperate Strength
+        description: >-
+          Damage increases as HP decreases. At 2 HP or below, attacks
+          deal 1d6+2. They have nothing to lose.
+      - name: Pack Coordination
+        description: >-
+          Attack from multiple corridors simultaneously. In their tunnels,
+          they choose when and where. You don't.
+      - name: The Lullaby
+        description: >-
+          Occasionally, one will sing a fragment of a Drifter lullaby.
+          This has no mechanical effect. It is worse than any mechanical
+          effect.
+    weaknesses:
+      - Bright light blinds them
+      - Disoriented in open spaces — cannot coordinate outside tunnels
+      - Drifter lullabies (the real ones, from before the Bargain) sometimes calm them
+    loot:
+      - description: "Scavenged Vaultborn tools — functional but eerily clinical"
+        value: 8
+        chance: 0.3
+      - description: "A Drifter trinket, impossibly old, worn smooth by generations of hands"
+        value: 5
+        chance: 0.1
+    tags: [vault_echo, bargain_legacy, tier_2, once_human, unsettling]
+    notes: >-
+      The moral horror of Vault Echo. These are the Bargain's
+      children. Fighting them should feel wrong. Drifter party members
+      should be given opportunities to feel something about this.
+
+  - id: echo_frog
+    name: Echo Frog
+    wound: bargain
+    description: >-
+      Small, iridescent amphibians that live in Blind Reach's last
+      surviving spring. At dusk, they croak. The sounds resolve, slowly,
+      into names. The names of the tithed children, three hundred years
+      dead. This is observed fact, confirmed by Drifter genealogical
+      records. The frogs croak names that match the Tithe Wall in Tood's
+      Dome, including names that were added to the wall after the frogs
+      were first documented. No one knows how. The Drifters treat them
+      as sacred. Harming one is a killing offense at Salt Camp. The
+      Vaultborn have submitted six collection requests, all denied by
+      Protocol. A Scrapborn naturalist named Hest Wirebound spent three
+      years studying them and published a single paper consisting of the
+      sentence: "I don't know."
+    terrains: [blind_reach, sporecap_garden]
+    niche: symbiote
+    origin: unknown
+    sociality: colony
+    tier_range: [1, 1]
+    size: tiny
+    disposition_range: [10, 30]
+    relationships:
+      culture_notes:
+        Drifters: "They remember what we cannot. We will not silence them."
+        Vaultborn: "Anomalous. Collection denied. Do not discuss with surface contacts."
+        Scrapborn: "Hest spent three years. Wrote one sentence. Drank for a month after."
+    hp: 1
+    max_hp: 1
+    ac: 8
+    damage: "0 (harmless)"
+    abilities:
+      - name: Name Recall
+        description: >-
+          Croaks the names of specific dead individuals. Accuracy has been
+          confirmed against historical records. Mechanism unknown.
+      - name: Sacred Protection
+        description: >-
+          Harming an echo frog near Drifters triggers immediate violent
+          response. This is a cultural mechanic, not a creature ability.
+      - name: Psychic Resonance
+        description: >-
+          Creatures within earshot of the dusk chorus report feeling
+          watched and judged. No mechanical effect. Deeply unsettling.
+    weaknesses:
+      - Physically helpless
+      - Cannot survive outside the spring
+      - Their only protection is cultural — they are fragile
+    loot:
+      - description: "Nothing. You don't touch the frogs."
+    tags: [blind_reach, bargain_legacy, tier_1, sacred, mystery]
+    notes: >-
+      Not an encounter. An atmosphere. The narrator should describe the
+      dusk chorus when the party camps at Blind Reach. It should never
+      be comfortable.
+
+  - id: protocol_sentinel
+    name: Protocol Sentinel
+    wound: bargain
+    description: >-
+      Whatever the Vaultborn have been doing inside Vault Echo for three
+      centuries, they've been doing it with these. Humanoid in rough
+      outline but wrong in every proportion — arms too long, torso too
+      narrow, a head that is mostly jaw. Skin like white ceramic. Eyes
+      that track movement with mechanical precision. They do not speak.
+      They do not negotiate. They patrol the sealed corridors between the
+      Vaultborn's living quarters and the tithe-born's abandoned sections.
+      They are the wall between what the Vaultborn acknowledge and what
+      they have discarded. Surface dwellers who breach Vault Echo's outer
+      seals meet these first. No surface dweller has reported what's past
+      them. Several have not reported at all.
+    terrains: [vault_echo]
+    niche: territorial
+    origin: biotech
+    sociality: pair
+    tier_range: [3, 4]
+    size: medium
+    disposition_range: [-30, -30]
+    relationships:
+      created_by: [vaultborn]
+      guards_against: [tithe_born, surface_intruders]
+      culture_notes:
+        Vaultborn: "Security Asset. Classification: Protocol-Exempt."
+        Drifters: "White things in the dark. Blãna lost two riders to them."
+        Scrapborn: "Ceramic skin. Doesn't sell. Doesn't scrape. Doesn't stop."
+    hp: 22
+    max_hp: 22
+    ac: 16
+    damage: "1d8+3 (ceramic-plated limb strike)"
+    abilities:
+      - name: Mechanical Tracking
+        description: >-
+          Tracks movement with inhuman precision. -2 to hit penalty
+          against targets who stand perfectly still, +2 against targets
+          who move. Optimized for intercepting intruders, not stationary threats.
+      - name: Ceramic Armor
+        description: >-
+          White ceramic skin resists slashing and piercing. Blunt force
+          cracks it — clubs and hammers deal +2 damage.
+      - name: Silent Patrol
+        description: >-
+          Makes no sound. No footsteps, no breathing, no vocalizations.
+          Its presence is detected by the absence of other sounds — the
+          tithe-born go quiet when sentinels are near.
+      - name: Pair Coordination
+        description: >-
+          Always operates in pairs. One pursues while the other flanks.
+          They do not communicate audibly — the coordination appears
+          instinctive or preprogrammed.
+    weaknesses:
+      - Will not pursue past sealed bulkheads — confined to assigned corridors
+      - Blunt weapons crack ceramic armor
+      - The tithe-born know their patrol routes and can guide allies past them
+    loot:
+      - description: "Ceramic armor fragments (10 GP, Scrapborn material interest)"
+        value: 10
+        chance: 0.4
+      - description: "Whatever it was carrying — sometimes Vaultborn data tablets"
+        value: 40
+        chance: 0.1
+    tags: [vault_echo, bargain_legacy, tier_3, vaultborn_made, silent]
+
+  # ══════════════════════════════════════════════════════════════
+  # WOUND: ALL THREE — Steppe, routes, contested territory
+  # Where the wounds overlap, where cultures collide
+  # ══════════════════════════════════════════════════════════════
+
+  - id: glass_touched_mount
+    name: Glass-Touched Mount
+    wound: unsealing
+    description: >-
+      The feral cousins of the seven-limbed beasts the Drifters ride.
+      The Unsealing warped the steppe's native grazers into something
+      new: seven legs, bioluminescent hide, vocalizations that are
+      almost speech. Domesticated specimens are the backbone of Drifter
+      culture — mount, pack animal, companion, status symbol. Feral
+      specimens are larger, more aggressive, and increasingly strange.
+      Drifter riders report that feral herds have begun moving in
+      response to the Long Signal — congregating at points where radio
+      static is strongest, stomping patterns into the earth that look,
+      from above, like circuit diagrams.
+    terrains: [bone_wind, glass_flat, the_czyåabytrz_mark, przyå_dust]
+    niche: territorial
+    origin: mutation
+    sociality: herd
+    tier_range: [2, 3]
+    size: large
+    disposition_range: [-15, 5]
+    relationships:
+      eats: [resonance_grazer, dust_drinker_nodules]
+      culture_notes:
+        Drifters: "Our mounts' wild kin. Respect them. Capture the young only."
+        Scrapborn: "Bioluminescent hide sells for 40 GP. If you can skin one."
+        Vaultborn: "Specimen Drift-7. Fascinating degeneration. Request live sample."
+    hp: 14
+    max_hp: 14
+    ac: 12
+    damage: "1d6+2 (multi-limb trample)"
+    abilities:
+      - name: Bioluminescent Flash
+        description: >-
+          Bright pulse from hide disorients attackers for 1 round.
+          Used defensively when threatened. The flash pattern is not
+          random — Drifter singers say it matches Long Signal fragments.
+      - name: Vocal Mimicry
+        description: >-
+          Vocalizations imitate Drifter commands with disturbing accuracy.
+          Can lure unwary travelers toward the herd by imitating
+          "come here" and "help" in Drifter trail-speech.
+      - name: Herd Stampede
+        description: >-
+          A threatened herd stampedes. 4d6 trampling damage to everything
+          in the path. The dominant signals the direction — downing the
+          dominant scatters the herd.
+    weaknesses:
+      - Juveniles calmed by Drifter grazing songs (if you know them)
+      - Herd scatters if dominant is downed
+      - Will not cross running water
+    loot:
+      - description: "Bioluminescent hide (40 GP, prized by Scrapborn)"
+        value: 40
+        chance: 0.3
+      - description: "Calcium-rich bones (trade value to Drifters for tool-making)"
+        value: 5
+    tags: [steppe, unsealing_legacy, tier_2, drifter_cultural, herd]
+
+  - id: static_singer
+    name: Static Singer
+    wound: unsealing
+    description: >-
+      A lean, six-legged predator that hunts the steppe. Named not for
+      what it looks like but for what it does: its hide generates a field
+      of radio static that disrupts communication, navigation, and — the
+      Drifter singers insist — thought itself. A pack closing in sounds
+      like the Long Signal being shredded. Drifter riders consider them
+      sacred enemies: dangerous, respected, and proof that the Unsealing
+      made the steppe's predators as strange as its prey. The static
+      field is not a weapon. It is a hunting adaptation — in the field,
+      prey animals cannot coordinate flight, mounts cannot hear rider
+      commands, and Drifter singers lose their connection to the Long
+      Signal. The pack attacks in the silence it creates.
+    terrains: [bone_wind, the_czyåabytrz_mark, przyå_dust]
+    niche: pack_hunter
+    origin: mutation
+    sociality: pack
+    tier_range: [2, 3]
+    size: medium
+    disposition_range: [-25, -15]
+    relationships:
+      hunts: [glass_touched_mount, dust_strider_analog]
+      culture_notes:
+        Drifters: "When the Signal tears, count to three. If the silence holds, ride."
+        Scrapborn: "Their hides make the best radio insulation. 25 GP per pelt."
+    hp: 10
+    max_hp: 10
+    ac: 13
+    damage: "1d6+1 (bite, pack bonus)"
+    abilities:
+      - name: Static Field
+        description: >-
+          Disrupts radio, electronics, and coordination in 30-meter radius.
+          Drifter singers lose Long Signal contact. Mounted riders cannot
+          command mounts verbally. Pack prey cannot coordinate flight.
+      - name: Pack Silence
+        description: >-
+          Within the combined static field of 3+ singers, targets suffer
+          -2 to all actions requiring communication or coordination.
+      - name: Sprint Burst
+        description: >-
+          Short-range charge at extreme speed. Always from within the
+          static field — prey doesn't hear them coming.
+    weaknesses:
+      - Static field shorts out in water — useless near rivers or rain
+      - Fire scatters the pack
+      - Solitary specimens are cowards — the field is their confidence
+    loot:
+      - description: "Static-generating hide (25 GP, radio insulation material)"
+        value: 25
+        chance: 0.4
+      - description: "Teeth (Drifter riders wear them as trophies)"
+        value: 2
+    tags: [steppe, unsealing_legacy, tier_2, pack, sacred_enemy]
+
+  - id: canyon_rememberer
+    name: Canyon Rememberer
+    wound: bargain
+    description: >-
+      A colonial organism that grows on the walls of Blind Reach,
+      layered over and into the palimpsest of Bargain inscriptions.
+      It is bioluminescent — faintly, in patterns that shift when
+      observed. The Drifters at Salt Camp believe it is reading the
+      inscriptions. The Scrapborn naturalist Hest Wirebound (the
+      same one who studied the echo frogs) measured its light patterns
+      against the carved text and found correlations she described as
+      "statistically impossible and personally upsetting." The organism
+      appears to grow faster over sections of text that describe the
+      most painful events. It grows thickest over the names of the
+      youngest children. It has no mouth. It has no brain. It has no
+      reason to care. It cares anyway.
+    terrains: [blind_reach]
+    niche: sessile
+    origin: unknown
+    sociality: colony
+    tier_range: [1, 1]
+    size: varies
+    disposition_range: [0, 0]
+    relationships:
+      culture_notes:
+        Drifters: "It reads the wall. It remembers for us. Don't scrape it off."
+        Scrapborn: "Hest published one paper about the frogs. She won't publish the one about this."
+        Vaultborn: "Bioluminescent lichen. Classification: inert. Stop asking."
+    hp: 3
+    max_hp: 3
+    ac: 6
+    damage: "0 (harmless)"
+    abilities:
+      - name: Text Resonance
+        description: >-
+          Light patterns correlate with nearby inscriptions. No known
+          mechanical effect. Observers report feeling that they are
+          being read rather than reading.
+    weaknesses:
+      - Physically helpless — a colony, not a combatant
+      - Scraping it off the walls is easy but feels deeply wrong
+    loot:
+      - description: "Nothing. It is a mystery that offers nothing but itself."
+    tags: [blind_reach, bargain_legacy, tier_1, mystery, sessile]
+    notes: >-
+      Not an encounter. A detail. The narrator should describe the
+      light shifting when the party examines the Bargain inscriptions.
+      It should never be explained.
+
+  - id: bone_saint
+    name: Bone Saint
+    wound: all
+    description: >-
+      The steppe's apex predator. A solitary hunting organism four meters
+      at the shoulder, its body a cathedral of fused bone and living
+      tissue. It is not one creature — it is a composite, assembled
+      over decades from the skeletons of everything it has consumed,
+      held together by mycelial threads and resonance-charged tissue.
+      Its skull is a mosaic of a dozen smaller skulls. Its ribs are
+      the ribs of mounts, riders, and things that have no name. It
+      leaves bone cairns where it feeds — not from instinct, but from
+      something worse than instinct. Drifter rider-poets compose songs
+      about it. The songs are never heroic. They are elegies for
+      whatever it was before the three wounds made it into what it is:
+      part Unsealing (the resonance that holds it together), part
+      Rooting (the mycelium that operates its muscles), part Bargain
+      (the human bones in its architecture, which it somehow prefers).
+    terrains: [bone_wind, blind_reach, the_czyåabytrz_mark]
+    niche: apex_predator
+    origin: all_three_wounds
+    sociality: solitary
+    tier_range: [4, 4]
+    size: huge
+    disposition_range: [-30, -25]
+    relationships:
+      eats: [everything]
+      culture_notes:
+        Drifters: "The riders who've seen it don't speak of it. The riders who speak of it haven't seen it."
+        Scrapborn: "200 GP in salvageable bone. No one has collected."
+        Greenfolk: "The Understory's threads are in it. We did not put them there."
+        Vaultborn: "Human skeletal elements confirmed in composite structure. Origin: external."
+    hp: 45
+    max_hp: 45
+    ac: 17
+    damage: "2d8+3 (composite bone limb)"
+    abilities:
+      - name: Bone Composite
+        description: >-
+          Body assembled from consumed skeletons. Resistance to slashing
+          and piercing (half damage). Blunt force cracks the composite —
+          full damage from clubs, hammers, falls.
+      - name: Resonance Hold
+        description: >-
+          The Unsealing's gift. Emits a low-frequency hum that paralyzes
+          prey within 10 meters. CON save or be rooted for 1 round.
+          The hum sounds like the Glass Flat's dirge, compressed into
+          a single predatory note.
+      - name: Mycelial Repair
+        description: >-
+          The Rooting's gift. Regenerates 2 HP per round as the
+          mycelial threads reknit bone. Can only be stopped by fire
+          (which burns the threads) or separation from soil (which
+          severs the Understory connection).
+      - name: Cairn Instinct
+        description: >-
+          Arranges the bones of its kills into cairns after feeding.
+          This serves no survival purpose. It does it anyway.
+    weaknesses:
+      - Fire burns the mycelial threads, stopping regeneration
+      - Must maintain soil contact for regeneration
+      - Solitary — there is only one per region at a time
+      - Moves slowly except in short pursuit bursts
+    loot:
+      - description: "Rare-earth minerals crystallized in the bone matrix (100 GP)"
+        value: 100
+        chance: 0.5
+      - description: "Intact skulls from its architecture — some are identifiable"
+        value: 30
+        chance: 0.4
+      - description: "Mycelial root-core (Greenfolk will pay 75 GP for study)"
+        value: 75
+        chance: 0.3
+    tags: [steppe, all_wounds, tier_4, apex, unique_per_region, boss]
+    notes: >-
+      The set-piece encounter. Not a random roll — the Bone Saint
+      appears when the story demands it. It is the Flickering Reach
+      made flesh: three wounds in one body, still walking, still hungry,
+      still building cairns for reasons it cannot explain.

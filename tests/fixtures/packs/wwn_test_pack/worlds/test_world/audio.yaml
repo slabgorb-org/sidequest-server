@@ -1,0 +1,171 @@
+# Audio mood-map for Barsoom (heavy_metal / barsoom)
+#
+# WORLD-LEVEL HARD OVERRIDE. Barsoom is HEROIC SWORD-AND-PLANET PULP —
+# Burroughs by way of Frazetta — NOT heavy_metal's pruned elegiac doom.
+# The genre pack's funereal Górecki/Ligeti palette is tonally wrong for a
+# dying world worth FIGHTING FOR; this override re-titles and re-maps the
+# inherited tracks toward adventure, romance, and martial honor, and adds
+# Barsoom region/scene aliases so the interpreter can pick a mood for the
+# dead sea-bottoms, the scarlet tower-cities, the green-horde war, the
+# Valley Dor menace, the Okar ice-domes, and Lothar's illusions.
+#
+# CRITICAL — No Silent Fallbacks / no invented tracks:
+#   Every `path` below points at an OGG that the heavy_metal pack ALREADY
+#   ships in its own audio.yaml mood_tracks (verified present on R2 for the
+#   rendered evropi/long_foundry worlds). This world authors NO new OGG
+#   filenames. Net-new, genre-true HEROIC Barsoom tracks are a known gap
+#   flagged for the operator (see the GAP note at the foot of this file):
+#   until they are generated, Barsoom borrows the pack's existing tracks,
+#   which lean doom-funereal and are a tonal compromise, not the target.
+#
+# override_policy: replace_mood_tracks — the world REPLACES the genre
+# mood_tracks wholesale (re-titled, re-tuned energies), and layers its
+# region/scene aliases on top. SFX + mixer are inherited from the genre
+# audio.yaml (not restated here).
+
+world: barsoom
+genre: heavy_metal
+inherits_from: genre_packs/heavy_metal/audio.yaml
+override_policy: replace_mood_tracks
+
+mixer:
+  music_volume: 0.08
+  sfx_volume: 0.12
+  crossfade_default_ms: 4000
+
+# ---------------------------------------------------------------------------
+# Core mood tracks — the engine's mood vocabulary
+# (exploration / combat / tension / rest / sorrow, plus the heavy_metal
+# "ritual" mood) re-titled for Barsoom. Every `path` is an existing pack OGG.
+# Energies nudged UP from the genre's funereal defaults toward heroic pulp.
+# ---------------------------------------------------------------------------
+mood_tracks:
+  exploration:
+    - path: audio/music/exploration_full.ogg
+      title: "Across the Dead Sea-Bottom"
+      bpm: 64
+      energy: 0.4
+    - path: audio/music/exploration_ambient.ogg
+      title: "Two Moons Over the Ochre Plain"
+      bpm: 58
+      energy: 0.3
+
+  combat:
+    - path: audio/music/combat_full.ogg
+      title: "Steel and the Code"
+      bpm: 120
+      energy: 0.9
+    - path: audio/music/combat_overture.ogg
+      title: "The Long-Sword Answers"
+      bpm: 112
+      energy: 0.85
+    - path: audio/music/battle_hymn_of_war.ogg
+      title: "The Green Horde Rides"
+      bpm: 112
+      energy: 0.85
+
+  tension:
+    - path: audio/music/tension_full.ogg
+      title: "The Thern Is Watching"
+      bpm: 54
+      energy: 0.5
+    - path: audio/music/tension_tension_build.ogg
+      title: "Something Stirs in the Ruins"
+      bpm: 48
+      energy: 0.45
+    - path: audio/music/the_desolate_expanse.ogg
+      title: "The Empty Bottom"
+      bpm: 52
+      energy: 0.4
+
+  ritual:
+    - path: audio/music/ritual_full.ogg
+      title: "The Will Made Real"
+      bpm: 44
+      energy: 0.55
+    - path: audio/music/ritual_ambient.ogg
+      title: "Phantom Bowmen at the Wall"
+      bpm: 40
+      energy: 0.5
+    - path: audio/music/the_monolith.ogg
+      title: "The Atmosphere Plant Turns"
+      bpm: 44
+      energy: 0.55
+    - path: audio/music/angelic_voices.ogg
+      title: "The False Heaven of Dor"
+      bpm: 46
+      energy: 0.5
+
+  sorrow:
+    - path: audio/music/sorrow_full.ogg
+      title: "A World in Its Long Ending"
+      bpm: 52
+      energy: 0.3
+    - path: audio/music/dwarven_farewell.ogg
+      title: "Down the River Iss"
+      bpm: 48
+      energy: 0.3
+
+  rest:
+    - path: audio/music/rest_full.ogg
+      title: "Camp Under the Hurtling Moons"
+      bpm: 56
+      energy: 0.2
+
+# ---------------------------------------------------------------------------
+# Barsoom region / scene mood aliases — map the planet's distinctive
+# places and beats onto the core moods above. Every alias terminates in a
+# real mood_tracks key (AudioConfig._validate_mood_aliases discipline),
+# kept to a single hop so resolution is obvious.
+#
+# Regions are the slugs used in history.yaml POIs + world.yaml.
+# ---------------------------------------------------------------------------
+mood_aliases:
+  # --- regions (history.yaml POI `region:` values) ---
+  korad_dead_sea_bottom: exploration   # the cracked ochre dead-sea plain
+  helium: exploration                  # the scarlet tower-cities, fliers, canals
+  zodanga: tension                     # the cold city of assassins
+  valley_dor: ritual                   # the false-heaven menace of the South
+  otz_mountains: tension               # the Golden Cliffs, watching Therns
+  omean: ritual                        # the buried sea + Temple of Issus
+  carrion_caves: tension               # the corpse-heaped ice road
+  okar: tension                        # the tyrant's crystal domes
+  marentina: rest                      # the free dome's warm conspirators' hall
+  lothar: ritual                       # the dreaming city of phantom armies
+
+  # --- scenes / beats ---
+  dead_sea_bottom: exploration
+  scarlet_city: exploration
+  tower_city: exploration
+  flier_deck: exploration
+  canal: exploration
+  green_horde_war: combat
+  duel: combat                         # honor settled with the long-sword
+  thark_camp: tension
+  death_cult: ritual
+  pilgrimage: sorrow                    # the voyage down the River Iss
+  buried_sea: ritual
+  ice_dome: tension
+  arena: combat                        # Salensus Oll's pits
+  phantom_bowmen: ritual               # Lotharian mentalism, illusion-as-real
+  illusion: ritual
+  atmosphere_plant: ritual             # the planet's monumental failing heart
+  court: tension                       # red-empire / yellow-throne politics
+  honor: combat
+
+# ---------------------------------------------------------------------------
+# ★ OPERATOR GAP NOTE — net-new Barsoom heroic music ★
+#
+# The mood_tracks above borrow the heavy_metal pack's EXISTING OGGs, which
+# were authored for funereal baroque doom. They are tonally serviceable but
+# NOT the heroic-pulp target the design spec calls for. When the operator
+# wants Barsoom's own voice, generate net-new tracks (Frazetta-pulp: big
+# romantic strings, martial brass, exotic percussion, swashbuckling adventure
+# cues — NOT the genre's tolling-bell requiem) and point these paths at them.
+# Suggested net-new track ids if generated:
+#   barsoom_dead_sea_bottom, barsoom_tower_city, barsoom_green_horde_war,
+#   barsoom_valley_dor, barsoom_okar_dome, barsoom_lothar_illusion,
+#   barsoom_river_iss_lament, barsoom_camp_moons.
+# This is OPERATOR/music-generation scope (sq-music / generate_music.py),
+# NOT this authoring story. Do not reference these ids until they exist.
+# ---------------------------------------------------------------------------

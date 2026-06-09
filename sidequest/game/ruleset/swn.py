@@ -195,10 +195,12 @@ class SwnRulesetModule(RulesetModule):
             label=label,
         )
 
-    def resolve_damage(self, *, beat, actor_core, pack):
+    def resolve_damage(self, *, beat, actor_core, pack, world_slug=None):
         from sidequest.server.dispatch.damage_roll import resolve_damage_spec_from_beat_and_actor
 
-        return resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor_core, pack=pack)
+        return resolve_damage_spec_from_beat_and_actor(
+            beat=beat, actor_core=actor_core, pack=pack, world_slug=world_slug
+        )
 
     def roll_initiative(
         self,

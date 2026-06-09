@@ -247,9 +247,7 @@ async def test_resolved_crisis_does_not_escalate(monkeypatch: pytest.MonkeyPatch
 
     crisis_ops = _ops(captured, "crisis")
     assert "resolved" in crisis_ops, f"crisis.resolved must fire on success (got {crisis_ops})"
-    assert "escalated" not in crisis_ops, (
-        f"a resolved crisis must NOT escalate (got {crisis_ops})"
-    )
+    assert "escalated" not in crisis_ops, f"a resolved crisis must NOT escalate (got {crisis_ops})"
 
 
 # ---------------------------------------------------------------------------

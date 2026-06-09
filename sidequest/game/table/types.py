@@ -53,6 +53,11 @@ class TableState(BaseModel):
     decision_point: int = 0
     max_decision_points: int  # abstracted betting — small (e.g. 3), content-declared
     resolved_winner: str | None = None
+    # Kind-scoped shared state — an opaque dict the kind's resolver owns, for
+    # resources shared across ALL seats (not the per-seat ``TableSeat.private_state``).
+    # war_rig_crew stows its vessel-scoped CommandPointPool here (Story 86-7); poker
+    # and auction leave it empty. Persists across decision points within the hand.
+    shared_state: dict[str, Any] = Field(default_factory=dict)
     # Accusations are recorded when committed but RESOLVED at showdown (rolled
     # against the final cheat_trace) so a cheat in a later decision point is
     # still catchable. (accuser_seat_id, target_seat_id).

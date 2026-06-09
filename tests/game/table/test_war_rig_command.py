@@ -148,10 +148,15 @@ def test_above_and_beyond_grants_a_d6_bonus():
         spend_command_points,
     )
 
-    pool = CommandPointPool(current=5, max=5, vessel_id="war_rig_alpha")
+    # Fresh 1-CP pool per sample — we're sampling the d6 across seeds, not
+    # draining one shared pool (over-spending would correctly hit the fail-loud
+    # insufficient-CP guard, which is a different test).
     bonuses = {
         spend_command_points(
-            pool, CP_ABOVE_AND_BEYOND, seat="seat_1", rng=random.Random(seed)
+            CommandPointPool(current=1, max=1, vessel_id="war_rig_alpha"),
+            CP_ABOVE_AND_BEYOND,
+            seat="seat_1",
+            rng=random.Random(seed),
         ).bonus
         for seed in range(20)
     }
@@ -169,9 +174,7 @@ def test_support_department_assists_for_one_command_point():
     )
 
     pool = CommandPointPool(current=2, max=2, vessel_id="war_rig_alpha")
-    result = spend_command_points(
-        pool, CP_SUPPORT_DEPARTMENT, seat="seat_2", rng=random.Random(1)
-    )
+    result = spend_command_points(pool, CP_SUPPORT_DEPARTMENT, seat="seat_2", rng=random.Random(1))
 
     assert result.cost == 1, f"support_department must cost 1 CP, got {result.cost}"
     assert pool.current == 1

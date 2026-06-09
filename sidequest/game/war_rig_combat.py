@@ -9,12 +9,18 @@ Per the design spec ``2026-06-09-road-warrior-war-rig-crew-spec.md`` §4 (G3/G4)
   - The Hull is **vessel-scoped**, NOT the character-bound
     :class:`~sidequest.game.rig_composure_pool.RigComposurePool` (whose
     ``character_id`` is required and immutable). It reuses the ``rig_pool.*``
-    span vocabulary (``delta`` / ``zero_crossing`` / ``crash_event``) keyed by
-    ``vessel_id`` so the GM panel renders the crewed Hull exactly as it renders
-    the solo rig. A blank ``vessel_id`` fails loud.
+    span vocabulary (``delta`` / ``zero_crossing`` / ``crash_event``). Since the
+    existing ``rig_pool.*`` SPAN_ROUTES extract lambdas read ``character_id`` /
+    ``chassis_id`` (not ``vessel_id``), the Hull's ``vessel_id`` is **aliased
+    into both of those attr slots** so the GM panel renders the crewed Hull
+    exactly as it renders the solo rig with zero route changes. (A raw
+    ``vessel_id`` attr is also emitted for forward use, but no route extracts it
+    yet — promoting it to a first-class GM-panel field means adding it to the
+    four lambdas in ``telemetry/spans/rig.py``.) A blank ``vessel_id`` fails loud.
   - On Hull→0 the crash cascade **fans 86-2's** :func:`resolve_crash_saves` out
-    to each seated occupant (reuse, not reimplement) — half max HP per failed
-    save — and marks each occupant dismounted (the foot-combat transition).
+    to each seated occupant (reuse, not reimplement) — HP consequences are
+    :func:`resolve_crash_saves`'s contract, not this module's — and marks each
+    occupant dismounted (the foot-combat transition).
 
 Solo-rig combat stays on 86-2's ``RigComposurePool`` / ``apply_rig_damage`` path
 (spec §6); this module is the crewed generalization, not a replacement.
@@ -58,9 +64,10 @@ class WarRigHull(BaseModel):
     ``current`` ∈ ``[0, max]``. Keyed by ``vessel_id`` (NOT a character) so the
     whole crew shares one pool; a blank ``vessel_id`` fails loud rather than
     smuggle crew identity into the OTEL attribution. Emits the ``rig_pool.*``
-    span family — keyed by ``vessel_id`` in the ``character_id``/``chassis_id``
-    attr slots the GM panel already renders, with ``vessel_id`` also carried
-    explicitly for downstream consumers.
+    span family with ``vessel_id`` aliased into the ``character_id`` /
+    ``chassis_id`` attr slots the existing routes render (a raw ``vessel_id``
+    attr is also emitted, but no SPAN_ROUTE extracts it yet — see the module
+    docstring).
     """
 
     model_config = {"extra": "forbid"}

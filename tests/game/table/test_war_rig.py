@@ -86,14 +86,66 @@ def _war_rig_state(n_crew: int = 3, max_dp: int = 4) -> TableState:
 
 
 def test_war_rig_crew_kind_is_registered():
-    """Importing the kind module registers ``war_rig_crew`` in the table
-    registry, resolvable by the same path poker/auction use."""
-    import sidequest.game.table.war_rig  # noqa: F401
+    """Importing the table PACKAGE (the production path) registers
+    ``war_rig_crew``, resolvable by the same path poker/auction use.
+
+    Imports ``sidequest.game.table`` — NOT ``sidequest.game.table.war_rig``
+    directly — because production reaches the kind only via the package
+    ``__init__`` side-effect imports, never by importing the kind module by
+    hand. (The pollution-proof proof is
+    :func:`test_war_rig_crew_registered_via_production_package_import`, which
+    runs in a fresh interpreter; this in-process check is the fast guard.)
+    """
+    import sidequest.game.table  # noqa: F401  (package __init__ registers built-in kinds)
     from sidequest.game.table.registry import get_table_game
 
     game = get_table_game("war_rig_crew")
     assert game.kind == "war_rig_crew", (
         f"war_rig_crew kind must self-identify as 'war_rig_crew', got {game.kind!r}"
+    )
+
+
+def test_war_rig_crew_registered_via_production_package_import():
+    """Pollution-proof wiring proof: a FRESH interpreter importing ONLY the
+    production package ``sidequest.game.table`` must resolve ``war_rig_crew``.
+
+    In-process tests cannot prove this — any sibling test that does
+    ``import sidequest.game.table.war_rig`` registers the kind process-wide and
+    masks a missing ``__init__`` wiring. (Story 86-6 review: that exact
+    false-green shipped a kind that raised ``UnknownTableGameError`` in
+    production.) A subprocess is the only way to prove the package's ``__init__``
+    side-effect imports register the kind. Mirrors
+    ``tests/magic/test_production_registration_wiring.py``. The script MUST NOT
+    import ``sidequest.game.table.war_rig`` directly — doing so would prove
+    nothing (that IS the bug).
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                import sidequest.game.table  # production package entrypoint ONLY
+                from sidequest.game.table.registry import get_table_game
+
+                game = get_table_game("war_rig_crew")
+                assert game.kind == "war_rig_crew", game.kind
+                print("OK", game.kind)
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, (
+        "production package import sidequest.game.table did not register "
+        f"war_rig_crew (subprocess exit={proc.returncode})\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
     )
 
 
@@ -124,8 +176,7 @@ def test_deal_assigns_a_station_role_to_every_crew_seat():
     stations = [s.private_state.get("station") for s in st.seats]
     assert all(stations), f"every crew seat needs a station, got {stations!r}"
     assert set(stations) <= WAR_RIG_STATIONS, (
-        f"stations must come from the SWN→rig mapping {sorted(WAR_RIG_STATIONS)}, "
-        f"got {stations!r}"
+        f"stations must come from the SWN→rig mapping {sorted(WAR_RIG_STATIONS)}, got {stations!r}"
     )
 
 
@@ -186,6 +237,22 @@ def test_war_rig_station_verb_resolves_without_unsupported_beat_error():
     assert outcome.showdown is False, (
         "one decision point with multiple active crew should not be a showdown"
     )
+
+
+def test_war_rig_unknown_station_verb_fails_loud():
+    """No Silent Fallbacks (kind-level): a verb war_rig_crew does NOT register
+    (e.g. ``fly``) must raise through ``WarRigCrewTableGame.custom_beat`` — a
+    DISTINCT fail-loud path from the ``TableGame`` ABC default that poker hits.
+    Guards against a future widening of WAR_RIG_STATION_VERBS or a dropped
+    guard silently turning an unknown station verb into a no-op."""
+    import sidequest.game.table.war_rig  # noqa: F401
+    from sidequest.game.table.engine import deal_table, resolve_table
+
+    st = _war_rig_state(n_crew=3, max_dp=4)
+    deal_table(st, rng=random.Random(3))
+    commits = {"seat_1": TableCommit(seat_id="seat_1", beat_id="fly")}
+    with pytest.raises(ValueError):
+        resolve_table(st, commits=commits, rng=random.Random(3))
 
 
 def test_poker_unsupported_beat_still_fails_loud_after_seam():

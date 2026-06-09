@@ -168,6 +168,14 @@ async def test_hull_destruction_fires_full_rig_chain(
     assert "delta" in ops, f"rig_pool.delta must fire on the hit (got {ops})"
     assert "zero_crossing" in ops, f"rig_pool.zero_crossing must fire at 0 (got {ops})"
     assert "crash_event" in ops, f"rig_pool.crash_event must fire on destruction (got {ops})"
+    # The crash must fan to EVERY occupant — one crash_event per crew member, not
+    # just one. A membership check would pass even if the fan-out reached only one
+    # occupant; pin the count so a partial fan-out is caught (review 86-6).
+    crash_events = [o for o in ops if o == "crash_event"]
+    assert len(crash_events) == len(occupants), (
+        f"rig_pool.crash_event must fire once per occupant ({len(occupants)}), "
+        f"got {len(crash_events)} (ops: {ops})"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +244,57 @@ async def test_passed_saves_spare_the_occupant(
     )
 
 
+@pytest.mark.asyncio
+async def test_armor_exceeding_damage_still_scratches_one_hull(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CWN 'a connecting hit always scratches': armor >= raw damage still removes
+    1 Hull (``max(1, amount - armor)``), never 0 — mirrors 86-2's
+    ``apply_rig_damage`` floor. Pins the distinct armor-over-damage path."""
+    from sidequest.game.war_rig_combat import apply_war_rig_hull_damage
+
+    captured = await _setup(monkeypatch, "war-rig-armor-floor")
+    hull = _hull(current=6)
+    occupants = [_occupant("Mira")]
+    await asyncio.sleep(0.05)
+    captured.clear()
+
+    # armor 9 >> raw 3 → would be -6, floored to a 1-point scratch (no crash).
+    apply_war_rig_hull_damage(hull, 3, armor=9, occupants=occupants)
+    await asyncio.sleep(0.05)
+
+    assert hull.current == 5, (
+        f"an armor-over-damage hit must still scratch exactly 1 (6→5), got {hull.current}"
+    )
+    rig = [e for e in captured if e.get("component") == "rig" and e["fields"].get("op") == "delta"]
+    assert len(rig) == 1 and rig[0]["fields"]["delta"] == -1, (
+        "the scratch must publish a single rig_pool.delta of -1, got "
+        f"{[r['fields'].get('delta') for r in rig]}"
+    )
+    assert "zero_crossing" not in _ops(captured, "rig"), "a 1-point scratch must not cross zero"
+
+
+@pytest.mark.asyncio
+async def test_one_failed_save_costs_exactly_half_max_hp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-occupant save granularity: an occupant who passes ONE crash save and
+    fails the other takes exactly half max HP — distinguishing the one-fail path
+    from both-pass (0 loss) and both-fail (full max loss)."""
+    from sidequest.game.war_rig_combat import apply_war_rig_hull_damage
+
+    await _setup(monkeypatch, "war-rig-one-save")
+    hull = _hull(current=4)
+    occ = _occupant("Half", hp=8, hp_max=8)
+
+    apply_war_rig_hull_damage(hull, 6, armor=2, occupants=[occ], crash_save_outcomes=(True, False))
+    await asyncio.sleep(0.05)
+
+    assert occ.hp.current == 4, (
+        f"one failed crash save costs exactly half max HP (8//2=4 → 8-4=4), got {occ.hp.current}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # MANDATORY OTEL wiring test (table half) — station verbs emit table.* spans
 # ---------------------------------------------------------------------------
@@ -292,8 +351,23 @@ async def test_crewed_round_emits_table_spans_through_real_route(
     resolve_table(st, commits=commits, rng=random.Random(11))
     await asyncio.sleep(0.05)
 
+    # Each of the 3 committed station verbs must emit its OWN table.commit span
+    # through the real route — a truthy "at least one" check would pass even if
+    # two of three verbs silently no-op'd (review 86-6). Pin one commit per verb
+    # AND assert the distinct beat_ids so a dropped verb is caught.
     table_ops = _ops(captured, "table")
-    assert table_ops, (
-        "a crewed war_rig round must emit at least one table.* span through the "
-        f"real route (got components: {[e.get('component') for e in captured]})"
+    commit_ops = [o for o in table_ops if o == "commit"]
+    assert len(commit_ops) == 3, (
+        "each of the 3 committed station verbs must drive one table.commit span; "
+        f"got {len(commit_ops)} (all table ops: {table_ops}, "
+        f"components: {[e.get('component') for e in captured]})"
+    )
+    committed_beats = {
+        e["fields"].get("beat_id")
+        for e in captured
+        if e.get("component") == "table" and e["fields"].get("op") == "commit"
+    }
+    assert committed_beats == {"steer", "shoot", "repair"}, (
+        f"each station verb must drive its OWN table.commit span (no silent no-op); "
+        f"got {committed_beats}"
     )

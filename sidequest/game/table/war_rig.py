@@ -62,10 +62,16 @@ class WarRigCrewTableGame(TableGame):
                 pass
 
     def strength(self, seat: TableSeat) -> int:
-        """Crew don't compete — the win condition is Hull depletion vs an
-        external threat, not a strength comparison between crew members. Return
-        a uniform value so any accidental showdown is a stable no-contest rather
-        than a crash; the cooperative victory check lives on the Hull, not here.
+        """Crew don't compete — there is no inter-crew strength comparison.
+
+        Returns 0 uniformly. NOTE: the engine's ``_showdown`` still runs if a
+        war_rig table reaches ``max_decision_points`` — with all crew at
+        strength 0 it picks ``contenders[0]`` by position (a degenerate, but
+        crash-free, "winner"). The *cooperative* win condition (the threat's
+        Hull reaching 0) is NOT yet wired into the table showdown — that
+        integration is deferred to 86-5/86-7 (see the vessel-side
+        :mod:`sidequest.game.war_rig_combat`). For 86-6 the station-verb round
+        and the Hull pool are built but their resolution is not yet joined.
         """
         return 0
 
@@ -99,3 +105,9 @@ class WarRigCrewTableGame(TableGame):
 
 
 register_table_game(WarRigCrewTableGame())
+
+__all__ = [
+    "WAR_RIG_STATIONS",
+    "WAR_RIG_STATION_VERBS",
+    "WarRigCrewTableGame",
+]

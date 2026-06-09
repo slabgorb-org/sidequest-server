@@ -116,6 +116,24 @@ KEEPER: frozenset[Entry] = frozenset(
         # NPC versions of class abilities. Class name is at any position,
         # tier slot is the list-of-dict wildcard.
         ("power_tiers", ("*", "*", "npc")),
+        # history.points_of_interest keeper fields (Story 100-4). The POI section
+        # (build_poi_section) projects POIs through a public allowlist, but the
+        # SAME history.yaml is also projected as a generic-YAML node-tree, where
+        # classify() is the only gate. These spoiler-bearing POI fields must be
+        # KEEPER so they never cross via the generic path (spec C1).
+        # load_points_of_interest reads POIs in BOTH shapes — top-level
+        # points_of_interest[] AND chapters[].points_of_interest[] — so both
+        # key-path shapes are carved here (each entry has ≤2 wildcards).
+        ("history", ("points_of_interest", "*", "gm_notes")),
+        ("history", ("points_of_interest", "*", "secret")),
+        ("history", ("points_of_interest", "*", "trap")),
+        ("history", ("points_of_interest", "*", "hidden_exit")),
+        ("history", ("points_of_interest", "*", "draft")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "gm_notes")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "secret")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "trap")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "hidden_exit")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "draft")),
     }
 )
 

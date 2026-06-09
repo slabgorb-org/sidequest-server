@@ -18,15 +18,22 @@ import yaml
 from sidequest.genre.models.world import CartographyConfig
 from sidequest.server.asset_urls import resolve_asset_url
 from sidequest.server.reference_map import _edges_and_dangling, _npc_pins, load_cartography_config
-from sidequest.server.reference_presenters import cast_portrait_slug, portrait_image_key
+from sidequest.server.reference_presenters import (
+    cast_portrait_slug,
+    poi_image_key,
+    portrait_image_key,
+)
 from sidequest.server.reference_renderer import (
     EXCLUDED_FILES,
     LORE_WORLD_FILES,
     _cast_entry_is_projectable,
     _gate_cast_slugs_on_manifest,
+    _gate_poi_slugs_on_manifest,
     _humanize_label,
     _is_devnote,
     load_cast_entries,
+    load_poi_slug_map,
+    load_points_of_interest,
 )
 from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_visibility import Visibility, classify
@@ -37,6 +44,8 @@ from sidequest.telemetry.spans.reference import (
     reference_map_pin_resolved_span,
     reference_map_rendered_span,
     reference_npc_unratified_skipped_span,
+    reference_poi_image_not_found_span,
+    reference_poi_image_resolved_span,
     reference_portrait_not_found_span,
     reference_portrait_resolved_span,
     reference_unknown_field_span,
@@ -155,6 +164,69 @@ def build_cast_section(
     return {"id": "cast", "label": "Cast", "members": members}
 
 
+def build_poi_section(
+    entries: list[dict],
+    *,
+    pack: str,
+    world: str,
+    poi_on_r2_slugs: frozenset[str],
+) -> dict | None:
+    """Project the R2-gated POIs into the public ``poi`` section dict.
+
+    The data-shaping analog of ``present_renderable_landscapes`` (the "Renderable
+    Landscapes" gallery). Mirrors ``build_cast_section``: the caller pre-computes
+    the R2 **anchor**-slug set (the output of ``_gate_poi_slugs_on_manifest``);
+    this function does not load the manifest.
+
+    **Exclusion model.** A POI is projected only when its landscape is on R2 — a
+    POI whose anchor slug is not in ``poi_on_r2_slugs`` is omitted entirely (never
+    a member with ``image_url: None``), exactly as the gallery shows only POIs
+    with rendered art. The excluded POI still fires
+    ``reference_poi_image_not_found_span`` so the skip is observable (the GM/dev
+    panel sees the gate ran), unlike the HTML gallery's silent ``continue``.
+    Returns ``None`` when no POI survives the gate.
+
+    The R2 object key is built from the **verbatim** authored slug
+    (``poi_image_key`` over ``slug``-or-``name``), while membership keys on the
+    **anchor** (``slugify``) form — the Story 71-38 decouple, so an underscore
+    authored slug addresses its underscore R2 key, not the hyphen anchor. The
+    ``image_url`` is resolved server-side via ``resolve_asset_url``; the client
+    never sees a raw key/path. Only the public allowlist keys cross the boundary
+    — keeper fields are never splatted in.
+    """
+    members: list[dict] = []
+    for entry in entries:
+        raw = entry.get("slug") or entry.get("name")
+        if not raw:
+            continue
+        verbatim = str(raw)
+        anchor = slugify(verbatim)
+        if not anchor:
+            continue
+        if anchor not in poi_on_r2_slugs:
+            with reference_poi_image_not_found_span(pack=pack, world=world, slug=anchor):
+                pass
+            continue
+        with reference_poi_image_resolved_span(pack=pack, world=world, slug=anchor):
+            pass
+        image_url = resolve_asset_url(poi_image_key(pack, world, verbatim))
+        region = entry.get("region")
+        description = entry.get("description")
+        members.append(
+            {
+                "slug": anchor,
+                "name": str(entry.get("name", "")),
+                "region": region if region is None else str(region),
+                "description": description if description is None else str(description),
+                "image_url": image_url,
+            }
+        )
+
+    if not members:
+        return None
+    return {"id": "poi", "label": "Points of Interest", "entries": members}
+
+
 def _project_node(
     value: object,
     *,
@@ -255,8 +327,13 @@ def build_generic_yaml_section(
 
 
 def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: Path) -> dict:
-    """Assemble the public-projected lore document. This slice emits the map
-    section only; Cast/POI/Timeline/generic-YAML sections land in later slices.
+    """Assemble the public-projected lore document.
+
+    Emits, in order: the ``map`` section (cartography, when present), the ``poi``
+    section (history.yaml points_of_interest gated on R2 landscape art), the
+    ``cast`` section (ratified NPCs gated on R2 portraits), then one generic-YAML
+    section per present ``LORE_WORLD_FILES`` file. Each section is omitted when it
+    has no public content. The Timeline section is not yet implemented.
     """
     sections: list[dict] = []
 
@@ -276,6 +353,29 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
                 cartography, pack=pack, world=world, portrait_on_r2_slugs=gated_map_slugs
             )
         )
+
+    # POI section — public points of interest from history.yaml, AFTER the map
+    # section. Gallery semantics: only POIs whose landscape is on R2 project
+    # (exclusion model); an authored-but-art-less POI fires an observable
+    # not_found span and is omitted, and the section collapses to None when none
+    # survive. The R2 gate consults the {anchor: verbatim} slug map (verbatim
+    # keys the R2 object, anchor keys membership — Story 71-38).
+    poi_slug_map = load_poi_slug_map(world_dir)
+    if poi_slug_map:
+        gated_poi_slugs = _gate_poi_slugs_on_manifest(
+            poi_slug_map,
+            pack=pack,
+            world=world,
+            pack_dir=pack_dir,
+        )
+        poi_section = build_poi_section(
+            load_points_of_interest(world_dir),
+            pack=pack,
+            world=world,
+            poi_on_r2_slugs=gated_poi_slugs,
+        )
+        if poi_section is not None:
+            sections.append(poi_section)
 
     # Cast section — public NPC cast from portrait_manifest.yaml, AFTER the map
     # section. The ADR-138 §D4 ratification gate withholds unratified phantoms;

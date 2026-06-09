@@ -1,6 +1,6 @@
-"""ADR-114 Task 10 — space_opera e2e acceptance proof.
+"""ADR-114 Task 10 — SWN combat e2e acceptance proof.
 
-Proves that ONE space_opera combat turn delivers ALL THREE of the ADR-114
+Proves that ONE SWN combat turn delivers ALL THREE of the ADR-114
 success criteria in a single strike-beat resolution:
 
   (HP layer)   target CreatureCore.hp.current decreased by damage_total - mitigation
@@ -10,7 +10,8 @@ success criteria in a single strike-beat resolution:
 
 Beat chosen: ``shoot`` (kind=strike, damage_channel=strike) on a synthetic
 Firefight-shaped ConfrontationDef.
-Weapon: blaster_sidearm (damage: 1d6+0) from the REAL pack catalog.
+Weapon: blaster_sidearm (damage: 1d6+0) from the swn_test_pack fixture's
+world-tier catalog.
 Stat: Physique (the shoot beat's stat_check).
 
 **Fixture note (space_opera→SWN binding, Task 8):**
@@ -28,13 +29,14 @@ shape SYNTHETICALLY via ``_make_synthetic_firefight_pack``:
     routes through ``_resolve_opposed_check_branch`` — the engine-level branch
     still used by any pack that DOES declare opposed_check.
 
-Only the REAL blaster_sidearm weapon + its damage spec (1d6+0) are pulled from
-the real pack catalog (the spec genuinely lives there), so the weapon-lookup
-content path is still exercised. The synthetic shoot beat carries the same
+Story 96-1: the ``blaster_sidearm`` weapon + its damage spec (1d6+0) are
+pulled from the ``swn_test_pack`` FIXTURE's world-tier catalog
+(``worlds/test_world/inventory.yaml``) via the production
+``resolve_inventory`` seam — the same world-REPLACE path live migrated
+packs use — so the weapon-lookup path is still exercised without coupling
+to live content. The synthetic shoot beat carries the same
 ``stat_check: Physique`` and ``damage_channel: strike`` as the
 historically-authored shoot beat.
-
-Skips gracefully when sidequest-content is not present.
 
 The ``otel_capture`` fixture is imported from
 ``tests/integration/conftest.py`` which re-exports it from
@@ -45,29 +47,15 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
-from tests._helpers.genre_paths import PackNotFound, find_pack_path
-
-pytestmark = pytest.mark.skip(
-    reason="content-coupled: references weapon 'blaster_sidearm' that migrated to "
-    "world-tier inventory (epic 94), so genre-tier damage specs no longer resolve; "
-    "rewrite against fixtures — story 94-4"
-)
+from tests._helpers.fixture_packs import SWN_TEST_PACK, TEST_WORLD, load_fixture_pack
 
 # ---------------------------------------------------------------------------
 # Pack guard
 # ---------------------------------------------------------------------------
 
 
-def _load_space_opera_pack():
-    from sidequest.genre.loader import load_genre_pack
-
-    try:
-        path = find_pack_path("space_opera")
-    except PackNotFound:
-        return None
-    return load_genre_pack(path)
+def _load_fixture_swn_pack():
+    return load_fixture_pack(SWN_TEST_PACK)
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +115,7 @@ def _make_snapshot_with_blaster_attacker(attacker_name: str, target_name: str):
 
     # --- Snapshot ---
     snap = GameSnapshot(
-        genre_slug="space_opera",
+        genre_slug=SWN_TEST_PACK,
         world_slug="test_world",
         turn_manager=TurnManager(),
     )
@@ -247,8 +235,11 @@ def _make_synthetic_firefight_pack(real_pack, *, opposed_check: bool = False):
 
     pack = MagicMock()
     pack.rules = RulesConfig(confrontations=[cdef])
-    # Use the real pack's inventory so blaster_sidearm catalog lookup works.
+    # Mirror the fixture pack's two inventory tiers so the production
+    # resolve_inventory(pack, snapshot.world_slug) seam resolves the
+    # world-tier blaster_sidearm catalog exactly as it would in live play.
     pack.inventory = real_pack.inventory
+    pack.worlds = real_pack.worlds
     return pack
 
 
@@ -260,7 +251,7 @@ def _make_synthetic_firefight_pack(real_pack, *, opposed_check: bool = False):
 def test_space_opera_shoot_beat_deals_hp_damage_while_dials_advance(otel_capture):
     """ADR-114 Task 10 — three-part acceptance proof.
 
-    Drives the real space_opera pack through dispatch_dice_throw with the
+    Drives the swn_test_pack fixture through dispatch_dice_throw with the
     ``shoot`` beat (damage_channel=strike, stat_check=Physique) and a
     face value that guarantees SUCCESS so the damage roll fires.
 
@@ -269,43 +260,47 @@ def test_space_opera_shoot_beat_deals_hp_damage_while_dials_advance(otel_capture
     (OTEL)       state_patch.hp span present in otel_capture
     (dial layer) encounter.player_metric.current > 0 (momentum advanced)
 
-    Uses REAL pack: the Part A canary weapon (blaster_sidearm, 1d6+0) and
-    the shoot beat's damage_channel=strike annotation are both exercised.
+    Uses the swn_test_pack FIXTURE: the Part A canary weapon
+    (blaster_sidearm, 1d6+0, world-tier catalog) and the shoot beat's
+    damage_channel=strike annotation are both exercised.
     """
-    real_pack = _load_space_opera_pack()
-    if real_pack is None:
-        pytest.skip("sidequest-content not on disk in this checkout")
+    real_pack = _load_fixture_swn_pack()
 
     from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
     from sidequest.server.dispatch.dice import dispatch_dice_throw
+    from sidequest.server.dispatch.inventory_resolve import resolve_inventory
     from sidequest.telemetry.spans.state_patch import SPAN_STATE_PATCH_HP
 
     attacker_name = "Nova"
     target_name = "Corsair"
 
-    # Part A canary checks against the REAL pack:
+    # Part A canary checks against the FIXTURE pack:
     # 1. shoot beat exists and carries damage_channel=strike.
     real_combat_cdef = next(
         (c for c in real_pack.rules.confrontations if c.confrontation_type == "combat"),
         None,
     )
-    assert real_combat_cdef is not None, "space_opera pack must have a 'combat' ConfrontationDef"
+    assert real_combat_cdef is not None, "swn_test_pack must have a 'combat' ConfrontationDef"
     real_shoot_beat = next((b for b in real_combat_cdef.beats if b.id == "shoot"), None)
-    assert real_shoot_beat is not None, "space_opera combat confrontation must have a 'shoot' beat"
+    assert real_shoot_beat is not None, (
+        "swn_test_pack combat confrontation must have a 'shoot' beat"
+    )
     assert str(real_shoot_beat.damage_channel) == "strike", (
         "shoot beat must carry damage_channel=strike (Part A content canary)"
     )
 
-    # 2. blaster_sidearm has a damage spec in the catalog.
+    # 2. blaster_sidearm has a damage spec in the WORLD-TIER catalog, reached
+    #    through the production resolve_inventory seam (epic 94 shape).
+    resolved_inventory = resolve_inventory(real_pack, TEST_WORLD)
     sidearm_item = next(
         (
             i
-            for i in (real_pack.inventory.item_catalog if real_pack.inventory else [])
+            for i in (resolved_inventory.item_catalog if resolved_inventory else [])
             if i.id == "blaster_sidearm"
         ),
         None,
     )
-    assert sidearm_item is not None, "blaster_sidearm must be in item_catalog"
+    assert sidearm_item is not None, "blaster_sidearm must be in the world-tier item_catalog"
     assert sidearm_item.damage is not None, (
         "blaster_sidearm must carry a damage spec (Part A content canary)"
     )
@@ -344,7 +339,7 @@ def test_space_opera_shoot_beat_deals_hp_damage_while_dials_advance(otel_capture
         character_stats={"Physique": 10},
         encounter=enc,
         pack=pack,
-        genre_slug="space_opera",
+        genre_slug=SWN_TEST_PACK,
         session_id="so-e2e-session",
         round_number=1,
         room_broadcast=broadcasts.append,
@@ -415,9 +410,7 @@ def test_opposed_check_shoot_beat_deals_hp_damage_in_narration_apply(otel_captur
     2. A state_patch.hp span fired.
     3. The encounter's momentum dial advanced (player_metric.current > 0).
     """
-    real_pack = _load_space_opera_pack()
-    if real_pack is None:
-        pytest.skip("sidequest-content not on disk in this checkout")
+    real_pack = _load_fixture_swn_pack()
 
     from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
     from sidequest.game.character import Character
@@ -437,7 +430,7 @@ def test_opposed_check_shoot_beat_deals_hp_damage_in_narration_apply(otel_captur
     # Synthetic opposed_check pack: mirrors the Firefight shape with
     # resolution_mode=opposed_check so _apply_narration_result_to_snapshot
     # routes through _resolve_opposed_check_branch (the branch under test).
-    # blaster_sidearm catalog lookup still runs against the real inventory.
+    # blaster_sidearm catalog lookup runs against the fixture world-tier inventory.
     pack = _make_synthetic_firefight_pack(real_pack, opposed_check=True)
     combat_cdef = pack.rules.confrontations[0]
 
@@ -468,7 +461,7 @@ def test_opposed_check_shoot_beat_deals_hp_damage_in_narration_apply(otel_captur
         hp={"current": hp_target, "max": hp_target, "base_max": hp_target},
     )
     snap = GameSnapshot(
-        genre_slug="space_opera",
+        genre_slug=SWN_TEST_PACK,
         world_slug="test_world",
         turn_manager=TurnManager(),
     )

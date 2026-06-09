@@ -10,13 +10,13 @@ d20 and damage dice for determinism, and asserts:
 The NPC shooter can also score a hit — we pin the opponent d20 to a miss so the
 player's HP stays intact and the assertion is clean about which actor took damage.
 
-Skips when ``sidequest-content`` is not checked out alongside ``sidequest-server``
-(matches the pattern in ``test_sealed_letter_dispatch_integration.py``).
+Story 96-1: drives the ``swn_test_pack`` FIXTURE (world-tier ``multifocal_laser``
+catalog in ``test_world``) instead of live space_opera content. No environment
+skip — fixture packs ship with the suite.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -36,24 +36,11 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.dogfight_shot import FRAME_HP_KEY
 from sidequest.game.session import GameSnapshot
-from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+from tests._helpers.fixture_packs import SWN_TEST_PACK, TEST_WORLD, load_fixture_pack
 from tests._helpers.session_room import room_for
 from tests._helpers.trigger_encounter import trigger_encounter
-
-CONTENT_ROOT = Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
-
-pytestmark = [
-    pytest.mark.skipif(
-        not CONTENT_ROOT.is_dir(),
-        reason="sidequest-content not on disk alongside sidequest-server",
-    ),
-    pytest.mark.skip(
-        reason="content-coupled: references dogfight weapon 'multifocal_laser' that "
-        "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-    ),
-]
 
 PLAYER = "Apex"
 OPPONENT = "Bandit Ace"
@@ -65,12 +52,12 @@ OPPONENT = "Bandit Ace"
 
 
 @pytest.fixture(scope="module")
-def space_opera_pack() -> GenrePack:
-    return load_genre_pack(CONTENT_ROOT / "space_opera")
+def swn_fixture_pack() -> GenrePack:
+    return load_fixture_pack(SWN_TEST_PACK)
 
 
 def _make_pilot_character(name: str) -> Character:
-    """Build a minimal space_opera pilot PC with Reflex + Intellect stats.
+    """Build a minimal SWN pilot PC with Reflex + Intellect stats.
 
     The SWN ship_attack_params resolves best-of(DEXTERITY→Reflex, INTELLIGENCE→Intellect)
     for the to-hit modifier. Both stats are set to 10 (modifier=0) so the math is
@@ -90,11 +77,13 @@ def _make_pilot_character(name: str) -> Character:
 
 
 @pytest.fixture
-def snap_with_pilot(space_opera_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
-    snap = GameSnapshot(genre="space_opera")
-    snap.genre_slug = "space_opera"
+def snap_with_pilot(swn_fixture_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
+    snap = GameSnapshot(genre=SWN_TEST_PACK)
+    snap.genre_slug = SWN_TEST_PACK
+    # Epic 94 production shape: weapon lookup resolves world-tier inventory.
+    snap.world_slug = TEST_WORLD
     snap.characters = [_make_pilot_character(PLAYER)]
-    return snap, space_opera_pack
+    return snap, swn_fixture_pack
 
 
 @pytest.fixture

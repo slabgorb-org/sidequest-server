@@ -19,12 +19,14 @@ Three mandatory scenarios:
 Reuses the harness from test_dogfight_shot_wiring.py and trigger_encounter.
 Monkeypatches ``_roll_d20_server_side`` + ``sidequest.game.dogfight_shot._roll_damage_dice``
 for determinism.
-Skips when sidequest-content is not checked out.
+
+Story 96-1: drives the ``swn_test_pack`` FIXTURE (world-tier ``multifocal_laser``
+catalog in ``test_world``) instead of live space_opera content. No environment
+skip — fixture packs ship with the suite.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -38,20 +40,13 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.dogfight_shot import FRAME_HP_KEY, PendingDogfightShot
 from sidequest.game.session import GameSnapshot
-from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
 from sidequest.protocol.enums import MessageType
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+from tests._helpers.fixture_packs import SWN_TEST_PACK, TEST_WORLD, load_fixture_pack
 from tests._helpers.session_room import room_for
 from tests._helpers.trigger_encounter import trigger_encounter
-
-CONTENT_ROOT = Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
-
-pytestmark = pytest.mark.skipif(
-    not CONTENT_ROOT.is_dir(),
-    reason="sidequest-content not on disk alongside sidequest-server",
-)
 
 PLAYER = "Apex"
 OPPONENT = "Bandit Ace"
@@ -63,12 +58,12 @@ OPPONENT = "Bandit Ace"
 
 
 @pytest.fixture(scope="module")
-def space_opera_pack() -> GenrePack:
-    return load_genre_pack(CONTENT_ROOT / "space_opera")
+def swn_fixture_pack() -> GenrePack:
+    return load_fixture_pack(SWN_TEST_PACK)
 
 
 def _make_pilot_character(name: str) -> Character:
-    """Minimal space_opera pilot PC — both Reflex + Intellect at 10 (modifier=0)."""
+    """Minimal SWN pilot PC — both Reflex + Intellect at 10 (modifier=0)."""
     return Character(
         core=CreatureCore(name=name, description="Test pilot.", personality="Calm."),
         backstory="A pilot.",
@@ -79,11 +74,13 @@ def _make_pilot_character(name: str) -> Character:
 
 
 @pytest.fixture
-def snap_with_pilot(space_opera_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
-    snap = GameSnapshot(genre="space_opera")
-    snap.genre_slug = "space_opera"
+def snap_with_pilot(swn_fixture_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
+    snap = GameSnapshot(genre=SWN_TEST_PACK)
+    snap.genre_slug = SWN_TEST_PACK
+    # Epic 94 production shape: weapon lookup resolves world-tier inventory.
+    snap.world_slug = TEST_WORLD
     snap.characters = [_make_pilot_character(PLAYER)]
-    return snap, space_opera_pack
+    return snap, swn_fixture_pack
 
 
 @pytest.fixture
@@ -140,10 +137,6 @@ def _message_types(broadcasts: list[object]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 def test_player_gun_solution_stashes_and_emits_dice_request(
     snap_with_pilot: tuple[GameSnapshot, GenrePack],
 ) -> None:
@@ -252,12 +245,8 @@ class _DiceRequestCapturingRoom:
         pass
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 async def test_session_handler_emits_dice_request_and_stashes_on_sd(
-    space_opera_pack: GenrePack,
+    swn_fixture_pack: GenrePack,
     session_handler_factory,
 ) -> None:
     """Drive the SESSION-HANDLER layer (``_execute_narration_turn``), not just
@@ -277,20 +266,21 @@ async def test_session_handler_emits_dice_request_and_stashes_on_sd(
     from sidequest.protocol.messages import DiceRequestMessage
     from sidequest.server.session_handler import _State
 
-    sd, handler = session_handler_factory(genre="space_opera")
+    sd, handler = session_handler_factory(genre=SWN_TEST_PACK)
     handler._state = _State.Playing
 
-    # The autouse _fixture_pack_search_paths fixture points the factory's
-    # loader at frozen test packs, which carry NO dogfight subsystem. Swap in
-    # the real space_opera content pack (the same one Test 1 uses) so the
-    # dogfight ConfrontationDef the apply path reads (sd.genre_pack) matches
-    # the encounter we install.
-    sd.genre_pack = space_opera_pack
+    # Bind the swn_test_pack fixture explicitly (the factory's loader may have
+    # resolved a different fixture via the autouse search path) so the dogfight
+    # ConfrontationDef the apply path reads (sd.genre_pack) matches the
+    # encounter we install, and bind the fixture world so the weapon lookup
+    # resolves the world-tier inventory catalog (epic 94 production shape).
+    sd.genre_pack = swn_fixture_pack
+    sd.snapshot.world_slug = TEST_WORLD
     sd.player_name = PLAYER  # sealed-letter resolver finds the PC by player_name
     sd.snapshot.characters = [_make_pilot_character(PLAYER)]
     trigger_encounter(
         sd.snapshot,
-        space_opera_pack,
+        swn_fixture_pack,
         "dogfight",
         PLAYER,
         npcs_present=[NpcMention(name=OPPONENT, role="hostile", side="opponent")],
@@ -413,8 +403,8 @@ async def test_dice_throw_completes_pending_shot(
             self.pending_dogfight_shot = pending
             self.player_id = "player1"
             self.player_name = PLAYER
-            self.genre_slug = "space_opera"
-            self.world_slug = "test_world"
+            self.genre_slug = SWN_TEST_PACK
+            self.world_slug = TEST_WORLD
             self.genre_pack = pack
             self.snapshot = snap
             self._room = None  # set after FakeRoom is built
@@ -526,10 +516,6 @@ async def test_dice_throw_completes_pending_shot(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 def test_npc_only_gun_solution_resolves_immediately_no_stash(
     snap_with_pilot: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
@@ -621,10 +607,6 @@ def test_npc_only_gun_solution_resolves_immediately_no_stash(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="content-coupled: dogfight references weapon 'multifocal_laser' that "
-    "migrated to world-tier inventory (epic 94); rewrite against fixtures — story 94-4"
-)
 def test_no_shot_spans_when_player_gun_solution_deferred(
     snap_with_pilot: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,

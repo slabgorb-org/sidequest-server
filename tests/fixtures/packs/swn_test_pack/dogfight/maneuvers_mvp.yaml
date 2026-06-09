@@ -1,0 +1,126 @@
+# Dogfight Maneuvers — MVP (4 moves)
+#
+# The minimum playable maneuver set. Every pilot picks one per turn,
+# simultaneously and in secret (sealed-letter). The interaction table
+# (interactions_mvp.yaml) resolves the pair into new descriptors for both
+# viewers.
+#
+# Design shape:
+#   - 4 maneuvers x 4 = 16-cell interaction grid (hand-authorable in one sitting)
+#   - Two CLASSES: passive/evasive vs. offensive
+#   - Rock-paper-scissors pattern:
+#       * offense  beats passive (loop/kill_rotation catches a straight flier)
+#       * evasive  beats offense (bank slips the reversal)
+#       * passive  recovers energy (straight is the only credit move)
+#   - Two space-opera-signature moves (loop + kill_rotation) establish genre
+#     identity. The menu itself is what makes this feel like Expanse/Star Wars
+#     combat, not WWI dogfighting. Crunch in genre, flavor in world.
+#
+# Expansion to 8 maneuvers (post-MVP, after playtest validates the MVP) adds:
+#   immelmann, split_s, hard_break, cold_drift
+# That grows the grid to 64 cells. Commit to that expansion only after the
+# MVP playtest proves the core mechanic feels right.
+
+version: "0.1.0"
+genre: space_opera
+starting_state: merge  # MVP table is authored for the "merge" starting state only
+
+maneuvers:
+
+  - id: straight
+    display_name: "Throttle Up"
+    class: passive
+    energy_cost: -5   # negative cost = energy recovery
+    description: >-
+      Hold your current vector. Engines at full burn, guns tracking forward.
+      Predictable. Recovers energy. The pilot who doesn't commit has fuel
+      left for the next turn.
+    intent: >-
+      Cover ground. Recover energy. Refuse to show your hand. Let the other
+      pilot commit first and punish whatever they pick.
+    genre_note: >-
+      The aggressive restraint of a veteran — you don't have to move to win
+      the next exchange. Rocinante crew calls it "holding the line."
+    defensive: none
+    offensive: forward_tracking
+
+  - id: bank
+    display_name: "Break Right"
+    class: evasive
+    energy_cost: 5
+    description: >-
+      A hard 60-degree turn to starboard. Costs energy, breaks the merge
+      geometry, and throws off any pursuer's tracking solution. The bread-
+      and-butter evasive — always safe, never scoring.
+    intent: >-
+      Get off the predicted flight path. Refuse to be where the enemy expects.
+      Trade a shot at offense for a guaranteed survival.
+    genre_note: >-
+      The X-wing's instinctive break. Nobody holds a gun line on a pilot who
+      commits to the bank.
+    defensive: high
+    offensive: none
+    mvp_note: >-
+      MVP fixes the bank direction to starboard for table simplicity. Future
+      expansion will make direction a per-turn player choice (bank_left vs
+      bank_right), doubling the cell count for this maneuver.
+
+  - id: loop
+    display_name: "Vertical Reversal"
+    class: offensive
+    energy_cost: 30
+    description: >-
+      A full vertical circle — nose up, over the top, back down. Ends on the
+      same heading you started, but an opponent who flew past is now in front
+      of your guns. The classic reversal. Expensive but decisive.
+    intent: >-
+      Reverse without reversing heading. Kill a pilot who overcommitted to
+      the merge by catching them from behind on the exit.
+    genre_note: >-
+      The trench run maneuver. Commits the pilot to a visible arc — if it
+      works, you are on their six. If it misses, you are out of energy in
+      open space with your belly up.
+    defensive: none
+    offensive: reversal_gun_solution
+
+  - id: kill_rotation
+    display_name: "Kill Rotation"
+    class: offensive_space_only
+    energy_cost: 5
+    description: >-
+      Attitude jets flip the ship 180 degrees on its axis without changing
+      its velocity vector. You drift forward on inertia, nose pointed backward,
+      guns trained on whatever you just passed. The signature move of vacuum
+      combat — a thing a WWI plane physically cannot do.
+    intent: >-
+      Get a back-shot at a pursuer without bleeding energy into a loop. One
+      burst of fire, then inertia carries you out of the fight.
+    genre_note: >-
+      The Expanse's flip-and-burn. The Rocinante move. Guns fire for one
+      turn only — inertia carries you away from the target immediately after,
+      which is both the price and the escape hatch.
+    defensive: none
+    offensive: reverse_gun_solution
+    caveat: >-
+      Kill rotation only works in vacuum. In atmosphere the ship stalls the
+      moment the nose leaves the velocity vector. This is why it is space-
+      opera-specific and will not port to a WWI or Victorian aerial reskin.
+
+# ---- Interaction class reference ----
+#
+# Each maneuver's "class" is what determines its rock-paper-scissors role in
+# the interaction table. The table itself is authored against these classes:
+#
+#   passive       -> straight
+#   evasive       -> bank
+#   offensive     -> loop
+#   offensive_*   -> kill_rotation (same class role as offensive, different
+#                    flavor — kill rotation and loop are narratively distinct
+#                    but table-functionally similar offensive commitments)
+#
+# When expanding to 8 maneuvers, preserve the class balance:
+#   - At least one passive (recovery)
+#   - At least two evasive (left/right direction choice)
+#   - Three or four offensive (different offensive angles)
+#   - One defensive/stealth outlier (cold_drift — evades missile locks
+#     specifically, a category the MVP does not model yet)

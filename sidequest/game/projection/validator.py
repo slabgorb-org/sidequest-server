@@ -257,3 +257,39 @@ def validate_projection_rules(rules: ProjectionRules) -> None:
 
         else:
             raise ValidationError(f"rule[{idx}]: unrecognized rule type {type(rule).__name__}")
+
+
+# Kinds that MUST route through a visibility_tag rule in any pack that ships
+# projection rules. NARRATION + SECRET_NOTE are the structural-hiding pair
+# (ADR-104/-105): without a visibility_tag rule for the kind, the
+# ProjectionFilter pass-through leaks per-recipient dispatches to every
+# player. Story 96-1 moved this requirement out of per-shipping-pack server
+# tests and into the pack validator (validators validate content; tests test
+# fixtures).
+REQUIRED_VISIBILITY_KINDS: tuple[str, ...] = ("NARRATION", "SECRET_NOTE")
+
+
+def validate_visibility_coverage(rules: ProjectionRules) -> list[str]:
+    """Content-gate check: required kinds route through ``visibility_tag``.
+
+    Returns one human-readable finding per missing route (empty = covered).
+    Deliberately non-raising and deliberately NOT part of
+    ``validate_projection_rules``: that function runs at pack LOAD time and
+    must keep accepting minimal fixture packs that opt out of projection
+    coverage. This check carries validator-CLI severity only — it is wired
+    into ``sidequest.cli.validate.pack._validate_projection`` (the ``pf
+    validate pack`` content gate), which applies it when projection.yaml
+    exists.
+    """
+    findings: list[str] = []
+    for kind in REQUIRED_VISIBILITY_KINDS:
+        covered = any(
+            isinstance(rule, VisibilityTagRule) and rule.kind == kind for rule in rules.rules
+        )
+        if not covered:
+            findings.append(
+                f"projection rules have no visibility_tag rule for kind={kind} — "
+                f"without it the ProjectionFilter pass-through leaks {kind} payloads "
+                f"to every player (add `- kind: {kind}\\n  visibility_tag: {{}}`)"
+            )
+    return findings

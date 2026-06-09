@@ -1,0 +1,32 @@
+name: Test World
+slug: test_world
+draft: false           # live (Keith 2026-06-05); POIs rendering, portraits to follow
+cover_poi: dead_sea_bottom_of_korad   # MUST equal a points_of_interest slug in history.yaml
+description: >-
+  A dying world of ochre sea-bottoms where the oceans drained an age
+  ago and the cities of a vanished green-skied paradise stand as
+  marble ruins in the moss. The copper-skinned red men hold their
+  scarlet tower-cities — Helium first among them, and Helium's jealous
+  rival Zodanga — by the long-sword and a code of honor older than
+  their thousand-year lives. Out on the cracked sea-floor the
+  fifteen-foot, four-armed green hordes ride their war-mounts between
+  the dead cities, warring on each other and on every red city they
+  can reach. The whole planet breathes only because a single great
+  Atmosphere Plant still turns, far out on the desert, and no one
+  alive remembers how to build another. It is a world ending — and a
+  world worth a sword raised to save it.
+tagline: "A dying world worth the blade raised to save it."
+axis_snapshot:
+  hope: 0.7
+  tech_level: 0.4
+  weirdness: 0.7
+starting_location: "The Greater Helium landing-stage, beneath the scarlet tower of the twin city"
+starting_region: helium
+starting_time: "morning"
+extensions: []   # archetype_funnels added in 89-5.
+# Magic content (89-4) is NOT an `extensions` string: the engine has no
+# world-tier WWN spell consumer. The two Barsoom caster traditions' spell
+# lists live in the genre-tier spells_wwn.yaml (the only place the WWN catalog
+# loads), super-science gear lives in this world's items.yaml, and the
+# telepathy/caster narrator framing lives in lore.yaml (magic_narrator_baseline).
+# Caster Calling expression + cast_spell class_filter wiring are 89-5's scope.

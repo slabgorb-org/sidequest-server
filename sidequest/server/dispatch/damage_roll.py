@@ -147,21 +147,29 @@ def resolve_damage_spec_from_beat_and_actor(
     beat: BeatDef,
     actor_core: object | None,
     pack: GenrePack | None,
+    world_slug: str | None = None,
 ) -> DamageSpec | None:
     """Resolve the weapon DamageSpec for a strike beat.
 
     Resolution priority (CLAUDE.md no-silent-fallback — skip loudly, never fabricate):
     1. ``beat.damage_override`` — explicit spec on the beat (natural attack / creature).
     2. Actor's equipped weapon item dict carrying a ``damage`` dict (from inventory).
-    3. Pack catalog lookup: find the actor's first equipped weapon item by id,
-       then read ``CatalogItem.damage`` from the pack's item catalog.
+    3. Catalog lookup: find the actor's first equipped weapon item by id, then
+       read ``CatalogItem.damage`` from the WORLD-RESOLVED item catalog —
+       epic 94 moved item catalogs to the world tier for migrated packs, so
+       the lookup goes through ``resolve_inventory(pack, world_slug)`` (world
+       REPLACES genre; falsy/unknown world falls through to genre tier, which
+       packs like caverns_and_claudes still ship). Story 96-1: this seam
+       previously read only genre-tier ``pack.inventory``, which silently
+       skipped strike damage for every migrated pack.
     4. ``pack.rules.unarmed_damage`` — genre-level unarmed-strike floor so an
        empty-handed hit still deals HP (mirrors ``opponent_damage`` for the
        enemy reprisal). None ⇒ no floor; caller logs and skips.
     5. No match — returns None; caller must log and skip.
 
     ``actor_core`` is the actor's ``CreatureCore`` (may be None for actors without
-    a resolved core). ``pack`` is the live genre pack (provides the item catalog).
+    a resolved core). ``pack`` is the live genre pack; ``world_slug`` is the
+    session's bound world (drives the world-tier catalog resolution).
     """
     # Priority 1: beat-level override (natural attack, creature).
     if beat.damage_override is not None:
@@ -196,10 +204,13 @@ def resolve_damage_spec_from_beat_and_actor(
                         dmg_raw,
                     )
 
-    # Priority 3: pack catalog lookup by item id.
+    # Priority 3: world-resolved catalog lookup by item id (epic 94: world
+    # inventory REPLACES genre; falls through to genre tier when no world).
     catalog = None
     if pack is not None:
-        inv_config = getattr(pack, "inventory", None)
+        from sidequest.server.dispatch.inventory_resolve import resolve_inventory
+
+        inv_config = resolve_inventory(pack, world_slug)
         if inv_config is not None:
             catalog = getattr(inv_config, "item_catalog", None)
 

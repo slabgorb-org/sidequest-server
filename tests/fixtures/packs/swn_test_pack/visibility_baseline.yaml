@@ -1,0 +1,11 @@
+tone: balanced
+default_visibility:
+  npc_agency: all
+  confrontation_init: all
+  stealth_roll_check: actor_only
+  lore_reveal: actor_only
+  dice_roll_private: actor_only
+status_effect_fidelity:
+  blinded: {visual_only: drop, audio_only: keep}
+  deafened: {audio_only: drop, visual_only: keep}
+all_scope: protagonists

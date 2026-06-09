@@ -1,0 +1,258 @@
+# Power Tiers — heavy_metal
+# Per-class visual descriptions at each level range, in the baroque-elegy
+# register of the pack. Costs are always visible on the body.
+#
+# Keyed by the five WWN Calling display names (classes.yaml). The keys MUST
+# match classes.yaml display_name exactly — the running game derives the
+# reference-page anchor from the name.
+
+Warrior:
+  - level_range: [1, 3]
+    label: house-blade
+    player: >-
+      serviceable chain under a coat in fading house-colors, a sword whose
+      grip is wrapped in cord the wearer re-wraps themselves, boots that
+      have been re-soled more than once, and the posture of someone who has
+      drilled in a courtyard but not yet bled for a reason they actually
+      believe in
+    npc: >-
+      a retainer of one of the declining houses, armored in inherited kit a
+      little too large for them, carrying a blade whose sigil is half
+      scratched out, watchful in the way small household retainers are when
+      they think no one is looking
+  - level_range: [4, 6]
+    label: oath-bound duelist
+    player: >-
+      fitted mail under a long coat with subtle house embroidery, a properly
+      balanced blade with the maker's mark visible, a parrying dagger on the
+      off-hand, a small ledger of formal challenges kept in a breast pocket,
+      and the measured economy of someone who has killed politely and would
+      rather not do so again today
+    npc: >-
+      a named duelist of the courts, coat cut for ease of draw, carrying a
+      blade known by its own small reputation, attended by a second who
+      carries the challenge-book and speaks less than they do
+  - level_range: [7, 9]
+    label: captain-of-arms
+    player: >-
+      fine plate worked with the restrained ornament of an old house, a
+      blade whose history is known in at least three courts, a cloak whose
+      color has aged into something heavier than it began as, and the
+      authority of someone whose presence ends arguments without a word
+      being said
+    npc: >-
+      a house captain whose name opens and closes doors, armored in the kit
+      of a decade's campaigns, attended by a small entourage who speak for
+      them when they prefer silence — and they prefer silence more than they
+      used to
+  - level_range: [10, 10]
+    label: the last blade of the house
+    player: >-
+      armor that is itself a minor relic, the ancestral blade of a line that
+      is ending, a cloak whose heraldry is recognized in rooms where no
+      living member of the house has been received in a generation, and the
+      quiet grief of someone who has become their family's entire living
+      inheritance
+    npc: >-
+      the sword of a dying line, standing attendance in a hall that still
+      honors an older order, their presence itself a kind of obligation
+      rendered visible
+
+Expert:
+  - level_range: [1, 3]
+    label: ledger-walker
+    player: >-
+      dark plain clothes with serviceable boots, a belt knife, a small set
+      of lockpicks and a smaller set of wax-seals, a battered notebook used
+      for copying and forging entries, and the quick unworried movements of
+      someone who has learned that information is easier to steal than coin
+    npc: >-
+      a freelance records-breaker hiring themselves to clients who need an
+      entry removed from a book that is not supposed to lose entries,
+      carrying the tools of their trade in a hidden pocket and a ready story
+      about which trade they actually practice
+  - level_range: [4, 6]
+    label: strata-walker
+    player: >-
+      oiled leathers over a long coat, a short blade kept razor for
+      road-work, a ruin-notebook copied from an older notebook, a
+      pilgrim-token knotted into the belt, and the slow economical movements
+      of someone who has walked a hundred dangerous miles and catalogued
+      most of them in their head
+    npc: >-
+      a journeyman ruin-guide at the edge of a stratified wilderness, hiring
+      themselves to small parties who need to enter a site without drawing
+      its attention, carrying the bare minimum and knowing where every inch
+      of it is
+  - level_range: [7, 9]
+    label: shadow-reckoner
+    player: >-
+      armor of dark cloth that bends light around its edges, a signature
+      blade worn cross-draw, a kit of lock-tools and scribe-tools
+      interchangeable in a hidden roll, a cloak that seems to drink the
+      candlelight, and the unhurried stillness of someone who has robbed a
+      feeding temple and lived to decline to talk about it
+    npc: >-
+      a legendary reckoner whose work is recognized by its absences,
+      commissioned only through intermediaries, walking into rooms where no
+      living witness can later say they were present
+  - level_range: [10, 10]
+    label: the unrecorded
+    player: >-
+      clothing that seems at once formal and impossible to describe
+      afterward, a relic blade of shadow-metal, a scribe's kit that is also
+      a grimoire, and the particular uncanny absence of someone who has been
+      expunged from their own entries in the books
+    npc: >-
+      a figure whose name no ledger currently holds, acknowledged by
+      scholars only through the holes they leave in otherwise complete
+      records, their face remembered only by those they have chosen to let
+      remember it
+
+Necromancer:
+  - level_range: [1, 3]
+    label: tithe-reader
+    player: >-
+      plain dark vestments tied with a cord, a tally-stick already crowded
+      with small marks, ink-stained fingers, a walking staff, and the
+      still-new bearing of someone who has begun to hear what the body owes
+      and is not yet certain they were meant to
+    npc: >-
+      a novice account-priest in the liturgical cold of a small charnel
+      house, checking the day's tally of the dying, speaking only when
+      addressed
+  - level_range: [4, 6]
+    label: account-priest
+    player: >-
+      vestments in the grey of a specific feeding, a tally-book chained to
+      the belt and crowded with collected balances, a censer for the parts
+      of the rite the living are allowed to watch, and the quiet cadence of
+      someone who has called a debt due and watched it answer
+    npc: >-
+      a parish reckoner of the dead, vestments bearing the precise markings
+      of their rite-rank, measuring the day's balances before attending to
+      anything living
+  - level_range: [7, 9]
+    label: prefect-of-the-unpaid
+    player: >-
+      fine grey vestments worked with sigils held for years, a ledger bound
+      in a material the faithful do not discuss, a relic kept more as a
+      witness than a tool, and the unshakable administrative presence of
+      someone who has balanced a charnel house's books through a bad winter
+    npc: >-
+      a prefect of one of the great death-accountings, presiding over a
+      complex of the dying and the recently dead, attended by junior
+      reckoners, keeping the columns honest through bureaucratic skill and
+      increasingly inventive solicitation
+  - level_range: [10, 10]
+    label: first-of-the-ledger
+    player: >-
+      vestments that are themselves a continuing audit, a holy symbol that
+      hums when the bearer fasts, a body in which the line between reader and
+      read has thinned, and the serene focus of someone who has kept a great
+      account unbroken for a decade
+    npc: >-
+      the senior reckoner of a major death-cult, their presence a kind of
+      guarantee that the dead of a province are being properly counted, their
+      word enough to shift the unpaid balances of an entire region
+
+Elementalist:
+  - level_range: [1, 3]
+    label: forge-apprentice
+    player: >-
+      an ink- and soot-stained robe of a middle guild rank, a crooked staff
+      with a dim crystal, a pouch of reagents weighed out in small portions,
+      burns at the cuffs that are meant to be left, and the anxious focus of
+      someone whose master has begun letting them perform the smaller
+      workings unsupervised
+    npc: >-
+      a young guild apprentice running errands between the hall and the
+      reagent-yards, covered in the residues of whatever they prepared most
+      recently, eager and slightly overworked and slightly scorched
+  - level_range: [4, 6]
+    label: guild-thaumaturge
+    player: >-
+      properly fitted workshop robes in the color of a specific trade, a
+      staff whose crystal pulses when worked, a ledger of completed workings
+      and their costs, slag-marks healed into the forearms, and the focused
+      steady presence of someone who charges their rates by the hour and
+      keeps honest books
+    npc: >-
+      a mid-tier guild elementalist of one of the forge cities, attending a
+      client on commission, their rates and their honesty both a matter of
+      public guild record, the residue of the day's work still on their hands
+  - level_range: [7, 9]
+    label: senior-of-the-forge
+    player: >-
+      robes bearing the sigils of senior guild rank, a staff that hums
+      faintly in the quiet, the visible scarring of a long trade worked into
+      the skin like a maker's mark, and the authority of someone whose name
+      moves three different guild ledgers when it is cited
+    npc: >-
+      a guild senior on formal business, attended by a junior who carries
+      the reagent kit, walking with the calibrated weight of someone whose
+      work is visibly expensive to interrupt and visibly costly to perform
+  - level_range: [10, 10]
+    label: master-of-the-working
+    player: >-
+      robes whose embroidery reads differently depending on the workings
+      done that week, a staff whose presence alters the faint taste of the
+      air, hands that no longer fully heal between castings, and the quiet
+      certainty of someone who has personally rewritten the rates-tables of
+      an entire guild
+    npc: >-
+      the senior practitioner of an entire forge guild, approached only
+      through formal introduction, their word on a working determining what
+      is and is not permitted to be performed inside a quarter
+
+Pact-born:
+  - level_range: [1, 3]
+    label: newly-pledged
+    player: >-
+      common traveling clothes that no longer quite fit the way they used
+      to, a small token of the pact worn where it can be kept private, a
+      belt-knife, a notebook of recorded terms, and the nervous alertness of
+      someone who has started hearing the patron's voice in places where
+      nothing should be speaking
+    npc: >-
+      a freshly-pledged pact-bearer working small contracts for coin, still
+      testing the limits of what their patron will and will not permit,
+      glancing over their own shoulder at moments that do not seem to
+      require it
+  - level_range: [4, 6]
+    label: covenant-worker
+    player: >-
+      well-kept clothes with a discreet sigil worked into the collar-lining,
+      the pact-token now carried openly enough that the informed can read it,
+      a focus whose nature is plain to anyone who has studied such things,
+      and the measured practicality of someone who has already paid several
+      real installments on their agreement
+    npc: >-
+      a working pact-bearer on retainer to a small house or guild, bearing a
+      token recognized by specialists, known for a specific kind of working
+      their patron will reliably deliver — and a specific cost they reliably
+      pay
+  - level_range: [7, 9]
+    label: hand-of-the-patron
+    player: >-
+      clothing that carries fine detailed devotional work, a focus that has
+      become a quiet extension of the wielder, visible small marks of the
+      cost paid (a whitening of an eye, a patch of strange skin, an odd habit
+      of the voice), and the composed presence of someone trusted enough by
+      their patron to speak as the patron's hand
+    npc: >-
+      a senior pact-bearer whose patron is recognized by the scholarly,
+      their cost visible to those who know what to look for, attended in a
+      limited way by others pledged to the same agreement
+  - level_range: [10, 10]
+    label: vessel
+    player: >-
+      clothing that has become a devotional uniform, a focus that may itself
+      be part of the patron, a body whose visible changes mark a very long
+      accumulating offering, and the almost-serenity of someone who has
+      stopped distinguishing clearly between their own voice and the voice
+      that speaks through them
+    npc: >-
+      a pact-bearer whose covenant has become their public identity, their
+      presence treated by the informed as the presence of the patron at one
+      remove

@@ -1,0 +1,210 @@
+# Dogfight Scene Descriptor — Schema
+#
+# The descriptor is the per-player "page" of the dogfight book. One descriptor
+# per pilot, regenerated every turn from the interaction lookup table. The
+# narrator LLM consumes this record and writes 2-3 sentences of cockpit prose.
+# It never computes geometry — it only renders what the table already decided.
+#
+# Status tags on each field:
+#   mvp    = required for the 4-maneuver MVP playtest
+#   future = reserved for the 8-maneuver expansion, not yet consumed
+#
+# This schema is deliberately genre-agnostic. The lookup table operates only
+# on these fields. Skinning to another genre (low_fantasy aerial duels,
+# neon_dystopia hover-chases) changes the environment + narration_style fields
+# and the ship_model referenced per pilot. It does not change the schema.
+
+version: "0.1.0"
+status: mvp_draft
+
+fields:
+
+  viewer:
+    type: string
+    status: mvp
+    description: >-
+      Which pilot this descriptor is rendered for. Always "red" or "blue" in
+      the 2-player MVP. Each turn produces one descriptor per viewer.
+    values: [red, blue]
+
+  target_bearing:
+    type: string
+    status: mvp
+    description: >-
+      Clock position of the target ship relative to the viewer's nose.
+      12 = dead ahead; 06 = dead astern; clockwise from there. Eight octants
+      for the MVP — enough fidelity for the merge starting state, cheap
+      enough to hand-author.
+    values: ["12", "0130", "03", "0430", "06", "0730", "09", "1030"]
+
+  target_range:
+    type: string
+    status: mvp
+    description: >-
+      Qualitative distance band. "gun" means inside effective weapon range;
+      "close" is a clean visual on the canopy glass; "medium" needs optics
+      or HUD cueing; "far" is a blip on the long-range sensor.
+    values: [gun, close, medium, far]
+
+  target_aspect:
+    type: string
+    status: mvp
+    description: >-
+      What face of the target ship the viewer sees. Head-on = target's nose
+      points at viewer. Tail-on = target's exhaust points at viewer.
+      Crossing = broadside silhouette. Quartering = three-quarter view,
+      front or rear.
+    values: [head_on, crossing, quartering, tail_on]
+
+  closure:
+    type: string
+    status: mvp
+    description: >-
+      Rate at which the distance between ships is changing. Used for narration
+      pacing and pilot tells, not for lookup-table indexing. "opening_fast"
+      means the engagement is dissolving; "closing_fast" means a merge is
+      imminent.
+    values: [closing_fast, closing, stable, opening, opening_fast]
+
+  viewer_energy:
+    type: integer
+    status: mvp
+    description: >-
+      The viewer's remaining energy pool (0-100). Abstracts fuel, shield
+      reserves, and airframe energy into a single resource. Every maneuver
+      debits or credits this value. At 0 the pilot is on fumes — they can
+      only fly straight, with no maneuvering budget left.
+    range: [0, 100]
+
+  target_energy:
+    type: integer
+    status: mvp
+    description: >-
+      Target's energy pool, visible to the viewer only as qualitative tells
+      (exhaust colour, maneuver crispness, venting). The narrator references
+      this obliquely — "their engine note was ragged" — not as a number.
+    range: [0, 100]
+
+  gun_solution:
+    type: boolean
+    status: mvp
+    description: >-
+      Whether the viewer's gun cone is on the target THIS turn. If true,
+      the viewer has a valid shot and the narrator MUST describe firing
+      (or declining to fire). If false, the viewer has no shot — the
+      narrator must not invent one. This is the single most SOUL-sensitive
+      field in the schema.
+
+  environment:
+    type: string
+    status: mvp
+    description: >-
+      Reskinnable environment tag. The lookup table is environment-agnostic;
+      this field only affects narration flavor and visual render. Additional
+      environments can be added per world.
+    values: [deep_space, asteroid_field, nebula, planet_horizon, wreckage_field]
+    default: deep_space
+
+  narration_style:
+    type: string
+    status: mvp
+    description: >-
+      Which voice the narrator speaks in. "space_opera" = cinematic, crew
+      shouting over comms, rule-of-cool physics. Future genres plug in here
+      as their own values (e.g., "wwi", "low_fantasy_aerial").
+    values: [space_opera]
+    default: space_opera
+
+  # ---- Future fields (reserved, not consumed by MVP) ----
+
+  target_elevation:
+    type: string
+    status: future
+    description: >-
+      Vertical offset of the target above or below the viewer's flight plane.
+      MVP collapses elevation into target_bearing for simplicity; future
+      expansion breaks it out for real 3D fidelity.
+    values: [high, above, level, below, low]
+
+  target_bank:
+    type: string
+    status: future
+    description: >-
+      Target ship's visible roll attitude, for render fidelity in the
+      wireframe HUD and SDXL hero shots.
+    values: [level, left_shallow, left_hard, right_shallow, right_hard, inverted]
+
+  missile_lock:
+    type: string
+    status: future
+    description: >-
+      Lock-on state for seeker weapons. None = no seeker engaged; partial =
+      seeker tracking but not locked; full = locked and ready to fire;
+      fired = missile committed and inbound.
+    values: [none, partial, full, fired]
+
+  viewer_bank:
+    type: string
+    status: future
+    description: >-
+      Viewer's own roll attitude, for cockpit render (horizon tilt, G-force
+      effects). Not consumed by the lookup table.
+    values: [level, left_shallow, left_hard, right_shallow, right_hard, inverted]
+
+# ---- Starting states (for lookup-table indexing) ----
+#
+# The MVP ships with ONE starting state: "merge". Every duel begins here.
+# Future expansion adds more starting states and the interaction table is
+# partitioned per starting state — each gets its own 16-cell (or 64-cell) grid.
+
+starting_states:
+
+  - id: merge
+    status: mvp
+    description: >-
+      Two fighters approaching head-on at close range. No shots yet. Both
+      pilots have full energy and no gun solution. This is the classic
+      "merge" opening — the moment both pilots commit to a first maneuver.
+    initial_descriptor:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: closing_fast
+      viewer_energy: 60
+      target_energy: 60
+      gun_solution: false
+      environment: deep_space
+      narration_style: space_opera
+
+  - id: tail_chase
+    status: mvp
+    description: >-
+      One ship trailing the other, both heading the same direction. Red is
+      the pursuer (behind), Blue is the evader (ahead). Asymmetric geometry:
+      the pursuer has positional advantage but must commit to close the gun
+      cone; the evader has escape options but must turn to fight back.
+      Requires its own 16-cell interaction table — a bank from a tail-chase
+      means something different than a bank from a merge.
+    initial_descriptor:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: closing
+      viewer_energy: 60
+      target_energy: 60
+      gun_solution: false
+      environment: deep_space
+      narration_style: space_opera
+
+  - id: beam
+    status: future
+    description: >-
+      Both ships perpendicular to each other's flight paths. The "crossing"
+      engagement. Both pilots pass through the gun line briefly.
+
+  - id: overhead
+    status: future
+    description: >-
+      One ship diving vertically through the other's plane of flight.
+      High-angle snap-shot opportunity for the diver, limited response for
+      the target.

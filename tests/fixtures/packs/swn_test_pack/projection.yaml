@@ -1,0 +1,10 @@
+# ProjectionFilter rules for space_opera.
+#
+# visibility_tag is ordered FIRST so structural per-recipient decisions run
+# before any later redact_fields rules. Reads payload._visibility produced by
+# the narration decomposer (sidequest.game.dispatch.DispatchPackage.visibility).
+rules:
+  - kind: NARRATION
+    visibility_tag: {}
+  - kind: SECRET_NOTE
+    visibility_tag: {}

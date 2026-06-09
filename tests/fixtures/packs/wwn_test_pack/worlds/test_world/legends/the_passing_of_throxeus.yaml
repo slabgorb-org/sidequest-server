@@ -1,0 +1,61 @@
+name: The Passing of Throxeus
+era: the long dying — an age ago, before the first canal was cut
+summary: >-
+  The five oceans of Barsoom failed over a hundred thousand years, and
+  Throxeus, mightiest of the five, failed last. The fair-skinned Orovar race
+  that ruled the seas from a thousand harbor cities died with its harbors —
+  of war, of thirst, of the slow arithmetic of a world drying out. The red
+  race was bred from the survivors of three peoples who pooled their blood to
+  endure the new world; the green hordes took the emptied sea bottoms; and the
+  harbor cities — Korad, Thark, Horz, and their hundred sisters — were left
+  standing whole, marble quays facing miles of moss, too well built to fall
+  down and too far from water to live in. They are the largest monuments any
+  race ever raised to its own ending.
+affected_cultures:
+- Red Martian
+- Green Martian
+- Lotharian
+- Yellow Martian
+cultural_impact: >-
+  Red Martians still reckon long distances in sea-leagues and
+  name the cardinal directions after the dead oceans, and a red oath sworn
+  "by the bottom of Throxeus" is one no honorable man breaks. The green
+  hordes hold the sea bottoms by a conquest so old it has become a fact of
+  nature; they camp in the dead cities without ever building in them. In
+  Lothar, last unmixed remnant of the Orovar blood, the passing is not
+  history but grievance — the phantom fleets their conjurers raise still fly
+  the harbor pennants of Throxeus.
+faction_grudges:
+- from: Green Martian
+  to: Red Martian
+  reason: When the seas failed, the city races took the canals and the water
+    and left the nomad peoples to the drying bottoms. No green jed could
+    recite the particulars after this long, and none needs to — the hordes
+    remember being left, and the red canals glitter with everything the
+    bottoms lost.
+lost_arts:
+- Deep-keel shipwrightry — the dead cities' dry-docks still hold cradles cut
+  for hulls no living race could lay down.
+- The Orovar weather-craft that could call rain out of a clear sky, attested
+  in every harbor city's carvings and in no living memory.
+monuments:
+- The dead city of Korad — marble quays, empty cisterns, and an arena that
+  once watched regattas and now watches the great games of the hordes.
+- The stranded sea-gates of Lothar, five hundred miles from any water, their
+  bronze leaves still hanging true on their hinges.
+terrain_scars:
+- name: The Bottom of Throxeus
+  region: korad_dead_sea_bottom
+  type: dead_sea
+  description: A thousand miles of ochre moss where the mightiest ocean on
+    Barsoom used to stand. Old anchor-stones surface from the moss like
+    teeth, and after a hard blow the wind uncovers ship-ribs that crumble
+    at a touch.
+- name: The High Quays of Lothar
+  region: lothar
+  type: stranded_harbor
+  description: Lothar's harbor front, carved for a sea that left it behind.
+    The tide-marks are still visible on the marble, forty feet above the
+    moss, and the Lotharians keep the mooring rings polished.
+related_tropes:
+- the_hordes_gather_at_korad

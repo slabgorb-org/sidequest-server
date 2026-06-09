@@ -1,0 +1,73 @@
+name: Lotharian
+summary: The last remnant of an ancient white seafaring race, survivors by
+  mentalism alone — masters of phantom bowmen and materialized illusion in the
+  ruined city of Lothar by the dead sea of Throxeus
+description: >-
+  The Lotharians are the final handful of an older Mars: white-skinned
+  men of the vanished seafaring age who, when their ocean drained and the
+  green hordes closed in, did not change into red men or flee, but turned
+  inward and learned to make the mind's will real. They are perhaps the
+  oldest living people on Barsoom and very nearly the last of their kind —
+  a dwindling city of men only — the women an age dead, though the
+  conjurers still will phantom women into the evening halls, lovely and
+  laughing and gone by morning — sustained as much by habit and pride as
+  by anything that still breathes. From the ruins of
+  Lothar, on the shore of the long-dead sea of Throxeus to the west, they
+  hold off the warhordes that have besieged them for ages by conjuring
+  armies that do not exist: phantom bowmen, materialized out of pure
+  thought, whose arrows kill as surely as any real shaft for as long as
+  the conjurer believes in them. The mastery splits them into factions
+  that have feuded for centuries — those who hold the phantoms are only
+  illusions sustained by will, and those who insist the bowmen are as real
+  as the men who summon them, and that a few, like the materialized hero
+  Kar Komak, can be made real enough to outlive the thought that shaped
+  them. They are brilliant, half-mad with age and isolation, courteous and
+  treacherous by turns, and they trust no outsider who has not first proven
+  he can tell a true thing from a thing merely willed to seem so.
+slots:
+  given_name:
+    corpora:
+      - corpus: barsoom_lotharian.txt
+        weight: 1.0
+    lookback: 3
+  family_name:
+    corpora:
+      - corpus: barsoom_lotharian.txt
+        weight: 1.0
+    lookback: 3
+  rank:
+    word_list:
+      - Jeddak
+      - Jed
+      - Mentalist
+      - Master of the Bowmen
+      - Phantom-Caller
+      - Elder
+      - Last of the Line
+  place_noun:
+    word_list:
+      - city
+      - ruin
+      - hall
+      - tower
+      - gate
+      - terrace
+      - shore
+      - chamber
+  adjective:
+    word_list:
+      - ruined
+      - ancient
+      - phantom
+      - dreaming
+      - last
+      - white
+      - silent
+      - vanished
+person_patterns:
+  - '{given_name} {family_name}'
+  - '{given_name} {family_name}, {rank}'
+  - '{rank} {given_name}'
+place_patterns:
+  - '{adjective} {place_noun}'
+  - 'the {place_noun} of {given_name}'

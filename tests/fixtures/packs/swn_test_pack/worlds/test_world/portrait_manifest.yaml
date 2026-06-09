@@ -1,0 +1,110 @@
+# Character portraits for Flickering Reach
+# Visual descriptions for Flux portrait generation
+# Post-apocalyptic digital painting — gritty, bioluminescent accents,
+# weathered surfaces, desaturated earth tones, bruised sky
+
+characters:
+  - name: Odige Fuseborn
+    role: Dome Syndicate Leader and Rain-Catcher Monopolist
+    type: npc_major
+    appearance: >-
+      A Scrapborn woman in her fifties with close-cropped grey hair and
+      a face that calculates profit margins while you're still talking.
+      Medium brown skin marked with circuit-pattern tattoos in copper ink
+      — the Fuseborn clan mark. Lean and sharp, dressed in well-maintained
+      salvage clothing that's a cut above everyone else's — patched, yes,
+      but with matching patches. A toolkit at her belt, maintained to
+      military precision. Wears a pair of pre-war reading glasses she
+      found in a bunker, actual glass lenses, that she puts on when
+      she wants to look over them at you.
+    culture_aesthetic: >-
+      Scrapborn upper class — salvage, but the best salvage, maintained
+      with care that borders on ostentation. The reading glasses are a
+      power move.
+    element_visual: >-
+      Pre-war reading glasses, copper circuit tattoos, well-maintained
+      tool belt, Tood's Dome visible behind her — sheet metal and
+      rain-catchers.
+
+  - name: Åych Przysåuchkin
+    role: Singer of the Long Signal
+    type: npc_major
+    appearance: >-
+      An ancient Drifter woman so old that her mutation history has
+      become indistinguishable from age — translucent skin at the temples
+      showing faintly glowing veins, fingers too long by one knuckle,
+      eyes that have gone the pale blue of radio static. Draped in
+      layers of sun-bleached hide and woven wire, sitting astride a
+      seven-limbed mount whose extra legs move in a pattern that
+      shouldn't work but does. A bone-carved radio dish is strapped to
+      her saddle, humming faintly. She is always listening to something
+      no one else can hear.
+    culture_aesthetic: >-
+      Drifter elder — sun-bleached hide, woven wire jewelry, the
+      accoutrements of a life spent on the steppe listening to static.
+      The mount is as much a part of her portrait as she is.
+    element_visual: >-
+      Bone-carved radio dish on saddle, translucent temples with glowing
+      veins, seven-limbed mount, the open steppe behind her under a
+      bruised amber sky.
+
+  - name: Päan Sporecap
+    role: Greenfolk Communion Speaker
+    type: npc_major
+    appearance: >-
+      A Greenfolk person of indeterminate age whose lower body has been
+      partially consumed by symbiotic root growth — bark-like tissue
+      climbing their legs to the waist, small leaves sprouting from
+      their shoulders. Green-tinged skin, eyes with visible chloroplasts
+      that photosynthesize in direct light, giving them an eerie internal
+      glow. Bald head covered in a fine moss that they trim but don't
+      remove. Wears very little — the growth IS their clothing. Moves
+      slowly, deliberately, as if listening to something underground.
+    culture_aesthetic: >-
+      Greenfolk mystic — the body is the expression. The root-growth is
+      both condition and identity. What outsiders call parasitism, the
+      Greenfolk call communion.
+    element_visual: >-
+      Root growth from waist down, moss on scalp, chloroplast-green
+      eyes glowing faintly, small leaves on shoulders, the Blooming
+      Tangle's canopy behind them.
+
+  - name: Darty Ironlung
+    role: Scrapborn Salvage Crew Leader
+    type: npc_supporting
+    appearance: >-
+      A young Scrapborn man in his twenties with a permanent cough and
+      a grin that suggests he doesn't care. Pale skin under layers of
+      dust and engine grease, a mop of red hair tied back with wire.
+      Thin and wiry, built for climbing through collapsed structures.
+      Wears a salvage harness over a leather vest, goggles on forehead,
+      a crowbar strapped across his back like a sword. Missing the tip
+      of his left ring finger — lost to a rusted hatch.
+    culture_aesthetic: >-
+      Scrapborn working class — harness, goggles, tools as accessories.
+      The crowbar is both tool and weapon and he doesn't distinguish.
+    element_visual: >-
+      Salvage harness, goggles on forehead, crowbar on back, red hair
+      tied with copper wire, the entrance to a collapsed ruin behind him.
+
+  - name: Blãna Razwãrykin
+    role: Red Dust Riders Leader
+    type: npc_major
+    appearance: >-
+      A scarred Drifter woman in her thirties with sun-darkened skin
+      and a face that has stopped trying to be anything other than
+      dangerous. A long scar from temple to jaw, the gift of a
+      Vaultborn patrol machine. Hair in tight braids woven with red
+      oxide powder — the Riders' mark. Lean muscle over a frame built
+      for riding, leather armor reinforced with scavenged plate at the
+      shoulders and forearms. Her mount — a six-legged beast with
+      bioluminescent hide — stands behind her, its extra legs folded
+      in what passes for rest.
+    culture_aesthetic: >-
+      Red Dust Riders — Drifter militant. Red oxide in the hair, salvage
+      armor over riding leathers, the aesthetic of people who are done
+      asking permission.
+    element_visual: >-
+      Red oxide braids, temple-to-jaw scar, salvage plate armor, the
+      six-legged bioluminescent mount behind her, the Glass Flat's
+      black surface reflecting a green sky.

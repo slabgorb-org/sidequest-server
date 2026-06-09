@@ -551,6 +551,7 @@ def dispatch_dice_throw(
                 beat=beat,
                 actor_core=actor_core,
                 pack=pack,
+                world_slug=snapshot.world_slug,
             )
             if damage_spec is None:
                 logger.warning(
@@ -700,6 +701,7 @@ def dispatch_dice_throw(
                 beat=beat,
                 actor_core=actor_core,
                 pack=pack,
+                world_slug=snapshot.world_slug,
             )
             shock_target_name = _opposite_side_first_actor(encounter, actor.side)
             shock_target_core = (
@@ -1197,7 +1199,7 @@ def _resolve_opponent_reprisal(
     # never caps the player's weapon: it is read only on the opponent's turn.
     opponent_core = snapshot.find_creature_core(opponent_name)
     damage_spec = cdef.opponent_damage or ruleset.resolve_damage(
-        beat=opponent_beat, actor_core=opponent_core, pack=pack
+        beat=opponent_beat, actor_core=opponent_core, pack=pack, world_slug=snapshot.world_slug
     )
     if damage_spec is None:
         # The opponent's strike beat has no resolvable damage (no damage_override,

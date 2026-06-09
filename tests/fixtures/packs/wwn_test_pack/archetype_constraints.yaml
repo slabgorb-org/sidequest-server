@@ -1,0 +1,144 @@
+# archetype_constraints.yaml — heavy_metal (The Long Reckoning)
+# Defines valid Jungian x RPG Role pairings for this genre
+# common: chargen default, NPC gen draws most
+# uncommon: shown if player explores, NPC diversity
+# rare: allowed but unusual, memorable characters
+# forbidden: genuinely nonsensical for this genre
+#
+# Genre register: baroque debt-fantasy. Empires are ending. Every spell
+# is paid for in blood, years, or flesh. Inherited obligations, pact-born
+# sorcerers, guild-laborers whose craft is a continuing contract. The tone
+# is elegiac, operatic, and precise. Innocence is not extinct — it is
+# merely expensive, and the world collects on it without pity.
+
+valid_pairings:
+  common:
+    - [hero, tank]
+    - [hero, dps]
+    - [outlaw, stealth]
+    - [outlaw, dps]
+    - [magician, control]
+    - [magician, dps]
+    - [sage, control]
+    - [sage, support]
+    - [ruler, tank]
+    - [ruler, support]
+    - [caregiver, healer]
+    - [caregiver, support]
+    - [everyman, jack_of_all_trades]
+    - [everyman, support]
+
+  uncommon:
+    - [artist, control]
+    - [artist, support]
+    - [explorer, stealth]
+    - [explorer, jack_of_all_trades]
+    - [lover, support]
+    - [lover, healer]
+    - [jester, stealth]
+    - [jester, dps]
+    - [hero, jack_of_all_trades]
+    - [sage, healer]
+    - [outlaw, control]
+    - [ruler, dps]
+    - [innocent, healer]
+
+  rare:
+    - [innocent, support]
+    - [lover, dps]
+    - [artist, stealth]
+    - [jester, tank]
+    - [everyman, tank]
+    - [everyman, dps]
+    - [innocent, jack_of_all_trades]
+
+  forbidden:
+    - [innocent, stealth]
+    - [innocent, dps]
+    - [jester, healer]
+    - [caregiver, stealth]
+    - [caregiver, dps]
+    # The Long Reckoning does not produce guileless killers or laughing healers —
+    # every act of harm costs the one who does it, and those who tend wounds
+    # do not move through shadow.
+
+# Genre-level fallback names and flavor for each axis value
+# Used when no world-level funnel claims a combination
+genre_flavor:
+  jungian:
+    hero:
+      speech_pattern: "plain and declarative; avoids the ornate vocabulary of the courts; speaks debts aloud where others talk around them"
+      equipment_tendency: "iron weapons, battered armor, a covenant-mark worn visibly — nothing borrowed, nothing owed to a patron"
+      visual_cues: "scarred hands from work or pact-payment; upright posture earned rather than inherited; eyes that do not flinch from ledgers"
+    sage:
+      speech_pattern: "precise, archaic vocabulary; quotes from collapsed institutions without irony; pauses before naming anything"
+      equipment_tendency: "annotated codices, reagent pouches weighed to the grain, walking staff used to measure as much as to walk"
+      visual_cues: "ink-stained fingers; a faint smell of the reagents they use most; too-careful handwriting on any surface available"
+    outlaw:
+      speech_pattern: "clipped, evasive, dark-dry wit; refers to debts as 'arrangements' and creditors as 'parties of interest'"
+      equipment_tendency: "concealed blade, sealed letters in a coat lining, a set of papers that may or may not be authentic"
+      visual_cues: "hood or scarf; habitual checking of exits; calloused fingers from more than one kind of trade"
+    caregiver:
+      speech_pattern: "warm, patient, precise about dosage and obligation; distinguishes between what they offer freely and what they will not"
+      equipment_tendency: "healer's kit, provisions weighed for sharing, a small token from whoever they came here to protect"
+      visual_cues: "worry lines; hands that move with practiced gentleness; always positioned between the group and the door"
+    ruler:
+      speech_pattern: "commanding and formal; speaks of obligations in the third person; economical with words, baroque with silence"
+      equipment_tendency: "quality weapons maintained by someone else, signet or covenant-seal, a ledger they may or may not keep themselves"
+      visual_cues: "upright bearing that cost something to learn; a deliberate stillness; the particular weariness of someone who owes in every direction"
+    explorer:
+      speech_pattern: "excited about stratigraphy, casual about danger, uses guild-quarter idiom in courtly settings without noticing the effect"
+      equipment_tendency: "surveying tools, rubbing paper, rope, boots resoled more than once"
+      visual_cues: "hands dirty from recent digging; maps folded incorrectly and carried in a coat pocket; distant gaze when indoors"
+    magician:
+      speech_pattern: "precise and layered; refers to workings as transactions; uncomfortable with questions about the source of a patron's appetite"
+      equipment_tendency: "focus object specific to their pact, annotated grimoire of costs rather than effects, reagent pouch"
+      visual_cues: "pact-marks on skin — some deliberate, some not; faint iridescence at the fingertips after a working; too-steady hands"
+    artist:
+      speech_pattern: "observational, metaphor-heavy, apt to describe what is ending in terms of what it must have looked like when it began"
+      equipment_tendency: "tools of their specific craft, a record book of dying things, pigments or materials sourced from unusual places"
+      visual_cues: "stained hands from whatever their medium is; the particular attention of someone who is memorizing a thing before it leaves"
+    innocent:
+      speech_pattern: "earnest, questions inherited assumptions, occasionally names debts that everyone else has learned to work around"
+      equipment_tendency: "simple practical weapon, a family keepsake whose covenant implications they may not fully understand"
+      visual_cues: "open face that has not yet learned to close; a slight hesitation before transactions; the posture of someone who still believes the price can be refused"
+    lover:
+      speech_pattern: "attentive, emotionally fluent, names what is owed between people with an accuracy that makes others uncomfortable"
+      equipment_tendency: "token from a specific person, clothes that suggest they dressed for someone's eyes, nothing borrowed without intention to return it"
+      visual_cues: "expressive face; graceful but never performative movement; a particular attentiveness to when someone's account is running low"
+    jester:
+      speech_pattern: "quick wit deployed at the exact wrong moment; gallows humor that is actually more accurate than anyone wanted; deflects grief with precision"
+      equipment_tendency: "motley if the audience will read it as armor, a hidden blade, a prop or two that serves double duty"
+      visual_cues: "mischievous eyes that are watching harder than they appear to be; animated gestures; the specific grin of someone who has already calculated the cost and decided to pay it anyway"
+    everyman:
+      speech_pattern: "plain, local dialect, relatable; speaks of the feeding economy as a weather condition — something to work around, not argue with"
+      equipment_tendency: "practical tools of their trade, covenant-marks worn without ceremony, nothing that announces itself"
+      visual_cues: "tired eyes; calloused hands specific to a real trade; unremarkable build; the worn-smooth quality of someone who has been paying a little, every day, for a long time"
+
+  rpg_roles:
+    tank:
+      fallback_name: "Covenant-Shield"
+    dps:
+      fallback_name: "Debt-Blade"
+    control:
+      fallback_name: "Binder"
+    healer:
+      fallback_name: "Flesh-Keeper"
+    stealth:
+      fallback_name: "Name-Erased"
+    support:
+      fallback_name: "Account-Runner"
+    jack_of_all_trades:
+      fallback_name: "Long-Road"
+
+# NPC roles available in this genre
+npc_roles_available:
+  - mentor
+  - herald
+  - shadow
+  - threshold
+  - host
+  - artisan
+  - authority
+  - victim
+  - mook

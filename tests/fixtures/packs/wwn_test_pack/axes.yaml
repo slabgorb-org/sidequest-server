@@ -1,0 +1,132 @@
+# Heavy Metal — Tone Alignment Axes
+# These axes control the narrative tone of the game session.
+# Values range from 0.0 (first pole) to 1.0 (second pole).
+
+definitions:
+  - id: comedy
+    name: Comedy
+    description: >-
+      How much humor pervades the narrative. Heavy Metal defaults to very
+      low comedy — the pack is operatic, elegiac, and baroque. A little
+      gallows wit survives in the guild quarters; almost none survives in
+      the courts or the temples. At the high end, wry irony is the most
+      that is permitted — never slapstick, never bathos.
+    poles:
+      - grave
+      - wry
+    default: 0.15
+
+  - id: gravity
+    name: Gravity
+    description: >-
+      The weight of consequences and stakes. Heavy Metal defaults to very
+      high gravity. Every act of magic is a withdrawal from a ledger that
+      gets paid in blood, years, names, or flesh. Wounds scar. Debts
+      compound. Even small choices can close an account that was quiet
+      for a century.
+    poles:
+      - light
+      - crushing
+    default: 0.85
+
+  - id: outlook
+    name: Outlook
+    description: >-
+      The prevailing mood of the world. Heavy Metal is elegiac, not
+      nihilistic. Empires are ending, but the ending itself has beauty
+      and meaning. A bleak value leans further into decay, entropy, and
+      the exhaustion of institutions. A warmer value admits that
+      something worth saving still exists in the ruins — and that the
+      cost of saving it is never cheap.
+    poles:
+      - elegy
+      - ember
+    default: 0.2
+
+modifiers:
+  comedy:
+    grave:
+      A sweet ironic line may pass. A genuine joke breaks the spell.
+      Describe everything as if it were being remembered by someone a
+      long time after. Avoid contemporary idiom. No fourth-wall moves.
+      Ornate is preferred to spare. When in doubt, grieve rather than
+      grin.
+    wry:
+      A guildsman may dry-mouth a complaint. A drunk priest may say
+      something honest. A doomed noble may laugh once, softly, at the
+      right wrong moment. Never slapstick. Never cheap. If the joke
+      would feel at home in a modern sitcom, do not use it. Humor here
+      is an exhalation, not a punchline.
+
+  gravity:
+    light:
+      Wounds close. A debt is forgiven when the creditor isn't looking.
+      A pact can be renegotiated on the strength of a good argument. The
+      god is not actively watching this week. Use this setting sparingly
+      and with purpose — Heavy Metal collapses into a different genre
+      entirely if consequences are routinely waved away.
+    crushing:
+      Every choice debits an account somewhere. Violence costs the one
+      who does it as well as the one who suffers it. A small spell asks
+      for a memory, a voice, a face, a year. A large one asks for more.
+      Scars are the default. Forgiveness is something you pay for, and
+      the price is almost never what you expected.
+
+  outlook:
+    elegy:
+      The world is in its long dusk. Institutions are exhausted, their
+      rituals half-remembered and half-mis-remembered. What is beautiful
+      here is beautiful because it is leaving. Describe the decay with
+      the respect due to a thing that once worked. Hope is permitted only
+      in small, specific, hard-won forms — and should never sound like
+      optimism.
+    ember:
+      Something is still alive. Someone is still keeping a real vigil, a
+      real oath, a real debt honestly paid. The ending has not fully
+      arrived, and in the spaces it hasn't reached, real things are still
+      possible. Frame the glimmer as a choice that someone made, at real
+      cost — not as a gift from the world.
+
+presets:
+  - name: Court
+    description: >-
+      The baroque register — political, elegiac, cold. For sessions that
+      play among the inheritor houses, where obligations are paid in
+      marriages, suicides, and slow poisonings. Silence is a weapon.
+      Nothing in a room is accidental.
+    values:
+      comedy: 0.1
+      gravity: 0.9
+      outlook: 0.15
+
+  - name: Guild
+    description: >-
+      The forge-quarter register — grimy, specific, and slightly wry.
+      For sessions in the thaumaturgic guild cities, where magic is a
+      trade and sorcerers work shifts. Gallows humor is permitted here
+      as long as it is earned by the work.
+    values:
+      comedy: 0.3
+      gravity: 0.85
+      outlook: 0.25
+
+  - name: Temple
+    description: >-
+      The liturgical register — hushed, precise, ritual. For sessions
+      that live inside the feeding apparatus of an organized cult,
+      where everything is a measurement and a balance.
+    values:
+      comedy: 0.05
+      gravity: 0.9
+      outlook: 0.2
+
+  - name: Buried
+    description: >-
+      The deep-time register — slow, patient, and mostly silent. For
+      sessions that dig into the leavings of the older civilizations,
+      where the time scale is geological and the things that wake do
+      not speak any of the modern languages.
+    values:
+      comedy: 0.05
+      gravity: 0.95
+      outlook: 0.1

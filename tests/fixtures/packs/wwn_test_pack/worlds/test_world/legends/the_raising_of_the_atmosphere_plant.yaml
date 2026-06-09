@@ -1,0 +1,45 @@
+name: The Raising of the Atmosphere Plant
+era: the age of the great works — after the seas failed
+summary: >-
+  When it became plain that the air itself meant to follow the water,
+  the red race spent the wealth of a hundred cities and the lives of three
+  generations raising a single building far out on the dead sea floor — four
+  miles of seamless wall around a ninth-ray heart that drinks sunlight and
+  exhales a world's breath. It has not stopped in a thousand years. What
+  stopped instead was the knowledge: the builders trained keepers, the
+  keepers trained fewer keepers, and the secret of the great door — nine
+  thought-waves, sounded in order against the lock — narrowed with each
+  quiet generation until it became what it is now, a thing perhaps three
+  living men carry, none of whom has met the others.
+affected_cultures:
+- Red Martian
+- Green Martian
+- Yellow Martian
+cultural_impact: >-
+  Every race on Barsoom breathes by the plant's leave, and
+  every red coronation since the raising has included the Courier of the
+  Air — a rider sent to the plant with the new jeddak's tribute, returning
+  with a sealed phial of first-drawn air that the jeddak breathes before
+  his crowning oath. The oldest toast in the canal cities is two words,
+  "the pumps," and it is drunk seated, because the builders worked seated
+  at their benches until they died at them.
+faction_grudges: []
+lost_arts:
+- How to raise a second plant. The first one's plans were held in the
+  builders' guild-house at Horz, which has been a ruin for nine hundred
+  years.
+- The engineering of the ninth ray beyond maintenance rote — the keepers
+  tend a heart they could not rebuild, by rituals that were once
+  calculations.
+monuments:
+- The Atmosphere Plant itself — visible from two days' ride away, a wall
+  with no seam, no window, and one door that opens to nine thoughts.
+terrain_scars:
+- name: The Builders' Road
+  type: dead_road
+  description: A paved hauling-road running die-straight across the dead sea
+    floor toward the plant, rutted a hand-span deep by stone sledges. The
+    canal cities' maps no longer mark where it begins, only that crossing
+    it obliges a traveler to clear the drift-moss from one paving stone.
+related_tropes:
+- the_atmosphere_plant_falters

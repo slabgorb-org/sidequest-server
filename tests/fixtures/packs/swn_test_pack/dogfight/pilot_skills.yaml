@@ -1,0 +1,132 @@
+# Dogfight Pilot Skill Tiers — Future Capture
+#
+# Captured during the 2026-04-11 MVP brainstorm. Not yet consumed by any
+# system. This file defines how pilot experience expresses itself in the
+# dogfight subsystem — specifically how more-skilled pilots unlock larger
+# maneuver menus and score harder hits.
+#
+# Two axes of pilot progression:
+#   1. Maneuver menu expansion — rookies know fewer moves, aces know them all
+#   2. Damage modifier — higher skill = harder hits when gun_solution lands
+#
+# The tier thresholds match the space_opera pack's existing affinity system
+# (see ../progression.yaml): 0 / 6 / 15 / 30 pts in the relevant affinity
+# (Command for formation pilots, Grit for survival pilots, or a dedicated
+# "Piloting" sub-skill if we introduce one — TBD during integration).
+#
+# This file is forward-capture only. The MVP playtest uses tier_2 (Veteran)
+# for both pilots by default, which gives them the full 4-maneuver menu
+# without any damage bonus. Skill tiers come online when the dogfight
+# subsystem is wired into campaign play.
+
+version: "0.1.0"
+status: forward_capture
+depends_on:
+  - maneuvers_mvp.yaml
+  - ../progression.yaml
+
+tiers:
+
+  - id: tier_0
+    name: Rookie
+    display_name: "Fresh Cockpit"
+    affinity_threshold: 0
+    description: >-
+      Raw recruits. They can fly straight and evade, nothing more. Every
+      advanced maneuver in the menu is grayed out. Rookies survive by
+      running, not by winning.
+    available_maneuvers:
+      - straight
+      - bank
+    damage_modifier: 0
+    narrative_tell: >-
+      Jerky stick inputs, over-corrections on the bank, engine throttle
+      cycles visible from the other cockpit. Rookies are easy to read.
+
+  - id: tier_1
+    name: Trained
+    display_name: "Academy Graduate"
+    affinity_threshold: 6
+    description: >-
+      Finished basic flight school. Can execute the vertical loop cleanly.
+      Still no kill rotation — that's a reflex move only combat teaches.
+    available_maneuvers:
+      - straight
+      - bank
+      - loop
+    damage_modifier: 0
+    narrative_tell: >-
+      Clean geometry, textbook entry angles. Predictable because they fly
+      the way the manual tells them to.
+
+  - id: tier_2
+    name: Veteran
+    display_name: "Line Pilot"
+    affinity_threshold: 15
+    description: >-
+      Combat experience. Has the reflex for attitude-jet flips and the
+      nerve to execute them inside a merge. Full MVP menu available.
+    available_maneuvers:
+      - straight
+      - bank
+      - loop
+      - kill_rotation
+    damage_modifier: 1
+    narrative_tell: >-
+      Economy of motion. Veterans don't waste stick. Every maneuver is
+      committed at the last defensible instant and no earlier.
+
+  - id: tier_3
+    name: Ace
+    display_name: "Named Pilot"
+    affinity_threshold: 30
+    description: >-
+      Beyond veteran. The kind of pilot whose callsign is in the intel
+      briefing. Unlocks the full post-MVP 8-maneuver expansion set. Hits
+      harder, reads faster, occasionally sees the enemy's commit before
+      it's revealed.
+    available_maneuvers:
+      - straight
+      - bank
+      - loop
+      - kill_rotation
+      # post-MVP expansion (not yet authored in maneuvers_mvp.yaml):
+      - immelmann
+      - split_s
+      - hard_break
+      - cold_drift
+    damage_modifier: 2
+    special_ability:
+      id: ace_instinct
+      uses_per_duel: 1
+      effect: >-
+        Once per duel, the ace may reveal the opponent's committed maneuver
+        BEFORE committing their own. Breaks sealed-letter symmetry. Models
+        the "they always seem to know what you're going to do" feeling
+        that defines a named-pilot encounter.
+    narrative_tell: >-
+      You don't notice an ace flying at you until you realize they've been
+      in the correct position for three consecutive turns. By then it's
+      too late.
+
+# ---- Integration notes (for the engineer who wires this up) ----
+#
+# Consumers:
+#   - The maneuver menu UI must filter by the pilot's tier's
+#     available_maneuvers before presenting choices.
+#   - The damage resolution step (inside or adjacent to gun_solution
+#     evaluation) must add damage_modifier to clean-hit damage.
+#   - Ace Instinct is a one-shot toggle on the pilot's per-duel state;
+#     spending it sets opponent_maneuver_visible=true for this turn only.
+#
+# OTEL spans required when this ships:
+#   - dogfight.skill_tier_resolved (which tier, which maneuvers available)
+#   - dogfight.damage_modifier_applied (bonus value, source)
+#   - dogfight.ace_instinct_used (pilot id, opponent commit peeked)
+#
+# Balance notes:
+#   - A tier_3 vs tier_0 fight should be unwinnable for the rookie. That's
+#     CORRECT. Aces exist so that ace encounters feel different. Do not
+#     rubber-band this.
+#   - Campaign-level matchmaking should try to keep duels within 1 tier
+#     of each other except for boss encounters (intentional tier mismatch).

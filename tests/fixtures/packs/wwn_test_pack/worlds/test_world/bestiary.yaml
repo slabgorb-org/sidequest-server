@@ -1,0 +1,283 @@
+# Barsoom — world bestiary (mars_bestiary)
+#
+# World-tier override on the heavy_metal pack bestiary. SRD-aligned combat
+# stat blocks for the wwn ruleset module; encountergen samples these (alongside
+# the genre-tier pool) for the Monster Manual encounters of the dying red
+# planet. Narrative layers (OCEAN, visual prompt) are composed at generation
+# time. Stats follow the Worlds Without Number SRD 1.0 (Sine Nomine
+# Publishing) generic stat lines — level == HD, hp == average (4.5/HD),
+# ascending AC, morale on the 2d12 ladder, physical save 15 - floor(level/2).
+#
+# World tier (ADR-120): these hostiles are specific to Barsoom — the
+# eight-legged thoat, the ten-legged banth, the four-armed green hordes. The
+# creatures and cultures are Edgar Rice Burroughs' (Barsoom / John Carter of
+# Mars), public domain in the US. Genre-generic foes stay in the pack
+# bestiary.yaml; this file overrides only the world-flavored roster.
+entries:
+  - id: ulsio
+    name: Ulsio
+    level: 1
+    hp: 5
+    armor_class: 12
+    attack_bonus: 1
+    damage: "1d4"
+    move: "30 ft."
+    morale: 6
+    skill: 1
+    save: 15
+    role: pit-dwelling Martian rat
+    tags: [beast, vermin]
+    abilities:
+      - "Swarms — fights in numbers in the dungeons and dead-city cellars"
+    description: >-
+      A hairless six-legged rat the size of a hound, of the lightless
+      pits beneath the dead cities — cowardly in the open, murderous when
+      a pack of them corners prey in the dark.
+  - id: thern_zealot
+    name: Thern Zealot
+    level: 1
+    hp: 5
+    armor_class: 13
+    attack_bonus: 1
+    damage: "1d8"
+    move: "30 ft."
+    morale: 9
+    skill: 1
+    save: 15
+    role: temple guard of the false holy race
+    tags: [human, cultist]
+    description: >-
+      A white-skinned priest of the Golden Cliffs under a blond wig and
+      jeweled harness, long-sword drawn to keep the great lie of the River
+      Iss — certain the pilgrims he harvests die for a true paradise.
+  - id: calot
+    name: Calot
+    level: 2
+    hp: 9
+    armor_class: 13
+    attack_bonus: 3
+    damage: "1d6"
+    move: "50 ft."
+    morale: 7
+    skill: 1
+    save: 14
+    role: ten-legged Martian watch-beast
+    tags: [beast]
+    abilities:
+      - "Fastest thing on Barsoom — runs down anything afoot"
+    description: >-
+      A squat ten-legged hound the size of a Shetland pony, frog-jawed and
+      three-rowed with teeth, faster than any thoat. A tamed one guards a
+      jeddak's door; a wild one runs prey to ground across the sea-bottom.
+  - id: red_martian_panthan
+    name: Red Martian Panthan
+    level: 2
+    hp: 9
+    armor_class: 15
+    attack_bonus: 3
+    damage: "1d8+1"
+    move: "30 ft."
+    morale: 8
+    skill: 1
+    save: 14
+    role: masterless swordsman for hire
+    tags: [human, mercenary]
+    description: >-
+      A copper-skinned soldier of fortune in worn fighting-harness, owing
+      allegiance to no city — radium pistol holstered, long-sword loose,
+      his blade for sale to whoever met his price last.
+  - id: thoat
+    name: Wild Thoat
+    level: 3
+    hp: 14
+    armor_class: 13
+    attack_bonus: 4
+    damage: "1d10"
+    move: "60 ft."
+    morale: 7
+    skill: 1
+    save: 14
+    role: eight-legged war-mount run feral
+    tags: [beast, mount]
+    abilities:
+      - "Trample — rears and strikes with the forefeet for a second attack"
+    description: >-
+      A slate-dark eight-legged beast taller than a horse, smooth-hided
+      and tailless, vicious past breaking. The green hordes master them by
+      cruelty alone; a feral one off the picket-line will savage anything
+      that nears.
+  - id: black_corsair
+    name: Black Corsair of the First Born
+    level: 3
+    hp: 14
+    armor_class: 15
+    attack_bonus: 4
+    damage: "1d8+1"
+    move: "30 ft."
+    morale: 9
+    skill: 2
+    save: 14
+    role: pirate raider of the buried sea
+    tags: [human, raider]
+    description: >-
+      A black-skinned corsair of Omean in jeweled harness, beautiful and
+      cruel, who serves Issus and raids the surface by night in a black
+      flier — taking slaves of every Barsoomian race for the goddess's halls.
+  - id: plant_man
+    name: Plant-Man of Dor
+    level: 3
+    hp: 14
+    armor_class: 13
+    attack_bonus: 4
+    damage: "1d8"
+    move: "30 ft."
+    morale: 12
+    skill: 0
+    save: 14
+    role: blood-drinking horror of the Valley Dor
+    tags: [horror]
+    abilities:
+      - "Mindless and fearless — never checks morale"
+      - "Bounds on hands and tail; the single talon drains the blood of the fallen"
+    description: >-
+      A hairless white thing of the Valley Dor, near-sightless and all but
+      mouthless, that moves in great leaps on its hands and lashing tail
+      and feeds on the blood of the pilgrims the River Iss delivers to it.
+  - id: green_martian_warrior
+    name: Green Martian Warrior
+    level: 4
+    hp: 18
+    armor_class: 13
+    attack_bonus: 5
+    damage: "1d10"
+    move: "30 ft."
+    morale: 10
+    skill: 2
+    save: 13
+    role: four-armed horde-warrior of the dead sea bottoms
+    tags: [giant, elite]
+    abilities:
+      - "Four arms — makes two attacks per round"
+      - "Radium rifle — deadly accuracy at long range before the swords close"
+    description: >-
+      A fifteen-foot olive-skinned giant of the Thark or Warhoon hordes,
+      four-armed and tusked, twin long-swords and a radium rifle in his
+      hands — bred to cruelty, valuing courage in an enemy above mercy.
+  - id: sith
+    name: Sith
+    level: 4
+    hp: 18
+    armor_class: 14
+    attack_bonus: 5
+    damage: "1d8"
+    move: "fly 50 ft."
+    morale: 8
+    skill: 1
+    save: 13
+    role: bull-sized forest hornet
+    tags: [beast, vermin]
+    abilities:
+      - "Venomous sting — a struck target saves or is slain by the poison"
+    description: >-
+      A hairless hornet the size of a Hereford bull, of the great Kaolian
+      forest — bald-faced, droning, its sting carrying a poison that kills
+      a thoat as readily as a man.
+  - id: white_ape
+    name: White Ape
+    level: 5
+    hp: 23
+    armor_class: 13
+    attack_bonus: 6
+    damage: "1d10"
+    move: "40 ft."
+    morale: 9
+    skill: 1
+    save: 13
+    role: four-armed terror of the dead cities
+    tags: [beast]
+    abilities:
+      - "Four arms — makes two attacks per round"
+      - "Rends a seized foe between its grips"
+    description: >-
+      A ten-to-fifteen-foot hairless white brute, blue-grey and four-armed,
+      a bristling shock of hair on its skull — it dens in the toppled marble
+      of the dead cities and hunts whatever wanders the ruins.
+  - id: orluk
+    name: Orluk
+    level: 5
+    hp: 23
+    armor_class: 13
+    attack_bonus: 6
+    damage: "1d10"
+    move: "40 ft."
+    morale: 8
+    skill: 1
+    save: 13
+    role: striped polar predator
+    tags: [beast]
+    description: >-
+      A black-and-yellow striped hunter of the northern ice, prized for its
+      pelt by the yellow men's jeddak and feared by everything else that
+      crosses the frozen waste — ferocity wrapped in a fortune of fur.
+  - id: banth
+    name: Banth
+    level: 6
+    hp: 27
+    armor_class: 14
+    attack_bonus: 7
+    damage: "2d6"
+    move: "50 ft."
+    morale: 9
+    skill: 2
+    save: 12
+    role: ten-legged lion of the dead sea bottoms
+    tags: [beast, apex]
+    abilities:
+      - "Pounce — a charge into a foe grants a second attack that round"
+      - "Many-tusked maw — the bite damage is brutal"
+    description: >-
+      The great maneless lion of Barsoom: tawny, ten-legged, eyes
+      protruding from the sides of its head, an enormous mouth ringed with
+      row upon row of gleaming tusks. Its roar across the moss is the last
+      sound many a traveller hears.
+  - id: zitidar
+    name: Rogue Zitidar
+    level: 6
+    hp: 27
+    armor_class: 14
+    attack_bonus: 7
+    damage: "2d6"
+    move: "30 ft."
+    morale: 8
+    skill: 0
+    save: 12
+    role: mastodonian draft-beast gone wild
+    tags: [beast]
+    abilities:
+      - "Charge — an unobstructed rush tramples for double damage and bowls riders from the saddle"
+    description: >-
+      A tusked mountain of a beast, broad as a war-cart and bred to haul
+      them, the green hordes' living engine. A broken one loose from the
+      traces is an avalanche with malice — nothing on the sea-bottom turns
+      a charging zitidar.
+  - id: apt
+    name: Apt
+    level: 7
+    hp: 32
+    armor_class: 14
+    attack_bonus: 9
+    damage: "2d6+1"
+    move: "40 ft."
+    morale: 9
+    skill: 2
+    save: 12
+    role: six-limbed apex hunter of the north pole
+    tags: [beast, apex]
+    abilities:
+      - "Six limbs — two end in white grasping hands; makes two attacks per round"
+      - "Thousand-faceted eyes — cannot be flanked or ambushed"
+    description: >-
+      A shaggy white horror of the polar ice, two of its six limbs ending
+      in pallid hands, gleaming tusks below a pair of eyes each a thousand
+      facets wide. The apex predator of the frozen north, it takes men and
+      orluks alike.

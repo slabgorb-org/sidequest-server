@@ -1,0 +1,319 @@
+# Power Tiers — space_opera
+# Per-class visual descriptions at each level range.
+# Keyed by class from rules.yaml:
+#   Officer, Operative, Pilot, Engineer, Medic, Smuggler, Diplomat, Soldier
+
+Officer:
+  - level_range: [1, 3]
+    label: ensign
+    player: >-
+      a uniform that still creases where the factory pressed it, a sidearm
+      worn self-consciously, a datapad full of regulations they actually
+      read, the earnest posture of someone who believes the chain of command
+      means something out here on the edge
+    npc: >-
+      a junior officer fresh from the academy, still saluting people who
+      stopped caring about rank three systems ago
+  - level_range: [4, 6]
+    label: commander
+    player: >-
+      a uniform worn soft at the elbows, a sidearm drawn from muscle memory,
+      crew who look to them before making decisions, a datapad full of
+      favors owed and debts outstanding, the quiet authority of someone
+      who has given orders that got people killed and kept giving orders
+    npc: >-
+      a ship captain or station chief whose word is law in their domain,
+      respected by crew and tolerated by authorities
+  - level_range: [7, 9]
+    label: commodore
+    player: >-
+      a uniform that has become costume — medals from campaigns nobody
+      remembers, a command style that doesn't need the uniform at all,
+      multiple ships or a significant station under their authority,
+      the strategic mind that sees three jumps ahead
+    npc: >-
+      a fleet commander or sector authority whose decisions move markets
+      and change borders, the kind of officer who gets mentioned in
+      dispatches and histories
+  - level_range: [10, 10]
+    label: admiral
+    player: >-
+      the uniform is optional — their face is the authority, their name
+      is the fleet, their decisions shaped the sector and everyone in it
+      knows the story, a presence that quiets a room by entering it
+
+Operative:
+  - level_range: [1, 3]
+    label: asset
+    player: >-
+      nondescript clothing designed to be forgettable, a concealed sidearm,
+      a vibroknife in a boot sheath, a cover identity thinner than the
+      hull of a shuttle, the careful movements of someone who checks exits
+      before sitting down
+    npc: >-
+      a contact who shows up in bars and leaves no trace, claims to work
+      in shipping, answers questions with questions
+  - level_range: [4, 6]
+    label: field agent
+    player: >-
+      multiple identities worn like layers of clothing, weapons hidden in
+      places that defeat standard scans, a network of contacts in every
+      port, the easy smile of someone who is always lying and always
+      telling you exactly what you need to hear
+    npc: >-
+      an intelligence operative whose real employer is a matter of
+      speculation, trusted by no one and useful to everyone
+  - level_range: [7, 9]
+    label: handler
+    player: >-
+      a web of agents and assets across multiple systems, the ability to
+      make things happen without being present, a reputation that is
+      itself a weapon — people cooperate because of what they've heard,
+      not what they've seen
+    npc: >-
+      a spymaster operating from a nondescript office on a backwater
+      station, whose influence reaches into governments and corporations
+  - level_range: [10, 10]
+    label: ghost
+    player: >-
+      no official record, no confirmed sightings, a legend that intelligence
+      services tell each other — the operative who played every side and
+      won, whose real name might not exist, whose greatest achievement
+      is that nobody is sure they're real
+
+Pilot:
+  - level_range: [1, 3]
+    label: stick jockey
+    player: >-
+      a flight jacket with more patches than the hull they're flying,
+      a personal connection to the ship that borders on the unhealthy,
+      hands that twitch toward controls during conversation, the restless
+      energy of someone who is only calm when the ship is moving
+    npc: >-
+      a shuttle pilot or cargo runner, competent and cocky, living for
+      the next run
+  - level_range: [4, 6]
+    label: hotshot
+    player: >-
+      a flight jacket that's become a second skin, a ship they've modified
+      beyond spec, a flying style that makes passengers grip their seats,
+      a reputation at every port for either the best landing or the most
+      terrifying approach — sometimes both
+    npc: >-
+      a pilot whose name comes up when people need something moved fast,
+      quiet, or through space that's technically off-limits
+  - level_range: [7, 9]
+    label: ace
+    player: >-
+      a ship that responds to their touch like a living thing, maneuvers
+      that other pilots study and can't replicate, a flight record that
+      includes runs through asteroid fields and combat zones that should
+      have been fatal, the Zen calm of someone who has merged with their
+      machine
+    npc: >-
+      a legendary pilot whose skills are the reason convoys survive and
+      blockades fail, squadron leaders defer to their instincts
+  - level_range: [10, 10]
+    label: void dancer
+    player: >-
+      the ship IS the pilot — an extension of will and instinct that
+      defies physics, flying that looks like art and feels like gravity
+      giving up, the one other pilots tell stories about in bars with
+      the quiet reverence reserved for things they can't explain
+
+Engineer:
+  - level_range: [1, 3]
+    label: tech
+    player: >-
+      grease-stained coveralls, a multitool that never leaves the belt,
+      a personal relationship with every system on the ship that involves
+      cursing at it fondly, the dark circles of someone who was up all
+      night because the starboard coil was making a noise
+    npc: >-
+      a station mechanic or shipboard tech, competent and overworked,
+      valued for keeping things running, invisible when things work
+  - level_range: [4, 6]
+    label: systems engineer
+    player: >-
+      a tool harness that's an extension of the body, a diagnostic sense
+      that borders on intuition, modifications to the ship that weren't
+      in any manual, the confidence of someone who has kept a ship alive
+      through situations that should have killed it
+    npc: >-
+      a chief engineer whose ship runs better than it did off the line,
+      whose modifications are sought after by other crews
+  - level_range: [7, 9]
+    label: miracle worker
+    player: >-
+      a reputation that precedes any ship they serve on, the ability to
+      coax performance from systems that should be scrap, modifications
+      that other engineers study like scripture, the calm authority of
+      someone who has rebuilt a drive core under fire and considers it
+      a Tuesday
+    npc: >-
+      a legendary engineer whose name is a guarantee — any ship they've
+      touched runs better, and crews compete to recruit them
+  - level_range: [10, 10]
+    label: shipwright
+    player: >-
+      not just an engineer but an architect — designs ships, builds
+      systems, creates technology that changes how the sector works, a
+      mind that sees the machine the way a composer sees the orchestra,
+      the one who built the ship that built the legend
+
+Medic:
+  - level_range: [1, 3]
+    label: field medic
+    player: >-
+      a medkit that's always open, hands that are always clean, a
+      datapad full of anatomy references bookmarked at the ugly pages,
+      the focused intensity of someone who sees every injury as a
+      problem to solve and every person as a patient
+    npc: >-
+      a clinic worker or ship's medic, overworked and under-supplied,
+      patching people up with whatever's available
+  - level_range: [4, 6]
+    label: surgeon
+    player: >-
+      a field surgical kit that has seen too much use, steady hands that
+      don't shake even when the ship does, a growing knowledge of xenobiology
+      learned the hard way, the dark humor of someone who has held lives
+      together with sutures and swearing
+    npc: >-
+      a doctor whose skills keep crews alive on the frontier, trusted
+      with lives and secrets in equal measure
+  - level_range: [7, 9]
+    label: chief medical officer
+    player: >-
+      a medbay that's become a sanctuary — the one place on the ship
+      where rank doesn't matter, a pharmacological knowledge that includes
+      alien biochemistry, the authority to ground anyone including the
+      captain, the moral center of whatever crew they serve
+    npc: >-
+      a renowned physician whose clinic is a destination, whose
+      treatments include species nobody else has studied
+  - level_range: [10, 10]
+    label: life bringer
+    player: >-
+      the doctor who has saved more species than most people have met,
+      whose medical breakthroughs have changed the sector, whose hands
+      have held the line between life and death so many times that
+      death has learned to wait
+
+Smuggler:
+  - level_range: [1, 3]
+    label: runner
+    player: >-
+      a ship with more hidden compartments than cabin space, a manifest
+      that's technically accurate and fundamentally misleading, a fast
+      mouth and a faster exit plan, the nervous energy of someone who
+      is always one scan away from a very bad day
+    npc: >-
+      a cargo hauler who takes jobs that don't get written down, knows
+      which customs agents can be bribed and which can't
+  - level_range: [4, 6]
+    label: fixer
+    player: >-
+      a ship modified for speed and stealth, contacts in every port's
+      underworld, a cargo hold that has carried everything from medical
+      supplies to weapons to people, the easy charm of someone who makes
+      illegal things feel like favors between friends
+    npc: >-
+      a smuggler whose reputation opens doors in the right wrong places,
+      trusted to move anything anywhere without asking questions
+  - level_range: [7, 9]
+    label: kingpin
+    player: >-
+      a network of ships and runners operating across multiple systems,
+      legitimate businesses that launder the real income, a personal
+      ship that's a floating office, the quiet power of someone who
+      doesn't smuggle anymore — they organize
+    npc: >-
+      a crime lord whose supply chains rival legitimate commerce,
+      whose displeasure closes ports and whose favor opens them
+  - level_range: [10, 10]
+    label: free trader
+    player: >-
+      transcended crime entirely — a figure whose trade network is
+      so essential that governments negotiate rather than prosecute,
+      whose ships move freely because everyone needs what they carry,
+      the merchant prince of the void
+
+Diplomat:
+  - level_range: [1, 3]
+    label: attaché
+    player: >-
+      formal clothing that fits well but not expensively, a datapad
+      full of protocols and precedents, a gift for remembering names
+      and the patience to use them, the careful diplomacy of someone
+      who represents something larger than themselves
+    npc: >-
+      a junior diplomat or trade representative, polite and observant,
+      filing reports about everything they see
+  - level_range: [4, 6]
+    label: envoy
+    player: >-
+      clothing that signals status without declaring faction, a fluency
+      in multiple languages and cultural registers, a network of
+      relationships built on genuine mutual interest, the ability to
+      find common ground where none appears to exist
+    npc: >-
+      a diplomatic professional who brokers deals between species and
+      factions, trusted by both sides because betraying either would
+      end their career
+  - level_range: [7, 9]
+    label: ambassador
+    player: >-
+      a presence that commands attention in any chamber, a reputation
+      that opens doors across the sector, the architect of treaties
+      and trade agreements that shaped borders, a personal authority
+      that transcends the government they represent
+    npc: >-
+      a senior diplomat whose word is a commitment, whose displeasure
+      is a sanction, whose presence at a negotiation means it matters
+  - level_range: [10, 10]
+    label: peacemaker
+    player: >-
+      the diplomat who ended a war, or prevented one, or held a
+      coalition together when it should have shattered — whose name
+      is synonymous with a peace that holds, whose retirement is a
+      loss the sector feels
+
+Soldier:
+  - level_range: [1, 3]
+    label: grunt
+    player: >-
+      standard-issue armor showing early wear, a rifle maintained with
+      more care than anything else they own, a helmet with a name
+      scratched inside, the alertness of someone who learned to sleep
+      light and wake ready
+    npc: >-
+      a security contractor or garrison trooper, competent and wary,
+      doing a job that nobody thanks them for
+  - level_range: [4, 6]
+    label: veteran
+    player: >-
+      armor worn to personal fit, a rifle modified for preference,
+      a combat style that wastes nothing, scars that have stories
+      they don't tell, the economy of movement that comes from knowing
+      exactly how dangerous everything is
+    npc: >-
+      a combat veteran whose experience makes them valuable to any
+      crew or outfit, trusted in a firefight without question
+  - level_range: [7, 9]
+    label: sergeant major
+    player: >-
+      tactical armor that has been through campaigns, a weapons
+      loadout chosen for every contingency, a squad that follows
+      because they've seen what happens when they do, the strategic
+      mind that wins fights before they start
+    npc: >-
+      a career soldier whose tactical reputation precedes them,
+      whose units have survival rates that defy statistics
+  - level_range: [10, 10]
+    label: war hero
+    player: >-
+      the soldier whose actions turned a battle, whose name is in the
+      histories, whose armor is in a museum somewhere but who still
+      carries the weight of everyone they couldn't save — the living
+      proof that war makes legends and legends carry scars

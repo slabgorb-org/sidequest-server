@@ -1,0 +1,317 @@
+# World-specific tropes for Barsoom.
+# These supplement the genre-level tropes in heavy_metal/tropes.yaml.
+#
+# Four faithful Burroughs pressure-points, each a living-world clock:
+# Zodangan envy, the false heaven at the river's end, the thinning air,
+# and the hordes on the dead sea bottoms. Heroic pulp, not doom — every
+# escalation is a stage for a raised sword, not a dirge.
+
+- id: zodanga_moves_against_helium
+  name: Zodanga Moves Against Helium
+  description: >-
+    Zodanga's jealousy of Helium is not a mood but an institution — a
+    line item in her naval budget, a standing instruction to her
+    intelligencers, a toast drunk in her officers' messes. The twin
+    cities have fought before and the peace between them is a treaty,
+    not a friendship. Zodanga's yards are laying down more keels than
+    her declared patrol routes require, and her quiet men in Helium —
+    Sab Tor among them — have lately been asked for harbor depths and
+    tower garrison rosters rather than the usual gossip of the court.
+  category: conflict
+  triggers:
+    - mention of Zodanga
+    - conversation with Sab Tor
+    - visit to the Greater Helium landing-stage
+  narrative_hints:
+    - a freight flier's papers are in order in a way no honest papers are
+    - Kantos Vah doubles the landing-stage watch without explaining why
+    - a Zodangan trade delegation asks unusually detailed questions about the tower beacons
+  tension_level: 0.75
+  resolution_hints:
+    - expose Sab Tor's network and carry the proof to the Court of Greater Helium
+    - turn Sab Tor — a spy who loves neither city is a door that opens both ways
+    - strike the Zodangan yards before the new fleet swims
+  tags: [political, espionage, war_clock]
+  escalation:
+    - at: 0.2
+      event: >-
+        A Heliumetic patrol flier fails to return from the border
+        canals. The wreck, when found, has been picked over by someone
+        who knew exactly which instruments to take.
+      npcs_involved: [Kantos Vah]
+      stakes: Someone is mapping Helium's defenses. The court calls it banditry, for now.
+    - at: 0.5
+      event: >-
+        Sab Tor receives instructions that frighten him — not
+        information this time, but access. He begins, very carefully,
+        to look for someone outside both cities' services to whom a
+        prudent man might confess.
+      npcs_involved: [Sab Tor]
+      stakes: The spy himself has become the hinge. What he is asked to open, and for whom, decides the season.
+    - at: 0.75
+      event: >-
+        The Zodangan fleet holds "navigation exercises" within sight
+        of the border canals — a hundred fliers in war trim, turning
+        in formation, letting themselves be seen. Helium's towers
+        answer with mobilization drills of their own.
+      npcs_involved: [Sab Tor, Kantos Vah]
+      stakes: Both navies are now at readiness. Any incident on the border becomes the incident.
+    - at: 1.0
+      event: >-
+        War. The fleets rise from both cities in the same hour, and
+        the sky over the dead sea bottoms fills with the long guns
+        and the rams. Whatever the party knows — of Sab Tor, of the
+        yards, of the border wreck — is now worth a fleet's weight.
+      npcs_involved: [Sab Tor, Kantos Vah]
+      stakes: The twin cities burn their strength against each other while the hordes and the north watch with interest.
+  passive_progression:
+    rate_per_turn: 0.006
+    rate_per_day: 0.02
+    accelerators:
+      - zodanga
+      - spy
+      - fleet
+      - papers
+      - border
+    decelerators:
+      - treaty
+      - expose
+      - arrest
+      - parley
+    accelerator_bonus: 0.04
+    decelerator_penalty: 0.03
+
+- id: the_pilgrimage_must_be_answered
+  name: The Pilgrimage Must Be Answered
+  description: >-
+    The faith of the Iss is the one faith every race of Barsoom
+    shares: at the end of a long life, or at the bottom of a great
+    grief, a Barsoomian goes down to the river and rides it to the
+    Valley Dor, to paradise on the shore of the Lost Sea of Korus.
+    None return — and the faith holds that any who do are blasphemers
+    to be killed on sight, which is a very convenient article for
+    whatever actually waits downstream. Sooner or later someone the
+    party has names for will put their affairs in order, give away
+    their sword, and take the river. The question the faith cannot
+    survive is the one the river is daring someone to ask.
+  category: revelation
+  triggers:
+    - mention of the River Iss or the Valley Dor
+    - the death or great grief of a named elder
+    - conversation with a thern
+  narrative_hints:
+    - an old soldier of the party's acquaintance begins giving his possessions away
+    - a holy man's blond wig sits imperfectly over what might be a shaven scalp
+    - a riverside waystone's carved promise of Korus has been defaced by someone with strong opinions and a knife
+  tension_level: 0.7
+  resolution_hints:
+    - follow the river — openly as pilgrims, or secretly along the Golden Cliffs
+    - shelter a returned pilgrim from the law that demands their death, and hear them out
+    - carry proof of what the valley is to a court with the courage to hear it
+  tags: [faith, revelation, the_south]
+  escalation:
+    - at: 0.25
+      event: >-
+        Someone the party knows — a veteran of the landing-stage, a
+        court retainer, a Thark too old to ride — announces, with the
+        particular serenity Barsoom reserves for it, that they will
+        take the pilgrimage at the month's end.
+      npcs_involved: [Kantos Vah]
+      stakes: The pilgrimage is still a private grief. A word in the right ear might delay it — or sour a friendship.
+    - at: 0.5
+      event: >-
+        The pilgrim departs. At the river temple a thern of the
+        Hekkador's college blesses the boat with the smooth assurance
+        of a man performing the ten-thousandth repetition of a
+        profitable transaction.
+      npcs_involved: [Sator Throg]
+      stakes: The river has them. Pursuit is still possible; past the first cataract it becomes an expedition.
+    - at: 0.75
+      event: >-
+        A pilgrim comes BACK — gaunt, sun-blackened, raving of
+        flower-meadows that eat men and white things in the trees.
+        The law is explicit: blasphemy, death on sight. The mob
+        gathering in the plaza intends to be devout about it.
+      npcs_involved: [Sator Throg, Xodar]
+      stakes: A living witness to the Valley Dor stands in the street, and the faith requires the street to kill them.
+    - at: 1.0
+      event: >-
+        The truth of Dor can no longer be contained to rumor: the
+        therns' toll, the First Born raiding above them, and at the
+        root of the whole tiered lie the ancient creature in the
+        Temple of Issus who calls herself a goddess. The faith of a
+        world is now a fuse, and someone must decide whether to light
+        it or smother it.
+      npcs_involved: [Sator Throg, Xodar, Issus]
+      stakes: Expose the lie and every faith on Barsoom shakes; bury it and the river keeps eating pilgrims.
+  passive_progression:
+    rate_per_turn: 0.005
+    rate_per_day: 0.016
+    accelerators:
+      - iss
+      - pilgrimage
+      - dor
+      - korus
+      - thern
+    decelerators:
+      - dissuade
+      - delay
+      - doubt
+    accelerator_bonus: 0.04
+    decelerator_penalty: 0.03
+
+- id: the_atmosphere_plant_falters
+  name: The Atmosphere Plant Falters
+  description: >-
+    The whole planet breathes because one building breathes for it.
+    The Atmosphere Plant has run on its ninth-ray heart for a
+    thousand years, tended by keepers whose number has dwindled with
+    the secret itself, and its great door opens to nine thought-waves
+    that perhaps three living men can sound. The pumps have never
+    stopped. The barometers in the learned academies have lately
+    begun to read very slightly low, and the men who maintain those
+    barometers have begun recalibrating them rather than believe
+    them. This is the slowest clock on Barsoom, and the only one
+    that, run to its end, ends everything else.
+  category: revelation
+  triggers:
+    - mention of the Atmosphere Plant
+    - travel across the great desert
+    - thin air at flier ceiling altitude
+  narrative_hints:
+    - two academicians argue barometry in a wine house with more heat than the subject usually draws
+    - a high-flying scout reports light-headedness at altitudes that never troubled her before
+    - the plant keeper's scheduled relief courier is a month overdue and the court has not noticed
+  tension_level: 0.9
+  resolution_hints:
+    - reach the plant and learn why the pumps labor
+    - find the keeper — or what is left of him — and protect the succession of the nine thoughts
+    - carry the truth to the jeddaks before thin air does it first
+  tags: [doom, planetary, slow_burn]
+  escalation:
+    - at: 0.2
+      event: >-
+        The academies of Helium quietly pool their barometric records
+        and find the same shallow decline in all of them, too
+        consistent to be instrument error. They agree, in the manner
+        of learned men, to study the matter further before alarming
+        anyone.
+      npcs_involved: []
+      stakes: The decline is real and known to a handful of cautious men who will sit on it too long.
+    - at: 0.5
+      event: >-
+        The keeper's relief expedition returns from the desert with
+        its errand unperformed: the plant's outer door did not answer
+        the thought-waves, and the walls are four miles of seamless
+        stone. The court is informed in a sealed session.
+      npcs_involved: [Kantos Vah]
+      stakes: The plant is sealed with its trouble inside. The number of men who can sound the nine thoughts is now the most important number on Barsoom.
+    - at: 0.75
+      event: >-
+        The air thins enough to feel. Fliers cannot hold their
+        ceilings; the highland towers report fainting at the upper
+        landings; the price of bottled air in the canal cities
+        triples in a tenday. The secret is now weather.
+      npcs_involved: [Kantos Vah]
+      stakes: Panic arrives ahead of suffocation. Every jeddak on the planet wants the plant opened and none of them can do it.
+    - at: 1.0
+      event: >-
+        The pumps stop. Barsoom has perhaps three days of breathable
+        air, less at altitude — three days to cross the desert, sound
+        nine thoughts known to almost no one, and restart a machine
+        whose builders are dust. The dying world's whole long dying
+        arrives at once.
+      npcs_involved: []
+      stakes: Everything. Three days, one door, nine thoughts.
+  passive_progression:
+    rate_per_turn: 0.003
+    rate_per_day: 0.012
+    accelerators:
+      - atmosphere
+      - plant
+      - air
+      - barometer
+      - keeper
+    decelerators:
+      - repair
+      - succession
+      - restart
+    accelerator_bonus: 0.03
+    decelerator_penalty: 0.04
+
+- id: the_hordes_gather_at_korad
+  name: The Hordes Gather at Korad
+  description: >-
+    The Thark horde holds the dead city of Korad and the sea-bottom
+    moss for a hundred miles around it, and this season they have
+    called the great games — which means rival hordes riding in under
+    truce, ten thousand green warriors in one ruin, honor duels by
+    the hour, and prisoners for the arena. A great games can end two
+    ways: the hordes leave as they came, or some jed with a longer
+    vision than cruelty welds them into a single spear — and there is
+    only one direction history has ever pointed that spear: at the
+    canal cities of the red men.
+  category: conflict
+  triggers:
+    - visit to Korad or the dead sea bottom
+    - encounter with green Martians
+    - mention of the great games
+  narrative_hints:
+    - Gor Hajus's riders trade for steel in quantities a single horde does not need
+    - thoat herds move toward Korad from three horizons at once
+    - a red trader's caravan is let pass unrobbed — under truce, which is somehow worse
+  tension_level: 0.6
+  resolution_hints:
+    - earn standing in the games — the hordes respect nothing they have not seen bleed
+    - free the arena prisoners and put shame between the rival jeds
+    - back a jed who would rather raid the south than the canals, and help him win the argument
+  tags: [hordes, the_dead_seas, arena]
+  escalation:
+    - at: 0.25
+      event: >-
+        Outriders of a second horde are seen watering at the old
+        harbor cisterns — Warhoon banners, by their harness. Gor
+        Hajus's camp does not attack them, which means the truce of
+        the games is already in force.
+      npcs_involved: [Gor Hajus]
+      stakes: The gathering is real. Korad will hold more lances by month's end than any red border has faced in a generation.
+    - at: 0.5
+      event: >-
+        The games convene in Korad's dead arena. Among the stakes
+        offered: captured thoats, a downed flier's guns — and a red
+        prisoner, to be fought for and then fought.
+      npcs_involved: [Gor Hajus]
+      stakes: A red life is on the arena's table, and buying, winning, or stealing it each carries a different price in horde honor.
+    - at: 0.75
+      event: >-
+        A jed of the Warhoon stands before the assembled hordes and
+        proposes the thing the games exist to make possible: one
+        host, one season, the canal-farms stripped before the red
+        fleets can answer. Gor Hajus speaks neither for nor against
+        — he is counting lances.
+      npcs_involved: [Gor Hajus]
+      stakes: The alliance hangs on a handful of jeds' ambitions. A duel, a shame, or a better offer could still break it.
+    - at: 1.0
+      event: >-
+        The welded horde rides. Forty thousand lances come off the
+        dead sea bottom in a single tide, and the outlying canal
+        districts burn ahead of them. Helium's fleet must choose
+        between the border with Zodanga and the horde at its back.
+      npcs_involved: [Gor Hajus]
+      stakes: The red cities' whole eastern flank, and every farm and waystation on it.
+  passive_progression:
+    rate_per_turn: 0.005
+    rate_per_day: 0.018
+    accelerators:
+      - korad
+      - horde
+      - games
+      - warhoon
+      - arena
+    decelerators:
+      - duel
+      - shame
+      - truce_broken
+      - feud
+    accelerator_bonus: 0.04
+    decelerator_penalty: 0.03

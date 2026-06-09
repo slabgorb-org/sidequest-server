@@ -1,0 +1,32 @@
+name: The Archer Who Stayed
+era: within living memory
+summary: >-
+  The bowmen of Lothar are phantoms — ranks of grim archers willed out
+  of empty air by the city's conjurers, real enough to kill while the will
+  holds, gone like breath off a blade when the battle ends. Once, one did not
+  go. The bowman Kar Komak, materialized for a skirmish like ten thousand
+  before him, walked off the field after the recall, ate, slept, bled, and
+  declined every invitation to stop existing. Tario's court examined him and
+  ruled him impossible. Jav's faction toasted him and called him proof — that
+  the phantoms were never illusions at all, but men, summoned from somewhere
+  and owed something. Kar Komak himself, asked which doctrine was true,
+  reportedly said he was hungry, which both factions have been interpreting
+  in their favor ever since.
+affected_cultures:
+- Lotharian
+cultural_impact: >-
+  The Archer split Lothar's two doctrines from a scholarly
+  quarrel into the standing factions of the present court — Tario's
+  etherealists holding the phantoms to be projections of the worthy mind,
+  Jav's realists holding them to be realer than their conjurers. Bowmen
+  conjurers now count their ranks home after every engagement, and a
+  materialization that lingers past recall is recorded in the city annals
+  with the solemnity other cities reserve for eclipses.
+faction_grudges: []
+lost_arts: []
+monuments:
+- The Empty Plinth before Tario's palace — raised by public subscription for
+  a statue of Kar Komak, then left bare by Tario's decree, on the reasoning
+  that one does not commemorate an impossibility. The plinth is kept swept.
+  Both factions consider this a victory.
+terrain_scars: []

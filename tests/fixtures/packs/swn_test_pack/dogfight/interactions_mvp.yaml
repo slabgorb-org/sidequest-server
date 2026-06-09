@@ -1,0 +1,430 @@
+# Dogfight Interaction Table — MVP (merge starting state)
+#
+# A 16-cell lookup keyed by (red_maneuver, blue_maneuver). Each cell emits
+# two descriptor deltas — one per pilot — that transform the "merge" starting
+# state into a new state for the next turn.
+#
+# HOW THE NARRATOR CONSUMES THIS FILE (manual version):
+#
+#   1. Both players secretly commit to a maneuver (sealed-letter turn).
+#   2. Look up (red, blue) pair in this file under "cells".
+#   3. Apply red_view delta to red's descriptor, blue_view delta to blue's.
+#   4. Narrator reads each updated descriptor and writes 2-3 sentences of
+#      cockpit prose for each pilot, using narration_hint as the beat.
+#   5. Debit each pilot's own maneuver energy_cost from their energy pool.
+#   6. Check gun_solution on each pilot for hit resolution.
+#
+# DESIGN SHAPE (rock-paper-scissors triangle):
+#
+#      evasive (bank)
+#         \       ^
+#          v       \
+#       offense   passive
+#      (loop/kill) (straight)
+#            \   /
+#             v
+#           offense
+#
+#   - passive + passive      = clean merge, both walk away
+#   - passive + offense      = offense scores (loop/kill catches the straight)
+#   - passive + evasive      = clean break, both walk away
+#   - evasive + offense      = evasive slips the reversal (offense wastes energy)
+#   - offense + offense      = MUTUAL KILL RISK (both pilots exposed)
+#   - evasive + evasive      = mirror break, wider engagement
+#
+# Cells marked "mutual gunline" are the decision-point pressure cells: both
+# pilots committed to offense, both got a shot, both are exposed. Without
+# these the game is too safe; with too many it devolves into trade-the-kill.
+#
+# After a playtest, annotate each cell with tags: [exciting | lopsided |
+# confusing | dull | calibrated]. Cells that repeatedly tag as "dull" or
+# "lopsided" need delta adjustment before expanding to the 8-maneuver table.
+
+version: "0.1.0"
+starting_state: merge
+maneuvers_consumed: [straight, bank, loop, kill_rotation]
+
+# Starting descriptor (both pilots see this at the top of turn 1):
+#   target_bearing: "12"
+#   target_range:   close
+#   target_aspect:  head_on
+#   closure:        closing_fast
+#   viewer_energy:  60
+#   target_energy:  60
+#   gun_solution:   false
+
+cells:
+
+  # =========================================================================
+  # Row 1 — Red: straight
+  # =========================================================================
+
+  - pair: [straight, straight]
+    name: "Clean merge"
+    shape: "passive vs passive"
+    tags: [dull]
+    calibration_notes: "Run 2 — both pilots defaulted to safe option. No consequence, no drama. Expected: this is the safety baseline, dull is correct."
+    red_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: tail_on
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: tail_on
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Both ships rip past each other in a second of engine roar. Stars rush
+      back in. Both pilots are now astern of the other, facing away. No shots.
+
+  - pair: [straight, bank]
+    name: "Red drills through, Blue breaks"
+    shape: "passive vs evasive"
+    red_view:
+      target_bearing: "0430"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "1030"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red holds the merge line. Blue snap-rolls off to starboard at the last
+      instant, carving a wide arc away. The two ships pass on divergent
+      headings, neither with a shot.
+
+  - pair: [straight, loop]
+    name: "Blue reverses onto Red's six"
+    shape: "passive vs offense — offense scores"
+    tags: [calibrated]
+    red_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: opening
+      gun_solution: true
+    narration_hint: >-
+      Red powers through the merge, engines wide open. Blue pulls hard into
+      a vertical loop — inverted over the top, nose coming down — and rolls
+      out with Red's exhaust dead centre in the gunsight. Blue has one
+      clean shot.
+
+  - pair: [straight, kill_rotation]
+    name: "Blue's flip-and-burn back-shot"
+    shape: "passive vs offense — offense scores"
+    red_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: opening_fast
+      gun_solution: false
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: opening_fast
+      gun_solution: true
+    narration_hint: >-
+      Red holds course. Blue's attitude jets cough — the ship flips 180
+      degrees on its axis, still drifting in the original direction. Guns
+      aim back through Red's wake. One burst of cannon fire, and inertia
+      immediately starts carrying Blue out of the fight.
+
+  # =========================================================================
+  # Row 2 — Red: bank
+  # =========================================================================
+
+  - pair: [bank, straight]
+    name: "Red breaks, Blue drills through"
+    shape: "evasive vs passive"
+    red_view:
+      target_bearing: "1030"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "0430"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red snap-rolls to starboard at the merge. Blue holds the line. The
+      two ships carve past each other on divergent vectors, neither with
+      a clean angle.
+
+  - pair: [bank, bank]
+    name: "Mirror break"
+    shape: "evasive vs evasive"
+    red_view:
+      target_bearing: "09"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "09"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Both pilots commit to the break at the same instant. Two hard starboard
+      rolls, mirrored across the merge line. The engagement opens back up —
+      the two ships now hunt for a new angle across diverging arcs.
+
+  - pair: [bank, loop]
+    name: "Red slips the loop"
+    shape: "evasive vs offense — evasive slips"
+    tags: [calibrated]
+    red_view:
+      target_bearing: "06"
+      target_range: medium
+      target_aspect: head_on
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "1030"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red carves the starboard break while Blue commits to the vertical.
+      Blue's loop ends looking at empty stars — Red has slipped out of the
+      reversal line and is already quartering away on a new heading. Blue
+      has bled 30 energy for nothing.
+
+  - pair: [bank, kill_rotation]
+    name: "Red banks past the back-shot"
+    shape: "evasive vs offense — evasive slips"
+    tags: [calibrated]
+    red_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: crossing
+      closure: opening_fast
+      gun_solution: false
+    narration_hint: >-
+      Red breaks just as Blue's attitude jets fire. Blue flips to face back
+      through the merge but finds Red already sliding out of the gun line —
+      a crossing silhouette instead of a tail. The back-shot lands on
+      empty space.
+
+  # =========================================================================
+  # Row 3 — Red: loop
+  # =========================================================================
+
+  - pair: [loop, straight]
+    name: "Red reverses onto Blue's six"
+    shape: "offense vs passive — offense scores"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: opening
+      gun_solution: true
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Blue powers through the merge. Red hauls the nose up into a vertical
+      loop, inverted over the top, and rolls out with Blue's exhaust dead
+      centre in the gunsight. Red has one clean shot.
+
+  - pair: [loop, bank]
+    name: "Blue slips the loop"
+    shape: "offense vs evasive — evasive slips"
+    red_view:
+      target_bearing: "1030"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "06"
+      target_range: medium
+      target_aspect: head_on
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red commits to the vertical. Blue doesn't wait — hard starboard break
+      at the merge. Red's loop lines up on empty space, and Blue is already
+      carving away on a new vector. Red has bled 30 energy for a shot at
+      nothing.
+
+  - pair: [loop, loop]
+    name: "Twin loops — merge resumed"
+    shape: "offense vs offense — stalemate"
+    tags: [calibrated]
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: stable
+      gun_solution: false
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: stable
+      gun_solution: false
+    narration_hint: >-
+      Both pilots read each other's minds. Twin vertical loops, twin curtains
+      of exhaust against the starfield. When they level out, they are nose-
+      to-nose again — same merge, less fuel, more committed. Neither got
+      the shot. Both just got more desperate.
+
+  - pair: [loop, kill_rotation]
+    name: "Mutual gunline — knife fight"
+    shape: "offense vs offense — mutual kill risk"
+    tags: [exciting]
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: opening
+      gun_solution: true
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: opening
+      gun_solution: true
+    narration_hint: >-
+      Red's loop brings the nose back on line at the exact instant Blue's
+      attitude jets flare — and both ships are suddenly staring down each
+      other's gun barrels at point-blank range. Both pilots have a shot.
+      Both pilots are exposed.
+
+  # =========================================================================
+  # Row 4 — Red: kill_rotation
+  # =========================================================================
+
+  - pair: [kill_rotation, straight]
+    name: "Red's flip-and-burn back-shot"
+    shape: "offense vs passive — offense scores"
+    tags: [exciting]
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: opening_fast
+      gun_solution: true
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: opening_fast
+      gun_solution: false
+    narration_hint: >-
+      Blue holds course. Red's attitude jets cough — the ship flips 180
+      degrees on its axis, still drifting through the merge. Guns aim back
+      at Blue's wake. One burst of cannon fire, and inertia carries Red
+      out of the fight.
+
+  - pair: [kill_rotation, bank]
+    name: "Blue banks past the back-shot"
+    shape: "offense vs evasive — evasive slips"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: crossing
+      closure: opening_fast
+      gun_solution: false
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red fires the attitude jets, expecting a back-shot at a pursuer.
+      Blue is already breaking — the flip ends with a crossing silhouette
+      in the gunsight instead of a tail. The cannon burst lands on empty
+      starfield.
+
+  - pair: [kill_rotation, loop]
+    name: "Mutual gunline — knife fight"
+    shape: "offense vs offense — mutual kill risk"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: opening
+      gun_solution: true
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: opening
+      gun_solution: true
+    narration_hint: >-
+      Red fires the attitude jets at the same instant Blue pulls into the
+      vertical. When the arcs resolve, both pilots are looking down each
+      other's gun barrels. Two triggers pulled at once. Someone is about
+      to lose an engine or a canopy.
+
+  - pair: [kill_rotation, kill_rotation]
+    name: "Drift-through knife fight"
+    shape: "offense vs offense — mutual kill risk"
+    tags: [exciting]
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: stable
+      gun_solution: true
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: stable
+      gun_solution: true
+    narration_hint: >-
+      Both pilots fire attitude jets simultaneously. Both ships drift
+      through each other's space on pure inertia, both flipped, both guns
+      trained on the other's nose. A knife fight in slow motion at terminal
+      velocity. Whoever fires first probably lives.
+
+# ---- Post-playtest calibration tags (fill in after duel_01) ----
+#
+# Annotate each cell with how it actually played:
+#
+#   tags: [exciting, lopsided, confusing, dull, calibrated]
+#
+# Interpretation:
+#   exciting   = produced a memorable moment, keep as-is
+#   calibrated = worked as intended, no change needed
+#   lopsided   = one pilot felt forced; review the deltas
+#   confusing  = players couldn't parse the result; narration_hint weak
+#   dull       = no meaningful consequence; consider removing the pair
+#
+# Expected distribution after one playtest:
+#   - Mutual-kill cells should tag "exciting" — they are the decision pressure
+#   - Evasive-vs-offense cells should tag "calibrated" — they are the safety valve
+#   - Passive-vs-passive should tag "dull" (the safety baseline) — this is fine
+#   - If more than 2 cells tag "lopsided", the delta math needs rework

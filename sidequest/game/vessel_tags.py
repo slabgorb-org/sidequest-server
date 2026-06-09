@@ -25,9 +25,10 @@ Per CLAUDE.md "No Silent Fallbacks": every malformed shape raises
 :class:`InvalidVesselTagsError`; the binder never falls back to a default
 pool or skips a malformed vessel.
 
-Story 53-2 ships composure-only parsing — ``speed:N``, ``armor:N``,
-``fuel_capacity:N``, ``mount_slots:N`` are read by other subsystems (display,
-later mechanics) and are intentionally ignored here.
+Story 53-2 shipped composure-only parsing; Story 86-2 added ``armor:N``; Story
+86-5 (Plan 5) promotes ``speed:N`` and ``mount_slots:N`` to first-class required
+fields — the full vessel stat block. ``fuel_capacity:N`` remains read by other
+subsystems (display) and is not parsed here.
 """
 
 from __future__ import annotations
@@ -48,6 +49,8 @@ _VESSEL_TAG = "vessel"
 _COMPOSURE_KEY = "composure"
 _COMPOSURE_MAX_KEY = "composure_max"
 _ARMOR_KEY = "armor"
+_SPEED_KEY = "speed"
+_MOUNT_SLOTS_KEY = "mount_slots"
 
 
 class InvalidVesselTagsError(ValueError):
@@ -72,6 +75,14 @@ class VesselTags(BaseModel):
     rig damage). It defaults to 0 so composure-only legacy items (Story
     53-2, before the tag was read) keep parsing; an explicit but malformed
     ``armor:N`` still fails loud per :class:`InvalidVesselTagsError`.
+
+    Story 86-5 (Plan 5) promotes ``speed`` and ``mount_slots`` from
+    "authored-but-ignored" to first-class fields — the full vessel stat
+    block. Unlike ``armor`` they are **required** (no default): a rig is
+    defined by how fast it moves and how many hardpoints it carries, so a
+    vessel item that omits either is an incomplete stat block and fails
+    loud (No Silent Fallbacks). ``mount_slots`` may be 0 (a stripped,
+    weaponless chassis); both must be ``>= 0``.
     """
 
     model_config = {"extra": "forbid"}
@@ -79,6 +90,8 @@ class VesselTags(BaseModel):
     composure: int
     composure_max: int
     armor: int = 0
+    speed: int
+    mount_slots: int
 
 
 def _parse_int_tag(value: str, *, key: str, item_id: str) -> int:
@@ -119,6 +132,8 @@ def parse_vessel_tags(item: dict) -> VesselTags:
     composure: int | None = None
     composure_max: int | None = None
     armor: int | None = None
+    speed: int | None = None
+    mount_slots: int | None = None
 
     for tag in tags:
         if not isinstance(tag, str) or ":" not in tag:
@@ -136,6 +151,14 @@ def parse_vessel_tags(item: dict) -> VesselTags:
             if armor is not None:
                 raise InvalidVesselTagsError(item_id, f"duplicate {_ARMOR_KEY!r} tag")
             armor = _parse_int_tag(raw_value, key=_ARMOR_KEY, item_id=item_id)
+        elif key == _SPEED_KEY:
+            if speed is not None:
+                raise InvalidVesselTagsError(item_id, f"duplicate {_SPEED_KEY!r} tag")
+            speed = _parse_int_tag(raw_value, key=_SPEED_KEY, item_id=item_id)
+        elif key == _MOUNT_SLOTS_KEY:
+            if mount_slots is not None:
+                raise InvalidVesselTagsError(item_id, f"duplicate {_MOUNT_SLOTS_KEY!r} tag")
+            mount_slots = _parse_int_tag(raw_value, key=_MOUNT_SLOTS_KEY, item_id=item_id)
 
     if armor is not None and armor < 0:
         raise InvalidVesselTagsError(item_id, f"{_ARMOR_KEY} must be >= 0, got {armor}")
@@ -156,7 +179,24 @@ def parse_vessel_tags(item: dict) -> VesselTags:
             f"{_COMPOSURE_KEY} ({composure}) exceeds {_COMPOSURE_MAX_KEY} ({composure_max})",
         )
 
-    return VesselTags(composure=composure, composure_max=composure_max, armor=armor or 0)
+    # Story 86-5: speed + mount_slots are required (full stat block). A rig is
+    # defined by its movement and its hardpoints; an omission is a content bug.
+    if speed is None:
+        raise InvalidVesselTagsError(item_id, f"missing {_SPEED_KEY!r}:N tag")
+    if speed < 0:
+        raise InvalidVesselTagsError(item_id, f"{_SPEED_KEY} must be >= 0, got {speed}")
+    if mount_slots is None:
+        raise InvalidVesselTagsError(item_id, f"missing {_MOUNT_SLOTS_KEY!r}:N tag")
+    if mount_slots < 0:
+        raise InvalidVesselTagsError(item_id, f"{_MOUNT_SLOTS_KEY} must be >= 0, got {mount_slots}")
+
+    return VesselTags(
+        composure=composure,
+        composure_max=composure_max,
+        armor=armor or 0,
+        speed=speed,
+        mount_slots=mount_slots,
+    )
 
 
 def find_vessel_item(items: Iterable[dict]) -> dict | None:

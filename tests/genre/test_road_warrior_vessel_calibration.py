@@ -1,0 +1,220 @@
+"""road_warrior vessel calibration + mount_slot → CWN weapon remap (Story 86-5,
+Plan 5 — the epic's final integration gate).
+
+rules.yaml line 476 scopes this story explicitly: "full vessel stat blocks,
+mount_slot → CWN weapon remap, and lethality calibration are 86-5". This file is
+the calibration guard for that scope, loaded against the REAL road_warrior pack:
+
+  * AC2 — every shipped rig parses cleanly and its stat block is *calibrated*:
+    monotonic across tiers and matching the canonical ``rig_composure_spec`` table
+    in rules.yaml (composure_max 4/6/8/10/12, mount_slots 1/2/3/4/5).
+  * AC1 — the mounted rig weapons get real CWN vehicle-weapon damage (the
+    "mount_slot → CWN weapon remap"). Today every ``mounted``+``rig`` weapon ships
+    ``damage: None`` (inventory.yaml comment: "Rig/mounted weapons ... stay
+    damage-less — rig combat is Plan 2"); Plan 5 gives them mechanical backing so
+    a gunner manning a mount slot rolls real damage instead of improvised prose.
+
+RED until Dev (a) promotes speed/mount_slots to first-class parsed fields
+(see ``test_vessel_full_stat_blocks.py``) and (b) authors ``damage`` blocks on the
+mounted rig weapons in ``genre_packs/road_warrior/inventory.yaml``.
+
+The damage assertions are deliberately *structural* — they require a well-formed
+``damage`` block with NdM dice, never a specific die size. Per the design spec
+("faithful SRD port, do not redesign", D4) the exact vehicle-weapon numbers are
+Keith's crunch call; the test enforces that the backing EXISTS, not what it is.
+
+Pattern precedent: ``tests/genre/test_road_warrior_loads_cwn.py`` (real-pack load
++ structured-field assertions, never prose-grep).
+"""
+
+from __future__ import annotations
+
+import pytest
+import yaml
+
+from sidequest.game.vessel_tags import parse_vessel_tags
+from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
+from tests.genre.test_resolution_mode import load_pack
+
+# Canonical rig_composure_spec table (rules.yaml §rig_composure_spec):
+#   tier: (composure_max, mount_slots)
+SPEC_TABLE = {1: (4, 1), 2: (6, 2), 3: (8, 3), 4: (10, 4), 5: (12, 5)}
+
+
+def _has_real_content() -> bool:
+    return GENRE_PACKS_DIR.is_dir()
+
+
+def _raw_inventory() -> dict:
+    if not _has_real_content():
+        pytest.skip("sidequest-content not on disk")
+    inv_path = find_pack_path("road_warrior") / "inventory.yaml"
+    return yaml.safe_load(inv_path.read_text())
+
+
+def _vessel_dicts() -> list[dict]:
+    catalog = _raw_inventory()["item_catalog"]
+    return [it for it in catalog if "vessel" in (it.get("tags") or [])]
+
+
+def _tier_of(item: dict) -> int:
+    """Extract the tier integer from a ``tier-N`` tag. Fails loud if absent —
+    a vessel with no tier tag is a content bug that would make the calibration
+    table assertions pass vacuously."""
+    for tag in item.get("tags", []):
+        if isinstance(tag, str) and tag.startswith("tier-"):
+            return int(tag.split("-", 1)[1])
+    raise AssertionError(f"vessel {item.get('id')!r} has no tier-N tag")
+
+
+def _load_typed():
+    if not _has_real_content():
+        pytest.skip("sidequest-content not on disk")
+    try:
+        return load_pack("road_warrior")
+    except PackNotFound as exc:  # pragma: no cover - environment guard
+        pytest.skip(str(exc))
+
+
+# ---------------------------------------------------------------------------
+# AC2 — every vessel parses (fail-loud calibration; no silent content bug)
+# ---------------------------------------------------------------------------
+
+
+def test_every_vessel_item_parses_cleanly() -> None:
+    """Every ``category: vessel`` item parses through the production parser with a
+    full stat block. RED until speed/mount_slots are first-class (the parser
+    contract this story introduces)."""
+    vessels = _vessel_dicts()
+    assert len(vessels) >= 5, (
+        f"road_warrior ships a 5-tier rig ladder; found {len(vessels)} vessel items"
+    )
+    for item in vessels:
+        parsed = parse_vessel_tags(item)  # raises InvalidVesselTagsError on any bug
+        assert parsed.composure_max > 0
+        assert parsed.speed > 0
+        assert parsed.mount_slots >= 0
+
+
+# ---------------------------------------------------------------------------
+# AC2 — stat block is monotonic across the tier ladder
+# ---------------------------------------------------------------------------
+
+
+def test_vessel_stats_are_monotonic_across_tiers() -> None:
+    """Higher tier ⇒ a strictly better hull and never-worse speed/armor/mounts.
+
+    A non-monotonic ladder (tier 3 slower than tier 2, say) is a calibration
+    error that makes advancement feel broken to a mechanics-first player. Routes
+    every value through the production parser."""
+    by_tier = sorted(_vessel_dicts(), key=_tier_of)
+    tiers = [_tier_of(v) for v in by_tier]
+    assert tiers == sorted(set(tiers)), f"tier tags must be unique + ordered; got {tiers}"
+
+    prev = None
+    for item in by_tier:
+        cur = parse_vessel_tags(item)
+        if prev is not None:
+            assert cur.composure_max > prev.composure_max, (
+                f"composure_max must strictly increase by tier; {item['id']} "
+                f"({cur.composure_max}) <= previous ({prev.composure_max})"
+            )
+            assert cur.speed >= prev.speed, f"{item['id']} speed regressed vs lower tier"
+            assert cur.armor >= prev.armor, f"{item['id']} armor regressed vs lower tier"
+            assert cur.mount_slots >= prev.mount_slots, (
+                f"{item['id']} mount_slots regressed vs lower tier"
+            )
+        prev = cur
+
+
+def test_vessel_composure_and_mount_slots_match_spec_table() -> None:
+    """Each tier's parsed composure_max + mount_slots equals the canonical
+    rig_composure_spec table — the content must not drift from the documented
+    progression the narrator and UI quote to the player."""
+    for item in _vessel_dicts():
+        tier = _tier_of(item)
+        assert tier in SPEC_TABLE, f"unexpected rig tier {tier} on {item['id']}"
+        parsed = parse_vessel_tags(item)
+        want_composure, want_slots = SPEC_TABLE[tier]
+        assert parsed.composure_max == want_composure, (
+            f"tier {tier} ({item['id']}) composure_max must be {want_composure} "
+            f"per rig_composure_spec; got {parsed.composure_max}"
+        )
+        assert parsed.mount_slots == want_slots, (
+            f"tier {tier} ({item['id']}) mount_slots must be {want_slots} per "
+            f"rig_composure_spec; got {parsed.mount_slots}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC1 — mount_slot → CWN vehicle weapon remap: mounted rig weapons get damage
+# ---------------------------------------------------------------------------
+
+
+def _mounted_rig_weapons_typed(pack) -> list:
+    assert pack.inventory is not None, "road_warrior must ship an inventory catalog"
+    out = []
+    for it in pack.inventory.item_catalog:
+        tags = set(it.tags or [])
+        if it.category == "weapon" and {"mounted", "rig"} <= tags:
+            out.append(it)
+    return out
+
+
+def test_mounted_rig_weapons_exist() -> None:
+    """Guard: the pack actually ships mounted rig weapons, so the remap test below
+    can't pass vacuously on an empty list."""
+    pack = _load_typed()
+    mounted = _mounted_rig_weapons_typed(pack)
+    assert len(mounted) >= 3, (
+        f"road_warrior must ship its mounted rig-weapon set (mounted_gun, "
+        f"flame_rig, harpoon_gun, ...); found {[w.id for w in mounted]}"
+    )
+
+
+def test_mounted_rig_weapons_carry_vehicle_damage() -> None:
+    """Every mounted rig weapon carries a well-formed CWN damage block — the
+    mount_slot → CWN weapon remap (AC1). A gunner manning a mount slot must roll
+    real damage, not improvised prose. Structural only: asserts NdM dice exist,
+    never a specific die size (faithful-port decision D4 leaves the numbers to
+    Keith). RED today — mounted weapons ship ``damage: None``."""
+    pack = _load_typed()
+    undamaged = [
+        w.id for w in _mounted_rig_weapons_typed(pack) if w.damage is None or not w.damage.dice
+    ]
+    assert not undamaged, (
+        f"mounted rig weapons must carry a CWN vehicle-weapon damage block "
+        f"(Story 86-5 mount_slot → CWN weapon remap); still damage-less: {undamaged}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC1/AC2 — starting loadouts respect mount-slot capacity
+# ---------------------------------------------------------------------------
+
+
+def test_starting_mounted_weapons_fit_in_starting_rig_slots() -> None:
+    """No class is handed more mounted rig weapons than its starting rig has slots.
+
+    A loadout that over-fills the mount slots is an un-equippable content bug.
+    Cross-references starting_equipment against the parsed mount_slots of the
+    granted rig — RED until mount_slots parses."""
+    inv = _raw_inventory()
+    catalog = {it["id"]: it for it in inv["item_catalog"]}
+    starting = inv.get("starting_equipment", {})
+    assert starting, "road_warrior must define starting_equipment"
+
+    for class_name, item_ids in starting.items():
+        rig_ids = [i for i in item_ids if "vessel" in (catalog.get(i, {}).get("tags") or [])]
+        assert len(rig_ids) == 1, f"{class_name} must start with exactly one rig; got {rig_ids}"
+        slots = parse_vessel_tags(catalog[rig_ids[0]]).mount_slots
+        mounted = [
+            i
+            for i in item_ids
+            if {"mounted", "rig"} <= set(catalog.get(i, {}).get("tags") or [])
+            and catalog.get(i, {}).get("category") == "weapon"
+        ]
+        assert len(mounted) <= slots, (
+            f"{class_name} starts with {len(mounted)} mounted rig weapons {mounted} "
+            f"but its rig {rig_ids[0]} has only {slots} mount slot(s)"
+        )

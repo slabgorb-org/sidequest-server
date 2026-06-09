@@ -161,6 +161,23 @@ _BEAT_VOCABULARY_YAML = (
 )
 
 
+# Minimal prod-faithful theme.yaml (Story 100-7) — the rules endpoint attaches a
+# CSS-var token set from it; a theme-less pack 500s (No Silent Fallbacks).
+_THEME_YAML = (
+    "archetype: terminal\n"
+    "primary: '#4A90D9'\n"
+    "secondary: '#2C5F8A'\n"
+    "accent: '#E8A838'\n"
+    "background: '#0D1117'\n"
+    "surface: '#161B22'\n"
+    "text: '#C9D1D9'\n"
+    "web_font_family: Rajdhani\n"
+    "display_font_family: Orbitron\n"
+    "dinkus:\n"
+    "  glyph: {light: '✦', medium: '✦ ⬡ ✦', heavy: '⬡ ✦ ⬡'}\n"
+)
+
+
 def _seed_pack(root: Path, pack: str = "space_opera") -> Path:
     """Write a synthetic pack dir carrying the three keeper-bearing rules files
     plus a benign classes.yaml. Returns the pack dir."""
@@ -172,6 +189,10 @@ def _seed_pack(root: Path, pack: str = "space_opera") -> Path:
     (pack_dir / "classes.yaml").write_text(
         "Officer:\n  description: Commands a ship and crew.\n", encoding="utf-8"
     )
+    # Story 100-7: the rules JSON endpoint now attaches a theme token set built
+    # from theme.yaml. Every real pack has one (the reference routes require it),
+    # so a prod-faithful synthetic pack seeds it or the endpoint 500s.
+    (pack_dir / "theme.yaml").write_text(_THEME_YAML, encoding="utf-8")
     return pack_dir
 
 

@@ -7,11 +7,30 @@ from fastapi.testclient import TestClient
 
 from sidequest.server.reference_routes import create_reference_router
 
+# Every real pack carries a theme.yaml (the reference routes require it); Story
+# 100-7 attaches its CSS-var token set to the lore/rules JSON projections, so a
+# prod-faithful synthetic pack must seed one or the endpoint 500s (No Silent
+# Fallbacks — a theme-less pack cannot be themed).
+_THEME_YAML = (
+    "archetype: parchment\n"
+    "primary: '#1A1A1A'\n"
+    "secondary: '#3A3A3A'\n"
+    "accent: '#B08D57'\n"
+    "background: '#0E0E0E'\n"
+    "surface: '#161616'\n"
+    "text: '#D8D2C4'\n"
+    "web_font_family: Lora\n"
+    "display_font_family: Cinzel\n"
+    "dinkus:\n"
+    "  glyph: {light: '·', medium: '· · ·', heavy: '◆ ◆ ◆'}\n"
+)
+
 
 def _client(tmp_path: Path) -> TestClient:
     pack_dir = tmp_path / "pulp_noir"
     world_dir = pack_dir / "worlds" / "annees_folles"
     world_dir.mkdir(parents=True)
+    (pack_dir / "theme.yaml").write_text(_THEME_YAML, encoding="utf-8")
     (world_dir / "cartography.yaml").write_text(
         "starting_region: harbor\n"
         "regions:\n"

@@ -38,6 +38,7 @@ from sidequest.server.reference_renderer import (
     load_points_of_interest,
 )
 from sidequest.server.reference_slug import slugify
+from sidequest.server.reference_theme import _read_theme_yaml, _require_str
 from sidequest.server.reference_timeline import (
     _temporal_of,
     _year_key,
@@ -399,6 +400,47 @@ def build_generic_yaml_section(
     if node is None:
         return None
     return {"id": slugify(file_stem), "label": _humanize_label(file_stem), "node": node}
+
+
+def build_theme_tokens(pack: str, *, pack_dir: Path) -> dict[str, str]:
+    """Project a pack's ``theme.yaml`` into a flat CSS-var token set (Story 100-7).
+
+    Returns a flat ``{"--var": "value"}`` dict the Phase-2 session-free injector
+    (story 100-9, UI) splats directly via ``root.style.setProperty(k, v)`` —
+    replacing the session-coupled ``theme_css`` WebSocket channel for the
+    session-free reference routes.
+
+    **Allowlist discipline is the security spine here**, NOT a keeper firewall.
+    ``theme.yaml`` is public styling (``GenreTheme`` is ``extra="forbid"`` and
+    ``reference_visibility.py`` carries no ``theme`` carve), so there is no
+    ``classify()`` dimension. Instead the token set is built from an EXPLICIT
+    allowlist of the six shared-``useGenreTheme`` palette vars, the two font vars,
+    and the three dinkus glyphs — never a raw ``yaml.safe_load`` splat. Internal
+    non-CSS config (``border_style``, ``dinkus.cooldown``/``default_weight``,
+    ``session_opener``, authored ``_`` notes) and ``archetype`` (an HTML attribute,
+    not a CSS var) are excluded by construction.
+
+    Loud failure: a missing/empty required field raises ``MissingThemeFieldError``
+    via the shared ``_require_str`` (No Silent Fallbacks) — a pack that cannot be
+    themed 500s rather than rendering with collapsed defaults.
+    """
+    data, _pack_name = _read_theme_yaml(pack_dir)
+    glyph = (data.get("dinkus") or {}).get("glyph") or {}
+    return {
+        "--primary": _require_str(data.get("primary"), "primary", pack),
+        "--secondary": _require_str(data.get("secondary"), "secondary", pack),
+        "--accent": _require_str(data.get("accent"), "accent", pack),
+        "--background": _require_str(data.get("background"), "background", pack),
+        "--surface": _require_str(data.get("surface"), "surface", pack),
+        "--text": _require_str(data.get("text"), "text", pack),
+        "--font-body": _require_str(data.get("web_font_family"), "web_font_family", pack),
+        "--font-display": _require_str(
+            data.get("display_font_family"), "display_font_family", pack
+        ),
+        "--dinkus-light": _require_str(glyph.get("light"), "dinkus.glyph.light", pack),
+        "--dinkus-medium": _require_str(glyph.get("medium"), "dinkus.glyph.medium", pack),
+        "--dinkus-heavy": _require_str(glyph.get("heavy"), "dinkus.glyph.heavy", pack),
+    }
 
 
 def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: Path) -> dict:

@@ -3453,6 +3453,27 @@ def _apply_narration_result_to_snapshot(
                         },
                         component="game",
                     )
+        # Story 90-6 (reconcile with #739): the region-mode determination depends
+        # only on pack+world (cartography.navigation_mode), NOT the narrator
+        # location string — so compute it BEFORE the validity gate. A rejected
+        # heading (bracketed/multiline/too_long) in a region-mode world is not a
+        # region exit either (current_region cannot advance on it), so a live
+        # COMBAT must survive it; that needs _same_region_drift set here, which
+        # the valid-region branches below cannot reach for a rejected heading.
+        from sidequest.genre.models.world import NavigationMode
+
+        _region_world_obj = (
+            pack.worlds.get(world) if (pack is not None and world is not None) else None
+        )
+        _region_cart = (
+            getattr(_region_world_obj, "cartography", None)
+            if _region_world_obj is not None
+            else None
+        )
+        _is_region_mode_world = (
+            _region_cart is not None
+            and getattr(_region_cart, "navigation_mode", None) == NavigationMode.region
+        )
         # Story 45-16: filter narrator-emitted location before adding
         # to the region graph. Playtest 3 leaked
         # `(aside — narrator brief)` into discovered_regions because
@@ -3460,6 +3481,11 @@ def _apply_narration_result_to_snapshot(
         # Sebastien's lie-detector sees the filter fire.
         is_valid_region, rejection_reason = validate_region_name(result.location)
         if not is_valid_region:
+            # Story 90-6: a rejected heading is not a region exit. In a region-
+            # mode world, flag it as a same-region drift so a live combat is not
+            # abandoned on a garbage re-title (no causal span would link them).
+            if _is_region_mode_world:
+                _same_region_drift = True
             with region_entry_rejected_span(
                 entry=result.location,
                 reason=rejection_reason or "unknown",
@@ -3482,26 +3508,13 @@ def _apply_narration_result_to_snapshot(
             # to the surface-form path below, preserving narrator-invented
             # sub-area forking (story 45-17).
             known_region_id = _resolve_heading_to_cartography(result.location, pack, world)
-            # Region-mode detection (used by BOTH branches below). In a region-
-            # mode world the cartography region set is AUTHORED/closed, so an
-            # unresolved heading is a sub-location/POI within the current region —
-            # not a new region to fork into discovered_regions. Room-graph
+            # Region-mode detection (``_is_region_mode_world``) is computed ABOVE
+            # the validity gate now (Story 90-6 reconcile) and is available here.
+            # In a region-mode world the cartography region set is AUTHORED/closed,
+            # so an unresolved heading is a sub-location/POI within the current
+            # region — not a new region to fork into discovered_regions. Room-graph
             # (dungeon) worlds manage current_region via the room graph / frontier
             # hook and legitimately fork narrator-invented sub-areas (Story 45-17).
-            from sidequest.genre.models.world import NavigationMode
-
-            _region_world_obj = (
-                pack.worlds.get(world) if (pack is not None and world is not None) else None
-            )
-            _region_cart = (
-                getattr(_region_world_obj, "cartography", None)
-                if _region_world_obj is not None
-                else None
-            )
-            _is_region_mode_world = (
-                _region_cart is not None
-                and getattr(_region_cart, "navigation_mode", None) == NavigationMode.region
-            )
             if known_region_id is not None:
                 canonical_slug = canonicalize_region_name(known_region_id)
                 already_present = any(
@@ -3736,48 +3749,7 @@ def _apply_narration_result_to_snapshot(
             # CONTINUES (real endings still come via dial-threshold/opponent-
             # yield/beat-consequence, all checked first below).
             active_encounter = snapshot.encounter
-            if (
-                active_encounter is not None
-                and not active_encounter.resolved
-                and _same_region_drift
-            ):
-                # Ping-pong 2026-06-07 (region-drift kills combat): in a
-                # region-mode world a scene-title drift WITHIN the same
-                # cartography region is NOT a scene boundary — the party
-                # never left the scene, so none of the location-change
-                # resolution semantics (win-on-leave, yield-on-leave,
-                # abandon) apply. The encounter CONTINUES; real endings
-                # still come via apply_beat / dial thresholds / a genuine
-                # region change (negotiation-walk-out semantics preserved —
-                # a heading resolving to a DIFFERENT region leaves
-                # _same_region_drift False and falls through to the ladder
-                # below). OTEL lie-detector: the GM panel must see the
-                # engine CHOSE to continue, not silently skip the boundary.
-                logger.info(
-                    "encounter.continued_same_region_drift "
-                    "encounter_type=%s current_region=%r old_location=%r "
-                    "new_location=%r player=%s",
-                    active_encounter.encounter_type,
-                    snapshot.current_region,
-                    old_loc,
-                    result.location,
-                    player_name,
-                )
-                _watcher_publish(
-                    "confrontation_continued_same_region_drift",
-                    {
-                        "encounter_type": active_encounter.encounter_type,
-                        "current_region": snapshot.current_region or "",
-                        "old_location": old_loc,
-                        "new_location": result.location,
-                        "player_name": player_name,
-                        "turn_number": snapshot.turn_manager.interaction,
-                        "player_metric": active_encounter.player_metric.current,
-                        "opponent_metric": active_encounter.opponent_metric.current,
-                    },
-                    component="confrontation",
-                )
-            elif active_encounter is not None and not active_encounter.resolved:
+            if active_encounter is not None and not active_encounter.resolved:
                 abandoned_type = active_encounter.encounter_type
                 # A location change at/after a met win threshold is the natural
                 # CONSEQUENCE of winning, not an abandonment — escape/movement
@@ -3874,6 +3846,46 @@ def _apply_narration_result_to_snapshot(
                         {
                             "encounter_type": abandoned_type,
                             "category": getattr(active_encounter, "category", "") or "",
+                            "old_location": old_loc,
+                            "new_location": result.location,
+                            "player_name": player_name,
+                            "turn_number": snapshot.turn_manager.interaction,
+                            "player_metric": active_encounter.player_metric.current,
+                            "opponent_metric": active_encounter.opponent_metric.current,
+                        },
+                        component="confrontation",
+                    )
+                elif (
+                    _same_region_drift
+                    and (getattr(active_encounter, "category", "") or "") == "combat"
+                ):
+                    # Story 90-6 (reconcile): region-mode same-region scene-title
+                    # drift on an anchored COMBAT confrontation. Checked AFTER
+                    # won/yield/mobile so a met-threshold combat still banks its
+                    # win and a chase keeps its mobile-continue — only an
+                    # unfinished combat continues. COMBAT-ONLY by design: a social
+                    # negotiation walked out of within the region must still
+                    # ABANDON (the 2026-04-30 negotiation-walk-out / puppet-NPC
+                    # fix), so it falls through to the else below. This narrows
+                    # #739, which continued ANY anchored encounter at the top of
+                    # the ladder (social included, before the win/yield checks).
+                    # OTEL lie-detector: emit confrontation_continued_same_region_drift
+                    # so the GM panel sees the engine CHOSE to keep the fight live.
+                    logger.info(
+                        "encounter.continued_same_region_drift "
+                        "encounter_type=%s current_region=%r old_location=%r "
+                        "new_location=%r player=%s",
+                        abandoned_type,
+                        snapshot.current_region,
+                        old_loc,
+                        result.location,
+                        player_name,
+                    )
+                    _watcher_publish(
+                        "confrontation_continued_same_region_drift",
+                        {
+                            "encounter_type": abandoned_type,
+                            "current_region": snapshot.current_region or "",
                             "old_location": old_loc,
                             "new_location": result.location,
                             "player_name": player_name,

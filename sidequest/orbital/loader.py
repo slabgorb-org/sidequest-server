@@ -73,13 +73,13 @@ def load_orbital_content(world_dir: Path, region_id: str | None = None) -> Orbit
                 f"orbits.yaml missing under {world_dir}; required for orbital tier"
             )
 
-    with orbits_path.open() as f:
+    with orbits_path.open(encoding="utf-8") as f:
         orbits_raw = yaml.safe_load(f)
     orbits = OrbitsConfig.model_validate(orbits_raw)
 
     chart_path = world_dir / "chart.yaml"
     if chart_path.exists():
-        with chart_path.open() as f:
+        with chart_path.open(encoding="utf-8") as f:
             chart_raw = yaml.safe_load(f)
         chart = ChartConfig.model_validate(chart_raw)
     else:
@@ -100,6 +100,21 @@ def _resolve_system_file(world_dir: Path, systems_dir: Path, region_id: str | No
         raise OrbitalContentMissingError(
             f"multi-system world {world_dir} requires a region id to resolve "
             "systems/<region_id>.yaml; got a blank region (No Silent Fallbacks)"
+        )
+
+    # A region id is a single slug, never a path. Reject path-like ids — path
+    # separators, a ``..`` parent ref, or a NUL byte — BEFORE building or
+    # probing a path, so a (narrator-influenceable) ``current_region`` can never
+    # traverse outside ``systems/`` (CWE-22). Fail loud: a path-like region is
+    # invalid input, not a missing file — and a ValueError (unlike
+    # OrbitalContentMissingError) is not swallowed by the optional-tier catch in
+    # SessionRoom.bind_world, so the bad input surfaces instead of silently
+    # yielding no chart.
+    if "/" in region_id or "\\" in region_id or "\x00" in region_id or ".." in region_id:
+        raise ValueError(
+            f"region id {region_id!r} is not a valid system identifier: it may "
+            "not contain a path separator, '..', or NUL byte "
+            f"(refusing to resolve outside {systems_dir} — No Silent Fallbacks)"
         )
 
     system_path = systems_dir / f"{region_id}.yaml"

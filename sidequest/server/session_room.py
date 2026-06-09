@@ -266,9 +266,17 @@ class SessionRoom:
             try:
                 orbital_content = load_orbital_content(world_dir, region_id=resolved_region)
             except OrbitalContentMissingError:
-                # Orbital tier is optional — caverns_and_claudes,
-                # tea_and_murder, etc. have no orbits.yaml. Bind without
-                # orbital content; chart UI will not be available.
+                # The orbital tier is optional, so this catch is intentionally
+                # broad. It fires for two cases: (1) a non-orbital world —
+                # caverns_and_claudes, tea_and_murder, etc. — with no systems/
+                # dir and no orbits.yaml (the common, legitimate case); and
+                # (2, since 98-2) a multi-system world whose resolved region has
+                # no systems/<region_id>.yaml (a content authoring bug). Both
+                # bind without orbital content here. NOTE: an *invalid* (path-
+                # like) region raises ValueError from the loader, NOT
+                # OrbitalContentMissingError, so it is deliberately NOT caught —
+                # it surfaces loudly. Narrowing case (2) into a typed connect
+                # error is deferred to 98-3/98-5 (bind-time multi-system reach).
                 orbital_content = None
                 _log.debug(
                     "session.no_orbital_tier slug=%s world_dir=%s",

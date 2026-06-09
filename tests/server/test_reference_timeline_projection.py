@@ -508,8 +508,7 @@ def test_lore_api_endpoint_returns_timeline_section(tmp_path: Path):
     doc = resp.json()
     section_ids = [s["id"] for s in doc["sections"]]
     assert "timeline" in section_ids, (
-        "the Timeline section must be reachable through the production "
-        "/reference/api/lore endpoint"
+        "the Timeline section must be reachable through the production /reference/api/lore endpoint"
     )
     timeline = next(s for s in doc["sections"] if s["id"] == "timeline")
     assert [m["name"] for m in timeline["entries"]] == ["The Sundering"]

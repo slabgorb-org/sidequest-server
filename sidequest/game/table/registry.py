@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from sidequest.game.table.types import CheatResult, ReadResult, TablePot, TableSeat
+
+if TYPE_CHECKING:
+    from sidequest.game.table.types import TableCommit, TableState
 
 
 class UnknownTableGameError(ValueError):
@@ -39,6 +43,32 @@ class TableGame(ABC):
     def read(self, reader: TableSeat, target: TableSeat, *, reader_stat: int) -> ReadResult:
         """Return REAL info about a target into the reader's frame. Override per kind."""
         raise NotImplementedError(f"table_game {self.kind!r} does not support Read")
+
+    def custom_beat(
+        self,
+        state: TableState,
+        seat: TableSeat,
+        commit: TableCommit,
+        *,
+        rng: random.Random,
+    ) -> None:
+        """Resolve a kind-specific beat the generic engine can't (Story 86-6).
+
+        The engine handles pot actions (bet/raise/call/bluff), fold, and the
+        signature beats (cheat/read/accuse). Anything else — e.g. the War Rig's
+        station verbs (steer/shoot/repair/scan) — is dispatched here so a kind
+        can own its own resolution without the engine hardcoding every verb.
+
+        The default fails loud, preserving No Silent Fallbacks: a kind that does
+        NOT register a custom beat must not silently swallow an unknown beat
+        (poker + ``shoot`` still raises). Override per kind to handle station
+        verbs; emit a ``table.*`` span for each so the GM panel stays the lie
+        detector.
+        """
+        raise ValueError(
+            f"unsupported table beat {commit.beat_id!r} for seat {seat.seat_id!r} "
+            f"(game_kind={state.game_kind!r}); kind {self.kind!r} registers no custom beat"
+        )
 
 
 _REGISTRY: dict[str, TableGame] = {}

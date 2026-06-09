@@ -169,10 +169,11 @@ def _apply_signature_beat(state, seat_id, commit, *, game, rng, read_results) ->
         # The opposed check and table.accuse span both fire in _showdown.
         state.pending_accusations.append((seat_id, target.seat_id))
         return
-    raise ValueError(
-        f"unsupported table beat {commit.beat_id!r} for seat {seat_id!r} "
-        f"(game_kind={state.game_kind!r})"
-    )
+    # No pot/signature beat matched — dispatch to the kind's custom-beat seam
+    # (Story 86-6). The default TableGame.custom_beat still fails loud, so a kind
+    # that doesn't handle this beat (e.g. poker + 'shoot') raises exactly as
+    # before; war_rig_crew overrides it to resolve station verbs.
+    game.custom_beat(state, seat, commit, rng=rng)
 
 
 def _require_target(state, seat_id, commit):

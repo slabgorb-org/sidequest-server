@@ -26,6 +26,7 @@ import random
 
 from sidequest.game.table.registry import TableGame, register_table_game
 from sidequest.game.table.types import TableCommit, TablePot, TableSeat, TableState
+from sidequest.game.war_rig_combat import WarRigHull
 from sidequest.game.war_rig_command import (
     CP_ACTION_COSTS,
     CommandPointPool,
@@ -52,6 +53,12 @@ WAR_RIG_DEAL_WITH_CRISIS: str = "deal_with_crisis"
 # by the whole crew and persistent across the hand's decision points.
 WAR_RIG_DEFAULT_COMMAND_POINTS: int = 4
 _SHARED_CP_KEY = "command_points"
+
+# Starting shared Hull seeded for the crewed vessel (minimal playable; full vessel
+# stat blocks are 86-5). Stored alongside the CP pool in TableState.shared_state so a
+# failed continuing crisis damages the SAME Hull across the hand's decision points.
+WAR_RIG_DEFAULT_HULL: int = 6
+_SHARED_HULL_KEY = "war_rig_hull"
 
 
 class WarRigCrewTableGame(TableGame):
@@ -119,6 +126,26 @@ class WarRigCrewTableGame(TableGame):
         state.shared_state[_SHARED_CP_KEY] = pool
         return pool
 
+    def _shared_hull(self, state: TableState) -> WarRigHull:
+        """Get-or-seed the crew's SHARED vessel Hull on the table state.
+
+        The same vessel-scoped :class:`~sidequest.game.war_rig_combat.WarRigHull`
+        used by 86-2's two-pool model, stored on ``TableState.shared_state`` so a
+        failed continuing crisis (``deal_with_crisis``) damages the crew's actual
+        Hull across the hand's decision points — not a throwaway. Minimal-playable
+        starting Hull; the real vessel stat block is 86-5."""
+        existing = state.shared_state.get(_SHARED_HULL_KEY)
+        if isinstance(existing, WarRigHull):
+            return existing
+        hull = WarRigHull(
+            current=WAR_RIG_DEFAULT_HULL,
+            max=WAR_RIG_DEFAULT_HULL,
+            base_max=WAR_RIG_DEFAULT_HULL,
+            vessel_id=self._vessel_id(state),
+        )
+        state.shared_state[_SHARED_HULL_KEY] = hull
+        return hull
+
     def custom_beat(
         self,
         state: TableState,
@@ -142,6 +169,10 @@ class WarRigCrewTableGame(TableGame):
             spend_command_points(pool, verb, seat=seat.seat_id, rng=rng)
         elif verb == WAR_RIG_DEAL_WITH_CRISIS:
             vessel_id = self._vessel_id(state)
+            # Pass the crew's SHARED Hull so a failed continuing crisis actually
+            # escalates into 86-2's two-pool damage model in a live round (AC2) —
+            # not just a span. ability_mod=0 (character-stat binding is 86-5).
+            hull = self._shared_hull(state)
             rolled = roll_crisis(rng, vessel_id=vessel_id)
             deal_with_crisis(
                 rolled.entry,
@@ -149,6 +180,7 @@ class WarRigCrewTableGame(TableGame):
                 ability_mod=0,
                 rng=rng,
                 vessel_id=vessel_id,
+                hull=hull,
             )
         else:
             raise ValueError(
@@ -168,6 +200,8 @@ class WarRigCrewTableGame(TableGame):
 register_table_game(WarRigCrewTableGame())
 
 __all__ = [
+    "WAR_RIG_COMMAND_VERBS",
+    "WAR_RIG_DEAL_WITH_CRISIS",
     "WAR_RIG_STATIONS",
     "WAR_RIG_STATION_VERBS",
     "WarRigCrewTableGame",

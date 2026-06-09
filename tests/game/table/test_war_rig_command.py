@@ -178,6 +178,17 @@ def test_support_department_assists_for_one_command_point():
 
     assert result.cost == 1, f"support_department must cost 1 CP, got {result.cost}"
     assert pool.current == 1
+    assert result.bonus == 0, (
+        f"support_department grants no d6 bonus (that is above_and_beyond's alone), got {result.bonus}"
+    )
+
+
+def test_command_point_pool_max_zero_fails_loud():
+    """A 0-max pool is degenerate — the validator must reject it (mirrors WarRigHull)."""
+    from sidequest.game.war_rig_command import CommandPointPool
+
+    with pytest.raises(ValueError):
+        CommandPointPool(current=0, max=0, vessel_id="war_rig_alpha")
 
 
 # ---------------------------------------------------------------------------
@@ -344,4 +355,81 @@ def test_failed_acute_crisis_does_not_escalate():
     assert result.escalated is False, "an acute crisis must not escalate"
     assert hull.current == 6, (
         f"a failed acute crisis must not damage the Hull (one-round threat), got {hull.current}"
+    )
+
+
+def test_deal_with_crisis_boundary_total_equal_dc_succeeds():
+    """The success comparison is `total >= dc` — exercise the exact boundary so a
+    `>=`→`>` off-by-one is caught. With a known roll R and ability_mod m, a crisis
+    of DC R+m gives total == dc, which must SUCCEED."""
+    from sidequest.game.war_rig_command import CrisisEntry, deal_with_crisis
+
+    seed, ability_mod = 3, 2
+    roll = random.Random(seed).randint(1, 10)  # the roll deal_with_crisis will produce
+    entry = CrisisEntry(
+        crisis_id="boundary",
+        crisis_type="continuing",
+        dc=roll + ability_mod,  # total == dc exactly
+        description="On the knife's edge.",
+        hull_penalty=1,
+    )
+    result = deal_with_crisis(
+        entry,
+        seat="seat_1",
+        ability_mod=ability_mod,
+        rng=random.Random(seed),
+        vessel_id="war_rig_alpha",
+    )
+    assert result.total == entry.dc, (
+        f"setup sanity: total {result.total} should equal dc {entry.dc}"
+    )
+    assert result.success is True, "total == dc must resolve the crisis (>= boundary)"
+    assert result.escalated is False
+
+
+def test_deal_with_crisis_boundary_one_below_dc_fails():
+    """The companion boundary: total == dc-1 must FAIL (and a continuing crisis
+    then escalates)."""
+    from sidequest.game.war_rig_command import CrisisEntry, deal_with_crisis
+
+    seed, ability_mod = 3, 2
+    roll = random.Random(seed).randint(1, 10)
+    entry = CrisisEntry(
+        crisis_id="boundary",
+        crisis_type="continuing",
+        dc=roll + ability_mod + 1,  # total == dc - 1
+        description="Just short.",
+        hull_penalty=1,
+    )
+    result = deal_with_crisis(
+        entry,
+        seat="seat_1",
+        ability_mod=ability_mod,
+        rng=random.Random(seed),
+        vessel_id="war_rig_alpha",
+    )
+    assert result.total == entry.dc - 1, (
+        f"setup sanity: total {result.total} should be dc-1 {entry.dc - 1}"
+    )
+    assert result.success is False, "total == dc-1 must fail"
+    assert result.escalated is True, "a failed continuing crisis escalates"
+
+
+def test_deal_with_crisis_applies_negative_ability_mod_to_the_total():
+    """A negative ability_mod (poor stat on a stat-checked crisis) must subtract
+    from the roll — pin the arithmetic, not just the boolean branch."""
+    from sidequest.game.war_rig_command import CrisisEntry, deal_with_crisis
+
+    entry = CrisisEntry(
+        crisis_id="arith",
+        crisis_type="acute",
+        dc=5,
+        description="Test of arithmetic.",
+        hull_penalty=1,
+    )
+    result = deal_with_crisis(
+        entry, seat="seat_1", ability_mod=-3, rng=random.Random(7), vessel_id="war_rig_alpha"
+    )
+    assert result.total == result.roll - 3, (
+        f"total must be roll + ability_mod (roll {result.roll} + (-3)), got {result.total}"
     )

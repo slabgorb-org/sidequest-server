@@ -11,10 +11,12 @@ The SWN §4.3 *command* crunch layered on 86-6's War Rig table game. Two pieces:
 
   - **Crisis table** — a d10 table (:data:`CRISIS_TABLE`) of ``continuing`` (rolls
     each round, escalating) and ``acute`` (one-round) crises. :func:`deal_with_crisis`
-    rolls d10 + ability vs the crisis DC; a failed *continuing* crisis escalates and
-    feeds its hull penalty into 86-2's two-pool model via
+    rolls d10 + ability vs the crisis DC; a failed *continuing* crisis escalates and,
+    **when a Hull is supplied**, feeds its hull penalty into 86-2's two-pool model via
     :meth:`~sidequest.game.war_rig_combat.WarRigHull.apply_delta` (reuse, not
-    reimplement). An *acute* crisis does not continue.
+    reimplement). The ``war_rig_crew`` round supplies the crew's shared Hull, so this
+    fires in live play (see ``table.war_rig.custom_beat``); with no Hull the escalation
+    still emits ``crisis.escalated`` but deducts no HP. An *acute* crisis does not continue.
 
 Mirrors :mod:`sidequest.game.war_rig_combat`'s shape: a vessel-scoped pydantic pool
 (blank ``vessel_id`` fails loud) + pure resolvers that emit OTEL on every decision so
@@ -150,8 +152,10 @@ class CrisisEntry(BaseModel):
     """One face of the d10 Crisis table.
 
     ``hull_penalty`` is applied to the shared Hull when a *continuing* crisis is
-    failed (escalation feeds 86-2's two-pool model); it is inert for an *acute*
-    crisis (a one-round threat that does not continue).
+    failed **and a Hull is passed to** :func:`deal_with_crisis` (escalation feeds
+    86-2's two-pool model). It is inert for an *acute* crisis (a one-round threat that
+    does not continue) and inert when no Hull is supplied (the ``war_rig_crew`` round
+    supplies one; bare callers that omit it still escalate but deduct no HP).
     """
 
     model_config = {"extra": "forbid"}
@@ -285,11 +289,13 @@ def deal_with_crisis(
 ) -> CrisisResolutionResult:
     """Resolve a Deal With a Crisis attempt: d10 + ability vs the crisis DC.
 
-    Success resolves the crisis. A failed *continuing* crisis escalates — its
-    ``hull_penalty`` is applied to the shared ``hull`` (reusing 86-2's
-    ``rig_pool.delta`` channel) and ``crisis.escalated`` fires. A failed *acute*
-    crisis is a one-round threat: it does NOT escalate and does NOT damage the
-    Hull. Emits ``crisis.resolved`` on every attempt.
+    Success resolves the crisis. A failed *continuing* crisis escalates and
+    ``crisis.escalated`` fires; if a ``hull`` is supplied, its ``hull_penalty`` is
+    applied to that shared Hull (reusing 86-2's ``rig_pool.delta`` channel) and the
+    realized ``hull_delta`` is reported — if ``hull`` is None the escalation fires but
+    deducts no HP (``hull_delta`` 0). The ``war_rig_crew`` round always supplies the
+    crew's shared Hull. A failed *acute* crisis is a one-round threat: it does NOT
+    escalate and does NOT damage the Hull. Emits ``crisis.resolved`` on every attempt.
     """
     roll = rng.randint(1, 10)
     total = roll + ability_mod

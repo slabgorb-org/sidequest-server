@@ -7,8 +7,10 @@ failed — that it escalated and bit the Hull.
 
   - ``crisis.rolled``    — a crisis arises (d10 → table entry).
   - ``crisis.resolved``  — a Deal With a Crisis attempt resolves (success flag).
-  - ``crisis.escalated`` — a FAILED continuing crisis worsens; its hull penalty
-    is applied through the 86-2 two-pool Hull (which fires its own rig_pool.delta).
+  - ``crisis.escalated`` — a FAILED continuing crisis worsens; ``hull_delta`` reports
+    the penalty applied to the 86-2 two-pool Hull when one is supplied (which fires its
+    own rig_pool.delta). The ``war_rig_crew`` round supplies the crew's shared Hull, so
+    this damages it in live play; ``hull_delta`` is 0 (no rig_pool.delta) if no Hull.
 
 Routed per the ``rig_pool.*`` precedent (telemetry/spans/rig.py). Emitters fire on
 the crisis decision point and have no inner work — ``pass`` is intentional.

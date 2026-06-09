@@ -316,12 +316,159 @@ async def test_crewed_round_fires_both_command_and_crisis_span_families(
     resolve_table(st, commits=commits, rng=random.Random(11))
     await asyncio.sleep(0.05)
 
-    components = {e.get("component") for e in captured}
-    assert "command_points" in components, (
-        "a war_rig_crew round with a CP action must surface command_points.* through the "
-        f"real route; saw components {sorted(c for c in components if c)}"
+    # Assert the specific OPS fired, not just that the component appeared — a
+    # bare no-op span carrying the right component name would pass a membership
+    # check (reviewer 86-7). The CP action must record action_taken; the crisis
+    # verb must roll AND resolve.
+    cp_ops = _ops(captured, "command_points")
+    assert "action_taken" in cp_ops, (
+        "the above_and_beyond commit must drive command_points.action_taken through the "
+        f"real route; saw command_points ops {cp_ops}"
     )
-    assert "crisis" in components, (
-        "a war_rig_crew round dealing with a crisis must surface crisis.* through the "
-        f"real route; saw components {sorted(c for c in components if c)}"
+    crisis_ops = _ops(captured, "crisis")
+    assert "rolled" in crisis_ops, (
+        f"the deal_with_crisis commit must roll a crisis (crisis.rolled); saw {crisis_ops}"
+    )
+    assert "resolved" in crisis_ops, (
+        f"the deal_with_crisis commit must resolve the crisis (crisis.resolved); saw {crisis_ops}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_in_round_continuing_crisis_escalation_damages_the_shared_hull(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reviewer's HIGH fix: a failed continuing crisis in a LIVE war_rig_crew
+    round must actually damage the crew's shared Hull (AC2), not just fire a span.
+
+    Drives the production ``custom_beat`` path with a deterministic rng (seed 0 →
+    crisis face 7 'engine_fire', continuing, DC 12; resolve roll 7 → fails →
+    escalates, hull_penalty 2). Asserts the shared Hull on ``shared_state`` drops
+    AND the escalation drives a real ``rig_pool.delta`` through the watcher route —
+    proving the crisis→two-pool wiring is live in a round, not just at the
+    function level."""
+    import random as _random
+
+    import sidequest.game.table.war_rig  # noqa: F401  (registers war_rig_crew)
+    from sidequest.game.table.registry import get_table_game
+    from sidequest.game.table.types import TableCommit, TablePot, TableSeat, TableState
+
+    captured = await _setup(monkeypatch, "war-rig-inround-escalation")
+    game = get_table_game("war_rig_crew")
+    seat = TableSeat(
+        seat_id="seat_1", party_name="Boss", is_pc=True, status="active", private_state={}
+    )
+    st = TableState(
+        game_kind="war_rig_crew",
+        seats=[seat],
+        pot=TablePot(stake_kind="information", stake_descriptor="survival", contributions={}),
+        order=["seat_1"],
+        dealer_seat="seat_1",
+        max_decision_points=4,
+    )
+    await asyncio.sleep(0.05)
+    captured.clear()
+
+    commit = TableCommit(seat_id="seat_1", beat_id="deal_with_crisis")
+    game.custom_beat(st, seat, commit, rng=_random.Random(0))
+    await asyncio.sleep(0.05)
+
+    hull = st.shared_state["war_rig_hull"]
+    assert hull.current == 4, (
+        f"a failed continuing crisis in-round must damage the shared Hull (6-2=4), got {hull.current}"
+    )
+    assert "escalated" in _ops(captured, "crisis"), (
+        "crisis.escalated must fire on the failed continuing crisis"
+    )
+    rig_deltas = [e for e in _events(captured, "rig") if e["fields"].get("op") == "delta"]
+    assert any(e["fields"].get("delta") == -2 for e in rig_deltas), (
+        "the in-round escalation must drive a real rig_pool.delta of -2 (the two-pool model), "
+        f"saw rig deltas {[e['fields'].get('delta') for e in rig_deltas]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_support_department_emits_action_taken_and_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """support_department is also a 1-CP action — it must publish BOTH
+    command_points.action_taken and command_points.delta through the real route,
+    exactly like above_and_beyond. Guards against the delta emission being gated
+    on action identity rather than cost (which would dark-panel this action)."""
+    from sidequest.game.war_rig_command import (
+        CP_SUPPORT_DEPARTMENT,
+        CommandPointPool,
+        spend_command_points,
+    )
+
+    captured = await _setup(monkeypatch, "cp-support-department")
+    pool = CommandPointPool(current=2, max=2, vessel_id="war_rig_alpha")
+    await asyncio.sleep(0.05)
+    captured.clear()
+
+    spend_command_points(pool, CP_SUPPORT_DEPARTMENT, seat="seat_2", rng=random.Random(1))
+    await asyncio.sleep(0.05)
+
+    ops = _ops(captured, "command_points")
+    assert "action_taken" in ops, f"support_department must fire action_taken (got {ops})"
+    assert "delta" in ops, f"support_department (1 CP) must fire delta (got {ops})"
+    deltas = [e for e in _events(captured, "command_points") if e["fields"].get("op") == "delta"]
+    assert deltas[0]["fields"].get("delta") == -1, "support_department delta must be -1 CP"
+
+
+@pytest.mark.asyncio
+async def test_command_points_persist_across_two_resolve_table_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1 production-path persistence: the SHARED CP pool lives on shared_state
+    and depletes cumulatively across SEPARATE resolve_table rounds — not re-seeded
+    each round. Two rounds, each spending one CP, must leave the 4-CP pool at 2."""
+    import sidequest.game.table.war_rig  # noqa: F401
+    from sidequest.game.table.engine import deal_table, resolve_table
+    from sidequest.game.table.types import TableCommit, TablePot, TableSeat, TableState
+
+    await _setup(monkeypatch, "cp-cross-round-persist")
+    seats = [
+        TableSeat(
+            seat_id=f"seat_{i}", party_name=f"C{i}", is_pc=True, status="active", private_state={}
+        )
+        for i in (1, 2)
+    ]
+    st = TableState(
+        game_kind="war_rig_crew",
+        seats=seats,
+        pot=TablePot(
+            stake_kind="information",
+            stake_descriptor="the convoy",
+            contributions={s.seat_id: 0 for s in seats},
+        ),
+        order=[s.seat_id for s in seats],
+        dealer_seat="seat_1",
+        max_decision_points=6,
+    )
+    deal_table(st, rng=random.Random(11))
+
+    # Round 1: seat_1 spends a CP; seat_2 steers (no CP).
+    resolve_table(
+        st,
+        commits={
+            "seat_1": TableCommit(seat_id="seat_1", beat_id="above_and_beyond"),
+            "seat_2": TableCommit(seat_id="seat_2", beat_id="steer"),
+        },
+        rng=random.Random(11),
+    )
+    assert st.shared_state["command_points"].current == 3, "round 1 must drain 4→3"
+
+    # Round 2: same shared pool must persist and drain again, not re-seed to 4.
+    resolve_table(
+        st,
+        commits={
+            "seat_1": TableCommit(seat_id="seat_1", beat_id="above_and_beyond"),
+            "seat_2": TableCommit(seat_id="seat_2", beat_id="steer"),
+        },
+        rng=random.Random(12),
+    )
+    assert st.shared_state["command_points"].current == 2, (
+        "the shared CP pool must persist across rounds and drain cumulatively (4→3→2), "
+        f"got {st.shared_state['command_points'].current}"
     )

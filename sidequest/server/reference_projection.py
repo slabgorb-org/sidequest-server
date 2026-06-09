@@ -27,6 +27,7 @@ from sidequest.server.reference_presenters import (
 from sidequest.server.reference_renderer import (
     EXCLUDED_FILES,
     LORE_WORLD_FILES,
+    RULES_FILES,
     _cast_entry_is_projectable,
     _gate_cast_slugs_on_manifest,
     _gate_poi_slugs_on_manifest,
@@ -514,3 +515,37 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
             sections.append(section)
 
     return {"schema_version": 1, "pack": pack, "world": world, "sections": sections}
+
+
+def build_rules_projection(pack: str, *, pack_dir: Path) -> dict:
+    """Assemble the public-projected rules document (Story 100-6).
+
+    The pack-tier analog of :func:`build_lore_projection`. The Rules page is the
+    genre-tier **rulebook** — per-pack, not per-world — so the document carries no
+    ``world`` key and there is no map/cast/POI/timeline section. It emits one
+    generic-YAML node-tree section per present ``RULES_FILES`` file (skipping
+    ``EXCLUDED_FILES``), each projected through the SAME ``classify()`` firewall the
+    lore generic sections use. Routing every file through
+    :func:`build_generic_yaml_section` is load-bearing: the rules-tier keeper carves
+    already exist in ``reference_visibility.py`` (``rules`` ``narrator_hint`` on
+    confrontations/edge/resources, ``power_tiers.*.*.npc``, ``beat_vocabulary.obstacles``),
+    so the firewall is automatic — a raw ``yaml.safe_load`` splat would leak every
+    keeper field. Sections with no public content are omitted; an empty pack yields
+    an empty section list (purely additive per present file).
+    """
+    sections: list[dict] = []
+    for filename in RULES_FILES:
+        if filename in EXCLUDED_FILES:
+            continue
+        path = pack_dir / filename
+        if not path.exists():
+            continue
+        with path.open(encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+        if data is None:
+            continue
+        section = build_generic_yaml_section(data, file_stem=path.stem, pack=pack, world="")
+        if section is not None:
+            sections.append(section)
+
+    return {"schema_version": 1, "pack": pack, "sections": sections}

@@ -3,6 +3,8 @@
 Routes:
     GET /reference/rules/{pack}            — pack-tier YAML rendered as HTML
     GET /reference/lore/{pack}/{world}     — world-tier + pack flavor as HTML
+    GET /reference/api/lore/{pack}/{world} — world-tier public-projected JSON
+    GET /reference/api/rules/{pack}        — pack-tier public-projected JSON
 
 The renderer is pure (sidequest.server.reference_renderer). This module owns
 the HTTP boundary: registry lookups, 404/500, response shaping.
@@ -17,7 +19,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from sidequest.server.reference_projection import build_lore_projection
+from sidequest.server.reference_projection import build_lore_projection, build_rules_projection
 from sidequest.server.reference_renderer import (
     assemble_lore_page,
     assemble_rules_page,
@@ -139,6 +141,16 @@ def create_reference_router() -> APIRouter:
             doc = build_lore_projection(pack, world, pack_dir=pack_dir, world_dir=world_dir)
         except (ValueError, FileNotFoundError, MissingThemeFieldError) as exc:
             _LOG.exception("reference lore api: projection failed for %s/%s", pack, world)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return JSONResponse(content=doc)
+
+    @router.get("/api/rules/{pack}", response_class=JSONResponse)
+    async def rules_api(request: Request, pack: str) -> JSONResponse:
+        pack_dir = _resolve_pack_dir(request, pack)
+        try:
+            doc = build_rules_projection(pack, pack_dir=pack_dir)
+        except (ValueError, MissingThemeFieldError) as exc:
+            _LOG.exception("reference rules api: projection failed for %s", pack)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return JSONResponse(content=doc)
 

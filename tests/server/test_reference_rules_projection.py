@@ -110,6 +110,21 @@ _PUBLIC_BEAT_EFFECT = "opponent considers your argument"
 _PUBLIC_POWER_TIER_PLAYER = "a uniform that still creases where the factory pressed it"
 
 
+def _blob(obj: object) -> str:
+    """Serialize to JSON with ``ensure_ascii=False`` so non-ASCII characters
+    appear VERBATIM in the search string.
+
+    Load-bearing for the keeper firewall: ``_KEEPER_OBSTACLE_STAT`` carries an
+    em-dash (— U+2014). Under the ``json.dumps`` default ``ensure_ascii=True`` the
+    em-dash escapes to ``\\u2014``, so a raw-substring ``KEEPER not in dumps(...)``
+    check is VACUOUSLY True even when the field fully leaks (Reviewer round 1: the
+    obstacle carve broke 0 tests when removed). ``ensure_ascii=False`` keeps the
+    literal em-dash, so the substring check is sound for any keeper string,
+    ASCII or not.
+    """
+    return _json.dumps(obj, ensure_ascii=False)
+
+
 # ---------------------------------------------------------------------------
 # Fixture builders — synthetic YAML mirroring the real space_opera shapes.
 # ---------------------------------------------------------------------------
@@ -201,7 +216,7 @@ def test_rules_projection_includes_rules_files_sections(tmp_path: Path):
 def test_rules_projection_public_fields_survive(tmp_path: Path):
     pack_dir = _seed_pack(tmp_path)
     doc = build_rules_projection("space_opera", pack_dir=pack_dir)
-    blob = _json.dumps(doc)
+    blob = _blob(doc)
     # Public beat fields cross; public power-tier player prose crosses.
     assert _PUBLIC_BEAT_LABEL in blob
     assert _PUBLIC_BEAT_EFFECT in blob
@@ -232,7 +247,7 @@ def test_generic_yaml_rules_blocks_narrator_hint():
     data = yaml.safe_load(_RULES_YAML)
     section = build_generic_yaml_section(data, file_stem="rules", pack="space_opera", world="")
     assert section is not None
-    blob = _json.dumps(section)
+    blob = _blob(section)
     assert _KEEPER_NARRATOR_HINT not in blob, (
         "rules.yaml confrontations.*.beats.*.narrator_hint is narrator-only — "
         "it must not cross via the generic-YAML rules path (classify() KEEPER)"
@@ -247,7 +262,7 @@ def test_generic_yaml_power_tiers_blocks_npc():
         data, file_stem="power_tiers", pack="space_opera", world=""
     )
     assert section is not None
-    blob = _json.dumps(section)
+    blob = _blob(section)
     assert _KEEPER_POWER_TIER_NPC not in blob, (
         "power_tiers.*.*.npc is the narrator's NPC sizing — it must not cross "
         "via the generic-YAML power_tiers path (classify() KEEPER)"
@@ -263,7 +278,7 @@ def test_generic_yaml_beat_vocabulary_blocks_obstacles():
     # The obstacles subtree is wholly KEEPER; the public `moves` subtree survives,
     # so the section is not None.
     assert section is not None
-    blob = _json.dumps(section)
+    blob = _blob(section)
     assert _KEEPER_OBSTACLE_STAT not in blob, (
         "beat_vocabulary.obstacles is narrator-only obstacle stats — it must not "
         "cross via the generic-YAML beat_vocabulary path (classify() KEEPER)"
@@ -275,7 +290,7 @@ def test_rules_projection_whole_doc_no_keeper_leak(tmp_path: Path):
     # Whole-document firewall: NONE of the three keeper values survive ANY section.
     pack_dir = _seed_pack(tmp_path)
     doc = build_rules_projection("space_opera", pack_dir=pack_dir)
-    blob = _json.dumps(doc)
+    blob = _blob(doc)
     assert _KEEPER_NARRATOR_HINT not in blob
     assert _KEEPER_POWER_TIER_NPC not in blob
     assert _KEEPER_OBSTACLE_STAT not in blob
@@ -291,11 +306,11 @@ def test_raw_splat_would_leak_narrator_hint_but_projection_does_not(tmp_path: Pa
     # scrubs it. This is what makes the firewall assertions meaningful even
     # though the classify() carves pre-exist.
     pack_dir = _seed_pack(tmp_path)
-    raw_blob = _json.dumps(yaml.safe_load((pack_dir / "rules.yaml").read_text()))
+    raw_blob = _blob(yaml.safe_load((pack_dir / "rules.yaml").read_text()))
     assert _KEEPER_NARRATOR_HINT in raw_blob, (
         "sanity: the keeper field IS in the raw YAML, so a raw splat would leak it"
     )
-    projected_blob = _json.dumps(build_rules_projection("space_opera", pack_dir=pack_dir))
+    projected_blob = _blob(build_rules_projection("space_opera", pack_dir=pack_dir))
     assert _KEEPER_NARRATOR_HINT not in projected_blob, (
         "the firewalled projection must scrub what the raw splat would leak"
     )
@@ -336,7 +351,7 @@ def test_rules_api_endpoint_scrubs_keeper_fields(tmp_path: Path):
     _seed_pack(tmp_path)
     resp = _client(tmp_path).get("/reference/api/rules/space_opera")
     assert resp.status_code == 200
-    blob = _json.dumps(resp.json())
+    blob = _blob(resp.json())
     assert _KEEPER_NARRATOR_HINT not in blob, "narrator_hint leaked through the live HTTP path"
     assert _KEEPER_POWER_TIER_NPC not in blob, "power_tiers npc leaked through the live HTTP path"
     assert _KEEPER_OBSTACLE_STAT not in blob, "obstacle stat leaked through the live HTTP path"

@@ -194,88 +194,16 @@ def test_empty_theme_field_treated_as_missing(tmp_path):
     assert "display_font_family" in str(exc.value)
 
 
-# --- HTML emission contract ---
-
-
-def test_wrap_document_emits_data_pack_attribute(tmp_path):
-    """Rendered HTML root has data-pack with the pack slug."""
-    from sidequest.server.reference_renderer import assemble_rules_page
-
-    pack_dir = _write_pack(tmp_path, "demo")
-    html = assemble_rules_page("demo", pack_dir)
-
-    assert 'data-pack="demo"' in html
-
-
-def test_wrap_document_emits_data_archetype_attribute(tmp_path):
-    """data-archetype comes from theme.yaml — drives per-archetype CSS rules."""
-    from sidequest.server.reference_renderer import assemble_rules_page
-
-    pack_dir = _write_pack(tmp_path, "demo")
-    html = assemble_rules_page("demo", pack_dir)
-
-    assert 'data-archetype="parchment"' in html
-
-
-def test_wrap_document_emits_data_world_for_lore(tmp_path):
-    """Lore pages get data-world attribute from the world slug."""
-    from sidequest.server.reference_renderer import assemble_lore_page
-
-    pack_dir = _write_pack(tmp_path, "demo")
-    world_dir = pack_dir / "worlds" / "glenross"
-    world_dir.mkdir(parents=True)
-    (world_dir / "world.yaml").write_text("name: Glenross\n")
-
-    html = assemble_lore_page("demo", "glenross", pack_dir, world_dir)
-
-    assert 'data-pack="demo"' in html
-    assert 'data-world="glenross"' in html
-
-
-def test_wrap_document_injects_palette_css_vars(tmp_path):
-    """Per-pack palette flows into the document as CSS custom properties so the
-    static stylesheet can reference them without hardcoded hex values."""
-    from sidequest.server.reference_renderer import assemble_rules_page
-
-    pack_dir = _write_pack(tmp_path, "demo")
-    html = assemble_rules_page("demo", pack_dir)
-
-    # CSS variable form like --color-primary: #5C7A4F or similar
-    assert "#5C7A4F" in html  # primary hex appears in inline style
-    assert "#C9A96E" in html  # accent hex appears in inline style
-
-
-def test_wrap_document_injects_font_family_tokens(tmp_path):
-    """web_font_family + display_font_family must reach the browser via CSS vars or inline style."""
-    from sidequest.server.reference_renderer import assemble_rules_page
-
-    pack_dir = _write_pack(tmp_path, "demo")
-    html = assemble_rules_page("demo", pack_dir)
-
-    assert "Lora" in html
-    assert "Playfair Display" in html
-
-
-def test_wrap_document_loud_when_theme_missing(tmp_path):
-    """If the pack lacks theme.yaml entirely, assemble_*_page must propagate
-    MissingThemeFieldError — never silently emit a default-themed document."""
-    from sidequest.server.reference_renderer import assemble_rules_page
-    from sidequest.server.reference_theme import MissingThemeFieldError
-
-    pack_dir = _write_pack(tmp_path, "demo", theme_yaml=None)
-
-    with pytest.raises(MissingThemeFieldError):
-        assemble_rules_page("demo", pack_dir)
-
-
-def test_wrap_document_html_lang_preserved(tmp_path):
-    """Pre-existing `lang="en"` attribute must survive Task 18 changes."""
-    from sidequest.server.reference_renderer import assemble_rules_page
-
-    pack_dir = _write_pack(tmp_path, "demo")
-    html = assemble_rules_page("demo", pack_dir)
-
-    assert 'lang="en"' in html
+# --- HTML emission contract (RETIRED) ---
+# Story 100-12 (Phase 4 cutover) retired the server-side HTML assemblers
+# (``assemble_rules_page`` / ``assemble_lore_page``) and the ``_wrap_document``
+# chrome. The per-pack theme now reaches the browser as a flat CSS-var token
+# dict on the JSON projection (``build_theme_tokens``, top-level ``theme`` key),
+# applied client-side by the SPA's session-free injector. The data-attribute /
+# palette / font-token emission contract those tests pinned moved to
+# ``test_reference_theme_projection.py`` (token set) and the React
+# ``ReferenceLorePage.theme`` / ``ReferenceRulesPage.theme`` suites (injection).
+# The loud-failure contract above (``load_reference_theme``) is unchanged.
 
 
 # --- Wiring test ---

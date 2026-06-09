@@ -353,6 +353,38 @@ def test_generic_yaml_legends_blocks_related_tropes():
     assert "The sky cracked." in blob
 
 
+def test_generic_yaml_legends_map_form_blocks_related_tropes():
+    # The SECOND authoring shape _load_legends_flexible accepts: a {legends: [...]}
+    # MAP (genre/loader.py:329,353-356 — historically road_warrior), not the flat
+    # Vec. The generic-YAML path reads legends.yaml RAW, so this shape nests the
+    # field one level deeper — key path ("legends","*","related_tropes") — needing
+    # its OWN classify() carve distinct from the flat-Vec ("*","related_tropes")
+    # one. Without this test, deleting the map-form carve regresses 0 tests
+    # (vacuous-firewall gap, PR #770 review round 1): a map-form world with
+    # related_tropes would leak uncaught.
+    data = {
+        "legends": [
+            {
+                "name": "The Sundering",
+                "summary": "The sky cracked.",
+                "era": "1612",
+                "related_tropes": ["the_duke_betrays_you_in_act_three"],
+            }
+        ]
+    }
+    section = build_generic_yaml_section(data, file_stem="legends", pack="p", world="w")
+    assert section is not None
+    blob = _json.dumps(section)
+    assert "the_duke_betrays_you_in_act_three" not in blob, (
+        "a legend's related_tropes must NOT cross via the generic-YAML legends "
+        "path in the {legends: [...]} MAP form either (spec C1 — the map-form "
+        "classify() carve is load-bearing and independently tested)"
+    )
+    # The public legend fields DO survive the generic projection.
+    assert "The Sundering" in blob
+    assert "The sky cracked." in blob
+
+
 # ===========================================================================
 # Group 4 — OTEL wiring: the projection fires the SHIPPED Story 65-12 timeline
 #           span (reuse, not a new span) carrying the entry census + sort_mode.

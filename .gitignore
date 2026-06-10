@@ -77,3 +77,6 @@ tests/server/_tmp_solo_new/
 # 92-x router A/B eval corpora — re-derivable, see artifacts/router_ab_92_2_gate_decision.md
 artifacts/router_prompts.jsonl
 artifacts/router_corpus.jsonl
+
+# brm (brainstorm/agent tool) scratch
+.brm/

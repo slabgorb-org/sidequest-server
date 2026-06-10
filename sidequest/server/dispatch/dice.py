@@ -491,6 +491,13 @@ def dispatch_dice_throw(
     # of which branch executes.
     damage_request_payload: DiceRequestPayload | None = None
     damage_result_payload: DiceResultPayload | None = None
+    # WWN/CWN Shock chip HP actually removed this beat (miss-damage seam).
+    # Initialized at this level so the persisted beat-applied forensics event
+    # and the resolution close below can read it on every branch — barsoom-2
+    # playtest 2026-06-10: a shock chip killed the seated Other on a CritFail
+    # and NO persisted surface recorded the ablation, so the (correct)
+    # hp_depletion resolution read as the engine fabricating a win.
+    shock_hp_removed = 0
     # Story 71-21: opponent reprisal dice (to-hit + damage), built when the
     # seated opponent takes its server-driven attack turn. Broadcast AFTER the
     # player's own dice pair so the overlay shows the player's roll, then the
@@ -733,13 +740,47 @@ def dispatch_dice_throw(
                         actor=character_name,
                     )
                 if chip > 0:
-                    apply_beat_hp_channel(
+                    shock_hp_removed = apply_beat_hp_channel(
                         target=shock_target_core,
                         channel="strike",
                         damage_total=chip,
                         target_mitigation=0,
                         source_beat_id=f"{payload.beat_id}:shock",
                     )
+                    if shock_hp_removed > 0:
+                        # Text-log + GM-timeline visibility for the chip. The
+                        # wwn.shock.applied span (resolve_shock) is live-OTEL
+                        # only — log greps and the persisted /encounter_events
+                        # feed are structurally blind to it, which is how the
+                        # barsoom-2 shock kill masqueraded as a fabricated win.
+                        logger.info(
+                            "dice.shock_chip_applied actor=%s target=%s beat_id=%s "
+                            "chip=%d hp_after=%d/%d",
+                            character_name,
+                            shock_target_name,
+                            payload.beat_id,
+                            shock_hp_removed,
+                            shock_target_core.hp.current,
+                            shock_target_core.hp.max,
+                        )
+                        _watcher_publish(
+                            "state_transition",
+                            {
+                                "field": "encounter",
+                                "op": "shock_chip_applied",
+                                "actor": character_name,
+                                "target": shock_target_name,
+                                "beat_id": payload.beat_id,
+                                "outcome_tier": resolved.outcome.value
+                                if hasattr(resolved.outcome, "value")
+                                else str(resolved.outcome),
+                                "chip": shock_hp_removed,
+                                "target_hp_after": shock_target_core.hp.current,
+                                "target_hp_max": shock_target_core.hp.max,
+                                "source": "dice_throw_shock",
+                            },
+                            component="encounter",
+                        )
 
         apply_result = ruleset.apply_beat(
             encounter=encounter,
@@ -801,7 +842,12 @@ def dispatch_dice_throw(
                 # the *dial* delta and is suppressed to 0 under hp_depletion, so without
                 # this field a post-hoc reader of ENCOUNTER_BEAT_APPLIED sees a CritSuccess
                 # strike that "did nothing" while the CreatureCore HpPool actually dropped.
-                "opponent_hp_removed": apply_result.hp_removed,
+                # The TOTAL includes the Shock chip (miss-damage) — barsoom-2 2026-06-10:
+                # a shock chip removed the Other's last 3 HP on a CritFail and the
+                # hit-path-only field read 0, making the correct resolution look
+                # fabricated. ``shock_hp_removed`` attributes the shock share.
+                "opponent_hp_removed": apply_result.hp_removed + shock_hp_removed,
+                "shock_hp_removed": shock_hp_removed,
                 "metric_target": encounter.encounter_type,
                 "source": "dice_throw",
             },
@@ -882,6 +928,38 @@ def dispatch_dice_throw(
                 "final_opponent_metric": encounter.opponent_metric.current,
             },
             component="encounter",
+        )
+        # barsoom-2 playtest 2026-06-10: the PLAYER-beat resolution close told
+        # the narrator NOTHING — unlike the reprisal close (2026-06-07 fix,
+        # below in _resolve_opponent_reprisal), it stamped no resolution signal
+        # and appended no directive. The narrator saw "strike CritFail" and
+        # narrated a vivid player DEFEAT while the engine had (correctly)
+        # resolved player_victory via the Shock chip. Mirror the reprisal
+        # close: stamp pending_resolution_signal (renders the [ENCOUNTER
+        # RESOLVED] zone) + a MECHANICAL TRUTH directive, with an explicit
+        # Shock attribution when the kill landed on a missed swing so the
+        # prose renders the actual mechanism.
+        from sidequest.server.narration_apply import _build_resolution_signal
+
+        snapshot.pending_resolution_signal = _build_resolution_signal(encounter)
+        _shock_rider = ""
+        if (
+            shock_hp_removed > 0
+            and encounter.outcome == "player_victory"
+            and resolved.outcome in (RollOutcome.Fail, RollOutcome.CritFail)
+        ):
+            _shock_rider = (
+                f" The killing damage came from weapon Shock on a MISSED swing: "
+                f"{character_name}'s attack failed, but the blade's pressure "
+                f"still removed the final {shock_hp_removed} HP. Narrate the "
+                "kill that way — the swing goes wide yet the opponent falls. "
+                "Do NOT narrate the missed swing as a player defeat."
+            )
+        snapshot.next_turn_directives.append(
+            f"MECHANICAL TRUTH (weave into the narration): the "
+            f"{encounter.encounter_type} confrontation has RESOLVED — outcome: "
+            f"{encounter.outcome}. Narrate the close of the engagement; do NOT "
+            f"continue narrating it as a live, ongoing fight.{_shock_rider}"
         )
 
     # Seed drives spectator replay animation only — face values are already

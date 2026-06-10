@@ -189,6 +189,31 @@ async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext
             recoverable=True,
         )
 
+    # Inert-dial guard (barsoom-2 playtest 2026-06-10). Under
+    # ``win_condition=hp_depletion`` the dials are inert 1e6 placeholders —
+    # the HP channel is the authoritative track, and ``apply_beat`` suppresses
+    # its own dial mutation for exactly this reason (beat_kinds.py
+    # dial_suppressed_hp_depletion). The narrator free-handing this tool
+    # drifted a dead dial 0→4→−2 across a Blade-work fight, polluting the
+    # persisted forensics (``final_player_metric=-2``) badly enough that the
+    # playtest DRIVER hypothesized a momentum sign-flip in the resolver.
+    # Refuse loudly (recoverable — the turn proceeds on prose) and surface the
+    # refusal on the GM panel (No Silent Fallbacks), mirroring the two guards
+    # above.
+    if encounter.win_condition == "hp_depletion":
+        ctx.otel_span.set_attribute("tool.confrontation.refused_hp_depletion", True)
+        ctx.otel_span.set_attribute("tool.confrontation.encounter_type", encounter.encounter_type)
+        ctx.otel_span.set_attribute("tool.confrontation.axis", args.axis)
+        ctx.otel_span.set_attribute("tool.confrontation.delta", args.delta)
+        return ToolResult.error(
+            f"encounter {encounter.encounter_type!r} resolves via hp_depletion — "
+            "its dials are inert placeholders and must not move; the HP channel "
+            "is the authoritative track. Damage flows through committed beats "
+            "and the dice engine. Do not free-hand dial advances on this "
+            "confrontation.",
+            recoverable=True,
+        )
+
     # Opposed-check guard (RW-2 road_warrior chase, playtest 2026-06-05).
     # On a ``resolution_mode: opposed_check`` confrontation the DICE ENGINE
     # owns every dial delta: the player's stashed DICE_THROW d20 is paired

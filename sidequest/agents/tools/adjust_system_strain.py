@@ -73,15 +73,15 @@ class AdjustSystemStrainArgs(BaseModel):
 @tool(
     name="adjust_system_strain",
     description=(
-        "Adjust a CWN character's System Strain pool. CWN-only tool — raises "
-        "if the loaded pack is not ruleset 'cwn'. "
+        "Adjust a CWN-family character's System Strain pool. CWN-family only "
+        "(cwn/awn) — raises if the loaded pack's ruleset is not cwn or awn. "
         "kind: 'temporary' (incidental stress), 'permanent' (cyberware install/remove), "
         "'rest' (nightly recovery), 'first_aid' (medkit cost from pack config). "
         "Over-max adds are refused (applied=False); the refusal reason is returned so "
         "the narrator can describe the limit being hit."
     ),
     category=ToolCategory.WRITE,
-    ruleset="cwn",
+    ruleset=("cwn", "awn"),
 )
 async def adjust_system_strain(args: AdjustSystemStrainArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

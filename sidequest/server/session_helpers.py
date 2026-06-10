@@ -217,7 +217,6 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "discovered_rooms",
     "discovered_routes",
     "lore_established",
-    "mutation_use_log",
     "next_turn_directives",
     "notes",
     "npc_pool",

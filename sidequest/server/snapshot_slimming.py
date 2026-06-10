@@ -68,6 +68,14 @@ _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
     # handler's must_narrate directive, not the ledger. DROP affects only
     # the prompt payload; the ledger persists in the save.
     "wwn_spell_cast_log",
+    # mutation_use_log (Story 102-7 - AWN mutation engagement ledger). Exact
+    # analog of wwn_spell_cast_log: turn-stamped mutation-use receipts that
+    # grow one entry per use (unbounded by construction) and exist for the
+    # magic_working engagement witness + GM-panel/forensics (ADR-124), NOT
+    # the narrator - the narrator learns the mutation outcome from the
+    # handler's must_narrate directive, not the ledger. DROP affects only
+    # the prompt payload; the ledger persists in the save.
+    "mutation_use_log",
 )
 
 # Story 61-2 / ADR-110 — projection tunings for the four growing fields

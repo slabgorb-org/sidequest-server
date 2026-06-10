@@ -14,9 +14,17 @@ Pattern: tests/server/test_dice_throw_wiring.py (session_handler_factory +
 mocked narrator). The narrator is an AsyncMock — the intent-router pass never
 runs on a beat-commit replay turn (router-SUPPRESSED, story 91-2), so no
 router stub is needed; the mechanical seam under test is upstream of prose.
+The Monster Manual pregen (ADR-059) is likewise stubbed to "not loaded": it
+runs inside the narration turn (downstream of the dispatch chain under test)
+and on the real heavy_metal pack with the factory's ``world_slug=""`` it
+fail-louds on the missing world bestiary — correct production behavior, but
+out of scope for this seam.
 
-Uses the REAL heavy_metal pack (ruleset: wwn, cast_spell beat, spells_wwn
-catalog) — skips when sidequest-content is not on disk.
+Lives in tests/integration/ (not tests/server/) because tests/server's
+autouse ``_fixture_pack_search_paths`` repoints genre resolution at the
+frozen fixture packs — this proof needs the REAL heavy_metal pack
+(ruleset: wwn, cast_spell beat, spells_wwn catalog). Skips when
+sidequest-content is not on disk.
 """
 
 from __future__ import annotations
@@ -122,6 +130,14 @@ async def test_ws_dice_throw_with_spell_id_reaches_cast_spine(
     from sidequest.server.session_handler import _State
 
     monkeypatch.setattr("random.randint", lambda a, b: a)
+    # Monster Manual pregen runs in the narration turn, AFTER the dispatch
+    # chain under test; on real heavy_metal with the factory's world_slug=""
+    # it fail-louds on the missing world bestiary. Stub to "not loaded" so
+    # injection skips (the production `if manual is not None` gate).
+    monkeypatch.setattr(
+        "sidequest.server.dispatch.monster_manual_inject.ensure_loaded",
+        lambda _sd: None,
+    )
 
     sd, handler = session_handler_factory(genre="heavy_metal")
     handler._state = _State.Playing

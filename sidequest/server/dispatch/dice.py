@@ -325,6 +325,60 @@ def dispatch_dice_throw(
             f"{encounter.encounter_type!r} — available: [{available}]"
         )
 
+    # WN cast routing (story 102-2): a wwn cast_spell commit names WHICH
+    # prepared spell via ``payload.spell_id`` so the dice path can reach the
+    # same cast spine the narrator apply_beat path uses. Validate the request
+    # shape HERE, before any state mutation, so a malformed commit is a loud
+    # typed rejection (No Silent Fallbacks) with zero half-applied state:
+    #   - spell_id on a non-cast beat is a client bug — silently ignoring a
+    #     mechanical request field is exactly the silent-fallback failure mode;
+    #   - a cast commit with no spell_id is the pre-102-2 bug (the generic
+    #     stat throw) — the picker always sends one, so its absence means a
+    #     stale/buggy client;
+    #   - a spell_id unknown to the resolved (world-first) catalog is a
+    #     client/content bug — never improvise a cast.
+    # Economy refusals (no casts remaining, not prepared) are NOT validated
+    # here: those are valid requests the spine refuses-but-records on
+    # ``wwn.spell.cast`` (refused=True), in parity with apply_beat refusals.
+    is_wwn_cast = bool(
+        payload.beat_id == "cast_spell"
+        and pack
+        and pack.rules
+        and pack.rules.ruleset == "wwn"
+    )
+    if payload.spell_id is not None and not is_wwn_cast:
+        raise DiceDispatchError(
+            f"spell_id {payload.spell_id!r} is only valid on a wwn cast_spell "
+            f"beat commit; got beat_id {payload.beat_id!r} on ruleset "
+            f"{pack.rules.ruleset if pack and pack.rules else None!r}"
+        )
+    if is_wwn_cast:
+        if payload.spell_id is None:
+            raise DiceDispatchError(
+                "cast_spell commit missing spell_id — the spell picker must "
+                "name the prepared spell being cast (story 102-2); a generic "
+                "stat throw is not a valid cast resolution"
+            )
+        from sidequest.server.dispatch.wwn_spell_catalog_resolve import (
+            resolve_wwn_spell_catalog,
+        )
+
+        catalog = resolve_wwn_spell_catalog(pack, snapshot.world_slug)
+        if catalog is None:
+            raise DiceDispatchError(
+                f"cast_spell commit for {payload.spell_id!r} but no WWN spell "
+                f"catalog resolves for world {snapshot.world_slug!r} (pack "
+                "data bug — CLAUDE.md 'no silent fallback')"
+            )
+        try:
+            catalog.get(payload.spell_id)
+        except KeyError as exc:
+            available_spells = ",".join(s.id for s in catalog.spells)
+            raise DiceDispatchError(
+                f"unknown spell_id {payload.spell_id!r} for cast_spell — "
+                f"available: [{available_spells}]"
+            ) from exc
+
     # Ability-invocation decline evidence (sq-playtest 2026-06-07 Reroute
     # Power): in-confrontation actions ride ``payload.player_action`` straight
     # into a router-SUPPRESSED replay turn (story 91-2) — the intent-router
@@ -770,6 +824,36 @@ def dispatch_dice_throw(
             actor_side=actor.side,
             rng=random,
         )
+
+        # WN cast spine (story 102-2): route the committed cast through the
+        # SAME resolution the narrator apply_beat path uses — one cast
+        # implementation, two entry points (epic 102 "Reuse-first"). The d20
+        # throw above is NOT a to-hit gate: WWN High Magic casting is
+        # automatic (SRD §4.2 — the DEFENDER saves), so the spine runs
+        # regardless of ``resolved.outcome``. The spine spends the cast
+        # (refused-but-recorded on an economy failure), applies rolled spell
+        # damage through the HP channel, runs the shared downed seam, fires
+        # the hp_depletion win condition, and emits ``wwn.spell.cast`` on
+        # every call — the GM-panel lie detector. Function-level import:
+        # narration_apply is a heavy module and dispatch must not pull it at
+        # import time.
+        if is_wwn_cast:
+            from sidequest.agents.orchestrator import BeatSelection
+            from sidequest.server.narration_apply import _resolve_wwn_cast_for_beat
+
+            _resolve_wwn_cast_for_beat(
+                sel=BeatSelection(
+                    actor=actor.name,
+                    beat_id="cast_spell",
+                    outcome=resolved.outcome,
+                    spell_id=payload.spell_id,
+                ),
+                actor=actor,
+                snapshot=snapshot,
+                pack=pack,
+                encounter=encounter,
+                cdef=cdef,
+            )
 
         own_delta = apply_result.deltas.own if apply_result.deltas else 0
 

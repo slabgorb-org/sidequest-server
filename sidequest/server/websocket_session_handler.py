@@ -1090,6 +1090,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         # at the _apply_npc_mentions seam can look up real bestiary
                         # entries and embed them as creature_data on the pool member.
                         monster_manual=sd.monster_manual,
+                        # Story 97-5: the dice-resolution replay re-entry
+                        # (suppress_intent_router=True) carries no new player
+                        # intent — the scene's NPCs were applied on pass 1. Thread
+                        # the replay signal so the apply skips the NPC-mention
+                        # sub-block and stops every per-mention side effect from
+                        # double-running (the blackthorn turn-1 double-apply).
+                        is_dice_replay=suppress_intent_router,
                     )
                     applied_outcome = _apply_narration_result_to_snapshot(
                         snapshot,

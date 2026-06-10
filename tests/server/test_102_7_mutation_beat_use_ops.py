@@ -216,11 +216,7 @@ def _make_snapshot(*, usage_used: int = 0) -> GameSnapshot:
     snap.characters.append(pc)
     snap.npcs.append(Npc(core=opp_core))
 
-    usage = (
-        {_MUTATION: UsageCounter(period="per_scene", used=usage_used)}
-        if usage_used
-        else {}
-    )
+    usage = {_MUTATION: UsageCounter(period="per_scene", used=usage_used)} if usage_used else {}
     snap.mutation_state = MutationState(
         characters={
             _PC: CharacterMutationState(
@@ -263,9 +259,7 @@ def _apply_beat(
     from tests._helpers.session_room import room_for
 
     # Deterministic dice everywhere in the apply path (save rolls, damage).
-    monkeypatch.setattr(
-        "sidequest.server.narration_apply.random.randint", lambda a, b: b
-    )
+    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: b)
 
     result = NarrationTurnResult(
         narration="Rux's jaw unhinges; the wastes answer.",
@@ -322,7 +316,10 @@ def test_marked_beat_with_mutation_id_fires_used_span_and_pays_strain(
     pack = _make_awn_pack()
 
     _apply_beat(
-        snap, pack, beat_id="unleash_mutation", mutation_id=_MUTATION,
+        snap,
+        pack,
+        beat_id="unleash_mutation",
+        mutation_id=_MUTATION,
         monkeypatch=monkeypatch,
     )
 
@@ -341,9 +338,7 @@ def test_marked_beat_with_mutation_id_fires_used_span_and_pays_strain(
         f"(0 -> {_STRAIN_COST}); got {_pc_strain(snap)} — power without a "
         "price is exactly the crunchless improv Sebastien and Jade named"
     )
-    assert _pc_usage_used(snap) == 1, (
-        "per_scene usage must tick 0 -> 1 through the beat path"
-    )
+    assert _pc_usage_used(snap) == 1, "per_scene usage must tick 0 -> 1 through the beat path"
 
 
 # ===========================================================================
@@ -351,9 +346,7 @@ def test_marked_beat_with_mutation_id_fires_used_span_and_pays_strain(
 # ===========================================================================
 
 
-def test_marked_beat_without_mutation_id_is_loud_and_inert(
-    otel_capture, monkeypatch
-) -> None:
+def test_marked_beat_without_mutation_id_is_loud_and_inert(otel_capture, monkeypatch) -> None:
     """The pre-wiring bug shape: a mutation beat with no mutation named must
     NOT silently apply as plain narration — it emits ``awn.mutation.refused``
     (reason ``beat_no_mutation_id``, the ``magic.cast_spell_no_spell_id``
@@ -363,7 +356,10 @@ def test_marked_beat_without_mutation_id_is_loud_and_inert(
     pack = _make_awn_pack()
 
     _apply_beat(
-        snap, pack, beat_id="unleash_mutation", mutation_id=None,
+        snap,
+        pack,
+        beat_id="unleash_mutation",
+        mutation_id=None,
         monkeypatch=monkeypatch,
     )
 
@@ -380,9 +376,7 @@ def test_marked_beat_without_mutation_id_is_loud_and_inert(
     assert _pc_usage_used(snap) == 0, "no engagement -> no usage tick"
 
 
-def test_marked_beat_exhausted_usage_refuses_without_strain(
-    otel_capture, monkeypatch
-) -> None:
+def test_marked_beat_exhausted_usage_refuses_without_strain(otel_capture, monkeypatch) -> None:
     """Refusal IS engagement (102-3 doctrine): a per-scene mutation already
     used this scene refuses with ``limit_exhausted`` and pays NO Strain —
     never a free second use, never silent improv.
@@ -391,7 +385,10 @@ def test_marked_beat_exhausted_usage_refuses_without_strain(
     pack = _make_awn_pack()
 
     _apply_beat(
-        snap, pack, beat_id="unleash_mutation", mutation_id=_MUTATION,
+        snap,
+        pack,
+        beat_id="unleash_mutation",
+        mutation_id=_MUTATION,
         monkeypatch=monkeypatch,
     )
 
@@ -419,9 +416,7 @@ def test_unmarked_beat_ignores_stray_mutation_id(otel_capture, monkeypatch) -> N
     snap = _make_snapshot()
     pack = _make_awn_pack()
 
-    _apply_beat(
-        snap, pack, beat_id="shoot", mutation_id=_MUTATION, monkeypatch=monkeypatch
-    )
+    _apply_beat(snap, pack, beat_id="shoot", mutation_id=_MUTATION, monkeypatch=monkeypatch)
 
     assert _spans_named(otel_capture, "awn.mutation.used") == []
     assert _pc_strain(snap) == 0

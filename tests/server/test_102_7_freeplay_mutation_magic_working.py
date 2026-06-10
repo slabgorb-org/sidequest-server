@@ -172,9 +172,7 @@ def _make_native_pack() -> Any:
     return pack
 
 
-def _awn_snapshot(
-    *, with_mutation_state: bool = True, usage_used: int = 0
-) -> GameSnapshot:
+def _awn_snapshot(*, with_mutation_state: bool = True, usage_used: int = 0) -> GameSnapshot:
     """Free-play awn snapshot: one Mutant PC, NO encounter, NO ``magic_state``
     (the retired plugin), NO ``core.spellcasting`` (AWN has no spells) — the
     mutation surface is ``snapshot.mutation_state`` alone."""
@@ -205,9 +203,7 @@ def _awn_snapshot(
 
     if with_mutation_state:
         usage = (
-            {_MUTATION_ID: UsageCounter(period="per_scene", used=usage_used)}
-            if usage_used
-            else {}
+            {_MUTATION_ID: UsageCounter(period="per_scene", used=usage_used)} if usage_used else {}
         )
         snap.mutation_state = MutationState(
             characters={
@@ -400,8 +396,7 @@ async def test_freeplay_mutation_by_display_name_resolves(otel_capture) -> None:
 
     used = _spans_named(otel_capture, "awn.mutation.used")
     assert len(used) == 1, (
-        f"display-name resolution must reach the engine; got {len(used)} "
-        "awn.mutation.used spans"
+        f"display-name resolution must reach the engine; got {len(used)} awn.mutation.used spans"
     )
     assert used[0].attributes["mutation_id"] == _MUTATION_ID
 
@@ -418,9 +413,7 @@ async def test_freeplay_exhausted_usage_refusal_is_engagement(otel_capture) -> N
     result = await _run_bank(_package_with(dispatch), snapshot=snap, pack=pack)
 
     refused = _spans_named(otel_capture, "awn.mutation.refused")
-    assert len(refused) == 1, (
-        f"exhausted usage must emit awn.mutation.refused; got {len(refused)}"
-    )
+    assert len(refused) == 1, f"exhausted usage must emit awn.mutation.refused; got {len(refused)}"
     assert refused[0].attributes["reason"].startswith("limit_exhausted")
     assert _spans_named(otel_capture, "awn.mutation.used") == []
     assert _pc_strain(snap) == 0, "a refused use must not pay Strain"
@@ -466,12 +459,8 @@ async def test_native_pack_emits_no_awn_spans_and_does_not_crash(otel_capture) -
 
     await _run_bank(_package_with(_mutation_dispatch()), snapshot=snap, pack=pack)
 
-    awn_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name.startswith("awn.")
-    ]
-    assert awn_spans == [], (
-        f"a native pack must never cross the mutation seam; got {awn_spans}"
-    )
+    awn_spans = [s for s in otel_capture.get_finished_spans() if s.name.startswith("awn.")]
+    assert awn_spans == [], f"a native pack must never cross the mutation seam; got {awn_spans}"
 
 
 # ===========================================================================
@@ -480,9 +469,7 @@ async def test_native_pack_emits_no_awn_spans_and_does_not_crash(otel_capture) -
 
 
 @pytest.mark.asyncio
-async def test_pre_narrator_pass_routes_freeplay_mutation(
-    otel_capture, monkeypatch
-) -> None:
+async def test_pre_narrator_pass_routes_freeplay_mutation(otel_capture, monkeypatch) -> None:
     """THE WIRING TEST (CLAUDE.md: every suite needs one): drive the real
     ``execute_intent_router_pre_narrator_pass`` — real precondition gate, real
     dispatch bank — with only the Haiku classification stubbed to return the

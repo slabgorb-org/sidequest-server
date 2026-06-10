@@ -47,9 +47,7 @@ def _has_real_content() -> bool:
     return GENRE_PACKS_DIR.is_dir()
 
 
-pytestmark = pytest.mark.skipif(
-    not _has_real_content(), reason="sidequest-content not on disk"
-)
+pytestmark = pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 
 
 def _load_pack() -> GenrePack:
@@ -133,9 +131,7 @@ def test_combat_mutant_ability_beat_is_mutation_marked() -> None:
     so the apply path routes it through use_ops instead of bare narration
     (behavior pinned in tests/server/test_102_7_mutation_beat_use_ops.py)."""
     pack = _load_pack()
-    combat = next(
-        (c for c in pack.rules.confrontations if c.category == "combat"), None
-    )
+    combat = next((c for c in pack.rules.confrontations if c.category == "combat"), None)
     assert combat is not None, "mutant_wasteland must declare a combat confrontation"
 
     marked = [b for b in combat.beats if getattr(b, "mutation_resolution", False)]
@@ -178,9 +174,7 @@ def test_chargen_seam_seeds_mutant_class_from_real_catalog(otel_capture) -> None
 
     assert snap.mutation_state is not None, "the seam must create MutationState"
     cs = snap.mutation_state.characters.get("Rux")
-    assert cs is not None, (
-        f"a {mutant_class!r} PC must be seeded with a CharacterMutationState"
-    )
+    assert cs is not None, f"a {mutant_class!r} PC must be seeded with a CharacterMutationState"
     assert _spans_named(otel_capture, "awn.mutation.acquired"), (
         "chargen seeding must be span-visible (awn.mutation.acquired) — "
         "the GM panel is the lie detector"
@@ -197,9 +191,7 @@ def test_chargen_seam_skips_non_mutant_class(otel_capture) -> None:
     pack = _load_pack()
     assert pack.mutations is not None, "needs mutations.yaml (see test 1)"
     mutant_classes = set(pack.mutations.mp_economy.mutant_classes)
-    non_mutant = next(
-        (a.name for a in pack.archetypes if a.name not in mutant_classes), None
-    )
+    non_mutant = next((a.name for a in pack.archetypes if a.name not in mutant_classes), None)
     assert non_mutant is not None, (
         "fixture premise: the pack must offer at least one non-mutant archetype"
     )
@@ -215,11 +207,7 @@ def test_chargen_seam_skips_non_mutant_class(otel_capture) -> None:
         session_id="test-102-7",
     )
 
-    seeded = (
-        snap.mutation_state.characters.get("Dray")
-        if snap.mutation_state is not None
-        else None
-    )
+    seeded = snap.mutation_state.characters.get("Dray") if snap.mutation_state is not None else None
     assert seeded is None, (
         f"a {non_mutant!r} PC must NOT receive mutation state — absence is "
         "the correct state for a non-mutant class"
@@ -231,9 +219,7 @@ def test_chargen_seam_skips_non_mutant_class(otel_capture) -> None:
 # ===========================================================================
 
 
-def test_production_path_mutation_use_fires_spans_and_strain(
-    otel_capture, monkeypatch
-) -> None:
+def test_production_path_mutation_use_fires_spans_and_strain(otel_capture, monkeypatch) -> None:
     """THE LIVE PROOF (story title: 'prove AWN combat + lethality fire live'):
     seat the real combat confrontation, give a real-catalog mutant a
     Strain-costed mutation, drive the mutation beat through the REAL
@@ -259,9 +245,7 @@ def test_production_path_mutation_use_fires_spans_and_strain(
 
     # A Strain-costed, usable (non-passive) positive from the REAL catalog —
     # wiring needs one to exist, but pins nothing else about content (P2-4).
-    costed = next(
-        (m for m in pack.mutations.positives if m.strain_cost > 0), None
-    )
+    costed = next((m for m in pack.mutations.positives if m.strain_cost > 0), None)
     assert costed is not None, (
         "the catalog must offer at least one Strain-costed positive mutation "
         "(the cost economy is the crunch this story exists to make live)"
@@ -294,9 +278,7 @@ def test_production_path_mutation_use_fires_spans_and_strain(
     )
     snap.characters.append(pc)
     snap.mutation_state = MutationState(
-        characters={
-            pc_name: CharacterMutationState(mp_remaining=0, positive_ids=[costed.id])
-        }
+        characters={pc_name: CharacterMutationState(mp_remaining=0, positive_ids=[costed.id])}
     )
 
     # Seat the real combat confrontation via the production seam.
@@ -321,9 +303,7 @@ def test_production_path_mutation_use_fires_spans_and_strain(
     )
     assert mutation_beat is not None, "needs the marked beat (see test 3)"
 
-    monkeypatch.setattr(
-        "sidequest.server.narration_apply.random.randint", lambda a, b: b
-    )
+    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: b)
 
     strain_before = pc_core.system_strain.current
     result = NarrationTurnResult(

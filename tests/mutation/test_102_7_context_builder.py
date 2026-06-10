@@ -106,12 +106,9 @@ def test_static_block_empty_when_state_none() -> None:
 def test_static_block_empty_when_no_characters_seeded() -> None:
     from sidequest.mutation.context_builder import build_mutation_static_block
 
-    assert (
-        build_mutation_static_block(
-            mutation_state=MutationState(), catalog=_catalog()
-        )
-        == ""
-    ), "an empty state must cost zero prompt tokens (the 61-12 lesson)"
+    assert build_mutation_static_block(mutation_state=MutationState(), catalog=_catalog()) == "", (
+        "an empty state must cost zero prompt tokens (the 61-12 lesson)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -185,8 +182,7 @@ async def test_narrator_pre_prompt_contains_mutation_context_when_state_present(
     )
     prompt, _ = await orch.build_narrator_prompt("I bare my fangs", context)
     assert "Acid Spit" in prompt, (
-        "the narrator prompt must carry the owned-mutation surface when "
-        "mutation_state is populated"
+        "the narrator prompt must carry the owned-mutation surface when mutation_state is populated"
     )
 
 

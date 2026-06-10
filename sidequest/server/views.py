@@ -372,6 +372,30 @@ def party_member_from_character(
             filtered_ids, _index_beats(sd.genre_pack.rules.confrontations)
         )
 
+    # Story 93-4: link the character's own creation-seed lore fragments from
+    # the per-session ADR-048 store so the History 'Lore' subsection can
+    # render them. Plumbing only — fragments are seeded at chargen confirm.
+    from sidequest.game.lore_linking import linked_lore_for_character
+
+    lore_fragments = linked_lore_for_character(sd.lore_store, character)
+    if character.creation_answers:
+        # GM-panel lie detector (CLAUDE.md OTEL Observability Principle): prove
+        # how many fragments actually reached the surface, per character.
+        from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+        _watcher_publish(
+            "lore_retrieval",
+            {
+                "reason": "character_history_link",
+                "resolved_count": len(lore_fragments),
+                "answered_scenes": len(character.creation_answers),
+                "player_name": player_name,
+                "genre_slug": sd.genre_slug,
+                "world_slug": sd.world_slug,
+            },
+            component="rag",
+        )
+
     sheet = CharacterSheetDetails(
         race=NonBlankString(character.race),
         # Display-only flavor labels — None when chargen produced no distinct
@@ -391,6 +415,9 @@ def party_member_from_character(
         # Story 93-2: chargen provenance rides the sheet so the 93-3
         # History section can render the player's own answers.
         creation_answers=list(character.creation_answers),
+        # Story 93-4: player-linked creation-seed lore for the History
+        # 'Lore' subsection beneath the origin block.
+        lore_fragments=lore_fragments,
     )
 
     # Currency noun from inventory.yaml::currency.name (pingpong

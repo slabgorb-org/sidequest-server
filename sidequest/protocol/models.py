@@ -427,6 +427,32 @@ class CreationAnswer(BaseModel):
     confirm seam, never by builder.build() itself."""
 
 
+class LinkedLoreFragment(BaseModel):
+    """One creation-seed lore fragment linked to a character's History.
+
+    Story 93-4: a typed, sheet-ready projection of an ADR-048 lore fragment
+    that belongs to THIS character (its chosen chargen options), surfaced as
+    a 'Lore' subsection beneath the 93-3 origin block. Plumbing only — the
+    fragments are authored by chargen seeding (story 75-15 /
+    :func:`seed_lore_from_char_creation`), never minted here.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    fragment_id: str
+    """The ADR-048 store id (``lore_char_creation_<scene_id>_<choice_index>``)."""
+    title: str
+    """Display heading — the chosen option label."""
+    summary: str
+    """The fragment body (``"<label>: <description>"``)."""
+    source: str
+    """The fragment's LoreSource tag (``character_creation``)."""
+    lore_route: str | None = None
+    """Link to the fragment's lore page when one exists, else None. The UI
+    renders the title as a link only when this is set — never a fabricated
+    href (No Silent Fallbacks)."""
+
+
 # ---------------------------------------------------------------------------
 # CharacterSheetDetails — full character sheet nested inside PartyMember
 # ---------------------------------------------------------------------------
@@ -467,6 +493,11 @@ class CharacterSheetDetails(ProtocolBase):
     """Chargen provenance (Story 93-2): the player's per-scene answers in
     scene-walk order — rendered by the 93-3 History section. Empty for
     pre-93-2 characters."""
+    lore_fragments: list[LinkedLoreFragment] = Field(default_factory=list)
+    """Player-linked creation-seed lore fragments (Story 93-4) — rendered as
+    a 'Lore' subsection beneath the 93-3 origin block. Filtered to THIS
+    character's chosen chargen options; another player's picks never leak in.
+    Empty when the character has no linked fragments (legacy / no-store)."""
 
 
 # ---------------------------------------------------------------------------

@@ -1766,12 +1766,20 @@ class ConnectHandler:
                                 "roster_size": len(reconcile_roster),
                                 "sealed_count": _sealed_count,
                                 "phase": str(snapshot.turn_manager.phase),
+                                # Story 97-2: name which roster source produced
+                                # the count so desync forensics can tell the
+                                # durable-seat denominator from the old
+                                # live-socket one that under-counted the first
+                                # reconnector (solo 0/1). build_seal_reconcile_
+                                # roster derives membership from the durable
+                                # snapshot.player_seats.
+                                "roster_source": "durable_seats",
                             },
                             component="multiplayer",
                         )
                         logger.info(
                             "turn_status.reconciled_on_connect player_id=%s slug=%s "
-                            "sealed=%d/%d phase=%s",
+                            "sealed=%d/%d phase=%s source=durable_seats",
                             player_id,
                             slug,
                             _sealed_count,

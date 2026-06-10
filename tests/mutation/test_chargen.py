@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from sidequest.mutation.chargen import seed_character_mutations
 from sidequest.mutation.models import (
     MpEconomy,
@@ -71,3 +73,23 @@ def test_resume_safety_same_negative() -> None:
     ]
     assert results[0] is not None and results[1] is not None
     assert results[0].negative_ids == results[1].negative_ids
+
+
+def test_failed_seeding_leaves_no_half_seeded_actor() -> None:
+    catalog = MutationCatalog(
+        mp_economy=MpEconomy(mutant_classes=["Mutant"], chargen_negatives_rolled=2),
+        stigma=StigmaTables(body_part=["a"] * 6, nature=["b"] * 6, flavor=["c"] * 12),
+        negatives=[
+            NegativeMutationDef(id="negative/frail", name="F", roll_range=(1, 100), effect="y"),
+        ],
+        positives=[
+            PositiveMutationDef(id="structure/crushing_jaws", name="C",
+                                category="structure", effect="bite"),
+        ],
+    )
+    state = MutationState()
+    with pytest.raises(ValueError, match="non-duplicate"):
+        seed_character_mutations(
+            state, catalog, actor="Rux", character_class="Mutant", session_id="s1",
+        )
+    assert "Rux" not in state.characters  # no half-seeded residue

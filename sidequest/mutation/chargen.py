@@ -28,6 +28,14 @@ def seed_character_mutations(
         return state.characters[actor]  # idempotent — never re-roll
     cs = CharacterMutationState(mp_remaining=catalog.mp_economy.base_mp)
     state.characters[actor] = cs
-    for _ in range(catalog.mp_economy.chargen_negatives_rolled):
-        acquire_random_negative(state, catalog, actor=actor, session_id=session_id, source="chargen")
+    try:
+        for _ in range(catalog.mp_economy.chargen_negatives_rolled):
+            acquire_random_negative(
+                state, catalog, actor=actor, session_id=session_id, source="chargen"
+            )
+    except Exception:
+        # Never leave a half-seeded character behind the idempotency guard —
+        # remove the entry so a corrected catalog can retry cleanly.
+        del state.characters[actor]
+        raise
     return cs

@@ -25,7 +25,7 @@ Contract pinned by these tests (the Dev implements TO this surface):
 
 All scenes here are synthetic — content invariants belong to the pack
 validator, never unit tests. The real-content wiring test lives at
-``tests/server/test_creation_answers_snapshot.py``.
+``tests/integration/test_creation_answers_wiring.py``.
 """
 
 from __future__ import annotations
@@ -122,8 +122,8 @@ def _drive_scene() -> CharCreationScene:
         "the_drive",
         title="What drives you?",
         choices=[
-            make_choice("Revenge against the Combine", backstory_hook="revenge"),
-            make_choice("A debt unpaid", backstory_hook="debt"),
+            make_choice("Revenge against the Combine", goals="Seek vengeance"),
+            make_choice("A debt unpaid", goals="Repay a debt"),
         ],
     )
 

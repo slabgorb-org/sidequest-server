@@ -391,6 +391,43 @@ class ClassMove(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
+# CreationAnswer — durable chargen provenance (Story 93-2)
+# ---------------------------------------------------------------------------
+# Defined here (not in sidequest.game.character) for the same layering reason
+# as AbilityDefinition above: the Character model and the protocol sheet both
+# carry it, and game already depends on protocol. sidequest.game.character
+# re-exports it.
+# ---------------------------------------------------------------------------
+
+
+class CreationAnswer(BaseModel):
+    """One answered chargen scene — the player's words or their pick.
+
+    Story 93-2: the per-scene answer the player actually gave, recorded
+    durably on the Character (and carried in the snapshot sheet) instead of
+    being consumed for prose slots and discarded. Only ANSWERED scenes are
+    recorded — auto-advance acks and the arrangement confirm carry no
+    prompt/answer pair.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    scene_id: str
+    """The chargen scene that asked the question."""
+    prompt: str
+    """The scene's question/title, as the player saw it."""
+    kind: Literal["choice", "freeform"]
+    """How the player answered: a canned pick or their own words."""
+    value: str
+    """The chosen option LABEL (choice) or the player's verbatim text
+    (freeform) — never a derived/collapsed mechanical hint."""
+    archetype_inferred: bool = False
+    """True iff this answer's text fed the 93-1 Haiku archetype inference —
+    the UI badges these ('inferred from your words'). Marked at the chargen
+    confirm seam, never by builder.build() itself."""
+
+
+# ---------------------------------------------------------------------------
 # CharacterSheetDetails — full character sheet nested inside PartyMember
 # ---------------------------------------------------------------------------
 
@@ -426,6 +463,10 @@ class CharacterSheetDetails(ProtocolBase):
     """Pronouns. Optional. Non-blank when present."""
     equipment: list[str] = Field(default_factory=list)
     """Equipped/carried items as display strings."""
+    creation_answers: list[CreationAnswer] = Field(default_factory=list)
+    """Chargen provenance (Story 93-2): the player's per-scene answers in
+    scene-walk order — rendered by the 93-3 History section. Empty for
+    pre-93-2 characters."""
 
 
 # ---------------------------------------------------------------------------

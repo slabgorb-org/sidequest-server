@@ -7,11 +7,14 @@ Wire flow (matches Rust):
 1. Rolling client clicks a confrontation beat, UI builds ``DiceRequestPayload``
    locally (no server round-trip), auto-rolls in Rapier, reads settled faces.
 2. UI sends ``DICE_THROW { request_id, throw_params, face, beat_id? }``.
-3. Server (here) applies the beat to the active encounter, validates inputs,
-   resolves dice from the client-reported faces, broadcasts DICE_REQUEST +
-   DICE_RESULT to the room, stashes the resolved outcome + a replay-action
-   on the session, and synthesizes a narrator input that describes what
-   happened mechanically.
+3. Server (here) validates inputs, resolves dice from the client-reported
+   faces, and applies the beat to the active encounter — or, on a WN
+   sealed round (story 102-4: SwnRulesetModule family, hp_depletion, a
+   persisted initiative order), SEALS the commit until every seated
+   player-side participant is in, then walks the whole round in initiative
+   order. Either way it broadcasts DICE_REQUEST + DICE_RESULT to the room,
+   stashes the resolved outcome + a replay-action on the session, and
+   synthesizes a narrator input that describes what happened mechanically.
 4. The session handler then runs the narrator inline so the playtest UX is
    one click → dice result + narration, not two separate user actions.
 
@@ -31,7 +34,7 @@ from dataclasses import dataclass
 
 from sidequest.game.beat_kinds import _opposite_side_first_actor, apply_beat_hp_channel
 from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
-from sidequest.game.encounter import EncounterPhase, StructuredEncounter
+from sidequest.game.encounter import EncounterActor, EncounterPhase, StructuredEncounter
 from sidequest.game.hp_depletion import check_hp_depletion
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.base import RulesetModule
@@ -39,7 +42,7 @@ from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.ruleset.wwn import WwnRulesetModule
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
-from sidequest.genre.models.rules import ConfrontationDef, ResolutionMode
+from sidequest.genre.models.rules import BeatDef, ConfrontationDef, ResolutionMode
 from sidequest.protocol.dice import (
     DiceRequestPayload,
     DiceResultPayload,
@@ -307,7 +310,11 @@ def dispatch_dice_throw(
     snapshot: GameSnapshot,
     emit_confrontation: Callable[[object, Callable[[str], object]], None] | None = None,
 ) -> DiceThrowOutcome:
-    """Apply a beat, resolve dice, broadcast wire messages, return outcome.
+    """Apply or seal a beat, resolve dice, broadcast wire messages, return outcome.
+
+    On the WN sealed-round path (SwnRulesetModule family + hp_depletion +
+    persisted initiative) the beat SEALS — application and the damage
+    broadcast defer until the barrier-closing commit walks the round.
 
     Raises ``DiceDispatchError`` when the throw can't be resolved — no
     partial state mutation leaks because beat apply only runs after ALL
@@ -853,10 +860,12 @@ def dispatch_dice_throw(
             room_broadcast(_round_msg)
 
         # Story 45-3 / 59-20: Mid-turn CONFRONTATION emit. The metric mutation
-        # already landed via apply_beat above; without this the UI dial sits on
-        # the prior turn's CONFRONTATION snapshot through the entire dice +
-        # narration cycle (5–15s). Skipped on the opposed branch where deltas
-        # are deferred to narration_apply.
+        # already landed via apply_beat (or, on a sealed WN commit, the frame
+        # carries the committed_actors ledger so the table sees who the round
+        # waits on); without this the UI sits on the prior turn's
+        # CONFRONTATION snapshot through the entire dice + narration cycle
+        # (5–15s). Skipped on the opposed branch where deltas are deferred to
+        # narration_apply.
         if not opposed_pending:
             # The canonical full-union payload. Story 59-20: when the handler
             # provides ``emit_confrontation`` (the production path), route it
@@ -1013,8 +1022,8 @@ def _apply_committed_player_beat(
     spell_id: str | None,
     character_name: str,
     rolling_player_id: str,
-    beat,
-    actor,
+    beat: BeatDef,
+    actor: EncounterActor,
     outcome_tier: RollOutcome,
     encounter: StructuredEncounter,
     cdef: ConfrontationDef,
@@ -1323,7 +1332,7 @@ def _apply_committed_player_beat(
     # WN cast spine (story 102-2): route the committed cast through the
     # SAME resolution the narrator apply_beat path uses — one cast
     # implementation, two entry points (epic 102 "Reuse-first"). The d20
-    # throw above is NOT a to-hit gate: WWN High Magic casting is
+    # throw that produced ``outcome_tier`` is NOT a to-hit gate: WWN High Magic casting is
     # automatic (SRD §4.2 — the DEFENDER saves), so the spine runs
     # regardless of ``outcome_tier``. The spine spends the cast
     # (refused-but-recorded on an economy failure), applies rolled spell
@@ -1421,22 +1430,29 @@ def _emit_player_beat_resolution_close(
     encounter: StructuredEncounter,
     snapshot: GameSnapshot,
     character_name: str,
-    beat,
+    beat: BeatDef,
     actor_side: str,
     outcome_tier: RollOutcome,
     strike_hp_removed: int,
     shock_hp_removed: int,
     encounter_resolved: bool,
+    source: str = "dice_throw_beat",
 ) -> None:
     """Per-beat resolution close: the [ENCOUNTER RESOLVED] narrator signal on
     a resolving beat, or the kill-overclaim HP anchor on a damaging one.
     Shared by the legacy in-dispatch flow and the WN round walk (story 102-4)
-    so the two closes cannot drift."""
+    so the two closes cannot drift.
+
+    ``source`` labels which seam closed the fight on the ``encounter.resolved``
+    span and the persisted op="resolved" watcher row — "dice_throw_beat" for
+    the legacy in-dispatch close, "wn_round" when the WN round walk applies
+    the beat at its initiative slot (review rework r1: the lie-detector's own
+    label must not lie about the seam)."""
     if encounter_resolved:
         with encounter_resolved_span(
             encounter_type=encounter.encounter_type,
             outcome=encounter.outcome or "",
-            source="dice_throw_beat",
+            source=source,
         ):
             pass
         _watcher_publish(
@@ -1446,7 +1462,7 @@ def _emit_player_beat_resolution_close(
                 "op": "resolved",
                 "encounter_type": encounter.encounter_type,
                 "outcome": encounter.outcome or "",
-                "source": "dice_throw_beat",
+                "source": source,
                 "final_player_metric": encounter.player_metric.current,
                 "final_opponent_metric": encounter.opponent_metric.current,
             },

@@ -26,6 +26,7 @@ module loads first.
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass
 
 from sidequest.game.beat_kinds import _opposite_side_first_actor
@@ -128,7 +129,13 @@ def wn_barrier_closed(
 
 @dataclass(frozen=True)
 class WnRoundResult:
-    """What the round walk produced for the dispatching caller to fan out."""
+    """What one round walk produced.
+
+    ``messages`` is what the dispatching caller fans out to the room —
+    broadcast-ready dice pairs and incapacitation surfaces in slot order.
+    ``resolution_order`` is the comma-joined token sequence the walk visited;
+    it is already recorded on the ``{slug}.round.resolved`` span and is
+    surfaced here for callers/tests, not re-broadcast."""
 
     messages: list[object]
     resolution_order: str
@@ -144,7 +151,7 @@ def run_wn_round(
     session_id: str,
     round_number: int,
     rolling_player_id: str,
-    rng,
+    rng: random.Random,
 ) -> WnRoundResult:
     """Resolve one sealed WN round in descending persisted-initiative order.
 
@@ -326,6 +333,10 @@ def run_wn_round(
             strike_hp_removed=application.strike_hp_removed,
             shock_hp_removed=application.shock_hp_removed,
             encounter_resolved=application.encounter_resolved,
+            # Review rework r1: the walk closed this fight — the
+            # encounter.resolved span and the persisted op="resolved" row
+            # must say so (honest seam label for the GM panel / ADR-124).
+            source="wn_round",
         )
 
     # The round is spent — commits never leak into the next round.

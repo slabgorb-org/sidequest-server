@@ -16,6 +16,7 @@ from sidequest.telemetry.spans.awn import (
     awn_mutation_acquired_span,
     awn_mutation_mp_spend_span,
     awn_mutation_refused_span,
+    awn_mutation_stigma_span,
 )
 
 
@@ -76,6 +77,7 @@ def acquire_random_negative(
                 applied=True, actor=actor, mutation_id=nd.id, roll=roll,
                 mp_delta=eco.per_negative_mp, mp_remaining=cs.mp_remaining,
             )
+    awn_mutation_refused_span(actor=actor, mutation_id="", reason="dedupe_exhausted")
     raise ValueError(
         f"could not roll a non-duplicate negative for {actor!r}; "
         f"owned={cs.negative_ids}, table={[n.id for n in catalog.negatives]}"
@@ -206,4 +208,8 @@ def roll_stigma(
         concealable=concealable,
     )
     cs.stigma.append(record)
+    awn_mutation_stigma_span(
+        actor=actor, body_part=record.body_part, nature=record.nature,
+        flavor=record.flavor, concealable=concealable,
+    )
     return record

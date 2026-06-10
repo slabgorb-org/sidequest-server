@@ -75,6 +75,7 @@ def test_negative_reroll_on_duplicate_is_deterministic() -> None:
         acquire_random_negative(state, cat, actor="Rux", session_id="s1", source="chargen")
     assert s1.characters["Rux"].negative_ids == s2.characters["Rux"].negative_ids
     assert len(set(s1.characters["Rux"].negative_ids)) == 2  # both table entries, no dupe
+    assert s1.roll_sequence == s2.roll_sequence  # identical sequence consumption, rerolls included
 
 
 def test_random_positive_costs_one() -> None:
@@ -94,6 +95,18 @@ def test_picked_positive_costs_three() -> None:
     assert result.applied
     assert state.characters["Rux"].mp_remaining == 0
     assert state.characters["Rux"].positive_ids == ["sense/echo_location"]
+
+
+def test_picked_already_owned_refused() -> None:
+    state, cat = _state(mp=6), _catalog()
+    state.characters["Rux"].positive_ids = ["sense/echo_location"]
+    result = acquire_positive(
+        state, cat, actor="Rux", session_id="s1", source="chargen",
+        mutation_id="sense/echo_location",
+    )
+    assert not result.applied
+    assert result.reason == "already_owned"
+    assert state.characters["Rux"].mp_remaining == 6  # nothing spent
 
 
 def test_second_same_category_costs_three_even_random() -> None:

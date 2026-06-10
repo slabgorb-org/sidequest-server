@@ -156,3 +156,41 @@ def awn_mutation_mp_spend_span(
     }
     with Span.open(SPAN_AWN_MUTATION_MP_SPEND, attributes, tracer_override=_tracer):
         pass
+
+
+SPAN_AWN_MUTATION_STIGMA = "awn.mutation.stigma"
+SPAN_ROUTES[SPAN_AWN_MUTATION_STIGMA] = SpanRoute(
+    event_type="state_transition",
+    component="awn",
+    extract=lambda span: {
+        "field": "mutation_stigma",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "body_part": (span.attributes or {}).get("body_part", ""),
+        "nature": (span.attributes or {}).get("nature", ""),
+        "flavor": (span.attributes or {}).get("flavor", ""),
+        "concealable": (span.attributes or {}).get("concealable", False),
+    },
+)
+
+
+def awn_mutation_stigma_span(
+    *,
+    actor: str,
+    body_part: str,
+    nature: str,
+    flavor: str,
+    concealable: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    attributes: dict[str, Any] = {
+        "field": "mutation_stigma",
+        "actor": actor,
+        "body_part": body_part,
+        "nature": nature,
+        "flavor": flavor,
+        "concealable": concealable,
+        **attrs,
+    }
+    with Span.open(SPAN_AWN_MUTATION_STIGMA, attributes, tracer_override=_tracer):
+        pass

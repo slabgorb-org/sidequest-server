@@ -39,7 +39,7 @@ from sidequest.game.scenario_state import (
     ScenarioState,
 )
 from sidequest.game.session import GameSnapshot, Npc
-from sidequest.game.wwn_magic import SpellcastingState
+from sidequest.game.wwn_magic import EffortPool, SpellcastingState
 from sidequest.genre.models.scenario import ClueGraph
 from sidequest.magic.state import MagicState
 from sidequest.protocol.models import AbilityDefinition
@@ -334,7 +334,60 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
                 f"character.spellcasting validation failed — {exc}"
             ) from exc
 
+    # Hydrate WWN Effort (story 90-7, the dropped half of 90-4). An ``effort:``
+    # block is a mapping keyed by class-source (High Mage, Vowed, ...); each
+    # value seeds one ``EffortPool`` whose ``source`` is DERIVED FROM THE KEY
+    # (WWN SRD §1.4.4 — Effort from one source cannot fuel another, so the cast
+    # spine reads ``core.effort.get(source)``). The key is authoritative: any
+    # stray in-value ``source`` is stripped so it cannot diverge from the key
+    # and make the cast-time lookup silently miss. Save-bearing like
+    # spellcasting — a non-mapping block, a non-mapping pool value, a bad field
+    # type, or an ``extra="forbid"`` typo fails loud (No Silent Fallbacks).
+    raw_effort = data.get("effort")
+    if raw_effort is not None:
+        if not isinstance(raw_effort, dict):
+            raise FixtureValidationError(
+                f"character.effort must be a YAML mapping keyed by source, "
+                f"got {type(raw_effort).__name__}"
+            )
+        effort: dict[str, EffortPool] = {}
+        for source, pool_raw in raw_effort.items():
+            if not isinstance(pool_raw, dict):
+                raise FixtureValidationError(
+                    f"character.effort[{source!r}] must be a YAML mapping, "
+                    f"got {type(pool_raw).__name__}"
+                )
+            pool_kwargs = {k: v for k, v in pool_raw.items() if k != "source"}
+            try:
+                effort[str(source)] = EffortPool(source=str(source), **pool_kwargs)
+            except ValidationError as exc:
+                raise FixtureValidationError(
+                    f"character.effort[{source!r}] validation failed — {exc}"
+                ) from exc
+        core_kwargs["effort"] = effort
+
     core = CreatureCore(**core_kwargs)
+
+    # OTEL (story 90-7): when a fixture stages WWN crunch — spellcasting OR
+    # Effort — emit a watcher event so the GM panel can confirm the deterministic
+    # fixture seeded real mechanics rather than the narrator improvising them
+    # (CLAUDE.md OTEL Observability Principle — the GM panel is the lie detector).
+    # Module-qualified call so the standard ``_capture_events`` harness intercepts
+    # it, matching the ``magic.state_hydrated`` emitter convention below. Silent
+    # for non-casters (no noise on the canonical dial fixtures).
+    if core.spellcasting is not None or core.effort:
+        _hub.publish_event(
+            "wwn.magic_hydrated",
+            {
+                "actor": core.name,
+                "has_spellcasting": core.spellcasting is not None,
+                "prepared": len(core.spellcasting.prepared) if core.spellcasting else 0,
+                "casts_per_day": core.spellcasting.casts_per_day if core.spellcasting else 0,
+                "effort_sources": sorted(core.effort),
+            },
+            component="magic",
+            severity="info",
+        )
 
     # Hydrate known_facts (story 50-19, ADR-092 follow-on).
     #

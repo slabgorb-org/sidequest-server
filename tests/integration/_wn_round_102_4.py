@@ -87,7 +87,6 @@ def seat_wn_combat(
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
-
     from sidequest.server.dispatch.encounter_lifecycle import (
         instantiate_encounter_from_trigger,
     )

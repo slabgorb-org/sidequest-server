@@ -309,6 +309,16 @@ def build_confrontation_payload(
         ),
     }
 
+    # Story 102-4: the WN sealed-round commit ledger, projected as the
+    # player-side actor names whose Main Action is sealed this round — the
+    # overlay's committed-vs-waiting seam (ADR-036 submit-and-wait
+    # visibility; collaborative, never a rush cue). Key present only while
+    # commits are sealed: native/dial payloads and between-round WN payloads
+    # keep the legacy shape byte-for-byte, which the UI reads as "render no
+    # indicators".
+    if encounter.wn_commits:
+        payload["committed_actors"] = [c.actor for c in encounter.wn_commits]
+
     # Story 97-3 — server-authored pre-roll difficulty on every offered beat.
     # The TARGET banner used to be a CLIENT-side formula (App.tsx rawDc =
     # clamp(10 + |base|*2)) while resolution used ruleset.attack_params —

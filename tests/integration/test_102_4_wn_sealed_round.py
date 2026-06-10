@@ -43,8 +43,8 @@ from tests.integration._wn_round_102_4 import (
     force_initiative,
     load_pack,
     seat_wn_combat,
-    spans_named,
     span_start_order,
+    spans_named,
 )
 
 pytestmark = pytest.mark.skipif(

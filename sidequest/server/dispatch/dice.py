@@ -35,6 +35,7 @@ from sidequest.game.encounter import EncounterPhase, StructuredEncounter
 from sidequest.game.hp_depletion import check_hp_depletion
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.base import RulesetModule
+from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.ruleset.wwn import WwnRulesetModule
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
@@ -131,6 +132,14 @@ class DiceThrowOutcome:
 
     All three fields are ``None`` / ``False`` when the confrontation is
     NOT opposed_check — the legacy single-roll-vs-DC path is unchanged.
+
+    WN sealed-round field (story 102-4):
+
+    - ``commitment_pending``: True when this throw SEALED in a WN
+      confrontation (a seated peer is still uncommitted) — the to-hit is
+      resolved but the beat will apply at the actor's initiative slot once
+      the barrier closes. False when this commit fired the round (or on
+      every non-WN path). Mirrors the ``opposed_pending`` defer idiom.
     """
 
     request: DiceRequestPayload
@@ -141,6 +150,7 @@ class DiceThrowOutcome:
     opposed_pending: bool = False
     opposed_player_d20: int | None = None
     opposed_player_beat_id: str | None = None
+    commitment_pending: bool = False
 
 
 def _build_request_payload(
@@ -255,6 +265,33 @@ def _format_replay_action(
     return beat_summary
 
 
+def _format_commit_replay_action(
+    *,
+    beat_label: str,
+    stat_check: str,
+    total: int,
+    outcome: RollOutcome,
+    waiting_on: list[str],
+    player_action: str | None = None,
+) -> str:
+    """Synthetic narrator input for a SEALED WN commit (story 102-4).
+
+    The Main Action is locked in but nothing has resolved — the narrator may
+    describe intent and table state, never an outcome. Mirrors
+    ``_format_replay_action``'s PLAYER_ACTION prepend behavior.
+    """
+    summary = (
+        f"[ACTION_COMMITTED] {beat_label} ({stat_check}): roll {total} "
+        f"({outcome.value}) is SEALED — the round resolves in initiative "
+        f"order once every participant commits (waiting on: "
+        f"{', '.join(waiting_on) or 'nobody'}). Do NOT narrate the action "
+        "landing, missing, or any other mechanical outcome yet."
+    )
+    if player_action and player_action.strip():
+        return f"PLAYER_ACTION: {player_action.strip()}\n{summary}"
+    return summary
+
+
 def dispatch_dice_throw(
     *,
     payload: DiceThrowPayload,
@@ -344,10 +381,7 @@ def dispatch_dice_throw(
     # here: those are valid requests the spine refuses-but-records on
     # ``wwn.spell.cast`` (refused=True), in parity with apply_beat refusals.
     is_wwn_cast = bool(
-        payload.beat_id == "cast_spell"
-        and pack
-        and pack.rules
-        and pack.rules.ruleset == "wwn"
+        payload.beat_id == "cast_spell" and pack and pack.rules and pack.rules.ruleset == "wwn"
     )
     if payload.spell_id is not None and not is_wwn_cast:
         raise DiceDispatchError(
@@ -580,6 +614,33 @@ def dispatch_dice_throw(
     # player's own dice pair so the overlay shows the player's roll, then the
     # enemy's answer. Empty when no reprisal fires (opposed/dial/native paths).
     opponent_reprisal_messages: list[object] = []
+    # WN sealed round (story 102-4): blind commitment, initiative-ordered
+    # resolution. Capability binding is isinstance against the module class
+    # (epic invariant — no genre branches); the walk rides the persisted P4
+    # initiative order, so a WN hp_depletion combat with NO persisted order
+    # (pre-P4 saves, direct-construction fixtures) keeps the legacy
+    # immediate-resolution path — loudly, never silently.
+    commitment_pending = False
+    wn_waiting: list[str] = []
+    wn_round_messages: list[object] = []
+    wn_sealed_round = (
+        not opposed_pending
+        and isinstance(ruleset, SwnRulesetModule)
+        and cdef.win_condition == "hp_depletion"
+        and bool(encounter.initiative)
+    )
+    if (
+        not opposed_pending
+        and not wn_sealed_round
+        and isinstance(ruleset, SwnRulesetModule)
+        and cdef.win_condition == "hp_depletion"
+    ):
+        logger.warning(
+            "dice.wn_round_skipped reason=no_persisted_initiative encounter=%s "
+            "— WN combat dispatched without a P4 initiative order; resolving "
+            "on the legacy immediate path",
+            encounter.encounter_type,
+        )
 
     if opposed_pending:
         # Pull the raw d20 face for the resolver. The dice pool is
@@ -597,386 +658,67 @@ def dispatch_dice_throw(
                 f"opposed_check: player d20 face {opposed_player_d20} not in 1..20"
             )
         # No beat application here; ``apply_result`` is None-equivalent.
-        own_delta = 0
         encounter_resolved = False
-    else:
-        # ADR-114 / Task 7: damage roll for strike channel beats.
-        # Resolve the weapon DamageSpec BEFORE apply_beat so the resolver
-        # lambda captures a concrete total. The damage roll is server-side
-        # (no UI physics round-trip); we generate random faces, resolve the
-        # total, and broadcast a DICE_REQUEST + DICE_RESULT after the check
-        # broadcast so Sebastien sees the weapon dice animate in the overlay.
-        damage_resolver_fn = None
+    elif wn_sealed_round:
+        # WN turn model (story 102-4): the throw SEALS — the to-hit resolved
+        # above, but the beat applies at the actor's initiative slot only
+        # after every seated player-side participant has committed. The
+        # barrier-closing commit walks the whole round (committed →
+        # initiative → resolved) in the same dispatch; a solo table is a
+        # 1-participant barrier, never a special case.
+        from sidequest.server.dispatch.wn_round import (
+            run_wn_round,
+            seal_wn_commit,
+            wn_barrier_closed,
+            wn_waiting_actors,
+        )
 
-        damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
-
-        # WWN Killing Blow warrior-detection (SRD §1.5.18, Plan 3 Task 9).
-        # Resolved once here; reused in both the HIT and Shock (MISS) seams.
-        # Gate order: wwn ruleset first, then Warrior-archetype class flag.
-        # Non-wwn packs and non-Warrior classes are guaranteed byte-for-byte
-        # inert — no span, no bonus, no mutation.
-        _is_wwn_warrior = False
-        if pack and pack.rules and pack.rules.ruleset == "wwn":
-            _acting_char = next(
-                (c for c in snapshot.characters if c.core.name == character_name), None
-            )
-            _class_def = (
-                next(
-                    (cls for cls in pack.classes if cls.display_name == _acting_char.char_class),
-                    None,
-                )
-                if _acting_char is not None
-                else None
-            )
-            _is_wwn_warrior = bool(_class_def is not None and _class_def.warrior)
-
-        if damage_channel == "strike" and resolved.outcome not in (
-            RollOutcome.Fail,
-            RollOutcome.CritFail,
-        ):
-            actor_core = snapshot.find_creature_core(character_name)
-            damage_spec = ruleset.resolve_damage(
-                beat=beat,
-                actor_core=actor_core,
-                pack=pack,
-                world_slug=snapshot.world_slug,
-            )
-            if damage_spec is None:
-                logger.warning(
-                    "dice.damage_spec_missing beat=%r actor=%r encounter=%r — "
-                    "strike beat has no resolvable weapon, damage_override, or "
-                    "unarmed default; HP damage skipped (CLAUDE.md no-fabricate)",
-                    payload.beat_id,
-                    character_name,
-                    encounter.encounter_type,
-                )
-                _watcher_publish(
-                    "state_transition",
-                    {
-                        "field": "encounter",
-                        "op": "damage_spec_missing",
-                        "beat_id": payload.beat_id,
-                        "actor": character_name,
-                        "rationale": (
-                            "strike channel beat has no damage_override, no "
-                            "weapon with a damage spec in inventory, and no "
-                            "unarmed_damage default on the genre rules — "
-                            "HP path skipped"
-                        ),
-                    },
-                    component="encounter",
-                    severity="warning",
-                )
-            else:
-                # Lie-detector: when the strike resolved no weapon and fell back
-                # to the genre unarmed floor, emit a span so the GM panel can tell
-                # a real unarmed hit from narrator improvisation. Identity match —
-                # the resolver returns the exact pack.rules.unarmed_damage object.
-                _unarmed_floor = pack.rules.unarmed_damage if pack and pack.rules else None
-                if _unarmed_floor is not None and damage_spec is _unarmed_floor:
-                    _watcher_publish(
-                        "state_transition",
-                        {
-                            "field": "encounter",
-                            "op": "unarmed_strike_floor",
-                            "beat_id": payload.beat_id,
-                            "actor": character_name,
-                            "dice": damage_spec.dice,
-                            "rationale": (
-                                "strike resolved no weapon/override/catalog damage; "
-                                "fell back to pack.rules.unarmed_damage floor"
-                            ),
-                        },
-                        component="encounter",
-                        severity="info",
-                    )
-                dmg_request_id = str(uuid.uuid4())
-                damage_request_payload = damage_request_from_spec(
-                    damage_spec,
-                    request_id=dmg_request_id,
-                    rolling_player_id=rolling_player_id,
-                    character_name=character_name,
-                )
-                dmg_faces = _generate_server_faces(damage_request_payload.dice)
-                dmg_resolved = resolve_dice_with_faces(
-                    damage_request_payload.dice,
-                    dmg_faces,
-                    damage_request_payload.modifier,
-                    damage_request_payload.difficulty,
-                )
-                # A parity (d2) spec threw a backing d6 for the overlay; map the
-                # settled faces to d2 values for the HP total so the raw d6 never
-                # leaks into damage. dmg_resolved.rolls still carries the real d6
-                # faces, so the broadcast/readout shows the physical throw.
-                if damage_spec.is_parity_die:
-                    dmg_total = parity_damage_total(dmg_faces, damage_request_payload.modifier)
-                else:
-                    dmg_total = dmg_resolved.total
-                # CWN Trauma seam (spec 2026-05-28): multiply rolled damage on a
-                # Traumatic Hit, and flag the scene so a 0-HP drop this scene can
-                # roll Major Injury. No-op for native/swn (base passthrough).
-                _lethality = ruleset.resolve_trauma(
-                    spec=damage_spec,
-                    base_total=dmg_total,
-                    cfg=pack.rules.ruleset_config() if pack and pack.rules else None,
-                    rng=random,
-                    actor=character_name,
-                )
-                dmg_total = _lethality.final_total
-                # WWN Warrior Killing Blow rider — HIT path (SRD §1.5.18,
-                # Plan 3 Task 9). Adds ceil(level / divisor) to strike damage.
-                # Gate: wwn pack AND Warrior-archetype actor; inert otherwise.
-                if _is_wwn_warrior and actor_core is not None:
-                    assert isinstance(ruleset, WwnRulesetModule)
-                    cfg = pack.rules.ruleset_config()
-                    dmg_total = ruleset.apply_killing_blow(
-                        base_total=dmg_total,
-                        level=int(actor_core.level),
-                        cfg=cfg,
-                        actor=character_name,
-                    )
-                if _lethality.traumatic:
-                    from sidequest.game.encounter_tag import EncounterTag
-
-                    if not any(t.text == "Traumatic Hit Landed" for t in encounter.tags):
-                        encounter.tags.append(
-                            EncounterTag(
-                                text="Traumatic Hit Landed",
-                                created_by=character_name,
-                                target=None,
-                                leverage=0,
-                                fleeting=False,
-                                created_turn=round_number,
-                            )
-                        )
-                dmg_seed = generate_dice_seed(session_id, round_number + 1)
-                damage_result_payload = _compose_result_payload(
-                    request=damage_request_payload,
-                    rolls=dmg_resolved.rolls,
-                    total=dmg_total,
-                    outcome=RollOutcome.Success,  # damage rolls have no outcome tier
-                    seed=dmg_seed,
-                    throw_params=_DAMAGE_THROW_PARAMS,
-                )
-                _watcher_publish(
-                    "state_transition",
-                    {
-                        "field": "encounter",
-                        "op": "damage_roll_resolved",
-                        "beat_id": payload.beat_id,
-                        "actor": character_name,
-                        "damage_spec": damage_spec.dice,
-                        "bonus": damage_spec.bonus,
-                        "faces": dmg_faces,
-                        "total": dmg_total,
-                        "source": "dice_throw_server_roll",
-                    },
-                    component="encounter",
-                )
-                damage_resolver_fn = lambda: dmg_total  # noqa: E731
-
-        # CWN Shock seam (spec 2026-05-28, Task 10): a melee weapon with a
-        # Shock rating chips fixed damage on a MISS vs a low-Melee-AC target.
-        # Sibling of the HIT damage block above — fires ONLY on Fail/CritFail,
-        # so it never double-applies with the rolled-damage path. No-op for
-        # native/swn (base resolve_shock returns 0, so chip == 0).
-        if damage_channel == "strike" and resolved.outcome in (
-            RollOutcome.Fail,
-            RollOutcome.CritFail,
-        ):
-            actor_core = snapshot.find_creature_core(character_name)
-            shock_spec = ruleset.resolve_damage(
-                beat=beat,
-                actor_core=actor_core,
-                pack=pack,
-                world_slug=snapshot.world_slug,
-            )
-            shock_target_name = _opposite_side_first_actor(encounter, actor.side)
-            shock_target_core = (
-                snapshot.find_creature_core(shock_target_name)
-                if shock_target_name is not None
-                else None
-            )
-            if shock_spec is not None and shock_target_core is not None:
-                chip = ruleset.resolve_shock(
-                    spec=shock_spec,
-                    target_melee_ac=int(getattr(shock_target_core, "armor_class", 10)),
-                    actor=character_name,
-                )
-                # WWN Warrior Killing Blow rider — Shock path (SRD §1.5.18,
-                # Plan 3 Task 9). Killing Blow adds to Shock too (same gate).
-                # Only applies when chip > 0 (a genuine Shock hit).
-                if chip > 0 and _is_wwn_warrior:
-                    assert isinstance(ruleset, WwnRulesetModule)
-                    _kb_cfg = pack.rules.ruleset_config()
-                    _shock_actor_core = snapshot.find_creature_core(character_name)
-                    chip = ruleset.apply_killing_blow(
-                        base_total=chip,
-                        level=int(_shock_actor_core.level) if _shock_actor_core else 1,
-                        cfg=_kb_cfg,
-                        actor=character_name,
-                    )
-                if chip > 0:
-                    shock_hp_removed = apply_beat_hp_channel(
-                        target=shock_target_core,
-                        channel="strike",
-                        damage_total=chip,
-                        target_mitigation=0,
-                        source_beat_id=f"{payload.beat_id}:shock",
-                    )
-                    if shock_hp_removed > 0:
-                        # Text-log + GM-timeline visibility for the chip. The
-                        # wwn.shock.applied span (resolve_shock) is live-OTEL
-                        # only — log greps and the persisted /encounter_events
-                        # feed are structurally blind to it, which is how the
-                        # barsoom-2 shock kill masqueraded as a fabricated win.
-                        logger.info(
-                            "dice.shock_chip_applied actor=%s target=%s beat_id=%s "
-                            "chip=%d hp_after=%d/%d",
-                            character_name,
-                            shock_target_name,
-                            payload.beat_id,
-                            shock_hp_removed,
-                            shock_target_core.hp.current,
-                            shock_target_core.hp.max,
-                        )
-                        _watcher_publish(
-                            "state_transition",
-                            {
-                                "field": "encounter",
-                                "op": "shock_chip_applied",
-                                "actor": character_name,
-                                "target": shock_target_name,
-                                "beat_id": payload.beat_id,
-                                "outcome_tier": resolved.outcome.value
-                                if hasattr(resolved.outcome, "value")
-                                else str(resolved.outcome),
-                                "chip": shock_hp_removed,
-                                "target_hp_after": shock_target_core.hp.current,
-                                "target_hp_max": shock_target_core.hp.max,
-                                "source": "dice_throw_shock",
-                            },
-                            component="encounter",
-                        )
-
-        apply_result = ruleset.apply_beat(
+        seal_wn_commit(
             encounter=encounter,
             actor=actor,
             beat=beat,
             outcome=resolved.outcome,
-            turn=round_number,
-            edge_resolver=snapshot.find_creature_core,
-            damage_resolver=damage_resolver_fn,
+            spell_id=payload.spell_id,
         )
-
-        if apply_result.skipped_reason:
-            raise DiceDispatchError(
-                f"beat {payload.beat_id!r} skipped: {apply_result.skipped_reason}"
-            )
-
-        # CWN/WWN downed seam (spec 2026-05-28, Task 11): if this strike dropped
-        # a target to 0 HP, resolve the Mortal Injury (always) and Major Injury
-        # (only when a Traumatic Hit landed this scene). Shared with the WWN cast
-        # path (Plan 3 Task 7) via ``run_cwn_wwn_downed_seam`` so the two cannot
-        # drift — the helper carries the cwn/wwn gate + the 0-HP check internally.
-        run_cwn_wwn_downed_seam(
-            ruleset=ruleset,
-            snapshot=snapshot,
-            encounter=encounter,
-            cdef=cdef,
-            pack=pack,
-            actor_side=actor.side,
-            rng=random,
-        )
-
-        # WN cast spine (story 102-2): route the committed cast through the
-        # SAME resolution the narrator apply_beat path uses — one cast
-        # implementation, two entry points (epic 102 "Reuse-first"). The d20
-        # throw above is NOT a to-hit gate: WWN High Magic casting is
-        # automatic (SRD §4.2 — the DEFENDER saves), so the spine runs
-        # regardless of ``resolved.outcome``. The spine spends the cast
-        # (refused-but-recorded on an economy failure), applies rolled spell
-        # damage through the HP channel, runs the shared downed seam, fires
-        # the hp_depletion win condition, and emits ``wwn.spell.cast`` on
-        # every call — the GM-panel lie detector. Function-level import:
-        # narration_apply is a heavy module and dispatch must not pull it at
-        # import time.
-        if is_wwn_cast:
-            from sidequest.agents.orchestrator import BeatSelection
-            from sidequest.server.narration_apply import _resolve_wwn_cast_for_beat
-
-            _resolve_wwn_cast_for_beat(
-                sel=BeatSelection(
-                    actor=actor.name,
-                    beat_id="cast_spell",
-                    outcome=resolved.outcome,
-                    spell_id=payload.spell_id,
-                ),
-                actor=actor,
-                snapshot=snapshot,
-                pack=pack,
+        wn_waiting = wn_waiting_actors(encounter=encounter, snapshot=snapshot)
+        if wn_barrier_closed(encounter=encounter, snapshot=snapshot):
+            round_result = run_wn_round(
                 encounter=encounter,
                 cdef=cdef,
+                ruleset=ruleset,
+                pack=pack,
+                snapshot=snapshot,
+                session_id=session_id,
+                round_number=round_number,
+                rolling_player_id=rolling_player_id,
+                rng=random,
             )
-
-        own_delta = apply_result.deltas.own if apply_result.deltas else 0
-
-        with encounter_beat_applied_span(
-            encounter_type=encounter.encounter_type,
-            actor=character_name,
+            wn_round_messages = round_result.messages
+        else:
+            commitment_pending = True
+        encounter_resolved = encounter.resolved
+    else:
+        _application = _apply_committed_player_beat(
             beat_id=payload.beat_id,
-            metric_delta=own_delta,
-        ):
-            pass
-        _watcher_publish(
-            "state_transition",
-            {
-                "field": "encounter",
-                "op": "beat_applied",
-                "actor": character_name,
-                "actor_side": actor.side,
-                "beat_id": payload.beat_id,
-                "beat_kind": str(beat.kind.value)
-                if hasattr(beat.kind, "value")
-                else str(beat.kind),
-                "outcome_tier": resolved.outcome.value
-                if hasattr(resolved.outcome, "value")
-                else str(resolved.outcome),
-                "own_delta": own_delta,
-                "opponent_delta": apply_result.deltas.opponent if apply_result.deltas else 0,
-                # ADR-114 §2 / forensics lie-detector: the HP actually removed from
-                # the target by the strike damage channel. ``opponent_delta`` above is
-                # the *dial* delta and is suppressed to 0 under hp_depletion, so without
-                # this field a post-hoc reader of ENCOUNTER_BEAT_APPLIED sees a CritSuccess
-                # strike that "did nothing" while the CreatureCore HpPool actually dropped.
-                # The TOTAL includes the Shock chip (miss-damage) — barsoom-2 2026-06-10:
-                # a shock chip removed the Other's last 3 HP on a CritFail and the
-                # hit-path-only field read 0, making the correct resolution look
-                # fabricated. ``shock_hp_removed`` attributes the shock share.
-                "opponent_hp_removed": apply_result.hp_removed + shock_hp_removed,
-                "shock_hp_removed": shock_hp_removed,
-                "metric_target": encounter.encounter_type,
-                "source": "dice_throw",
-            },
-            component="encounter",
+            spell_id=payload.spell_id,
+            character_name=character_name,
+            rolling_player_id=rolling_player_id,
+            beat=beat,
+            actor=actor,
+            outcome_tier=resolved.outcome,
+            encounter=encounter,
+            cdef=cdef,
+            ruleset=ruleset,
+            pack=pack,
+            snapshot=snapshot,
+            session_id=session_id,
+            round_number=round_number,
         )
-        # Story 45-9: bump total_beats_fired counter + OTEL.
-        snapshot.record_beat_fired(
-            beat_id=payload.beat_id,
-            encounter_type=encounter.encounter_type,
-            turn=round_number,
-            source="dice_throw",
-        )
-
-        # Review round 2 (102-2): derive the post-beat resolution from the
-        # AUTHORITATIVE encounter state, not just apply_beat's return — a
-        # killing CAST resolves the encounter in the spine (check_hp_depletion)
-        # AFTER apply_beat, so apply_result.resolved is stale-False there and
-        # the dead opponent would take its reprisal swing in a fight already
-        # won (ADR-139 win-condition liveness). Strikes resolve inside
-        # apply_beat, so this is a strict widening, never a narrowing.
-        encounter_resolved = apply_result.resolved or encounter.resolved
-        strike_hp_removed = apply_result.hp_removed
+        encounter_resolved = _application.encounter_resolved
+        strike_hp_removed = _application.strike_hp_removed
+        shock_hp_removed = _application.shock_hp_removed
+        damage_request_payload = _application.damage_request_payload
+        damage_result_payload = _application.damage_result_payload
 
         # --- Opponent reprisal: server-driven enemy attack turn (story 71-21) ---
         # SWN hp_depletion combat had no enemy turn — the player could attack but
@@ -1024,81 +766,21 @@ def dispatch_dice_throw(
         phase=(encounter.structured_phase or EncounterPhase.Setup).value,
     ):
         pass
-    if encounter_resolved:
-        with encounter_resolved_span(
-            encounter_type=encounter.encounter_type,
-            outcome=encounter.outcome or "",
-            source="dice_throw_beat",
-        ):
-            pass
-        _watcher_publish(
-            "state_transition",
-            {
-                "field": "encounter",
-                "op": "resolved",
-                "encounter_type": encounter.encounter_type,
-                "outcome": encounter.outcome or "",
-                "source": "dice_throw_beat",
-                "final_player_metric": encounter.player_metric.current,
-                "final_opponent_metric": encounter.opponent_metric.current,
-            },
-            component="encounter",
+    if not wn_sealed_round:
+        # On the WN sealed path the per-beat resolution close runs inside the
+        # round walk (one close per applied slot) — running it again here
+        # would double-stamp directives. Opposed/legacy paths close here.
+        _emit_player_beat_resolution_close(
+            encounter=encounter,
+            snapshot=snapshot,
+            character_name=character_name,
+            beat=beat,
+            actor_side=actor.side,
+            outcome_tier=resolved.outcome,
+            strike_hp_removed=strike_hp_removed,
+            shock_hp_removed=shock_hp_removed,
+            encounter_resolved=encounter_resolved,
         )
-        # barsoom-2 playtest 2026-06-10: the PLAYER-beat resolution close told
-        # the narrator NOTHING — unlike the reprisal close (2026-06-07 fix,
-        # below in _resolve_opponent_reprisal), it stamped no resolution signal
-        # and appended no directive. The narrator saw "strike CritFail" and
-        # narrated a vivid player DEFEAT while the engine had (correctly)
-        # resolved player_victory via the Shock chip. Mirror the reprisal
-        # close: stamp pending_resolution_signal (renders the [ENCOUNTER
-        # RESOLVED] zone) + a MECHANICAL TRUTH directive, with an explicit
-        # Shock attribution when the kill landed on a missed swing so the
-        # prose renders the actual mechanism.
-        from sidequest.server.narration_apply import _build_resolution_signal
-
-        snapshot.pending_resolution_signal = _build_resolution_signal(encounter)
-        _shock_rider = ""
-        if (
-            shock_hp_removed > 0
-            and encounter.outcome == "player_victory"
-            and resolved.outcome in (RollOutcome.Fail, RollOutcome.CritFail)
-        ):
-            _shock_rider = (
-                f" The killing damage came from weapon Shock on a MISSED swing: "
-                f"{character_name}'s attack failed, but the blade's pressure "
-                f"still removed the final {shock_hp_removed} HP. Narrate the "
-                "kill that way — the swing goes wide yet the opponent falls. "
-                "Do NOT narrate the missed swing as a player defeat."
-            )
-        snapshot.next_turn_directives.append(
-            f"MECHANICAL TRUTH (weave into the narration): the "
-            f"{encounter.encounter_type} confrontation has RESOLVED — outcome: "
-            f"{encounter.outcome}. Narrate the close of the engagement; do NOT "
-            f"continue narrating it as a live, ongoing fight.{_shock_rider}"
-        )
-    elif strike_hp_removed + shock_hp_removed > 0:
-        # Kill-overclaim anchor (evropi 2/14 + barsoom 3/10, 2026-06-10): a
-        # damaging player hit that does NOT end the fight invites kill prose —
-        # twice this playtest the narrator rendered an unambiguous death for
-        # an Other the engine correctly kept alive, because the replay text
-        # carries the beat/outcome but never the target's resulting HP. Anchor
-        # the real pool + aliveness so the prose cannot overclaim. Mirrors the
-        # reprisal hit/miss anchors; skipped when the target core is
-        # unresolvable or already at 0 (a 0-HP unresolved state is a
-        # multi-combatant partial down — "still standing" would be false).
-        _anchor_target = _opposite_side_first_actor(encounter, actor.side)
-        _anchor_core = (
-            snapshot.find_creature_core(_anchor_target) if _anchor_target is not None else None
-        )
-        if _anchor_core is not None and _anchor_core.hp.current > 0:
-            snapshot.next_turn_directives.append(
-                f"MECHANICAL TRUTH (weave into the narration): {character_name}'s "
-                f"{beat.label} dealt {strike_hp_removed + shock_hp_removed} damage "
-                f"to {_anchor_target} — {_anchor_target} is at "
-                f"{_anchor_core.hp.current}/{_anchor_core.hp.max} HP and STILL "
-                "STANDING; the fight continues. Narrate a wound, not a kill — do "
-                "NOT describe their death, collapse, or incapacitation."
-            )
 
     # Seed drives spectator replay animation only — face values are already
     # authoritative from the rolling player's Rapier settle.
@@ -1165,6 +847,11 @@ def dispatch_dice_throw(
         for _reprisal_msg in opponent_reprisal_messages:
             room_broadcast(_reprisal_msg)
 
+        # Story 102-4: the WN round walk's messages (per-slot damage pairs,
+        # opponent attack dice, incapacitation surfaces), in slot order.
+        for _round_msg in wn_round_messages:
+            room_broadcast(_round_msg)
+
         # Story 45-3 / 59-20: Mid-turn CONFRONTATION emit. The metric mutation
         # already landed via apply_beat above; without this the UI dial sits on
         # the prior turn's CONFRONTATION snapshot through the entire dice +
@@ -1219,21 +906,35 @@ def dispatch_dice_throw(
                         ConfrontationMessage(payload=union_payload, player_id="server"),
                     )
 
-    replay_text = _format_replay_action(
-        beat_label=beat.label,
-        stat_check=beat.stat_check,
-        actor_side=actor.side,
-        player_metric_after=encounter.player_metric.current,
-        opponent_metric_after=encounter.opponent_metric.current,
-        total=resolved.total,
-        outcome=resolved.outcome,
-        player_action=payload.player_action,
-    )
+    if commitment_pending:
+        # A sealed commit resolved NOTHING — handing the narrator the
+        # [BEAT_RESOLVED] shape would invite prose for a hit that hasn't
+        # landed (the engine's version of winging it). Name the seal and the
+        # actors the barrier waits on instead.
+        replay_text = _format_commit_replay_action(
+            beat_label=beat.label,
+            stat_check=beat.stat_check,
+            total=resolved.total,
+            outcome=resolved.outcome,
+            waiting_on=wn_waiting,
+            player_action=payload.player_action,
+        )
+    else:
+        replay_text = _format_replay_action(
+            beat_label=beat.label,
+            stat_check=beat.stat_check,
+            actor_side=actor.side,
+            player_metric_after=encounter.player_metric.current,
+            opponent_metric_after=encounter.opponent_metric.current,
+            total=resolved.total,
+            outcome=resolved.outcome,
+            player_action=payload.player_action,
+        )
 
     logger.info(
         "dice.throw_resolved request_id=%s rolling_player=%s total=%d outcome=%s "
         "beat_id=%s player_momentum=%d opponent_momentum=%d resolved_encounter=%s "
-        "deferred_opposed=%s",
+        "deferred_opposed=%s commitment_pending=%s",
         request.request_id,
         rolling_player_id,
         resolved.total,
@@ -1243,6 +944,7 @@ def dispatch_dice_throw(
         encounter.opponent_metric.current,
         encounter_resolved,
         opposed_pending,
+        commitment_pending,
     )
 
     if opposed_pending:
@@ -1265,6 +967,13 @@ def dispatch_dice_throw(
             component="encounter",
         )
 
+    # TEA 102-4 finding: the two defer-the-beat mechanisms must never both
+    # fire. The wn_sealed_round gate requires ``not opposed_pending``, so this
+    # can only trip if someone edits the gate — fail loud, not implicit.
+    assert not (opposed_pending and commitment_pending), (
+        "opposed_pending and commitment_pending are mutually exclusive beat "
+        "deferrals — both set means the dispatch gate regressed"
+    )
     return DiceThrowOutcome(
         request=request,
         result=result,
@@ -1277,7 +986,527 @@ def dispatch_dice_throw(
         opposed_pending=opposed_pending,
         opposed_player_d20=opposed_player_d20 if opposed_pending else None,
         opposed_player_beat_id=payload.beat_id if opposed_pending else None,
+        commitment_pending=commitment_pending,
     )
+
+
+@dataclass(frozen=True)
+class _PlayerBeatApplication:
+    """What one committed player beat did when it applied.
+
+    Extracted from the legacy in-dispatch flow (story 102-4) so the WN round
+    walk can resolve the same beat at the actor's initiative slot — one beat
+    implementation, two call sites (legacy immediate dispatch + the sealed
+    round walk in ``wn_round.py``).
+    """
+
+    encounter_resolved: bool
+    strike_hp_removed: int
+    shock_hp_removed: int
+    damage_request_payload: DiceRequestPayload | None
+    damage_result_payload: DiceResultPayload | None
+
+
+def _apply_committed_player_beat(
+    *,
+    beat_id: str,
+    spell_id: str | None,
+    character_name: str,
+    rolling_player_id: str,
+    beat,
+    actor,
+    outcome_tier: RollOutcome,
+    encounter: StructuredEncounter,
+    cdef: ConfrontationDef,
+    ruleset: RulesetModule,
+    pack: GenrePack,
+    snapshot: GameSnapshot,
+    session_id: str,
+    round_number: int,
+) -> _PlayerBeatApplication:
+    """Apply one player's resolved beat to the encounter (strike damage,
+    Shock, downed seam, WN cast spine, beat_applied telemetry). The to-hit
+    is already resolved — ``outcome_tier`` is the tier the dice produced at
+    commit time. Request-shape validation (cast spell_id, stat) happened
+    before any mutation, at dispatch."""
+    damage_request_payload: DiceRequestPayload | None = None
+    damage_result_payload: DiceResultPayload | None = None
+    shock_hp_removed = 0
+    is_wwn_cast = bool(
+        beat_id == "cast_spell" and pack and pack.rules and pack.rules.ruleset == "wwn"
+    )
+    # ADR-114 / Task 7: damage roll for strike channel beats.
+    # Resolve the weapon DamageSpec BEFORE apply_beat so the resolver
+    # lambda captures a concrete total. The damage roll is server-side
+    # (no UI physics round-trip); we generate random faces, resolve the
+    # total, and broadcast a DICE_REQUEST + DICE_RESULT after the check
+    # broadcast so Sebastien sees the weapon dice animate in the overlay.
+    damage_resolver_fn = None
+
+    damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
+
+    # WWN Killing Blow warrior-detection (SRD §1.5.18, Plan 3 Task 9).
+    # Resolved once here; reused in both the HIT and Shock (MISS) seams.
+    # Gate order: wwn ruleset first, then Warrior-archetype class flag.
+    # Non-wwn packs and non-Warrior classes are guaranteed byte-for-byte
+    # inert — no span, no bonus, no mutation.
+    _is_wwn_warrior = False
+    if pack and pack.rules and pack.rules.ruleset == "wwn":
+        _acting_char = next((c for c in snapshot.characters if c.core.name == character_name), None)
+        _class_def = (
+            next(
+                (cls for cls in pack.classes if cls.display_name == _acting_char.char_class),
+                None,
+            )
+            if _acting_char is not None
+            else None
+        )
+        _is_wwn_warrior = bool(_class_def is not None and _class_def.warrior)
+
+    if damage_channel == "strike" and outcome_tier not in (
+        RollOutcome.Fail,
+        RollOutcome.CritFail,
+    ):
+        actor_core = snapshot.find_creature_core(character_name)
+        damage_spec = ruleset.resolve_damage(
+            beat=beat,
+            actor_core=actor_core,
+            pack=pack,
+            world_slug=snapshot.world_slug,
+        )
+        if damage_spec is None:
+            logger.warning(
+                "dice.damage_spec_missing beat=%r actor=%r encounter=%r — "
+                "strike beat has no resolvable weapon, damage_override, or "
+                "unarmed default; HP damage skipped (CLAUDE.md no-fabricate)",
+                beat_id,
+                character_name,
+                encounter.encounter_type,
+            )
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "encounter",
+                    "op": "damage_spec_missing",
+                    "beat_id": beat_id,
+                    "actor": character_name,
+                    "rationale": (
+                        "strike channel beat has no damage_override, no "
+                        "weapon with a damage spec in inventory, and no "
+                        "unarmed_damage default on the genre rules — "
+                        "HP path skipped"
+                    ),
+                },
+                component="encounter",
+                severity="warning",
+            )
+        else:
+            # Lie-detector: when the strike resolved no weapon and fell back
+            # to the genre unarmed floor, emit a span so the GM panel can tell
+            # a real unarmed hit from narrator improvisation. Identity match —
+            # the resolver returns the exact pack.rules.unarmed_damage object.
+            _unarmed_floor = pack.rules.unarmed_damage if pack and pack.rules else None
+            if _unarmed_floor is not None and damage_spec is _unarmed_floor:
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "encounter",
+                        "op": "unarmed_strike_floor",
+                        "beat_id": beat_id,
+                        "actor": character_name,
+                        "dice": damage_spec.dice,
+                        "rationale": (
+                            "strike resolved no weapon/override/catalog damage; "
+                            "fell back to pack.rules.unarmed_damage floor"
+                        ),
+                    },
+                    component="encounter",
+                    severity="info",
+                )
+            dmg_request_id = str(uuid.uuid4())
+            damage_request_payload = damage_request_from_spec(
+                damage_spec,
+                request_id=dmg_request_id,
+                rolling_player_id=rolling_player_id,
+                character_name=character_name,
+            )
+            dmg_faces = _generate_server_faces(damage_request_payload.dice)
+            dmg_resolved = resolve_dice_with_faces(
+                damage_request_payload.dice,
+                dmg_faces,
+                damage_request_payload.modifier,
+                damage_request_payload.difficulty,
+            )
+            # A parity (d2) spec threw a backing d6 for the overlay; map the
+            # settled faces to d2 values for the HP total so the raw d6 never
+            # leaks into damage. dmg_resolved.rolls still carries the real d6
+            # faces, so the broadcast/readout shows the physical throw.
+            if damage_spec.is_parity_die:
+                dmg_total = parity_damage_total(dmg_faces, damage_request_payload.modifier)
+            else:
+                dmg_total = dmg_resolved.total
+            # CWN Trauma seam (spec 2026-05-28): multiply rolled damage on a
+            # Traumatic Hit, and flag the scene so a 0-HP drop this scene can
+            # roll Major Injury. No-op for native/swn (base passthrough).
+            _lethality = ruleset.resolve_trauma(
+                spec=damage_spec,
+                base_total=dmg_total,
+                cfg=pack.rules.ruleset_config() if pack and pack.rules else None,
+                rng=random,
+                actor=character_name,
+            )
+            dmg_total = _lethality.final_total
+            # WWN Warrior Killing Blow rider — HIT path (SRD §1.5.18,
+            # Plan 3 Task 9). Adds ceil(level / divisor) to strike damage.
+            # Gate: wwn pack AND Warrior-archetype actor; inert otherwise.
+            if _is_wwn_warrior and actor_core is not None:
+                assert isinstance(ruleset, WwnRulesetModule)
+                cfg = pack.rules.ruleset_config()
+                dmg_total = ruleset.apply_killing_blow(
+                    base_total=dmg_total,
+                    level=int(actor_core.level),
+                    cfg=cfg,
+                    actor=character_name,
+                )
+            if _lethality.traumatic:
+                from sidequest.game.encounter_tag import EncounterTag
+
+                if not any(t.text == "Traumatic Hit Landed" for t in encounter.tags):
+                    encounter.tags.append(
+                        EncounterTag(
+                            text="Traumatic Hit Landed",
+                            created_by=character_name,
+                            target=None,
+                            leverage=0,
+                            fleeting=False,
+                            created_turn=round_number,
+                        )
+                    )
+            dmg_seed = generate_dice_seed(session_id, round_number + 1)
+            damage_result_payload = _compose_result_payload(
+                request=damage_request_payload,
+                rolls=dmg_resolved.rolls,
+                total=dmg_total,
+                outcome=RollOutcome.Success,  # damage rolls have no outcome tier
+                seed=dmg_seed,
+                throw_params=_DAMAGE_THROW_PARAMS,
+            )
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "encounter",
+                    "op": "damage_roll_resolved",
+                    "beat_id": beat_id,
+                    "actor": character_name,
+                    "damage_spec": damage_spec.dice,
+                    "bonus": damage_spec.bonus,
+                    "faces": dmg_faces,
+                    "total": dmg_total,
+                    "source": "dice_throw_server_roll",
+                },
+                component="encounter",
+            )
+            damage_resolver_fn = lambda: dmg_total  # noqa: E731
+
+    # CWN Shock seam (spec 2026-05-28, Task 10): a melee weapon with a
+    # Shock rating chips fixed damage on a MISS vs a low-Melee-AC target.
+    # Sibling of the HIT damage block above — fires ONLY on Fail/CritFail,
+    # so it never double-applies with the rolled-damage path. No-op for
+    # native/swn (base resolve_shock returns 0, so chip == 0).
+    if damage_channel == "strike" and outcome_tier in (
+        RollOutcome.Fail,
+        RollOutcome.CritFail,
+    ):
+        actor_core = snapshot.find_creature_core(character_name)
+        shock_spec = ruleset.resolve_damage(
+            beat=beat,
+            actor_core=actor_core,
+            pack=pack,
+            world_slug=snapshot.world_slug,
+        )
+        shock_target_name = _opposite_side_first_actor(encounter, actor.side)
+        shock_target_core = (
+            snapshot.find_creature_core(shock_target_name)
+            if shock_target_name is not None
+            else None
+        )
+        if shock_spec is not None and shock_target_core is not None:
+            chip = ruleset.resolve_shock(
+                spec=shock_spec,
+                target_melee_ac=int(getattr(shock_target_core, "armor_class", 10)),
+                actor=character_name,
+            )
+            # WWN Warrior Killing Blow rider — Shock path (SRD §1.5.18,
+            # Plan 3 Task 9). Killing Blow adds to Shock too (same gate).
+            # Only applies when chip > 0 (a genuine Shock hit).
+            if chip > 0 and _is_wwn_warrior:
+                assert isinstance(ruleset, WwnRulesetModule)
+                _kb_cfg = pack.rules.ruleset_config()
+                _shock_actor_core = snapshot.find_creature_core(character_name)
+                chip = ruleset.apply_killing_blow(
+                    base_total=chip,
+                    level=int(_shock_actor_core.level) if _shock_actor_core else 1,
+                    cfg=_kb_cfg,
+                    actor=character_name,
+                )
+            if chip > 0:
+                shock_hp_removed = apply_beat_hp_channel(
+                    target=shock_target_core,
+                    channel="strike",
+                    damage_total=chip,
+                    target_mitigation=0,
+                    source_beat_id=f"{beat_id}:shock",
+                )
+                if shock_hp_removed > 0:
+                    # Text-log + GM-timeline visibility for the chip. The
+                    # wwn.shock.applied span (resolve_shock) is live-OTEL
+                    # only — log greps and the persisted /encounter_events
+                    # feed are structurally blind to it, which is how the
+                    # barsoom-2 shock kill masqueraded as a fabricated win.
+                    logger.info(
+                        "dice.shock_chip_applied actor=%s target=%s beat_id=%s "
+                        "chip=%d hp_after=%d/%d",
+                        character_name,
+                        shock_target_name,
+                        beat_id,
+                        shock_hp_removed,
+                        shock_target_core.hp.current,
+                        shock_target_core.hp.max,
+                    )
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "encounter",
+                            "op": "shock_chip_applied",
+                            "actor": character_name,
+                            "target": shock_target_name,
+                            "beat_id": beat_id,
+                            "outcome_tier": outcome_tier.value
+                            if hasattr(outcome_tier, "value")
+                            else str(outcome_tier),
+                            "chip": shock_hp_removed,
+                            "target_hp_after": shock_target_core.hp.current,
+                            "target_hp_max": shock_target_core.hp.max,
+                            "source": "dice_throw_shock",
+                        },
+                        component="encounter",
+                    )
+
+    apply_result = ruleset.apply_beat(
+        encounter=encounter,
+        actor=actor,
+        beat=beat,
+        outcome=outcome_tier,
+        turn=round_number,
+        edge_resolver=snapshot.find_creature_core,
+        damage_resolver=damage_resolver_fn,
+    )
+
+    if apply_result.skipped_reason:
+        raise DiceDispatchError(f"beat {beat_id!r} skipped: {apply_result.skipped_reason}")
+
+    # CWN/WWN downed seam (spec 2026-05-28, Task 11): if this strike dropped
+    # a target to 0 HP, resolve the Mortal Injury (always) and Major Injury
+    # (only when a Traumatic Hit landed this scene). Shared with the WWN cast
+    # path (Plan 3 Task 7) via ``run_cwn_wwn_downed_seam`` so the two cannot
+    # drift — the helper carries the cwn/wwn gate + the 0-HP check internally.
+    run_cwn_wwn_downed_seam(
+        ruleset=ruleset,
+        snapshot=snapshot,
+        encounter=encounter,
+        cdef=cdef,
+        pack=pack,
+        actor_side=actor.side,
+        rng=random,
+    )
+
+    # WN cast spine (story 102-2): route the committed cast through the
+    # SAME resolution the narrator apply_beat path uses — one cast
+    # implementation, two entry points (epic 102 "Reuse-first"). The d20
+    # throw above is NOT a to-hit gate: WWN High Magic casting is
+    # automatic (SRD §4.2 — the DEFENDER saves), so the spine runs
+    # regardless of ``outcome_tier``. The spine spends the cast
+    # (refused-but-recorded on an economy failure), applies rolled spell
+    # damage through the HP channel, runs the shared downed seam, fires
+    # the hp_depletion win condition, and emits ``wwn.spell.cast`` on
+    # every call — the GM-panel lie detector. Function-level import:
+    # narration_apply is a heavy module and dispatch must not pull it at
+    # import time.
+    if is_wwn_cast:
+        from sidequest.agents.orchestrator import BeatSelection
+        from sidequest.server.narration_apply import _resolve_wwn_cast_for_beat
+
+        _resolve_wwn_cast_for_beat(
+            sel=BeatSelection(
+                actor=actor.name,
+                beat_id="cast_spell",
+                outcome=outcome_tier,
+                spell_id=spell_id,
+            ),
+            actor=actor,
+            snapshot=snapshot,
+            pack=pack,
+            encounter=encounter,
+            cdef=cdef,
+        )
+
+    own_delta = apply_result.deltas.own if apply_result.deltas else 0
+
+    with encounter_beat_applied_span(
+        encounter_type=encounter.encounter_type,
+        actor=character_name,
+        beat_id=beat_id,
+        metric_delta=own_delta,
+    ):
+        pass
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "encounter",
+            "op": "beat_applied",
+            "actor": character_name,
+            "actor_side": actor.side,
+            "beat_id": beat_id,
+            "beat_kind": str(beat.kind.value) if hasattr(beat.kind, "value") else str(beat.kind),
+            "outcome_tier": outcome_tier.value
+            if hasattr(outcome_tier, "value")
+            else str(outcome_tier),
+            "own_delta": own_delta,
+            "opponent_delta": apply_result.deltas.opponent if apply_result.deltas else 0,
+            # ADR-114 §2 / forensics lie-detector: the HP actually removed from
+            # the target by the strike damage channel. ``opponent_delta`` above is
+            # the *dial* delta and is suppressed to 0 under hp_depletion, so without
+            # this field a post-hoc reader of ENCOUNTER_BEAT_APPLIED sees a CritSuccess
+            # strike that "did nothing" while the CreatureCore HpPool actually dropped.
+            # The TOTAL includes the Shock chip (miss-damage) — barsoom-2 2026-06-10:
+            # a shock chip removed the Other's last 3 HP on a CritFail and the
+            # hit-path-only field read 0, making the correct resolution look
+            # fabricated. ``shock_hp_removed`` attributes the shock share.
+            "opponent_hp_removed": apply_result.hp_removed + shock_hp_removed,
+            "shock_hp_removed": shock_hp_removed,
+            "metric_target": encounter.encounter_type,
+            "source": "dice_throw",
+        },
+        component="encounter",
+    )
+    # Story 45-9: bump total_beats_fired counter + OTEL.
+    snapshot.record_beat_fired(
+        beat_id=beat_id,
+        encounter_type=encounter.encounter_type,
+        turn=round_number,
+        source="dice_throw",
+    )
+
+    # Review round 2 (102-2): derive the post-beat resolution from the
+    # AUTHORITATIVE encounter state, not just apply_beat's return — a
+    # killing CAST resolves the encounter in the spine (check_hp_depletion)
+    # AFTER apply_beat, so apply_result.resolved is stale-False there and
+    # the dead opponent would take its reprisal swing in a fight already
+    # won (ADR-139 win-condition liveness). Strikes resolve inside
+    # apply_beat, so this is a strict widening, never a narrowing.
+    encounter_resolved = apply_result.resolved or encounter.resolved
+    strike_hp_removed = apply_result.hp_removed
+
+    return _PlayerBeatApplication(
+        encounter_resolved=encounter_resolved,
+        strike_hp_removed=strike_hp_removed,
+        shock_hp_removed=shock_hp_removed,
+        damage_request_payload=damage_request_payload,
+        damage_result_payload=damage_result_payload,
+    )
+
+
+def _emit_player_beat_resolution_close(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    character_name: str,
+    beat,
+    actor_side: str,
+    outcome_tier: RollOutcome,
+    strike_hp_removed: int,
+    shock_hp_removed: int,
+    encounter_resolved: bool,
+) -> None:
+    """Per-beat resolution close: the [ENCOUNTER RESOLVED] narrator signal on
+    a resolving beat, or the kill-overclaim HP anchor on a damaging one.
+    Shared by the legacy in-dispatch flow and the WN round walk (story 102-4)
+    so the two closes cannot drift."""
+    if encounter_resolved:
+        with encounter_resolved_span(
+            encounter_type=encounter.encounter_type,
+            outcome=encounter.outcome or "",
+            source="dice_throw_beat",
+        ):
+            pass
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "resolved",
+                "encounter_type": encounter.encounter_type,
+                "outcome": encounter.outcome or "",
+                "source": "dice_throw_beat",
+                "final_player_metric": encounter.player_metric.current,
+                "final_opponent_metric": encounter.opponent_metric.current,
+            },
+            component="encounter",
+        )
+        # barsoom-2 playtest 2026-06-10: the PLAYER-beat resolution close told
+        # the narrator NOTHING — unlike the reprisal close (2026-06-07 fix,
+        # below in _resolve_opponent_reprisal), it stamped no resolution signal
+        # and appended no directive. The narrator saw "strike CritFail" and
+        # narrated a vivid player DEFEAT while the engine had (correctly)
+        # resolved player_victory via the Shock chip. Mirror the reprisal
+        # close: stamp pending_resolution_signal (renders the [ENCOUNTER
+        # RESOLVED] zone) + a MECHANICAL TRUTH directive, with an explicit
+        # Shock attribution when the kill landed on a missed swing so the
+        # prose renders the actual mechanism.
+        from sidequest.server.narration_apply import _build_resolution_signal
+
+        snapshot.pending_resolution_signal = _build_resolution_signal(encounter)
+        _shock_rider = ""
+        if (
+            shock_hp_removed > 0
+            and encounter.outcome == "player_victory"
+            and outcome_tier in (RollOutcome.Fail, RollOutcome.CritFail)
+        ):
+            _shock_rider = (
+                f" The killing damage came from weapon Shock on a MISSED swing: "
+                f"{character_name}'s attack failed, but the blade's pressure "
+                f"still removed the final {shock_hp_removed} HP. Narrate the "
+                "kill that way — the swing goes wide yet the opponent falls. "
+                "Do NOT narrate the missed swing as a player defeat."
+            )
+        snapshot.next_turn_directives.append(
+            f"MECHANICAL TRUTH (weave into the narration): the "
+            f"{encounter.encounter_type} confrontation has RESOLVED — outcome: "
+            f"{encounter.outcome}. Narrate the close of the engagement; do NOT "
+            f"continue narrating it as a live, ongoing fight.{_shock_rider}"
+        )
+    elif strike_hp_removed + shock_hp_removed > 0:
+        # Kill-overclaim anchor (evropi 2/14 + barsoom 3/10, 2026-06-10): a
+        # damaging player hit that does NOT end the fight invites kill prose —
+        # twice this playtest the narrator rendered an unambiguous death for
+        # an Other the engine correctly kept alive, because the replay text
+        # carries the beat/outcome but never the target's resulting HP. Anchor
+        # the real pool + aliveness so the prose cannot overclaim. Mirrors the
+        # reprisal hit/miss anchors; skipped when the target core is
+        # unresolvable or already at 0 (a 0-HP unresolved state is a
+        # multi-combatant partial down — "still standing" would be false).
+        _anchor_target = _opposite_side_first_actor(encounter, actor_side)
+        _anchor_core = (
+            snapshot.find_creature_core(_anchor_target) if _anchor_target is not None else None
+        )
+        if _anchor_core is not None and _anchor_core.hp.current > 0:
+            snapshot.next_turn_directives.append(
+                f"MECHANICAL TRUTH (weave into the narration): {character_name}'s "
+                f"{beat.label} dealt {strike_hp_removed + shock_hp_removed} damage "
+                f"to {_anchor_target} — {_anchor_target} is at "
+                f"{_anchor_core.hp.current}/{_anchor_core.hp.max} HP and STILL "
+                "STANDING; the fight continues. Narrate a wound, not a kill — do "
+                "NOT describe their death, collapse, or incapacitation."
+            )
 
 
 def _resolve_opponent_reprisal(
@@ -1291,6 +1520,7 @@ def _resolve_opponent_reprisal(
     session_id: str,
     round_number: int,
     rng: random.Random,
+    attacker_name: str | None = None,
 ) -> list[object]:
     """Server-driven opponent attack turn (story 71-21, SWN hp_depletion combat).
 
@@ -1310,7 +1540,10 @@ def _resolve_opponent_reprisal(
     """
     messages: list[object] = []
 
-    opponent_name = _opposite_side_first_actor(encounter, "player")
+    # Story 102-4: the WN round walk attacks AS the slot token (each seated
+    # opponent acts at its own initiative slot); legacy callers keep the
+    # first-Other resolution.
+    opponent_name = attacker_name or _opposite_side_first_actor(encounter, "player")
     if opponent_name is None:
         # ADR-116: a confrontation requires an Other. None seated → no reprisal.
         logger.warning(

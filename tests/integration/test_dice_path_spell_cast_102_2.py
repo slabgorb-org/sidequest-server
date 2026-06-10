@@ -57,9 +57,7 @@ def _has_real_content() -> bool:
     return GENRE_PACKS_DIR.is_dir()
 
 
-pytestmark = pytest.mark.skipif(
-    not _has_real_content(), reason="sidequest-content not on disk"
-)
+pytestmark = pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 
 
 def _load_heavy_metal():
@@ -136,6 +134,16 @@ def _seat_combat(pack, caster_name: str, opponent: str, *, caster_level: int = 1
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc
+    # Story 102-4: the WN sealed round resolves in the PERSISTED initiative
+    # order, and the seam's real 1d8+DEX roll is unseeded — pin the order this
+    # suite's choreography assumes (caster acts, opponent answers) so the walk
+    # order can never flip on a random roll.
+    from sidequest.protocol.models import InitiativeEntry
+
+    enc.initiative = [
+        InitiativeEntry(token_id=caster_name, value=9),
+        InitiativeEntry(token_id=opponent, value=2),
+    ]
     opp_core = snap.find_creature_core(opponent)
     assert opp_core is not None, "opponent core must resolve (defender HP)"
     return snap, enc, opp_core
@@ -209,8 +217,13 @@ def test_cast_beat_with_spell_id_fires_wwn_cast_spine(otel_capture, monkeypatch)
     hp_before = opp_core.hp.current
 
     _dispatch(
-        pack=pack, snap=snap, enc=enc,
-        caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=1,
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        caster_name="Vesska",
+        beat_id=_CAST_BEAT,
+        spell_id=_SPELL,
+        face=1,
     )
 
     assert caster_core.spellcasting.casts_remaining == 1, (
@@ -249,8 +262,13 @@ def test_cast_outcome_is_independent_of_the_d20_face(otel_capture, monkeypatch):
         snap, enc, opp_core = _seat_combat(pack, "Vesska", "Furnace Thrall")
         hp_before = opp_core.hp.current
         _dispatch(
-            pack=pack, snap=snap, enc=enc,
-            caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=face,
+            pack=pack,
+            snap=snap,
+            enc=enc,
+            caster_name="Vesska",
+            beat_id=_CAST_BEAT,
+            spell_id=_SPELL,
+            face=face,
         )
         deltas.append(hp_before - opp_core.hp.current)
         casts.append(snap.find_creature_core("Vesska").spellcasting.casts_remaining)
@@ -281,9 +299,8 @@ def test_cast_parity_with_apply_beat_path(otel_capture, monkeypatch):
     dispatch_dice_throw must produce equivalent mechanical outcomes and
     equivalent wwn.spell.cast span shapes."""
     from sidequest.agents.orchestrator import BeatSelection
-    from sidequest.server.narration_apply import _resolve_wwn_cast_for_beat
-
     from sidequest.protocol.dice import RollOutcome
+    from sidequest.server.narration_apply import _resolve_wwn_cast_for_beat
 
     monkeypatch.setattr("random.randint", lambda a, b: a)
     pack = _load_heavy_metal()
@@ -297,9 +314,7 @@ def test_cast_parity_with_apply_beat_path(otel_capture, monkeypatch):
     snap_a, enc_a, opp_a = _seat_combat(pack, "Vesska", "Furnace Thrall")
     caster_a = snap_a.find_creature_core("Vesska")
     hp_before_a = opp_a.hp.current
-    cdef = next(
-        c for c in pack.rules.confrontations if c.confrontation_type == "combat"
-    )
+    cdef = next(c for c in pack.rules.confrontations if c.confrontation_type == "combat")
     actor_a = enc_a.find_actor("Vesska")
     assert actor_a is not None
     _resolve_wwn_cast_for_beat(
@@ -321,14 +336,19 @@ def test_cast_parity_with_apply_beat_path(otel_capture, monkeypatch):
     caster_b = snap_b.find_creature_core("Vesska")
     hp_before_b = opp_b.hp.current
     _dispatch(
-        pack=pack, snap=snap_b, enc=enc_b,
-        caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=2,
+        pack=pack,
+        snap=snap_b,
+        enc=enc_b,
+        caster_name="Vesska",
+        beat_id=_CAST_BEAT,
+        spell_id=_SPELL,
+        face=2,
     )
 
     # Mechanical parity.
-    assert (
-        caster_b.spellcasting.casts_remaining == caster_a.spellcasting.casts_remaining
-    ), "both entry points must spend the same number of casts"
+    assert caster_b.spellcasting.casts_remaining == caster_a.spellcasting.casts_remaining, (
+        "both entry points must spend the same number of casts"
+    )
     assert (hp_before_b - opp_b.hp.current) == (hp_before_a - opp_a.hp.current), (
         "both entry points must apply the same spell damage under the same rng"
     )
@@ -363,8 +383,12 @@ def test_cast_beat_without_spell_id_is_loud_typed_rejection(otel_capture):
 
     with pytest.raises(DiceDispatchError):
         _dispatch(
-            pack=pack, snap=snap, enc=enc,
-            caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=None,
+            pack=pack,
+            snap=snap,
+            enc=enc,
+            caster_name="Vesska",
+            beat_id=_CAST_BEAT,
+            spell_id=None,
         )
 
     assert caster_core.spellcasting.casts_remaining == 2, "no cast may be spent"
@@ -386,8 +410,11 @@ def test_cast_beat_with_unknown_spell_id_is_loud_typed_rejection(otel_capture):
 
     with pytest.raises(DiceDispatchError):
         _dispatch(
-            pack=pack, snap=snap, enc=enc,
-            caster_name="Vesska", beat_id=_CAST_BEAT,
+            pack=pack,
+            snap=snap,
+            enc=enc,
+            caster_name="Vesska",
+            beat_id=_CAST_BEAT,
             spell_id="riff_of_unmaking_xyz",
         )
 
@@ -406,8 +433,13 @@ def test_spell_id_on_non_cast_beat_is_loud_typed_rejection(otel_capture):
 
     with pytest.raises(DiceDispatchError):
         _dispatch(
-            pack=pack, snap=snap, enc=enc,
-            caster_name="Vesska", beat_id=_STRIKE_BEAT, spell_id=_SPELL, face=20,
+            pack=pack,
+            snap=snap,
+            enc=enc,
+            caster_name="Vesska",
+            beat_id=_STRIKE_BEAT,
+            spell_id=_SPELL,
+            face=20,
         )
 
     assert opp_core.hp.current == hp_before, (
@@ -435,8 +467,12 @@ def test_cast_with_no_casts_remaining_is_refused_not_generic(otel_capture, monke
     hp_before = opp_core.hp.current
 
     _dispatch(
-        pack=pack, snap=snap, enc=enc,
-        caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL,
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        caster_name="Vesska",
+        beat_id=_CAST_BEAT,
+        spell_id=_SPELL,
     )
 
     assert caster_core.spellcasting.casts_remaining == 0
@@ -457,17 +493,20 @@ def test_cast_with_no_casts_remaining_is_refused_not_generic(otel_capture, monke
 def test_strike_beat_without_spell_id_regression_unchanged(otel_capture, monkeypatch):
     """The existing strike path must be untouched: HP ablates through the
     strike channel, no wwn.spell.cast span, no cast spent."""
-    monkeypatch.setattr(
-        "sidequest.server.dispatch.damage_roll.random.randint", lambda a, b: a
-    )
+    monkeypatch.setattr("sidequest.server.dispatch.damage_roll.random.randint", lambda a, b: a)
     pack = _load_heavy_metal()
     snap, enc, opp_core = _seat_combat(pack, "Vesska", "Furnace Thrall")
     caster_core = snap.find_creature_core("Vesska")
     hp_before = opp_core.hp.current
 
     _dispatch(
-        pack=pack, snap=snap, enc=enc,
-        caster_name="Vesska", beat_id=_STRIKE_BEAT, spell_id=None, face=20,
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        caster_name="Vesska",
+        beat_id=_STRIKE_BEAT,
+        spell_id=None,
+        face=20,
     )
 
     assert opp_core.hp.current < hp_before, (
@@ -476,9 +515,7 @@ def test_strike_beat_without_spell_id_regression_unchanged(otel_capture, monkeyp
     assert caster_core.spellcasting.casts_remaining == 2, (
         "a strike must never touch the cast economy"
     )
-    assert not _cast_spans(otel_capture), (
-        "a strike must never emit wwn.spell.cast"
-    )
+    assert not _cast_spans(otel_capture), "a strike must never emit wwn.spell.cast"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -486,9 +523,7 @@ def test_strike_beat_without_spell_id_regression_unchanged(otel_capture, monkeyp
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_killing_cast_resolves_encounter_and_suppresses_reprisal(
-    otel_capture, monkeypatch
-):
+def test_killing_cast_resolves_encounter_and_suppresses_reprisal(otel_capture, monkeypatch):
     """[HIGH, review round 2] A dice-path cast that DROPS the opponent must
     end the fight — the dead opponent must NOT take its reprisal swing.
 
@@ -508,15 +543,18 @@ def test_killing_cast_resolves_encounter_and_suppresses_reprisal(
     """
     monkeypatch.setattr("random.randint", lambda a, b: a if b == 20 else b)
     pack = _load_heavy_metal()
-    snap, enc, opp_core = _seat_combat(
-        pack, "Vesska", "Furnace Thrall", caster_level=2
-    )
+    snap, enc, opp_core = _seat_combat(pack, "Vesska", "Furnace Thrall", caster_level=2)
     caster_core = snap.find_creature_core("Vesska")
     player_hp_before = caster_core.hp.current
 
     _dispatch(
-        pack=pack, snap=snap, enc=enc,
-        caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=2,
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        caster_name="Vesska",
+        beat_id=_CAST_BEAT,
+        spell_id=_SPELL,
+        face=2,
     )
 
     assert opp_core.hp.current == 0, (
@@ -552,17 +590,20 @@ def test_cast_on_opposed_check_confrontation_rejects_loudly(otel_capture, monkey
     pack = _load_heavy_metal()
     snap, enc, opp_core = _seat_combat(pack, "Vesska", "Furnace Thrall")
     caster_core = snap.find_creature_core("Vesska")
-    cdef = next(
-        c for c in pack.rules.confrontations if c.confrontation_type == "combat"
-    )
+    cdef = next(c for c in pack.rules.confrontations if c.confrontation_type == "combat")
     # monkeypatch (not direct assignment) so the shared loaded-pack object is
     # restored after the test — load_genre_pack may cache instances.
     monkeypatch.setattr(cdef, "resolution_mode", ResolutionMode.opposed_check)
 
     with pytest.raises(DiceDispatchError):
         _dispatch(
-            pack=pack, snap=snap, enc=enc,
-            caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=5,
+            pack=pack,
+            snap=snap,
+            enc=enc,
+            caster_name="Vesska",
+            beat_id=_CAST_BEAT,
+            spell_id=_SPELL,
+            face=5,
         )
 
     assert caster_core.spellcasting.casts_remaining == 2, (

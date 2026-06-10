@@ -132,6 +132,16 @@ def test_heavy_metal_combat_is_wwn_bound_and_ablates_hp(otel_capture, monkeypatc
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc
+    # Story 102-4: the WN sealed round resolves in the PERSISTED initiative
+    # order, and the seam's real 1d8+DEX roll is unseeded — pin the order this
+    # suite's choreography assumes (player strikes, opponent answers) so the
+    # walk order can never flip on a random roll.
+    from sidequest.protocol.models import InitiativeEntry
+
+    enc.initiative = [
+        InitiativeEntry(token_id=attacker_name, value=9),
+        InitiativeEntry(token_id=opponent, value=2),
+    ]
 
     opponent_core = snap.find_creature_core(opponent)
     assert opponent_core is not None, (
@@ -322,6 +332,16 @@ def test_heavy_metal_opponent_reprisal_ablates_player_hp(otel_capture, monkeypat
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc
+    # Story 102-4: the WN sealed round resolves in the PERSISTED initiative
+    # order, and the seam's real 1d8+DEX roll is unseeded — pin the order this
+    # suite's choreography assumes (player strikes, opponent answers) so the
+    # walk order can never flip on a random roll.
+    from sidequest.protocol.models import InitiativeEntry
+
+    enc.initiative = [
+        InitiativeEntry(token_id=attacker_name, value=9),
+        InitiativeEntry(token_id=opponent, value=2),
+    ]
 
     player_core = snap.find_creature_core(attacker_name)
     assert player_core is not None, "attacker core must be reachable to ablate"

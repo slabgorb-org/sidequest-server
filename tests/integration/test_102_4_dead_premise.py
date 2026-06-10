@@ -56,11 +56,17 @@ _SPAN_BEAT_APPLIED = "encounter.beat_applied"
 
 
 @pytest.fixture
-def kill_order_combat(monkeypatch):
+def kill_order_combat(monkeypatch, otel_capture):
     """A kills the blade at slot 1; B's committed strike on it is premise-dead.
 
     Forced order: A(9) -> B(7) -> blade(2). rng pinned max so A's 2d6=12
     overkills the 10-HP blade before B's slot arrives.
+
+    Depends on ``otel_capture`` so the in-memory exporter is installed
+    BEFORE this fixture dispatches the round — the round spans fire during
+    fixture setup, and a test-signature ordering of (kill_order_combat,
+    otel_capture) would otherwise instantiate the capture too late to see
+    them (Dev green-phase fix, 102-4).
     """
     monkeypatch.setattr("random.randint", lambda a, b: b)
     pack = load_pack("heavy_metal")
@@ -157,6 +163,5 @@ def test_actor_dropped_before_its_slot_does_not_act(otel_capture, monkeypatch):
         "downed PC's committed strike must never apply"
     )
     assert not spans_named(otel_capture, _SPAN_BEAT_APPLIED), (
-        "no player beat may apply in a round where the PC dropped before "
-        "their slot"
+        "no player beat may apply in a round where the PC dropped before their slot"
     )

@@ -106,6 +106,16 @@ def _seat_combat(snap, pack):
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc
+    # Story 102-4: the WN sealed round resolves in the PERSISTED initiative
+    # order, and the seam's real 1d8+DEX roll is unseeded — pin the order this
+    # suite's choreography assumes (player strikes, opponent answers) so the
+    # walk can never randomly down the low-HP attacker before their slot.
+    from sidequest.protocol.models import InitiativeEntry
+
+    enc.initiative = [
+        InitiativeEntry(token_id=_ATTACKER, value=9),
+        InitiativeEntry(token_id=_OPPONENT, value=2),
+    ]
     return enc
 
 

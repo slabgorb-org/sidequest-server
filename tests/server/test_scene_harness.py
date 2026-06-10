@@ -948,20 +948,34 @@ def test_scene_harness_emits_magic_state_hydrated_span(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """50-22 OTEL wiring (CLAUDE.md observability principle + "Every Test
-    Suite Needs a Wiring Test"): hydrating a ``magic_state:`` fixture must
-    emit a ``magic.state_hydrated`` watcher event so the GM panel can
-    confirm the fixture staged real magic state rather than the narrator
-    improvising one.
+    """50-22 OTEL wiring, re-pinned by story 90-8 to the ROUTED-SPAN contract
+    (CLAUDE.md observability principle + "Every Test Suite Needs a Wiring
+    Test"): hydrating a ``magic_state:`` fixture must open a
+    ``magic.state_hydrated`` OTEL span whose SPAN_ROUTES extract carries the
+    hydrated identity, so the event reaches the typed GM-panel Subsystems
+    feed — not just the dashboard RAW console (the 90-7 Reviewer finding:
+    a raw publish_event with an event_type outside the UI union is invisible
+    to the typed tabs).
 
-    Found by simplify-quality during verify: the event was emitted but
-    unasserted, and the original bound-import (`publish_event as
-    _watcher_publish`) made it uncapturable by the standard
-    ``_capture_events`` harness. The emitter was realigned to the
-    ``scene_harness_router`` convention (`_hub.publish_event`) so this
-    test exercises the real production path.
+    The raw ``publish_event`` emit must be retired with the span's arrival —
+    a double emit would put one raw + one typed event per hydration on the
+    dashboard.
     """
     captured = _capture_events(monkeypatch)
+
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    import sidequest.telemetry.spans as spans_module
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    local_tracer = provider.get_tracer("test-scene-harness-90-8")
+    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
 
     fixtures_dir = tmp_path / "fixtures"
     fixtures_dir.mkdir()
@@ -974,12 +988,21 @@ def test_scene_harness_emits_magic_state_hydrated_span(
     r = client.post("/dev/scene/magic_otel")
     assert r.status_code == 200, f"fixture must hydrate; got {r.status_code} body={r.text}"
 
-    magic_events = [e for e in captured if e[0] == "magic.state_hydrated"]
-    assert magic_events, (
-        f"hydrating magic_state: must emit a 'magic.state_hydrated' watcher event; "
-        f"captured event types: {sorted({e[0] for e in captured})!r}"
+    magic_spans = [
+        s for s in exporter.get_finished_spans() if s.name == "magic.state_hydrated"
+    ]
+    assert magic_spans, (
+        f"hydrating magic_state: must open a 'magic.state_hydrated' span; "
+        f"finished spans: {sorted({s.name for s in exporter.get_finished_spans()})!r}"
     )
-    event_type, fields, meta = magic_events[0]
+
+    from sidequest.telemetry.spans import SPAN_ROUTES
+
+    assert "magic.state_hydrated" in SPAN_ROUTES, (
+        "magic.state_hydrated must be routed in SPAN_ROUTES — without a route "
+        "the typed Subsystems feed never sees it (the exact 90-8 gap)"
+    )
+    fields = SPAN_ROUTES["magic.state_hydrated"].extract(magic_spans[0])
     # Field-level identity — the lie-detector needs real values, not a bare
     # truthy (a silently-empty-hydrated fixture would carry wrong slugs).
     assert fields["world_slug"] == "coyote_star", (
@@ -989,6 +1012,13 @@ def test_scene_harness_emits_magic_state_hydrated_span(
     assert fields["control_tier_actors"] == 1, (
         f"event must report the 1 control_tier actor from the fixture; got {fields!r}"
     )
-    assert meta["component"] == "magic", (
-        f"event must be tagged component=magic for the Subsystems tab; got {meta!r}"
+    assert SPAN_ROUTES["magic.state_hydrated"].component == "magic", (
+        "route must be tagged component=magic for the Subsystems tab; got "
+        f"{SPAN_ROUTES['magic.state_hydrated'].component!r}"
+    )
+
+    raw_magic_events = [e for e in captured if e[0] == "magic.state_hydrated"]
+    assert raw_magic_events == [], (
+        f"the raw publish_event emit must be retired by the routed span "
+        f"(no double emit); got {raw_magic_events!r}"
     )

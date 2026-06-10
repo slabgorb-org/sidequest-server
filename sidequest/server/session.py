@@ -15,7 +15,7 @@ from collections import deque
 from typing import TYPE_CHECKING
 
 from sidequest.game.ruleset.registry import get_ruleset_module
-from sidequest.game.ruleset.wwn import WwnRulesetModule
+from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.orbital.beats import StoryBeat, StoryBeatKind, advance_clock_via_beat
 from sidequest.orbital.clock import Clock
 from sidequest.orbital.render import Scope
@@ -85,25 +85,20 @@ class Session:
         semantically.
         """
         clear_scratch_on_scene_end(self._snapshot, reason=reason, turn=turn)
-        # WWN scene-boundary Effort reclaim (spec §H). Gated strictly on the
-        # bound ruleset slug (mirrors the dice.py ruleset-slug gate) so non-WWN
-        # sessions are completely untouched — no module resolution, no iteration.
-        # reclaim_scene_effort drops only ``scene`` commitments and is a no-op
-        # for cores with none, so iterating every PC core is safe. It emits one
-        # wwn.effort.reclaim span per pool touched (GM-panel lie detector). The
-        # day/long-rest reclaim TRIGGER is deferred to Plan 3.
-        if self._ruleset == "wwn":
+        # SWN-family scene-boundary Effort reclaim (SRD §1.4.4 / §6). The Effort
+        # engine is shared SWN-family crunch (Story 102-6 lifted it to the base),
+        # so a swn psychic's scene-committed Effort reclaims at scene end exactly
+        # as a wwn caster's does. Gated on the bound module being an
+        # ``SwnRulesetModule`` (swn/cwn/awn/wwn) so native sessions are completely
+        # untouched. ``reclaim_scene_effort`` drops only ``scene`` commitments and
+        # is a no-op for cores with none, so iterating every PC core is safe. It
+        # emits one ``{ruleset}.effort.reclaim`` span per pool touched (GM-panel
+        # lie detector). The day/long-rest reclaim TRIGGER is deferred to Plan 3.
+        if self._ruleset:
             module = get_ruleset_module(self._ruleset)
-            # reclaim_scene_effort is WWN-specific (not on the RulesetModule ABC).
-            # The slug gate guarantees a WwnRulesetModule here; assert it to fail
-            # loud rather than silently skip if the registry binding ever drifts.
-            if not isinstance(module, WwnRulesetModule):
-                raise TypeError(
-                    f"ruleset 'wwn' resolved to {type(module).__name__!r}, "
-                    "expected WwnRulesetModule"
-                )
-            for char in self._snapshot.characters:
-                module.reclaim_scene_effort(core=char.core)
+            if isinstance(module, SwnRulesetModule):
+                for char in self._snapshot.characters:
+                    module.reclaim_scene_effort(core=char.core)
         self.advance_via_beat(StoryBeat(kind=StoryBeatKind.ENCOUNTER, trigger=f"scene-{reason}"))
 
     # ------------------------------------------------------------------

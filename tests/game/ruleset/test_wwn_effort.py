@@ -397,9 +397,17 @@ class TestReclaimDayAndRefresh:
         assert len(spans) == 1
         assert dict(spans[0].attributes or {})["trigger"] == "day"
 
-    def test_requires_wwn_config(self):
+    def test_accepts_swn_family_config(self):
+        """Story 102-6 lifted the Effort engine to the SWN family base, so day
+        reclaim now accepts any SwnConfig (WwnConfig extends it) — a swn psychic
+        reclaims day Effort the same way a wwn caster does. A non-config still
+        fails loud."""
         from sidequest.genre.models.rules import SwnConfig
 
+        # SwnConfig is now accepted (the base config) — no raise.
         core = _core(effort={})
-        with pytest.raises(ValueError, match="WwnConfig"):
-            _MOD.reclaim_day_and_refresh(core=core, comfortable=True, cfg=SwnConfig())
+        _MOD.reclaim_day_and_refresh(core=core, comfortable=True, cfg=SwnConfig())
+
+        # A non-SwnConfig still fails loud (No Silent Fallbacks).
+        with pytest.raises(ValueError, match="SwnConfig"):
+            _MOD.reclaim_day_and_refresh(core=core, comfortable=True, cfg=None)

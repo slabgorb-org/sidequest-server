@@ -513,6 +513,26 @@ def party_member_from_character(
         if s.text in (INJURY_STATUS_TEXT, DISMOUNTED_STATUS_TEXT)
     ]
 
+    # Story 102-6 (Sebastien/Jade legibility): project the psychic's Effort pool
+    # (committed / free / max) and System Strain so the mechanical resource game
+    # is legible in the party panel. None for non-psychics (no Effort pool) —
+    # distinct from 0 (a psychic with everything committed). Effort is aggregated
+    # across every source pool (SWN psionics use one; a WWN caster may carry
+    # class-source pools too).
+    effort_available: int | None = None
+    effort_committed: int | None = None
+    effort_max: int | None = None
+    if character.core.effort:
+        effort_available = sum(p.available for p in character.core.effort.values())
+        effort_committed = sum(p.committed for p in character.core.effort.values())
+        effort_max = sum(p.max for p in character.core.effort.values())
+
+    system_strain_current: int | None = None
+    system_strain_max: int | None = None
+    if character.core.system_strain is not None:
+        system_strain_current = character.core.system_strain.current
+        system_strain_max = character.core.system_strain.max
+
     return PartyMember(
         player_id=NonBlankString(player_id or "anon"),
         name=NonBlankString(player_name or "Player"),
@@ -539,6 +559,11 @@ def party_member_from_character(
         rig_composure_current=rig_composure_current,
         rig_composure_max=rig_composure_max,
         injury_tags=injury_tags,
+        effort_available=effort_available,
+        effort_committed=effort_committed,
+        effort_max=effort_max,
+        system_strain_current=system_strain_current,
+        system_strain_max=system_strain_max,
     )
 
 

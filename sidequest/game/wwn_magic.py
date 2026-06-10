@@ -111,6 +111,21 @@ class EffortResult(BaseModel):
     reason: str = ""
 
 
+class DisciplineActivationResult(BaseModel):
+    """Outcome of a psionic discipline activation (Story 102-6, SWN SRD §6).
+
+    ``applied`` False = refused (no free Effort) — pool unchanged, ``reason``
+    set. Never a silent success: a refusal is loud (the discipline span carries
+    ``refused=True``)."""
+
+    model_config = {"extra": "forbid"}
+    applied: bool
+    discipline_id: str
+    available: int
+    strained: int = 0  # System Strain taken on a push (0 for a normal discipline)
+    reason: str = ""
+
+
 class SpellcastResult(BaseModel):
     model_config = {"extra": "forbid"}
     cast: bool

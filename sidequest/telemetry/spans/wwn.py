@@ -323,54 +323,10 @@ def wwn_spell_cast_span(
         pass
 
 
-def wwn_effort_commit_span(
-    *,
-    actor: str,
-    source: str,
-    points: int,
-    duration: str,
-    available: int,
-    applied: bool,
-    _tracer: trace.Tracer | None = None,
-    **attrs: Any,
-) -> None:
-    """Emit a wwn.effort.commit span (lie-detector for WWN effort commitment)."""
-    attributes: dict[str, Any] = {
-        "field": "effort_commit",
-        "actor": actor,
-        "source": source,
-        "points": points,
-        "duration": duration,
-        "available": available,
-        "applied": applied,
-        **attrs,
-    }
-    with Span.open(SPAN_WWN_EFFORT_COMMIT, attributes, tracer_override=_tracer):
-        pass
-
-
-def wwn_effort_reclaim_span(
-    *,
-    actor: str,
-    source: str,
-    points: int,
-    trigger: str,
-    available: int,
-    _tracer: trace.Tracer | None = None,
-    **attrs: Any,
-) -> None:
-    """Emit a wwn.effort.reclaim span (lie-detector for WWN effort reclamation)."""
-    attributes: dict[str, Any] = {
-        "field": "effort_reclaim",
-        "actor": actor,
-        "source": source,
-        "points": points,
-        "trigger": trigger,
-        "available": available,
-        **attrs,
-    }
-    with Span.open(SPAN_WWN_EFFORT_RECLAIM, attributes, tracer_override=_tracer):
-        pass
+# NOTE: wwn.effort.commit / wwn.effort.reclaim are emitted by the slug-namespaced
+# ``effort_commit_span`` / ``effort_reclaim_span`` in spans/psionics.py (the Effort
+# engine lifted to the SWN family base in Story 102-6, ``{ruleset}.effort.*``). The
+# SPAN_WWN_EFFORT_* constants + routes above stay so the wwn-slug output still routes.
 
 
 def wwn_killing_blow_span(
@@ -477,9 +433,7 @@ SPAN_ROUTES[SPAN_WWN_MAGIC_HYDRATED] = SpanRoute(
         # JSON-encoded per the magic.py structured-payload convention — OTEL
         # attribute handling of empty sequences is a footgun; a JSON string
         # round-trips the empty list reliably.
-        "effort_sources": _json.loads(
-            (span.attributes or {}).get("effort_sources_json", "[]")
-        ),
+        "effort_sources": _json.loads((span.attributes or {}).get("effort_sources_json", "[]")),
     },
 )
 

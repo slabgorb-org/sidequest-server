@@ -25,9 +25,6 @@ from sidequest.game.status import Status, StatusSeverity
 from sidequest.game.system_strain import StrainResult
 from sidequest.game.wwn_magic import (
     CastInput,
-    EffortCommitment,
-    EffortDuration,
-    EffortResult,
     SpellcastResult,
     VeteransLuckMode,
     VeteransLuckResult,
@@ -35,8 +32,6 @@ from sidequest.game.wwn_magic import (
 from sidequest.genre.models.inventory import _DICE_RE, DamageSpec
 from sidequest.genre.models.rules import SwnConfig, WwnConfig
 from sidequest.telemetry.spans.wwn import (
-    wwn_effort_commit_span,
-    wwn_effort_reclaim_span,
     wwn_killing_blow_span,
     wwn_major_injury_roll_span,
     wwn_mortal_injury_declared_span,
@@ -297,167 +292,12 @@ class WwnRulesetModule(SwnRulesetModule):
         )
 
     # ------------------------------------------------------------------
-    # Effort engine (WWN SRD §1.4.4)
+    # Effort engine (SRD §1.4.4) + psionic discipline activation (§6) are lifted
+    # to ``SwnRulesetModule`` (Story 102-6 — shared SWN-family crunch); WWN
+    # inherits ``commit_effort`` / ``reclaim_effort`` / ``reclaim_scene_effort`` /
+    # ``reclaim_day_and_refresh`` / ``activate_discipline`` unchanged. The
+    # slug-namespaced spans read ``wwn.effort.*`` here via ``self.slug``.
     # ------------------------------------------------------------------
-
-    def commit_effort(
-        self,
-        *,
-        core: CreatureCore,
-        source: str,
-        points: int = 1,
-        duration: EffortDuration = "scene",
-        label: str = "",
-        _tracer: trace.Tracer | None = None,
-    ) -> EffortResult:
-        """Commit Effort from one class-source pool (SRD §1.4.4).
-
-        Over-commit is REFUSED (applied=False) — fail loud, never silently clamp.
-        A missing source pool raises ValueError immediately. Emits
-        wwn.effort.commit on every call (applied=True or False).
-        """
-        pool = core.effort.get(source)
-        if pool is None:
-            raise ValueError(f"{core.name!r} has no {source!r} Effort pool; seed it at chargen")
-        applied = points <= pool.available
-        reason = "" if applied else f"only {pool.available} of {points} Effort available"
-        if applied:
-            pool.commitments.append(EffortCommitment(points=points, duration=duration, label=label))
-        wwn_effort_commit_span(
-            actor=core.name,
-            source=source,
-            points=points,
-            duration=duration,
-            available=pool.available,
-            applied=applied,
-            _tracer=_tracer,
-        )
-        return EffortResult(
-            applied=applied,
-            source=source,
-            available=pool.available,
-            max=pool.max,
-            reason=reason,
-        )
-
-    def reclaim_effort(
-        self,
-        *,
-        core: CreatureCore,
-        source: str,
-        trigger: str = "maintained",
-        _tracer: trace.Tracer | None = None,
-    ) -> EffortResult:
-        """Reclaim Effort from one pool by dropping commitments that match
-        ``trigger`` (duration).
-
-        "maintained" Effort is released by an explicit Instant action (SRD
-        §1.4.4). If no matching commitments exist, applied=False and no span
-        is emitted (nothing reclaimed). Emits wwn.effort.reclaim only when
-        points are actually returned.
-        """
-        pool = core.effort.get(source)
-        if pool is None:
-            raise ValueError(f"{core.name!r} has no {source!r} Effort pool; seed it at chargen")
-        matching = [c for c in pool.commitments if c.duration == trigger]
-        returned = sum(c.points for c in matching)
-        if not matching:
-            return EffortResult(
-                applied=False,
-                source=source,
-                available=pool.available,
-                max=pool.max,
-                reason=f"no {trigger!r} commitments to reclaim",
-            )
-        pool.commitments = [c for c in pool.commitments if c.duration != trigger]
-        wwn_effort_reclaim_span(
-            actor=core.name,
-            source=source,
-            points=returned,
-            trigger=trigger,
-            available=pool.available,
-            _tracer=_tracer,
-        )
-        return EffortResult(
-            applied=True,
-            source=source,
-            available=pool.available,
-            max=pool.max,
-        )
-
-    def reclaim_scene_effort(
-        self,
-        *,
-        core: CreatureCore,
-        _tracer: trace.Tracer | None = None,
-    ) -> None:
-        """Drop all ``scene`` commitments across every Effort pool.
-
-        Emits one wwn.effort.reclaim span per pool that had scene commitments.
-        Pools with nothing to reclaim produce no span.
-        """
-        for source, pool in core.effort.items():
-            matching = [c for c in pool.commitments if c.duration == "scene"]
-            returned = sum(c.points for c in matching)
-            if not matching:
-                continue
-            pool.commitments = [c for c in pool.commitments if c.duration != "scene"]
-            wwn_effort_reclaim_span(
-                actor=core.name,
-                source=source,
-                points=returned,
-                trigger="scene",
-                available=pool.available,
-                _tracer=_tracer,
-            )
-
-    def reclaim_day_and_refresh(
-        self,
-        *,
-        core: CreatureCore,
-        comfortable: bool = True,
-        cfg: SwnConfig | None,
-        _tracer: trace.Tracer | None = None,
-    ) -> None:
-        """Drop ``scene`` commitments (always) and ``day`` commitments (when
-        comfortable or when cfg.magic.day_reclaim_requires_comfort is False).
-        Refreshes core.spellcasting.casts_remaining to casts_per_day if
-        spellcasting is seeded.
-
-        Fails loud if cfg is not a WwnConfig — day-rest reclaim is a WWN
-        mechanic that requires the full WWN config.
-        """
-        if not isinstance(cfg, WwnConfig):
-            raise ValueError(
-                f"reclaim_day_and_refresh requires a WwnConfig; got {type(cfg).__name__!r}"
-            )
-        drop_day = comfortable or not cfg.magic.day_reclaim_requires_comfort
-        durations_to_drop = {"scene"}
-        if drop_day:
-            durations_to_drop.add("day")
-
-        for source, pool in core.effort.items():
-            matching = [c for c in pool.commitments if c.duration in durations_to_drop]
-            returned = sum(c.points for c in matching)
-            if not matching:
-                continue
-            pool.commitments = [c for c in pool.commitments if c.duration not in durations_to_drop]
-            # trigger reflects the duration ACTUALLY reclaimed for this pool, not
-            # the intent — the GM panel is the lie detector and must not read
-            # "day" when only scene Effort was swept on a comfortable rest.
-            dropped = {c.duration for c in matching}
-            trigger = "day" if "day" in dropped else "scene"
-            wwn_effort_reclaim_span(
-                actor=core.name,
-                source=source,
-                points=returned,
-                trigger=trigger,
-                available=pool.available,
-                _tracer=_tracer,
-            )
-
-        if core.spellcasting is not None:
-            core.spellcasting.casts_remaining = core.spellcasting.casts_per_day
 
     # ------------------------------------------------------------------
     # Cast spine (WWN SRD §4.2 / spec §C-§D)

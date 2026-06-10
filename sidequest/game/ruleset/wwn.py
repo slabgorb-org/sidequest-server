@@ -600,7 +600,8 @@ class WwnRulesetModule(SwnRulesetModule):
         the damage of any attack/spell/ability (and to Shock). Returns the new
         total; emits wwn.killing_blow.
 
-        Pure math + span — no core mutation, not wired to dispatch (Plan 3).
+        Pure math + span — no core mutation, called by dispatch/dice.py at the
+        killing_blow beat (dice.py:644 normal strike, dice.py:725 chip).
         cfg guard raises on non-WwnConfig, consistent with other methods.
         """
         if not isinstance(cfg, WwnConfig):
@@ -634,7 +635,7 @@ class WwnRulesetModule(SwnRulesetModule):
         fail-loud-but-recorded, consistent with commit_effort).
 
         ``mode`` must be ``"force_hit"`` or ``"force_miss"`` (declared by the
-        caller; dispatch integration is Plan 3).
+        caller; narrator tool contract lives in agents/tools/veterans_luck.py).
         """
         already_used = any(s.text == VETERANS_LUCK_USED_MARKER for s in core.statuses)
         if already_used:

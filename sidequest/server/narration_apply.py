@@ -7099,6 +7099,10 @@ def _resolve_opposed_check_branch(
                         angular=(0.5, 0.5, 0.5),
                         position=(0.5, 0.5),
                     ),
+                    # Follow-on weapon roll — tag it so the UI overlay treats it
+                    # as a damage readout, not the primary check (the request
+                    # from _damage_request_from_spec is already roll_role=damage).
+                    roll_role="damage",
                 )
                 _watcher_publish(
                     "state_transition",

@@ -260,6 +260,32 @@ def test_strike_beat_reduces_opponent_hp(otel_capture):
         "damage DICE_RESULT must have a new request_id distinct from the check roll"
     )
 
+    # (d) Roll-role tagging (playtest 2026-06-10 dice-overlay regression): a hit
+    # broadcasts BOTH a primary check roll and a follow-on damage roll for the
+    # SAME actor. The UI overlay can only render the right one if the wire says
+    # which is which — the check result must be roll_role="check" and the damage
+    # result roll_role="damage". Without this the dice-guard renders the damage
+    # roll's value/tier as the authoritative beat outcome.
+    check_results = [m for m in damage_dice_results if m.payload.request_id == "check-req-1"]
+    damage_results = [m for m in damage_dice_results if m.payload.request_id != "check-req-1"]
+    assert check_results and all(m.payload.roll_role == "check" for m in check_results), (
+        "primary beat/check DICE_RESULT must be roll_role='check'; "
+        f"got {[m.payload.roll_role for m in check_results]}"
+    )
+    assert damage_results and all(m.payload.roll_role == "damage" for m in damage_results), (
+        "follow-on weapon DICE_RESULT must be roll_role='damage'; "
+        f"got {[m.payload.roll_role for m in damage_results]}"
+    )
+    # Same on the DICE_REQUEST side.
+    from sidequest.protocol.messages import DiceRequestMessage
+
+    dice_requests = [m for m in broadcasts if isinstance(m, DiceRequestMessage)]
+    damage_requests = [m for m in dice_requests if m.payload.request_id != "check-req-1"]
+    assert damage_requests and all(m.payload.roll_role == "damage" for m in damage_requests), (
+        "follow-on weapon DICE_REQUEST must be roll_role='damage'; "
+        f"got {[m.payload.roll_role for m in damage_requests]}"
+    )
+
 
 def test_strike_beat_with_no_damage_spec_skips_damage(otel_capture):
     """Strike beat with damage_channel=strike but no damage_override and no equipped weapon.

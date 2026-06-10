@@ -213,6 +213,10 @@ def _compose_result_payload(
         outcome=outcome,
         seed=seed,
         throw_params=throw_params,
+        # Carry the request's role so the damage follow-on result is tagged
+        # "damage" and the primary beat/check result stays "check" — the UI
+        # overlay keys on this to avoid rendering a damage roll as the primary.
+        roll_role=request.roll_role,
     )
 
 

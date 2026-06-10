@@ -51,6 +51,7 @@ from sidequest.game.trope_time_skip import TimeSkipBeatEvent
 from sidequest.game.turn import TurnManager
 from sidequest.genre.models.rules import ResourceDeclaration
 from sidequest.magic.state import MagicState
+from sidequest.mutation.state import MutationState
 from sidequest.orbital.course import PlottedCourse
 from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 
@@ -1036,6 +1037,10 @@ class GameSnapshot(BaseModel):
     # Magic system state (Coyote Star iteration 2). None on saves that
     # predate magic or on worlds without a magic config.
     magic_state: MagicState | None = None
+
+    # AWN mutation state (Plan 2). None on saves that predate mutations or
+    # on packs without a mutations.yaml catalog.
+    mutation_state: MutationState | None = None
 
     # Phase 5 (Story 47-3): outbound magic-confrontation dispatch queue.
     # Populated by ``narration_apply.apply_magic_working`` (one entry per

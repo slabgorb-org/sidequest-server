@@ -3028,7 +3028,7 @@ def test_encounter_invalid_win_condition_raises(tmp_path: Path) -> None:
     _write_encounter_fixture(
         tmp_path,
         "enc_bad_wc",
-        encounter_yaml="encounter:\n  type: combat\n  win_condition: hp_depletion\n",  # typo
+        encounter_yaml="encounter:\n  type: combat\n  win_condition: hp_deletion\n",  # typo
     )
 
     from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture

@@ -267,7 +267,17 @@ def test_hydrated_wwn_fixture_drives_deterministic_strike(otel_capture, monkeypa
         ),
         rolling_player_id="player-mei-lin",
         character_name=_CASTER,
-        character_stats={"STR": 12, "DEX": 12, "CON": 10, "INT": 12, "WIS": 10, "CHA": 10},
+        # elemental_harmony renames the SWN attributes (attribute_map) and the
+        # elemental_burst beat's stat_check is the flavor name "Strength"; a real
+        # character in this pack carries flavor-keyed stats, so the proof must too.
+        character_stats={
+            "Strength": 12,
+            "Agility": 12,
+            "Endurance": 10,
+            "Insight": 12,
+            "Spirit": 10,
+            "Harmony": 10,
+        },
         encounter=enc,
         pack=pack,
         genre_slug=_GENRE,

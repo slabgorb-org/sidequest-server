@@ -33,12 +33,13 @@ from pydantic import ValidationError
 
 from sidequest.game.character import Character, KnownFact
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.encounter import EncounterMetric, StructuredEncounter
+from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.scenario_state import (
     ScenarioRole,
     ScenarioState,
 )
 from sidequest.game.session import GameSnapshot, Npc
+from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.models.scenario import ClueGraph
 from sidequest.magic.state import MagicState
 from sidequest.protocol.models import AbilityDefinition
@@ -309,6 +310,29 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
     max_hp = data.get("max_hp")
     if isinstance(hp, int) and isinstance(max_hp, int):
         core_kwargs["hp"] = {"current": hp, "max": max_hp, "base_max": max_hp}
+
+    # Hydrate WWN spellcasting (story 90-4, epic 90 finding 3). A fixture
+    # ``spellcasting:`` block seeds ``CreatureCore.spellcasting`` so a
+    # deterministic fixture can fire ``wwn.spell.cast`` (the counterpart to
+    # 90-3's live free-play proof). Like known_facts/abilities this is
+    # save-bearing: a malformed shape (non-mapping) or an extra/typo'd key
+    # (SpellcastingState ``extra="forbid"``) fails loud (No Silent Fallbacks)
+    # rather than silently dropping the block. Omitting it leaves
+    # ``core.spellcasting`` at the CreatureCore default (None) — non-casters
+    # are unaffected.
+    spellcasting_raw = data.get("spellcasting")
+    if spellcasting_raw is not None:
+        if not isinstance(spellcasting_raw, dict):
+            raise FixtureValidationError(
+                f"character.spellcasting must be a YAML mapping, "
+                f"got {type(spellcasting_raw).__name__}"
+            )
+        try:
+            core_kwargs["spellcasting"] = SpellcastingState(**spellcasting_raw)
+        except ValidationError as exc:
+            raise FixtureValidationError(
+                f"character.spellcasting validation failed — {exc}"
+            ) from exc
 
     core = CreatureCore(**core_kwargs)
 
@@ -657,9 +681,36 @@ def _hydrate_encounter(raw: Any, *, fixture_name: str) -> StructuredEncounter:
             )
         return override.get("threshold", _DEFAULT_METRIC_THRESHOLD)
 
+    # WWN hp_depletion seeding (story 90-4, epic 90 finding 3). A fixture may
+    # declare ``win_condition`` (default "dial_threshold"), ``category``
+    # (default ""), and an ``actors:`` list so it can stand up a WWN
+    # hp_depletion combat that seats player/opponent actors — the cast/strike
+    # spine resolves its defender via the opposite-side actor, so an
+    # actor-less encounter has no defender. The non-list / non-mapping guards
+    # fail loud directly; closed-Literal rejections (an invalid win_condition
+    # or an invalid actor ``side``) surface through the StructuredEncounter /
+    # EncounterActor constructors and are re-wrapped below.
+    actors_raw = raw.get("actors")
+    if actors_raw is not None and not isinstance(actors_raw, list):
+        raise FixtureValidationError(
+            f"fixture {fixture_name!r}: encounter.actors must be a YAML list, "
+            f"got {type(actors_raw).__name__}"
+        )
+    if isinstance(actors_raw, list):
+        for index, entry in enumerate(actors_raw):
+            if not isinstance(entry, dict):
+                raise FixtureValidationError(
+                    f"fixture {fixture_name!r}: encounter.actors[{index}] must be a "
+                    f"YAML mapping, got {type(entry).__name__}"
+                )
+
     try:
+        actors = [EncounterActor(**entry) for entry in (actors_raw or [])]
         return StructuredEncounter(
             encounter_type=encounter_type,
+            win_condition=raw.get("win_condition", "dial_threshold"),
+            category=raw.get("category", ""),
+            actors=actors,
             player_metric=EncounterMetric(
                 name="player",
                 current=0,

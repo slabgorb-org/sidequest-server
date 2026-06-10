@@ -329,7 +329,11 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
             )
         try:
             core_kwargs["spellcasting"] = SpellcastingState(**spellcasting_raw)
-        except ValidationError as exc:
+        except (ValidationError, TypeError) as exc:
+            # TypeError covers a non-string YAML key (``1: foo`` -> the
+            # ``**spellcasting_raw`` splat raises "keywords must be strings") —
+            # re-wrap so the boundary returns FixtureValidationError (HTTP 422),
+            # never a raw TypeError (HTTP 500). (90-7 fast-follow.)
             raise FixtureValidationError(
                 f"character.spellcasting validation failed — {exc}"
             ) from exc
@@ -360,7 +364,11 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
             pool_kwargs = {k: v for k, v in pool_raw.items() if k != "source"}
             try:
                 effort[str(source)] = EffortPool(source=str(source), **pool_kwargs)
-            except ValidationError as exc:
+            except (ValidationError, TypeError) as exc:
+                # TypeError covers a non-string YAML key under the pool (``1:
+                # foo`` -> the ``**pool_kwargs`` splat raises "keywords must be
+                # strings") — re-wrap as FixtureValidationError (HTTP 422), never
+                # a raw TypeError (HTTP 500). (90-7 fast-follow.)
                 raise FixtureValidationError(
                     f"character.effort[{source!r}] validation failed — {exc}"
                 ) from exc

@@ -3468,6 +3468,56 @@ def test_effort_pool_extra_field_rejected(tmp_path: Path) -> None:
         hydrate_fixture(name="effort_extra", fixtures_dir=tmp_path)
 
 
+# ── 90-7 fast-follow: non-string YAML key must fail loud, not leak TypeError ─
+
+
+def test_effort_pool_non_string_key_raises(tmp_path: Path) -> None:
+    """A non-string YAML key under a pool (YAML permits int/bool keys:
+    ``high_mage:\\n  1: foo`` -> ``{1: 'foo'}``) must fail loud as
+    FixtureValidationError, NOT leak a raw ``TypeError: keywords must be
+    strings`` from the ``EffortPool(**pool_kwargs)`` splat. ADR-092 "Failure is
+    loud" wants HTTP 422 at the module boundary, not an opaque 500.
+
+    RED driver (pre-fix): the ``except ValidationError`` around the splat does
+    not catch TypeError, so the raw TypeError escapes hydrate_fixture's wrap.
+    """
+    _write_magic_fixture(
+        tmp_path,
+        "effort_nonstr_key",
+        extra_character_yaml="  effort:\n    high_mage:\n      max: 3\n      1: foo\n",
+    )
+
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="effort_nonstr_key", fixtures_dir=tmp_path)
+
+
+def test_spellcasting_non_string_key_raises(tmp_path: Path) -> None:
+    """The same loud-fail contract for the sibling spellcasting branch — a
+    non-string key under ``spellcasting:`` must raise FixtureValidationError,
+    not a raw TypeError. (Pre-existing gap from #787's 90-4; closed here
+    alongside the effort branch's identical splat.)
+    """
+    _write_magic_fixture(
+        tmp_path,
+        "sc_nonstr_key",
+        extra_character_yaml=(
+            "  spellcasting:\n"
+            "    prepared: []\n"
+            "    casts_remaining: 1\n"
+            "    casts_per_day: 1\n"
+            "    max_spell_level: 1\n"
+            "    1: foo\n"
+        ),
+    )
+
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="sc_nonstr_key", fixtures_dir=tmp_path)
+
+
 # ── AC-6: wwn.magic_hydrated OTEL span (GM-panel lie-detector / wiring test) ─
 
 
@@ -3556,3 +3606,63 @@ def test_non_caster_emits_no_wwn_magic_hydrated_span(
         f"a non-caster fixture must not emit wwn.magic_hydrated; got "
         f"{_wwn_hydrated_events(captured)!r}"
     )
+
+
+# ── 90-7 fast-follow: committed on-disk WWN fixture exercises the effort block ─
+
+
+def test_canonical_wwn_fixture_hydrates_effort_spellcasting_and_hp_depletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wiring test: the committed ``combat_wwn_emberfront.yaml`` fixture in
+    CANONICAL_FIXTURES_DIR hydrates all three WWN halves end-to-end —
+    source-keyed Effort, prepared spellcasting, and an hp_depletion combat with
+    seated actors — and emits the ``wwn.magic_hydrated`` lie-detector span.
+
+    Closes the 90-7 delivery-finding gap: before this, the effort: block was
+    covered only by tmp_path unit fixtures, with no on-disk artifact a real
+    POST /dev/scene/{name} run (or 90-3's live proof) could load. This test
+    drives the same CANONICAL_FIXTURES_DIR path the harness endpoint uses, so a
+    schema drift in the committed fixture fails here, not silently in a playtest.
+    """
+    captured = _capture_wwn_events(monkeypatch)
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    snapshot = hydrate_fixture(
+        name="combat_wwn_emberfront", fixtures_dir=CANONICAL_FIXTURES_DIR
+    )
+
+    core = snapshot.characters[0].core
+    # Effort: source-keyed by "channeler" (the real elemental_harmony Channeler source).
+    assert core.effort.get("channeler") is not None, (
+        f"fixture must seed core.effort['channeler']; got {sorted(core.effort)!r}"
+    )
+    assert core.effort["channeler"].source == "channeler"
+    assert core.effort["channeler"].max == 2, (
+        f"effort pool max must hydrate from the fixture; got {core.effort['channeler'].max}"
+    )
+    # Spellcasting: prepared verbatim so the cast can fire with no rest beat.
+    assert core.spellcasting is not None, "fixture must seed core.spellcasting"
+    assert core.spellcasting.prepared == ["cinder_lance"], (
+        f"prepared spell must round-trip; got {core.spellcasting.prepared!r}"
+    )
+    assert core.spellcasting.casts_remaining == 2
+    # Encounter: hp_depletion with both actors seated for the cast/strike spine.
+    enc = snapshot.encounter
+    assert enc is not None and enc.win_condition == "hp_depletion", (
+        f"fixture must stand up an hp_depletion combat; got "
+        f"{enc.win_condition if enc else None!r}"
+    )
+    assert {a.side for a in enc.actors} == {"player", "opponent"}, (
+        f"both sides must seat for the cast defender lookup; got {[a.side for a in enc.actors]!r}"
+    )
+    # Lie-detector span fired for the seeded crunch.
+    events = _wwn_hydrated_events(captured)
+    assert len(events) == 1, (
+        f"the WWN fixture must emit one wwn.magic_hydrated event; got {len(events)}"
+    )
+    _event_type, fields, _meta = events[0]
+    assert fields["effort_sources"] == ["channeler"], (
+        f"span must report the seeded effort source; got {fields.get('effort_sources')!r}"
+    )
+    assert fields["has_spellcasting"] is True

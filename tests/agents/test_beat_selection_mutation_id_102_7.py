@@ -47,7 +47,7 @@ def test_from_dict_parses_mutation_id() -> None:
         {
             "actor": "Rux",
             "beat_id": "mutant_ability",
-            "outcome": "success",
+            "outcome": "Success",
             "mutation_id": "exotic/acid_spit",
         }
     )
@@ -57,7 +57,7 @@ def test_from_dict_parses_mutation_id() -> None:
 def test_from_dict_tolerates_absent_mutation_id() -> None:
     """Legacy narrator payloads (no mutation_id key) must keep parsing —
     regression guard for every non-AWN genre."""
-    sel = BeatSelection.from_dict({"actor": "Rux", "beat_id": "shoot", "outcome": "success"})
+    sel = BeatSelection.from_dict({"actor": "Rux", "beat_id": "shoot", "outcome": "Success"})
     assert sel.mutation_id is None
 
 
@@ -67,7 +67,7 @@ def test_from_dict_spell_id_unaffected() -> None:
         {
             "actor": "Vesska",
             "beat_id": "cast_spell",
-            "outcome": "success",
+            "outcome": "Success",
             "spell_id": "foundation_of_flame",
         }
     )

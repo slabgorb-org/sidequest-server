@@ -132,6 +132,16 @@ def test_heavy_metal_reprisal_kill_emits_wwn_mortal_injury_for_pc(otel_capture, 
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc
+    # Story 102-4: the WN sealed round resolves in the PERSISTED initiative
+    # order, and the seam's real 1d8+DEX roll is unseeded — pin the order this
+    # test's choreography assumes (the PC swings, the opponent's answer kills)
+    # so the dying PC is never randomly downed before their own slot.
+    from sidequest.protocol.models import InitiativeEntry
+
+    enc.initiative = [
+        InitiativeEntry(token_id=PLAYER, value=9),
+        InitiativeEntry(token_id=OPPONENT, value=2),
+    ]
 
     monkeypatch.setattr(
         "sidequest.server.dispatch.dice.random.randint", _reprisal_hits_all_else_min

@@ -822,6 +822,15 @@ class ConfrontationPayload(ProtocolBase):
     # extra="forbid". Shape when non-None: {"casts_remaining": int,
     # "casts_per_day": int, "prepared": list[str]} (prepared spell IDs).
     spellcasting: dict[str, Any] | None = None
+    # Story 102-4: the WN sealed-round commit ledger — player-side actor names
+    # whose Main Action is sealed this round. Drives the overlay's
+    # committed-vs-waiting indicators (ADR-036 submit-and-wait visibility).
+    # Additive-conditional: the key is set by build_confrontation_payload only
+    # while a WN round has sealed commits, so native/dial frames and
+    # between-round WN frames keep the legacy shape. Declared because the
+    # model is extra="forbid" — an undeclared key would crash the mid-turn
+    # CONFRONTATION emit on the first sealed MP commit.
+    committed_actors: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------

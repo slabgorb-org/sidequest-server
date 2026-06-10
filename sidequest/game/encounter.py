@@ -126,6 +126,28 @@ class EncounterActor(BaseModel):
     per_actor_state: dict[str, Any] = Field(default_factory=dict)
 
 
+class WnSealedCommit(BaseModel):
+    """One sealed Main Action in a WN round (story 102-4).
+
+    The WN turn model is blind commitment, initiative-ordered resolution:
+    a player's DICE_THROW resolves its to-hit at commit time but the beat
+    does NOT apply until every seated player-side participant has committed
+    and the round walk reaches the actor's initiative slot. ``outcome``
+    carries the commit-time RollOutcome value (string form — the enum lives
+    in the protocol layer); ``target`` pins the premise (the opponent the
+    action was aimed at) so the walk can detect a dead premise without
+    auto-retargeting (SOUL: The Test).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    actor: str
+    beat_id: str
+    outcome: str
+    target: str | None = None
+    spell_id: str | None = None
+
+
 class EncounterMetric(BaseModel):
     """Ascending dial. ``current`` advances toward ``threshold``; the side
     that reaches ``threshold`` first triggers resolution.
@@ -177,6 +199,11 @@ class StructuredEncounter(BaseModel):
     initiative: list[InitiativeEntry] = Field(default_factory=list)
     """SWN P4: 1d8+DEX resolution order, rolled once at instantiation. Empty for
     rulesets with no ordering (native) and non-combat encounters."""
+    wn_commits: list[WnSealedCommit] = Field(default_factory=list)
+    """Story 102-4: the WN sealed-commit ledger for the CURRENT round. Player-side
+    Main Actions seal here until every live seated participant has committed; the
+    round walk consumes and clears it. Always empty for native/dial encounters and
+    between WN rounds."""
     tags: list[EncounterTag] = Field(default_factory=list)
     outcome: str | None = None
     resolved: bool = False

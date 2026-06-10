@@ -670,10 +670,6 @@ class CharGenMixin:
 
         # Late-bound function import (story 91-1 monkeypatch doctrine): the
         # tests fake the SDK construction site underneath this call.
-        from sidequest.agents.anthropic_sdk_client import (
-            AnthropicSdkCostCeilingExceeded,
-        )
-        from sidequest.agents.claude_client import LlmClientError
         from sidequest.agents.llm_factory import infer_archetype_from_freeform
 
         try:
@@ -684,10 +680,17 @@ class CharGenMixin:
                 existing_hints=existing_hints,
                 session_id=session_id,
             )
-        except (LlmClientError, AnthropicSdkCostCeilingExceeded) as exc:
-            # python.md rule 4: error path logs to the structured server log
-            # surface. The gate will block downstream; the caller words the
-            # error as an inference failure.
+        except Exception as exc:  # noqa: BLE001 — see rationale below
+            # Review rework [HIGH]: the real SDK raises ``anthropic.*``
+            # exceptions (transport blips, 429/529, context-length 400s)
+            # that are NOT in our LlmClientError family, and a response-
+            # shape change can raise TypeError. ANY failure at this seam
+            # must degrade to the loud inference-failed chargen block —
+            # letting it propagate reaches websocket.py's outer catch,
+            # which sends a generic "Server error" and tears the player's
+            # WS session down mid-chargen. This is explicit handling, not
+            # swallowing (python.md #1/#4): the failure is logged WARNING
+            # here and the 45-6 gate blocks loudly downstream.
             logger.warning(
                 "chargen.archetype_inference_failed player_id=%s session_id=%s error=%s",
                 player_id,

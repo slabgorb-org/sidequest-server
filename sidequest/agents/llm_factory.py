@@ -672,6 +672,13 @@ def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm | _Ol
 
 _ARCHETYPE_INFERENCE_MODEL = _INTENT_ROUTER_MODEL
 _ARCHETYPE_INFERENCE_TOOL_NAME = "infer_archetype_axes"
+# Review rework (python.md #11): the joined freeform fodder is player-
+# authored and otherwise unbounded (the WS frame cap is ~16MB). Bound it
+# before the SDK call so a hostile/verbose player can neither grind
+# per-call cost nor draw a context-length 400. 4,000 chars (~1k tokens)
+# comfortably holds several paragraphs of backstory — the archetype
+# signal is in the first paragraphs, not the fortieth.
+_ARCHETYPE_INFERENCE_MAX_FODDER_CHARS = 4_000
 _ARCHETYPE_INFERENCE_SYSTEM = (
     "You infer a tabletop RPG character's archetype axes from the player's "
     "own freeform character-creation answers. Read the answers, then call "
@@ -740,6 +747,16 @@ async def infer_archetype_from_freeform(
             session_id,
         )
         return None
+    if len(freeform_text) > _ARCHETYPE_INFERENCE_MAX_FODDER_CHARS:
+        # Review rework (python.md #11): bound player-authored input before
+        # the API call. Loud, not silent — the player's words were cut.
+        logger.warning(
+            "chargen.archetype_inference fodder truncated from %d to %d chars session_id=%s",
+            len(freeform_text),
+            _ARCHETYPE_INFERENCE_MAX_FODDER_CHARS,
+            session_id,
+        )
+        freeform_text = freeform_text[:_ARCHETYPE_INFERENCE_MAX_FODDER_CHARS]
 
     ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
     if session_id is not None:
@@ -765,10 +782,14 @@ async def infer_archetype_from_freeform(
     if constraints.valid_pairings.common:
         common = ", ".join(f"{j}/{r}" for j, r in constraints.valid_pairings.common)
         constraint_lines = f"\n\nCommon pairings in this genre (prefer one of these): {common}"
+    # ADR-047 defense-in-depth: the player's words ride inside a structural
+    # delimiter so instruction-shaped text in their answers reads as quoted
+    # material. The forced tool_choice + enum validation remain the actual
+    # security boundary; this just hardens the prompt shape.
     user = (
         f"Missing axes to infer: {missing_axis_names}\n\n"
         "Player's character-creation answers (their own words):\n"
-        f"{freeform_text}"
+        f"<player_answers>\n{freeform_text}\n</player_answers>"
         f"{constraint_lines}"
     )
 

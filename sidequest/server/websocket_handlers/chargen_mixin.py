@@ -902,10 +902,10 @@ class CharGenMixin:
             )
             init_mutation_state_for_session(
                 sd.snapshot,
-                catalog=sd.genre_pack.mutations if sd.genre_pack is not None else None,
+                catalog=sd.genre_pack.mutations,
                 character_name=character.core.name,
                 character_class=character.char_class,
-                session_id=sd.repository.session_id,
+                session_id=str(sd.repository.session_id),
             )
 
             init_chassis_registry(sd.snapshot, sd.genre_pack)
@@ -1131,10 +1131,10 @@ class CharGenMixin:
             )
             init_mutation_state_for_session(
                 sd.snapshot,
-                catalog=sd.genre_pack.mutations if sd.genre_pack is not None else None,
+                catalog=sd.genre_pack.mutations,
                 character_name=character.core.name,
                 character_class=character.char_class,
-                session_id=sd.repository.session_id,
+                session_id=str(sd.repository.session_id),
             )
             # Re-bind active_scenario on this socket from whatever the
             # peer wrote — its presence on sd.active_scenario is what

@@ -87,15 +87,15 @@ class StabilizeMortalInjuryArgs(BaseModel):
 @tool(
     name="stabilize_mortal_injury",
     description=(
-        "Resolve a CWN stabilization attempt against a character's Mortal Injury. "
-        "CWN-only tool — raises if the loaded pack is not ruleset 'cwn'. A Heal "
-        "check (Dex/Heal or Int/Heal) vs difficulty 8 + rounds_elapsed. On success "
+        "Resolve a CWN-family stabilization attempt against a character's Mortal Injury. "
+        "CWN-family only (cwn/awn) — raises if the loaded pack's ruleset is not cwn or awn. "
+        "A Heal check (Dex/Heal or Int/Heal) vs difficulty 8 + rounds_elapsed. On success "
         "the Mortal Injury clears and the character downgrades to a 'Frail' Wound "
         "(recovers at 1 HP); on failure the Mortal Injury stays and the death timer "
         "keeps running."
     ),
     category=ToolCategory.WRITE,
-    ruleset="cwn",
+    ruleset=("cwn", "awn"),
 )
 async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

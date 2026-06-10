@@ -392,6 +392,16 @@ class NpcMention:
     # Keeper Goldbraid of the Emerald City"). Defaults False so every existing
     # mention stays a person, fully backward-compatible.
     is_creature: bool = False
+    # sq-playtest 2026-06-10 (long_foundry zombie negotiation): the narrator
+    # marks a seated opponent that has LEFT the confrontation (walked away from a
+    # negotiation, fled a parley). ADR-116 §4 end-on-no-Other needs a grounded
+    # signal for the SOCIAL path — ``opponents_disposition`` is morale-only and
+    # nothing else flips a social opponent's ``withdrawn``. When true on a
+    # ``side="opponent"`` mention, the engine withdraws the matching opponent
+    # actor so the end-on-no-Other sweep resolves the encounter instead of
+    # trapping the player. Defaults False (No Silent Fallbacks — absence is never
+    # read as departure).
+    disengaged: bool = False
 
     @classmethod
     def from_value(cls, value: Any) -> NpcMention:
@@ -419,6 +429,7 @@ class NpcMention:
                 side=side,
                 is_new=bool(value.get("is_new", False)),
                 is_creature=bool(value.get("is_creature", False)),
+                disengaged=bool(value.get("disengaged", False)),
             )
         return cls(name=str(value), side="neutral")
 

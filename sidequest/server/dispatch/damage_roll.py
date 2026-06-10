@@ -109,6 +109,7 @@ def damage_request_from_spec(
         stat=_DAMAGE_STAT,
         difficulty=1,  # damage rolls have no DC
         context=context,
+        roll_role="damage",  # follow-on weapon roll — never the primary overlay
     )
 
 

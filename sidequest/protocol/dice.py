@@ -18,7 +18,7 @@ this shape via sidequest-ui/src/types/payloads.ts.
 from __future__ import annotations
 
 from enum import Enum, IntEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -149,6 +149,15 @@ class DiceRequestPayload(ProtocolBase):
     stat: Stat
     difficulty: int = Field(ge=1)
     context: str = ""
+    # Which roll in a multi-roll beat turn this is. ``check`` (default) is the
+    # PRIMARY roll the player committed — the beat/skill check whose value+tier
+    # the overlay must render as authoritative. ``damage`` is the strike's
+    # follow-on weapon-damage roll (ADR-114 §2) broadcast so the weapon dice
+    # animate; it must NOT replace the primary overlay's value/tier. A hit emits
+    # both for the SAME actor (story-91-2 dice-guard predates that and rendered
+    # the wrong one — playtest 2026-06-10). Default keeps every existing single-
+    # roll path on ``check``.
+    roll_role: Literal["check", "damage"] = "check"
 
     @model_validator(mode="after")
     def _require_non_empty_pool(self) -> DiceRequestPayload:
@@ -201,6 +210,10 @@ class DiceResultPayload(ProtocolBase):
     outcome: RollOutcome
     seed: int
     throw_params: ThrowParams
+    # See DiceRequestPayload.roll_role. ``damage`` results carry the weapon
+    # damage total + faces (for the animation) but must not overwrite the
+    # primary ``check`` overlay's value/tier.
+    roll_role: Literal["check", "damage"] = "check"
 
     @model_validator(mode="after")
     def _require_face_count_matches_pool(self) -> DiceResultPayload:

@@ -260,26 +260,29 @@ def _inject_hints(
 
     monkeypatch.setattr(CharacterBuilder, "accumulated", fake)
 
+
 def _disable_archetype_inference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Stub infer_archetype_from_freeform to return None (inference failed).
-    
+
     Story 93-1: the inference seam was added to catch all-freeform chargen.
     The pumblestone BLOCKED_PARTIAL tests exercise the path where no hints
     are available (via _inject_hints) but freeform answers exist. To test
     that the gate still blocks when inference is unavailable or fails, stub
     the inference to return None (out-of-enum / rejection path).
     """
+
     async def fake(*args, **kwargs):
         # Return None: signals that inference failed or returned
         # an out-of-enum value (caller treats this as "gate blocks").
         return None
-    
+
     monkeypatch.setattr(
         "sidequest.agents.llm_factory.infer_archetype_from_freeform",
         fake,
     )
+
 
 # ---------------------------------------------------------------------------
 # AC1 — OK_RESOLVED: axes-set pack + valid hints succeed

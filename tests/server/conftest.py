@@ -498,6 +498,42 @@ def _stub_intent_router_factory(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_anthropic_sdk(monkeypatch):
+    """Autouse guard (Story 93-1): forbid REAL ``AsyncAnthropic`` construction.
+
+    Third leg of the hermeticity tripod alongside ``_mock_claude_client``
+    (narrator) and ``_stub_intent_router_factory`` (router): story 93-1
+    wired a Haiku call (``infer_archetype_from_freeform``) into the chargen
+    confirm seam, which made ``build_async_anthropic`` reachable from
+    ordinary WS-driven tests. On a developer machine with a live
+    ``ANTHROPIC_API_KEY`` in the environment, four pumblestone gate tests
+    were discovered making REAL billed API calls — and passing/failing on
+    the live model's output. Server tests must be hermetic: any test that
+    reaches the single SDK construction site without installing a fake
+    fails loudly here instead of silently spending money.
+
+    Tests that need the SDK install their own fake AFTER this guard
+    (monkeypatch LIFO shadowing, same doctrine as the two guards above) —
+    see ``test_93_1_archetype_inference.py::_fake_inference_sdk``.
+    """
+    from sidequest.agents.claude_client import LlmClientError
+
+    def _refuse() -> object:
+        raise LlmClientError(
+            "Test attempted to construct the REAL Anthropic SDK via "
+            "build_async_anthropic() — server tests must be hermetic "
+            "(with a developer ANTHROPIC_API_KEY this silently bills a "
+            "live API call). Install a fake: monkeypatch.setattr("
+            "llm_factory, 'build_async_anthropic', lambda: fake_sdk)."
+        )
+
+    monkeypatch.setattr(
+        "sidequest.agents.llm_factory.build_async_anthropic",
+        _refuse,
+    )
+
+
 def canned_claude_response(
     *,
     text: str | None = None,

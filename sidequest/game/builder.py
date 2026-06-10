@@ -1864,6 +1864,10 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=None,
                 freeform_class_label=freeform_class_label,
+                # Story 93-1: stamp the source scene so freeform_answer_texts()
+                # can exclude the name-entry scene from the archetype-inference
+                # fodder without re-deriving result→scene alignment.
+                scene_id=scene.id,
             )
         )
 
@@ -1894,6 +1898,32 @@ class CharacterBuilder:
             )
         else:
             self._advance_scene(scene_index)
+
+    def freeform_answer_texts(self) -> list[str]:
+        """The player's freeform scene answers — archetype-inference fodder.
+
+        Story 93-1: when the archetype gate would block with
+        ``missing_axes_with_pack_axes``, the confirm seam infers the missing
+        axes from these texts. Name-entry scene answers are EXCLUDED: every
+        player types a name (preset-only players included), so counting the
+        name would make the no-freeform fail-loud path unreachable and spend
+        a Haiku call on text with no archetype signal.
+
+        Derived from ``_results`` (revert-safe — a popped result drops its
+        text) using the ``scene_id`` stamped by ``apply_freeform``. Results
+        from other input paths that left ``scene_id`` as ``None`` are
+        included: only a positively-identified name scene is excluded.
+        """
+        name_scene_ids = {
+            self._scenes[i].id for i in range(len(self._scenes)) if self._is_name_scene(i)
+        }
+        return [
+            result.input_type.text
+            for result in self._results
+            if isinstance(result.input_type, FreeformInput)
+            and result.input_type.text.strip()
+            and (result.scene_id is None or result.scene_id not in name_scene_ids)
+        ]
 
     def _is_name_scene(self, scene_index: int) -> bool:
         """True when ``scene_index`` is the name-entry scene: the terminal

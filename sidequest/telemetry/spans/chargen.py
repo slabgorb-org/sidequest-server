@@ -56,6 +56,34 @@ SPAN_ROUTES[SPAN_CHARGEN_ARCHETYPE_GATE_EVALUATED] = SpanRoute(
         "player_id": (span.attributes or {}).get("player_id", ""),
     },
 )
+# Story 93-1: Haiku archetype inference for all-freeform chargen.
+#
+# When the archetype gate would block with ``missing_axes_with_pack_axes``
+# AND the player answered hint-bearing scenes via freeform text, a single
+# Haiku call infers the missing axis value(s) constrained to the pack's
+# valid ids. This span fires ONLY on a successful inference and is the
+# lie-detector entry that distinguishes "the engine inferred this pair
+# from the player's words" from "preset scenes accumulated it" — without
+# it the GM panel cannot tell which path produced the archetype.
+SPAN_CHARGEN_ARCHETYPE_INFERRED = "chargen.archetype_inferred"
+SPAN_ROUTES[SPAN_CHARGEN_ARCHETYPE_INFERRED] = SpanRoute(
+    event_type="state_transition",
+    component="character_creation",
+    extract=lambda span: {
+        "field": "archetype_inference",
+        "op": "inferred",
+        # Which axes the inference actually supplied (never a preset-set
+        # axis — the inference fills only missing ones).
+        "inferred_axes": (span.attributes or {}).get("inferred_axes", ""),
+        "jungian_hint": (span.attributes or {}).get("jungian_hint", ""),
+        "rpg_role_hint": (span.attributes or {}).get("rpg_role_hint", ""),
+        "source": (span.attributes or {}).get("source", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
+
 SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED = "chargen.archetype_gate_blocked"
 SPAN_ROUTES[SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED] = SpanRoute(
     event_type="state_transition",

@@ -41,6 +41,9 @@ from sidequest.telemetry.spans.llm_request import llm_request_span
 if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
 
+    from sidequest.genre.models.archetype_axes import BaseArchetypes
+    from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
+
 logger = logging.getLogger(__name__)
 
 # Canonical Anthropic beta opt-in for ttl:"1h" ephemeral cache lives in
@@ -661,3 +664,181 @@ def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm | _Ol
             "test_intent_router_prefix_token_floor_live (count_tokens)."
         )
     return _IntentRouterLlm(session_id=session_id)
+
+
+# ---------------------------------------------------------------------------
+# Chargen archetype inference (Story 93-1)
+# ---------------------------------------------------------------------------
+
+_ARCHETYPE_INFERENCE_MODEL = _INTENT_ROUTER_MODEL
+_ARCHETYPE_INFERENCE_TOOL_NAME = "infer_archetype_axes"
+_ARCHETYPE_INFERENCE_SYSTEM = (
+    "You infer a tabletop RPG character's archetype axes from the player's "
+    "own freeform character-creation answers. Read the answers, then call "
+    "the tool with the requested missing axis value(s). Pick the value that "
+    "best fits the character the player described. You MUST pick values "
+    "from the allowed lists only — never invent a value. Omit an axis "
+    "entirely if the text gives you no basis to infer it."
+)
+
+
+async def infer_archetype_from_freeform(
+    *,
+    freeform_text: str,
+    base: BaseArchetypes,
+    constraints: ArchetypeConstraints,
+    existing_hints: dict[str, str | None],
+    session_id: str | None,
+) -> dict[str, str] | None:
+    """Infer missing archetype axis value(s) from freeform chargen answers.
+
+    Story 93-1 ([BAR-1]): the all-freeform chargen path accumulates zero
+    ``jungian_hint``/``rpg_role_hint``, so axis-bearing packs dead-end at the
+    45-6 gate. This single-shot Haiku call (intent-router ``emit_tool``
+    pattern, ADR-102/ADR-113) reads the player's accumulated freeform text
+    and fills ONLY the missing axes, constrained to the pack's valid ids
+    (``base.jungian[*].id`` / ``base.rpg_roles[*].id``).
+
+    Returns:
+        - ``dict`` containing ONLY newly-inferred axes (never echoes or
+          overrides an existing hint),
+        - ``{}`` when nothing is missing or Haiku declined every missing
+          axis (caller keeps the existing fail-loud block),
+        - ``None`` when the freeform text is empty/whitespace (nothing to
+          infer from — no SDK spend) or Haiku returned an out-of-enum value
+          (the WHOLE inference is invalid: no coercion, no partial accept,
+          no pack-default fallback — No Silent Fallbacks).
+
+    Cost (ADR-134): pre-flight ``check_ceiling`` refuses a killed session
+    before a single token is billed; the call records to the session ledger
+    via ``record_call`` under caller ``archetype_inference``. The SDK comes
+    from :func:`build_async_anthropic` (story 91-1 single construction
+    site, late-bound through module globals so the test fake is what this
+    function receives).
+
+    The bare-string ``system`` is deliberate: this fires at most once per
+    chargen, and the prefix is far below Haiku's cacheable floor — a
+    ``cache_control`` marker here would be accepted and silently never
+    cache (the epic-91 trap).
+    """
+    valid_jungian = [j.id for j in base.jungian]
+    valid_roles = [r.id for r in base.rpg_roles]
+    axis_enums: dict[str, list[str]] = {
+        "jungian_hint": valid_jungian,
+        "rpg_role_hint": valid_roles,
+    }
+    missing = [
+        (axis, enum)
+        for axis, enum in axis_enums.items()
+        if existing_hints.get(axis) is None and enum
+    ]
+    if not missing:
+        return {}
+    if not freeform_text.strip():
+        logger.info(
+            "chargen.archetype_inference skipped reason=empty_freeform session_id=%s",
+            session_id,
+        )
+        return None
+
+    ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
+    if session_id is not None:
+        # Pre-flight terminal refusal (ADR-134): a session killed by ANY
+        # call site must not bill another inference token.
+        cost_safety.ledger().check_ceiling(session_id, ceiling_usd=ceiling_usd)
+
+    missing_axis_names = [axis for axis, _ in missing]
+    tool_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            axis: {
+                "type": "string",
+                "enum": enum,
+                "description": f"The inferred {axis} — one of the allowed values.",
+            }
+            for axis, enum in missing
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
+    constraint_lines = ""
+    if constraints.valid_pairings.common:
+        common = ", ".join(f"{j}/{r}" for j, r in constraints.valid_pairings.common)
+        constraint_lines = f"\n\nCommon pairings in this genre (prefer one of these): {common}"
+    user = (
+        f"Missing axes to infer: {missing_axis_names}\n\n"
+        "Player's character-creation answers (their own words):\n"
+        f"{freeform_text}"
+        f"{constraint_lines}"
+    )
+
+    # Late-bound through module globals (story 91-1 monkeypatch doctrine).
+    sdk = build_async_anthropic()
+    with llm_request_span(model=_ARCHETYPE_INFERENCE_MODEL) as span:
+        resp = await sdk.messages.create(
+            model=_ARCHETYPE_INFERENCE_MODEL,
+            system=_ARCHETYPE_INFERENCE_SYSTEM,
+            messages=[{"role": "user", "content": user}],
+            tools=[
+                {
+                    "name": _ARCHETYPE_INFERENCE_TOOL_NAME,
+                    "description": (
+                        "Report the inferred archetype axis value(s). Omit any "
+                        "axis you cannot infer from the player's answers."
+                    ),
+                    "input_schema": tool_schema,
+                }
+            ],
+            tool_choice={"type": "tool", "name": _ARCHETYPE_INFERENCE_TOOL_NAME},
+            max_tokens=256,
+        )
+        usage = _record_usage_telemetry(
+            span,
+            resp,
+            caller="archetype_inference",
+            request_model=_ARCHETYPE_INFERENCE_MODEL,
+        )
+    if session_id is not None:
+        cost_safety.ledger().record_call(
+            session_id=session_id,
+            caller="archetype_inference",
+            model=usage.model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=usage.cost_usd,
+            ceiling_usd=ceiling_usd,
+        )
+
+    parsed: dict[str, Any] | None = None
+    for block in resp.content:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and block.name == _ARCHETYPE_INFERENCE_TOOL_NAME
+        ):
+            parsed = dict(block.input)
+            break
+    if parsed is None:
+        block_types = [getattr(b, "type", "?") for b in resp.content]
+        raise LlmClientError(
+            f"archetype inference returned no tool_use block "
+            f"(stop_reason={getattr(resp, 'stop_reason', None)!r}, blocks={block_types})"
+        )
+
+    inferred: dict[str, str] = {}
+    for axis, enum in missing:
+        value = parsed.get(axis)
+        if value is None:
+            continue
+        if value not in enum:
+            # Out-of-enum invalidates the WHOLE inference — no coercion,
+            # no partial accept (No Silent Fallbacks).
+            logger.warning(
+                "chargen.archetype_inference_invalid axis=%s value=%r "
+                "session_id=%s — out-of-enum, rejecting inference",
+                axis,
+                value,
+                session_id,
+            )
+            return None
+        inferred[axis] = str(value)
+    return inferred

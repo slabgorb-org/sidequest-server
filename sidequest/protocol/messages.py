@@ -812,6 +812,16 @@ class ConfrontationPayload(ProtocolBase):
     # additive-conditional like the hp keys. Declared because the model is
     # extra="forbid".
     stakes: str | None = None
+    # Story 102-2: WWN spellcasting state for the recipient (caster economy:
+    # prepared spells, casts_remaining, casts_per_day). The overlay's "Work a
+    # Spell" picker needs this to render the prepared-spell list and show
+    # casts_remaining (player-visible math per Sebastien/Jade legibility goal).
+    # ``None`` for non-casters / B/X packs — never a fabricated empty economy.
+    # ALWAYS present on the wire (like ``stakes``), so the UI gates the picker
+    # on the value, not on key presence. Declared because the model is
+    # extra="forbid". Shape when non-None: {"casts_remaining": int,
+    # "casts_per_day": int, "prepared": list[str]} (prepared spell IDs).
+    spellcasting: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

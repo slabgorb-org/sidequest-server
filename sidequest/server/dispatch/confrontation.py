@@ -193,6 +193,13 @@ def build_confrontation_payload(
     else:
         mood = ""
 
+    # Story 102-2: hoisted above the recipient branch so the payload's
+    # ``spellcasting`` projection (below) sees the derived value. Explicit
+    # ``spellcasting`` wins; the recipient branch refines it from the
+    # recipient core when None. Non-recipient callers keep whatever was
+    # passed (None for every legacy/bootstrap path).
+    effective_spellcasting = spellcasting
+
     if recipient_pc is not None:
         # Local imports keep the legacy (recipient_pc=None) call path
         # free of telemetry / filter imports — important for the
@@ -213,7 +220,6 @@ def build_confrontation_payload(
         # ``core_resolver``. A B/X core has ``spellcasting is None``, so the
         # derived value is None and the B/X arm runs unchanged (no-op) — the
         # WWN/B/X behavior split lives entirely in beat_filter.
-        effective_spellcasting = spellcasting
         if effective_spellcasting is None and core_resolver is not None and recipient_actor_name:
             recipient_core = core_resolver(recipient_actor_name)
             if recipient_core is not None:
@@ -286,6 +292,21 @@ def build_confrontation_payload(
         "mood": mood,
         "active": not encounter.resolved,
         "stakes": stakes_value,
+        # Story 102-2: project the recipient's WWN cast economy so the
+        # overlay's "Work a Spell" picker can list prepared spells and show
+        # casts_remaining (player-visible math — the Sebastien/Jade lane).
+        # None for non-casters / B/X packs — never a fabricated empty
+        # economy. Always present on the wire (like ``stakes``), so the UI
+        # gates the picker on the value, not on key presence.
+        "spellcasting": (
+            {
+                "casts_remaining": effective_spellcasting.casts_remaining,
+                "casts_per_day": effective_spellcasting.casts_per_day,
+                "prepared": list(effective_spellcasting.prepared),
+            }
+            if effective_spellcasting is not None
+            else None
+        ),
     }
 
     # Story 97-3 — server-authored pre-roll difficulty on every offered beat.

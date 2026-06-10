@@ -183,6 +183,14 @@ class DiceThrowPayload(ProtocolBase):
     the mechanical beat outcome AND the player's invention — Zork Problem
     avoidance (SOUL.md). When absent/empty the synthetic ``[BEAT_RESOLVED]``
     line is used alone, matching the pre-2026-05-13 wire shape.
+
+    ``spell_id`` — story 102-2: when the committed beat is the WN-family
+    ``cast_spell``, the overlay's spell picker names WHICH prepared spell is
+    cast so dispatch can route the WN cast spine (``wwn.spell.cast`` +
+    cast-economy spend) instead of resolving a generic stat throw. ``None``
+    on every non-cast beat — the pre-102-2 wire shape is unchanged. The
+    narrator apply_beat path carries the same value on its BeatSelection
+    sidecar; this field is the dice path's carrier.
     """
 
     request_id: str
@@ -190,6 +198,7 @@ class DiceThrowPayload(ProtocolBase):
     face: list[int]
     beat_id: str | None = None
     player_action: str | None = None
+    spell_id: str | None = None
 
 
 class DiceResultPayload(ProtocolBase):

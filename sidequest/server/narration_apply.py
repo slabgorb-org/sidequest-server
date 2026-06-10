@@ -267,9 +267,18 @@ def _resolve_wwn_cast_for_beat(
     encounter,
     cdef,
 ) -> None:
-    """WWN Content Plan 3 Task 7 — drive WwnRulesetModule.resolve_spellcast for a
-    cast_spell beat, apply rolled spell damage to the defender's HP, then run the
-    SAME CWN/WWN downed seam the strike path uses.
+    """Drive WwnRulesetModule.resolve_spellcast for a cast_spell beat, apply
+    rolled spell damage to the defender's HP, then run the SAME CWN/WWN downed
+    seam the strike path uses. (Origin: WWN Content Plan 3 Task 7.)
+
+    TWO ENTRY POINTS, one implementation (epic 102 "Reuse-first"): the
+    narrator apply_beat path (``spell_id`` from the BeatSelection sidecar)
+    and the dice path (``dispatch_dice_throw``, story 102-2 — ``spell_id``
+    from ``DiceThrowPayload``, the UI spell picker). Asymmetry note: a
+    missing ``spell_id`` here is a narrator omission and degrades to a
+    watcher-warning no-op (``wwn.cast_spell_no_spell_id``); the dice path
+    pre-validates and raises ``DiceDispatchError`` instead, because a
+    pickerless cast commit is a malformed client request.
 
     Mirrors ``_resolve_innate_cast_for_beat``'s guard idiom: each missing
     precondition publishes a ``_watcher_publish`` event (the lie-detector) and

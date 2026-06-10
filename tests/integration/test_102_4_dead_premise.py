@@ -75,6 +75,13 @@ def kill_order_combat(monkeypatch, otel_capture):
 
     dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
     dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_B, player_id="p2")
+    # Review rework r1: the fixture owns its kill-choreography precondition so
+    # EVERY consumer inherits the guarantee — a broken kill would otherwise
+    # green a consumer that never asserts the blade actually dropped.
+    assert snap.find_creature_core(_OPP).hp.current == 0, (
+        "kill choreography precondition: A's pinned 2d6=12 must drop the "
+        "10-HP blade at slot 1 before B's dead-premise slot is meaningful"
+    )
     return pack, snap, enc
 
 
@@ -164,4 +171,13 @@ def test_actor_dropped_before_its_slot_does_not_act(otel_capture, monkeypatch):
     )
     assert not spans_named(otel_capture, _SPAN_BEAT_APPLIED), (
         "no player beat may apply in a round where the PC dropped before their slot"
+    )
+    # Review rework r1: pin the §6 / §6.4 distinction — a DOWNED actor
+    # skipping its slot is "an actor at 0 HP does not act", NOT a dead
+    # premise. The dead_premise span is reserved for a LIVE actor whose
+    # committed TARGET dropped; emitting it here would conflate the two
+    # cases on the GM panel.
+    assert not spans_named(otel_capture, _SPAN_DEAD_PREMISE), (
+        "a downed actor's skipped slot must not emit wwn.dead_premise — the "
+        "actor is down, their premise isn't"
     )

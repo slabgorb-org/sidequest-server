@@ -85,13 +85,13 @@ def _install_wn_combat(sd) -> None:
     )
 
 
-def _strike_message():
+def _strike_message(player_id: str = "player-1", request_id: str = "wire-round-102-4"):
     from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
     from sidequest.protocol.messages import DiceThrowMessage
 
     return DiceThrowMessage(
         payload=DiceThrowPayload(
-            request_id="wire-round-102-4",
+            request_id=request_id,
             throw_params=ThrowParams(
                 velocity=(0.0, 5.0, -2.0),
                 angular=(1.0, 1.0, 1.0),
@@ -100,7 +100,7 @@ def _strike_message():
             face=[13],
             beat_id=_STRIKE_BEAT,
         ),
-        player_id="player-1",
+        player_id=player_id,
     )
 
 
@@ -141,8 +141,7 @@ async def test_ws_dice_throw_runs_the_initiative_ordered_round(
         (
             s
             for s in spans
-            if s.name
-            in ("encounter.opponent_attack_resolved", "encounter.beat_applied")
+            if s.name in ("encounter.opponent_attack_resolved", "encounter.beat_applied")
         ),
         key=lambda s: s.start_time,
     )
@@ -150,4 +149,69 @@ async def test_ws_dice_throw_runs_the_initiative_ordered_round(
         "with the opponent first in persisted initiative, its attack must "
         "START before the player's beat applies — order walked at the wire "
         f"level, not narrated; walk: {[s.name for s in walk]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mp_wire_first_commit_seals_second_commit_fires_the_round(
+    session_handler_factory, otel_capture, monkeypatch
+):
+    """Review rework r1 [MEDIUM]: the seal→fire sequence at the WIRE level.
+
+    Two seated PCs (snapshot.player_seats maps each player_id to its PC —
+    the production MP seat resolution in handlers/dice_throw.py). The first
+    DICE_THROW must seal (no round-phase spans, no resolution); the second
+    must close the barrier and walk the round exactly once, inside the same
+    production chain (handler → dispatch → wn_round). Before this test the
+    two-player sequence was proven at dispatch level only."""
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.game.encounter import EncounterActor
+    from sidequest.protocol.models import InitiativeEntry
+    from sidequest.server.session_handler import _State
+    from tests.integration._wn_round_102_4 import make_pc
+
+    monkeypatch.setattr("random.randint", lambda a, b: a)  # min: misses, nobody drops
+    monkeypatch.setattr(
+        "sidequest.server.dispatch.monster_manual_inject.ensure_loaded",
+        lambda _sd: None,
+    )
+
+    sd, handler = session_handler_factory(genre="heavy_metal")
+    handler._state = _State.Playing
+    _install_wn_combat(sd)
+    pc_one = sd.snapshot.characters[0].core.name
+    pc_two = "Vex Calder"
+    sd.snapshot.characters.append(make_pc(pc_two, stats=_STATS))
+    enc = sd.snapshot.encounter
+    enc.actors.append(EncounterActor(name=pc_two, role="combatant", side="player"))
+    enc.initiative.append(InitiativeEntry(token_id=pc_two, value=1))
+    sd.snapshot.player_seats = {"player-1": pc_one, "player-2": pc_two}
+    sd.orchestrator.run_narration_turn = AsyncMock(
+        return_value=NarrationTurnResult(narration="Steel waits on steel."),
+    )
+
+    await handler.handle_message(_strike_message(player_id="player-1", request_id="mp-wire-1"))
+
+    names_after_first = [s.name for s in otel_capture.get_finished_spans()]
+    assert "wwn.round.committed" not in names_after_first, (
+        "the barrier is still open after one of two commits — no round phase "
+        f"may start; got spans {names_after_first}"
+    )
+    assert "wwn.round.resolved" not in names_after_first, (
+        "resolution output leaked before the barrier closed (AC1 at the wire)"
+    )
+    assert "encounter.opponent_attack_resolved" not in names_after_first, (
+        "the opponent acts at its initiative slot once the round fires — a "
+        "reprisal on the FIRST sealed commit is the retired rider behavior"
+    )
+
+    await handler.handle_message(_strike_message(player_id="player-2", request_id="mp-wire-2"))
+
+    names = [s.name for s in otel_capture.get_finished_spans()]
+    assert "wwn.round.committed" in names and "wwn.round.resolved" in names, (
+        f"the barrier-closing wire commit must run the sealed round; got {names}"
+    )
+    assert names.count("wwn.round.resolved") == 1, (
+        "exactly one round may fire for one full set of commits; got "
+        f"{names.count('wwn.round.resolved')}"
     )

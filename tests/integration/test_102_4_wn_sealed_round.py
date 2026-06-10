@@ -84,9 +84,7 @@ def test_first_commit_is_sealed_not_resolved(two_pc_combat, otel_capture, monkey
     force_initiative(enc, [(_PC_A, 9), (_PC_B, 7), (_OPP, 2)])
     opp_hp_before = snap.find_creature_core(_OPP).hp.current
 
-    outcome = dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1"
-    )
+    outcome = dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
 
     assert outcome.commitment_pending is True, (
         "with a seated peer uncommitted, the throw must seal (commit, not "
@@ -136,17 +134,13 @@ def test_committed_actors_surface_on_confrontation_payload(two_pc_combat, monkey
     monkeypatch.setattr("random.randint", lambda a, b: b)
     pack, snap, enc = two_pc_combat
     force_initiative(enc, [(_PC_A, 9), (_PC_B, 7), (_OPP, 2)])
-    cdef = next(
-        c for c in pack.rules.confrontations if c.win_condition == "hp_depletion"
-    )
+    cdef = next(c for c in pack.rules.confrontations if c.win_condition == "hp_depletion")
 
     dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
 
     from sidequest.server.dispatch.confrontation import build_confrontation_payload
 
-    payload = build_confrontation_payload(
-        encounter=enc, cdef=cdef, genre_slug="heavy_metal"
-    )
+    payload = build_confrontation_payload(encounter=enc, cdef=cdef, genre_slug="heavy_metal")
     assert payload.get("committed_actors") == [_PC_A], (
         "the payload must surface exactly the sealed player-side actors so "
         "the overlay can render committed-vs-waiting (Alex sees who the "
@@ -158,9 +152,7 @@ def test_committed_actors_surface_on_confrontation_payload(two_pc_combat, monkey
 # ─── AC1→AC2: the last commit fires the ordered round ────────────────────────
 
 
-def test_last_commit_fires_round_phase_spans_in_order(
-    two_pc_combat, otel_capture, monkeypatch
-):
+def test_last_commit_fires_round_phase_spans_in_order(two_pc_combat, otel_capture, monkeypatch):
     """B's commit closes the barrier: committed -> initiative -> resolved
     spans fire, in that phase order (the GM-panel polygraph for the round)."""
     monkeypatch.setattr("random.randint", lambda a, b: a)  # min: misses, nobody drops
@@ -168,18 +160,14 @@ def test_last_commit_fires_round_phase_spans_in_order(
     force_initiative(enc, [(_PC_A, 9), (_PC_B, 7), (_OPP, 2)])
 
     dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
-    outcome_b = dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC_B, player_id="p2"
-    )
+    outcome_b = dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_B, player_id="p2")
 
     assert outcome_b.commitment_pending is False, (
         "the barrier-closing commit resolves the round in the same dispatch"
     )
     for name in (_SPAN_COMMITTED, _SPAN_INITIATIVE, _SPAN_RESOLVED):
         assert spans_named(otel_capture, name), f"missing round-phase span {name}"
-    order = span_start_order(
-        otel_capture, _SPAN_COMMITTED, _SPAN_INITIATIVE, _SPAN_RESOLVED
-    )
+    order = span_start_order(otel_capture, _SPAN_COMMITTED, _SPAN_INITIATIVE, _SPAN_RESOLVED)
     assert order == [_SPAN_COMMITTED, _SPAN_INITIATIVE, _SPAN_RESOLVED], (
         f"round phases must run committed -> initiative -> resolved; got {order}"
     )
@@ -235,13 +223,135 @@ def test_solo_pc_commit_fires_the_round_immediately(otel_capture, monkeypatch):
     snap, enc = seat_wn_combat(pack, [_PC_A], [_OPP])
     force_initiative(enc, [(_OPP, 9), (_PC_A, 3)])
 
-    outcome = dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1"
-    )
+    outcome = dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
 
     assert outcome.commitment_pending is False, (
         "a solo commit is the last commit — it must resolve, not dangle"
     )
     assert spans_named(otel_capture, _SPAN_RESOLVED), (
         "solo rounds emit the same round-phase polygraph as MP rounds"
+    )
+
+
+# ─── Review rework round 1 (Reviewer findings, 2026-06-10) ───────────────────
+
+
+def test_round_fire_clears_the_commit_ledger_and_payload_key(
+    two_pc_combat, otel_capture, monkeypatch
+):
+    """[HIGH] regression net: firing the round must RESET the ledger —
+    ``enc.wn_commits`` empties and ``committed_actors`` leaves the
+    CONFRONTATION payload. A stale ledger silently reverts AC1 for every
+    round after the first (the next first-commit would close the barrier
+    alone), and before this test nothing pinned the reset."""
+    monkeypatch.setattr("random.randint", lambda a, b: a)  # min: nobody drops
+    pack, snap, enc = two_pc_combat
+    force_initiative(enc, [(_PC_A, 9), (_PC_B, 7), (_OPP, 2)])
+    cdef = next(c for c in pack.rules.confrontations if c.win_condition == "hp_depletion")
+
+    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
+    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_B, player_id="p2")
+
+    assert enc.wn_commits == [], (
+        "the round walk must consume and clear the sealed-commit ledger; "
+        f"stale commits poison the next round's barrier: {enc.wn_commits!r}"
+    )
+    from sidequest.server.dispatch.confrontation import build_confrontation_payload
+
+    payload = build_confrontation_payload(encounter=enc, cdef=cdef, genre_slug="heavy_metal")
+    assert "committed_actors" not in payload, (
+        "between rounds the payload must drop the committed_actors key (the "
+        "UI legacy/no-indicator state) — a lingering previous-round list "
+        f"would lie to the table; got {payload.get('committed_actors')!r}"
+    )
+
+
+def test_second_round_first_commit_seals_again(two_pc_combat, otel_capture, monkeypatch):
+    """[HIGH] the barrier RE-ARMS each round: after a full round resolves
+    (nobody drops), the next first commit must seal — not fire — and only
+    round 1's resolved span exists. This is the round-2 proof the review
+    found missing: every prior test ended after one round."""
+    monkeypatch.setattr("random.randint", lambda a, b: a)  # min: misses, nobody drops
+    pack, snap, enc = two_pc_combat
+    force_initiative(enc, [(_PC_A, 9), (_PC_B, 7), (_OPP, 2)])
+
+    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
+    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_B, player_id="p2")
+    assert not enc.resolved, "fixture precondition: a min-roll round resolves nothing"
+
+    outcome_r2 = dispatch_throw(
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        character_name=_PC_A,
+        player_id="p1",
+        request_id="req-102-4-round2-a",
+    )
+
+    assert outcome_r2.commitment_pending is True, (
+        "round 2's first commit must SEAL — a False here means the round-1 "
+        "ledger leaked and the barrier closed on one commit (AC1 silently "
+        "reverted for every round after the first)"
+    )
+    assert len(spans_named(otel_capture, _SPAN_RESOLVED)) == 1, (
+        "only round 1 may have resolved; a second wwn.round.resolved after a "
+        "single round-2 commit is the stale-ledger failure mode"
+    )
+
+
+def test_double_commit_in_one_round_is_a_loud_typed_rejection(
+    two_pc_combat, otel_capture, monkeypatch
+):
+    """[MEDIUM] one Main Action per round: the same actor committing twice
+    while the barrier is open is a loud, typed DiceDispatchError and the
+    ledger keeps exactly one entry (no partial write, no silent overwrite).
+
+    Green-by-design characterization lock: the guard exists
+    (wn_round.seal_wn_commit) but no test exercised it — a fast-click or
+    network-retry client is a realistic production path."""
+    monkeypatch.setattr("random.randint", lambda a, b: b)
+    pack, snap, enc = two_pc_combat
+    force_initiative(enc, [(_PC_A, 9), (_PC_B, 7), (_OPP, 2)])
+
+    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
+
+    from sidequest.server.dispatch.dice import DiceDispatchError
+
+    with pytest.raises(DiceDispatchError, match="already committed"):
+        dispatch_throw(
+            pack=pack,
+            snap=snap,
+            enc=enc,
+            character_name=_PC_A,
+            player_id="p1",
+            request_id="req-102-4-double-a",
+        )
+    assert [c.actor for c in enc.wn_commits] == [_PC_A], (
+        "the rejected double commit must leave exactly the first seal on the "
+        f"ledger; got {[c.actor for c in enc.wn_commits]!r}"
+    )
+
+
+def test_round_walk_resolution_close_carries_wn_round_source(otel_capture, monkeypatch):
+    """[MEDIUM] OTEL honesty: a resolution closed INSIDE the round walk must
+    stamp ``source="wn_round"`` on the ``encounter.resolved`` span (and the
+    persisted watcher row it feeds) — the GM panel and ADR-124 forensics must
+    not attribute a walk-closed fight to the legacy in-dispatch path.
+
+    RED driver: today the shared close hardcodes ``source="dice_throw_beat"``
+    on both call paths."""
+    monkeypatch.setattr("random.randint", lambda a, b: b)  # max: 2d6=12 kills the 10-HP blade
+    pack = load_pack("heavy_metal")
+    snap, enc = seat_wn_combat(pack, [_PC_A], [_OPP])
+    force_initiative(enc, [(_PC_A, 9), (_OPP, 2)])
+
+    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
+
+    resolved = spans_named(otel_capture, "encounter.resolved")
+    assert resolved, "the killing solo round must emit encounter.resolved"
+    sources = {s.attributes.get("source") for s in resolved}
+    assert "wn_round" in sources, (
+        "a round-walk resolution close must carry source='wn_round' so the "
+        "lie-detector's own label doesn't lie about which seam closed the "
+        f"fight; got sources {sources!r}"
     )

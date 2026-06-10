@@ -539,6 +539,53 @@ def test_reprisal_hit_appends_damage_directive_and_logs(caplog):
     assert not any("RESOLVED" in d for d in snap.next_turn_directives)
 
 
+def test_reprisal_miss_appends_no_damage_directive(caplog):
+    """barsoom playtest 2026-06-10: a reprisal MISS told the narrator NOTHING
+    (``if not outcome.hit: return``), so the prose fabricated a hit, damage that
+    never landed, and a precise false HP value ("One hit point left" while the
+    engine had the PC at 4/10). The miss path must append a MECHANICAL TRUTH
+    directive anchoring the miss + the UNCHANGED HP so the narrator cannot
+    invent either, and INFO-log the miss for text-log forensics (parity with
+    dice.opponent_reprisal_hit)."""
+    import logging
+
+    pack = _load_space_opera_pack()
+    if pack is None:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+    # AC 30: the reprisal d20 (max 20 + mook mods) can never reach it — a
+    # guaranteed miss, no rng pinning needed.
+    snap = _make_snapshot(player_ac=30, player_hp=4)
+    enc = _make_encounter()
+    with caplog.at_level(logging.INFO, logger="sidequest.server.dispatch.dice"):
+        _drive_player_shoot(snap, enc, pack, broadcasts=[])
+
+    player_core = snap.find_creature_core(PLAYER)
+    assert player_core is not None and player_core.hp.current == 4, (
+        "precondition: the missed reprisal must not ablate the player"
+    )
+    miss_directives = [
+        d for d in snap.next_turn_directives if "MISSED" in d and PLAYER in d and OPPONENT in d
+    ]
+    assert miss_directives, (
+        f"a reprisal MISS must append a narrator directive anchoring the miss "
+        f"(the silent miss path is how the narrator fabricated 'One hit point "
+        f"left' against an engine 4/10); directives={snap.next_turn_directives!r}"
+    )
+    # The directive must anchor the player's REAL, unchanged HP so the prose
+    # cannot quote an invented number.
+    assert any("4/4" in d for d in miss_directives), (
+        f"the miss directive must state the unchanged HP (4/4); got {miss_directives!r}"
+    )
+    assert any("dice.opponent_reprisal_miss" in r.message for r in caplog.records), (
+        "reprisal miss must INFO-log dice.opponent_reprisal_miss (text-log "
+        "forensics parity with the hit line)"
+    )
+    # A miss resolves nothing.
+    assert snap.pending_resolution_signal is None
+    assert not any("RESOLVED" in d for d in snap.next_turn_directives)
+
+
 def test_reprisal_down_stamps_resolution_signal_and_directive(caplog):
     """A reprisal that DOWNS the player must stamp pending_resolution_signal
     (narrator renders the [ENCOUNTER RESOLVED] zone this turn), append a

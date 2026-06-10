@@ -15,8 +15,11 @@ shared per-session store. So "this character's lore" is the fragments whose
 ``metadata['choice_label']`` matches an answer the character actually gave
 (``Character.creation_answers[].value`` for ``kind == 'choice'``). That
 value match is the per-character firewall: two players who answered the same
-scene differently never see each other's pick in their History
-(ADR-104/105 intent).
+scene *differently* never see each other's pick in their History
+(ADR-104/105 intent). Players who chose the *same* option both surface the
+one shared fragment (identical content) — full per-player isolation would
+require scoping fragment ids by player at seed time, which the seeder does
+not yet do (tracked as a Delivery Finding).
 
 No Silent Fallbacks: a *choice* answer with no matching fragment in the
 store (e.g. a resume where seeding didn't run, or a content edit that
@@ -31,7 +34,7 @@ from __future__ import annotations
 import logging
 
 from sidequest.game.character import Character
-from sidequest.game.lore_store import LoreSource, LoreStore
+from sidequest.game.lore_store import LoreFragment, LoreSource, LoreStore
 from sidequest.protocol.models import LinkedLoreFragment
 
 logger = logging.getLogger(__name__)
@@ -47,7 +50,7 @@ def linked_lore_for_character(store: LoreStore, character: Character) -> list[Li
     # Index this session's creation-seed fragments by (scene_id, choice_label)
     # — the only key derivable from Character.creation_answers (which records
     # the chosen LABEL, not the choice index in the fragment id).
-    by_choice: dict[tuple[str, str], object] = {}
+    by_choice: dict[tuple[str, str], LoreFragment] = {}
     for fragment in store.fragments_iter():
         if fragment.source != LoreSource.CharacterCreation:
             continue

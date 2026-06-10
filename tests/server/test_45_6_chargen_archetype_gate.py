@@ -260,6 +260,26 @@ def _inject_hints(
 
     monkeypatch.setattr(CharacterBuilder, "accumulated", fake)
 
+def _disable_archetype_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stub infer_archetype_from_freeform to return None (inference failed).
+    
+    Story 93-1: the inference seam was added to catch all-freeform chargen.
+    The pumblestone BLOCKED_PARTIAL tests exercise the path where no hints
+    are available (via _inject_hints) but freeform answers exist. To test
+    that the gate still blocks when inference is unavailable or fails, stub
+    the inference to return None (out-of-enum / rejection path).
+    """
+    async def fake(*args, **kwargs):
+        # Return None: signals that inference failed or returned
+        # an out-of-enum value (caller treats this as "gate blocks").
+        return None
+    
+    monkeypatch.setattr(
+        "sidequest.agents.llm_factory.infer_archetype_from_freeform",
+        fake,
+    )
 
 # ---------------------------------------------------------------------------
 # AC1 — OK_RESOLVED: axes-set pack + valid hints succeed
@@ -379,6 +399,7 @@ class TestArchetypeGateBlockedPartial:
             # null them out to recreate the malformed-scene case the
             # gate is supposed to catch).
             _inject_hints(monkeypatch, jungian=None, rpg_role=None)
+            _disable_archetype_inference(monkeypatch)
 
             out = await _send_confirmation(handler)
             assert out, "confirmation must produce a frame"
@@ -436,6 +457,7 @@ class TestArchetypeGateBlockedPartial:
 
             # Recreate the pumblestone case: pack has axes, hints unset.
             _inject_hints(monkeypatch, jungian=None, rpg_role=None)
+            _disable_archetype_inference(monkeypatch)
 
             sd_before = handler._session_data  # type: ignore[attr-defined]
             assert not sd_before.snapshot.characters, (
@@ -691,6 +713,7 @@ class TestArchetypeGateOtel:
             # for the rationale — pack-axisless + caverns default hints
             # would land in the gate's raw_pair_unresolved branch.
             _inject_hints(monkeypatch, jungian=None, rpg_role=None)
+            _disable_archetype_inference(monkeypatch)
 
             await _send_confirmation(handler)
 
@@ -723,6 +746,7 @@ class TestArchetypeGateOtel:
 
             # Recreate pumblestone: pack has axes, hints unset.
             _inject_hints(monkeypatch, jungian=None, rpg_role=None)
+            _disable_archetype_inference(monkeypatch)
 
             await _send_confirmation(handler)
 
@@ -921,6 +945,7 @@ class TestArchetypeGateLogging:
             await _walk_to_confirmation(handler)
             # Recreate pumblestone — pack has axes, hints unset.
             _inject_hints(monkeypatch, jungian=None, rpg_role=None)
+            _disable_archetype_inference(monkeypatch)
 
             with caplog.at_level(logging.WARNING):
                 await _send_confirmation(handler)

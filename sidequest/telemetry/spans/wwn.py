@@ -7,6 +7,7 @@ dropped (WWN has no cyberspace). Duplication is intentional per the WWN spec §2
 
 from __future__ import annotations
 
+import json as _json
 from typing import Any
 
 from opentelemetry import trace
@@ -456,4 +457,59 @@ def wwn_long_rest_span(
         **attrs,
     }
     with Span.open(SPAN_WWN_LONG_REST, attributes, tracer_override=_tracer):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Scene-harness hydration lie-detector (story 90-8 — 90-7 fast-follow)
+# ---------------------------------------------------------------------------
+
+SPAN_WWN_MAGIC_HYDRATED = "wwn.magic_hydrated"
+SPAN_ROUTES[SPAN_WWN_MAGIC_HYDRATED] = SpanRoute(
+    event_type="state_transition",
+    component="magic",
+    extract=lambda span: {
+        "field": "magic_hydrated",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "has_spellcasting": (span.attributes or {}).get("has_spellcasting", False),
+        "prepared": (span.attributes or {}).get("prepared", 0),
+        "casts_per_day": (span.attributes or {}).get("casts_per_day", 0),
+        # JSON-encoded per the magic.py structured-payload convention — OTEL
+        # attribute handling of empty sequences is a footgun; a JSON string
+        # round-trips the empty list reliably.
+        "effort_sources": _json.loads(
+            (span.attributes or {}).get("effort_sources_json", "[]")
+        ),
+    },
+)
+
+
+def wwn_magic_hydrated_span(
+    *,
+    actor: str,
+    has_spellcasting: bool,
+    prepared: int,
+    casts_per_day: int,
+    effort_sources: list[str],
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a wwn.magic_hydrated span (story 90-8).
+
+    Lie-detector proving a scene-harness fixture seeded real WWN crunch
+    (spellcasting and/or Effort) rather than the narrator improvising it.
+    Replaces 90-7's raw ``watcher_hub.publish_event`` emit so the event
+    reaches the typed GM-panel Subsystems feed via the SPAN_ROUTES
+    translation, not just the dashboard RAW console.
+    """
+    attributes: dict[str, Any] = {
+        "field": "magic_hydrated",
+        "actor": actor,
+        "has_spellcasting": has_spellcasting,
+        "prepared": prepared,
+        "casts_per_day": casts_per_day,
+        "effort_sources_json": _json.dumps(list(effort_sources)),
+        **attrs,
+    }
+    with Span.open(SPAN_WWN_MAGIC_HYDRATED, attributes, tracer_override=_tracer):
         pass

@@ -43,7 +43,7 @@ from sidequest.game.wwn_magic import EffortPool, SpellcastingState
 from sidequest.genre.models.scenario import ClueGraph
 from sidequest.magic.state import MagicState
 from sidequest.protocol.models import AbilityDefinition
-from sidequest.telemetry import watcher_hub as _hub
+from sidequest.telemetry.spans import magic_state_hydrated_span, wwn_magic_hydrated_span
 
 logger = logging.getLogger(__name__)
 
@@ -376,25 +376,21 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
 
     core = CreatureCore(**core_kwargs)
 
-    # OTEL (story 90-7): when a fixture stages WWN crunch — spellcasting OR
-    # Effort — emit a watcher event so the GM panel can confirm the deterministic
-    # fixture seeded real mechanics rather than the narrator improvising them
-    # (CLAUDE.md OTEL Observability Principle — the GM panel is the lie detector).
-    # Module-qualified call so the standard ``_capture_events`` harness intercepts
-    # it, matching the ``magic.state_hydrated`` emitter convention below. Silent
-    # for non-casters (no noise on the canonical dial fixtures).
+    # OTEL (story 90-7, re-routed by 90-8): when a fixture stages WWN crunch —
+    # spellcasting OR Effort — emit the lie-detector so the GM panel can confirm
+    # the deterministic fixture seeded real mechanics rather than the narrator
+    # improvising them (CLAUDE.md OTEL Observability Principle). A ROUTED span
+    # (SPAN_ROUTES → state_transition/magic), not a raw publish_event, so the
+    # typed Subsystems feed sees it — the raw event_type was outside the UI
+    # union and reached only the dashboard RAW console (90-7 Reviewer finding).
+    # Silent for non-casters (no noise on the canonical dial fixtures).
     if core.spellcasting is not None or core.effort:
-        _hub.publish_event(
-            "wwn.magic_hydrated",
-            {
-                "actor": core.name,
-                "has_spellcasting": core.spellcasting is not None,
-                "prepared": len(core.spellcasting.prepared) if core.spellcasting else 0,
-                "casts_per_day": core.spellcasting.casts_per_day if core.spellcasting else 0,
-                "effort_sources": sorted(core.effort),
-            },
-            component="magic",
-            severity="info",
+        wwn_magic_hydrated_span(
+            actor=core.name,
+            has_spellcasting=core.spellcasting is not None,
+            prepared=len(core.spellcasting.prepared) if core.spellcasting else 0,
+            casts_per_day=core.spellcasting.casts_per_day if core.spellcasting else 0,
+            effort_sources=sorted(core.effort),
         )
 
     # Hydrate known_facts (story 50-19, ADR-092 follow-on).
@@ -664,22 +660,18 @@ def _hydrate_magic_state(raw: Any, *, fixture_name: str) -> MagicState:
             f"fixture {fixture_name!r}: magic_state validation failed — {exc}"
         ) from exc
 
-    # Module-qualified call (not a bound import) so the standard
-    # ``_capture_events`` test harness — which monkeypatches
-    # ``watcher_hub.publish_event`` — intercepts this event, matching the
-    # established ``scene_harness_router`` emitter convention.
-    _hub.publish_event(
-        "magic.state_hydrated",
-        {
-            "fixture": fixture_name,
-            "world_slug": magic_state.config.world_slug,
-            "genre_slug": magic_state.config.genre_slug,
-            "ledger_bars": len(magic_state.ledger),
-            "confrontations": len(magic_state.confrontations),
-            "control_tier_actors": len(magic_state.control_tier),
-        },
-        component="magic",
-        severity="info",
+    # Routed span (story 90-8, replacing 50-22's raw publish_event): the
+    # SPAN_ROUTES translation carries this into the typed GM-panel Subsystems
+    # feed; the raw event_type was outside the UI union and reached only the
+    # dashboard RAW console. Test harnesses intercept via the documented
+    # ``spans.tracer`` monkeypatch seam (Span.open's lazy default lookup).
+    magic_state_hydrated_span(
+        fixture=fixture_name,
+        world_slug=magic_state.config.world_slug,
+        genre_slug=magic_state.config.genre_slug,
+        ledger_bars=len(magic_state.ledger),
+        confrontations=len(magic_state.confrontations),
+        control_tier_actors=len(magic_state.control_tier),
     )
     return magic_state
 

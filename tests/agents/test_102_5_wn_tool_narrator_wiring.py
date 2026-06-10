@@ -18,7 +18,6 @@ RED: ``wn_attack`` is not registered, so the dispatch returns the
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
@@ -226,12 +225,24 @@ async def test_narrator_turn_drives_wn_attack_through_production_dispatch(
     )
 
     # The tool result went BACK to the model (the narrator describes the
-    # engine's adjudication — it does not invent one).
+    # engine's adjudication — it does not invent one). Inspect the tool_result
+    # block's content directly: a tool_result's ``content`` is a JSON STRING
+    # (the valid Anthropic shape — content is str-or-content-blocks, never a
+    # bare object), so asserting against ``json.dumps`` of the whole call would
+    # only ever see the escaped form (``\"hit\": true``). Read the unescaped
+    # content string the narrator actually receives.
     assert len(fake.messages.calls) == 2, "expected tool round-trip then narration"
-    second_call = json.dumps(fake.messages.calls[1], default=str)
-    assert "tool_result" in second_call
-    assert '"hit": true' in second_call.replace("'", '"') or '"hit": True' in second_call, (
-        f"the engine's hit adjudication never reached the narrator: {second_call[:400]}"
+    tool_result_blocks = [
+        block
+        for msg in fake.messages.calls[1]["messages"]
+        if isinstance(msg.get("content"), list)
+        for block in msg["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    ]
+    assert tool_result_blocks, "no tool_result block returned to the narrator"
+    tr_content = tool_result_blocks[0]["content"]
+    assert '"hit": true' in tr_content, (
+        f"the engine's hit adjudication never reached the narrator: {tr_content!r}"
     )
 
     # Span chain: narrator → tool (registry, by construction) → module (slug-honest).

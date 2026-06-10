@@ -44,4 +44,5 @@ from sidequest.agents.tools import (
     update_resource_pool,  # noqa: F401
     use_mutation,  # noqa: F401
     veterans_luck,  # noqa: F401
+    wn_tools,  # noqa: F401
 )

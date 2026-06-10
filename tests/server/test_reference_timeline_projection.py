@@ -489,6 +489,42 @@ def test_lore_projection_timeline_after_map_section(tmp_path: Path):
     )
 
 
+def test_lore_projection_legends_section_from_directory_form(tmp_path: Path):
+    # Most live worlds author legends as one file per legend in a ``legends/``
+    # directory. Those worlds must get a FULL ``legends`` section (the legend
+    # bodies), not just the chronological ``timeline`` digest. The keeper
+    # ``related_tropes`` field is firewalled exactly as on the flat-file path.
+    world_dir = tmp_path / "worlds" / "w"
+    (world_dir / "legends").mkdir(parents=True)
+    (world_dir / "legends" / "the_sundering.yaml").write_text(
+        "name: The Sundering\n"
+        'era: "1612"\n'
+        "summary: The sky cracked and the old empire fell.\n"
+        "cultural_impact: Every calendar in the realm still counts from that year.\n"
+        "affected_cultures:\n"
+        "  - Highland Scots\n"
+        "related_tropes:\n"
+        "  - the_duke_betrays_you_in_act_three\n",
+        encoding="utf-8",
+    )
+
+    doc = build_lore_projection("p", "w", pack_dir=tmp_path, world_dir=world_dir)
+    ids = [s["id"] for s in doc["sections"]]
+
+    # Both the chronological digest (timeline) and the full bodies (legends) project.
+    assert "timeline" in ids, "directory-form legends still feed the Timeline digest"
+    assert "legends" in ids, "directory-form legends must also yield a full Legends section"
+    # Exactly one legends section — never doubled by the flat-file generic path.
+    assert ids.count("legends") == 1, f"duplicate legends section: {ids}"
+
+    blob = _json.dumps(next(s for s in doc["sections"] if s["id"] == "legends"))
+    # Public legend body surfaces…
+    assert "Every calendar in the realm still counts" in blob
+    # …but the keeper field never does.
+    assert "related_tropes" not in blob
+    assert "the_duke_betrays_you_in_act_three" not in blob
+
+
 def test_lore_projection_omits_timeline_when_no_legends(tmp_path: Path):
     world_dir = tmp_path / "worlds" / "w"
     world_dir.mkdir(parents=True)

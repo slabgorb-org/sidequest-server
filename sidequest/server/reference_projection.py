@@ -449,9 +449,15 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
     Emits, in order: the ``map`` section (cartography, when present), the
     ``timeline`` section (the world's legends with an honest conditional sort), the
     ``poi`` section (history.yaml points_of_interest gated on R2 landscape art), the
-    ``cast`` section (ratified NPCs gated on R2 portraits), then one generic-YAML
-    section per present ``LORE_WORLD_FILES`` file. Each section is omitted when it
-    has no public content.
+    ``cast`` section (ratified NPCs gated on R2 portraits), one generic-YAML section
+    per present ``LORE_WORLD_FILES`` file, then the ``legends`` section (full legend
+    bodies — built from the per-file ``legends/`` directory form here; the flat
+    ``legends.yaml`` form is covered by the generic-YAML loop). Each section is
+    omitted when it has no public content.
+
+    The server emits sections in build order only; *display* ordering is a client
+    concern — the React reference page (``sidequest-ui``) sorts the sections it
+    renders. This module keeps the projection job: deciding what public data exists.
     """
     sections: list[dict] = []
 
@@ -542,8 +548,16 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
 
     # Generic-YAML sections — one per present LORE_WORLD_FILES file, AFTER the
     # map section. EXCLUDED_FILES (and file-root KEEPER stems) never project.
+    legends_dir_present = (world_dir / "legends").is_dir()
     for filename in LORE_WORLD_FILES:
         if filename in EXCLUDED_FILES:
+            continue
+        # The Legends section is built below from the per-file ``legends/``
+        # directory when present (the dominant authoring form); skip the flat
+        # ``legends.yaml`` file path here so the directory wins and we never emit
+        # two ``id: "legends"`` sections. When there is no directory, the flat
+        # file is projected here as usual.
+        if filename == "legends.yaml" and legends_dir_present:
             continue
         path = world_dir / filename
         if not path.exists():
@@ -555,6 +569,29 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
         section = build_generic_yaml_section(data, file_stem=path.stem, pack=pack, world=world)
         if section is not None:
             sections.append(section)
+
+    # Legends section (per-file ``legends/`` directory form). Most live worlds
+    # author legends as one ``*.yaml`` per legend in a ``legends/`` dir rather
+    # than a flat ``legends.yaml`` — those worlds previously got ONLY the
+    # chronological Timeline digest and no full Legends section. Build it here
+    # from the same raw legend dicts, through the SAME generic renderer +
+    # ``classify()`` firewall as the flat-file path (``related_tropes`` is KEEPER),
+    # so both authoring forms yield an identical full ``legends`` section. The
+    # flat-file form is handled by the generic loop above; the two are mutually
+    # exclusive (see the skip guard) so there is never a duplicate.
+    if legends_dir_present:
+        raw_legends = [
+            yaml.safe_load((world_dir / "legends" / f.name).read_text(encoding="utf-8"))
+            for f in sorted((world_dir / "legends").glob("*.yaml"))
+            if f.name not in ("_meta.yaml", ".gitkeep")
+        ]
+        raw_legends = [r for r in raw_legends if r is not None]
+        if raw_legends:
+            legends_section = build_generic_yaml_section(
+                raw_legends, file_stem="legends", pack=pack, world=world
+            )
+            if legends_section is not None:
+                sections.append(legends_section)
 
     return {"schema_version": 1, "pack": pack, "world": world, "sections": sections}
 

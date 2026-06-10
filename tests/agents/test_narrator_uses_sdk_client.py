@@ -207,7 +207,10 @@ async def test_orchestrator_routes_narration_through_sdk(
     # Story 77-2 (ADR-137) added typed quest/stakes tools: record_quest (34th),
     # set_stakes (35th). 35.
     # AWN Plan 2 (Task 11) added use_mutation (36th tool). 36.
-    assert len(sent_tools) == len(default_registry.list_names()) == 36
+    # Story 102-5 added the four WN-family narrator contract tools: wn_attack
+    # (37th), wn_skill_check (38th), wn_save (39th), wn_adjudicate_dead_premise
+    # (40th). 40.
+    assert len(sent_tools) == len(default_registry.list_names()) == 40
 
     # 3. The result carries the SDK's text.
     assert result.narration == fake_response_text

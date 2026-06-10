@@ -75,10 +75,30 @@ def build_seal_reconcile_roster(
       broadcast. So we project all playing peers ``submitted`` (the round has
       effectively closed), mirroring that terminal projection.
 
+    **Story 97-2 — membership derives from the DURABLE seated-PC roster
+    (``snapshot.player_seats``), not the live ``playing_player_ids``.** After a
+    server reload both seats reconnect; at the instant the FIRST reconnector
+    lands, its own socket is the only PLAYING peer in the freshly-rebuilt room,
+    so ``playing_player_ids`` under-counts and the reconcile reported a solo
+    ``0/1`` (server log ``.20260607-090551`` lines 652/668, 863/878).
+    ``snapshot.player_seats`` is durable (Postgres, ADR-115) and already knows
+    the table is N-seat, so it is the authoritative denominator. It is *also*
+    the 45-2 phantom guard: it is written only on ``_chargen_confirmation``
+    commit, so a mid-chargen phantom peer has no entry and is excluded for free
+    — the live ``playing_player_ids`` is therefore NOT consulted for membership
+    (a phantom leaking into it cannot inflate the roster), but is retained as
+    the call contract for pre-97-2 callers.
+
+    The numerator is unchanged: ``_submitted`` still drives who reads
+    ``submitted`` during InputCollection. (``_submitted`` is runtime-only and
+    reconstructed empty on a process reload, so a seal made *before* the reload
+    is not recoverable — out of scope, see the story 97-2 deviation.)
+
     Read-only: never mutates ``_submitted`` or the phase (presence recovery
     must not perturb the barrier it only reports).
     """
-    base = build_turn_status_roster(snapshot, playing_player_ids)
+    durable_seat_ids = list(snapshot.player_seats.keys())
+    base = build_turn_status_roster(snapshot, durable_seat_ids)
     if snapshot.turn_manager.phase == TurnPhase.InputCollection:
         return base
     # Barrier already fired — project the round's terminal all-submitted state.

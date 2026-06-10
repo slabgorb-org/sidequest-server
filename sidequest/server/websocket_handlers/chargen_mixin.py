@@ -744,6 +744,19 @@ class CharGenMixin:
             )
             return True
 
+        # Story 93-2: badge the provenance entries whose words fed this
+        # inference — marked iff the entry's text is in the fodder set.
+        # ``freeform_answer_texts`` IS the fodder definition (name-entry
+        # answers already excluded there), so the marking can never claim
+        # a scene the Haiku call didn't consume. build() never marks;
+        # this seam is the only writer of archetype_inferred=True.
+        fodder = set(freeform_answers)
+        provenance_marked = 0
+        for entry in character.creation_answers:
+            if entry.kind == "freeform" and entry.value in fodder:
+                entry.archetype_inferred = True
+                provenance_marked += 1
+
         # Success: the lie-detector span. Fires ONLY here — the GM panel
         # must distinguish "inferred from the player's words" from "preset
         # accumulation" (OTEL Observability Principle).
@@ -757,6 +770,7 @@ class CharGenMixin:
                 "genre": sd.genre_slug,
                 "world": sd.world_slug,
                 "player_id": player_id,
+                "provenance_marked": provenance_marked,
             },
         ):
             pass

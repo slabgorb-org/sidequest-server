@@ -1059,3 +1059,115 @@ class TestOversizedFodderBounded:
             "truncation must be logged loudly (No Silent Fallbacks: the "
             "player's words were cut — the operator should be able to see it)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 93-2 — creation_answers provenance marks the inference-fed scenes
+# ---------------------------------------------------------------------------
+
+
+class TestCreationAnswersInferenceMarking:
+    """Story 93-2 AC5: the scene(s) whose freeform fed the 93-1 archetype
+    inference carry ``archetype_inferred=True`` on the Character's
+    ``creation_answers`` provenance — and ONLY those scenes. The marking
+    contract is pinned against the builder's own fodder definition
+    (``freeform_answer_texts``), so the name-scene exclusion doctrine is
+    inherited rather than re-stated: an answer is marked iff its text was
+    inference fodder AND the inference actually fired.
+    """
+
+    async def test_inference_marks_fodder_scenes_on_creation_answers(
+        self,
+        handler_factory,
+        monkeypatch: pytest.MonkeyPatch,
+        otel_capture: InMemorySpanExporter,
+        fresh_ledger,
+    ) -> None:
+        _fake_inference_sdk(
+            monkeypatch,
+            tool_input={
+                "jungian_hint": _VALID_JUNGIAN,
+                "rpg_role_hint": _VALID_RPG_ROLE,
+            },
+        )
+        _disable_default_hint_stamping(monkeypatch)
+        handler = handler_factory()
+        await _connect(handler)
+        await _walk_all_freeform(handler)
+
+        # Ground truth captured BEFORE confirm consumes the builder: the
+        # exact texts the inference will be fed (name-entry answers already
+        # excluded by the 93-1 fodder doctrine).
+        sd = handler._session_data  # type: ignore[attr-defined]
+        fodder_texts = set(sd.builder.freeform_answer_texts())
+        assert fodder_texts, "all-freeform walk must accumulate inference fodder"
+
+        out = await _send_confirmation(handler)
+        for msg in out:
+            assert not isinstance(msg, ErrorMessage), msg.payload.message
+
+        character = sd.snapshot.characters[0]
+        answers = character.creation_answers
+        assert answers, (
+            "an all-freeform chargen must ship creation_answers provenance "
+            "(93-2) — the History section has nothing to render otherwise"
+        )
+
+        marked = [a for a in answers if a.archetype_inferred]
+        unmarked = [a for a in answers if not a.archetype_inferred]
+        assert marked, (
+            "the inference fired (gate unblocked) — the scenes whose words "
+            "fed it must carry archetype_inferred=True for the UI badge"
+        )
+        for entry in marked:
+            assert entry.kind == "freeform", (
+                f"{entry.scene_id}: only freeform answers can feed the "
+                f"inference; a {entry.kind!r} entry must never be marked"
+            )
+            assert entry.value in fodder_texts, (
+                f"{entry.scene_id}: marked entry's text was not in the "
+                "inference fodder — marking must track what the Haiku call "
+                "actually consumed, not blanket-flag freeform scenes"
+            )
+        for entry in unmarked:
+            assert entry.value not in fodder_texts or entry.kind != "freeform", (
+                f"{entry.scene_id}: this freeform answer WAS inference "
+                "fodder but is not marked — the UI badge would lie by "
+                "omission"
+            )
+
+    async def test_preset_build_marks_nothing(
+        self,
+        handler_factory,
+        monkeypatch: pytest.MonkeyPatch,
+        otel_capture: InMemorySpanExporter,
+    ) -> None:
+        """Preset accumulation never marks: the badge means 'the engine read
+        your words', and on a preset walk it never did. The fake SDK is
+        installed purely to prove no inference call sneaks in."""
+        create = _fake_inference_sdk(
+            monkeypatch,
+            tool_input={
+                "jungian_hint": _VALID_JUNGIAN,
+                "rpg_role_hint": _VALID_RPG_ROLE,
+            },
+        )
+        handler = handler_factory()
+        await _connect(handler)
+        await _walk_presets_only(handler)
+        out = await _send_confirmation(handler)
+        for msg in out:
+            assert not isinstance(msg, ErrorMessage), msg.payload.message
+
+        assert create.call_count == 0, (
+            "preset walk with stamped hints must not reach the inference SDK"
+        )
+        sd = handler._session_data  # type: ignore[attr-defined]
+        character = sd.snapshot.characters[0]
+        assert character.creation_answers, (
+            "preset chargen must also record creation_answers (AC3) — "
+            "provenance is not a freeform-only feature"
+        )
+        assert all(not a.archetype_inferred for a in character.creation_answers), (
+            "no inference fired — no entry may carry archetype_inferred=True"
+        )

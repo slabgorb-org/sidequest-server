@@ -388,6 +388,9 @@ def party_member_from_character(
         personality=NonBlankString(character.core.personality),
         pronouns=NonBlankString(character.pronouns) if character.pronouns else None,
         equipment=equipment,
+        # Story 93-2: chargen provenance rides the sheet so the 93-3
+        # History section can render the player's own answers.
+        creation_answers=list(character.creation_answers),
     )
 
     # Currency noun from inventory.yaml::currency.name (pingpong

@@ -20,8 +20,16 @@ from sidequest.protocol.models import (
     AbilityDefinition,
     AdvancementDelta,
     AffinityTierUp,
+    CreationAnswer,
     FactCategory,
 )
+
+__all__ = [
+    "AffinityState",
+    "Character",
+    "CreationAnswer",
+    "KnownFact",
+]
 
 
 class KnownFact(BaseModel):
@@ -133,6 +141,14 @@ class Character(BaseModel):
     # chassis-voice block).
     background: str = ""
     drive: str = ""
+
+    # Story 93-2: durable chargen provenance — one entry per ANSWERED scene
+    # (the player's verbatim freeform text or chosen option label), in
+    # scene-walk order. Populated by builder.build(); the 93-1 confirm seam
+    # marks the entries whose text fed the archetype inference. Persisted
+    # with the save (the inferred marker cannot be recomputed on load).
+    # Defaults to [] so pre-93-2 saves still validate.
+    creation_answers: list[CreationAnswer] = Field(default_factory=list)
 
     # Display-only flavor labels for the player-facing sheet (Diamonds-and-
     # Coal: flavor on the surface, archetype underneath). When chargen used a

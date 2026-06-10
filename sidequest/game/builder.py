@@ -15,7 +15,7 @@ from enum import StrEnum
 from opentelemetry import trace
 
 from sidequest.game.ability import AbilitySource
-from sidequest.game.character import AbilityDefinition, Character
+from sidequest.game.character import AbilityDefinition, Character, CreationAnswer
 from sidequest.game.creature_core import (
     CreatureCore,
     HpPool,
@@ -2713,6 +2713,65 @@ class CharacterBuilder:
         # fallback).
         first_name, last_name = _split_name(name)
 
+        # Story 93-2: durable provenance of the player's chargen answers —
+        # one entry per ANSWERED scene in scene-walk order. Auto-advance
+        # acks and the arrangement confirm append a SceneResult but carry
+        # no prompt/answer pair (choice_label is None), so they are
+        # skipped. Results align with scenes by index (every applied scene
+        # appends exactly one result — the same invariant the abilities
+        # loop above relies on); freeform/story results also carry an
+        # explicit scene_id stamp which wins when present.
+        creation_answers: list[CreationAnswer] = []
+        # strict=False: results ≤ scenes always (build runs from the
+        # Confirmation phase, where every walked scene appended exactly
+        # one result; barsoom-style packs with a trailing display scene
+        # can legitimately have fewer results than scenes after revert).
+        for scene_for_answer, result in zip(self._scenes, self._results, strict=False):
+            answer_scene_id = result.scene_id or scene_for_answer.id
+            if isinstance(result.input_type, FreeformInput):
+                creation_answers.append(
+                    CreationAnswer(
+                        scene_id=answer_scene_id,
+                        prompt=scene_for_answer.title,
+                        kind="freeform",
+                        value=result.input_type.text,
+                    )
+                )
+            elif isinstance(result.input_type, StoryInput):
+                # the_story folds background + description; pronouns are
+                # mechanical (pronoun_hint), not narrative words. Same join
+                # _apply_story uses for MechanicalEffects.background.
+                story_parts = [
+                    result.input_type.background.strip(),
+                    result.input_type.description.strip(),
+                ]
+                creation_answers.append(
+                    CreationAnswer(
+                        scene_id=answer_scene_id,
+                        prompt=scene_for_answer.title,
+                        kind="freeform",
+                        value=" | ".join(p for p in story_parts if p),
+                    )
+                )
+            elif isinstance(result.input_type, ChoiceInput) and result.choice_label is not None:
+                creation_answers.append(
+                    CreationAnswer(
+                        scene_id=answer_scene_id,
+                        prompt=scene_for_answer.title,
+                        kind="choice",
+                        value=result.choice_label,
+                    )
+                )
+        span.add_event(
+            "chargen.creation_answers_recorded",
+            {
+                "count": len(creation_answers),
+                "choice_count": sum(1 for a in creation_answers if a.kind == "choice"),
+                "freeform_count": sum(1 for a in creation_answers if a.kind == "freeform"),
+                "scene_ids": ", ".join(a.scene_id for a in creation_answers),
+            },
+        )
+
         # Compose the Character. Character / CreatureCore non-blank
         # validators will catch blank name / description / personality.
         character = Character(
@@ -2759,6 +2818,7 @@ class CharacterBuilder:
             first_name=first_name,
             last_name=last_name,
             nickname="",
+            creation_answers=creation_answers,
         )
 
         return character

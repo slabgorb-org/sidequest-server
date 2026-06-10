@@ -273,8 +273,11 @@ def dispatch_dice_throw(
     """Apply a beat, resolve dice, broadcast wire messages, return outcome.
 
     Raises ``DiceDispatchError`` when the throw can't be resolved — no
-    partial state mutation leaks because beat apply only runs after stat
-    validation succeeds.
+    partial state mutation leaks because beat apply only runs after ALL
+    request validation succeeds: stat canonicalization AND the WN
+    cast-shape checks (spell_id presence on a wwn cast_spell, catalog
+    membership, no spell_id on non-cast beats, no cast on opposed_check
+    cdefs — story 102-2).
 
     ``room_broadcast`` is the room's broadcast(msg) callable. When None
     (no room bound — e.g., legacy single-socket test paths), the dice
@@ -358,6 +361,20 @@ def dispatch_dice_throw(
                 "cast_spell commit missing spell_id — the spell picker must "
                 "name the prepared spell being cast (story 102-2); a generic "
                 "stat throw is not a valid cast resolution"
+            )
+        # Review round 2: the cast spine runs in the non-opposed branch
+        # below. A wwn cast on an opposed_check cdef would pass validation
+        # and then SILENTLY skip the spine (no span, no spend) — the exact
+        # silent-fallback shape this epic kills. No current content ships
+        # the combination; reject loudly until a story defines opposed-cast
+        # semantics.
+        if cdef.resolution_mode == ResolutionMode.opposed_check:
+            raise DiceDispatchError(
+                f"cast_spell with spell_id {payload.spell_id!r} on an "
+                f"opposed_check confrontation {cdef.confrontation_type!r} — "
+                "the WN cast spine has no opposed-check arm; author the "
+                "cast beat on a beat_selection/hp_depletion confrontation "
+                "(No Silent Fallbacks)"
             )
         from sidequest.server.dispatch.wwn_spell_catalog_resolve import (
             resolve_wwn_spell_catalog,
@@ -899,7 +916,14 @@ def dispatch_dice_throw(
             source="dice_throw",
         )
 
-        encounter_resolved = apply_result.resolved
+        # Review round 2 (102-2): derive the post-beat resolution from the
+        # AUTHORITATIVE encounter state, not just apply_beat's return — a
+        # killing CAST resolves the encounter in the spine (check_hp_depletion)
+        # AFTER apply_beat, so apply_result.resolved is stale-False there and
+        # the dead opponent would take its reprisal swing in a fight already
+        # won (ADR-139 win-condition liveness). Strikes resolve inside
+        # apply_beat, so this is a strict widening, never a narrowing.
+        encounter_resolved = apply_result.resolved or encounter.resolved
 
         # --- Opponent reprisal: server-driven enemy attack turn (story 71-21) ---
         # SWN hp_depletion combat had no enemy turn — the player could attack but

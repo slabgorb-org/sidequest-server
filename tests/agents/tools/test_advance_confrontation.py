@@ -311,6 +311,38 @@ async def test_advance_confrontation_refuses_resolved_encounter() -> None:
     )
 
 
+async def test_advance_confrontation_refuses_hp_depletion_encounter() -> None:
+    """barsoom-2 playtest 2026-06-10: on a ``win_condition=hp_depletion`` combat
+    the dials are inert 1e6 placeholders (the HP channel is the authoritative
+    track — apply_beat suppresses dial mutation for exactly this reason), but
+    the narrator free-handed advance_confrontation across the fight, drifting
+    the dead dial 0→4→−2. The drift polluted forensics
+    (``final_player_metric=-2``) badly enough that the DRIVER hypothesized a
+    momentum sign-flip in the resolver. The tool must refuse the same way
+    apply_beat suppresses: fail loud (recoverable), dial frozen,
+    tool.confrontation.refused_hp_depletion on the GM panel.
+    """
+    enc = _encounter(player_current=0, encounter_type="combat")
+    enc.win_condition = "hp_depletion"
+    snap = _build_snapshot(characters=[_character("Alice")], encounter=enc)
+    store = _store_with(snap)
+    ctx = _make_ctx(store, snapshot=snap)
+
+    r = await _call({"axis": "player", "delta": 4}, ctx)
+    assert r.status is ToolResultStatus.ERROR_RECOVERABLE, (
+        f"advancing an inert hp_depletion dial must fail loud (recoverable), got status={r.status}"
+    )
+    assert snap.encounter is not None
+    assert snap.encounter.player_metric.current == 0, (
+        "an hp_depletion dial is inert and must stay frozen — the refused nudge "
+        f"silently moved it to {snap.encounter.player_metric.current}"
+    )
+    attrs = _otel_attrs(ctx)
+    assert attrs.get("tool.confrontation.refused_hp_depletion") is True, (
+        "the GM panel must see the refusal via tool.confrontation.refused_hp_depletion"
+    )
+
+
 async def test_confrontation_id_default_recorded_in_otel() -> None:
     """``confrontation_id=""`` is the default and is forwarded to OTEL."""
     snap = _build_snapshot(

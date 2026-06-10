@@ -177,6 +177,27 @@ SPAN_ROUTES[SPAN_NPC_AUTO_MINT_SKIPPED] = SpanRoute(
     },
 )
 
+# Story 97-5: dice-resolution replay re-entry. A dice-gated action runs
+# ``_execute_narration_turn`` twice in one interaction turn (pass 1 = player
+# action, pass 2 = ``dice_throw.py`` re-entry with ``[BEAT_RESOLVED]`` replay
+# text and ``suppress_intent_router=True``). Story 91-2 taught the intent
+# router to skip the replay; this span fires when the mention-apply seam does
+# the same — proving the per-mention side effects (last_seen, pool matching,
+# mint paths) were intentionally suppressed on the replay, not silently
+# dropped. The GM panel distinguishes "skipped (replay)" from "apply dark".
+SPAN_NPC_MENTIONS_REPLAY_SUPPRESSED = "npc.mentions_replay_suppressed"
+SPAN_ROUTES[SPAN_NPC_MENTIONS_REPLAY_SUPPRESSED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc_pool",
+        "op": "mentions_replay_suppressed",
+        "mention_count": (span.attributes or {}).get("mention_count", 0),
+        "reason": (span.attributes or {}).get("reason", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # Story 49-6: ratification gate — fires once per turn for each pool member
 # that was auto-minted from prose on a prior turn (``observation_pending=True``).
 # Promote fires when the narrator re-cites the member this turn (member stays
@@ -926,6 +947,37 @@ def npc_auto_mint_skipped_span(
     }
     with Span.open(
         SPAN_NPC_AUTO_MINT_SKIPPED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_mentions_replay_suppressed_span(
+    *,
+    mention_count: int,
+    turn_number: int,
+    reason: str = "dice_replay",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 97-5: emitted when the NPC-mention application sub-block is
+    skipped on a dice-resolution replay re-entry of ``_execute_narration_turn``
+    (``suppress_intent_router=True``). The scene's NPCs were already applied on
+    the player-action pass; re-applying them on the replay is the turn-1
+    double-apply root cause. Mirrors ``intent_router.replay_suppressed`` (Story
+    91-2) so the GM panel sees the suppression as a positive decision, never a
+    silent skip (CLAUDE.md OTEL principle / No Silent Fallbacks).
+    """
+    attributes: dict[str, Any] = {
+        "mention_count": mention_count,
+        "turn_number": turn_number,
+        "reason": reason,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_MENTIONS_REPLAY_SUPPRESSED,
         attributes,
         tracer_override=_tracer,
     ) as span:

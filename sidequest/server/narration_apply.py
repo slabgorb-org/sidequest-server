@@ -113,6 +113,7 @@ from sidequest.telemetry.spans import (
     npc_identity_seeded_span,
     npc_invented_name_routed_span,
     npc_invented_name_unrouted_span,
+    npc_mentions_replay_suppressed_span,
     npc_observation_gate_order_violation_span,
     npc_pc_name_skipped_span,
     npc_referenced_span,
@@ -3301,6 +3302,7 @@ def _apply_narration_result_to_snapshot(
     opposed_player_actor: str | None = None,
     acting_character_name: str | None = None,
     monster_manual: MonsterManual | None = None,
+    is_dice_replay: bool = False,
 ) -> NarrationApplyOutcome:
     """Apply narrator-extracted fields to the snapshot.
 
@@ -3331,6 +3333,19 @@ def _apply_narration_result_to_snapshot(
     MUST trace back to an explicit DICE_THROW frame, never to a peer or
     self narration. Test helpers that simulate the dispatch path may set
     ``from_explicit_action=True`` to bypass the gate.
+
+    ``is_dice_replay`` (Story 97-5): True when this apply runs on the
+    dice-resolution replay re-entry of ``_execute_narration_turn``
+    (``suppress_intent_router=True``). The replay carries no new player intent —
+    the scene's NPCs were already applied on the player-action pass — so the
+    entire NPC-mention application sub-block (mention apply, recurring-presence
+    detect, observation gate, auto-mint) is skipped to stop every per-mention
+    side effect (last_seen stamps, pool matching, mint paths, the disposition
+    beat) from double-running within one interaction turn. A loud
+    ``npc.mentions_replay_suppressed`` span fires in its place (never a silent
+    skip). This is the upstream fix for the blackthorn 2026-06-07 turn-1
+    double-apply; it makes Server #742's ``last_development_turn`` across-call
+    dedupe dead for its stated purpose (kept as defense-in-depth).
     """
     from sidequest.agents.orchestrator import NarrationTurnResult
 
@@ -4543,67 +4558,92 @@ def _apply_narration_result_to_snapshot(
     # perseus_cloud session-894 guard). Resolution is LAZY inside the seam:
     # the generator is built only when a genuinely novel name is about to be
     # minted, so quiet turns (no invented NPC) pay nothing.
-    _apply_npc_mentions(
-        snapshot=snapshot,
-        mentions=list(result.npcs_present),
-        turn_num=turn_num,
-        acting_character_name=acting_character_name,
-        pack=pack,
-        world=world,
-        monster_manual=monster_manual,
-    )
+    # Story 97-5: skip the ENTIRE NPC-mention application sub-block on a
+    # dice-resolution replay re-entry. A dice-gated action runs
+    # ``_execute_narration_turn`` twice in one interaction turn (pass 1 = player
+    # action, pass 2 = the dice handler's ``[BEAT_RESOLVED]`` replay with
+    # ``suppress_intent_router=True``). Story 91-2 gave the intent router this
+    # guard; the mention-apply never got it, so every per-mention side effect
+    # below (last_seen stamps, pool matching, the observation gate, mint paths,
+    # the disposition beat) double-ran — the blackthorn 2026-06-07 turn-1
+    # double-apply. The replay introduces no new player intent; the scene's
+    # NPCs were already applied on the player-action pass. Emit a LOUD span in
+    # place of the work (never a silent skip — CLAUDE.md OTEL principle).
+    if is_dice_replay:
+        with npc_mentions_replay_suppressed_span(
+            mention_count=len(result.npcs_present),
+            turn_number=turn_num,
+        ):
+            logger.info(
+                "npc.mentions_replay_suppressed turn=%d mentions=%d — "
+                "dice-replay re-entry, NPCs already applied on the "
+                "player-action pass (story 97-5)",
+                turn_num,
+                len(result.npcs_present),
+            )
+    else:
+        _apply_npc_mentions(
+            snapshot=snapshot,
+            mentions=list(result.npcs_present),
+            turn_num=turn_num,
+            acting_character_name=acting_character_name,
+            pack=pack,
+            world=world,
+            monster_manual=monster_manual,
+        )
 
-    # Story 45-53: detect known recurring NPCs named in prose but missing
-    # from npcs_present. Soft warning span (no exception) — the GM panel
-    # surfaces the miss for human follow-up.
-    _detect_missed_recurring_npcs(
-        snapshot=snapshot,
-        narration_text=result.narration or "",
-        emitted_mentions=list(result.npcs_present),
-        turn_num=turn_num,
-    )
+        # Story 45-53: detect known recurring NPCs named in prose but missing
+        # from npcs_present. Soft warning span (no exception) — the GM panel
+        # surfaces the miss for human follow-up.
+        _detect_missed_recurring_npcs(
+            snapshot=snapshot,
+            narration_text=result.narration or "",
+            emitted_mentions=list(result.npcs_present),
+            turn_num=turn_num,
+        )
 
-    # Story 49-6: ratification gate. Resolves observation_pending pool
-    # members from the PRIOR turn against THIS turn's emitted_mentions —
-    # promote on match (clear the flag, keep entry), purge on miss
-    # (remove entry from npc_pool). Order is load-bearing: this MUST run
-    # BEFORE _auto_mint_prose_only_npcs below, otherwise the gate would
-    # evaluate this turn's own freshly-minted entries against this turn's
-    # (omitting) mentions and self-purge them. Emits
-    # SPAN_NPC_OBSERVATION_GATE_PROMOTED / SPAN_NPC_OBSERVATION_GATE_PURGED
-    # so Sebastien's GM panel sees every gate decision.
-    _apply_npc_observation_gate(
-        snapshot=snapshot,
-        emitted_mentions=list(result.npcs_present),
-        turn_num=turn_num,
-        # Prose re-citation ratifies (sq-playtest 2026-06-07 purge/mint
-        # deadlock) — a pending member named in this turn's narration is
-        # observed, not phantom, even when npcs_present omits them.
-        narration_text=result.narration or "",
-    )
+        # Story 49-6: ratification gate. Resolves observation_pending pool
+        # members from the PRIOR turn against THIS turn's emitted_mentions —
+        # promote on match (clear the flag, keep entry), purge on miss
+        # (remove entry from npc_pool). Order is load-bearing: this MUST run
+        # BEFORE _auto_mint_prose_only_npcs below, otherwise the gate would
+        # evaluate this turn's own freshly-minted entries against this turn's
+        # (omitting) mentions and self-purge them. Emits
+        # SPAN_NPC_OBSERVATION_GATE_PROMOTED / SPAN_NPC_OBSERVATION_GATE_PURGED
+        # so Sebastien's GM panel sees every gate decision.
+        _apply_npc_observation_gate(
+            snapshot=snapshot,
+            emitted_mentions=list(result.npcs_present),
+            turn_num=turn_num,
+            # Prose re-citation ratifies (sq-playtest 2026-06-07 purge/mint
+            # deadlock) — a pending member named in this turn's narration is
+            # observed, not phantom, even when npcs_present omits them.
+            narration_text=result.narration or "",
+        )
 
-    # Story 72-10: ordering invariant. The gate above resolves every prior-turn
-    # observation_pending member, so the pool must hold zero pending entries
-    # before the minter runs. A survivor here means the gate did not precede the
-    # mint — fail loud + emit a violation span rather than let the ratification
-    # gate silently degrade into the phantom-NPC failure mode.
-    _assert_observation_gate_preceded_mint(snapshot=snapshot, turn_num=turn_num)
+        # Story 72-10: ordering invariant. The gate above resolves every
+        # prior-turn observation_pending member, so the pool must hold zero
+        # pending entries before the minter runs. A survivor here means the
+        # gate did not precede the mint — fail loud + emit a violation span
+        # rather than let the ratification gate silently degrade into the
+        # phantom-NPC failure mode.
+        _assert_observation_gate_preceded_mint(snapshot=snapshot, turn_num=turn_num)
 
-    # Story 49-2: auto-mint NPCs the narrator named in prose via role
-    # (Father, mother, the doctor, ...) or honorific (Mrs. Gow, Dr.
-    # Sallow, ...) but omitted from npcs_present. Runs AFTER the
-    # recurring-presence detector so known names hit the 45-53 detector
-    # first; this catches the FIRST-mention path. Side-effects only —
-    # appends NpcPoolMember(drawn_from="dialogue_extraction",
-    # observation_pending=True) and emits SPAN_NPC_AUTO_MINTED_FROM_PROSE
-    # per mint. New mints face the 49-6 ratification gate on the NEXT
-    # turn — not this one.
-    _auto_mint_prose_only_npcs(
-        snapshot=snapshot,
-        narration_text=result.narration or "",
-        emitted_mentions=list(result.npcs_present),
-        turn_num=turn_num,
-    )
+        # Story 49-2: auto-mint NPCs the narrator named in prose via role
+        # (Father, mother, the doctor, ...) or honorific (Mrs. Gow, Dr.
+        # Sallow, ...) but omitted from npcs_present. Runs AFTER the
+        # recurring-presence detector so known names hit the 45-53 detector
+        # first; this catches the FIRST-mention path. Side-effects only —
+        # appends NpcPoolMember(drawn_from="dialogue_extraction",
+        # observation_pending=True) and emits SPAN_NPC_AUTO_MINTED_FROM_PROSE
+        # per mint. New mints face the 49-6 ratification gate on the NEXT
+        # turn — not this one.
+        _auto_mint_prose_only_npcs(
+            snapshot=snapshot,
+            narration_text=result.narration or "",
+            emitted_mentions=list(result.npcs_present),
+            turn_num=turn_num,
+        )
 
     # Plot-a-course: parse course sidecar variants out of the
     # game_patch payload and apply them to the snapshot. Other

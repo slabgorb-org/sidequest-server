@@ -370,11 +370,12 @@ def _migrate_s6_strip_npc_voice_id(out: dict[str, Any]) -> dict[str, Any] | None
     """S6 (story 101-2) — drop the dead ``voice_id`` field from every ``Npc``.
 
     The voice-generation surface was deprecated (operator decision
-    2026-06-09) and ``Npc.voice_id`` is removed. ``Npc`` is ``extra=forbid``,
-    so a pre-removal Postgres save that persisted ``voice_id`` (always
-    ``None`` at materialization, but written as a key) would raise
-    ``ValidationError`` on load. Stripping the key here keeps those saves
-    loadable.
+    2026-06-09) and ``Npc.voice_id`` is removed. The field was typed
+    ``int | None``, defaulting to ``None`` at materialization but potentially
+    carrying an integer in saves from before it was deprecated. ``Npc`` is
+    ``extra=forbid``, so any pre-removal Postgres save that persisted the
+    ``voice_id`` key (whatever its value) would raise ``ValidationError`` on
+    load. Stripping the key here keeps those saves loadable.
 
     Operates in raw-dict space before pydantic re-hydration, on the
     deep-copied ``out``. Returns OTEL attributes when at least one NPC dict

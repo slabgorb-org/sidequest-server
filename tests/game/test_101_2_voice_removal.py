@@ -1,12 +1,13 @@
-"""Failing tests for Story 101-2 — remove all dead voice-generation references.
+"""Tests for Story 101-2 — removal of all dead voice-generation references.
 
 Operator decision 2026-06-09: the TTS/voice-generation surface in the engine
 is fully dead (zero runtime readers, ``voice_presets.yaml`` in zero packs,
 zero kokoro refs, UI never reads voice fields). This story rips it out.
 ``/sq-voice`` remains orchestrator-level authoring tooling and is out of scope.
 
-These tests assert the POST-removal target state, so they fail on the current
-tree (RED) and pass once Dev deletes the five surfaces and adds the save-shim.
+These tests assert the POST-removal target state — the five surfaces are gone
+and the save-shim is wired — so they pass on the post-removal tree. (They were
+authored RED, before the deletion.)
 
 Surfaces (from context-story-101-2.md):
   1. genre/models/audio.py — VoiceConfig, VoicePresets, CreatureVoicePreset,
@@ -114,13 +115,11 @@ def test_genre_pack_has_no_voice_presets_field() -> None:
     """``GenrePack.voice_presets`` field is removed."""
     from sidequest.genre.models.pack import GenrePack
 
-    assert "voice_presets" not in GenrePack.model_fields, (
-        "GenrePack still declares voice_presets"
-    )
+    assert "voice_presets" not in GenrePack.model_fields, "GenrePack still declares voice_presets"
 
 
 # ---------------------------------------------------------------------------
-# Surface 2 — chassis-voice / mixer dials are NOT in scope (negative guard)
+# Negative guard — chassis-voice / mixer dials are NOT in scope
 # ---------------------------------------------------------------------------
 
 
@@ -182,9 +181,7 @@ def test_targeted_kinds_has_no_voice_text_route() -> None:
     must be removed — there is no VOICE_TEXT message to route."""
     from sidequest.game.projection.invariants import TARGETED_KINDS
 
-    assert "VOICE_TEXT" not in TARGETED_KINDS, (
-        "TARGETED_KINDS still routes VOICE_TEXT"
-    )
+    assert "VOICE_TEXT" not in TARGETED_KINDS, "TARGETED_KINDS still routes VOICE_TEXT"
 
 
 # ---------------------------------------------------------------------------

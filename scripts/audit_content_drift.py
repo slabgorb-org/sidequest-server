@@ -25,7 +25,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
-from sidequest.genre.models.audio import AudioConfig, VoicePresets
+from sidequest.genre.models.audio import AudioConfig
 from sidequest.genre.models.axes import AxesConfig
 from sidequest.genre.models.character import (
     BackstoryTables,
@@ -40,7 +40,7 @@ from sidequest.genre.models.lore import Lore
 from sidequest.genre.models.narrative import (
     Achievement,
     BeatVocabulary,
-    OpeningHook,
+    Opening,
     Prompts,
 )
 from sidequest.genre.models.ocean import DramaThresholds
@@ -74,10 +74,9 @@ REQUIRED: list[tuple[str, type[BaseModel], bool]] = [
 OPTIONAL: list[tuple[str, type[BaseModel], bool]] = [
     ("achievements.yaml", Achievement, True),
     ("beat_vocabulary.yaml", BeatVocabulary, False),
-    ("voice_presets.yaml", VoicePresets, False),
     ("pacing.yaml", DramaThresholds, False),
     ("inventory.yaml", InventoryConfig, False),
-    ("openings.yaml", OpeningHook, True),
+    ("openings.yaml", Opening, True),
     ("backstory_tables.yaml", BackstoryTables, False),
     ("equipment_tables.yaml", EquipmentTables, False),
     ("archetype_constraints.yaml", ArchetypeConstraints, False),

@@ -193,6 +193,9 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     # single-record optionals / single-record structs
     "encounter",
     "magic_state",
+    # AWN mutation state (Plan 2) — single-record optional, same
+    # rationale as ``magic_state``.
+    "mutation_state",
     "pending_resolution_signal",
     "pending_time_skip_summary",
     "plotted_course",

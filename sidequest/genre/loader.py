@@ -68,6 +68,7 @@ from sidequest.genre.models.world import CartographyConfig, NavigationMode, Worl
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.genre.premise_validate import validate_premises
 from sidequest.genre.resolve import resolve_trope_inheritance
+from sidequest.mutation.catalog import load_mutation_catalog
 
 # ---------------------------------------------------------------------------
 # Default search paths (mirrors Rust loader convention)
@@ -1986,6 +1987,13 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # absent, the UI keeps its pre-genre fallback (dark-mode shadcn defaults).
     client_theme_css = _load_text_optional(path / "client_theme.css")
 
+    # === Genre-tier mutations.yaml — OPTIONAL (silent-skip when absent) ===
+    # Packs without a mutation system simply omit the file; that's a deliberate
+    # authoring choice (mirrors the magic.yaml pattern above). A present-but-
+    # invalid file still fails loud via ValidationError.
+    mutations_path = path / "mutations.yaml"
+    mutations = load_mutation_catalog(mutations_path) if mutations_path.is_file() else None
+
     pack = GenrePack(
         meta=meta,
         rules=rules,
@@ -2023,6 +2031,7 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         lethality_policy=lethality_policy,
         wwn_spell_catalog=wwn_catalog,
         bestiary=bestiary,
+        mutations=mutations,
         source_dir=path,
         client_theme_css=client_theme_css,
     )

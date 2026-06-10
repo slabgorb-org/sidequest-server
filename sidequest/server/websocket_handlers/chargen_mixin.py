@@ -74,6 +74,7 @@ from sidequest.server.dispatch.chargen_summary import render_confirmation_summar
 from sidequest.server.dispatch.premise_bind import bind_political_state
 from sidequest.server.dispatch.scenario_bind import bind_scenario
 from sidequest.server.magic_init import init_magic_state_for_session
+from sidequest.server.mutation_init import init_mutation_state_for_session
 from sidequest.server.session_helpers import (
     _error_msg,
     _world_history_value,
@@ -899,6 +900,13 @@ class CharGenMixin:
                 character_id=character.core.name,
                 character_class=character.char_class,
             )
+            init_mutation_state_for_session(
+                sd.snapshot,
+                catalog=sd.genre_pack.mutations,
+                character_name=character.core.name,
+                character_class=character.char_class,
+                session_id=str(sd.repository.session_id),
+            )
 
             init_chassis_registry(sd.snapshot, sd.genre_pack)
             # Story 47-6: bond_seeds in rigs.yaml use the
@@ -1120,6 +1128,13 @@ class CharGenMixin:
                 world_slug=sd.world_slug,
                 character_id=character.core.name,
                 character_class=character.char_class,
+            )
+            init_mutation_state_for_session(
+                sd.snapshot,
+                catalog=sd.genre_pack.mutations,
+                character_name=character.core.name,
+                character_class=character.char_class,
+                session_id=str(sd.repository.session_id),
             )
             # Re-bind active_scenario on this socket from whatever the
             # peer wrote — its presence on sd.active_scenario is what

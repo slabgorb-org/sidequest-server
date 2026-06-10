@@ -206,7 +206,8 @@ async def test_orchestrator_routes_narration_through_sdk(
     # veterans_luck (32nd), long_rest (33rd). 33.
     # Story 77-2 (ADR-137) added typed quest/stakes tools: record_quest (34th),
     # set_stakes (35th). 35.
-    assert len(sent_tools) == len(default_registry.list_names()) == 35
+    # AWN Plan 2 (Task 11) added use_mutation (36th tool). 36.
+    assert len(sent_tools) == len(default_registry.list_names()) == 36
 
     # 3. The result carries the SDK's text.
     assert result.narration == fake_response_text

@@ -33,6 +33,7 @@ from .agent import *  # noqa: F401, F403
 from .aside import *  # noqa: F401, F403
 from .asset_url import *  # noqa: F401, F403
 from .audio import *  # noqa: F401, F403
+from .awn import *  # noqa: F401, F403
 from .barrier import *  # noqa: F401, F403
 from .cartography_map import *  # noqa: F401, F403
 from .catch_up import *  # noqa: F401, F403

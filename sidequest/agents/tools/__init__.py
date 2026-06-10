@@ -42,5 +42,6 @@ from sidequest.agents.tools import (
     tick_tropes,  # noqa: F401
     update_npc_disposition,  # noqa: F401
     update_resource_pool,  # noqa: F401
+    use_mutation,  # noqa: F401
     veterans_luck,  # noqa: F401
 )

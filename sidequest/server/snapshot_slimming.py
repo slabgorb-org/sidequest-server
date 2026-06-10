@@ -60,6 +60,14 @@ _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
     # the narrator learns the PC moved from the scene prose, not the ledger.
     # DROP affects only the prompt payload; the ledger persists in the save.
     "region_transitions",
+    # wwn_spell_cast_log (Story 102-3 - magic_working engagement ledger).
+    # Same rationale as region_transitions: turn-stamped WN cast receipts
+    # that grow one entry per cast (unbounded by construction) and exist for
+    # the magic_working engagement witness + GM-panel/forensics (ADR-124),
+    # NOT the narrator - the narrator learns the cast outcome from the
+    # handler's must_narrate directive, not the ledger. DROP affects only
+    # the prompt payload; the ledger persists in the save.
+    "wwn_spell_cast_log",
 )
 
 # Story 61-2 / ADR-110 — projection tunings for the four growing fields

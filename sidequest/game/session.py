@@ -49,6 +49,7 @@ from sidequest.game.resource_pool import (
 from sidequest.game.scenario_state import ScenarioState
 from sidequest.game.trope_time_skip import TimeSkipBeatEvent
 from sidequest.game.turn import TurnManager
+from sidequest.game.wwn_magic import WwnCastLogEntry
 from sidequest.genre.models.rules import ResourceDeclaration
 from sidequest.magic.state import MagicState
 from sidequest.mutation.state import MutationState
@@ -1021,6 +1022,15 @@ class GameSnapshot(BaseModel):
     # both relocation seams (``apply_world_patch`` Site A and ``narration_apply``
     # Site B); a durable GM-panel/forensics artifact (ADR-124).
     region_transitions: list[RegionTransition] = Field(default_factory=list)
+
+    # Story 102-3 — turn-stamped WN cast receipts (the artifact the
+    # ``magic_working`` engagement witness reads on WN worlds, where magic
+    # lives on ``core.spellcasting`` instead of the ADR-126 ``magic_state``
+    # plugin ledger). Same shape rationale as ``region_transitions`` above:
+    # flat on the snapshot, written by the free-play cast handler on every
+    # ``resolve_spellcast`` invocation (cast AND refused — a refusal is
+    # engagement). A durable GM-panel/forensics artifact (ADR-124).
+    wwn_spell_cast_log: list[WwnCastLogEntry] = Field(default_factory=list)
 
     # Combat state (P1-required: permadeath / death detection)
     player_dead: bool = False

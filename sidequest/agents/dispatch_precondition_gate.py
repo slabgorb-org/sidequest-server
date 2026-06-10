@@ -40,6 +40,7 @@ from opentelemetry import trace
 
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.dispatch import DispatchPackage, SubsystemDispatch
+from sidequest.telemetry.spans.dispatch_engagement import dispatch_engagement_mismatch_span
 from sidequest.telemetry.spans.intent_router import (
     intent_router_dispatch_gated_span,
     intent_router_dispatch_unregistered_span,
@@ -52,11 +53,17 @@ class GatedDispatch:
 
     Carries enough for the wrapper to emit a useful span AND for callers that
     consume the pure function directly to introspect the decision.
+
+    ``dispatched_type`` carries the dispatch's identifying param (the same
+    value the post-turn watcher would have shown — e.g. ``params["actor"]``
+    for magic_working) so the Story 102-3 gate-side mismatch span renders on
+    the GM panel with the same identity the watcher path uses.
     """
 
     subsystem: str
     idempotency_key: str
     reason: str
+    dispatched_type: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -82,33 +89,49 @@ def _witnessed_act_precondition_unmet(snapshot: GameSnapshot) -> str | None:
 
 
 def _magic_working_precondition_unmet(snapshot: GameSnapshot) -> str | None:
-    # ``magic_working`` is the ADR-126 pact-working magic plugin; it engages
-    # ``apply_magic_working`` against ``snapshot.magic_state`` (the per-session
-    # pact-working ledger, loaded at chargen ONLY for worlds that ship a
-    # ``magic.yaml``). A world whose ``magic_state`` is None cannot service it:
-    # ``apply_magic_working`` raises ``MagicWorkingParseError`` ("magic_working
-    # emitted but world has no magic_state loaded") on every channel.
+    # ``magic_working`` has TWO servicing engines (Story 102-3):
     #
-    # This is the wwn/swn/cwn class-spellcasting case (elemental_harmony,
-    # space_opera-without-coyote, neon_dystopia): their magic lives on the
-    # character core (spellcasting/effort/system_strain + class moves), NOT in
-    # the pact-working plugin, so ``magic_state`` stays None. Gating off the
-    # inapplicable dispatch lets the channel be narrated via the existing beat
-    # path instead of erroring every turn.
+    #   1. The ADR-126 pact-working plugin — ``apply_magic_working`` against
+    #      ``snapshot.magic_state`` (the per-session ledger, loaded at chargen
+    #      ONLY for worlds that ship a ``magic.yaml``, e.g. coyote_star).
+    #   2. The WN cast spine — ``WwnRulesetModule.resolve_spellcast`` against a
+    #      PC's ``core.spellcasting`` (WWN SRD §4.2; seeded at chargen on WN
+    #      worlds like heavy_metal/long_foundry, elemental_harmony).
     #
-    # The condition is PLUGIN PRESENCE, not the ruleset slug: space_opera is
-    # ``ruleset: swn`` yet ships a pact-working ``magic.yaml`` for coyote_star,
-    # so its ``magic_state`` IS populated and the dispatch passes through. A
-    # ruleset-slug gate would wrongly suppress coyote_star's salvage magic.
-    if snapshot.magic_state is None:
-        return "snapshot.magic_state is None (world ships no ADR-126 pact-working magic plugin)"
-    return None
+    # The dispatch is structurally inert only when NEITHER surface exists.
+    # Pre-102-3 this predicate keyed off ``magic_state`` alone, which gated
+    # every WN world's named free-play cast into narrator improv — the exact
+    # Illusionism (90-3 AC5b gap #3) the lie-detector doctrine exists to catch.
+    #
+    # The pact-working condition remains PLUGIN PRESENCE, not the ruleset slug:
+    # space_opera is ``ruleset: swn`` yet ships a pact-working ``magic.yaml``
+    # for coyote_star, so its ``magic_state`` IS populated and the dispatch
+    # passes through. The WN condition is likewise SURFACE PRESENCE (a PC with
+    # seeded spellcasting), not the slug — a WN world whose party has no caster
+    # still has no engine to engage.
+    if snapshot.magic_state is not None:
+        return None
+    if any(c.core.spellcasting is not None for c in snapshot.characters):
+        return None
+    return (
+        "snapshot.magic_state is None (world ships no ADR-126 pact-working "
+        "magic plugin) and no PC carries WN core.spellcasting (no cast surface)"
+    )
 
 
 _INERT_PRECONDITIONS: dict[str, Callable[[GameSnapshot], str | None]] = {
     "scenario_clue": _scenario_clue_precondition_unmet,
     "witnessed_act": _witnessed_act_precondition_unmet,
     "magic_working": _magic_working_precondition_unmet,
+}
+
+# Identifying param per subsystem for the gated span's dispatched_type —
+# mirrors the watcher's _DISPATCHED_TYPE_KEY for the subsystems this gate
+# covers (kept local so the pure decision layer stays watcher-free).
+_GATE_DISPATCHED_TYPE_KEY: dict[str, str] = {
+    "scenario_clue": "fact_id",
+    "witnessed_act": "act_id",
+    "magic_working": "actor",
 }
 
 
@@ -139,6 +162,9 @@ def gate_inert_dispatches(
                 subsystem=dispatch.subsystem,
                 idempotency_key=dispatch.idempotency_key,
                 reason=reason,
+                dispatched_type=str(
+                    dispatch.params.get(_GATE_DISPATCHED_TYPE_KEY.get(dispatch.subsystem, ""), "")
+                ),
             )
         )
         return False
@@ -171,6 +197,19 @@ def run_dispatch_precondition_gate(
 
     Returns the filtered package for the caller to feed to both the dispatch
     bank and (via ``turn_context.dispatch_package``) the post-turn watcher.
+
+    Story 102-3 (AC2): a gated ``magic_working`` ALSO emits
+    ``dispatch_engagement.magic_working.mismatch``. The router classified a
+    cast and no engine can engage it — that is the lie-detector's definition
+    of "convincing prose with zero mechanical backing", and the gate removing
+    the dispatch from the package means the post-turn watcher can never see
+    it. The gate-side emission keeps the GM panel's magic lie-detector
+    complete across both miss shapes (gated-before-bank here, dispatched-but-
+    unengaged in the watcher). Scoped to magic_working: scenario_clue keeps
+    the 59-8 Glenross quiet-gate contract (an unavoidable mismatch on every
+    investigative turn is spam, not signal), whereas a player explicitly
+    casting into a world with no magic engine is a per-action miss the panel
+    must show.
     """
     filtered, gated = gate_inert_dispatches(package=package, snapshot=snapshot)
     for g in gated:
@@ -181,6 +220,15 @@ def run_dispatch_precondition_gate(
             _tracer=tracer,
         ):
             pass
+        if g.subsystem == "magic_working":
+            with dispatch_engagement_mismatch_span(
+                subsystem=g.subsystem,
+                idempotency_key=g.idempotency_key,
+                dispatched_type=g.dispatched_type,
+                evidence=f"gated pre-bank: {g.reason}",
+                _tracer=tracer,
+            ):
+                pass
     return filtered
 
 

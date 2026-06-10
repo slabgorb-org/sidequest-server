@@ -140,12 +140,30 @@ def _check_confrontation_engaged(
 def _check_magic_working_engaged(
     dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
 ) -> str | None:
+    """magic_working witness — two engagement evidences (Story 102-3):
+
+    1. WN cast spine: a turn-scoped ``WwnCastLogEntry`` receipt in
+       ``snapshot.wwn_spell_cast_log`` for THIS turn and THIS actor (the
+       59-30 ledger pattern; cast AND refused both count — the engine
+       answered either way).
+    2. ADR-126 pact-working: a ``WorkingRecord`` in
+       ``magic_state.working_log`` (the original 59-3 evidence).
+
+    Either satisfies the witness; neither means the prose had no mechanical
+    backing — mismatch.
+    """
     actor = _required_str_param(dispatch, "actor")
     if actor is None:
         return _MALFORMED_EVIDENCE.format(subsystem="magic_working", key="actor")
+    current_turn = snapshot.turn_manager.interaction
+    if any(r.turn == current_turn and r.actor == actor for r in snapshot.wwn_spell_cast_log):
+        return None
     magic_state = snapshot.magic_state
     if magic_state is None:
-        return "snapshot.magic_state is None (world has no magic config loaded)"
+        return (
+            f"no WN cast receipt for actor={actor!r} at turn={current_turn} and "
+            "snapshot.magic_state is None (no magic engine engaged)"
+        )
     if not any(r.actor == actor for r in magic_state.working_log):
         return f"no WorkingRecord with actor={actor!r} in magic_state.working_log"
     return None

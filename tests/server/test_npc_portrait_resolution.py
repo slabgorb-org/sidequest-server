@@ -111,14 +111,20 @@ def test_server_slug_equals_render_script_slug() -> None:
     points at a filename that does not exist on R2.
     """
     import re
+    import unicodedata
 
     from sidequest.server.utils import slugify_player_name
 
     def _render_script_slugify(name: str) -> str:
-        # Verbatim copy of scripts/generate_portrait_images._slugify_name
-        # (== daemon CharacterCatalog._slugify_name). Pinned here so a drift
-        # on either side fails this test rather than silently 404ing.
-        lowered = name.strip().lower()
+        # Mirror of scripts/render_common._slugify_name / daemon
+        # CharacterCatalog._slugify_name. Pinned here so a drift on either side
+        # fails this test rather than silently 404ing. Story 101-8: both sides
+        # now NFKD-fold non-ASCII before the lower/whitespace/drop steps, so
+        # "Big Léon" → "big_leon" (not "big_lon").
+        folded = "".join(
+            ch for ch in unicodedata.normalize("NFKD", name) if not unicodedata.combining(ch)
+        )
+        lowered = folded.strip().lower()
         collapsed = re.sub(r"\s+", "_", lowered)
         return re.sub(r"[^a-z0-9_-]", "", collapsed)
 
@@ -128,6 +134,9 @@ def test_server_slug_equals_render_script_slug() -> None:
         "Commissaire Renard",
         "Big Léon Marchetti",
         "  Trailing Spaces  ",
+        # Story 101-8: diacritic-heavy case — folds to ASCII base letters on both
+        # sides (the render-key == consumer-key contract for evropi/coyote_star).
+        "Srárný Fyzioloniązka",
     ]
     for name in cases:
         assert slugify_player_name(name) == _render_script_slugify(name), (

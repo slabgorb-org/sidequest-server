@@ -91,11 +91,13 @@ def test_diacritic_poi_resolves_under_unified_fold(otel_capture) -> None:
         "the POI anchor must be the unified NFKD-fold form, matching the R2 gate"
     )
 
+    # The POI span keys the slug under "reference.slug" (via _poi_attrs), unlike
+    # the portrait span which uses bare "slug".
     resolved = span_attrs_by_name(otel_capture, SPAN_REFERENCE_POI_IMAGE_RESOLVED)
-    assert any(a.get("slug") == _POI_ANCHOR_FOLDED for a in resolved), (
+    assert any(a.get("reference.slug") == _POI_ANCHOR_FOLDED for a in resolved), (
         "a resolved diacritic POI must fire poi_image_resolved with the folded anchor"
     )
     not_found = span_attrs_by_name(otel_capture, SPAN_REFERENCE_POI_IMAGE_NOT_FOUND)
-    assert not any(a.get("slug") == _POI_ANCHOR_FOLDED for a in not_found), (
+    assert not any(a.get("reference.slug") == _POI_ANCHOR_FOLDED for a in not_found), (
         "the folded landscape is on R2 — it must not fire poi_image_not_found"
     )

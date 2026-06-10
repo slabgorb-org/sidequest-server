@@ -1198,6 +1198,73 @@ def _resolve_opponent_reprisal(
     messages.append(DiceResultMessage(payload=tohit_result, player_id="server"))
 
     if not outcome.hit:
+        # WN Shock seam (story 102-1): the signature CWN/WWN melee rule — a
+        # weapon with a Shock rating chips fixed damage even on a MISS vs a
+        # target whose Melee AC is at or under the weapon's shock_ac ceiling.
+        # The strike path already applies this player→opponent (the Fail/
+        # CritFail block in dispatch_dice_throw); the opponent's reprisal must
+        # chip the PC the same way. No-op for native/swn (base resolve_shock
+        # returns 0) and for a spec-less opponent (weaponless seeded mook with
+        # no authored opponent_damage).
+        shock_opponent_core = snapshot.find_creature_core(opponent_name)
+        shock_spec = cdef.opponent_damage or ruleset.resolve_damage(
+            beat=opponent_beat,
+            actor_core=shock_opponent_core,
+            pack=pack,
+            world_slug=snapshot.world_slug,
+        )
+        chip = (
+            ruleset.resolve_shock(
+                spec=shock_spec,
+                target_melee_ac=int(player_core.armor_class),
+                actor=opponent_name,
+            )
+            if shock_spec is not None
+            else 0
+        )
+        if chip <= 0:
+            return messages
+        apply_beat_hp_channel(
+            target=player_core,
+            channel="strike",
+            damage_total=chip,
+            target_mitigation=0,
+            source_beat_id=f"{opponent_beat.id}:opponent_shock",
+        )
+        logger.info(
+            "dice.opponent_reprisal_shock attacker=%s target=%s beat=%s chip=%s hp_after=%s/%s",
+            opponent_name,
+            player_name,
+            opponent_beat.id,
+            chip,
+            player_core.hp.current,
+            player_core.hp.max,
+        )
+        # The narrator never sees server-applied chip damage (same channel gap
+        # as the hit path below) — without this directive the prose narrates a
+        # clean miss while the engine already drew blood.
+        snapshot.next_turn_directives.append(
+            f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
+            f"{opponent_beat.label} missed {player_name}, but its Shock still "
+            f"chipped {chip} damage — {player_name} is now at "
+            f"{player_core.hp.current}/{player_core.hp.max} HP. Narrate the "
+            "graze; do not soften or omit it."
+        )
+        # A chip can kill: run the SAME depletion close as the hit path.
+        messages.extend(
+            _close_reprisal_depletion(
+                encounter=encounter,
+                cdef=cdef,
+                ruleset=ruleset,
+                pack=pack,
+                snapshot=snapshot,
+                player_name=player_name,
+                player_core=player_core,
+                beat_id=f"{opponent_beat.id}:opponent_shock",
+                round_number=round_number,
+                rng=rng,
+            )
+        )
         return messages
 
     # HIT: roll the opponent's weapon damage and ablate the player's HP.
@@ -1314,12 +1381,63 @@ def _resolve_opponent_reprisal(
     messages.append(DiceResultMessage(payload=dmg_result, player_id="server"))
 
     # The player may now be at 0 HP — resolve hp_depletion against them so the
-    # player can actually lose the fight (emits encounter.resolved source=
-    # hp_depletion).
+    # player can actually lose the fight (shared close with the miss-Shock
+    # branch above; emits encounter.resolved source=hp_depletion).
+    messages.extend(
+        _close_reprisal_depletion(
+            encounter=encounter,
+            cdef=cdef,
+            ruleset=ruleset,
+            pack=pack,
+            snapshot=snapshot,
+            player_name=player_name,
+            player_core=player_core,
+            beat_id=f"{opponent_beat.id}:opponent_attack",
+            round_number=round_number,
+            rng=rng,
+        )
+    )
+
+    return messages
+
+
+def _close_reprisal_depletion(
+    *,
+    encounter: StructuredEncounter,
+    cdef: ConfrontationDef,
+    ruleset: RulesetModule,
+    pack: GenrePack,
+    snapshot: GameSnapshot,
+    player_name: str,
+    player_core,
+    beat_id: str,
+    round_number: int,
+    rng: random.Random,
+) -> list[object]:
+    """Shared reprisal close: resolve hp_depletion against the player and apply
+    every consequence of the resolution. Called by BOTH reprisal damage channels
+    (the hit's rolled damage and the miss's Shock chip) so the close cannot
+    drift between them. Idempotent / no-op-safe above 0 HP.
+
+    Order matters (story 102-1): the genre lethality verdict applies FIRST —
+    a non-lethal verdict recovers the PC to the 1-HP floor, which the WN downed
+    seam's own hp>0 gate then reads as "not down", so a recovering PC never
+    gets a Mortal Injury death clock (Genre Truth: the genre's verdict outranks
+    the module's lethality table). On a LETHAL verdict the PC stays at 0 and
+    ``run_cwn_wwn_downed_seam`` (actor_side="opponent" → the downed defender is
+    the PLAYER side) runs the same Mortal/Major Injury stack the strike path
+    runs for a dropped opponent — emitting ``{ruleset}.mortal_injury.declared``
+    (and, on a traumatic-scene failed save, ``{ruleset}.major_injury.roll``),
+    the AC5b combat-half lie-detector.
+
+    Returns the player-facing messages the caller must broadcast (the
+    CHARACTER_INCAPACITATED death surface for each PC taken out).
+    """
+    messages: list[object] = []
     depletion = check_hp_depletion(
         encounter,
         snapshot.find_creature_core,
-        beat_id=f"{opponent_beat.id}:opponent_attack",
+        beat_id=beat_id,
     )
     if depletion is not None:
         # sq-playtest 2026-06-07 SILENT death-spiral: the reprisal resolved the
@@ -1386,6 +1504,23 @@ def _resolve_opponent_reprisal(
 
     incapacitations = apply_post_resolution_lethality(
         snapshot=snapshot, encounter=encounter, pack=pack, turn=round_number
+    )
+    # Story 102-1 (90-3 AC5b combat half): a PC left DOWN by a LETHAL verdict
+    # must run the same WN Mortal/Major Injury stack the strike path runs for a
+    # dropped opponent — otherwise a dying PC emits only the generic verdict
+    # with zero {ruleset}.* spans and the GM panel cannot show WN lethality
+    # engaged. Runs AFTER the verdict so a non-lethal recovery (PC back at the
+    # 1-HP floor) gates the seam off via its own hp>0 check; the seam's config
+    # capability gate keeps native/swn silent. actor_side="opponent" resolves
+    # the downed defender as the PLAYER side.
+    run_cwn_wwn_downed_seam(
+        ruleset=ruleset,
+        snapshot=snapshot,
+        encounter=encounter,
+        cdef=cdef,
+        pack=pack,
+        actor_side="opponent",
+        rng=rng,
     )
     # sq-playtest 2026-06-07 (barsoom-3, blocking): surface the death AT the
     # moment it happens. The turn-intake gate (handlers.player_action) is the

@@ -45,8 +45,10 @@ THE CONTRACT THESE TESTS PIN (story context, sprint/context/context-story-102-3.
     crash and emits zero ``wwn.*`` spans.
 
 Test discipline (story guardrail "router test discipline"): the router is
-STUBBED everywhere except the env-gated live-classification test at the
-bottom — classification and dispatch-routing are separate seams.
+STUBBED everywhere in this file — classification and dispatch-routing are
+separate seams. The env-gated LIVE classification half (AC4) lives at
+tests/agents/test_102_3_live_router_classification.py, outside this tree's
+hermeticity tripod (review finding R1).
 
 CLAUDE.md rule coverage:
   * "Every Test Suite Needs a Wiring Test" —
@@ -59,7 +61,6 @@ CLAUDE.md rule coverage:
 
 from __future__ import annotations
 
-import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -574,53 +575,12 @@ async def test_native_genre_cast_does_not_crash_or_emit_wwn_spans(otel_capture) 
 
 # ===========================================================================
 # Seam 4 — live classification (AC4, env-gated opt-in)
+#
+# RELOCATED (review finding R1, 2026-06-10): the live AC4 test
+# (test_live_router_classifies_explicit_named_cast_as_magic_working) lives at
+# tests/agents/test_102_3_live_router_classification.py. It CANNOT run here —
+# this tree's autouse hermeticity tripod (conftest.py:
+# _stub_intent_router_factory + _no_real_anthropic_sdk) stubs the router
+# factory and refuses real SDK construction, so an opted-in run would assert
+# against a stub. tests/agents/ carries no such stubs.
 # ===========================================================================
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(120)
-async def test_live_router_classifies_explicit_named_cast_as_magic_working() -> None:
-    """AC4 live half (opt-in): the REAL router (live Haiku classification, not
-    stubbed) classifies an explicit named cast as ``magic_working``, carries
-    the spell name in params, and clears the bank's engagement threshold
-    (story guardrail: an explicit named cast must clear confidence gating).
-
-    Gated like the other live-API verifications (test_91_3 pattern) so CI and
-    xdist runs stay deterministic.
-    """
-    if os.environ.get("SIDEQUEST_VERIFY_FREEPLAY_CAST_LIVE") != "1":
-        pytest.skip("set SIDEQUEST_VERIFY_FREEPLAY_CAST_LIVE=1 (+ ANTHROPIC_API_KEY) to run")
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip("ANTHROPIC_API_KEY required for live classification")
-
-    from sidequest.agents.subsystems import DEFAULT_DISPATCH_CONFIDENCE_THRESHOLD
-    from sidequest.server.intent_router_pass import (
-        _build_state_summary,
-        build_intent_router_for_session,
-    )
-
-    snap = _wwn_snapshot(casts_remaining=2)
-    pack = _make_wwn_pack()
-    router = build_intent_router_for_session(session_id=None)
-
-    package = await router.decompose(
-        action="I cast foundation_of_flame at the rust-wight blocking the gate.",
-        state_summary=_build_state_summary(snap, pack=pack),
-    )
-
-    magic_dispatches = [
-        d for pd in package.per_player for d in pd.dispatch if d.subsystem == "magic_working"
-    ] + [d for ca in package.cross_player for d in ca.dispatch if d.subsystem == "magic_working"]
-    assert magic_dispatches, (
-        "an explicit named cast ('I cast foundation_of_flame ...') must "
-        "classify as magic_working; got subsystems="
-        f"{[d.subsystem for pd in package.per_player for d in pd.dispatch]}"
-    )
-    d = magic_dispatches[0]
-    assert "foundation" in str(d.params).lower(), (
-        f"the dispatch params must carry the named spell; got params={d.params}"
-    )
-    assert d.confidence >= DEFAULT_DISPATCH_CONFIDENCE_THRESHOLD, (
-        f"an explicit named cast must clear the engagement threshold "
-        f"({DEFAULT_DISPATCH_CONFIDENCE_THRESHOLD}); got {d.confidence}"
-    )

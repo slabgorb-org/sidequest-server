@@ -195,17 +195,21 @@ def _witnessed_act_dispatch(*, key: str = "k-wa-1") -> SubsystemDispatch:
 
 
 # --- magic_working fixtures (mirror the scenario_clue builders above) -------
-# magic_working keys off snapshot.magic_state (the ADR-126 pact-working magic
-# plugin). It is structurally inert when magic_state is None — the world ships
-# no magic.yaml, so the pact-working ledger was never loaded. This is the
-# elemental_harmony/burning_peace case (ruleset: wwn): WWN magic lives on the
-# character core (spellcasting/effort/system_strain + class moves), NOT in the
-# pact-working plugin, so magic_state stays None and apply_magic_working would
-# raise MagicWorkingParseError on every channel. A pact-working world
-# (space_opera/coyote_star — swn ruleset but ships magic.yaml) has magic_state
-# populated and routes normally; the gate must NOT fire there. The principled
-# condition is plugin presence (magic_state populated), NOT the ruleset slug —
-# proven by the swn coyote_star pass-through test below.
+# magic_working has TWO servicing engines since Story 102-3: the ADR-126
+# pact-working plugin (snapshot.magic_state, worlds that ship magic.yaml) and
+# the WN cast spine (a PC with core.spellcasting, e.g. heavy_metal/long_foundry
+# — routed to WwnRulesetModule.resolve_spellcast by the magic_working handler).
+# The gate drops the dispatch only when NEITHER surface exists: magic_state is
+# None AND no PC carries spellcasting. The fixtures below build snapshots with
+# NO characters at all, so they exercise that no-surface case — the original
+# 59-8 false-mismatch scenario. A pact-working world (space_opera/coyote_star —
+# swn ruleset but ships magic.yaml) has magic_state populated and routes
+# normally; the gate must NOT fire there. The principled conditions are
+# SURFACE PRESENCE (plugin ledger or seeded spellcasting), never the ruleset
+# slug — proven by the swn coyote_star pass-through test below and the
+# WN-caster keep test in tests/server/test_102_3_freeplay_cast_magic_working.py.
+# Note 102-3 also made the gate emit dispatch_engagement.magic_working.mismatch
+# alongside intent_router.dispatch.gated for this subsystem (AC2 lie-detector).
 
 
 def _magic_working_dispatch(*, key: str = "k-magic-1") -> SubsystemDispatch:

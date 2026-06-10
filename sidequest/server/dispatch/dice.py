@@ -498,6 +498,12 @@ def dispatch_dice_throw(
     # and NO persisted surface recorded the ablation, so the (correct)
     # hp_depletion resolution read as the engine fabricating a win.
     shock_hp_removed = 0
+    # HP the player's own strike removed via the damage channel (apply_beat).
+    # Initialized at the same level for the same reason: the kill-overclaim
+    # anchor below the resolution close reads it (evropi 2/14 + barsoom 3/10,
+    # 2026-06-10: the narrator rendered kill prose for an Other the engine
+    # correctly kept alive, because nothing anchored the post-strike HP).
+    strike_hp_removed = 0
     # Story 71-21: opponent reprisal dice (to-hit + damage), built when the
     # seated opponent takes its server-driven attack turn. Broadcast AFTER the
     # player's own dice pair so the overlay shows the player's roll, then the
@@ -862,6 +868,7 @@ def dispatch_dice_throw(
         )
 
         encounter_resolved = apply_result.resolved
+        strike_hp_removed = apply_result.hp_removed
 
         # --- Opponent reprisal: server-driven enemy attack turn (story 71-21) ---
         # SWN hp_depletion combat had no enemy turn — the player could attack but
@@ -961,6 +968,29 @@ def dispatch_dice_throw(
             f"{encounter.outcome}. Narrate the close of the engagement; do NOT "
             f"continue narrating it as a live, ongoing fight.{_shock_rider}"
         )
+    elif strike_hp_removed + shock_hp_removed > 0:
+        # Kill-overclaim anchor (evropi 2/14 + barsoom 3/10, 2026-06-10): a
+        # damaging player hit that does NOT end the fight invites kill prose —
+        # twice this playtest the narrator rendered an unambiguous death for
+        # an Other the engine correctly kept alive, because the replay text
+        # carries the beat/outcome but never the target's resulting HP. Anchor
+        # the real pool + aliveness so the prose cannot overclaim. Mirrors the
+        # reprisal hit/miss anchors; skipped when the target core is
+        # unresolvable or already at 0 (a 0-HP unresolved state is a
+        # multi-combatant partial down — "still standing" would be false).
+        _anchor_target = _opposite_side_first_actor(encounter, actor.side)
+        _anchor_core = (
+            snapshot.find_creature_core(_anchor_target) if _anchor_target is not None else None
+        )
+        if _anchor_core is not None and _anchor_core.hp.current > 0:
+            snapshot.next_turn_directives.append(
+                f"MECHANICAL TRUTH (weave into the narration): {character_name}'s "
+                f"{beat.label} dealt {strike_hp_removed + shock_hp_removed} damage "
+                f"to {_anchor_target} — {_anchor_target} is at "
+                f"{_anchor_core.hp.current}/{_anchor_core.hp.max} HP and STILL "
+                "STANDING; the fight continues. Narrate a wound, not a kill — do "
+                "NOT describe their death, collapse, or incapacitation."
+            )
 
     # Seed drives spectator replay animation only — face values are already
     # authoritative from the rolling player's Rapier settle.

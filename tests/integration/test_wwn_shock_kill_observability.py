@@ -237,6 +237,83 @@ def test_shock_kill_on_critfail_is_observable_end_to_end(monkeypatch):
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_player_hit_that_does_not_kill_anchors_opponent_alive(monkeypatch):
+    """Kill-overclaim anchor (evropi + barsoom, 2026-06-10): a player hit that
+    damages but does NOT kill must append a MECHANICAL TRUTH directive carrying
+    the target's real HP and that they are still standing — twice this playtest
+    the narrator rendered unambiguous kill prose for an Other the engine
+    correctly kept alive (2/14 evropi, 3/10 barsoom), because nothing anchored
+    the post-strike HP."""
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
+
+    pack = _load_heavy_metal()
+    snap = GameSnapshot(
+        genre_slug="heavy_metal",
+        world_slug="barsoom",
+        turn_manager=TurnManager(interaction=7),
+    )
+    snap.characters.append(_make_warrior(shock_weapon=False))
+    snap.character_locations[_ATTACKER] = "The Pit"
+
+    enc = _seat_combat(snap, pack)
+    opponent_core = snap.find_creature_core(_OPPONENT)
+    assert opponent_core is not None and opponent_core.hp.current == 10
+
+    # Pin damage faces to MIN: committed_blow damage_override 2d6 → 2, plus
+    # the Warrior Killing Blow rider (+1 at L1) = 3. Opponent 10→7, ALIVE.
+    monkeypatch.setattr("sidequest.server.dispatch.damage_roll.random.randint", lambda a, b: a)
+
+    dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="alive-anchor-req-1",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[20],  # natural 20 → CritSuccess, guaranteed hit
+            beat_id="committed_blow",
+        ),
+        rolling_player_id="player-tarkas",
+        character_name=_ATTACKER,
+        character_stats={"STR": 12, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
+        encounter=enc,
+        pack=pack,
+        genre_slug="heavy_metal",
+        session_id="alive-anchor-session",
+        round_number=7,
+        room_broadcast=(lambda _msg: None),
+        snapshot=snap,
+    )
+
+    hp_after = opponent_core.hp.current
+    assert 0 < hp_after < 10, (
+        f"precondition: the pinned-min hit must wound but not kill; hp={hp_after}"
+    )
+    assert not enc.resolved
+
+    alive_anchors = [
+        d
+        for d in snap.next_turn_directives
+        if "MECHANICAL TRUTH" in d and _OPPONENT in d and "STILL STANDING" in d
+    ]
+    assert alive_anchors, (
+        f"a damaging, non-killing player hit must anchor the target's "
+        f"aliveness for the narrator (kill-overclaim family — evropi 2/14, "
+        f"barsoom 3/10); directives={snap.next_turn_directives!r}"
+    )
+    assert any(f"{hp_after}/{opponent_core.hp.max}" in d for d in alive_anchors), (
+        f"the anchor must state the target's REAL HP "
+        f"({hp_after}/{opponent_core.hp.max}); got {alive_anchors!r}"
+    )
+    # No resolution directive — the fight is live.
+    assert not any("RESOLVED" in d for d in snap.next_turn_directives)
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_no_shock_no_fabrication_on_plain_miss(monkeypatch):
     """Guard rail: a missed strike with a shock-less weapon fabricates nothing —
     no HP removed, no shock event, no resolution signal, encounter live."""

@@ -52,7 +52,7 @@ from sidequest.game.turn import TurnManager
 from sidequest.game.wwn_magic import WwnCastLogEntry
 from sidequest.genre.models.rules import ResourceDeclaration
 from sidequest.magic.state import MagicState
-from sidequest.mutation.state import MutationState
+from sidequest.mutation.state import MutationState, MutationUseLogEntry
 from sidequest.orbital.course import PlottedCourse
 from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 
@@ -1050,6 +1050,14 @@ class GameSnapshot(BaseModel):
     # AWN mutation state (Plan 2). None on saves that predate mutations or
     # on packs without a mutations.yaml catalog.
     mutation_state: MutationState | None = None
+
+    # Story 102-7 — turn-stamped mutation-use receipts (the artifact the
+    # ``magic_working`` engagement witness reads on AWN worlds, where the
+    # pack's magic IS the mutation system). The ``wwn_spell_cast_log``
+    # mirror: written by the free-play mutation handler on every
+    # ``use_mutation`` resolution (applied AND refused — a refusal is
+    # engagement). A durable GM-panel/forensics artifact (ADR-124).
+    mutation_use_log: list[MutationUseLogEntry] = Field(default_factory=list)
 
     # Phase 5 (Story 47-3): outbound magic-confrontation dispatch queue.
     # Populated by ``narration_apply.apply_magic_working`` (one entry per

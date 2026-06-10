@@ -414,6 +414,75 @@ def _resolve_wwn_cast_for_beat(
         )
 
 
+def _resolve_mutation_for_beat(
+    *,
+    sel,
+    actor,
+    snapshot,
+    pack,
+) -> None:
+    """Story 102-7 — drive ``use_mutation`` for a ``mutation_resolution`` beat.
+
+    The AWN Plan 2 §6.3 wiring: a beat carrying the marker routes through the
+    mutation engine (ownership, usage limits, Strain cost, save-vs) via the
+    ``BeatSelection.mutation_id`` sidecar — the exact ``cast_spell``/
+    ``spell_id`` pattern. Mirrors ``_resolve_wwn_cast_for_beat``'s guard
+    idiom: every miss is LOUD (an ``awn.mutation.refused`` span the GM panel
+    can see), never a silent fall-through to bare narration.
+    """
+    from sidequest.game.ruleset.cwn import CwnRulesetModule
+    from sidequest.game.ruleset.registry import get_ruleset_module
+    from sidequest.mutation.use_ops import use_mutation
+    from sidequest.telemetry.spans.awn import awn_mutation_refused_span
+
+    mutation_id = getattr(sel, "mutation_id", None)
+    if not mutation_id:
+        # The pre-wiring bug shape: a mutation beat with no mutation named.
+        # Mirror of magic.cast_spell_no_spell_id — loud, inert.
+        awn_mutation_refused_span(actor=actor.name, mutation_id="", reason="beat_no_mutation_id")
+        return
+    catalog = getattr(pack, "mutations", None)
+    state = snapshot.mutation_state
+    if catalog is None or state is None:
+        awn_mutation_refused_span(
+            actor=actor.name, mutation_id=mutation_id, reason="no_mutation_surface"
+        )
+        return
+    rules = getattr(pack, "rules", None)
+    module = get_ruleset_module(rules.ruleset) if rules is not None else None
+    if not isinstance(module, CwnRulesetModule):
+        awn_mutation_refused_span(
+            actor=actor.name, mutation_id=mutation_id, reason="non_cwn_family_ruleset"
+        )
+        return
+    core = snapshot.find_creature_core(actor.name)
+    if core is None:
+        awn_mutation_refused_span(actor=actor.name, mutation_id=mutation_id, reason="no_actor_core")
+        return
+    try:
+        catalog.positive_by_id(mutation_id)
+    except KeyError:
+        awn_mutation_refused_span(
+            actor=actor.name, mutation_id=mutation_id, reason="unknown_mutation"
+        )
+        return
+
+    # v1 save handling matches the use_mutation tool: the narrator narrates
+    # the target's save from the returned save_stat; opposed-save dice wiring
+    # rides the dice protocol in a later plan. "fail" applies the full effect.
+    use_mutation(
+        state=state,
+        catalog=catalog,
+        module=module,
+        cfg=rules.ruleset_config(),
+        core=core,
+        actor=actor.name,
+        mutation_id=mutation_id,
+        target_id=getattr(sel, "target", None) or "",
+        save_resolver=lambda stat, target: "fail",
+    )
+
+
 def _all_opponents_mindless(opp_actors, pack: GenrePack | None) -> bool:
     """Return True iff every opponent actor in ``opp_actors`` maps to an
     NpcArchetype with ``mindless: True``.
@@ -5544,6 +5613,21 @@ def _apply_narration_result_to_snapshot(
                             actor=actor,
                             snapshot=snapshot,
                         )
+
+                # ─── Story 102-7: AWN mutation resolution (Plan 2 §6.3) ────
+                # A beat carrying the mutation_resolution marker routes
+                # through the mutation engine (Strain, usage limits, save-vs)
+                # via the BeatSelection.mutation_id sidecar — the cast_spell
+                # pattern retold for the pack's marquee mechanic. The marker
+                # is the route (a stray mutation_id on an unmarked beat is
+                # ignored); every miss inside is a loud awn.mutation.refused.
+                if getattr(beat, "mutation_resolution", False):
+                    _resolve_mutation_for_beat(
+                        sel=sel,
+                        actor=actor,
+                        snapshot=snapshot,
+                        pack=pack,
+                    )
 
                 # ─── B/X morale per-beat hook (Task 9, architect feedback
                 # 2026-05-08) ───────────────────────────────────────────

@@ -113,9 +113,17 @@ def _magic_working_precondition_unmet(snapshot: GameSnapshot) -> str | None:
         return None
     if any(c.core.spellcasting is not None for c in snapshot.characters):
         return None
+    # 3. The AWN mutation engine (Story 102-7) — ``use_mutation`` against
+    #    ``snapshot.mutation_state`` (seeded at chargen on packs that ship a
+    #    mutations.yaml, e.g. mutant_wasteland — where mutations ARE the
+    #    pack's magic). Surface presence again: a seeded character map, not
+    #    the ruleset slug.
+    if snapshot.mutation_state is not None and snapshot.mutation_state.characters:
+        return None
     return (
         "snapshot.magic_state is None (world ships no ADR-126 pact-working "
-        "magic plugin) and no PC carries WN core.spellcasting (no cast surface)"
+        "magic plugin), no PC carries WN core.spellcasting (no cast surface), "
+        "and no PC carries mutation state (no AWN mutation surface)"
     )
 
 

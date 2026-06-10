@@ -180,6 +180,11 @@ class BeatDef(BaseModel):
     # Both default to 0 so native-module packs require no YAML changes.
     attack_bonus: int = 0
     combat_skill: int = 0
+    # AWN Plan 2 §6.3 wiring marker (story 102-7) — when True, applying this
+    # beat routes through sidequest.mutation.use_ops via the
+    # ``BeatSelection.mutation_id`` sidecar instead of bare narration (the
+    # cast_spell precedent). False everywhere a pack has no mutation system.
+    mutation_resolution: bool = False
 
     @model_validator(mode="after")
     def _validate(self) -> BeatDef:

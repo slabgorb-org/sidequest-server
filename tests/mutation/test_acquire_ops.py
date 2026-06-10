@@ -23,22 +23,48 @@ def _catalog() -> MutationCatalog:
         stigma=StigmaTables(
             body_part=["eyes", "skin", "hands", "spine", "jaw", "hair"],
             nature=["luminous", "scaled", "withered", "oversized", "translucent", "ridged"],
-            flavor=["amber", "silver", "weeping", "cracked", "humming", "cold",
-                    "hot", "twitching", "numb", "bright", "dark", "shifting"],
+            flavor=[
+                "amber",
+                "silver",
+                "weeping",
+                "cracked",
+                "humming",
+                "cold",
+                "hot",
+                "twitching",
+                "numb",
+                "bright",
+                "dark",
+                "shifting",
+            ],
         ),
         negatives=[
-            NegativeMutationDef(id="negative/withered_arm", name="Withered Arm",
-                                roll_range=(1, 50), effect="weak arm"),
-            NegativeMutationDef(id="negative/frail", name="Frail",
-                                roll_range=(51, 100), effect="frail"),
+            NegativeMutationDef(
+                id="negative/withered_arm",
+                name="Withered Arm",
+                roll_range=(1, 50),
+                effect="weak arm",
+            ),
+            NegativeMutationDef(
+                id="negative/frail", name="Frail", roll_range=(51, 100), effect="frail"
+            ),
         ],
         positives=[
-            PositiveMutationDef(id="structure/crushing_jaws", name="Crushing Jaws",
-                                category="structure", effect="bite"),
-            PositiveMutationDef(id="structure/savage_claws", name="Savage Claws",
-                                category="structure", effect="claws"),
-            PositiveMutationDef(id="sense/echo_location", name="Echo Location",
-                                category="sense", effect="sonar"),
+            PositiveMutationDef(
+                id="structure/crushing_jaws",
+                name="Crushing Jaws",
+                category="structure",
+                effect="bite",
+            ),
+            PositiveMutationDef(
+                id="structure/savage_claws",
+                name="Savage Claws",
+                category="structure",
+                effect="claws",
+            ),
+            PositiveMutationDef(
+                id="sense/echo_location", name="Echo Location", category="sense", effect="sonar"
+            ),
         ],
     )
 
@@ -89,7 +115,11 @@ def test_random_positive_costs_one() -> None:
 def test_picked_positive_costs_three() -> None:
     state, cat = _state(mp=3), _catalog()
     result = acquire_positive(
-        state, cat, actor="Rux", session_id="s1", source="chargen",
+        state,
+        cat,
+        actor="Rux",
+        session_id="s1",
+        source="chargen",
         mutation_id="sense/echo_location",
     )
     assert result.applied
@@ -101,7 +131,11 @@ def test_picked_already_owned_refused() -> None:
     state, cat = _state(mp=6), _catalog()
     state.characters["Rux"].positive_ids = ["sense/echo_location"]
     result = acquire_positive(
-        state, cat, actor="Rux", session_id="s1", source="chargen",
+        state,
+        cat,
+        actor="Rux",
+        session_id="s1",
+        source="chargen",
         mutation_id="sense/echo_location",
     )
     assert not result.applied
@@ -113,7 +147,12 @@ def test_second_same_category_costs_three_even_random() -> None:
     state, cat = _state(mp=4), _catalog()
     state.characters["Rux"].positive_ids = ["structure/crushing_jaws"]
     result = acquire_positive(
-        state, cat, actor="Rux", session_id="s1", source="chargen", category="structure",
+        state,
+        cat,
+        actor="Rux",
+        session_id="s1",
+        source="chargen",
+        category="structure",
     )
     assert result.applied
     assert result.mutation_id == "structure/savage_claws"

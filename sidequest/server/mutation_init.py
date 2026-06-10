@@ -52,7 +52,10 @@ def init_mutation_state_for_session(
     if seeded is not None:
         logger.info(
             "mutation_init: seeded %r (class=%s) mp=%d negatives=%s",
-            character_name, character_class, seeded.mp_remaining, seeded.negative_ids,
+            character_name,
+            character_class,
+            seeded.mp_remaining,
+            seeded.negative_ids,
         )
         _watcher_publish(
             "mutation.init",

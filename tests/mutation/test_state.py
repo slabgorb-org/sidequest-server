@@ -14,7 +14,9 @@ def test_round_trip_serialization() -> None:
         mp_remaining=3,
         negative_ids=["negative/withered_arm"],
         positive_ids=["structure/crushing_jaws"],
-        stigma=[StigmaRecord(body_part="eyes", nature="luminous", flavor="amber", concealable=True)],
+        stigma=[
+            StigmaRecord(body_part="eyes", nature="luminous", flavor="amber", concealable=True)
+        ],
         usage={"structure/crushing_jaws": UsageCounter(period="per_scene", used=1)},
         acquisition_log=["negative/withered_arm", "structure/crushing_jaws"],
     )

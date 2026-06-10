@@ -42,10 +42,14 @@ def _catalog() -> MutationCatalog:
     return MutationCatalog(
         mp_economy=MpEconomy(mutant_classes=["Mutant"]),
         stigma=StigmaTables(body_part=["a"] * 6, nature=["b"] * 6, flavor=["c"] * 12),
-        negatives=[NegativeMutationDef(id="negative/frail", name="F",
-                                       roll_range=(1, 100), effect="y")],
-        positives=[PositiveMutationDef(id="structure/crushing_jaws", name="C",
-                                       category="structure", effect="bite")],
+        negatives=[
+            NegativeMutationDef(id="negative/frail", name="F", roll_range=(1, 100), effect="y")
+        ],
+        positives=[
+            PositiveMutationDef(
+                id="structure/crushing_jaws", name="C", category="structure", effect="bite"
+            )
+        ],
     )
 
 
@@ -58,7 +62,11 @@ def _snapshot() -> GameSnapshot:
 def test_no_catalog_skips_silently(captured_mutation_init_events) -> None:
     snap = _snapshot()
     init_mutation_state_for_session(
-        snap, catalog=None, character_name="Rux", character_class="Mutant", session_id="s1",
+        snap,
+        catalog=None,
+        character_name="Rux",
+        character_class="Mutant",
+        session_id="s1",
     )
     assert snap.mutation_state is None
     skipped = [
@@ -71,7 +79,11 @@ def test_no_catalog_skips_silently(captured_mutation_init_events) -> None:
 def test_mutant_seeds_snapshot_state(captured_mutation_init_events) -> None:
     snap = _snapshot()
     init_mutation_state_for_session(
-        snap, catalog=_catalog(), character_name="Rux", character_class="Mutant", session_id="s1",
+        snap,
+        catalog=_catalog(),
+        character_name="Rux",
+        character_class="Mutant",
+        session_id="s1",
     )
     assert snap.mutation_state is not None
     assert "Rux" in snap.mutation_state.characters
@@ -83,7 +95,11 @@ def test_mutant_seeds_snapshot_state(captured_mutation_init_events) -> None:
 def test_non_mutant_leaves_no_character_entry(captured_mutation_init_events) -> None:
     snap = _snapshot()
     init_mutation_state_for_session(
-        snap, catalog=_catalog(), character_name="Rux", character_class="Scavenger", session_id="s1",
+        snap,
+        catalog=_catalog(),
+        character_name="Rux",
+        character_class="Scavenger",
+        session_id="s1",
     )
     # container may exist (created on first init), but no entry for a non-mutant
     if snap.mutation_state is not None:

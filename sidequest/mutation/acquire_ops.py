@@ -34,9 +34,7 @@ class AcquireResult(BaseModel):
 
 def _character(state: MutationState, actor: str) -> CharacterMutationState:
     if actor not in state.characters:
-        raise KeyError(
-            f"actor {actor!r} has no mutation state; known: {sorted(state.characters)}"
-        )
+        raise KeyError(f"actor {actor!r} has no mutation state; known: {sorted(state.characters)}")
     return state.characters[actor]
 
 
@@ -53,7 +51,9 @@ def acquire_random_negative(
     if len(cs.negative_ids) >= eco.max_negatives:
         awn_mutation_refused_span(actor=actor, mutation_id="", reason="max_negatives")
         return AcquireResult(
-            applied=False, actor=actor, mp_remaining=cs.mp_remaining,
+            applied=False,
+            actor=actor,
+            mp_remaining=cs.mp_remaining,
             reason=f"max_negatives ({eco.max_negatives}) reached",
         )
     # Bounded dedupe re-roll: deterministic because every attempt consumes
@@ -61,8 +61,11 @@ def acquire_random_negative(
     for _ in range(len(catalog.negatives) * 4):
         state.roll_sequence += 1
         roll = deterministic_roll(
-            session_id=session_id, actor=actor, purpose="negative_d100",
-            sequence=state.roll_sequence, sides=100,
+            session_id=session_id,
+            actor=actor,
+            purpose="negative_d100",
+            sequence=state.roll_sequence,
+            sides=100,
         )
         nd = catalog.negative_for_roll(roll)
         if nd.id not in cs.negative_ids:
@@ -70,12 +73,20 @@ def acquire_random_negative(
             cs.acquisition_log.append(nd.id)
             cs.mp_remaining += eco.per_negative_mp
             awn_mutation_acquired_span(
-                actor=actor, mutation_id=nd.id, source=source, roll=roll,
-                mp_delta=eco.per_negative_mp, mp_remaining=cs.mp_remaining,
+                actor=actor,
+                mutation_id=nd.id,
+                source=source,
+                roll=roll,
+                mp_delta=eco.per_negative_mp,
+                mp_remaining=cs.mp_remaining,
             )
             return AcquireResult(
-                applied=True, actor=actor, mutation_id=nd.id, roll=roll,
-                mp_delta=eco.per_negative_mp, mp_remaining=cs.mp_remaining,
+                applied=True,
+                actor=actor,
+                mutation_id=nd.id,
+                roll=roll,
+                mp_delta=eco.per_negative_mp,
+                mp_remaining=cs.mp_remaining,
             )
     awn_mutation_refused_span(actor=actor, mutation_id="", reason="dedupe_exhausted")
     raise ValueError(
@@ -115,13 +126,16 @@ def acquire_positive(
         resolved_category = target.category
     else:
         pool = [
-            p for p in catalog.positives
+            p
+            for p in catalog.positives
             if p.id not in cs.positive_ids and (category is None or p.category == category)
         ]
         if not pool:
             awn_mutation_refused_span(actor=actor, mutation_id="", reason="pool_exhausted")
             return AcquireResult(
-                applied=False, actor=actor, mp_remaining=cs.mp_remaining,
+                applied=False,
+                actor=actor,
+                mp_remaining=cs.mp_remaining,
                 reason=f"pool_exhausted (category={category!r})",
             )
         candidates = sorted(pool, key=lambda p: p.id)
@@ -129,17 +143,25 @@ def acquire_positive(
         resolved_category = category or ""
 
     if picked and mutation_id in cs.positive_ids:
-        awn_mutation_refused_span(actor=actor, mutation_id=mutation_id or "", reason="already_owned")
+        awn_mutation_refused_span(
+            actor=actor, mutation_id=mutation_id or "", reason="already_owned"
+        )
         return AcquireResult(
-            applied=False, actor=actor, mutation_id=mutation_id or "",
-            mp_remaining=cs.mp_remaining, reason="already_owned",
+            applied=False,
+            actor=actor,
+            mutation_id=mutation_id or "",
+            mp_remaining=cs.mp_remaining,
+            reason="already_owned",
         )
 
     if not picked:
         state.roll_sequence += 1
         roll = deterministic_roll(
-            session_id=session_id, actor=actor, purpose="positive_pick",
-            sequence=state.roll_sequence, sides=len(candidates),
+            session_id=session_id,
+            actor=actor,
+            purpose="positive_pick",
+            sequence=state.roll_sequence,
+            sides=len(candidates),
         )
         chosen = candidates[roll - 1]
         resolved_category = chosen.category
@@ -151,7 +173,10 @@ def acquire_positive(
     if cs.mp_remaining < cost:
         awn_mutation_refused_span(actor=actor, mutation_id=chosen.id, reason="insufficient_mp")
         return AcquireResult(
-            applied=False, actor=actor, mutation_id=chosen.id, mp_remaining=cs.mp_remaining,
+            applied=False,
+            actor=actor,
+            mutation_id=chosen.id,
+            mp_remaining=cs.mp_remaining,
             reason=f"insufficient_mp (need {cost}, have {cs.mp_remaining})",
         )
 
@@ -159,15 +184,26 @@ def acquire_positive(
     cs.positive_ids.append(chosen.id)
     cs.acquisition_log.append(chosen.id)
     awn_mutation_mp_spend_span(
-        actor=actor, spend_kind=spend_kind, cost=cost, mp_remaining=cs.mp_remaining,
+        actor=actor,
+        spend_kind=spend_kind,
+        cost=cost,
+        mp_remaining=cs.mp_remaining,
     )
     awn_mutation_acquired_span(
-        actor=actor, mutation_id=chosen.id, source=source, roll=roll,
-        mp_delta=-cost, mp_remaining=cs.mp_remaining,
+        actor=actor,
+        mutation_id=chosen.id,
+        source=source,
+        roll=roll,
+        mp_delta=-cost,
+        mp_remaining=cs.mp_remaining,
     )
     return AcquireResult(
-        applied=True, actor=actor, mutation_id=chosen.id, roll=roll,
-        mp_delta=-cost, mp_remaining=cs.mp_remaining,
+        applied=True,
+        actor=actor,
+        mutation_id=chosen.id,
+        roll=roll,
+        mp_delta=-cost,
+        mp_remaining=cs.mp_remaining,
     )
 
 
@@ -189,16 +225,21 @@ def roll_stigma(
             return None
         cs.mp_remaining -= eco.concealable_stigma_cost
         awn_mutation_mp_spend_span(
-            actor=actor, spend_kind="concealable_stigma",
-            cost=eco.concealable_stigma_cost, mp_remaining=cs.mp_remaining,
+            actor=actor,
+            spend_kind="concealable_stigma",
+            cost=eco.concealable_stigma_cost,
+            mp_remaining=cs.mp_remaining,
         )
     rolls: list[int] = []
     for purpose, sides in (("stigma_body", 6), ("stigma_nature", 6), ("stigma_flavor", 12)):
         state.roll_sequence += 1
         rolls.append(
             deterministic_roll(
-                session_id=session_id, actor=actor, purpose=purpose,
-                sequence=state.roll_sequence, sides=sides,
+                session_id=session_id,
+                actor=actor,
+                purpose=purpose,
+                sequence=state.roll_sequence,
+                sides=sides,
             )
         )
     record = StigmaRecord(
@@ -209,7 +250,10 @@ def roll_stigma(
     )
     cs.stigma.append(record)
     awn_mutation_stigma_span(
-        actor=actor, body_part=record.body_part, nature=record.nature,
-        flavor=record.flavor, concealable=concealable,
+        actor=actor,
+        body_part=record.body_part,
+        nature=record.nature,
+        flavor=record.flavor,
+        concealable=concealable,
     )
     return record

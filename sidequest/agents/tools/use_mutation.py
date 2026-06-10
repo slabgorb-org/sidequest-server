@@ -24,7 +24,8 @@ from sidequest.mutation.use_ops import use_mutation as resolve_use_mutation
 class UseMutationArgs(BaseModel):
     actor: str = Field(..., min_length=1, description="PC/NPC using the mutation.")
     mutation_id: str = Field(
-        ..., min_length=1,
+        ...,
+        min_length=1,
         description="Catalog id, e.g. 'structure/crushing_jaws'.",
     )
     target: str = Field(
@@ -59,13 +60,13 @@ async def use_mutation(args: UseMutationArgs, ctx: ToolContext) -> ToolResult:
     if not isinstance(module, CwnRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
         raise ValueError(
-            f"use_mutation requires a CWN-family ruleset (awn); "
-            f"loaded pack has ruleset={ruleset!r}"
+            f"use_mutation requires a CWN-family ruleset (awn); loaded pack has ruleset={ruleset!r}"
         )
+    # pack cannot be None here: module is CwnRulesetModule only when pack was not
+    # None and pack.rules was not None (see the ternary above).
+    assert pack is not None
     if pack.mutations is None:
-        raise ValueError(
-            "use_mutation called but the loaded pack has no mutations.yaml catalog"
-        )
+        raise ValueError("use_mutation called but the loaded pack has no mutations.yaml catalog")
 
     snapshot = session.snapshot
     core = snapshot.find_creature_core(args.actor)

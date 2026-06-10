@@ -59,7 +59,10 @@ def use_mutation(
         reason = "not_owned" if cs is not None else "not_owned (actor has no mutation state)"
         awn_mutation_refused_span(actor=actor, mutation_id=mutation_id, reason=reason)
         return UseMutationResult(
-            applied=False, actor=actor, mutation_id=mutation_id, reason=reason,
+            applied=False,
+            actor=actor,
+            mutation_id=mutation_id,
+            reason=reason,
         )
 
     md = catalog.positive_by_id(mutation_id)
@@ -70,9 +73,13 @@ def use_mutation(
     if md.usage != "at_will":
         counter = cs.usage.setdefault(mutation_id, UsageCounter(period=md.usage))
         if counter.used >= md.uses_per_period:
-            awn_mutation_refused_span(actor=actor, mutation_id=mutation_id, reason="limit_exhausted")
+            awn_mutation_refused_span(
+                actor=actor, mutation_id=mutation_id, reason="limit_exhausted"
+            )
             return UseMutationResult(
-                applied=False, actor=actor, mutation_id=mutation_id,
+                applied=False,
+                actor=actor,
+                mutation_id=mutation_id,
                 reason=f"limit_exhausted ({md.usage}: {counter.used}/{md.uses_per_period})",
             )
 
@@ -87,14 +94,22 @@ def use_mutation(
     strain: StrainResult | None = None
     if md.strain_cost > 0:
         strain = module.apply_system_strain(
-            core=core, kind="temporary", amount=md.strain_cost,
-            source=f"mutation:{mutation_id}", cfg=cfg,
+            core=core,
+            kind="temporary",
+            amount=md.strain_cost,
+            source=f"mutation:{mutation_id}",
+            cfg=cfg,
         )
         if not strain.applied:
-            awn_mutation_refused_span(actor=actor, mutation_id=mutation_id, reason="strain_over_max")
+            awn_mutation_refused_span(
+                actor=actor, mutation_id=mutation_id, reason="strain_over_max"
+            )
             return UseMutationResult(
-                applied=False, actor=actor, mutation_id=mutation_id,
-                reason=f"strain_over_max ({strain.reason})", strain=strain,
+                applied=False,
+                actor=actor,
+                mutation_id=mutation_id,
+                reason=f"strain_over_max ({strain.reason})",
+                strain=strain,
             )
 
     # Save-vs resolution (cost already paid — AWN: the power fires, the target saves)
@@ -110,12 +125,20 @@ def use_mutation(
         uses_remaining = md.uses_per_period - counter.used
 
     awn_mutation_used_span(
-        actor=actor, mutation_id=mutation_id, strain_cost=md.strain_cost,
+        actor=actor,
+        mutation_id=mutation_id,
+        strain_cost=md.strain_cost,
         uses_remaining=uses_remaining,
-        save_stat=save_stat or "", save_result=save_result or "",
+        save_stat=save_stat or "",
+        save_result=save_result or "",
     )
     return UseMutationResult(
-        applied=True, actor=actor, mutation_id=mutation_id, strain=strain,
-        uses_remaining=uses_remaining, save_stat=save_stat, save_result=save_result,
+        applied=True,
+        actor=actor,
+        mutation_id=mutation_id,
+        strain=strain,
+        uses_remaining=uses_remaining,
+        save_stat=save_stat,
+        save_result=save_result,
         effect=md.effect,
     )

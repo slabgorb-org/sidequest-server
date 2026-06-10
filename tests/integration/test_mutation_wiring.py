@@ -20,7 +20,6 @@ _pg_isolation, so it is managed explicitly).
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
@@ -52,7 +51,7 @@ from sidequest.mutation.models import (
     PositiveMutationDef,
     StigmaTables,
 )
-from sidequest.mutation.state import CharacterMutationState, MutationState
+from sidequest.mutation.state import CharacterMutationState
 from sidequest.server.mutation_init import init_mutation_state_for_session
 from sidequest.telemetry import spans as spans_module
 
@@ -335,8 +334,7 @@ async def test_mutation_wiring_end_to_end(
     assert core.system_strain is not None, "SystemStrainPool must survive round-trip"
     strain_cost = 2  # exotic/acid_spit has strain_cost=2
     assert core.system_strain.current == strain_cost, (
-        f"strain current should be {strain_cost} after acid_spit; "
-        f"got {core.system_strain.current}"
+        f"strain current should be {strain_cost} after acid_spit; got {core.system_strain.current}"
     )
 
     # Step 10 — Assert BOTH required spans fired.

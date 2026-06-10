@@ -12,7 +12,9 @@ from __future__ import annotations
 import hashlib
 
 
-def deterministic_roll(*, session_id: str, actor: str, purpose: str, sequence: int, sides: int) -> int:
+def deterministic_roll(
+    *, session_id: str, actor: str, purpose: str, sequence: int, sides: int
+) -> int:
     """Return a 1..sides roll, fully determined by the inputs."""
     if sides < 1:
         raise ValueError(f"sides must be >= 1, got {sides}")

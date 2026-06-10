@@ -43,9 +43,7 @@ class PositiveMutationDef(BaseModel):
 
     id: str
     name: str
-    category: Literal[
-        "structure", "sense", "hybrid", "cognition", "pseudo_psychic", "exotic"
-    ]
+    category: Literal["structure", "sense", "hybrid", "cognition", "pseudo_psychic", "exotic"]
     effect: str
     strain_cost: int = Field(default=0, ge=0)
     usage: Literal["at_will", "per_scene", "per_day"] = "at_will"

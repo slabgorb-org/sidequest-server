@@ -39,7 +39,6 @@ from sidequest.mutation.models import (
     MutationCatalog,
     NegativeMutationDef,
     PositiveMutationDef,
-    SaveVs,
     StigmaTables,
 )
 from sidequest.mutation.state import CharacterMutationState, MutationState
@@ -116,35 +115,49 @@ def _catalog() -> MutationCatalog:
     return MutationCatalog(
         mp_economy=MpEconomy(mutant_classes=["Mutant"]),
         stigma=StigmaTables(
-            body_part=["a"] * 6, nature=["b"] * 6, flavor=["c"] * 12,
+            body_part=["a"] * 6,
+            nature=["b"] * 6,
+            flavor=["c"] * 12,
         ),
         negatives=[
             NegativeMutationDef(
-                id="negative/frail", name="Frail",
-                roll_range=(1, 100), effect="frail",
+                id="negative/frail",
+                name="Frail",
+                roll_range=(1, 100),
+                effect="frail",
             )
         ],
         positives=[
             PositiveMutationDef(
-                id="structure/crushing_jaws", name="Crushing Jaws",
-                category="structure", effect="bite", strain_cost=2,
-                usage="per_scene", uses_per_period=1,
+                id="structure/crushing_jaws",
+                name="Crushing Jaws",
+                category="structure",
+                effect="bite",
+                strain_cost=2,
+                usage="per_scene",
+                uses_per_period=1,
             ),
             PositiveMutationDef(
-                id="sense/dark_sight", name="Dark Sight",
-                category="sense", effect="see in dark",
-                strain_cost=0, usage="at_will",
+                id="sense/dark_sight",
+                name="Dark Sight",
+                category="sense",
+                effect="see in dark",
+                strain_cost=0,
+                usage="at_will",
             ),
         ],
     )
 
 
 def _mutation_state(actor: str, *positive_ids: str) -> MutationState:
-    return MutationState(characters={
-        actor: CharacterMutationState(
-            mp_remaining=0, positive_ids=list(positive_ids),
-        ),
-    })
+    return MutationState(
+        characters={
+            actor: CharacterMutationState(
+                mp_remaining=0,
+                positive_ids=list(positive_ids),
+            ),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -337,9 +350,7 @@ async def test_refusal_payload_round_trips() -> None:
         {"actor": "Rux", "mutation_id": "structure/crushing_jaws"},
         ctx,
     )
-    assert r2.status is ToolResultStatus.OK, (
-        "refusal is DATA for the narrator, not an error"
-    )
+    assert r2.status is ToolResultStatus.OK, "refusal is DATA for the narrator, not an error"
     p2 = _payload(r2)
     assert p2["applied"] is False
     assert "limit_exhausted" in p2["reason"]

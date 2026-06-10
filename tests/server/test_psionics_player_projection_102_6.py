@@ -76,9 +76,7 @@ class TestEffortProjectionFields:
         assert pm.effort_committed == 3
 
     def test_effort_fields_serialize_on_wire(self) -> None:
-        pm = PartyMember(
-            **_base_kwargs(), effort_available=2, effort_committed=1, effort_max=3
-        )
+        pm = PartyMember(**_base_kwargs(), effort_available=2, effort_committed=1, effort_max=3)
         d = pm.model_dump(by_alias=True)
         assert d["effort_available"] == 2
         assert d["effort_committed"] == 1

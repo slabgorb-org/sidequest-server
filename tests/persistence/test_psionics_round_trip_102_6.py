@@ -34,9 +34,7 @@ def _psychic_snapshot(*, with_strain: bool = False) -> tuple[GameSnapshot, Creat
     )
     if with_strain:
         core.system_strain = SystemStrainPool(current=0, max=10)
-    char = Character(
-        core=core, char_class="Psychic", race="Human", backstory="A quiet world."
-    )
+    char = Character(core=core, char_class="Psychic", race="Human", backstory="A quiet world.")
     snap = GameSnapshot(
         genre_slug="space_opera",
         world_slug="aureate_span",

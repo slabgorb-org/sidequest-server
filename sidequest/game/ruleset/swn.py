@@ -488,13 +488,48 @@ class SwnRulesetModule(RulesetModule):
         never a silent success. Emits ``{slug}.discipline.activated`` on EVERY
         call (``refused`` reflects the outcome), plus ``{slug}.effort.commit``
         and (on a push) ``{slug}.system_strain.delta`` when applied. A missing
-        Effort pool raises ValueError (No Silent Fallbacks)."""
+        Effort pool raises ValueError (No Silent Fallbacks).
+
+        A ``strain_cost`` discipline requires a seeded ``core.system_strain``
+        pool (only the strain-bearing rulesets — WWN/CWN/AWN — carry one; SWN
+        psionics is Effort-only). This precondition is checked BEFORE any Effort
+        is committed: a strain push on a strainless core is REFUSED loudly
+        (``applied=False``, pool unchanged), never a partial Effort spend and
+        never an opaque ``AttributeError`` from the missing strain engine."""
         pool = core.effort.get(source)
         if pool is None:
             raise ValueError(
                 f"{core.name!r} has no {source!r} Effort pool; a psychic seeds one at chargen"
             )
         cost = int(discipline.effort_cost)
+        strain_cost = int(discipline.strain_cost or 0)
+
+        # Precondition FIRST, before any mutation: a push needs a strain pool.
+        # Checked here so a content/config mismatch (a strain discipline on a
+        # strainless ruleset) is a clean loud refusal, not a half-committed
+        # Effort spend that then AttributeErrors on the absent strain engine.
+        if strain_cost > 0 and core.system_strain is None:
+            reason = (
+                f"{discipline.id!r} costs {strain_cost} System Strain but "
+                f"{core.name!r} has no System Strain pool — this ruleset has no "
+                "Strain engine (SWN psionics is Effort-only); author the strain "
+                "discipline on a WWN/CWN/AWN pack"
+            )
+            discipline_activated_span(
+                ruleset=self.slug,
+                actor=core.name,
+                discipline_id=discipline.id,
+                refused=True,
+                _tracer=_tracer,
+            )
+            return DisciplineActivationResult(
+                applied=False,
+                discipline_id=discipline.id,
+                available=pool.available,
+                strained=0,
+                reason=reason,
+            )
+
         applied = cost <= pool.available
         strained = 0
         if applied:
@@ -506,12 +541,10 @@ class SwnRulesetModule(RulesetModule):
                 label=discipline.name,
                 _tracer=_tracer,
             )
-            strain_cost = int(discipline.strain_cost or 0)
             if strain_cost > 0:
-                # apply_system_strain lives on the strain-bearing WWN module; a
-                # strain-costing discipline therefore requires a strain ruleset
-                # (SWN proper has none). AttributeError here is the correct loud
-                # failure for a strain discipline authored on a strainless pack.
+                # Precondition above guarantees core.system_strain is seeded here,
+                # which only the strain-bearing rulesets (WWN/CWN/AWN) do — and
+                # those define apply_system_strain. Safe to route the push.
                 self.apply_system_strain(
                     core=core,
                     kind="temporary",

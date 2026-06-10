@@ -84,9 +84,7 @@ class TestSwnEffortEngine:
         engine is shared family-base behavior, not wwn-only."""
         module = get_ruleset_module("swn")
         core = _psychic_core(max_effort=3)
-        result = module.commit_effort(
-            core=core, source=_PSIONIC_SOURCE, points=2, duration="scene"
-        )
+        result = module.commit_effort(core=core, source=_PSIONIC_SOURCE, points=2, duration="scene")
         assert result.applied is True
         assert core.effort[_PSIONIC_SOURCE].available == 1  # 3 - 2
 
@@ -199,9 +197,7 @@ class TestZeroEffortIsLoud:
         assert core.effort[_PSIONIC_SOURCE].available == 0
         strain_before = core.system_strain.current if core.system_strain else 0
 
-        result = module.commit_effort(
-            core=core, source=_PSIONIC_SOURCE, points=1, duration="scene"
-        )
+        result = module.commit_effort(core=core, source=_PSIONIC_SOURCE, points=1, duration="scene")
 
         refused = result.applied is False and result.reason != ""
         strain_after = core.system_strain.current if core.system_strain else 0
@@ -229,9 +225,7 @@ class TestZeroEffortIsLoud:
             core=core, source=_PSIONIC_SOURCE, points=3, duration="day", _tracer=tracer
         )
         if result.applied is False:
-            commit = [
-                s for s in exporter.get_finished_spans() if s.name == "swn.effort.commit"
-            ]
+            commit = [s for s in exporter.get_finished_spans() if s.name == "swn.effort.commit"]
             assert len(commit) == 1
             assert dict(commit[0].attributes or {})["applied"] is False
 
@@ -244,3 +238,76 @@ class TestZeroEffortIsLoud:
             module.commit_effort(
                 core=core, source="nonexistent_discipline", points=1, duration="scene"
             )
+
+
+# ===========================================================================
+# Review rework (Round-Trip 1): a strain-costing discipline on a STRAINLESS
+# SWN core must REFUSE loudly WITHOUT committing Effort — never a partial spend,
+# never an opaque AttributeError from the absent SWN strain engine.
+# ===========================================================================
+
+
+class TestStrainDisciplineOnStrainlessSwnCoreIsLoud:
+    def _strain_discipline(self):
+        from sidequest.genre.models.psionics import PsionicDiscipline
+
+        return PsionicDiscipline(
+            id="dominate",
+            name="Hand on the Tiller",
+            level=4,
+            effort_cost=1,
+            duration="scene",
+            save="mental",
+            strain_cost=1,  # a push — needs a System Strain pool to pay
+            genre_description="x",
+            mechanical_effect="y",
+        )
+
+    def test_strain_discipline_refused_loud_and_effort_not_spent(self):
+        """SWN is Effort-only (no strain engine, no strain pool seeded). A
+        strain-costing discipline must be REFUSED before any Effort is committed
+        — applied=False, reason set, pool UNTOUCHED. The old behavior committed
+        Effort then AttributeError'd on the missing apply_system_strain."""
+        module = get_ruleset_module("swn")
+        core = _psychic_core(max_effort=3)  # no system_strain pool
+        assert core.system_strain is None
+
+        result = module.activate_discipline(
+            core=core, discipline=self._strain_discipline(), source=_PSIONIC_SOURCE
+        )
+
+        assert result.applied is False, "a strain push on a strainless core must refuse"
+        assert result.reason != "", "the refusal must carry a loud reason"
+        # Effort must NOT have been spent — no partial application.
+        assert core.effort[_PSIONIC_SOURCE].available == 3
+        assert core.effort[_PSIONIC_SOURCE].committed == 0
+
+    def test_refusal_does_not_raise_attribute_error(self):
+        """Regression: the refusal path must not reach self.apply_system_strain
+        (absent on SwnRulesetModule) — no AttributeError escapes."""
+        module = get_ruleset_module("swn")
+        core = _psychic_core(max_effort=3)
+        # Must not raise (the bug raised AttributeError after committing Effort).
+        result = module.activate_discipline(
+            core=core, discipline=self._strain_discipline(), source=_PSIONIC_SOURCE
+        )
+        assert result.applied is False
+
+    def test_refused_strain_push_records_a_refused_discipline_span(self):
+        """The refusal is loud on the GM panel: a {slug}.discipline.activated
+        span fires with refused=True (the lie-detector sees the blocked push)."""
+        module = get_ruleset_module("swn")
+        core = _psychic_core(max_effort=3)
+        exporter, tracer = _exporter()
+        module.activate_discipline(
+            core=core,
+            discipline=self._strain_discipline(),
+            source=_PSIONIC_SOURCE,
+            _tracer=tracer,
+        )
+        disc = [s for s in exporter.get_finished_spans() if s.name == "swn.discipline.activated"]
+        assert len(disc) == 1
+        assert dict(disc[0].attributes or {})["refused"] is True
+        # No effort.commit span — nothing was spent.
+        commits = [s for s in exporter.get_finished_spans() if s.name == "swn.effort.commit"]
+        assert commits == []

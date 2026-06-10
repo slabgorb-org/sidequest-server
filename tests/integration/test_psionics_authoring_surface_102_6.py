@@ -200,9 +200,7 @@ def test_yaml_authored_discipline_is_activatable(tmp_path):
     tracer = provider.get_tracer("test")
 
     module = get_ruleset_module("swn")
-    module.activate_discipline(
-        core=core, discipline=discipline, source="psionic", _tracer=tracer
-    )
+    module.activate_discipline(core=core, discipline=discipline, source="psionic", _tracer=tracer)
 
     disc_spans = [
         s for s in exporter.get_finished_spans() if s.name.endswith(".discipline.activated")

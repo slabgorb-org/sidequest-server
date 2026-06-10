@@ -175,9 +175,7 @@ def _psychic_core(
     committed: int = 0,
     with_strain: bool = False,
 ) -> CreatureCore:
-    commitments = (
-        [EffortCommitment(points=committed, duration="scene")] if committed else []
-    )
+    commitments = [EffortCommitment(points=committed, duration="scene")] if committed else []
     core = CreatureCore(
         name=_PSYCHIC,
         description="A precognitive of the Aureate Span.",
@@ -213,7 +211,9 @@ def _snapshot(core: CreatureCore, *, genre: str, world: str) -> GameSnapshot:
     return snap
 
 
-def _activation_dispatch(*, discipline: str = _DISCIPLINE_ID, key: str = "k-psi-1") -> SubsystemDispatch:
+def _activation_dispatch(
+    *, discipline: str = _DISCIPLINE_ID, key: str = "k-psi-1"
+) -> SubsystemDispatch:
     return SubsystemDispatch(
         subsystem="magic_working",
         params={"actor": _PSYCHIC, "spell": discipline},
@@ -256,9 +256,7 @@ def _discipline_spans(otel_capture) -> list[Any]:
     """Discipline-activation spans, shape per wwn.spell.cast: name ends in
     '.discipline.activated' and carries the actor + discipline id."""
     return [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name.endswith(".discipline.activated")
+        s for s in otel_capture.get_finished_spans() if s.name.endswith(".discipline.activated")
     ]
 
 
@@ -268,7 +266,9 @@ def _discipline_spans(otel_capture) -> list[Any]:
 
 
 @pytest.mark.asyncio
-async def test_freeplay_discipline_activation_fires_discipline_and_effort_spans(otel_capture) -> None:
+async def test_freeplay_discipline_activation_fires_discipline_and_effort_spans(
+    otel_capture,
+) -> None:
     """A magic_working dispatch naming a known discipline, on a swn psychic with
     free Effort, engages the activation spine: a discipline-activation span fires
     AND ``swn.effort.commit`` fires, with the pool decremented by the cost."""
@@ -313,9 +313,7 @@ async def test_discipline_activation_with_no_free_effort_is_loud(otel_capture) -
     assert successful == [], "no-free-Effort activation must not resolve as a success"
 
     run_dispatch_engagement_watcher(package=package, snapshot=snap)
-    refusals = [
-        s for s in _discipline_spans(otel_capture) if s.attributes.get("refused") is True
-    ]
+    refusals = [s for s in _discipline_spans(otel_capture) if s.attributes.get("refused") is True]
     mismatches = _spans_named(otel_capture, "dispatch_engagement.magic_working.mismatch")
     assert refusals or mismatches, (
         "0-Effort activation must surface LOUD evidence — a refused discipline "
@@ -339,10 +337,10 @@ async def test_native_genre_discipline_dispatch_emits_no_swn_spans(otel_capture)
 
     await _run_bank(_package(_activation_dispatch()), snapshot=snap, pack=pack)
 
-    swn_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name.startswith("swn.")
-    ]
-    assert swn_spans == [], f"native genre must not borrow swn spans; got {[s.name for s in swn_spans]}"
+    swn_spans = [s for s in otel_capture.get_finished_spans() if s.name.startswith("swn.")]
+    assert swn_spans == [], (
+        f"native genre must not borrow swn spans; got {[s.name for s in swn_spans]}"
+    )
     assert _discipline_spans(otel_capture) == []
 
 
@@ -365,8 +363,7 @@ def test_beat_selection_reads_discipline_id_sidecar() -> None:
         }
     )
     assert getattr(sel, "discipline_id", None) == _DISCIPLINE_ID, (
-        "BeatSelection must expose a discipline_id sidecar for the beat-path "
-        "discipline activation"
+        "BeatSelection must expose a discipline_id sidecar for the beat-path discipline activation"
     )
 
 
@@ -393,8 +390,7 @@ async def test_wwn_psionic_push_routes_strain_through_shared_counter(otel_captur
     )
 
     assert core.system_strain.current > strain_before, (
-        "a strain-costing discipline must raise the shared core.system_strain "
-        "counter"
+        "a strain-costing discipline must raise the shared core.system_strain counter"
     )
     deltas = _spans_named(otel_capture, "wwn.system_strain.delta")
     assert deltas, "the strain push must emit wwn.system_strain.delta"

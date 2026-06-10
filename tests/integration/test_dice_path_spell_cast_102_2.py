@@ -71,12 +71,16 @@ def _load_heavy_metal():
         pytest.skip("sidequest-content not on disk in this checkout")
 
 
-def _make_caster(name: str, *, casts_remaining: int = 2):
+def _make_caster(name: str, *, casts_remaining: int = 2, level: int = 1):
     """A Necromancer with a hydrated WWN SpellcastingState.
 
     Built directly (not through chargen) — chargen seeding is proven by
     tests/integration/test_wwn_heavy_metal_dispatch.py; this suite tests the
     dispatch seam, which only reads ``core.spellcasting``.
+
+    ``level`` drives wracking_bolt's damage dice (damage_per_level →
+    caster_level × d6) — the killing-cast test needs level 2 so 2d6 pinned
+    high (12) overkills the 10-HP seeded opponent through a failed save.
     """
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
@@ -88,6 +92,7 @@ def _make_caster(name: str, *, casts_remaining: int = 2):
         personality="cold",
         inventory=Inventory(),
         hp={"current": 12, "max": 12, "base_max": 12},
+        level=level,
         spellcasting=SpellcastingState(
             prepared=[_SPELL],
             casts_remaining=casts_remaining,
@@ -104,7 +109,7 @@ def _make_caster(name: str, *, casts_remaining: int = 2):
     )
 
 
-def _seat_combat(pack, caster_name: str, opponent: str):
+def _seat_combat(pack, caster_name: str, opponent: str, *, caster_level: int = 1):
     """Seat the real heavy_metal Blade-work combat via the production seam."""
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.session import GameSnapshot
@@ -118,7 +123,7 @@ def _seat_combat(pack, caster_name: str, opponent: str):
         world_slug="test_world",
         turn_manager=TurnManager(interaction=2),
     )
-    snap.characters.append(_make_caster(caster_name))
+    snap.characters.append(_make_caster(caster_name, level=caster_level))
     snap.character_locations[caster_name] = "The Reliquary Gate"
 
     enc = instantiate_encounter_from_trigger(
@@ -228,24 +233,42 @@ def test_cast_beat_with_spell_id_fires_wwn_cast_spine(otel_capture, monkeypatch)
 
 
 def test_cast_outcome_is_independent_of_the_d20_face(otel_capture, monkeypatch):
-    """A face of 20 and a face of 1 must produce the SAME cast outcome —
-    the d20 throw is not a to-hit gate on WWN casting."""
+    """face=1 and face=20 must produce IDENTICAL cast results — span attrs,
+    HP delta, and cast spend — even though the d20 outcome TIER differs
+    (Fail-ish vs Success). If the implementation gated the cast on the throw,
+    the low face would refuse/skip and the attribute sets would diverge.
+    (Review rework: comparing both runs attr-by-attr distinguishes "cast
+    ignores the d20" from "damage happens to be pinned"; a single-run
+    arithmetic check could not.)"""
     monkeypatch.setattr("random.randint", lambda a, b: a)
     pack = _load_heavy_metal()
-    snap, enc, opp_core = _seat_combat(pack, "Vesska", "Furnace Thrall")
-    hp_before = opp_core.hp.current
 
-    _dispatch(
-        pack=pack, snap=snap, enc=enc,
-        caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=20,
-    )
+    deltas: list[int] = []
+    casts: list[int] = []
+    for face in (1, 20):
+        snap, enc, opp_core = _seat_combat(pack, "Vesska", "Furnace Thrall")
+        hp_before = opp_core.hp.current
+        _dispatch(
+            pack=pack, snap=snap, enc=enc,
+            caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=face,
+        )
+        deltas.append(hp_before - opp_core.hp.current)
+        casts.append(snap.find_creature_core("Vesska").spellcasting.casts_remaining)
 
-    caster_core = snap.find_creature_core("Vesska")
-    assert caster_core.spellcasting.casts_remaining == 1
-    assert opp_core.hp.current == hp_before - 1, (
-        "a high face must not change the spell's damage arithmetic — "
-        "save + damage dice drive it, not the player's d20"
+    assert deltas[0] == deltas[1] == 1, (
+        f"spell damage must be face-independent (save + damage dice drive it); "
+        f"face=1 delta {deltas[0]}, face=20 delta {deltas[1]}"
     )
+    assert casts == [1, 1], f"exactly one cast spent per run; got {casts}"
+
+    spans = _cast_spans(otel_capture)
+    assert len(spans) == 2, f"one cast span per run; got {len(spans)}"
+    low, high = (spans[0].attributes or {}), (spans[1].attributes or {})
+    for key in ("spell_id", "refused", "save", "save_made", "damage"):
+        assert low.get(key) == high.get(key), (
+            f"span attr {key!r} diverges between face=1 ({low.get(key)!r}) and "
+            f"face=20 ({high.get(key)!r}) — the d20 face is leaking into the cast"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,10 +283,17 @@ def test_cast_parity_with_apply_beat_path(otel_capture, monkeypatch):
     from sidequest.agents.orchestrator import BeatSelection
     from sidequest.server.narration_apply import _resolve_wwn_cast_for_beat
 
+    from sidequest.protocol.dice import RollOutcome
+
     monkeypatch.setattr("random.randint", lambda a, b: a)
     pack = _load_heavy_metal()
 
-    # Reference: the narrator apply_beat path on world A.
+    # Reference: the narrator apply_beat path on world A. Review rework: the
+    # reference BeatSelection carries the SAME outcome tier the dice path
+    # derives from face=2 (2 + INT mod vs the server DC → a plain Fail, and
+    # not a nat-1 special) so the two invocations are equal on EVERY field —
+    # if the spine ever starts reading ``sel.outcome``, this stays a real
+    # parity proof instead of silently comparing unequal inputs.
     snap_a, enc_a, opp_a = _seat_combat(pack, "Vesska", "Furnace Thrall")
     caster_a = snap_a.find_creature_core("Vesska")
     hp_before_a = opp_a.hp.current
@@ -273,7 +303,12 @@ def test_cast_parity_with_apply_beat_path(otel_capture, monkeypatch):
     actor_a = enc_a.find_actor("Vesska")
     assert actor_a is not None
     _resolve_wwn_cast_for_beat(
-        sel=BeatSelection(actor="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL),
+        sel=BeatSelection(
+            actor="Vesska",
+            beat_id=_CAST_BEAT,
+            outcome=RollOutcome.Fail,
+            spell_id=_SPELL,
+        ),
         actor=actor_a,
         snapshot=snap_a,
         pack=pack,
@@ -281,13 +316,13 @@ def test_cast_parity_with_apply_beat_path(otel_capture, monkeypatch):
         cdef=cdef,
     )
 
-    # Under test: the dice path on world B.
+    # Under test: the dice path on world B (face=2 → outcome tier Fail).
     snap_b, enc_b, opp_b = _seat_combat(pack, "Vesska", "Furnace Thrall")
     caster_b = snap_b.find_creature_core("Vesska")
     hp_before_b = opp_b.hp.current
     _dispatch(
         pack=pack, snap=snap_b, enc=enc_b,
-        caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=1,
+        caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=2,
     )
 
     # Mechanical parity.
@@ -443,4 +478,96 @@ def test_strike_beat_without_spell_id_regression_unchanged(otel_capture, monkeyp
     )
     assert not _cast_spans(otel_capture), (
         "a strike must never emit wwn.spell.cast"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Review rework (102-2 round 2) — ADR-139 integrity on the kill path
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_killing_cast_resolves_encounter_and_suppresses_reprisal(
+    otel_capture, monkeypatch
+):
+    """[HIGH, review round 2] A dice-path cast that DROPS the opponent must
+    end the fight — the dead opponent must NOT take its reprisal swing.
+
+    The reprisal gate reads ``apply_result.resolved`` (set by apply_beat),
+    but a killing cast resolves the encounter in the SPINE via
+    ``check_hp_depletion``, after apply_beat — so the gate sees a stale False
+    and the corpse attacks the winner (ADR-139 win-condition liveness).
+
+    rng pin is split by die size: every d20 (defender save, downed-seam
+    saves, any reprisal to-hit) rolls 1, every damage die rolls max — so a
+    level-2 wracking_bolt is 2d6=12 vs the failed save, overkilling the
+    10-HP seeded opponent in one cast. The PRIMARY assertion is the span:
+    ``encounter.opponent_attack_resolved`` fires on every reprisal attempt
+    (hit or miss), so its absence proves the reprisal never ran — a
+    player-HP check alone would pass vacuously when the pinned reprisal
+    d20=1 happens to miss.
+    """
+    monkeypatch.setattr("random.randint", lambda a, b: a if b == 20 else b)
+    pack = _load_heavy_metal()
+    snap, enc, opp_core = _seat_combat(
+        pack, "Vesska", "Furnace Thrall", caster_level=2
+    )
+    caster_core = snap.find_creature_core("Vesska")
+    player_hp_before = caster_core.hp.current
+
+    _dispatch(
+        pack=pack, snap=snap, enc=enc,
+        caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=2,
+    )
+
+    assert opp_core.hp.current == 0, (
+        f"precondition: 2d6 pinned high (12) through a failed save must drop "
+        f"the 10-HP opponent; hp={opp_core.hp.current}"
+    )
+    assert enc.resolved is True, (
+        "a killing cast must resolve the encounter via check_hp_depletion "
+        "(the win condition the spine fires)"
+    )
+    span_names = [s.name for s in otel_capture.get_finished_spans()]
+    assert "encounter.opponent_attack_resolved" not in span_names, (
+        "the DEAD opponent took its reprisal swing — the reprisal gate read "
+        "the stale apply_result.resolved instead of the authoritative "
+        "encounter.resolved the cast spine set (ADR-139 win-condition "
+        f"liveness); got spans: {span_names}"
+    )
+    assert caster_core.hp.current == player_hp_before, (
+        "no reprisal damage may land in a fight that is already won"
+    )
+
+
+def test_cast_on_opposed_check_confrontation_rejects_loudly(otel_capture, monkeypatch):
+    """[MEDIUM, review round 2] A wwn cast_spell commit on an opposed_check
+    ConfrontationDef must be a loud typed rejection — TODAY it passes
+    validation and then the opposed branch silently skips the cast spine
+    entirely (no span, no spend, no damage: the exact silent-fallback shape
+    this epic exists to kill). No current content ships the combination;
+    this pins the seam shut before someone authors it."""
+    from sidequest.genre.models.rules import ResolutionMode
+    from sidequest.server.dispatch.dice import DiceDispatchError
+
+    pack = _load_heavy_metal()
+    snap, enc, opp_core = _seat_combat(pack, "Vesska", "Furnace Thrall")
+    caster_core = snap.find_creature_core("Vesska")
+    cdef = next(
+        c for c in pack.rules.confrontations if c.confrontation_type == "combat"
+    )
+    # monkeypatch (not direct assignment) so the shared loaded-pack object is
+    # restored after the test — load_genre_pack may cache instances.
+    monkeypatch.setattr(cdef, "resolution_mode", ResolutionMode.opposed_check)
+
+    with pytest.raises(DiceDispatchError):
+        _dispatch(
+            pack=pack, snap=snap, enc=enc,
+            caster_name="Vesska", beat_id=_CAST_BEAT, spell_id=_SPELL, face=5,
+        )
+
+    assert caster_core.spellcasting.casts_remaining == 2, (
+        "no cast may be spent on a rejected opposed_check commit"
+    )
+    assert not _cast_spans(otel_capture), (
+        "a rejected commit must not fabricate a wwn.spell.cast span"
     )

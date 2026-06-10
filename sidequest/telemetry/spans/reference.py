@@ -37,6 +37,12 @@ SPAN_REFERENCE_THEME_MISSING = "sidequest.reference.theme_missing"
 SPAN_REFERENCE_HERO_UNBOUND = "sidequest.reference.hero_unbound"
 SPAN_REFERENCE_TOC_MISSING = "sidequest.reference.toc_missing"
 
+# Masthead chrome gap span (2026-06-09 reference redesign). The SPA masthead
+# meta block (pack_label / dateline / world_name) falls back to a derived
+# value when the chrome constants or world.yaml lack the field — this ERROR
+# span makes that fallback observable, same doctrine as toc_missing.
+SPAN_REFERENCE_META_MISSING = "sidequest.reference.meta_missing"
+
 # Body-presenter dispatch spans (Story 63-8 / reference-body-presenters plan).
 SPAN_REFERENCE_UNKNOWN_FIELD = "sidequest.reference.unknown_field"
 SPAN_REFERENCE_UNPRESENTED_FIELD = "sidequest.reference.unpresented_field"
@@ -119,6 +125,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_REFERENCE_THEME_MISSING,
         SPAN_REFERENCE_HERO_UNBOUND,
         SPAN_REFERENCE_TOC_MISSING,
+        SPAN_REFERENCE_META_MISSING,
         SPAN_REFERENCE_UNKNOWN_FIELD,
         SPAN_REFERENCE_UNPRESENTED_FIELD,
         SPAN_REFERENCE_PRESENTER_ERROR,
@@ -242,6 +249,27 @@ def reference_theme_missing_span(
     """
     with Span.open(
         SPAN_REFERENCE_THEME_MISSING,
+        {"reference.pack": pack, "reference.field": field},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def reference_meta_missing_span(
+    *,
+    pack: str,
+    field: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """ERROR span fired when masthead meta chrome falls back to a derived value.
+
+    ``field`` names the gap (``pack_label`` / ``dateline`` / ``world_name``).
+    Fired by ``build_reference_meta`` so a pack/world shipping without authored
+    chrome surfaces on the GM panel instead of silently rendering a slug.
+    """
+    with Span.open(
+        SPAN_REFERENCE_META_MISSING,
         {"reference.pack": pack, "reference.field": field},
         tracer_override=_tracer,
     ) as span:

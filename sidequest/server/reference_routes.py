@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 
 from sidequest.server.reference_projection import (
     build_lore_projection,
+    build_reference_meta,
     build_rules_projection,
     build_theme_tokens,
 )
@@ -100,6 +101,10 @@ def create_reference_router() -> APIRouter:
             # Story 100-7: the session-free theme token set rides on the same
             # projection doc the React injector consumes (top-level "theme").
             doc["theme"] = build_theme_tokens(pack, pack_dir=pack_dir)
+            # 2026-06-09 redesign: masthead chrome (pack label / dateline /
+            # world name) attaches at the route layer like theme, keeping the
+            # projection builders pure for synthetic-pack unit tests.
+            doc["meta"] = build_reference_meta(pack, world_dir=world_dir)
         except (ValueError, FileNotFoundError, MissingThemeFieldError) as exc:
             _LOG.exception("reference lore api: projection failed for %s/%s", pack, world)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -114,6 +119,8 @@ def create_reference_router() -> APIRouter:
             # (not inside build_rules_projection — that would break the empty-pack
             # omits-absent-files contract). Same top-level "theme" key as lore.
             doc["theme"] = build_theme_tokens(pack, pack_dir=pack_dir)
+            # 2026-06-09 redesign: masthead chrome, pack-tier (no world name).
+            doc["meta"] = build_reference_meta(pack)
         except (ValueError, MissingThemeFieldError) as exc:
             _LOG.exception("reference rules api: projection failed for %s", pack)
             raise HTTPException(status_code=500, detail=str(exc)) from exc

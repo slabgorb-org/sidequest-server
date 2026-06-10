@@ -38,7 +38,12 @@ from sidequest.server.reference_renderer import (
     load_points_of_interest,
 )
 from sidequest.server.reference_slug import slugify
-from sidequest.server.reference_theme import _read_theme_yaml, _require_str
+from sidequest.server.reference_theme import (
+    PACK_BLURBS,
+    PACK_LABELS,
+    _read_theme_yaml,
+    _require_str,
+)
 from sidequest.server.reference_timeline import (
     _temporal_of,
     _year_key,
@@ -53,6 +58,7 @@ from sidequest.telemetry.spans.reference import (
     reference_map_pin_not_found_span,
     reference_map_pin_resolved_span,
     reference_map_rendered_span,
+    reference_meta_missing_span,
     reference_npc_unratified_skipped_span,
     reference_poi_image_not_found_span,
     reference_poi_image_resolved_span,
@@ -441,6 +447,51 @@ def build_theme_tokens(pack: str, *, pack_dir: Path) -> dict[str, str]:
         "--dinkus-medium": _require_str(glyph.get("medium"), "dinkus.glyph.medium", pack),
         "--dinkus-heavy": _require_str(glyph.get("heavy"), "dinkus.glyph.heavy", pack),
     }
+
+
+def build_reference_meta(pack: str, *, world_dir: Path | None = None) -> dict[str, str]:
+    """Masthead chrome for the reference SPA (2026-06-09 redesign bundle).
+
+    The React shell's ``Masthead`` needs a pack label, a dateline, and — on the
+    lore page — the world's display name. Pack label and dateline come from the
+    chrome constants in ``reference_theme.py`` (``PACK_LABELS``/``PACK_BLURBS``,
+    stranded by the 100-12 SPA cutover and re-wired here); the world name comes
+    from the world's ``world.yaml`` ``name`` field. The dinkus glyph is NOT
+    carried here — it already rides the theme token set as ``--dinkus-light``.
+
+    A gap in any field follows the documented chrome loud-fallback doctrine
+    (see ``PACK_TOC``/``DEFAULT_TOC``): derive a humanized slug AND fire the
+    ``sidequest.reference.meta_missing`` ERROR span so drift surfaces on the
+    GM panel — never a silent default, never a 500 for missing prose chrome.
+    """
+    label = PACK_LABELS.get(pack)
+    if label is None:
+        with reference_meta_missing_span(pack=pack, field="pack_label"):
+            label = _humanize_label(pack)
+    meta: dict[str, str] = {"pack_label": label}
+
+    dateline = PACK_BLURBS.get(pack)
+    if dateline is None:
+        with reference_meta_missing_span(pack=pack, field="dateline"):
+            pass
+    else:
+        meta["dateline"] = dateline
+
+    if world_dir is not None:
+        world_name: str | None = None
+        world_yaml = world_dir / "world.yaml"
+        if world_yaml.is_file():
+            with world_yaml.open(encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) or {}
+            raw = data.get("name") if isinstance(data, dict) else None
+            if isinstance(raw, str) and raw.strip():
+                world_name = raw.strip()
+        if world_name is None:
+            with reference_meta_missing_span(pack=pack, field="world_name"):
+                world_name = _humanize_label(world_dir.name)
+        meta["world_name"] = world_name
+
+    return meta
 
 
 def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: Path) -> dict:

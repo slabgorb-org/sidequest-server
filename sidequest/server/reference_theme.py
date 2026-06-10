@@ -147,6 +147,7 @@ PACK_LABELS: dict[str, str] = {
     "road_warrior": "Road Warrior",
     "spaghetti_western": "Spaghetti Western",
     "tea_and_murder": "Tea and Murder",
+    "wry_whimsy": "Wry Whimsy",
 }
 
 
@@ -166,6 +167,7 @@ PACK_BLURBS: dict[str, str] = {
     "road_warrior": "the tank reads empty and the horizon doesn't",
     "spaghetti_western": "a long ride, a quiet town, an open grave",
     "tea_and_murder": "the kettle is on and someone won't see breakfast",
+    "wry_whimsy": "the door home never opens from this side",
 }
 
 
@@ -266,6 +268,14 @@ PACK_EPIGRAPHS: dict[str, dict[str, str]] = {
         ),
         "attrib": "On the well-set table",
     },
+    "wry_whimsy": {
+        "body": (
+            "You fell, stepped, or were blown through, and the land on the "
+            "other side has rules. The rules have loopholes, the loopholes "
+            "have opinions, and getting home is the easy part."
+        ),
+        "attrib": "On arrivals",
+    },
 }
 
 
@@ -334,6 +344,10 @@ PACK_TOC: dict[str, list[dict[str, str]]] = {
     ],
     "tea_and_murder": [
         {"num": "I", "id": "reckoning", "label": "The House"},
+        {"num": "II", "id": "bearing", "label": "Bearing & Make"},
+    ],
+    "wry_whimsy": [
+        {"num": "I", "id": "reckoning", "label": "The Crossing"},
         {"num": "II", "id": "bearing", "label": "Bearing & Make"},
     ],
 }

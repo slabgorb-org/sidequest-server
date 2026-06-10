@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.ruleset.cwn import CwnRulesetModule
 from sidequest.game.system_strain import StrainResult
-from sidequest.genre.models.rules import SwnConfig
+from sidequest.genre.models.rules import CwnConfig
 from sidequest.mutation.models import MutationCatalog
 from sidequest.mutation.state import MutationState, UsageCounter
 from sidequest.telemetry.spans.awn import (
@@ -36,7 +36,7 @@ class UseMutationResult(BaseModel):
     mutation_id: str
     reason: str = ""
     strain: StrainResult | None = None
-    uses_remaining: int = -1  # -1 = at_will (unlimited)
+    uses_remaining: int = -1  # -1 = at_will (unlimited); only meaningful when applied=True
     save_stat: str | None = None
     save_result: SaveResult | None = None
     effect: str = ""
@@ -47,7 +47,7 @@ def use_mutation(
     state: MutationState,
     catalog: MutationCatalog,
     module: CwnRulesetModule,
-    cfg: SwnConfig | None,
+    cfg: CwnConfig | None,
     core: CreatureCore,
     actor: str,
     mutation_id: str,
@@ -56,10 +56,10 @@ def use_mutation(
 ) -> UseMutationResult:
     cs = state.characters.get(actor)
     if cs is None or mutation_id not in cs.positive_ids:
-        awn_mutation_refused_span(actor=actor, mutation_id=mutation_id, reason="not_owned")
+        reason = "not_owned" if cs is not None else "not_owned (actor has no mutation state)"
+        awn_mutation_refused_span(actor=actor, mutation_id=mutation_id, reason=reason)
         return UseMutationResult(
-            applied=False, actor=actor, mutation_id=mutation_id,
-            reason="not_owned" if cs is not None else "not_owned (actor has no mutation state)",
+            applied=False, actor=actor, mutation_id=mutation_id, reason=reason,
         )
 
     md = catalog.positive_by_id(mutation_id)

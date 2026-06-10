@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.ruleset.awn import AwnRulesetModule
 from sidequest.game.system_strain import SystemStrainPool
@@ -115,9 +117,17 @@ def test_not_owned_refused() -> None:
     assert "not_owned" in result.reason
 
 
-def test_save_resolver_required_when_save_stat_set() -> None:
-    import pytest
+def test_unknown_actor_refused_not_raised() -> None:
+    result = use_mutation(
+        state=MutationState(), catalog=_catalog(),
+        module=AwnRulesetModule(), cfg=_cfg(), core=_core(),
+        actor="Nobody", mutation_id="exotic/acid_spit",
+    )
+    assert not result.applied
+    assert "no mutation state" in result.reason
 
+
+def test_save_resolver_required_when_save_stat_set() -> None:
     with pytest.raises(ValueError, match="save_resolver"):
         use_mutation(
             state=_state_with("exotic/acid_spit"), catalog=_catalog(),

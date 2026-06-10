@@ -174,8 +174,7 @@ def test_real_chargen_flow_exposes_creation_answers_in_sheet_payload(cc_pack) ->
     answered_ids = {a.scene_id for a in answers}
     for absent in ("the_roll", "the_arrangement", "the_kit", "the_mouth"):
         assert absent not in answered_ids, (
-            f"{absent} was never answered by the player — it must not "
-            "appear in creation_answers"
+            f"{absent} was never answered by the player — it must not appear in creation_answers"
         )
 
     # The serialized payload — what the WS state-mirror actually sends —

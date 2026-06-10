@@ -156,8 +156,7 @@ class TestCreationAnswerModel:
         assert entry.kind == "choice"
         assert entry.value == "The Village Itself"
         assert entry.archetype_inferred is False, (
-            "archetype_inferred must default False — only the 93-1 inference "
-            "seam marks it True"
+            "archetype_inferred must default False — only the 93-1 inference seam marks it True"
         )
 
     def test_kind_is_closed_literal(self) -> None:
@@ -308,8 +307,7 @@ class TestFreeformFlowAnswers:
         assert len(answers) == 2
         assert all(a.kind == "freeform" for a in answers)
         assert answers[0].value == _VERBATIM_FREEFORM, (
-            "freeform provenance must be the player's exact words; got "
-            f"{answers[0].value!r}"
+            f"freeform provenance must be the player's exact words; got {answers[0].value!r}"
         )
         assert answers[1].value == ("A vegetarian and temperance lecturer — forever ignored.")
         assert [a.scene_id for a in answers] == ["the_origin", "the_calling"]

@@ -142,8 +142,17 @@ For each player action:
          so always pick from game_state.confrontation_types:
 """
     + CONFRONTATION_TRIGGER_CORE
-    + """       - magic_working: spell or magical ability usage. params is a
-         MagicWorking-shaped object (the spell/effect fields).
+    + """       - magic_working: spell or magical ability usage. When the player
+         NAMES a specific spell ("I cast foundation_of_flame", "I work the
+         Foundation of Flame"), params MUST carry
+         {"actor": "<the casting character's name>",
+          "spell": "<the spell exactly as the player named it>"} —
+         the engine resolves the name against the world's spell catalog and
+         the caster's prepared list; never resolve, rename, or invent the
+         spell yourself. An explicit named cast is an unambiguous mechanical
+         intent: score its confidence HIGH. For an unnamed/ambient working
+         (pact-working worlds), params is a MagicWorking-shaped object
+         (the spell/effect fields) and MUST still include "actor".
        - scenario_clue: clue/evidence discovery. params={"fact_id": "<id>"}
          (optional "summary", "category").
        - npc_agency: NPC reacts per role and disposition.

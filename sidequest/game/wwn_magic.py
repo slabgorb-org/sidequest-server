@@ -47,6 +47,26 @@ class EffortPool(BaseModel):
         return self.max - self.committed
 
 
+class WwnCastLogEntry(BaseModel):
+    """One turn-stamped WN cast receipt — Story 102-3 / ADR-113.
+
+    The durable provenance artifact the ``magic_working`` engagement witness
+    reads to answer "did the router-dispatched cast actually run the WN cast
+    spine this turn?". Mirrors ``RegionTransition`` (the movement witness's
+    ledger, Story 59-30). Stamped on EVERY ``resolve_spellcast`` invocation —
+    a REFUSED cast (0 casts remaining, unprepared spell) is still mechanical
+    engagement: the engine answered, so the lie-detector must not cry wolf on
+    a fizzle the narrator honestly narrates.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    turn: int
+    actor: str
+    spell_id: str
+    cast: bool
+
+
 class SpellcastingState(BaseModel):
     """WWN spell economy (SRD §4.2). A cast spends ONE from ``casts_remaining``
     on ANY prepared spell of level <= max_spell_level; refreshes to casts_per_day

@@ -35,12 +35,10 @@ from sidequest.agents.tool_registry import (
     ToolResult,
     tool,
 )
-from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.base import RulesetModule
 from sidequest.genre.models.inventory import DamageSpec
-from sidequest.genre.models.rules import BeatDef
 from sidequest.telemetry.spans.wn import (
     WN_FAMILY_SLUGS,
     wn_attack_resolved_span,
@@ -48,6 +46,11 @@ from sidequest.telemetry.spans.wn import (
     wn_save_resolved_span,
     wn_skill_check_resolved_span,
 )
+
+# Module-level dice RNG (a real ``random.Random`` instance — ``DamageSpec.roll``
+# and the d20/2d6 throws below take an instance, not the ``random`` module).
+# Server-side rolls, seeded from OS entropy; spectator replay uses its own seed.
+_RNG = random.Random()
 
 # ---------------------------------------------------------------------------
 # Shared resolution helpers
@@ -63,15 +66,15 @@ def _require_wn(ctx: ToolContext) -> tuple[RulesetModule, Any, str]:
     module's slug (``module.slug``) so every span is slug-honest — an awn pack
     says ``awn``, not ``cwn``.
     """
-    pack = ctx.genre_pack
-    declared = getattr(getattr(pack, "rules", None), "ruleset", None)
-    if declared not in WN_FAMILY_SLUGS:
+    rules = getattr(ctx.genre_pack, "rules", None)
+    declared = getattr(rules, "ruleset", None)
+    if rules is None or declared not in WN_FAMILY_SLUGS:
         raise ValueError(
             f"WN tool requires a WN-family ruleset (one of {WN_FAMILY_SLUGS}); "
             f"loaded pack has ruleset={declared!r}"
         )
     module = get_ruleset_module(declared)
-    cfg = pack.rules.ruleset_config()
+    cfg = rules.ruleset_config()
     if cfg is None:
         raise ValueError(f"WN ruleset {declared!r} resolved no ruleset config")
     return module, cfg, module.slug
@@ -94,37 +97,98 @@ def _resolve_actor(snapshot: Any, name: str) -> tuple[CreatureCore, dict[str, in
     return None
 
 
-def _resolve_weapon_damage(
-    *, actor_core: CreatureCore, pack: Any, world_slug: str | None
-) -> DamageSpec | None:
-    """Resolve the strike DamageSpec through the production priority ladder.
+# Narrator vocabulary for an unarmed strike — these resolve to the genre's
+# unarmed-damage floor rather than an inventory weapon.
+_UNARMED_TERMS = frozenset({"fists", "fist", "unarmed", "unarmed strike", "hands", "bare hands"})
 
-    Delegates to ``resolve_damage_spec_from_beat_and_actor`` (the shared seam):
-    the actor's inline-damage inventory item (priority 2), the world/genre item
-    catalog (priority 3), then the genre unarmed-strike floor (priority 4). The
-    catalog/floor tiers require a real ``GenrePack``; a duck-typed test pack
-    carries no catalog, so only the actor's own inventory resolves (and a
-    no-weapon hit returns None → the caller fails loud). Returns None when
-    nothing resolves — never a fabricated zero.
+
+def _damage_from_item(item: dict) -> DamageSpec | None:
+    """The inline ``damage`` spec on an inventory item dict, or None.
+
+    Mirrors priority 2 of ``resolve_damage_spec_from_beat_and_actor`` but for ONE
+    named item (a dict with ``damage`` as an NdM string or a DamageSpec dict).
+    Unparseable specs return None (the caller fails loud) — never a fabricated zero.
+    """
+    raw = item.get("damage")
+    if isinstance(raw, dict):
+        try:
+            return DamageSpec.model_validate(raw)
+        except Exception:
+            return None
+    if isinstance(raw, str):
+        try:
+            return DamageSpec.model_validate({"dice": raw})
+        except Exception:
+            return None
+    return None
+
+
+def _resolve_weapon_damage(
+    *, actor_core: CreatureCore, weapon_name: str, pack: Any, world_slug: str | None
+) -> DamageSpec | None:
+    """Resolve the DamageSpec for the *named* weapon (102-5 review R-1).
+
+    The narrator names a weapon; the engine must roll THAT weapon's dice, not
+    "whichever inventory item happens to carry a damage dict first" (the shared
+    ``resolve_damage_spec_from_beat_and_actor`` seam matches by no name). For a
+    multi-weapon actor that distinction is the difference between the narrator's
+    prose and the engine's dice agreeing or diverging.
+
+    Resolution (No Silent Fallbacks — never a fabricated zero, never the wrong
+    weapon):
+      1. The named weapon CARRIED with an inline ``damage`` dict → that spec.
+      2. The named weapon carried but damage lives in the world/genre item
+         catalog (real ``GenrePack`` only) → ``CatalogItem.damage`` by the item's
+         id (world replaces genre, per epic 94).
+      3. The named weapon NOT carried but it is an unarmed strike (``fists`` etc.)
+         → the genre unarmed-strike floor (``pack.rules.unarmed_damage``).
+      4. Otherwise (weapon not carried and not unarmed, or carried with no
+         resolvable damage) → None; the caller fails loud.
     """
     from sidequest.genre.models.pack import GenrePack
-    from sidequest.server.dispatch.damage_roll import (
-        resolve_damage_spec_from_beat_and_actor,
+
+    items = list(getattr(getattr(actor_core, "inventory", None), "items", []) or [])
+    wanted = weapon_name.strip().lower()
+    matched = next(
+        (
+            it
+            for it in items
+            if wanted
+            in {
+                str(it.get("name", "")).strip().lower(),
+                str(it.get("id", "")).strip().lower(),
+            }
+        ),
+        None,
     )
 
-    beat = BeatDef(
-        id="wn_attack_strike",
-        label="WN attack",
-        kind=BeatKind.strike,
-        stat_check="STRENGTH",
-    )
-    seam_pack = pack if isinstance(pack, GenrePack) else None
-    return resolve_damage_spec_from_beat_and_actor(
-        beat=beat,
-        actor_core=actor_core,
-        pack=seam_pack,
-        world_slug=world_slug or None,
-    )
+    if matched is not None:
+        # Priority 1: inline damage on the named item.
+        spec = _damage_from_item(matched)
+        if spec is not None:
+            return spec
+        # Priority 2: world/genre catalog lookup by the named item's id. The
+        # catalog tier requires a real GenrePack — a duck-typed pack carries no
+        # catalog, so we fail loud rather than silently degrade (security WN-1).
+        item_id = matched.get("id")
+        if item_id and isinstance(pack, GenrePack):
+            from sidequest.server.dispatch.inventory_resolve import resolve_inventory
+
+            inv = resolve_inventory(pack, world_slug or None)
+            catalog = getattr(inv, "item_catalog", None) if inv is not None else None
+            if catalog:
+                cat = next((c for c in catalog if c.id == item_id), None)
+                if cat is not None and cat.damage is not None:
+                    return cat.damage
+        return None
+
+    # Priority 3: an unarmed strike falls to the genre unarmed-damage floor.
+    if wanted in _UNARMED_TERMS:
+        rules = getattr(pack, "rules", None)
+        return getattr(rules, "unarmed_damage", None) if rules is not None else None
+
+    # Named weapon not carried and not an unarmed strike → loud (caller).
+    return None
 
 
 # ===========================================================================
@@ -192,17 +256,20 @@ async def wn_attack(args: WnAttackArgs, ctx: ToolContext) -> ToolResult:
     damage = 0
     if outcome.hit:
         spec = _resolve_weapon_damage(
-            actor_core=attacker_core, pack=ctx.genre_pack, world_slug=ctx.world_id
+            actor_core=attacker_core,
+            weapon_name=args.weapon,
+            pack=ctx.genre_pack,
+            world_slug=ctx.world_id,
         )
         if spec is None:
             return ToolResult.error(
                 f"{args.attacker!r} hit {args.target!r} with {args.weapon!r} but no "
-                "resolvable weapon damage spec (no inventory damage, no catalog item, "
-                "no unarmed floor) — refusing a silent 0-damage hit "
-                "(CLAUDE.md No Silent Fallbacks)",
+                "resolvable weapon damage spec (the named weapon is not carried, or "
+                "carries no damage, and there is no unarmed floor) — refusing a "
+                "silent 0-damage hit (CLAUDE.md No Silent Fallbacks)",
                 recoverable=True,
             )
-        damage = spec.roll(random)
+        damage = spec.roll(_RNG)
         target_core.apply_hp_delta(-damage)
         ctx.repository.save(snapshot)
 

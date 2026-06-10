@@ -295,6 +295,57 @@ async def test_attack_hit_with_no_resolvable_damage_fails_loud_not_zero() -> Non
     assert core.hp.current == 10
 
 
+async def test_attack_resolves_the_NAMED_weapon_not_the_first_in_inventory() -> None:
+    """Regression (102-5 review R-1): the ``weapon`` arg must select the damage
+    source. A multi-weapon actor carries a feeble Dart (1d2 → max 2) FIRST and a
+    Maul (3d6+3 → min 6) SECOND. Naming the Maul must roll the Maul, not the
+    first damage-bearing item — otherwise the narrator's prose ("I swing the
+    maul") diverges from the engine's dice, the exact improv this system exists
+    to prevent."""
+    dart = {"id": "dart", "name": "Dart", "damage": {"dice": "1d2", "bonus": 0}}
+    maul = {"id": "maul", "name": "Maul", "damage": {"dice": "3d6", "bonus": 3}}
+    attacker = _pc("Vesska", items=[dict(dart), dict(maul)])
+    target = _pc("Husk", ac=-100, hp=40)
+    store = _store_with(_snapshot([attacker, target]))
+    ctx = _make_ctx(store, genre_pack=_pack("wwn"))
+
+    r = await _call("wn_attack", {"attacker": "Vesska", "target": "Husk", "weapon": "Maul"}, ctx)
+    assert r.status is ToolResultStatus.OK
+    p = _payload(r)
+    assert p["hit"] is True
+    assert 6 <= p["damage"] <= 21, (
+        f"named Maul (3d6+3, min 6) but got {p['damage']} — the Dart (max 2) was used"
+    )
+
+    reloaded = store.load()
+    assert reloaded is not None
+    core = reloaded.snapshot.find_creature_core("Husk")
+    assert core is not None
+    assert core.hp.current == 40 - p["damage"]
+
+
+async def test_attack_naming_a_weapon_the_actor_does_not_carry_fails_loud() -> None:
+    """The named weapon must be CARRIED. Naming a weapon absent from inventory
+    (and not an unarmed strike) is a loud error, not a silent fall-through to
+    some other item's dice (No Silent Fallbacks)."""
+    attacker = _pc("Vesska", items=[{"id": "dart", "name": "Dart", "damage": {"dice": "1d2"}}])
+    target = _pc("Husk", ac=-100, hp=10)
+    store = _store_with(_snapshot([attacker, target]))
+    ctx = _make_ctx(store, genre_pack=_pack("wwn"))
+
+    out = await _dispatch(
+        "wn_attack", {"attacker": "Vesska", "target": "Husk", "weapon": "Plasma Lance"}, ctx
+    )
+    assert out.is_error is True
+    assert "plasma lance" in out.content.lower() or "damage" in out.content.lower()
+
+    reloaded = store.load()
+    assert reloaded is not None
+    core = reloaded.snapshot.find_creature_core("Husk")
+    assert core is not None
+    assert core.hp.current == 10
+
+
 @pytest.mark.parametrize("slug", ["wwn", "awn"])
 async def test_attack_emits_module_span_with_bound_slug(slug: str, otel_capture) -> None:
     """AC2 + the slug-honesty invariant: the module-scoped resolution span is

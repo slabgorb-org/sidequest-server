@@ -67,6 +67,7 @@ from .intent_router import *  # noqa: F401, F403
 from .interior import *  # noqa: F401, F403
 from .inventory import *  # noqa: F401, F403
 from .journal import *  # noqa: F401, F403
+from .jump import *  # noqa: F401, F403
 from .lobby import *  # noqa: F401, F403
 from .location import *  # noqa: F401, F403
 from .lore import *  # noqa: F401, F403

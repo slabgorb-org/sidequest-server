@@ -11,7 +11,7 @@ import random
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from sidequest.game.ruleset.resolution import AttackRollParams
+from sidequest.game.ruleset.resolution import AttackRollParams, JumpAdjudication
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
 from sidequest.protocol.models import InitiativeEntry
 
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from sidequest.game.lethality import DownedResult, LethalityResult
     from sidequest.game.table.types import TableCommit, TableResolutionOutcome, TableState
     from sidequest.genre.models.inventory import DamageSpec
+    from sidequest.genre.models.world import Route
 
 
 class UnknownRulesetError(ValueError):
@@ -100,6 +101,25 @@ class RulesetModule(ABC):
     ) -> AttackRollParams:
         """Modifier + target number for one ship-gunnery shot (dogfight SWN layer)."""
         raise NotImplementedError(f"{self.slug} ruleset has no ship-gunnery resolution")
+
+    def adjudicate_jump(
+        self,
+        *,
+        route: Route | None,
+        drive_rating: int,
+        rng: random.Random,
+    ) -> JumpAdjudication:
+        """Adjudicate one campaign-scale inter-system jump (Story 98-5, ADR-141).
+
+        ``route`` is the authored ``routes`` entry for the edge, or None for a
+        bare adjacency (the ruleset computes its own default). ``drive_rating``
+        is the ship's spike-drive rating; ``rng`` rolls the hazard check.
+
+        Base default fails loud (mirrors ``ship_attack_params``): a ruleset with
+        no jump model declines rather than inventing a cost. The slug appears in
+        the message so the GM/dev sees which module had no inter-system drive
+        model. SWN overrides with the spike-drive computation."""
+        raise NotImplementedError(f"{self.slug} ruleset has no inter-system jump adjudication")
 
     def resolve_opponent_attack(
         self,

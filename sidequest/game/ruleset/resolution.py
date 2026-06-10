@@ -3,6 +3,7 @@
 A module computes these from the full turn context (attacker + target), so SWN can
 read target AC where native reads a beat DC. Frozen — pure data, no behavior.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,8 +12,9 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class AttackRollParams:
     """Everything dispatch needs to roll one attack: the d20 modifier and the number to meet."""
-    modifier: int        # attacker to-hit modifier (native: stat mod; SWN: attack_bonus + skill + attr)
-    target_number: int   # number the roll must meet/beat (native: beat DC; SWN: target AC)
+
+    modifier: int  # attacker to-hit modifier (native: stat mod; SWN: attack_bonus + skill + attr)
+    target_number: int  # number the roll must meet/beat (native: beat DC; SWN: target AC)
 
 
 @dataclass(frozen=True)
@@ -32,10 +34,30 @@ class OpponentAttackOutcome:
 
 
 @dataclass(frozen=True)
+class JumpAdjudication:
+    """One adjudicated inter-system jump (Story 98-5, ADR-141 campaign scale).
+
+    The bound ruleset (space_opera → SWN per ADR-117) computes the cost of moving
+    from one star system to an adjacent one. ``source`` distinguishes an authored
+    ``routes`` entry (``"route"``) from the ruleset's explicit default for a bare
+    adjacency (``"ruleset_default"``) — never a silent zero (No Silent Fallbacks).
+    ``hazard`` is the authored narrative hazard tag (or None on a default edge);
+    ``hazard_roll`` is the rolled d6 the GM-panel span records for every jump.
+    """
+
+    fuel_spent: int  # drive fuel consumed by the jump (>= 1; explicit, never a silent 0)
+    transit_days: int  # subjective transit time of the spike drill (>= 1)
+    hazard: str | None  # authored hazard tag from the route, or None for a default edge
+    hazard_roll: int  # the rolled hazard check (d6) — the per-jump GM-panel record
+    source: str  # "route" (authored fields) or "ruleset_default" (drive-model default)
+
+
+@dataclass(frozen=True)
 class CheckRollParams:
     """A non-beat check (skill check or save): the dice pool, modifier, and difficulty."""
-    sides: int           # 6 for 2d6 skill checks, 20 for saves
-    count: int           # 2 for skill checks, 1 for saves
-    modifier: int        # attr mod (+ skill level for skill checks)
-    difficulty: int      # SWN difficulty (skill check) or save target
-    label: str           # human label for the dice overlay context, e.g. "Notice check" / "Physical save"
+
+    sides: int  # 6 for 2d6 skill checks, 20 for saves
+    count: int  # 2 for skill checks, 1 for saves
+    modifier: int  # attr mod (+ skill level for skill checks)
+    difficulty: int  # SWN difficulty (skill check) or save target
+    label: str  # human label for the dice overlay context, e.g. "Notice check" / "Physical save"

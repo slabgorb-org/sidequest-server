@@ -362,6 +362,29 @@ def _is_vocation_label(label: str) -> bool:
     return not label.strip().lower().startswith(_ARTICLE_PREFIXES)
 
 
+# The race-axis discriminator is INDEFINITE-only — see _is_origin_display_label.
+_INDEFINITE_ARTICLE_PREFIXES = ("a ", "an ")
+
+
+def _is_origin_display_label(label: str) -> bool:
+    """True when a choice label works as the origin/Race display, False when
+    it's an indefinite-article descriptor phrase that should fall back to the
+    resolved ``race_hint``.
+
+    Race-axis sibling of ``_is_vocation_label`` (sq-playtest 2026-06-10,
+    barsoom): "A Green Martian of the Hordes" stamped verbatim made the sheet
+    read "Race: A Green Martian of the Hordes" where the resolved race_hint
+    ("Green Martian") belongs. Unlike the Calling guard this one keys on the
+    INDEFINITE article only — a full-corpus survey shows every "a/an" origin
+    label reads better as its race_hint ("A Sealed Vault" → Pure Strain Human,
+    "A Lab" → Synthetic, all five barsoom origins), while DEFINITE-article
+    labels are intended displays across the packs ("The Village Itself" over
+    Servant, "The Streets" over Street, elemental_harmony's "The …" homelands
+    — the documented reason race_label exists). Do not widen to "the".
+    """
+    return not label.strip().lower().startswith(_INDEFINITE_ARTICLE_PREFIXES)
+
+
 # ---------------------------------------------------------------------------
 # SceneResult — unit of revert for go_back
 # ---------------------------------------------------------------------------
@@ -1423,7 +1446,14 @@ class CharacterBuilder:
                 # button (e.g. "The Village Itself" → race_hint "Servant").
                 # Display-only; the mechanical Character.race still resolves
                 # from race_hint.
-                if result.choice_label is not None:
+                # ...but not an indefinite-article descriptor phrase ("A Green
+                # Martian of the Hordes") — leaving race_label empty falls the
+                # sheet back to the resolved race_hint ("Green Martian"). The
+                # race-axis sibling of the _is_vocation_label Calling guard
+                # above (sq-playtest 2026-06-10, barsoom Tarkas).
+                if result.choice_label is not None and _is_origin_display_label(
+                    result.choice_label
+                ):
                     acc.race_label = result.choice_label
             if eff.personality_trait is not None:
                 acc.personality_trait = eff.personality_trait

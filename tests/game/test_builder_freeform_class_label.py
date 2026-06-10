@@ -181,3 +181,46 @@ class TestArticleLeadingCannedLabel:
         acc = b.accumulated()
         assert acc.class_hint == "Doctor"
         assert acc.class_label == "Country Doctor"
+
+
+class TestIndefiniteArticleOriginLabel:
+    """sq-playtest 2026-06-10 BUG-LOW (barsoom Tarkas): the race-axis sibling of
+    the calling-axis fix above. barsoom's origin labels are indefinite-article
+    descriptor phrases ("A Green Martian of the Hordes") with the real race in
+    race_hint ("Green Martian"); stamping the label as the origin display made
+    the sheet read "Race: A Green Martian of the Hordes".
+
+    The guard is INDEFINITE-only ("a"/"an") — a full-corpus survey shows every
+    a/an origin label reads better as its race_hint ("A Sealed Vault" → Pure
+    Strain Human, "A Lab" → Synthetic, all five barsoom origins), while
+    definite-article labels are intended displays everywhere ("The Village
+    Itself" over Servant, "The Streets" over Street, the elemental_harmony
+    "The …" homelands). Do NOT widen this guard to "the"."""
+
+    def _origin_scene(self) -> CharCreationScene:
+        return make_scene(
+            "origin",
+            choices=[
+                make_choice("A Green Martian of the Hordes", race_hint="Green Martian"),
+                make_choice("The Village Itself", race_hint="Servant"),
+            ],
+        )
+
+    def test_indefinite_article_origin_label_not_captured(self) -> None:
+        b = CharacterBuilder(scenes=[self._origin_scene()], rules=simple_rules())
+        b.apply_choice(0)
+        acc = b.accumulated()
+        # Mechanical race still resolves...
+        assert acc.race_hint == "Green Martian"
+        # ...but the descriptor phrase is NOT stamped as the origin display —
+        # the sheet falls back to the resolved race.
+        assert acc.race_label is None
+
+    def test_definite_article_origin_label_still_captured(self) -> None:
+        # tea_and_murder "The Village Itself" (race_hint Servant) is the
+        # documented reason race_label exists — it must keep its display.
+        b = CharacterBuilder(scenes=[self._origin_scene()], rules=simple_rules())
+        b.apply_choice(1)
+        acc = b.accumulated()
+        assert acc.race_hint == "Servant"
+        assert acc.race_label == "The Village Itself"

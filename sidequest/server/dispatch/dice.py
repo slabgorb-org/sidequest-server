@@ -792,6 +792,12 @@ def dispatch_dice_throw(
                 else str(resolved.outcome),
                 "own_delta": own_delta,
                 "opponent_delta": apply_result.deltas.opponent if apply_result.deltas else 0,
+                # ADR-114 §2 / forensics lie-detector: the HP actually removed from
+                # the target by the strike damage channel. ``opponent_delta`` above is
+                # the *dial* delta and is suppressed to 0 under hp_depletion, so without
+                # this field a post-hoc reader of ENCOUNTER_BEAT_APPLIED sees a CritSuccess
+                # strike that "did nothing" while the CreatureCore HpPool actually dropped.
+                "opponent_hp_removed": apply_result.hp_removed,
                 "metric_target": encounter.encounter_type,
                 "source": "dice_throw",
             },

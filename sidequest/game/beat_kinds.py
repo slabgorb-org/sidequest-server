@@ -381,6 +381,15 @@ class ApplyResult:
     # Player-facing legibility descriptor (Story 73-4). None only when the beat
     # was skipped (no deltas resolved).
     impact: BeatImpact | None = None
+    # Actual HP removed from the primary target by the strike damage channel
+    # (ADR-114 §2). Distinct from ``deltas.opponent``, which is the *dial*
+    # delta and is suppressed to 0 under ``win_condition="hp_depletion"`` (the
+    # dials are inert placeholders). Without this, the persisted forensics
+    # ``ENCOUNTER_BEAT_APPLIED`` event records only the inert dial delta and a
+    # post-hoc reader sees ``opponent_delta=0`` for a strike that removed real
+    # HP — the lie-detector goes blind on the persisted surface even though the
+    # live ``state_patch.hp`` span fired. 0 when no HP channel ran.
+    hp_removed: int = 0
 
 
 def _phase_for_beat(beat: int) -> EncounterPhase:
@@ -886,6 +895,7 @@ def apply_beat(
     # HP path is skipped — Task 7 injects the real dice resolver; until then
     # the engine is silent on HP for channel=strike beats (no phantom zero damage).
     damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
+    hp_removed = 0
     if damage_channel == "strike" and damage_resolver is not None:
         damage_total = damage_resolver()
         # Resolve target mitigation: beat.mitigation_override takes precedence;
@@ -914,7 +924,7 @@ def apply_beat(
         if primary_target is not None and edge_resolver is not None:
             hp_target = edge_resolver(primary_target)
             if hp_target is not None:
-                apply_beat_hp_channel(
+                hp_removed = apply_beat_hp_channel(
                     target=hp_target,
                     channel="strike",
                     damage_total=damage_total,
@@ -1055,4 +1065,10 @@ def apply_beat(
         enc.structured_phase = EncounterPhase.Resolution
         resolved = True
 
-    return ApplyResult(deltas=deltas, resolved=resolved, skipped_reason=None, impact=impact)
+    return ApplyResult(
+        deltas=deltas,
+        resolved=resolved,
+        skipped_reason=None,
+        impact=impact,
+        hp_removed=hp_removed,
+    )

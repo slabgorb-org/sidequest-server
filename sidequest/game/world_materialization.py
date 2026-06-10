@@ -542,7 +542,6 @@ class WorldBuilder:
         snap.npcs.append(
             Npc(
                 core=core,
-                voice_id=None,
                 disposition=int(npc_data.disposition or 0),
                 location=npc_data.location,
                 pronouns=None,
@@ -871,7 +870,6 @@ def preload_authored_npcs(
         )
         runtime = Npc(
             core=core,
-            voice_id=None,
             disposition=int(authored_npc.initial_disposition),
             location=None,
             pronouns=authored_npc.pronouns or None,

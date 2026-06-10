@@ -18,7 +18,7 @@ from sidequest.game.projection.rules import ProjectionRules
 from sidequest.genre.models.archetype_axes import BaseArchetypes
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 from sidequest.genre.models.archetype_funnels import ArchetypeFunnels
-from sidequest.genre.models.audio import AudioConfig, VoicePresets
+from sidequest.genre.models.audio import AudioConfig
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig
 from sidequest.genre.models.bestiary import Bestiary
@@ -287,7 +287,6 @@ class GenrePack(BaseModel):
     beat_vocabulary: BeatVocabulary | None = None
     chassis_classes: ChassisClassesConfig | None = None
     achievements: list[Achievement] = Field(default_factory=list)
-    voice_presets: VoicePresets | None = None
     power_tiers: dict[str, list[PowerTier]] = Field(default_factory=dict)
     worlds: dict[str, World] = Field(default_factory=dict)
     scenarios: dict[str, ScenarioPack] = Field(default_factory=dict)

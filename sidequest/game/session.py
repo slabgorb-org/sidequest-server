@@ -139,7 +139,6 @@ class Npc(BaseModel):
     core: CreatureCore
 
     # NPC-specific fields (P1-required: narrator uses name, personality, disposition)
-    voice_id: int | None = None
     # ``disposition`` is a ``Disposition`` wrapper (Story 50-10) — exposes
     # ``.value`` (clamped int) and ``.attitude()`` (Attitude enum). The
     # Pydantic schema hook on Disposition coerces raw int construction

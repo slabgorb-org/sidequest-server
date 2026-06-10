@@ -57,7 +57,6 @@ logger = logging.getLogger(__name__)
 TARGETED_KINDS: dict[str, str] = {
     "DICE_REQUEST": "to",
     "JOURNAL_RESPONSE": "to",
-    "VOICE_TEXT": "to",
 }
 
 # ADR-105 B1: kinds whose recipient set lives in ``_visibility.visible_to``

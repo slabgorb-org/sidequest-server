@@ -366,6 +366,36 @@ def _migrate_s5_reconcile_npc_pool(out: dict[str, Any]) -> dict[str, Any] | None
     }
 
 
+def _migrate_s6_strip_npc_voice_id(out: dict[str, Any]) -> dict[str, Any] | None:
+    """S6 (story 101-2) — drop the dead ``voice_id`` field from every ``Npc``.
+
+    The voice-generation surface was deprecated (operator decision
+    2026-06-09) and ``Npc.voice_id`` is removed. ``Npc`` is ``extra=forbid``,
+    so a pre-removal Postgres save that persisted ``voice_id`` (always
+    ``None`` at materialization, but written as a key) would raise
+    ``ValidationError`` on load. Stripping the key here keeps those saves
+    loadable.
+
+    Operates in raw-dict space before pydantic re-hydration, on the
+    deep-copied ``out``. Returns OTEL attributes when at least one NPC dict
+    carried the key, else ``None`` (no-op — silent on canonical input).
+    """
+    npcs = out.get("npcs")
+    if not isinstance(npcs, list):
+        return None
+
+    stripped = 0
+    for npc in npcs:
+        if isinstance(npc, dict) and "voice_id" in npc:
+            del npc["voice_id"]
+            stripped += 1
+
+    if stripped == 0:
+        return None
+
+    return {"s6_voice_id_stripped": stripped}
+
+
 def migrate_legacy_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     """Rewrite a legacy snapshot dict into the canonical shape.
 
@@ -385,6 +415,7 @@ def migrate_legacy_snapshot(data: dict[str, Any]) -> dict[str, Any]:
         _migrate_s4_pc_regions,
         # S5 must run after S2 — it reconciles against the post-split pool.
         _migrate_s5_reconcile_npc_pool,
+        _migrate_s6_strip_npc_voice_id,
     ):
         attrs = sub(out)
         if attrs is not None:

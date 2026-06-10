@@ -48,6 +48,7 @@ from sidequest.genre.models.npc_traits import NpcTraitsDatabase
 from sidequest.genre.models.ocean import DramaThresholds
 from sidequest.genre.models.premises import BlocDef, PremiseDef, WitnessedActArchetype
 from sidequest.genre.models.progression import ProgressionConfig
+from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig
 from sidequest.genre.models.rules import RulesConfig, SavingThrowsTable
 from sidequest.genre.models.scenario import ScenarioPack
@@ -191,6 +192,12 @@ class World(BaseModel):
     ``resolve_wwn_spell_catalog``; the genre-tier ``GenrePack.wwn_spell_catalog``
     is the shared default for packs that have not migrated the catalog down (no
     silent fallback to a fabricated catalog)."""
+    psionic_discipline_catalog: PsionicDisciplineCatalog | None = None
+    """World-tier psionic discipline CATALOG (``worlds/<slug>/disciplines_psionic.yaml``),
+    Story 102-6. Same world-over-genre rule as ``wwn_spell_catalog``: the
+    disciplines a world ships are CAST/CATALOG, not a genre mechanic (ADR-140).
+    ``None`` when the world ships none; consumers read this world-first via
+    ``resolve_psionic_discipline_catalog`` with genre-tier fallback."""
     magic_register: str = ""
     items: WorldItemsCatalog | None = None
     inventory: InventoryConfig | None = None
@@ -303,6 +310,12 @@ class GenrePack(BaseModel):
     visibility_baseline: VisibilityBaseline | None = None
     lethality_policy: LethalityPolicy | None = None
     wwn_spell_catalog: WwnSpellCatalog | None = None
+    psionic_discipline_catalog: PsionicDisciplineCatalog | None = None
+    """Genre-tier psionic discipline catalog (the shared default for packs that
+    keep one catalog at the genre tier). Story 102-6 — discipline catalogs are
+    content (ADR-140 "Crunch in the Genre"). None = the pack ships no psionics
+    (a deliberate authoring choice). Consumers read world-first via
+    ``resolve_psionic_discipline_catalog``."""
     bestiary: Bestiary | None = None
     """Pack-root ``bestiary.yaml`` (story 90-1): SRD-aligned combat-layer stat
     blocks for ruleset-module packs. None when the file is absent — encountergen

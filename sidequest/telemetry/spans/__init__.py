@@ -89,6 +89,7 @@ from .pregen import *  # noqa: F401, F403
 from .premise import *  # noqa: F401, F403
 from .projection import *  # noqa: F401, F403
 from .prompt import *  # noqa: F401, F403
+from .psionics import *  # noqa: F401, F403
 from .quests import *  # noqa: F401, F403
 from .rag import *  # noqa: F401, F403
 from .recent_narrative import *  # noqa: F401, F403

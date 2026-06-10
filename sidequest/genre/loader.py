@@ -59,6 +59,7 @@ from sidequest.genre.models.pack import (
 )
 from sidequest.genre.models.premises import PremisesFile, WitnessedActsFile
 from sidequest.genre.models.progression import ProgressionConfig
+from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldConfig
 from sidequest.genre.models.rules import RulesConfig
 from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
@@ -1467,6 +1468,26 @@ def _load_single_world(
             spell_count=len(world_spell_catalog.spells),
         )
 
+    # === World-tier disciplines_psionic.yaml — OPTIONAL (Story 102-6) ===
+    # A world's psionic discipline catalog is a world-tier CAST/CATALOG surface
+    # (the disciplines a world ships, ADR-140 "Crunch in the Genre"), NOT a genre
+    # mechanic. Absent file → None (a valid choice — psionics is optional content,
+    # and a pack may keep a shared catalog at the genre tier). A malformed file
+    # fails loud, world-scoped (dup-id / unknown-field / non-safe-load via the
+    # catalog model). Consumers resolve world-first via
+    # ``server.dispatch.psionic_discipline_resolve.resolve_psionic_discipline_catalog``.
+    world_psionic_catalog_path = world_path / "disciplines_psionic.yaml"
+    world_psionic_catalog: PsionicDisciplineCatalog | None = None
+    if world_psionic_catalog_path.exists():
+        from sidequest.genre.models.psionics import (
+            load_psionic_discipline_catalog as _load_disc,
+        )
+
+        try:
+            world_psionic_catalog = _load_disc(world_psionic_catalog_path)
+        except Exception as exc:
+            raise GenreLoadError(path=world_psionic_catalog_path, detail=str(exc)) from exc
+
     # === World-tier inventory.yaml — OPTIONAL (epic 94) ===
     # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
     # a world's item catalog, class starting-kits, gold, and currency are a
@@ -1508,6 +1529,7 @@ def _load_single_world(
         char_creation=char_creation,
         classes=world_classes,
         wwn_spell_catalog=world_spell_catalog,
+        psionic_discipline_catalog=world_psionic_catalog,
         chassis_instances=chassis_instances,
         chassis_classes=chassis_classes,
         seed_tropes=world_seed_tropes,
@@ -1743,6 +1765,23 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # AND non-empty casts_per_day_by_level) but has no spells_wwn.yaml is an
     # authoring bug. No silent fallback.
     wwn_catalog = _load_wwn_spell_catalog(path, rules, classes_list)
+
+    # Genre-tier psionic discipline catalog — load disciplines_psionic.yaml when
+    # present (Story 102-6). OPTIONAL and uncoupled to classes (unlike WWN
+    # spells): psionics is optional content, and the catalog may instead live at
+    # the world tier. Absent → None (no silent fallback). A malformed file fails
+    # loud via the catalog model (dup-id / unknown-field / non-safe-load).
+    genre_psionic_catalog: PsionicDisciplineCatalog | None = None
+    _genre_psionic_path = path / "disciplines_psionic.yaml"
+    if _genre_psionic_path.exists():
+        from sidequest.genre.models.psionics import (
+            load_psionic_discipline_catalog as _load_disc,
+        )
+
+        try:
+            genre_psionic_catalog = _load_disc(_genre_psionic_path)
+        except Exception as exc:
+            raise GenreLoadError(path=_genre_psionic_path, detail=str(exc)) from exc
 
     # Pack-root bestiary (story 90-1) — SRD-aligned combat stat blocks for
     # ruleset-module packs. Optional at load (synthetic fixtures and non-
@@ -2026,6 +2065,7 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         visibility_baseline=visibility_baseline,
         lethality_policy=lethality_policy,
         wwn_spell_catalog=wwn_catalog,
+        psionic_discipline_catalog=genre_psionic_catalog,
         bestiary=bestiary,
         mutations=mutations,
         source_dir=path,

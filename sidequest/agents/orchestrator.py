@@ -286,6 +286,11 @@ class BeatSelection:
     # non-mutation beat; the mutation handler in narration_apply routes it
     # through sidequest.mutation.use_ops.
     mutation_id: str | None = None
+    # Story 102-6 — when the applied beat is a ``psionic_activation``, the
+    # narrator nominates WHICH discipline via this sidecar (the spell_id /
+    # mutation_id mirror). None on every non-psionic beat; the activation handler
+    # routes it through ``SwnRulesetModule.activate_discipline``.
+    discipline_id: str | None = None
     # Table confrontations (poker/auction): raise/bet chips. None on every
     # non-table beat. The existing ``target`` field carries the Read/Accuse
     # target seat_id.
@@ -344,6 +349,7 @@ class BeatSelection:
         except (TypeError, ValueError):
             amount = None
         mutation_id_raw = d.get("mutation_id")
+        discipline_id_raw = d.get("discipline_id")
         return cls(
             actor=str(d.get("actor", "")),
             beat_id=str(d.get("beat_id", "")),
@@ -351,6 +357,7 @@ class BeatSelection:
             target=d.get("target"),
             spell_id=str(spell_id_raw) if spell_id_raw else None,
             mutation_id=str(mutation_id_raw) if mutation_id_raw else None,
+            discipline_id=str(discipline_id_raw) if discipline_id_raw else None,
             amount=amount,
         )
 

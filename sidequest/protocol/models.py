@@ -609,6 +609,27 @@ class PartyMember(ProtocolBase):
     """Maximum rig composure. None when character has no rig."""
     injury_tags: list[str] = Field(default_factory=list)
     """Crash-related injury statuses (e.g. 'injury', 'dismounted')."""
+    effort_available: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
+    """Story 102-6 (Sebastien/Jade legibility): free Effort the psychic can still
+    commit. None when the character has no Effort pool (non-psychic) — distinct
+    from 0 (a psychic with every point committed)."""
+    effort_committed: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
+    """Effort currently committed to active disciplines. None for non-psychics."""
+    effort_max: int | None = Field(default=None, json_schema_extra={"include_when_none": True})
+    """Maximum Effort pool. None for non-psychics."""
+    system_strain_current: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
+    """Story 102-6: accumulated System Strain (psionic pushes + lethality share
+    this one counter). None when the character has no strain pool."""
+    system_strain_max: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
+    """Maximum System Strain. None when the character has no strain pool."""
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import random
 
+from opentelemetry import trace
+
+from sidequest.game.creature_core import CreatureCore
 from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.resolution import (
     AttackRollParams,
@@ -18,9 +21,25 @@ from sidequest.game.ruleset.resolution import (
     JumpAdjudication,
     OpponentAttackOutcome,
 )
-from sidequest.genre.models.rules import BeatDef
+from sidequest.game.wwn_magic import (
+    DisciplineActivationResult,
+    EffortCommitment,
+    EffortDuration,
+    EffortResult,
+)
+from sidequest.genre.models.psionics import PsionicDiscipline
+from sidequest.genre.models.rules import BeatDef, SwnConfig
 from sidequest.genre.models.world import Route
 from sidequest.protocol.models import InitiativeEntry
+from sidequest.telemetry.spans.psionics import (
+    discipline_activated_span,
+    effort_commit_span,
+    effort_reclaim_span,
+)
+
+# Source key for the SWN psionic Effort pool. SWN psionics draw every discipline
+# from ONE Effort pool (SRD §6), so the pool keys ``core.effort`` under this slug.
+PSIONIC_EFFORT_SOURCE = "psionic"
 
 # SWN spike-drive jump model (SRD Revised, Sine Nomine 2017, "Spike Drives" p.211):
 # a spike drill crosses up to ``rating`` hexes and takes roughly six days of
@@ -277,3 +296,275 @@ class SwnRulesetModule(RulesetModule):
         ]
         entries.sort(key=lambda e: e.value, reverse=True)
         return entries
+
+    # ------------------------------------------------------------------
+    # Effort engine (SWN/WWN SRD §1.4.4 / §6) — shared SWN-family crunch.
+    #
+    # Lifted to the family base in Story 102-6 so a swn-bound psychic commits
+    # Effort exactly as a wwn caster does; WWN inherits it unchanged. Spans are
+    # namespaced by the resolved slug (``{ruleset}.effort.*``) via ``self.slug``
+    # so a swn commit reads ``swn.effort.commit`` and a wwn commit stays
+    # ``wwn.effort.commit`` (backward compatible).
+    # ------------------------------------------------------------------
+
+    def commit_effort(
+        self,
+        *,
+        core: CreatureCore,
+        source: str,
+        points: int = 1,
+        duration: EffortDuration = "scene",
+        label: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> EffortResult:
+        """Commit Effort from one source pool (SRD §1.4.4 / §6).
+
+        Over-commit is REFUSED (applied=False) — fail loud, never silently clamp.
+        A missing source pool raises ValueError immediately. Emits
+        ``{slug}.effort.commit`` on every call (applied=True or False)."""
+        pool = core.effort.get(source)
+        if pool is None:
+            raise ValueError(f"{core.name!r} has no {source!r} Effort pool; seed it at chargen")
+        applied = points <= pool.available
+        reason = "" if applied else f"only {pool.available} of {points} Effort available"
+        if applied:
+            pool.commitments.append(EffortCommitment(points=points, duration=duration, label=label))
+        effort_commit_span(
+            ruleset=self.slug,
+            actor=core.name,
+            source=source,
+            points=points,
+            duration=duration,
+            available=pool.available,
+            applied=applied,
+            _tracer=_tracer,
+        )
+        return EffortResult(
+            applied=applied,
+            source=source,
+            available=pool.available,
+            max=pool.max,
+            reason=reason,
+        )
+
+    def reclaim_effort(
+        self,
+        *,
+        core: CreatureCore,
+        source: str,
+        trigger: str = "maintained",
+        _tracer: trace.Tracer | None = None,
+    ) -> EffortResult:
+        """Reclaim Effort from one pool by dropping commitments matching
+        ``trigger`` (duration). Emits ``{slug}.effort.reclaim`` only when points
+        are actually returned; an empty reclaim is applied=False, no span."""
+        pool = core.effort.get(source)
+        if pool is None:
+            raise ValueError(f"{core.name!r} has no {source!r} Effort pool; seed it at chargen")
+        matching = [c for c in pool.commitments if c.duration == trigger]
+        returned = sum(c.points for c in matching)
+        if not matching:
+            return EffortResult(
+                applied=False,
+                source=source,
+                available=pool.available,
+                max=pool.max,
+                reason=f"no {trigger!r} commitments to reclaim",
+            )
+        pool.commitments = [c for c in pool.commitments if c.duration != trigger]
+        effort_reclaim_span(
+            ruleset=self.slug,
+            actor=core.name,
+            source=source,
+            points=returned,
+            trigger=trigger,
+            available=pool.available,
+            _tracer=_tracer,
+        )
+        return EffortResult(
+            applied=True,
+            source=source,
+            available=pool.available,
+            max=pool.max,
+        )
+
+    def reclaim_scene_effort(
+        self,
+        *,
+        core: CreatureCore,
+        _tracer: trace.Tracer | None = None,
+    ) -> None:
+        """Drop all ``scene`` commitments across every Effort pool, emitting one
+        ``{slug}.effort.reclaim`` per pool that had scene commitments. Pools with
+        nothing to reclaim produce no span."""
+        for source, pool in core.effort.items():
+            matching = [c for c in pool.commitments if c.duration == "scene"]
+            returned = sum(c.points for c in matching)
+            if not matching:
+                continue
+            pool.commitments = [c for c in pool.commitments if c.duration != "scene"]
+            effort_reclaim_span(
+                ruleset=self.slug,
+                actor=core.name,
+                source=source,
+                points=returned,
+                trigger="scene",
+                available=pool.available,
+                _tracer=_tracer,
+            )
+
+    def reclaim_day_and_refresh(
+        self,
+        *,
+        core: CreatureCore,
+        comfortable: bool = True,
+        cfg: SwnConfig | None,
+        _tracer: trace.Tracer | None = None,
+    ) -> None:
+        """Drop ``scene`` commitments (always) and ``day`` commitments (when
+        comfortable, or when the config's ``magic.day_reclaim_requires_comfort``
+        is False). Refreshes ``core.spellcasting.casts_remaining`` to
+        ``casts_per_day`` when spellcasting is seeded (WWN casters; a SWN psychic
+        carries no spellcasting, so that block no-ops).
+
+        Fails loud if cfg is not a SwnConfig (WwnConfig extends it) — day-rest
+        reclaim is an SWN-family mechanic that requires the bound config."""
+        if not isinstance(cfg, SwnConfig):
+            raise ValueError(
+                f"reclaim_day_and_refresh requires a SwnConfig; got {type(cfg).__name__!r}"
+            )
+        # SwnConfig carries no ``magic`` block (SWN psionics has no day-comfort
+        # gate); WwnConfig does. Default to "comfort required" when absent.
+        magic = getattr(cfg, "magic", None)
+        requires_comfort = getattr(magic, "day_reclaim_requires_comfort", True)
+        drop_day = comfortable or not requires_comfort
+        durations_to_drop = {"scene"}
+        if drop_day:
+            durations_to_drop.add("day")
+
+        for source, pool in core.effort.items():
+            matching = [c for c in pool.commitments if c.duration in durations_to_drop]
+            returned = sum(c.points for c in matching)
+            if not matching:
+                continue
+            pool.commitments = [c for c in pool.commitments if c.duration not in durations_to_drop]
+            # trigger reflects the duration ACTUALLY reclaimed for this pool, not
+            # the intent — the GM panel is the lie detector and must not read
+            # "day" when only scene Effort was swept on a comfortable rest.
+            dropped = {c.duration for c in matching}
+            trigger = "day" if "day" in dropped else "scene"
+            effort_reclaim_span(
+                ruleset=self.slug,
+                actor=core.name,
+                source=source,
+                points=returned,
+                trigger=trigger,
+                available=pool.available,
+                _tracer=_tracer,
+            )
+
+        if core.spellcasting is not None:
+            core.spellcasting.casts_remaining = core.spellcasting.casts_per_day
+
+    # ------------------------------------------------------------------
+    # Psionic discipline activation (SWN SRD §6) — the cast-spine mirror.
+    # ------------------------------------------------------------------
+
+    def activate_discipline(
+        self,
+        *,
+        core: CreatureCore,
+        discipline: PsionicDiscipline,
+        source: str = PSIONIC_EFFORT_SOURCE,
+        cfg: SwnConfig | None = None,
+        _tracer: trace.Tracer | None = None,
+    ) -> DisciplineActivationResult:
+        """Activate a psionic discipline: commit its ``effort_cost`` from the
+        psychic's Effort pool and, on a push (``strain_cost`` > 0), route the
+        System Strain through the SAME ``core.system_strain`` counter the
+        lethality seam uses (AC3 — no forked strain field).
+
+        Zero free Effort → REFUSED loudly (``applied=False``, pool unchanged) —
+        never a silent success. Emits ``{slug}.discipline.activated`` on EVERY
+        call (``refused`` reflects the outcome), plus ``{slug}.effort.commit``
+        and (on a push) ``{slug}.system_strain.delta`` when applied. A missing
+        Effort pool raises ValueError (No Silent Fallbacks).
+
+        A ``strain_cost`` discipline requires a seeded ``core.system_strain``
+        pool (only the strain-bearing rulesets — WWN/CWN/AWN — carry one; SWN
+        psionics is Effort-only). This precondition is checked BEFORE any Effort
+        is committed: a strain push on a strainless core is REFUSED loudly
+        (``applied=False``, pool unchanged), never a partial Effort spend and
+        never an opaque ``AttributeError`` from the missing strain engine."""
+        pool = core.effort.get(source)
+        if pool is None:
+            raise ValueError(
+                f"{core.name!r} has no {source!r} Effort pool; a psychic seeds one at chargen"
+            )
+        cost = int(discipline.effort_cost)
+        strain_cost = int(discipline.strain_cost or 0)
+
+        # Precondition FIRST, before any mutation: a push needs a strain pool.
+        # Checked here so a content/config mismatch (a strain discipline on a
+        # strainless ruleset) is a clean loud refusal, not a half-committed
+        # Effort spend that then AttributeErrors on the absent strain engine.
+        if strain_cost > 0 and core.system_strain is None:
+            reason = (
+                f"{discipline.id!r} costs {strain_cost} System Strain but "
+                f"{core.name!r} has no System Strain pool — this ruleset has no "
+                "Strain engine (SWN psionics is Effort-only); author the strain "
+                "discipline on a WWN/CWN/AWN pack"
+            )
+            discipline_activated_span(
+                ruleset=self.slug,
+                actor=core.name,
+                discipline_id=discipline.id,
+                refused=True,
+                _tracer=_tracer,
+            )
+            return DisciplineActivationResult(
+                applied=False,
+                discipline_id=discipline.id,
+                available=pool.available,
+                strained=0,
+                reason=reason,
+            )
+
+        applied = cost <= pool.available
+        strained = 0
+        if applied:
+            self.commit_effort(
+                core=core,
+                source=source,
+                points=cost,
+                duration=discipline.duration,
+                label=discipline.name,
+                _tracer=_tracer,
+            )
+            if strain_cost > 0:
+                # Precondition above guarantees core.system_strain is seeded here,
+                # which only the strain-bearing rulesets (WWN/CWN/AWN) do — and
+                # those define apply_system_strain. Safe to route the push.
+                self.apply_system_strain(
+                    core=core,
+                    kind="temporary",
+                    amount=strain_cost,
+                    source=f"psionic:{discipline.id}",
+                    cfg=cfg,
+                    _tracer=_tracer,
+                )
+                strained = strain_cost
+        discipline_activated_span(
+            ruleset=self.slug,
+            actor=core.name,
+            discipline_id=discipline.id,
+            refused=not applied,
+            _tracer=_tracer,
+        )
+        return DisciplineActivationResult(
+            applied=applied,
+            discipline_id=discipline.id,
+            available=pool.available,
+            strained=strained,
+            reason="" if applied else f"only {pool.available} of {cost} Effort available",
+        )

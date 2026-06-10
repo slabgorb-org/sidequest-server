@@ -84,6 +84,33 @@ def _wwn_cast_module(pack: Any):
     return module if isinstance(module, WwnRulesetModule) else None
 
 
+def _psionic_module(pack: Any):
+    """Return the pack's ruleset module when it can activate psionic disciplines
+    (an SWN-family module — the Effort engine lives on ``SwnRulesetModule``),
+    else None. Capability (isinstance), never the genre slug — the ADR-117
+    one-seam rule. The catalog-presence + psychic-effort checks live at the call
+    site (mirroring the cast spine's spellcasting check)."""
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.ruleset.swn import SwnRulesetModule
+
+    rules = getattr(pack, "rules", None)
+    slug = getattr(rules, "ruleset", None) if rules is not None else None
+    if not slug:
+        return None
+    module = get_ruleset_module(slug)
+    return module if isinstance(module, SwnRulesetModule) else None
+
+
+def _has_psionic_catalog(pack: Any, world_slug: str | None) -> bool:
+    """True when the pack ships a psionic discipline catalog at either tier
+    (world-over-genre, mirroring ``resolve_psionic_discipline_catalog``)."""
+    if getattr(pack, "psionic_discipline_catalog", None) is not None:
+        return True
+    worlds = getattr(pack, "worlds", None) or {}
+    world = worlds.get(world_slug) if world_slug else None
+    return world is not None and getattr(world, "psionic_discipline_catalog", None) is not None
+
+
 def _awn_mutation_module(pack: Any):
     """Return the pack's ruleset module when the pack carries the AWN
     mutation surface (a CWN-family module + a loaded mutations.yaml catalog),
@@ -276,6 +303,153 @@ async def _run_wn_freeplay_cast(
             "spell_id": result.spell_id,
             "casts_remaining": result.casts_remaining,
             "damage": result.damage,
+            "reason": result.reason,
+        },
+    )
+
+
+async def _run_psionic_freeplay_activation(
+    dispatch: SubsystemDispatch,
+    *,
+    snapshot: GameSnapshot,
+    pack: Any,
+    module: Any,
+) -> SubsystemOutput:
+    """Story 102-6: route a named free-play psionic discipline activation through
+    ``SwnRulesetModule.activate_discipline`` — the 102-3 cast-spine mirror for
+    psionics. The router's param contract is reused verbatim: the discipline AS
+    THE PLAYER TYPED IT rides the ``spell`` key; the HANDLER resolves it against
+    the pack's discipline catalog (by id or display name)."""
+    from sidequest.game.ruleset.swn import PSIONIC_EFFORT_SOURCE
+    from sidequest.server.dispatch.psionic_discipline_resolve import (
+        resolve_psionic_discipline_catalog,
+    )
+
+    actor = dispatch.params.get("actor")
+    if not isinstance(actor, str) or not actor:
+        return _failed_premise(
+            dispatch,
+            error="missing_actor",
+            payload=(
+                "A psionic working was classified but no psychic was identified; "
+                "narrate the attempt fizzling without mechanical effect."
+            ),
+        )
+
+    discipline_ref = dispatch.params.get("spell")
+    if not isinstance(discipline_ref, str) or not discipline_ref:
+        return _failed_premise(
+            dispatch,
+            error="missing_discipline",
+            payload=(
+                f"{actor} reaches inward but names no discipline; narrate the "
+                "focus failing to take shape — nothing was activated and no "
+                "Effort was spent."
+            ),
+            actor=actor,
+        )
+    # Same CWE-400 hardening as the cast spine: the reference is LLM-copied from
+    # player free text — cap it before the normalize + catalog scan.
+    if len(discipline_ref) > _MAX_SPELL_REF_CHARS:
+        return _failed_premise(
+            dispatch,
+            error="discipline_ref_too_long",
+            payload=(
+                f"{actor} reaches for a discipline this mind does not hold — a "
+                "failed premise. Nothing was activated and no Effort was spent."
+            ),
+            actor=actor,
+            discipline_ref_chars=len(discipline_ref),
+        )
+
+    core = snapshot.find_creature_core(actor)
+    if core is None or not core.effort:
+        return _failed_premise(
+            dispatch,
+            error="no_psionics",
+            payload=(
+                f"{actor} has no psionic training — the attempted discipline has "
+                "no mechanical backing; narrate the failure honestly."
+            ),
+            actor=actor,
+        )
+
+    catalog = resolve_psionic_discipline_catalog(pack, snapshot.world_slug)
+    if catalog is None:
+        return _failed_premise(
+            dispatch,
+            error="no_discipline_catalog",
+            payload=(
+                f"{actor} reaches for a discipline but this world ships no "
+                "discipline catalog — the working cannot resolve mechanically; "
+                "narrate a failed premise, not a success."
+            ),
+            actor=actor,
+        )
+
+    needle = _norm_spell_name(discipline_ref)
+    discipline = next(
+        (
+            d
+            for d in catalog.disciplines
+            if _norm_spell_name(d.id) == needle or _norm_spell_name(d.name) == needle
+        ),
+        None,
+    )
+    if discipline is None:
+        # Same S3 discipline as the cast spine: the typed reference rides
+        # ``data`` (forensics/OTEL), never the narrator directive payload.
+        return _failed_premise(
+            dispatch,
+            error="unknown_discipline",
+            payload=(
+                f"{actor} reaches for a discipline this catalog does not know — a "
+                "failed premise. Nothing was activated and no Effort was spent; "
+                "narrate the miss honestly, without inventing a power."
+            ),
+            actor=actor,
+            discipline=discipline_ref,
+            available_ids=[d.id for d in catalog.disciplines],
+        )
+
+    cfg = pack.rules.ruleset_config()
+    result = module.activate_discipline(
+        core=core,
+        discipline=discipline,
+        source=PSIONIC_EFFORT_SOURCE,
+        cfg=cfg,
+    )
+
+    if result.applied:
+        payload = (
+            f"{actor} activated {discipline.name} ({discipline.id}); "
+            f"{discipline.effort_cost} Effort committed, {result.available} free."
+        )
+        if result.strained > 0:
+            payload += f" The push cost {result.strained} System Strain."
+        if discipline.save:
+            payload += f" It forces a {discipline.save} save on its target."
+        payload += " Narrate THIS mechanical outcome — the discipline is real and spent."
+    else:
+        payload = (
+            f"{actor} reached for {discipline.name} ({discipline.id}) but the "
+            f"activation was REFUSED: {result.reason}. Nothing was spent. Narrate "
+            "the refusal as a mechanical fact — the power does not come."
+        )
+
+    return SubsystemOutput(
+        directives=[
+            NarratorDirective(
+                kind="must_narrate",
+                payload=payload,
+                visibility=dispatch.visibility,
+            )
+        ],
+        data={
+            "applied": result.applied,
+            "discipline_id": result.discipline_id,
+            "available": result.available,
+            "strained": result.strained,
             "reason": result.reason,
         },
     )
@@ -476,6 +650,20 @@ async def run_magic_working_dispatch(
         if module is not None and any(c.core.spellcasting is not None for c in snapshot.characters):
             return await _run_wn_freeplay_cast(
                 dispatch, snapshot=snapshot, pack=pack, module=module
+            )
+        # Story 102-6 — psionics: an SWN-family pack that ships a discipline
+        # catalog, on a psychic carrying a seeded Effort pool. Surface presence
+        # mirrors the cast spine (no spellcasting needed — a psychic commits
+        # Effort, not casts). Checked after the cast route so a WWN caster's
+        # spell working still takes the cast path.
+        psionic_module = _psionic_module(pack)
+        if (
+            psionic_module is not None
+            and _has_psionic_catalog(pack, snapshot.world_slug)
+            and any(c.core.effort for c in snapshot.characters)
+        ):
+            return await _run_psionic_freeplay_activation(
+                dispatch, snapshot=snapshot, pack=pack, module=psionic_module
             )
         # Story 102-7 — the third magic surface: an AWN pack's mutation
         # engine (mutations ARE the pack's magic). Surface presence again:

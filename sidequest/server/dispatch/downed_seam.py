@@ -1,10 +1,12 @@
 """Shared CWN-family/WWN 0-HP downed seam — cwn, awn, wwn (spec 2026-05-28 Task 11; WWN content Plan 3 Task 7).
 
-Both the strike path (``dispatch.dice.dispatch_dice_throw``) and the WWN cast
-path (``server.narration_apply._resolve_wwn_cast_for_beat``) must run the SAME
-Mortal/Major Injury resolution after they ablate a defender to 0 HP. This module
-holds the single implementation so the two paths cannot drift (CLAUDE.md "Don't
-reinvent — wire up what exists").
+The strike path (``dispatch.dice.dispatch_dice_throw``), the WWN cast path
+(``server.narration_apply._resolve_wwn_cast_for_beat``), and the opponent-
+reprisal close (``dispatch.dice._close_reprisal_depletion``, story 102-1 — the
+downed defender there is the PC) must run the SAME Mortal/Major Injury
+resolution after a defender is ablated to 0 HP. This module holds the single
+implementation so the paths cannot drift (CLAUDE.md "Don't reinvent — wire up
+what exists").
 
 ``physical_save_target_for`` resolves the downed actor's Physical-save target
 number the SAME way for both paths: PC stats come from the seated

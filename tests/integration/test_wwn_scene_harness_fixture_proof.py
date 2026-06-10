@@ -1,0 +1,291 @@
+"""Story 90-4 — the DETERMINISTIC scene-harness fixture proof for WWN crunch.
+
+The deterministic counterpart to 90-3's live free-play OTEL proof. Where the
+sibling ``test_wwn_elemental_harmony_dispatch.py`` builds its caster through the
+real ``CharacterBuilder.build()`` and seats combat through the production
+``instantiate_encounter_from_trigger`` seam, THIS proof stands the SAME state up
+entirely from a scene-harness FIXTURE (``hydrate_fixture``) — exactly the path a
+content-only deterministic playtest takes through ``POST /dev/scene/{name}``
+(ADR-092). That is the whole point of story 90-4: a fixture must be able to seed
+
+  * per-character WWN ``core.spellcasting`` (``_hydrate_character``), and
+  * a WWN ``hp_depletion`` combat that seats player/opponent actors
+    (``_hydrate_encounter``),
+
+so the crunch fires WITHOUT chargen and WITHOUT the trigger seam.
+
+This is the wiring test mandated by CLAUDE.md ("Every Test Suite Needs a Wiring
+Test"): it drives the REAL elemental_harmony pack through the REAL apply / dice
+seams and asserts on OTEL spans (the GM-panel lie detector), so it survives
+refactor and fails on real wiring breakage. rng is pinned for determinism.
+
+Skips cleanly when sidequest-content is not on disk (mirrors the sibling
+integration proofs).
+
+RED (90-4): both tests fail today because ``hydrate_fixture`` silently drops the
+``spellcasting:`` block (caster has no prepared spell / no casts) and builds a
+dial_threshold, actor-less StructuredEncounter (the cast/strike spine finds no
+defender). They pass once ``_hydrate_character`` + ``_hydrate_encounter`` seed
+the WWN state.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
+
+# elemental_harmony combat = "Martial Exchange" (rules.yaml): type: combat,
+# win_condition: hp_depletion, category: combat. opponent_default_stats carries
+# all six WWN ability scores so the defender-save path resolves.
+_GENRE = "elemental_harmony"
+_CASTER = "Mei Lin"
+_OPPONENT = "Jade Duelist"
+_DAMAGE_SPELL = "cinder_lance"  # 1d6, damage_per_level, save: evasion (genre catalog)
+_STRIKE_BEAT = "elemental_burst"  # kind: strike, damage_override 2d6 (deterministic)
+
+
+def _has_real_content() -> bool:
+    return GENRE_PACKS_DIR.is_dir()
+
+
+def _load_elemental_harmony():
+    from sidequest.genre.loader import load_genre_pack
+
+    try:
+        return load_genre_pack(find_pack_path(_GENRE))
+    except PackNotFound:
+        pytest.skip("sidequest-content not on disk in this checkout")
+
+
+def _write_wwn_combat_fixture(fixtures_dir: Path, name: str) -> None:
+    """Write a deterministic WWN combat fixture: a Channeler with a seeded
+    spellcasting economy, an opponent NPC, and an hp_depletion combat seating
+    both as actors.
+
+    The opponent NPC carries no explicit HP — the CreatureCore default
+    (HpPool 10/10/10) is the defender's pool, which is all the proof needs (it
+    asserts HP *decreases*, not a specific value). ``type: combat`` resolves the
+    Martial Exchange ConfrontationDef via find_confrontation_def at apply time.
+    """
+    body = (
+        f"genre: {_GENRE}\n"
+        "world: test_world\n"
+        "location: Courtyard\n"
+        "turn: 2\n"
+        "characters:\n"
+        f"  - name: {_CASTER}\n"
+        "    description: A Channeler of the Ember Isles\n"
+        "    personality: serene under fire\n"
+        "    backstory: trained in the ember registers\n"
+        "    char_class: Channeler\n"
+        "    race: Human\n"
+        "    level: 1\n"
+        "    stats:\n"
+        "      STR: 12\n"
+        "      DEX: 12\n"
+        "      CON: 10\n"
+        "      INT: 12\n"
+        "      WIS: 10\n"
+        "      CHA: 10\n"
+        "    spellcasting:\n"
+        "      prepared:\n"
+        f"        - {_DAMAGE_SPELL}\n"
+        "        - river_step\n"
+        "      casts_remaining: 2\n"
+        "      casts_per_day: 2\n"
+        "      max_spell_level: 1\n"
+        "npcs:\n"
+        f"  - name: {_OPPONENT}\n"
+        "    role: rival duelist\n"
+        "    disposition: -2\n"
+        "encounter:\n"
+        "  type: combat\n"
+        "  win_condition: hp_depletion\n"
+        "  category: combat\n"
+        "  actors:\n"
+        f"    - name: {_CASTER}\n"
+        "      role: caster\n"
+        "      side: player\n"
+        f"    - name: {_OPPONENT}\n"
+        "      role: defender\n"
+        "      side: opponent\n"
+    )
+    (fixtures_dir / f"{name}.yaml").write_text(body, encoding="utf-8")
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_hydrated_wwn_fixture_drives_cast_spell_and_ablates_hp(otel_capture, monkeypatch, tmp_path):
+    """A scene-harness fixture seeds spellcasting + an hp_depletion combat; the
+    REAL apply path then fires wwn.spell.cast and ablates the opponent's HP.
+
+    Asserts (all on the real pack, through the real apply path):
+      1. the fixture seeded core.spellcasting (prepared + 2 casts);
+      2. the cast spent exactly one cast (2 -> 1);
+      3. the opponent's HP was ablated through the HP channel;
+      4. the wwn.spell.cast span fired with refused=False (the lie detector);
+      5. the state_patch.hp span fired (ablative-HP combat, the GM-panel proof).
+    """
+    from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
+    from sidequest.game.scene_harness import hydrate_fixture
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from sidequest.telemetry.spans.state_patch import SPAN_STATE_PATCH_HP
+    from tests._helpers.session_room import room_for
+
+    pack = _load_elemental_harmony()
+    assert pack.rules is not None and pack.rules.ruleset == "wwn", (
+        f"{_GENRE} must be bound ruleset: wwn; got {pack.rules.ruleset!r}"
+    )
+
+    _write_wwn_combat_fixture(tmp_path, "wwn_cast_proof")
+    snapshot = hydrate_fixture(name="wwn_cast_proof", fixtures_dir=tmp_path)
+
+    # ── Assertion 1: the fixture seeded the caster's spellcasting ──────────
+    caster_core = snapshot.find_creature_core(_CASTER)
+    assert caster_core is not None, "the hydrated caster must be reachable"
+    sc = caster_core.spellcasting
+    assert sc is not None, (
+        "the fixture's spellcasting: block must seed core.spellcasting — without "
+        "it the cast is refused for want of a prepared spell"
+    )
+    assert _DAMAGE_SPELL in sc.prepared, f"{_DAMAGE_SPELL} must be prepared; got {sc.prepared!r}"
+    assert sc.casts_remaining == 2, f"fixture must seed 2 casts; got {sc.casts_remaining}"
+
+    opponent_core = snapshot.find_creature_core(_OPPONENT)
+    assert opponent_core is not None, (
+        "the hydrated opponent must be reachable via find_creature_core — without "
+        "a defender HP pool the cast has nothing to ablate"
+    )
+
+    # Pin rng to max so the save (if rolled) is made and damage is halved but
+    # still > 0 and below the kill threshold — deterministic, never trips the
+    # downed seam.
+    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: b)
+
+    casts_before = sc.casts_remaining
+    hp_before = opponent_core.hp.current
+
+    result = NarrationTurnResult(
+        narration="Mei Lin looses a lance of fire.",
+        beat_selections=[
+            BeatSelection(actor=_CASTER, beat_id="cast_spell", spell_id=_DAMAGE_SPELL),
+        ],
+    )
+    room = room_for(snapshot)
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        result,
+        player_name=_CASTER,
+        pack=pack,
+        from_explicit_action=True,
+        room=room,
+        acting_character_name=_CASTER,
+    )
+
+    # ── Assertion 2: the cast spent one cast (2 -> 1) ──────────────────────
+    sc_after = snapshot.find_creature_core(_CASTER).spellcasting  # type: ignore[union-attr]
+    assert sc_after is not None
+    assert sc_after.casts_remaining == casts_before - 1, (
+        f"casting {_DAMAGE_SPELL} from a hydrated fixture must spend exactly one "
+        f"cast; before={casts_before} after={sc_after.casts_remaining}"
+    )
+
+    # ── Assertion 3: opponent HP ablated through the HP channel ─────────────
+    assert opponent_core.hp.current < hp_before, (
+        f"{_DAMAGE_SPELL} damage must ablate the opponent's HP through the WWN "
+        f"cast spine; before={hp_before} after={opponent_core.hp.current}"
+    )
+
+    # ── Assertion 4: wwn.spell.cast span fired, refused=False ──────────────
+    cast_spans = [s for s in otel_capture.get_finished_spans() if s.name == "wwn.spell.cast"]
+    assert len(cast_spans) >= 1, (
+        "a hydrated WWN fixture must fire a wwn.spell.cast span on the real apply "
+        f"path (GM-panel lie detector); got "
+        f"{[s.name for s in otel_capture.get_finished_spans()]}"
+    )
+    assert cast_spans[-1].attributes.get("refused") is False, (
+        "the cast was valid (spell prepared + a cast remaining), so the "
+        "wwn.spell.cast span must record refused=False — proving the fixture "
+        "seeded a USABLE spellcasting state, not an empty one"
+    )
+
+    # ── Assertion 5: state_patch.hp span fired (ablative-HP combat proof) ──
+    finished = [s.name for s in otel_capture.get_finished_spans()]
+    assert SPAN_STATE_PATCH_HP in finished, (
+        f"the WWN cast spine must emit a state_patch.hp span when it ablates the "
+        f"defender (deterministic wwn.* combat proof); got spans: {finished}"
+    )
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_hydrated_wwn_fixture_drives_deterministic_strike(otel_capture, monkeypatch, tmp_path):
+    """The same hydrated hp_depletion combat drives a deterministic WWN STRIKE
+    (no spellcasting) — proving fixture-seated combat ablates HP through the
+    dice seam, the non-spell half of "wwn.* combat".
+
+    The ``elemental_burst`` beat carries a ``damage_override`` (2d6) so the proof
+    does not depend on weapon-catalog plumbing; rng is pinned to MIN so the
+    opponent survives and the downed seam is not tripped.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
+    from sidequest.telemetry.spans.state_patch import SPAN_STATE_PATCH_HP
+
+    pack = _load_elemental_harmony()
+
+    _write_wwn_combat_fixture(tmp_path, "wwn_strike_proof")
+    snapshot = hydrate_fixture(name="wwn_strike_proof", fixtures_dir=tmp_path)
+
+    enc = snapshot.encounter
+    assert enc is not None, "fixture declares an encounter — it must hydrate"
+    assert enc.win_condition == "hp_depletion", (
+        f"the fixture combat must hydrate as hp_depletion; got {enc.win_condition!r}"
+    )
+
+    opponent_core = snapshot.find_creature_core(_OPPONENT)
+    assert opponent_core is not None, "opponent must be reachable to ablate"
+    hp_before = opponent_core.hp.current
+
+    # Pin the damage faces (generate_server_faces → random.randint) to MIN so the
+    # 2d6 override deals 2 — opponent survives, downed seam untripped.
+    monkeypatch.setattr("sidequest.server.dispatch.damage_roll.random.randint", lambda a, b: a)
+
+    broadcasts: list[object] = []
+    dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="wwn-fixture-strike-1",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[20],  # high d20 so the strike clears its DC and lands
+            beat_id=_STRIKE_BEAT,
+        ),
+        rolling_player_id="player-mei-lin",
+        character_name=_CASTER,
+        character_stats={"STR": 12, "DEX": 12, "CON": 10, "INT": 12, "WIS": 10, "CHA": 10},
+        encounter=enc,
+        pack=pack,
+        genre_slug=_GENRE,
+        session_id="wwn-fixture-session",
+        round_number=1,
+        room_broadcast=broadcasts.append,
+        snapshot=snapshot,
+    )
+
+    # ── Assertion 1: HP ablated through the HP channel ─────────────────────
+    assert opponent_core.hp.current < hp_before, (
+        f"{_STRIKE_BEAT} must ablate the fixture opponent's HP on the real wwn "
+        f"pack; before={hp_before} after={opponent_core.hp.current}"
+    )
+
+    # ── Assertion 2: state_patch.hp span fired (the lie detector) ──────────
+    finished = [s.name for s in otel_capture.get_finished_spans()]
+    assert SPAN_STATE_PATCH_HP in finished, (
+        f"a fixture-seated WWN combat strike must emit a state_patch.hp span "
+        f"(GM-panel lie detector); got spans: {finished}"
+    )

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from sidequest.game.character import Character
     from sidequest.game.encounter import EncounterActor, EncounterPhase, StructuredEncounter
     from sidequest.game.monster_manual import MonsterManual
+    from sidequest.genre.models.world import CartographyConfig
     from sidequest.genre.names.generator import NameGenerator
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
@@ -3201,6 +3202,60 @@ def _resolve_heading_to_cartography(
     )
 
 
+# Story 98-5 (ADR-141): placeholder spike-drive rating until a per-ship drive
+# subsystem sources it. SWN starter ships ship rating 1; the rating only feeds a
+# route's ``drive_rating_min`` strain gate (extra fuel, never a block), so a
+# placeholder is safe — see the Design Deviation logged for 98-5.
+_DEFAULT_SHIP_DRIVE_RATING = 1
+
+
+def _adjudicate_inter_system_jump_for_advance(
+    *,
+    cartography: CartographyConfig,
+    from_region: str,
+    to_region: str,
+    ruleset: str,
+    turn: int,
+) -> None:
+    """Adjudicate an orbital region advance as a campaign-scale inter-system jump
+    (Story 98-5, ADR-141). The live movement seam reaching ``orbital/jump.py``.
+
+    Only a real cartography adjacency is a jump edge; a non-adjacency advance
+    (teleport, init, narrator leap) is NOT a jump and loud-skips. A bound ruleset
+    with no jump model (e.g. a future orbital world on a non-SWN ruleset)
+    loud-skips too rather than abandoning the already-applied region move."""
+    from sidequest.orbital.jump import adjudicate_inter_system_jump
+
+    from_obj = cartography.regions.get(from_region)
+    if from_obj is None or to_region not in from_obj.adjacent:
+        logger.info(
+            "jump.skip_non_adjacency from=%r to=%r (region advance is not a "
+            "cartography adjacency — not an inter-system jump)",
+            from_region,
+            to_region,
+        )
+        return
+    # Resume-stable seed (ADR-128): same turn + edge → same hazard roll on replay.
+    rng = random.Random(f"jump:{from_region}->{to_region}@{turn}")
+    try:
+        adjudicate_inter_system_jump(
+            cartography=cartography,
+            from_region=from_region,
+            to_region=to_region,
+            ruleset=ruleset,
+            drive_rating=_DEFAULT_SHIP_DRIVE_RATING,
+            rng=rng,
+        )
+    except NotImplementedError:
+        logger.info(
+            "jump.skip_no_ruleset_model ruleset=%r from=%r to=%r (bound ruleset has "
+            "no inter-system jump model; region move stands)",
+            ruleset,
+            from_region,
+            to_region,
+        )
+
+
 # A chase/escape is intrinsically continuous movement — the narrator advances
 # the scene location every turn by design. Movement-category confrontations are
 # MOBILE: they move WITH the party, so a scene/location change CONTINUES them
@@ -3601,6 +3656,27 @@ def _apply_narration_result_to_snapshot(
                     # movement.py defers region-mode moves to this path — so the
                     # chart cannot follow the party without it.
                     room.session.bind_region_scope(known_region_id, trigger="relocation")
+                    # Story 98-5 (ADR-141): a current_region advance in an ORBITAL
+                    # region-mode world IS a campaign-scale inter-system jump
+                    # (region id == star-system id). Adjudicate its cost through
+                    # the bound ruleset (ADR-117) and emit the GM-panel jump spans
+                    # — the live movement seam reaching orbital/jump.py. Gated to
+                    # orbital worlds (orbital_content present): non-orbital
+                    # region-mode worlds (oz/wonderland) have no jump scale.
+                    _region_rules = getattr(pack, "rules", None) if pack is not None else None
+                    if (
+                        _prior_region
+                        and room.session.orbital_content is not None
+                        and _region_cart is not None
+                        and _region_rules is not None
+                    ):
+                        _adjudicate_inter_system_jump_for_advance(
+                            cartography=_region_cart,
+                            from_region=_prior_region,
+                            to_region=known_region_id,
+                            ruleset=_region_rules.ruleset,
+                            turn=snapshot.turn_manager.interaction,
+                        )
                 if known_region_id != result.location:
                     with region_entry_canonicalized_dedup_span(
                         entry=result.location,

@@ -23,11 +23,11 @@ import logging
 import random
 
 import pytest
-import sidequest.telemetry.spans as spans_module
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import sidequest.telemetry.spans as spans_module
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.native import NativeRulesetModule
 from sidequest.genre.models.world import CartographyConfig, Region, Route
@@ -57,7 +57,9 @@ def _spans_named(exporter: InMemorySpanExporter, name: str):
 
 
 def _region(name: str, adjacent: list[str]) -> Region:
-    return Region(name=name, summary=f"{name} summary", description=f"{name} desc", adjacent=adjacent)
+    return Region(
+        name=name, summary=f"{name} summary", description=f"{name} desc", adjacent=adjacent
+    )
 
 
 def _yula_basilica_carto(routes: list[Route]) -> CartographyConfig:
@@ -103,6 +105,29 @@ def test_swn_adjudicate_jump_reads_authored_route_via_bound_module():
     assert result.transit_days == 6
     assert result.hazard == "ion_shoals"
     assert result.source == "route"
+
+
+def test_swn_underrated_drive_makes_strained_jump_costs_extra_fuel():
+    """AC1 / drive_rating_min semantics (Dev decision, TEA finding #2): a ship
+    whose drive rating is BELOW the route's ``drive_rating_min`` still makes the
+    jump (a bare adjacency is always navigable) but burns one extra fuel load —
+    a mechanical cost, never a block (No Silent Fallbacks)."""
+    swn = get_ruleset_module("swn")
+    route = _authored_route()  # jump_fuel=2, drive_rating_min=1
+    unstrained = swn.adjudicate_jump(route=route, drive_rating=1, rng=random.Random(1))
+    assert unstrained.fuel_spent == 2  # drive_rating == min: no penalty
+
+    strained_route = Route(
+        name="High-Threshold Lane",
+        description="Needs a strong drive.",
+        from_id="yula",
+        to_id="basilica",
+        jump_fuel=2,
+        drive_rating_min=3,
+    )
+    strained = swn.adjudicate_jump(route=strained_route, drive_rating=1, rng=random.Random(1))
+    assert strained.fuel_spent == 3  # 2 authored + 1 strain penalty
+    assert strained.source == "route"  # still a routed jump, not a default
 
 
 def test_native_ruleset_has_no_jump_adjudication():

@@ -15,10 +15,22 @@ from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.resolution import (
     AttackRollParams,
     CheckRollParams,
+    JumpAdjudication,
     OpponentAttackOutcome,
 )
 from sidequest.genre.models.rules import BeatDef
+from sidequest.genre.models.world import Route
 from sidequest.protocol.models import InitiativeEntry
+
+# SWN spike-drive jump model (SRD Revised, Sine Nomine 2017, "Spike Drives" p.211):
+# a spike drill crosses up to ``rating`` hexes and takes roughly six days of
+# subjective transit regardless of distance, burning one fuel load per jump.
+SPIKE_TRANSIT_DAYS = 6  # subjective days per spike drill (one jump)
+SPIKE_FUEL_PER_JUMP = 1  # one fuel load consumed per jump
+# A drive under a route's authored minimum makes the jump under strain: it still
+# crosses (a bare adjacency is navigable), but burns an extra fuel load. Below-min
+# is a mechanical cost, not a block — No Silent Fallbacks, and the field gets teeth.
+UNDERRATED_DRIVE_FUEL_PENALTY = 1
 
 
 def swn_attribute_modifier(score: int) -> int:
@@ -138,6 +150,48 @@ class SwnRulesetModule(RulesetModule):
         return AttackRollParams(
             modifier=int(attack_bonus) + int(pilot_skill) + best_mod + int(geometry_modifier),
             target_number=int(target_ac),
+        )
+
+    def adjudicate_jump(
+        self,
+        *,
+        route: Route | None,
+        drive_rating: int,
+        rng: random.Random,
+    ) -> JumpAdjudication:
+        """SWN spike-drive inter-system jump (Story 98-5, ADR-141 campaign scale).
+
+        With an authored ``routes`` entry, the cost reflects its fields
+        (``jump_fuel`` / ``transit_days`` / ``hazard``), falling back per-field to
+        the spike-drive default when a field is unauthored. A route's
+        ``drive_rating_min`` gates the jump: a ship below it makes the crossing
+        under strain (one extra fuel load), never a block — a bare adjacency is
+        always navigable.
+
+        With no route (``None``), the spike-drive model computes an EXPLICIT
+        default — one fuel load, ~six days, no narrative hazard — labelled
+        ``ruleset_default`` so the caller emits the default-cost span (No Silent
+        Fallbacks: a named computation, never a swallowed zero)."""
+        hazard_roll = rng.randint(1, 6)  # d6 hazard check, recorded on the span every jump
+        if route is None:
+            return JumpAdjudication(
+                fuel_spent=SPIKE_FUEL_PER_JUMP,
+                transit_days=SPIKE_TRANSIT_DAYS,
+                hazard=None,
+                hazard_roll=hazard_roll,
+                source="ruleset_default",
+            )
+        fuel_spent = route.jump_fuel if route.jump_fuel is not None else SPIKE_FUEL_PER_JUMP
+        transit_days = route.transit_days if route.transit_days is not None else SPIKE_TRANSIT_DAYS
+        if route.drive_rating_min is not None and drive_rating < route.drive_rating_min:
+            # Underrated drive: strained jump costs an extra fuel load (not a block).
+            fuel_spent += UNDERRATED_DRIVE_FUEL_PENALTY
+        return JumpAdjudication(
+            fuel_spent=fuel_spent,
+            transit_days=transit_days,
+            hazard=route.hazard,
+            hazard_roll=hazard_roll,
+            source="route",
         )
 
     def apply_beat(self, *, encounter, actor, beat, outcome, turn, edge_resolver, damage_resolver):

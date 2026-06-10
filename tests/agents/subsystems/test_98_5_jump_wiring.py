@@ -25,11 +25,11 @@ import random
 from dataclasses import dataclass
 
 import pytest
-import sidequest.telemetry.spans as spans_module
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import sidequest.telemetry.spans as spans_module
 from sidequest.genre.models.world import CartographyConfig, Region, Route
 
 

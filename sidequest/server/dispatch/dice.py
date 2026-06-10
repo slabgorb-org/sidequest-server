@@ -1301,6 +1301,34 @@ def _resolve_opponent_reprisal(
             else 0
         )
         if chip <= 0:
+            # CLEAN miss (no Shock chip). barsoom playtest 2026-06-10: the
+            # silent miss path let the narrator fabricate a hit, damage, and a
+            # precise FALSE HP value ("One hit point left" while the engine
+            # had the PC at 4/10). The narrator never sees the server-rolled
+            # reprisal (the dice messages go to the table, not the prompt) —
+            # anchor the miss AND the unchanged HP explicitly, mirroring the
+            # hit directive below. INFO line completes the hit/miss text-log
+            # forensics pair. (A shock-chipped miss takes the branch below,
+            # whose directive anchors the chip + real HP instead.)
+            logger.info(
+                "dice.opponent_reprisal_miss attacker=%s target=%s beat=%s "
+                "attack_total=%d target_ac=%d hp_unchanged=%s/%s",
+                opponent_name,
+                player_name,
+                opponent_beat.id,
+                outcome.attack_total,
+                outcome.target_ac,
+                player_core.hp.current,
+                player_core.hp.max,
+            )
+            snapshot.next_turn_directives.append(
+                f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
+                f"{opponent_beat.label} MISSED {player_name} — no damage landed; "
+                f"{player_name} remains at "
+                f"{player_core.hp.current}/{player_core.hp.max} HP. "
+                "Narrate the attack failing to connect; do NOT narrate it landing, "
+                "do NOT invent damage, and do NOT state any other HP value."
+            )
             return messages
         apply_beat_hp_channel(
             target=player_core,

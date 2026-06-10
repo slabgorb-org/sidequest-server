@@ -267,6 +267,20 @@ def bind_player_identity(
     )
 
 
+def _starting_region_for(genre_pack: GenrePack | None, world_slug: str) -> str | None:
+    """The world's ``cartography.starting_region``, or ``None``.
+
+    Used to seed per-region orbital file resolution (Story 98-2) at FRESH bind
+    time, when ``snapshot.current_region`` is not yet populated (region_init
+    runs later, at chargen confirmation). Mirrors the cartography lookup in
+    ``_bind_initial_orbital_scope``.
+    """
+    world_obj = genre_pack.worlds.get(world_slug) if genre_pack is not None else None
+    cartography = getattr(world_obj, "cartography", None) if world_obj is not None else None
+    starting = getattr(cartography, "starting_region", None) if cartography is not None else None
+    return starting or None
+
+
 def _bind_initial_orbital_scope(
     room: SessionRoom,
     *,
@@ -764,11 +778,16 @@ class ConnectHandler:
                 _pg_repository.init_session()
                 # ADR-037 Python port: bind the fresh snapshot to the room
                 # so the second-connect handler observes the same object.
+                # Story 98-2: a fresh snapshot has a blank ``current_region``
+                # (region_init runs later at chargen), so pass the world's
+                # ``starting_region`` explicitly to resolve the per-system
+                # orbital file (``systems/<region_id>.yaml``) at bind time.
                 room.bind_world(
                     snapshot=snapshot,
                     store=_pg_repository,
                     world_dir=world_dir,
                     ruleset=(genre_pack.rules.ruleset if genre_pack.rules else None),
+                    region_id=_starting_region_for(genre_pack, row.world_slug),
                 )
                 snapshot = room.snapshot  # type: ignore[assignment]
                 # Story 95-1: center the per-location orrery on the world's

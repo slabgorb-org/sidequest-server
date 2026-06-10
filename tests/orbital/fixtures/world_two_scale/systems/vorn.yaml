@@ -1,0 +1,22 @@
+# Two-scale fixture (Story 98-2) — VORN per-system orrery file.
+# Distinct single-root system so per-region resolution can be proven to pick
+# the right file (region 'vorn' -> systems/vorn.yaml, NOT yula's). The 'vorn'
+# body id does NOT appear in yula.yaml and vice-versa, so a test can assert
+# the loader returned the correct file by body membership alone.
+# Synthetic TEST content — not shipped.
+version: "0.1.0"
+clock:
+  epoch_days: 0
+travel:
+  realism: orbital
+bodies:
+  vorn:
+    type: star
+    label: VORN
+  vorn_depot:
+    type: habitat
+    parent: vorn
+    semi_major_au: 0.6
+    period_days: 50
+    epoch_phase_deg: 90
+    label: "VORN DEPOT"

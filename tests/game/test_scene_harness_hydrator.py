@@ -3165,3 +3165,394 @@ def test_combat_brawl_wasteland_encounter_stays_dial_threshold_and_actorless() -
         f"a fixture with no win_condition must stay dial_threshold; got {enc.win_condition!r}"
     )
     assert enc.actors == [], f"a fixture with no actors block must seat none; got {enc.actors!r}"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Story 90-7 — WWN Effort hydration + the wwn.magic_hydrated lie-detector span
+# ════════════════════════════════════════════════════════════════════════════
+#
+# #787 (story 90-4) shipped the spellcasting + hp_depletion halves of the WWN
+# scene-harness hydrator but DROPPED the two things the story title promised:
+#
+#   AC-1  ``_hydrate_character`` must read an ``effort:`` block and project it to
+#         ``core.effort`` — a dict keyed by class-source, each value an EffortPool
+#         whose ``source`` is DERIVED FROM THE KEY (WWN SRD §1.4.4: Effort from
+#         one class-source cannot fuel another, so a caster carries a dict keyed
+#         by source). The cast spine reads ``core.effort.get(source)`` at commit:
+#
+#             effort:
+#               high_mage: {max: 3}   # -> core.effort["high_mage"] = EffortPool(source="high_mage", max=3)
+#
+#   AC-2  Backward-compat: a character with no ``effort:`` key keeps
+#         ``core.effort`` at its CreatureCore default (empty dict), not None and
+#         not a fabricated pool.
+#
+#   AC-3  ``source`` is authoritative from the KEY — a stray in-value ``source:``
+#         must NOT override it (footgun guard: the key wins; #788 strips it).
+#
+#   AC-4  The ``effort:`` block is save-bearing — a malformed shape (non-mapping
+#         block, non-mapping pool value, bad field type, or an extra=forbid typo)
+#         fails loudly as FixtureValidationError -> HTTP 422, NEVER a silent skip
+#         (CLAUDE.md "No Silent Fallbacks"; ADR-092 "Failure is loud";
+#         lang-review #1/#11). The hydrator re-wraps the pydantic ValidationError
+#         at the module boundary rather than leaking it.
+#
+#   AC-5  Effort hydrates under the multi-PC ``characters:`` LIST path (not just
+#         the singular ``character:`` block) and sources do not cross-contaminate
+#         between PCs or between sources on one PC.
+#
+#   AC-6  Hydration emits a ``wwn.magic_hydrated`` OTEL watcher event whenever a
+#         fixture seeds WWN crunch (spellcasting OR effort) — the GM-panel lie-
+#         detector that proves the deterministic fixture seeded real Effort/spells
+#         rather than the narrator improvising (CLAUDE.md OTEL Observability
+#         Principle; this is the wiring test that survives refactor). The event
+#         carries the seeded shape (actor, has_spellcasting, prepared count,
+#         casts_per_day, sorted effort_sources) under component "magic". It must
+#         NOT fire for a non-caster (no noise on the canonical dial fixtures).
+#
+# Scope boundary: the spellcasting hydration (``spellcasting:`` -> core.spellcasting)
+# and the encounter hp_depletion seeding (win_condition/category/actors) already
+# landed in #787 and are covered by the sections above — 90-7 adds ONLY the
+# effort branch and the span.
+#
+# Reference: oq-1 closed PR #788 (the worked effort+span implementation + tests).
+
+
+# An ``effort:`` block indented for a ``character:`` mapping (key at 2 spaces,
+# source at 4, pool fields at 6) — one High Mage source with a 3-point pool,
+# matching the WWN SRD seed (effort_base + relevant skill + governing attribute
+# modifier).
+_EFFORT_YAML = "  effort:\n    high_mage:\n      max: 3\n"
+
+
+def _capture_wwn_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict, dict]]:
+    """Patch ``watcher_hub.publish_event`` (module-qualified — the same handle
+    ``scene_harness`` calls through, per its line-46 ``import ... as _hub``) so
+    every emission is captured. Mirrors the canonical ``_capture_events`` harness
+    in tests/server/test_render_mounts.py.
+    """
+    captured: list[tuple[str, dict, dict]] = []
+
+    def fake_publish(event_type, fields, *, component="", severity="info"):
+        captured.append((event_type, dict(fields), {"component": component, "severity": severity}))
+
+    import sidequest.telemetry.watcher_hub as _hub
+
+    monkeypatch.setattr(_hub, "publish_event", fake_publish)
+    return captured
+
+
+def _wwn_hydrated_events(captured: list[tuple[str, dict, dict]]) -> list[tuple[str, dict, dict]]:
+    """Filter a capture list down to ``wwn.magic_hydrated`` emissions."""
+    return [e for e in captured if e[0] == "wwn.magic_hydrated"]
+
+
+# ── AC-1 / AC-3 / AC-5: _hydrate_character effort hydration ─────────────────
+
+
+def test_character_effort_block_hydrates(tmp_path: Path) -> None:
+    """AC-1: an ``effort:`` block under ``character:`` projects to ``core.effort``
+    — a dict keyed by class-source, each value an EffortPool whose ``source`` is
+    the key and whose ``max`` round-trips, so the cast spine can read it at
+    commit time (``core.effort.get(source)``).
+
+    RED driver: today ``_hydrate_character`` never reads ``effort`` and never
+    passes it to ``CreatureCore``, so ``core.effort`` stays at its default
+    (``{}``) — these assertions fail until 90-7 lands.
+    """
+    _write_magic_fixture(tmp_path, "effort_pc", extra_character_yaml=_EFFORT_YAML)
+
+    from sidequest.game.scene_harness import hydrate_fixture
+    from sidequest.game.wwn_magic import EffortPool
+
+    snapshot = hydrate_fixture(name="effort_pc", fixtures_dir=tmp_path)
+    effort = snapshot.characters[0].core.effort
+
+    assert "high_mage" in effort, f"effort dict must be keyed by source; got {list(effort)!r}"
+    pool = effort["high_mage"]
+    assert isinstance(pool, EffortPool), f"effort value must be an EffortPool; got {type(pool).__name__}"
+    assert pool.source == "high_mage", (
+        f"EffortPool.source must be set from the fixture key; got {pool.source!r}"
+    )
+    assert pool.max == 3, f"EffortPool.max must hydrate from the block; got {pool.max}"
+    assert pool.available == 3, f"a freshly-seeded pool must be fully available; got {pool.available}"
+
+
+def test_missing_effort_block_leaves_core_effort_empty_dict(tmp_path: Path) -> None:
+    """AC-2 (backward-compat / regression lock): a character with NO ``effort:``
+    key keeps ``core.effort`` at the CreatureCore default (empty dict) — not None,
+    not a fabricated pool.
+
+    Guards against an implementation that *requires* the block or seeds a phantom
+    pool for non-casters.
+    """
+    _write_magic_fixture(tmp_path, "no_effort", extra_character_yaml="")
+
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    snapshot = hydrate_fixture(name="no_effort", fixtures_dir=tmp_path)
+    assert snapshot.characters[0].core.effort == {}, (
+        f"omitting effort: must leave core.effort == {{}}; got {snapshot.characters[0].core.effort!r}"
+    )
+
+
+def test_effort_source_derived_from_key_not_in_value(tmp_path: Path) -> None:
+    """AC-3: the EffortPool ``source`` is authoritative from the mapping KEY. A
+    stray ``source:`` inside the value must be stripped/overridden so the key
+    wins — otherwise a fixture could key a pool ``high_mage`` but stamp it
+    ``source: vowed`` and the cast spine's ``core.effort.get(source)`` lookup
+    would silently miss (a deterministic proof passing for the wrong reason).
+    """
+    _write_magic_fixture(
+        tmp_path,
+        "effort_source_footgun",
+        extra_character_yaml="  effort:\n    high_mage:\n      max: 3\n      source: vowed\n",
+    )
+
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    snapshot = hydrate_fixture(name="effort_source_footgun", fixtures_dir=tmp_path)
+    effort = snapshot.characters[0].core.effort
+    assert "high_mage" in effort, f"pool must be keyed by the mapping key; got {list(effort)!r}"
+    assert effort["high_mage"].source == "high_mage", (
+        f"in-value source: must NOT override the key; got {effort['high_mage'].source!r}"
+    )
+    assert "vowed" not in effort, (
+        f"the in-value source: must not spawn a second pool; got {list(effort)!r}"
+    )
+
+
+def test_multiple_effort_sources_hydrate_independently(tmp_path: Path) -> None:
+    """AC-1/AC-5: two distinct class-sources each seed their own EffortPool keyed
+    by source, with no bleed between them (SRD §1.4.4 — Effort from one source
+    cannot fuel another).
+    """
+    _write_magic_fixture(
+        tmp_path,
+        "two_sources",
+        extra_character_yaml=(
+            "  effort:\n"
+            "    high_mage:\n"
+            "      max: 3\n"
+            "    vowed:\n"
+            "      max: 2\n"
+        ),
+    )
+
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    snapshot = hydrate_fixture(name="two_sources", fixtures_dir=tmp_path)
+    effort = snapshot.characters[0].core.effort
+    assert set(effort) == {"high_mage", "vowed"}, f"both sources must seed; got {set(effort)!r}"
+    assert effort["high_mage"].source == "high_mage" and effort["high_mage"].max == 3
+    assert effort["vowed"].source == "vowed" and effort["vowed"].max == 2
+
+
+def test_effort_hydrates_under_multi_pc_characters_list(tmp_path: Path) -> None:
+    """AC-5: ``effort:`` works under a ``characters:`` LIST entry, not only the
+    singular ``character:`` block (both funnel through ``_hydrate_character``).
+    A sibling PC without an effort block keeps ``core.effort == {}`` — no
+    cross-contamination.
+    """
+    body = (
+        "genre: elemental_harmony\n"
+        "world: test_world\n"
+        "characters:\n"
+        "  - name: Mei Lin\n"
+        "    description: A High Mage of the Ember Isles\n"
+        "    personality: serene\n"
+        "    backstory: trained in the ember registers\n"
+        "    char_class: High Mage\n"
+        "    race: Human\n"
+        "    effort:\n"
+        "      high_mage:\n"
+        "        max: 3\n"
+        "  - name: Bo\n"
+        "    description: A non-caster bruiser\n"
+        "    personality: blunt\n"
+        "    backstory: raised on the docks\n"
+        "    char_class: Warrior\n"
+        "    race: Human\n"
+    )
+    (tmp_path / "effort_multi.yaml").write_text(body, encoding="utf-8")
+
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    snapshot = hydrate_fixture(name="effort_multi", fixtures_dir=tmp_path)
+    caster, bruiser = snapshot.characters
+    assert caster.core.effort.get("high_mage") is not None, (
+        "caster in characters: list must seed effort"
+    )
+    assert caster.core.effort["high_mage"].max == 3
+    assert bruiser.core.effort == {}, (
+        f"a sibling PC with no effort: block must keep core.effort == {{}}; got {bruiser.core.effort!r}"
+    )
+
+
+# ── AC-4: effort block is save-bearing (loud-fail) ──────────────────────────
+
+
+def test_effort_block_not_a_mapping_raises(tmp_path: Path) -> None:
+    """AC-4: ``effort:`` declared as a list (or scalar) instead of a
+    source-keyed mapping raises FixtureValidationError naming the block — never
+    a silent skip (No Silent Fallbacks; lang-review #1/#11).
+
+    RED driver: today the key is ignored entirely, so hydrate_fixture returns
+    normally and pytest.raises fails — exactly the gap this story closes.
+    """
+    _write_magic_fixture(
+        tmp_path,
+        "list_effort",
+        extra_character_yaml="  effort:\n    - high_mage\n",
+    )
+
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    with pytest.raises(FixtureValidationError) as exc_info:
+        hydrate_fixture(name="list_effort", fixtures_dir=tmp_path)
+
+    assert "effort" in str(exc_info.value).lower(), (
+        f"the error must name the offending block; got {str(exc_info.value)!r}"
+    )
+
+
+def test_effort_pool_value_not_a_mapping_raises(tmp_path: Path) -> None:
+    """AC-4: an effort SOURCE whose value is a list/scalar instead of a pool
+    mapping raises FixtureValidationError — the per-source shape is validated,
+    not blindly splatted into EffortPool(**value).
+    """
+    _write_magic_fixture(
+        tmp_path,
+        "bad_pool_shape",
+        extra_character_yaml="  effort:\n    high_mage:\n      - 3\n",
+    )
+
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="bad_pool_shape", fixtures_dir=tmp_path)
+
+
+def test_effort_pool_bad_field_type_raises(tmp_path: Path) -> None:
+    """AC-4: an effort pool with a non-int ``max`` surfaces as
+    FixtureValidationError — the pydantic ValidationError from EffortPool(...)
+    must be re-wrapped at the hydrate_fixture boundary, not leaked.
+    """
+    _write_magic_fixture(
+        tmp_path,
+        "bad_effort_value",
+        extra_character_yaml="  effort:\n    high_mage:\n      max: not_an_int\n",
+    )
+
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="bad_effort_value", fixtures_dir=tmp_path)
+
+
+def test_effort_pool_extra_field_rejected(tmp_path: Path) -> None:
+    """AC-4: an extra/typo'd key inside a pool raises FixtureValidationError.
+    EffortPool is ``extra="forbid"``; the hydrator must re-wrap the pydantic
+    ValidationError at the module boundary (the same contract spellcasting /
+    known_facts obey) rather than silently dropping the field.
+    """
+    _write_magic_fixture(
+        tmp_path,
+        "effort_extra",
+        extra_character_yaml="  effort:\n    high_mage:\n      max: 3\n      bonus: 9\n",
+    )
+
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="effort_extra", fixtures_dir=tmp_path)
+
+
+# ── AC-6: wwn.magic_hydrated OTEL span (GM-panel lie-detector / wiring test) ─
+
+
+def test_effort_hydration_emits_wwn_magic_hydrated_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-6 (wiring test): seeding an ``effort:`` block emits a single
+    ``wwn.magic_hydrated`` watcher event under component "magic", carrying the
+    sorted effort_sources and has_spellcasting=False. This is the GM-panel lie-
+    detector mandated by CLAUDE.md (OTEL span assertion, not a source-text grep).
+
+    RED driver: no ``wwn.magic_hydrated`` emitter exists anywhere yet, so the
+    capture list is empty and this fails until 90-7 wires the span.
+    """
+    _write_magic_fixture(tmp_path, "effort_span", extra_character_yaml=_EFFORT_YAML)
+
+    captured = _capture_wwn_events(monkeypatch)
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    hydrate_fixture(name="effort_span", fixtures_dir=tmp_path)
+
+    events = _wwn_hydrated_events(captured)
+    assert len(events) == 1, (
+        f"effort hydration must emit exactly one wwn.magic_hydrated event; got {len(events)}"
+    )
+    _event_type, fields, meta = events[0]
+    assert fields["effort_sources"] == ["high_mage"], (
+        f"span must report the seeded sources (sorted); got {fields.get('effort_sources')!r}"
+    )
+    assert fields["has_spellcasting"] is False, (
+        f"effort-only fixture must report has_spellcasting=False; got {fields.get('has_spellcasting')!r}"
+    )
+    assert fields["actor"] == "Practitioner", (
+        f"span must name the actor; got {fields.get('actor')!r}"
+    )
+    assert meta["component"] == "magic", f"span must be component 'magic'; got {meta['component']!r}"
+
+
+def test_spellcasting_hydration_emits_wwn_magic_hydrated_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-6: the lie-detector covers ALL WWN crunch, not just effort — a
+    spellcasting-only fixture (the #787 path) must also emit
+    ``wwn.magic_hydrated``, reporting has_spellcasting=True with the prepared
+    count and casts_per_day, and an empty effort_sources list.
+    """
+    _write_magic_fixture(tmp_path, "sc_span", extra_character_yaml=_SPELLCASTING_YAML)
+
+    captured = _capture_wwn_events(monkeypatch)
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    hydrate_fixture(name="sc_span", fixtures_dir=tmp_path)
+
+    events = _wwn_hydrated_events(captured)
+    assert len(events) == 1, (
+        f"spellcasting hydration must emit one wwn.magic_hydrated event; got {len(events)}"
+    )
+    _event_type, fields, _meta = events[0]
+    assert fields["has_spellcasting"] is True, (
+        f"a spellcasting fixture must report has_spellcasting=True; got {fields.get('has_spellcasting')!r}"
+    )
+    assert fields["prepared"] == 2, f"span must report prepared count; got {fields.get('prepared')!r}"
+    assert fields["casts_per_day"] == 2, (
+        f"span must report casts_per_day; got {fields.get('casts_per_day')!r}"
+    )
+    assert fields["effort_sources"] == [], (
+        f"a spellcasting-only fixture seeds no effort; got {fields.get('effort_sources')!r}"
+    )
+
+
+def test_non_caster_emits_no_wwn_magic_hydrated_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-6 (no-noise guard): a plain non-caster fixture (no effort, no
+    spellcasting) must emit NO ``wwn.magic_hydrated`` event — the GM panel must
+    not light up for the canonical dial fixtures.
+    """
+    _write_magic_fixture(tmp_path, "plain_pc", extra_character_yaml="")
+
+    captured = _capture_wwn_events(monkeypatch)
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    hydrate_fixture(name="plain_pc", fixtures_dir=tmp_path)
+
+    assert _wwn_hydrated_events(captured) == [], (
+        f"a non-caster fixture must not emit wwn.magic_hydrated; got "
+        f"{_wwn_hydrated_events(captured)!r}"
+    )

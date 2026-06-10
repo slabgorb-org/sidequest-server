@@ -11,8 +11,13 @@ she sits at 0/10 and the game just continues "What do you do?".
 ROOT CAUSE: ``_resolve_opponent_reprisal`` (``server.dispatch.dice``) ablates the
 PC to 0 HP and resolves the encounter via ``check_hp_depletion`` — but, unlike the
 player-strike / player-cast paths which run the CWN/WWN downed seam
-(``run_cwn_wwn_downed_seam``) after dropping a *defender*, the reprisal applies NO
-mechanical consequence to the *player* who just went down.
+(``run_cwn_wwn_downed_seam``) after dropping a *defender*, the reprisal applied NO
+mechanical consequence to the *player* who just went down. (Story 102-1 closed
+the WN half of that asymmetry: the reprisal close now runs
+``run_cwn_wwn_downed_seam`` for the downed PC AFTER this module's verdict, so a
+LETHAL down also emits the module-scoped ``{ruleset}.mortal_injury`` /
+``{ruleset}.major_injury`` spans, while a non-lethal recovery — PC back at the
+1-HP floor — gates that seam off.)
 
 This module is the single policy-driven seam. It reads the mandatory genre
 ``lethality_policy.verdicts_on_zero_hp.pc`` (the authoritative statement of how a

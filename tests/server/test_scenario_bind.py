@@ -68,12 +68,11 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
     ADR-115 D2: chargen confirmation persists the authoritative snapshot
     (incl. ``scenario_state``) to Postgres via ``db_pool.get_pool()``, and the
     slug-connect path reloads from there — NOT the SQLite save_dir store. The
-    dispatch tests in this module share a fixed slug (``seed_slug_for_test``'s
-    default ``"test-slug"``), so without per-test isolation the
-    ``test_confirmation_binds_injected_scenario`` snapshot (with a bound
-    scenario_state) leaks into the shared ``sidequest_test`` db and the
-    no-scenarios test resumes it instead of a clean session. TRUNCATE per test
-    keeps each one reading only its own seed.
+    TRUNCATE-per-test keeps each test reading only its own seeded session row
+    in the shared, session-scoped ``sidequest_test`` db. (Story 97-6 also made
+    ``seed_slug_for_test`` return a unique slug per call, so dispatch tests no
+    longer share the old fixed ``"test-slug"`` row; the TRUNCATE remains as
+    defence-in-depth against any other cross-test row bleed.)
     """
     import psycopg
 

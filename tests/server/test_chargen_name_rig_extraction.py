@@ -195,3 +195,78 @@ class TestNameRigExtractionWiring:
             )
 
         run(body())
+
+
+class TestSeedSlugIsolation:
+    """Story 97-6 — deterministic reproduction of the xdist flake's ROOT CAUSE.
+
+    The flake was MISDIAGNOSED (PR-741 notes / the story hypothesis) as an OTEL
+    span-exporter race. The captured full-suite traceback proved otherwise:
+    BOTH ``TestNameRigExtractionWiring`` tests fail at the *first* line,
+    ``await _connect(...)``, with
+    ``ErrorMessage: "Failed to load genre... genre pack 'test_genre' not found"``
+    and log ``session.genre_load_failed genre=test_genre slug=test-slug`` — even
+    though the test asked for ``road_warrior``. The walk never runs, so
+    ``chargen.names_extracted`` never fires: the "span absent" symptom is a
+    *consequence* of the failed connect, not an OTEL bug.
+
+    Root cause — a shared fixed test slug collides in a committed shared DB:
+
+    * ``seed_slug_for_test`` (``tests/server/conftest.py``) defaults to a FIXED
+      slug ``"test-slug"``. 18 server-test call sites use that default, each
+      seeding a DIFFERENT genre.
+    * They write to the SESSION-scoped, commit-based ``migrated_db`` (the pool
+      COMMITS; there is no per-test rollback), so all callers in one xdist
+      worker share the same ``sessions`` rows.
+    * ``ensure_session`` (``sidequest/game/pg/sessions.py``) upserts
+      ``ON CONFLICT (session_slug) DO UPDATE SET last_played = excluded.last_played``
+      — it NEVER updates ``genre_slug``/``world_slug``. So the FIRST seeder of
+      ``test-slug`` in a worker wins the genre; every later re-seed of the same
+      slug is a silent no-op for genre.
+    * When a sibling (e.g. ``test_chargen_dispatch``, which uses the fixture
+      ``test_genre`` pack) seeds ``test-slug -> test_genre`` before this pair
+      seeds ``test-slug -> road_warrior``, the chargen connect reads the stale
+      ``test_genre`` row and — reading against the REAL content tree
+      (``genre_pack_search_paths=[CONTENT_ROOT]``) where ``test_genre`` does not
+      exist — fails to load it. Order-dependent on who wins the row → the flake.
+
+    Fix (test-harness isolation; no production change): ``seed_slug_for_test``
+    must return a UNIQUE uuid-namespaced slug per call, mirroring
+    ``tests/dungeon/conftest.py`` which already documents the identical rule
+    ("slug is uuid-namespaced — REQUIRED because migrated_db is session-scoped
+    and the pool COMMITS, so fixed slugs bleed across xdist workers").
+
+    This test encodes that isolation contract DETERMINISTICALLY — it needs no
+    xdist scheduling and no broken env to fail; it reproduces the collision in
+    a single process by issuing two sibling seeds against one pool.
+    """
+
+    def test_default_slug_does_not_collide_across_sibling_seeds(
+        self, _pg_isolation: None, tmp_path: Path
+    ) -> None:
+        from sidequest.game import db_pool
+        from sidequest.game.pg.sessions import get_game
+        from tests.server.conftest import seed_slug_for_test
+
+        # Two sibling tests' seeds, default slug, DIFFERENT genres, same pool —
+        # exactly the shared-row condition that bites under xdist.
+        slug_first = seed_slug_for_test(tmp_path, genre="genre_alpha", world="world_a")
+        slug_second = seed_slug_for_test(tmp_path, genre="genre_beta", world="world_b")
+
+        # Contract 1: distinct slugs — sibling seeds must not share a row.
+        assert slug_first != slug_second, (
+            f"seed_slug_for_test returned the same slug twice ({slug_second!r}) — "
+            "fixed-slug collision. In the session-scoped, commit-based migrated_db "
+            "the second seed's genre is silently dropped (ON CONFLICT DO UPDATE "
+            "SET last_played only), so a later test reads the earlier test's genre."
+        )
+
+        # Contract 2: the second seed's row carries ITS OWN genre, never the
+        # first seeder's — the stale-genre leak that fails the chargen connect.
+        pool = db_pool.get_pool()
+        row_second = get_game(pool, slug=slug_second)
+        assert row_second is not None, f"no sessions row for {slug_second!r}"
+        assert row_second.genre_slug == "genre_beta", (
+            f"slug_second row genre is {row_second.genre_slug!r}, expected "
+            "'genre_beta' — the prior seed's genre leaked across the shared slug."
+        )

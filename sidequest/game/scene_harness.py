@@ -33,12 +33,13 @@ from pydantic import ValidationError
 
 from sidequest.game.character import Character, KnownFact
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.encounter import EncounterMetric, StructuredEncounter
+from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.scenario_state import (
     ScenarioRole,
     ScenarioState,
 )
 from sidequest.game.session import GameSnapshot, Npc
+from sidequest.game.wwn_magic import EffortPool, SpellcastingState
 from sidequest.genre.models.scenario import ClueGraph
 from sidequest.magic.state import MagicState
 from sidequest.protocol.models import AbilityDefinition
@@ -310,7 +311,72 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
     if isinstance(hp, int) and isinstance(max_hp, int):
         core_kwargs["hp"] = {"current": hp, "max": max_hp, "base_max": max_hp}
 
+    # Hydrate WWN magic (story 90-4, Epic 90 / ADR-114/117/126).
+    #
+    # ``effort:`` and ``spellcasting:`` seed the per-CreatureCore WWN magic
+    # the cast spine reads (``core.effort.get(source)`` / ``core.spellcasting``
+    # in ruleset/wwn.py). Both are save-bearing — a malformed shape fails
+    # loudly (FixtureValidationError → HTTP 422) rather than silently skipping,
+    # which would ship a non-casting "caster" and let a deterministic proof
+    # pass for the wrong reason (CLAUDE.md "No Silent Fallbacks", ADR-092
+    # "Failure is loud", lang-review #1/#11). Field-level pydantic
+    # ValidationError (extra=forbid typo, bad value type) propagates to the
+    # ``hydrate_fixture`` caller, which re-wraps it as FixtureValidationError
+    # on both the singular and multi-PC paths.
+    #
+    # DETERMINISTIC note: unlike chargen's ``seed_wwn_magic`` (which seeds
+    # ``prepared == []`` — spells chosen at rest), a fixture seeds ``prepared``
+    # VERBATIM so a cast can succeed with no rest beat in the loop.
+    raw_effort = data.get("effort")
+    if raw_effort is not None:
+        if not isinstance(raw_effort, dict):
+            raise FixtureValidationError(
+                f"character.effort must be a YAML mapping keyed by source, "
+                f"got {type(raw_effort).__name__}"
+            )
+        effort: dict[str, EffortPool] = {}
+        for source, pool_raw in raw_effort.items():
+            if not isinstance(pool_raw, dict):
+                raise FixtureValidationError(
+                    f"character.effort[{source!r}] must be a YAML mapping, "
+                    f"got {type(pool_raw).__name__}"
+                )
+            # ``source`` is derived from the mapping key — strip any stray
+            # in-value ``source`` so the key is authoritative.
+            pool_kwargs = {k: v for k, v in pool_raw.items() if k != "source"}
+            effort[str(source)] = EffortPool(source=str(source), **pool_kwargs)
+        core_kwargs["effort"] = effort
+
+    raw_spellcasting = data.get("spellcasting")
+    if raw_spellcasting is not None:
+        if not isinstance(raw_spellcasting, dict):
+            raise FixtureValidationError(
+                f"character.spellcasting must be a YAML mapping, "
+                f"got {type(raw_spellcasting).__name__}"
+            )
+        core_kwargs["spellcasting"] = SpellcastingState(**raw_spellcasting)
+
     core = CreatureCore(**core_kwargs)
+
+    # OTEL: when a fixture stages WWN crunch, emit a watcher event so the GM
+    # panel can confirm the deterministic fixture seeded real spellcasting/
+    # effort rather than the narrator improvising it (CLAUDE.md OTEL
+    # Observability Principle — the GM panel is the lie detector). Module-
+    # qualified call so the standard ``_capture_events`` harness intercepts it,
+    # matching the ``magic.state_hydrated`` emitter convention below.
+    if core.spellcasting is not None or core.effort:
+        _hub.publish_event(
+            "wwn.magic_hydrated",
+            {
+                "actor": core.name,
+                "has_spellcasting": core.spellcasting is not None,
+                "prepared": len(core.spellcasting.prepared) if core.spellcasting else 0,
+                "casts_per_day": core.spellcasting.casts_per_day if core.spellcasting else 0,
+                "effort_sources": sorted(core.effort),
+            },
+            component="magic",
+            severity="info",
+        )
 
     # Hydrate known_facts (story 50-19, ADR-092 follow-on).
     #
@@ -657,6 +723,50 @@ def _hydrate_encounter(raw: Any, *, fixture_name: str) -> StructuredEncounter:
             )
         return override.get("threshold", _DEFAULT_METRIC_THRESHOLD)
 
+    # WWN hp_depletion seeding (story 90-4, Epic 90 / ADR-114/116/117).
+    #
+    # ``win_condition`` (ADR-114 HP-kill channel vs the default dial race),
+    # ``category`` (confrontation category — combat/social/movement/...), and
+    # ``actors`` (seated combatants the hp_depletion side-scan walks) are the
+    # three keys a deterministic WWN combat fixture needs. Omitting them keeps
+    # the StructuredEncounter pydantic defaults ("dial_threshold" / "" / []) so
+    # the canonical combat_brawl_wasteland fixture (type: combat only) is
+    # unchanged. An out-of-Literal win_condition or out-of-Literal actor side
+    # surfaces as the wrapped ValidationError below — no silent default.
+    extra_kwargs: dict[str, Any] = {}
+
+    win_condition = raw.get("win_condition")
+    if win_condition is not None:
+        # Pass through verbatim — StructuredEncounter's Literal rejects typos
+        # (caught by the ValidationError wrap), so no manual allow-list here.
+        extra_kwargs["win_condition"] = win_condition
+
+    category = raw.get("category")
+    if category is not None:
+        extra_kwargs["category"] = category
+
+    raw_actors = raw.get("actors")
+    if raw_actors is not None:
+        if not isinstance(raw_actors, list):
+            raise FixtureValidationError(
+                f"fixture {fixture_name!r}: encounter.actors must be a YAML list, "
+                f"got {type(raw_actors).__name__}"
+            )
+        actors: list[EncounterActor] = []
+        for index, actor_raw in enumerate(raw_actors):
+            if not isinstance(actor_raw, dict):
+                raise FixtureValidationError(
+                    f"fixture {fixture_name!r}: encounter.actors[{index}] must be a "
+                    f"YAML mapping, got {type(actor_raw).__name__}"
+                )
+            try:
+                actors.append(EncounterActor(**actor_raw))
+            except ValidationError as exc:
+                raise FixtureValidationError(
+                    f"fixture {fixture_name!r}: encounter.actors[{index}] validation failed — {exc}"
+                ) from exc
+        extra_kwargs["actors"] = actors
+
     try:
         return StructuredEncounter(
             encounter_type=encounter_type,
@@ -672,6 +782,7 @@ def _hydrate_encounter(raw: Any, *, fixture_name: str) -> StructuredEncounter:
                 starting=0,
                 threshold=_threshold("opponent_metric"),
             ),
+            **extra_kwargs,
         )
     except ValidationError as exc:
         raise FixtureValidationError(

@@ -30,6 +30,7 @@ guard intentionally and must handle their own content-not-found skips.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -53,7 +54,7 @@ def seed_slug_for_test(
     *,
     genre: str,
     world: str,
-    slug: str = "test-slug",
+    slug: str | None = None,
     mode: GameMode | None = None,
 ) -> str:
     """Story 45-26: pre-populate a slug-keyed games-table row for tests.
@@ -68,11 +69,26 @@ def seed_slug_for_test(
     fixture active so the process pool points at an isolated PG database.
 
     Returns the slug to thread into the connect envelope.
+
+    Story 97-6: ``slug`` defaults to a UNIQUE uuid-namespaced value per call.
+    The migrated_db is session-scoped and the pool COMMITS (no per-test
+    rollback), so a FIXED default slug collided across the ~18 server-test
+    call sites within an xdist worker: ``ensure_session`` upserts
+    ``ON CONFLICT (session_slug) DO UPDATE SET last_played`` and never updates
+    ``genre_slug``/``world_slug``, so the first seeder of a shared slug won the
+    genre and later same-slug seeds silently kept the stale one — an
+    order-dependent flake (e.g. ``test_chargen_name_rig_extraction`` reading a
+    sibling's ``test_genre`` against the real content tree). Unique slugs give
+    each call its own row. Mirrors ``tests/dungeon/conftest.py``, which
+    documents the identical rule. Callers thread the *returned* slug into the
+    connect envelope, so a unique default is transparent.
     """
     from sidequest.game import db_pool
     from sidequest.game.persistence import GameMode
     from sidequest.server.session_state import _build_pg_repos_for_slug
 
+    if slug is None:
+        slug = f"test-{uuid.uuid4().hex[:8]}"
     resolved_mode = mode if mode is not None else GameMode.SOLO
 
     _build_pg_repos_for_slug(

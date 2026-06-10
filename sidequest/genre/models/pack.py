@@ -56,6 +56,7 @@ from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.visibility import VisibilityBaseline
 from sidequest.genre.models.world import CartographyConfig, WorldConfig
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
+from sidequest.mutation.models import MutationCatalog
 
 
 class RecommendedPlayers(BaseModel):
@@ -308,6 +309,10 @@ class GenrePack(BaseModel):
     blocks for ruleset-module packs. None when the file is absent — encountergen
     fails loud when the bound ruleset is non-native and this is None (the
     bestiary is REQUIRED for ruleset-module packs; native packs ignore it)."""
+    mutations: MutationCatalog | None = None
+    """Genre-tier ``mutations.yaml`` (AWN Plan 2): the mutation catalog the
+    awn ruleset's mutation subsystem resolves against. None = the pack has
+    no mutation system (a deliberate authoring choice, like magic.yaml)."""
     source_dir: Path | None = None
     client_theme_css: str | None = None
     """Raw contents of the genre's top-level ``client_theme.css`` if present.

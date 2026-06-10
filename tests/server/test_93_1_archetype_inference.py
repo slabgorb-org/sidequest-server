@@ -929,3 +929,133 @@ class TestInferenceCostAccounting:
             "the ceiling check is a PRE-flight refusal — the SDK must not "
             "be called for a killed session"
         )
+
+
+# ---------------------------------------------------------------------------
+# Review rework (Thought Police rejection, 2026-06-10) — two findings
+# ---------------------------------------------------------------------------
+
+
+class TestSdkFailureDegradesLoudly:
+    """[HIGH] [EDGE] review finding: the real SDK raises ``anthropic.*``
+    exceptions (transport blips, 429s, 529s, context-length 400s) that are
+    NOT in our ``LlmClientError`` family. Those must degrade to the same
+    loud inference-failed chargen block as every other failure mode — never
+    propagate out of the confirm dispatch (websocket.py's outer catch would
+    tear the player's WS session down mid-chargen)."""
+
+    async def test_transport_error_yields_inference_failed_block_not_crash(
+        self,
+        handler_factory,
+        monkeypatch: pytest.MonkeyPatch,
+        otel_capture: InMemorySpanExporter,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from sidequest.agents import llm_factory
+
+        class _FakeTransportError(Exception):
+            """Stands in for anthropic.APIConnectionError — deliberately
+            outside the LlmClientError family."""
+
+        async def _explode(**_kwargs: Any) -> SimpleNamespace:
+            raise _FakeTransportError("simulated API connection failure")
+
+        create = AsyncMock(side_effect=_explode)
+        fake_sdk = SimpleNamespace(messages=SimpleNamespace(create=create))
+        monkeypatch.setattr(llm_factory, "build_async_anthropic", lambda: fake_sdk)
+        _disable_default_hint_stamping(monkeypatch)
+
+        handler = handler_factory()
+        await _connect(handler)
+        await _walk_all_freeform(handler)
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            # The load-bearing assertion is that this call RETURNS instead
+            # of raising _FakeTransportError up through the dispatch.
+            out = await _send_confirmation(handler)
+
+        errors = [m for m in out if isinstance(m, ErrorMessage)]
+        assert errors, (
+            "an SDK transport failure during inference must surface as the "
+            "loud chargen block, not crash the confirm dispatch"
+        )
+        assert "inference" in str(errors[0].payload.message).lower()
+
+        sd = handler._session_data  # type: ignore[attr-defined]
+        assert not sd.snapshot.characters, "a failed inference must not persist a character"
+        assert handler._state != _State.Playing  # type: ignore[attr-defined]
+        assert not _spans_named(otel_capture, _INFERRED_SPAN_NAME), (
+            "no success span for a failed inference"
+        )
+        assert any("infer" in rec.getMessage().lower() for rec in caplog.records), (
+            "the failure must be logged at WARNING on the structured log surface"
+        )
+
+
+class TestOversizedFodderBounded:
+    """[MEDIUM] [SEC] review finding (python.md #11): player freeform fodder
+    must be length-bounded before it reaches the SDK — otherwise a hostile
+    player grinds per-call cost and an oversized context draws an API 400."""
+
+    async def test_fodder_constant_exists_and_is_sane(self) -> None:
+        from sidequest.agents.llm_factory import (
+            _ARCHETYPE_INFERENCE_MAX_FODDER_CHARS,
+        )
+
+        assert 1_000 <= _ARCHETYPE_INFERENCE_MAX_FODDER_CHARS <= 16_000, (
+            "the fodder bound must be generous enough for real backstories "
+            "(>=1k chars) and small enough to bound cost (<=16k chars); got "
+            f"{_ARCHETYPE_INFERENCE_MAX_FODDER_CHARS}"
+        )
+
+    async def test_oversized_freeform_is_truncated_before_sdk_call(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from sidequest.agents.llm_factory import (
+            _ARCHETYPE_INFERENCE_MAX_FODDER_CHARS,
+            infer_archetype_from_freeform,
+        )
+
+        base, constraints = _load_heavy_metal_axes()
+        create = _fake_inference_sdk(
+            monkeypatch,
+            tool_input={"jungian_hint": _VALID_JUNGIAN, "rpg_role_hint": _VALID_RPG_ROLE},
+        )
+
+        oversized = ("I protect what is mine. " * 20_000).strip()  # ~480k chars
+        assert len(oversized) > _ARCHETYPE_INFERENCE_MAX_FODDER_CHARS * 10
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            result = await infer_archetype_from_freeform(
+                freeform_text=oversized,
+                base=base,
+                constraints=constraints,
+                existing_hints={"jungian_hint": None, "rpg_role_hint": None},
+                session_id="93-1-oversize",
+            )
+
+        assert result == {
+            "jungian_hint": _VALID_JUNGIAN,
+            "rpg_role_hint": _VALID_RPG_ROLE,
+        }, "truncation must not break a legitimate (if verbose) inference"
+        assert create.call_count == 1
+
+        # The payload the SDK actually received must be bounded: the user
+        # message carries headers + fodder + pairing hints, so allow a
+        # small fixed overhead beyond the fodder bound.
+        sent = create.call_args.kwargs["messages"][0]["content"]
+        assert isinstance(sent, str)
+        assert len(sent) <= _ARCHETYPE_INFERENCE_MAX_FODDER_CHARS + 2_000, (
+            f"user message is {len(sent)} chars — the joined fodder must be "
+            f"truncated to ~{_ARCHETYPE_INFERENCE_MAX_FODDER_CHARS} before the call"
+        )
+        assert any("truncat" in rec.getMessage().lower() for rec in caplog.records), (
+            "truncation must be logged loudly (No Silent Fallbacks: the "
+            "player's words were cut — the operator should be able to see it)"
+        )

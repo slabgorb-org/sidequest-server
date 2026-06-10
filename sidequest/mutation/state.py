@@ -42,6 +42,26 @@ class CharacterMutationState(BaseModel):
     acquisition_log: list[str] = Field(default_factory=list)
 
 
+class MutationUseLogEntry(BaseModel):
+    """One turn-stamped mutation-use receipt — Story 102-7.
+
+    The ``WwnCastLogEntry`` mirror: the durable provenance artifact the
+    ``magic_working`` engagement witness reads to answer "did the
+    router-dispatched mutation use actually run the engine this turn?".
+    Stamped on EVERY ``use_mutation`` resolution — a REFUSED use
+    (limit exhausted, Strain over max, unowned) is still mechanical
+    engagement: the engine answered, so the lie-detector must not cry wolf
+    on a fizzle the narrator honestly narrates.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    turn: int
+    actor: str
+    mutation_id: str
+    applied: bool
+
+
 class MutationState(BaseModel):
     model_config = {"extra": "forbid"}
 

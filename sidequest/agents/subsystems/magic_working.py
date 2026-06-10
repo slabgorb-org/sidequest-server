@@ -3,7 +3,7 @@
 
 The router classifies a player action and emits a ``DispatchPackage``
 whose ``SubsystemDispatch`` entries may include
-``subsystem="magic_working"``. Two engines can service the dispatch:
+``subsystem="magic_working"``. Three engines can service the dispatch:
 
 1. **ADR-126 pact-working plugin** (``snapshot.magic_state`` populated —
    worlds that ship a ``magic.yaml``, e.g. coyote_star): params carry a
@@ -18,6 +18,12 @@ whose ``SubsystemDispatch`` entries may include
    ``_resolve_wwn_cast_for_beat`` (reuse-first; no second cast
    implementation). Free play seats no defender: the cast spends and
    rolls with no target, per the spine's no-target contract.
+3. **AWN mutation engine** (Story 102-7 — ``magic_state`` is None, no WN
+   cast surface, but the pack ships a mutations.yaml catalog and the
+   snapshot carries seeded ``mutation_state``): the same param shape, the
+   working resolved against the MUTATION catalog and routed through
+   ``sidequest.mutation.use_ops.use_mutation`` — mutations ARE an AWN
+   pack's magic. Receipts land in ``snapshot.mutation_use_log``.
 
 Every ``resolve_spellcast`` invocation (cast AND refused) appends a
 turn-stamped ``WwnCastLogEntry`` to ``snapshot.wwn_spell_cast_log`` — the
@@ -76,6 +82,23 @@ def _wwn_cast_module(pack: Any):
         return None
     module = get_ruleset_module(slug)
     return module if isinstance(module, WwnRulesetModule) else None
+
+
+def _awn_mutation_module(pack: Any):
+    """Return the pack's ruleset module when the pack carries the AWN
+    mutation surface (a CWN-family module + a loaded mutations.yaml catalog),
+    else None. Capability + catalog presence, never the genre slug."""
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.ruleset.cwn import CwnRulesetModule
+
+    if getattr(pack, "mutations", None) is None:
+        return None
+    rules = getattr(pack, "rules", None)
+    slug = getattr(rules, "ruleset", None) if rules is not None else None
+    if not slug:
+        return None
+    module = get_ruleset_module(slug)
+    return module if isinstance(module, CwnRulesetModule) else None
 
 
 def _failed_premise(
@@ -258,6 +281,172 @@ async def _run_wn_freeplay_cast(
     )
 
 
+async def _run_awn_freeplay_mutation(
+    dispatch: SubsystemDispatch,
+    *,
+    snapshot: GameSnapshot,
+    pack: Any,
+    module: Any,
+) -> SubsystemOutput:
+    """Story 102-7: route a named free-play mutation use through use_ops.
+
+    The 102-3 cast-spine mirror for AWN packs, where mutations ARE the
+    pack's magic. The router's param contract is reused verbatim — the
+    working AS THE PLAYER TYPED IT rides the ``spell`` key; the HANDLER
+    resolves it against the pack's mutation catalog (by id or display
+    name) because the router does not know spell from mutation.
+    """
+    from sidequest.mutation.state import MutationUseLogEntry
+    from sidequest.mutation.use_ops import use_mutation
+    from sidequest.telemetry.spans.awn import awn_mutation_refused_span
+
+    actor = dispatch.params.get("actor")
+    if not isinstance(actor, str) or not actor:
+        return _failed_premise(
+            dispatch,
+            error="missing_actor",
+            payload=(
+                "A mutation use was classified but no actor was identified; "
+                "narrate the attempt fizzling without mechanical effect."
+            ),
+        )
+
+    working_ref = dispatch.params.get("spell")
+    if not isinstance(working_ref, str) or not working_ref:
+        return _failed_premise(
+            dispatch,
+            error="missing_mutation",
+            payload=(
+                f"{actor} reaches for the change but named no mutation; "
+                "narrate the body failing to answer — nothing was used and "
+                "nothing was spent."
+            ),
+            actor=actor,
+        )
+    # Same CWE-400 hardening as the cast spine: the reference is LLM-copied
+    # from player free text — cap it before the normalize + catalog scan.
+    if len(working_ref) > _MAX_SPELL_REF_CHARS:
+        return _failed_premise(
+            dispatch,
+            error="mutation_ref_too_long",
+            payload=(
+                f"{actor} reaches for a power this body does not carry — a "
+                "failed premise. Nothing was used and nothing was spent."
+            ),
+            actor=actor,
+            mutation_ref_chars=len(working_ref),
+        )
+
+    core = snapshot.find_creature_core(actor)
+    state = snapshot.mutation_state
+    if core is None or state is None or actor not in state.characters:
+        # No mutation surface on THIS actor. Loud span (GM-panel evidence) +
+        # failed premise — the narrator must not improvise a power.
+        awn_mutation_refused_span(
+            actor=actor if isinstance(actor, str) else "",
+            mutation_id="",
+            reason="no_mutation_state",
+        )
+        return _failed_premise(
+            dispatch,
+            error="no_mutation_state",
+            payload=(
+                f"{actor} carries no mutation — the attempted use has no "
+                "mechanical backing; narrate the failure honestly."
+            ),
+            actor=actor,
+        )
+
+    catalog = pack.mutations
+    needle = _norm_spell_name(working_ref)
+    mutation = next(
+        (
+            m
+            for m in catalog.positives
+            if _norm_spell_name(m.id) == needle
+            or _norm_spell_name(m.id.split("/", 1)[1]) == needle
+            or _norm_spell_name(m.name) == needle
+        ),
+        None,
+    )
+    if mutation is None:
+        # Unknown working → failed premise. Same S3 discipline as the cast
+        # spine: the typed reference rides ``data`` (forensics/OTEL), never
+        # the narrator directive payload (ADR-047 sanitization lane).
+        awn_mutation_refused_span(actor=actor, mutation_id="", reason="unknown_mutation")
+        return _failed_premise(
+            dispatch,
+            error="unknown_mutation",
+            payload=(
+                f"{actor} reaches for a power this catalog does not know — a "
+                "failed premise. Nothing was used and nothing was spent; "
+                "narrate the miss honestly, without inventing a mutation."
+            ),
+            actor=actor,
+            mutation=working_ref,
+            available_ids=[m.id for m in catalog.positives],
+        )
+
+    # v1 save handling matches the use_mutation tool: the narrator narrates
+    # the target's save from the returned save_stat; opposed-save dice wiring
+    # rides the dice protocol in a later plan.
+    result = use_mutation(
+        state=state,
+        catalog=catalog,
+        module=module,
+        cfg=pack.rules.ruleset_config(),
+        core=core,
+        actor=actor,
+        mutation_id=mutation.id,
+        target_id=str(dispatch.params.get("target") or ""),
+        save_resolver=lambda stat, target: "fail",
+    )
+
+    # The engagement receipt the post-turn witness reads (the
+    # wwn_spell_cast_log mirror). Stamped on use AND refusal.
+    snapshot.mutation_use_log.append(
+        MutationUseLogEntry(
+            turn=snapshot.turn_manager.interaction,
+            actor=actor,
+            mutation_id=mutation.id,
+            applied=result.applied,
+        )
+    )
+
+    if result.applied:
+        payload = f"{actor} used {mutation.name} ({mutation.id})."
+        if mutation.strain_cost > 0:
+            payload += f" It cost {mutation.strain_cost} System Strain."
+        if result.uses_remaining >= 0:
+            payload += f" {result.uses_remaining} use(s) remain this period."
+        if result.save_stat:
+            payload += f" The target's {result.save_stat} save: {result.save_result}."
+        if result.effect:
+            payload += f" Effect: {result.effect}"
+        payload += " Narrate THIS mechanical outcome — the use is real and paid for."
+    else:
+        payload = (
+            f"{actor} reached for {mutation.name} ({mutation.id}) but the use "
+            f"was REFUSED: {result.reason}. Nothing was spent. Narrate the "
+            "refusal as a mechanical fact — the body does not answer."
+        )
+
+    return SubsystemOutput(
+        directives=[
+            NarratorDirective(
+                kind="must_narrate",
+                payload=payload,
+                visibility=dispatch.visibility,
+            )
+        ],
+        data={
+            "applied": result.applied,
+            "mutation_id": mutation.id,
+            "reason": result.reason,
+        },
+    )
+
+
 async def run_magic_working_dispatch(
     dispatch: SubsystemDispatch,
     *,
@@ -287,6 +476,18 @@ async def run_magic_working_dispatch(
         if module is not None and any(c.core.spellcasting is not None for c in snapshot.characters):
             return await _run_wn_freeplay_cast(
                 dispatch, snapshot=snapshot, pack=pack, module=module
+            )
+        # Story 102-7 — the third magic surface: an AWN pack's mutation
+        # engine (mutations ARE the pack's magic). Surface presence again:
+        # a loaded catalog + seeded per-character mutation state.
+        mutation_module = _awn_mutation_module(pack)
+        if (
+            mutation_module is not None
+            and snapshot.mutation_state is not None
+            and snapshot.mutation_state.characters
+        ):
+            return await _run_awn_freeplay_mutation(
+                dispatch, snapshot=snapshot, pack=pack, module=mutation_module
             )
 
     magic_result = apply_magic_working(snapshot=snapshot, patch_field=dict(dispatch.params))

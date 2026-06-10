@@ -1193,6 +1193,12 @@ def _build_turn_context(
         # invariant lie-detector relies on; aligning here closes the same
         # snapshot/store divergence class.
         recent_narrative_log=sd.repository.recent_narrative(RECENT_NARRATIVE_WINDOW_K),
+        # Story 102-7 (Plan 2 §5.4) — the AWN mutation surface for the
+        # narrator context block. Both None on packs without mutations.yaml
+        # or sessions with no seeded mutants; the orchestrator chokepoint
+        # registers nothing in that case (zero token cost).
+        mutation_state=snapshot.mutation_state,
+        mutation_catalog=(sd.genre_pack.mutations if sd.genre_pack is not None else None),
         # Story 50-4: thread the live snapshot so build_narrator_prompt can
         # render + clear pending_time_skip_summary (one-shot lifecycle).
         snapshot=snapshot,

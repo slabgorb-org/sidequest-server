@@ -280,6 +280,12 @@ class BeatSelection:
     # narration_apply uses this to look up the Spell in the world's catalog
     # and route the save branch.
     spell_id: str | None = None
+    # Story 102-7 — when the applied beat carries the AWN Plan 2 §6.3
+    # ``mutation_resolution`` marker, the narrator nominates WHICH owned
+    # mutation via this sidecar (the spell_id mirror). None on every
+    # non-mutation beat; the mutation handler in narration_apply routes it
+    # through sidequest.mutation.use_ops.
+    mutation_id: str | None = None
     # Table confrontations (poker/auction): raise/bet chips. None on every
     # non-table beat. The existing ``target`` field carries the Read/Accuse
     # target seat_id.
@@ -337,12 +343,14 @@ class BeatSelection:
             amount = int(amount_raw) if amount_raw is not None else None
         except (TypeError, ValueError):
             amount = None
+        mutation_id_raw = d.get("mutation_id")
         return cls(
             actor=str(d.get("actor", "")),
             beat_id=str(d.get("beat_id", "")),
             outcome=outcome,
             target=d.get("target"),
             spell_id=str(spell_id_raw) if spell_id_raw else None,
+            mutation_id=str(mutation_id_raw) if mutation_id_raw else None,
             amount=amount,
         )
 
@@ -887,6 +895,14 @@ class TurnContext:
     # the narrator knows the active plugins, hard_limits, and per-actor ledger
     # bars before composing narration for any magic working.
     magic_state: Any = None  # runtime type: sidequest.magic.state.MagicState | None
+
+    # AWN mutation surface (story 102-7, Plan 2 §5.4). When BOTH are
+    # non-None, build_narrator_prompt injects the mutation-context block so
+    # the narrator sees owned mutations, costs, and live MP/usage — the same
+    # single-chokepoint economics as magic_state (non-mutation worlds pay
+    # zero tokens).
+    mutation_state: Any = None  # runtime: sidequest.mutation.state.MutationState | None
+    mutation_catalog: Any = None  # runtime: sidequest.mutation.models.MutationCatalog | None
 
     # World-tier items catalog (Story 47-5). When non-None, the
     # reliquaries section drives the Cleric's <available-reliquaries>
@@ -2291,6 +2307,48 @@ class Orchestrator:
                     PromptSection.new(
                         "magic_context",
                         f"<magic-ledger>\n{magic_volatile}\n</magic-ledger>",
+                        AttentionZone.Valley,
+                        SectionCategory.State,
+                    ),
+                )
+
+        # Story 102-7 (Plan 2 §5.4) — AWN mutation context. The magic-block
+        # pattern retold for the pack whose magic IS mutation: static owned
+        # surface at Early (changes only on acquisition; NOT added to
+        # STABLE_SECTION_NAMES — cache promotion is a separate ADR-112 pass),
+        # live MP/usage ledger in Valley. Worlds without a mutation surface
+        # register nothing and pay nothing.
+        if context.mutation_state is not None and context.mutation_catalog is not None:
+            from sidequest.mutation.context_builder import (
+                build_mutation_static_block,
+                build_mutation_volatile_block,
+            )
+
+            mutation_static = build_mutation_static_block(
+                mutation_state=context.mutation_state,
+                catalog=context.mutation_catalog,
+            )
+            if mutation_static:
+                registry.register_section(
+                    agent_name,
+                    PromptSection.new(
+                        "mutation_context_static",
+                        f"<mutation-context>\n{mutation_static}\n</mutation-context>",
+                        AttentionZone.Early,
+                        SectionCategory.State,
+                    ),
+                )
+
+            mutation_volatile = build_mutation_volatile_block(
+                mutation_state=context.mutation_state,
+                catalog=context.mutation_catalog,
+            )
+            if mutation_volatile:
+                registry.register_section(
+                    agent_name,
+                    PromptSection.new(
+                        "mutation_context",
+                        f"<mutation-ledger>\n{mutation_volatile}\n</mutation-ledger>",
                         AttentionZone.Valley,
                         SectionCategory.State,
                     ),

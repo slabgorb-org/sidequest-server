@@ -32,6 +32,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 _DISCIPLINE_YAML = textwrap.dedent(
     """
@@ -135,7 +136,8 @@ def test_duplicate_discipline_id_rejected(tmp_path):
         ).strip(),
         encoding="utf-8",
     )
-    with pytest.raises(Exception):
+    # The dup-id model_validator raises pydantic ValidationError at load.
+    with pytest.raises(ValidationError):
         load_psionic_discipline_catalog(dupe)
 
 
@@ -161,7 +163,8 @@ def test_unknown_discipline_field_rejected(tmp_path):
         ).strip(),
         encoding="utf-8",
     )
-    with pytest.raises(Exception):
+    # extra="forbid" raises pydantic ValidationError on the unknown key at load.
+    with pytest.raises(ValidationError):
         load_psionic_discipline_catalog(bad)
 
 

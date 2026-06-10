@@ -3932,13 +3932,50 @@ def _apply_narration_result_to_snapshot(
         # only Scratch clears. ``old_loc`` is None at session start —
         # don't sweep on the first location set (no scene to leave).
         if old_loc and old_loc != result.location:
-            from sidequest.server.status_clear import clear_scratch_on_scene_end
+            # Story 97-4 (sibling of #739): the scratch sweep keyed on the raw
+            # ``old_loc != result.location`` string, so a same-region scene-title
+            # drift in a region-mode world (perseus: 'New Kowloon, Yula' ->
+            # 'New Kowloon — Transit Promenade') wiped scene-bounded status
+            # (Scratch/Boon) even though the party never left the scene. #739
+            # fixed the encounter-abandon ladder for exactly this drift via the
+            # ``_same_region_drift`` signal computed above; the sweep is the
+            # sibling gate. Consult the SAME signal: on a same-region drift the
+            # sweep is SKIPPED (this turn is scene-continuous). A genuine region
+            # change leaves the flag False and the sweep runs unchanged
+            # (scene-boundary semantics from Playtest 2026-04-26 Bug #1 preserved).
+            if not _same_region_drift:
+                from sidequest.server.status_clear import clear_scratch_on_scene_end
 
-            clear_scratch_on_scene_end(
-                snapshot,
-                reason="location_change",
-                turn=snapshot.turn_manager.interaction,
-            )
+                clear_scratch_on_scene_end(
+                    snapshot,
+                    reason="location_change",
+                    turn=snapshot.turn_manager.interaction,
+                )
+            else:
+                # OTEL lie-detector (CLAUDE.md OTEL principle): the GM panel must
+                # see the engine CHOSE to keep scene-bounded status across a
+                # same-region drift — otherwise a regression that silently
+                # resumes sweeping is invisible. Mirrors the encounter ladder's
+                # ``confrontation_continued_same_region_drift`` keep span below.
+                logger.info(
+                    "status.scratch_sweep_skipped_same_region_drift "
+                    "current_region=%r old_location=%r new_location=%r player=%s",
+                    snapshot.current_region,
+                    old_loc,
+                    result.location,
+                    player_name,
+                )
+                _watcher_publish(
+                    "scratch_sweep_skipped_same_region_drift",
+                    {
+                        "current_region": snapshot.current_region or "",
+                        "old_location": old_loc,
+                        "new_location": result.location,
+                        "player_name": player_name,
+                        "turn_number": snapshot.turn_manager.interaction,
+                    },
+                    component="encounter",
+                )
 
             # Pingpong 2026-04-30: confrontation panel sticks open after
             # the party physically leaves the encounter location.

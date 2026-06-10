@@ -600,8 +600,8 @@ class WwnRulesetModule(SwnRulesetModule):
         the damage of any attack/spell/ability (and to Shock). Returns the new
         total; emits wwn.killing_blow.
 
-        Pure math + span — no core mutation, called by dispatch/dice.py at the
-        killing_blow beat (dice.py:644 normal strike, dice.py:725 chip).
+        Pure math + span — no core mutation, called by dispatch/dice.py on the
+        killing_blow rider (the strike HIT path and the Shock chip path).
         cfg guard raises on non-WwnConfig, consistent with other methods.
         """
         if not isinstance(cfg, WwnConfig):

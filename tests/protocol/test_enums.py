@@ -70,12 +70,9 @@ def test_message_type_audio_cue_wire_string() -> None:
     assert MessageType.AUDIO_CUE == "AUDIO_CUE"
 
 
-def test_message_type_voice_signal_wire_string() -> None:
-    assert MessageType.VOICE_SIGNAL == "VOICE_SIGNAL"
-
-
-def test_message_type_voice_text_wire_string() -> None:
-    assert MessageType.VOICE_TEXT == "VOICE_TEXT"
+# VOICE_SIGNAL / VOICE_TEXT wire-string tests removed by Story 101-2 — the
+# voice-generation protocol surface is dead and the members are being deleted.
+# Absence is now asserted in tests/game/test_101_2_voice_removal.py.
 
 
 def test_message_type_action_queue_wire_string() -> None:
@@ -265,10 +262,13 @@ def test_message_type_complete_count() -> None:
     lethality verdict) so the UI locks that seat's input and shows a death
     banner / re-roll CTA; the server-side turn-intake gate is the authority.
     Intentional addition; bumped 55 → 56.
+    Story 101-2 removed VOICE_SIGNAL + VOICE_TEXT — the voice-generation
+    protocol surface is fully dead (zero emitters/handlers, no UI readers).
+    Dropped 56 → 54.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 56
+    assert len(MessageType) == 54
 
 
 # ===========================================================================

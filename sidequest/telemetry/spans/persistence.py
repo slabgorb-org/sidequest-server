@@ -56,6 +56,7 @@ def _extract_snapshot_canonicalize(span: Any) -> dict[str, Any]:
         "s1_world_confrontations_merged",
         "s1_world_confrontations_dropped_no_target",
         "s3_party_location_seeded",
+        "s6_voice_id_stripped",
     ):
         if key in attrs:
             payload[key] = attrs[key]

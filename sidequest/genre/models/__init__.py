@@ -45,14 +45,11 @@ from sidequest.genre.models.audio import (
     AudioEffect,
     AudioTheme,
     AudioVariation,
-    CreatureVoicePreset,
     FactionThemeDef,
     FactionTriggers,
     MixerConfig,
     MoodTrack,
     TrackVariation,
-    VoiceConfig,
-    VoicePresets,
 )
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig, AxisDefinition, AxisPreset
@@ -256,14 +253,11 @@ __all__ = [
     "AudioEffect",
     "AudioTheme",
     "AudioVariation",
-    "CreatureVoicePreset",
     "FactionThemeDef",
     "FactionTriggers",
     "MixerConfig",
     "MoodTrack",
     "TrackVariation",
-    "VoiceConfig",
-    "VoicePresets",
     # axes
     "AxesConfig",
     "AxisDefinition",

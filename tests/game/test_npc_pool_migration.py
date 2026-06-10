@@ -53,7 +53,6 @@ def _minimal_npc_dict(name: str, location: str = "Inn") -> dict[str, Any]:
             },
             "acquired_advancements": [],
         },
-        "voice_id": None,
         "disposition": 0,
         "location": location,
         "current_room": None,

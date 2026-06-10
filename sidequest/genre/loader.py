@@ -24,7 +24,7 @@ from sidequest.genre.genre_code import GenreCode
 from sidequest.genre.models.archetype_axes import BaseArchetypes
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 from sidequest.genre.models.archetype_funnels import ArchetypeFunnels
-from sidequest.genre.models.audio import AudioConfig, VoicePresets
+from sidequest.genre.models.audio import AudioConfig
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig
 from sidequest.genre.models.bestiary import Bestiary
@@ -1689,9 +1689,6 @@ def load_genre_pack(path: Path | str) -> GenrePack:
 
         for cc in chassis_classes.classes:
             validate_chassis_stations(cc)
-    voice_presets: VoicePresets | None = _load_yaml_optional(
-        path / "voice_presets.yaml", VoicePresets
-    )
     drama_thresholds: DramaThresholds | None = _load_yaml_optional(
         path / "pacing.yaml", DramaThresholds
     )
@@ -2013,7 +2010,6 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         beat_vocabulary=beat_vocabulary,
         chassis_classes=chassis_classes,
         achievements=achievements,
-        voice_presets=voice_presets,
         power_tiers=power_tiers,
         worlds=worlds,
         scenarios=scenarios,

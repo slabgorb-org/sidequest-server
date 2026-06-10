@@ -334,6 +334,34 @@ class StoryInput(SceneInputType):
     description: str
 
 
+# Indefinite/definite articles that mark a chargen CHOICE label as an oblique
+# flavor phrase rather than a vocation title. heavy_metal's calling scene uses
+# evocative phrases ("A craft that costs the craftsman") whose real class lives
+# in ``class_hint``; spaghetti_western uses thematic paths ("The Gun" → Gunslinger);
+# wry_whimsy echoes the class with an article ("A curious child" → "Curious Child").
+# A genuine vocation display label ("Country Veterinary Surgeon", "Channeler")
+# never leads with an article. See ``_is_vocation_label``.
+_ARTICLE_PREFIXES = ("a ", "an ", "the ")
+
+
+def _is_vocation_label(label: str) -> bool:
+    """True when a choice label reads like a vocation title fit for the Calling
+    display, False when it's an oblique flavor phrase that should fall back to
+    the resolved ``class_hint``.
+
+    The discriminator is a leading indefinite/definite article. A label like
+    "A craft that costs the craftsman" is a feeling the player chose, not a job
+    name — stamping it as the Calling produced the doubled-article bug
+    ("Vesska, a A craft that costs the craftsman"). Falling back to the
+    ``class_hint`` ("Elementalist") that every such choice already carries is
+    strictly cleaner across every pack that does this (heavy_metal,
+    spaghetti_western, wry_whimsy). Combined-origin packs (elemental_harmony
+    "The Ember Isles" → race+class) are already excluded upstream by the
+    ``race_hint is None`` guard at the capture site.
+    """
+    return not label.strip().lower().startswith(_ARTICLE_PREFIXES)
+
+
 # ---------------------------------------------------------------------------
 # SceneResult — unit of revert for go_back
 # ---------------------------------------------------------------------------
@@ -1373,7 +1401,17 @@ class CharacterBuilder:
                 # origin_label onto calling_label and seeded a hollow quest
                 # ("The Ember Isles · The Ember Isles"). The label belongs to
                 # race_label (set below); calling_label resolves from class_hint.
-                if result.choice_label is not None and eff.race_hint is None:
+                # ...but only when the label reads like a vocation. An oblique
+                # flavor phrase that leads with an article ("A craft that costs
+                # the craftsman", "The Gun") is NOT a job title; capturing it
+                # produced the doubled-article Calling bug ("a A craft …").
+                # Leaving class_label empty falls back to class_hint at build
+                # time (the resolved class — "Elementalist", "Gunslinger").
+                if (
+                    result.choice_label is not None
+                    and eff.race_hint is None
+                    and _is_vocation_label(result.choice_label)
+                ):
                     acc.class_label = result.choice_label
             # Freeform vocation display label (class-selecting scene answered
             # with free text). Last-wins, display-only.

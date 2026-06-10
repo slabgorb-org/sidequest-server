@@ -133,3 +133,51 @@ class TestFreeformVocationLabel:
         )
         b.apply_freeform("Neil")
         assert b.accumulated().class_label is None
+
+
+class TestArticleLeadingCannedLabel:
+    """sq-playtest 2026-06-10 BUG-LOW: heavy_metal's calling scene uses oblique
+    flavor labels ("A craft that costs the craftsman") with the real class in
+    class_hint. Capturing the label verbatim produced the doubled-article
+    Calling ("Vesska, a A craft that costs the craftsman"). A label leading with
+    an article is NOT a vocation title — leave class_label empty so build-time
+    falls back to the resolved class_hint. Confirmed genre-wide (spaghetti_western
+    "The Gun" → Gunslinger, wry_whimsy "A curious child" → "Curious Child")."""
+
+    def _calling_scene(self) -> CharCreationScene:
+        # heavy_metal/long_foundry "obligation" calling scene shape.
+        return make_scene(
+            "calling",
+            choices=[
+                make_choice("A craft that costs the craftsman", class_hint="Elementalist"),
+                make_choice("The Gun", class_hint="Gunslinger"),
+            ],
+            allows_freeform=True,
+        )
+
+    def test_article_leading_label_is_not_captured_as_vocation(self) -> None:
+        b = CharacterBuilder(scenes=[self._calling_scene()], rules=simple_rules())
+        b.apply_choice(0)
+        acc = b.accumulated()
+        # Mechanical class still resolves...
+        assert acc.class_hint == "Elementalist"
+        # ...but the oblique flavor phrase is NOT stamped as the display label.
+        assert acc.class_label is None
+        # {class} prose falls back to the resolved class — no doubled article.
+        assert b.interpolate_scene_narration("a {class}") == "a Elementalist"
+
+    def test_definite_article_label_also_skipped(self) -> None:
+        b = CharacterBuilder(scenes=[self._calling_scene()], rules=simple_rules())
+        b.apply_choice(1)
+        acc = b.accumulated()
+        assert acc.class_hint == "Gunslinger"
+        assert acc.class_label is None
+
+    def test_non_article_vocation_label_still_captured(self) -> None:
+        # Regression guard: the tea_and_murder path ("Country Doctor") must keep
+        # capturing its flavor label — the fix only skips article-leading labels.
+        b = CharacterBuilder(scenes=[_vocation_scene()], rules=simple_rules())
+        b.apply_choice(0)
+        acc = b.accumulated()
+        assert acc.class_hint == "Doctor"
+        assert acc.class_label == "Country Doctor"

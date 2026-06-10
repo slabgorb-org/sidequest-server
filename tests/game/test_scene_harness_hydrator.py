@@ -2722,3 +2722,578 @@ def test_canonical_fixtures_still_hydrate_with_encounter_implementation() -> Non
                 f"{fixture_name}: encounter_type mismatch; got "
                 f"{snapshot.encounter.encounter_type!r}, expected {expected_type!r}"
             )
+
+
+# ── Story 90-4 — WWN deterministic-fixture hydration (Epic 90, ADR-092/114/117/126) ──
+#
+# Epic 90 makes RulesetModule (WWN) worlds PROVE their crunch fires. 90-3 does it
+# under live free-play; 90-4 is the DETERMINISTIC counterpart — a content-only
+# fixture that, when hydrated, can drive ``wwn.spell.cast`` (the WWN cast spine)
+# and ``check_hp_depletion`` (the WWN/ADR-114 combat win condition) with no
+# narrator in the loop. Two hydrator extensions are required:
+#
+#   1. ``_hydrate_character`` must seed per-character WWN magic:
+#        character:
+#          effort:
+#            high_mage: {max: 3}        # -> core.effort["high_mage"] = EffortPool(source=..., max=3)
+#          spellcasting:                 # -> core.spellcasting = SpellcastingState(...)
+#            prepared: [firebolt]        #    DETERMINISTIC seed: prepared is NON-EMPTY
+#            casts_remaining: 2          #    (chargen seeds prepared==[]; a fixture proof
+#            casts_per_day: 2            #     needs a castable spell pre-loaded so a cast
+#            max_spell_level: 1          #     can succeed without a rest beat)
+#
+#   2. ``_hydrate_encounter`` must seed a WWN ``hp_depletion`` encounter:
+#        encounter:
+#          type: combat
+#          category: combat              # -> StructuredEncounter.category
+#          win_condition: hp_depletion   # -> StructuredEncounter.win_condition
+#          actors:                       # -> list[EncounterActor]
+#            - {name: Lyra, role: caster, side: player}
+#            - {name: Slag-Ghoul, role: brute, side: opponent}
+#
+# Backward-compat is load-bearing: every pre-90-4 fixture omits these keys and
+# MUST keep hydrating with ``core.spellcasting is None``, ``core.effort == {}``,
+# and ``encounter.win_condition == "dial_threshold"``.
+#
+# Validation discipline mirrors the rest of the hydrator (CLAUDE.md "No Silent
+# Fallbacks", ADR-092 "Failure is loud", lang-review #1/#11): a malformed
+# spellcasting/effort/actors shape or an out-of-Literal win_condition/side
+# raises FixtureValidationError (HTTP 422), never a silent skip and never a
+# leaked pydantic ValidationError.
+
+# Stats keyed by FLAVOR names (WWN attribute_map) — only needed by the cast
+# spine when a spell forces a save; the deterministic proof below uses a
+# no-save spell so it stays target-free and rng-independent.
+_WWN_ATTRIBUTE_MAP_90_4 = {
+    "STRENGTH": "Might",
+    "DEXTERITY": "Grace",
+    "CONSTITUTION": "Vigor",
+    "INTELLIGENCE": "Wits",
+    "WISDOM": "Spirit",
+    "CHARISMA": "Presence",
+}
+
+
+def _write_wwn_caster_fixture(
+    tmp_path: Path,
+    name: str,
+    *,
+    magic_yaml: str,
+    encounter_yaml: str = "",
+) -> None:
+    """Write a minimal heavy_metal (WWN) fixture with a spellcaster PC.
+
+    ``magic_yaml`` is the indented ``effort:`` / ``spellcasting:`` body nested
+    under the character block. ``encounter_yaml`` is an optional top-level
+    encounter block. Keeps test bodies focused on the assertion under test.
+    """
+    body = (
+        "genre: heavy_metal\n"
+        "world: evropi\n"
+        "character:\n"
+        "  name: Lyra\n"
+        "  description: A channeler of the foundry-flame\n"
+        "  personality: studious\n"
+        "  backstory: apprenticed to the long foundry\n"
+        "  char_class: Mage\n"
+        "  race: Human\n"
+        f"{magic_yaml}"
+    )
+    body += encounter_yaml
+    (tmp_path / f"{name}.yaml").write_text(body, encoding="utf-8")
+
+
+_SPELLCASTING_BLOCK = (
+    "  spellcasting:\n"
+    "    prepared: [firebolt]\n"
+    "    casts_remaining: 2\n"
+    "    casts_per_day: 2\n"
+    "    max_spell_level: 1\n"
+)
+_EFFORT_BLOCK = "  effort:\n    high_mage:\n      max: 3\n"
+
+
+# ── Part A: _hydrate_character seeds core.spellcasting + core.effort ─────────
+
+
+def test_character_spellcasting_block_hydrates(tmp_path: Path) -> None:
+    """A ``spellcasting:`` block under a character projects to
+    ``core.spellcasting`` as a SpellcastingState with the declared values.
+
+    The DETERMINISTIC distinction from chargen: ``prepared`` is NON-EMPTY.
+    seed_wwn_magic seeds ``prepared == []`` (spells chosen at rest); a fixture
+    proof must pre-load a castable spell so ``wwn.spell.cast`` can succeed with
+    no rest beat in the loop.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+    from sidequest.game.wwn_magic import SpellcastingState
+
+    _write_wwn_caster_fixture(tmp_path, "caster", magic_yaml=_SPELLCASTING_BLOCK)
+
+    snapshot = hydrate_fixture(name="caster", fixtures_dir=tmp_path)
+    state = snapshot.characters[0].core.spellcasting
+
+    assert isinstance(state, SpellcastingState), (
+        f"spellcasting: block must hydrate a SpellcastingState, got {type(state).__name__}"
+    )
+    assert state.prepared == ["firebolt"], (
+        f"prepared must seed NON-EMPTY for a deterministic cast; got {state.prepared!r}"
+    )
+    assert state.casts_remaining == 2
+    assert state.casts_per_day == 2
+    assert state.max_spell_level == 1
+
+
+def test_character_effort_block_hydrates(tmp_path: Path) -> None:
+    """An ``effort:`` block projects to ``core.effort`` — a dict keyed by
+    class-source, each value an EffortPool whose ``source`` is the key and
+    whose ``max`` is the declared cap. This is the shape ``wwn.py`` reads at
+    cast time (``core.effort.get(source)``).
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+    from sidequest.game.wwn_magic import EffortPool
+
+    _write_wwn_caster_fixture(tmp_path, "effort_pc", magic_yaml=_EFFORT_BLOCK)
+
+    snapshot = hydrate_fixture(name="effort_pc", fixtures_dir=tmp_path)
+    effort = snapshot.characters[0].core.effort
+
+    assert "high_mage" in effort, f"effort dict must be keyed by source; got {list(effort)!r}"
+    pool = effort["high_mage"]
+    assert isinstance(pool, EffortPool), (
+        f"effort value must be an EffortPool, got {type(pool).__name__}"
+    )
+    assert pool.source == "high_mage", (
+        f"EffortPool.source must be set from the fixture key; got {pool.source!r}"
+    )
+    assert pool.max == 3, f"EffortPool.max must hydrate from the block; got {pool.max}"
+    # A freshly-seeded pool has nothing committed — full pool available.
+    assert pool.available == 3
+
+
+def test_character_without_spellcasting_leaves_core_none(tmp_path: Path) -> None:
+    """Backward-compat: a character with no ``spellcasting:`` key keeps
+    ``core.spellcasting`` at its model default (None). The 90-4 branch must
+    not require the new block.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    _write_wwn_caster_fixture(tmp_path, "no_magic", magic_yaml="")
+
+    snapshot = hydrate_fixture(name="no_magic", fixtures_dir=tmp_path)
+    assert snapshot.characters[0].core.spellcasting is None, (
+        "omitting spellcasting: must leave core.spellcasting at the default None"
+    )
+
+
+def test_character_without_effort_leaves_empty_dict(tmp_path: Path) -> None:
+    """Backward-compat: a character with no ``effort:`` key keeps
+    ``core.effort`` at its model default (empty dict), not None.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    _write_wwn_caster_fixture(tmp_path, "no_effort", magic_yaml="")
+
+    snapshot = hydrate_fixture(name="no_effort", fixtures_dir=tmp_path)
+    assert snapshot.characters[0].core.effort == {}, (
+        f"omitting effort: must leave core.effort == {{}}; got "
+        f"{snapshot.characters[0].core.effort!r}"
+    )
+
+
+def test_spellcasting_extra_field_raises_FixtureValidationError(tmp_path: Path) -> None:
+    """SpellcastingState is ``extra="forbid"`` — a typo'd key in the
+    ``spellcasting:`` block (e.g. ``casts_remainng``) must surface as a
+    FixtureValidationError (HTTP 422), not silently drop the value.
+
+    Guards the model's extra=forbid contract through the hydrator (lang-review
+    #11 — validate at the fixture-parser boundary).
+    """
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    typo_block = (
+        "  spellcasting:\n"
+        "    prepared: [firebolt]\n"
+        "    casts_remainng: 2\n"  # typo: casts_remainng vs casts_remaining
+        "    casts_per_day: 2\n"
+        "    max_spell_level: 1\n"
+    )
+    _write_wwn_caster_fixture(tmp_path, "bad_spellcasting", magic_yaml=typo_block)
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="bad_spellcasting", fixtures_dir=tmp_path)
+
+
+def test_spellcasting_not_a_mapping_raises_FixtureValidationError(tmp_path: Path) -> None:
+    """ADR-092 "Failure is loud" + lang-review #1: a ``spellcasting:`` set to a
+    scalar/list instead of a mapping MUST raise a structured error, never
+    silently skip. Spellcasting is save-bearing — a silent skip would ship a
+    non-casting "caster" and the deterministic proof would pass for the wrong
+    reason.
+    """
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path, "scalar_spellcasting", magic_yaml="  spellcasting: firebolt\n"
+    )
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="scalar_spellcasting", fixtures_dir=tmp_path)
+
+
+def test_effort_not_a_mapping_raises_FixtureValidationError(tmp_path: Path) -> None:
+    """ADR-092 "Failure is loud": an ``effort:`` set to a list/scalar instead
+    of a source-keyed mapping MUST raise rather than silently skip.
+    """
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    _write_wwn_caster_fixture(tmp_path, "list_effort", magic_yaml="  effort:\n    - high_mage\n")
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="list_effort", fixtures_dir=tmp_path)
+
+
+def test_effort_pool_bad_value_raises_FixtureValidationError(tmp_path: Path) -> None:
+    """An effort source whose value is malformed (non-int ``max``, or a typo'd
+    extra key under EffortPool's ``extra="forbid"``) must surface as a
+    FixtureValidationError — the pydantic ValidationError is re-wrapped at the
+    boundary, never leaked.
+    """
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path,
+        "bad_effort_value",
+        magic_yaml="  effort:\n    high_mage:\n      max: not_an_int\n",
+    )
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="bad_effort_value", fixtures_dir=tmp_path)
+
+
+def test_hydrated_spellcasting_drives_wwn_cast_spine(tmp_path: Path) -> None:
+    """WIRING / deterministic proof (CLAUDE.md "Every Test Suite Needs a
+    Wiring Test"): the ``core.spellcasting`` a fixture hydrates is mechanically
+    valid — feeding it through the REAL ``WwnRulesetModule.resolve_spellcast``
+    produces a successful cast (``cast=True``, one cast spent).
+
+    This is the whole point of 90-4: prove ``wwn.spell.cast`` fires from a
+    content-only fixture with no narrator. A no-save / no-damage spell keeps
+    the proof target-free and rng-independent — the only thing under test is
+    that the hydrated economy (prepared + casts_remaining + max_spell_level)
+    satisfies the cast spine's validation gates.
+    """
+    import random
+
+    from sidequest.game.ruleset.wwn import WwnRulesetModule
+    from sidequest.game.scene_harness import hydrate_fixture
+    from sidequest.game.wwn_magic import CastInput
+    from sidequest.genre.models.rules import WwnConfig
+
+    _write_wwn_caster_fixture(tmp_path, "castable", magic_yaml=_SPELLCASTING_BLOCK)
+    snapshot = hydrate_fixture(name="castable", fixtures_dir=tmp_path)
+    caster_core = snapshot.characters[0].core
+
+    spell = CastInput(id="firebolt", level=1, save=None, damage_die=None, damage_per_level=False)
+    result = WwnRulesetModule().resolve_spellcast(
+        caster_core=caster_core,
+        spell=spell,
+        cfg=WwnConfig(attribute_map=_WWN_ATTRIBUTE_MAP_90_4),
+        rng=random.Random(0),
+    )
+
+    assert result.cast is True, (
+        f"a hydrated prepared spell with casts remaining must cast; refused with {result.reason!r}"
+    )
+    assert result.casts_remaining == 1, (
+        f"casting must spend exactly one cast (2 -> 1); got {result.casts_remaining}"
+    )
+    assert caster_core.spellcasting is not None
+    assert caster_core.spellcasting.casts_remaining == 1, (
+        "the cast must mutate the hydrated state, not a copy"
+    )
+
+
+# ── Part B: _hydrate_encounter seeds a WWN hp_depletion encounter ───────────
+
+
+_HP_DEPLETION_ENCOUNTER = (
+    "encounter:\n"
+    "  type: combat\n"
+    "  category: combat\n"
+    "  win_condition: hp_depletion\n"
+    "  actors:\n"
+    "    - name: Lyra\n"
+    "      role: caster\n"
+    "      side: player\n"
+    "    - name: Slag-Ghoul\n"
+    "      role: brute\n"
+    "      side: opponent\n"
+)
+
+
+def test_encounter_win_condition_hp_depletion_hydrates(tmp_path: Path) -> None:
+    """A ``win_condition: hp_depletion`` encounter block projects to
+    ``StructuredEncounter.win_condition == "hp_depletion"`` — the ADR-114
+    HP-kill resolution channel, distinct from the default dial race.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path, "hp_dep", magic_yaml="", encounter_yaml=_HP_DEPLETION_ENCOUNTER
+    )
+
+    snapshot = hydrate_fixture(name="hp_dep", fixtures_dir=tmp_path)
+    enc = snapshot.encounter
+    assert enc is not None, "encounter block was provided — must hydrate"
+    assert enc.win_condition == "hp_depletion", (
+        f"win_condition: hp_depletion must hydrate; got {enc.win_condition!r}"
+    )
+
+
+def test_encounter_default_win_condition_is_dial_threshold(tmp_path: Path) -> None:
+    """Backward-compat: an encounter block WITHOUT ``win_condition:`` keeps the
+    StructuredEncounter default ``"dial_threshold"``. The canonical
+    combat_brawl_wasteland fixture (``encounter: type: combat`` only) relies on
+    this — 90-4 must not silently flip existing fixtures to HP-depletion.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path, "default_wc", magic_yaml="", encounter_yaml="encounter:\n  type: combat\n"
+    )
+
+    snapshot = hydrate_fixture(name="default_wc", fixtures_dir=tmp_path)
+    enc = snapshot.encounter
+    assert enc is not None
+    assert enc.win_condition == "dial_threshold", (
+        f"omitting win_condition: must keep the default 'dial_threshold'; got {enc.win_condition!r}"
+    )
+
+
+def test_encounter_invalid_win_condition_raises_FixtureValidationError(tmp_path: Path) -> None:
+    """AC: ``win_condition:`` outside the Literal
+    (dial_threshold | hp_depletion | table_showdown) MUST raise — no silent
+    default to dial_threshold. StructuredEncounter's Literal owns the
+    validation; the hydrator re-wraps as FixtureValidationError (HTTP 422).
+    """
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path,
+        "bad_wc",
+        magic_yaml="",
+        encounter_yaml="encounter:\n  type: combat\n  win_condition: heat_death\n",
+    )
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="bad_wc", fixtures_dir=tmp_path)
+
+
+def test_encounter_category_hydrates(tmp_path: Path) -> None:
+    """A ``category:`` field projects to ``StructuredEncounter.category`` —
+    the confrontation category the engine uses to answer "is this MOBILE?"
+    and to seat the right ruleset behavior.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path, "cat", magic_yaml="", encounter_yaml=_HP_DEPLETION_ENCOUNTER
+    )
+
+    snapshot = hydrate_fixture(name="cat", fixtures_dir=tmp_path)
+    assert snapshot.encounter is not None
+    assert snapshot.encounter.category == "combat", (
+        f"category: combat must hydrate; got {snapshot.encounter.category!r}"
+    )
+
+
+def test_encounter_actors_block_hydrates(tmp_path: Path) -> None:
+    """An ``actors:`` block seats EncounterActors with name/role/side in
+    declared order. hp_depletion needs seated actors — the resolution check
+    walks ``enc.actors`` to decide which side is down.
+    """
+    from sidequest.game.encounter import EncounterActor
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path, "actors", magic_yaml="", encounter_yaml=_HP_DEPLETION_ENCOUNTER
+    )
+
+    snapshot = hydrate_fixture(name="actors", fixtures_dir=tmp_path)
+    enc = snapshot.encounter
+    assert enc is not None
+    assert len(enc.actors) == 2, f"two actors declared; got {len(enc.actors)}"
+    for actor in enc.actors:
+        assert isinstance(actor, EncounterActor)
+    lyra, ghoul = enc.actors[0], enc.actors[1]
+    assert (lyra.name, lyra.role, lyra.side) == ("Lyra", "caster", "player")
+    assert (ghoul.name, ghoul.role, ghoul.side) == ("Slag-Ghoul", "brute", "opponent")
+
+
+def test_encounter_actor_invalid_side_raises_FixtureValidationError(tmp_path: Path) -> None:
+    """ADR-092 "Failure is loud": an actor ``side`` outside the closed
+    ActorSide Literal (player | opponent | neutral) MUST raise. A silent coerce
+    would seat a combatant on no side and break the hp_depletion side scan.
+    """
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path,
+        "bad_side",
+        magic_yaml="",
+        encounter_yaml=(
+            "encounter:\n"
+            "  type: combat\n"
+            "  win_condition: hp_depletion\n"
+            "  actors:\n"
+            "    - name: Lyra\n"
+            "      role: caster\n"
+            "      side: heroes\n"  # not in ActorSide
+        ),
+    )
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="bad_side", fixtures_dir=tmp_path)
+
+
+def test_encounter_actors_not_a_list_raises_FixtureValidationError(tmp_path: Path) -> None:
+    """ADR-092 "Failure is loud" + lang-review #1: an ``actors:`` set to a
+    mapping/scalar instead of a list MUST raise rather than silently skip.
+    """
+    from sidequest.game.scene_harness import FixtureValidationError, hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path,
+        "actors_scalar",
+        magic_yaml="",
+        encounter_yaml="encounter:\n  type: combat\n  win_condition: hp_depletion\n  actors: Lyra\n",
+    )
+
+    with pytest.raises(FixtureValidationError):
+        hydrate_fixture(name="actors_scalar", fixtures_dir=tmp_path)
+
+
+def test_hydrated_hp_depletion_encounter_resolves_via_check(tmp_path: Path) -> None:
+    """WIRING / deterministic proof: the hp_depletion encounter a fixture
+    hydrates actually drives ``check_hp_depletion``. With the seated opponent
+    at 0 HP and the player standing, the REAL helper resolves
+    ``player_victory`` — proving WWN combat resolution fires from a content-only
+    fixture (the deterministic counterpart to 90-3's live free-play).
+
+    The edge_resolver maps actor names to the cores the fixture hydrated, so a
+    pass means the encounter, the actors, AND their HP all wired through end to
+    end — not three isolated units that happen to construct.
+    """
+    from sidequest.game.creature_core import HpPool
+    from sidequest.game.hp_depletion import check_hp_depletion
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    # Two-PC party shape: a standing caster (Lyra) and the seated opponent
+    # (Slag-Ghoul) declared in the NPC roster, dropped to 0 HP for the kill.
+    body = (
+        "genre: heavy_metal\n"
+        "world: evropi\n"
+        "character:\n"
+        "  name: Lyra\n"
+        "  description: A channeler of the foundry-flame\n"
+        "  personality: studious\n"
+        "  backstory: apprenticed to the long foundry\n"
+        "  char_class: Mage\n"
+        "  race: Human\n"
+        "  hp: 8\n"
+        "  max_hp: 8\n"
+        "npcs:\n"
+        "  - name: Slag-Ghoul\n"
+        "    role: brute\n"
+        "    disposition: -20\n" + _HP_DEPLETION_ENCOUNTER
+    )
+    (tmp_path / "deterministic_fight.yaml").write_text(body, encoding="utf-8")
+
+    snapshot = hydrate_fixture(name="deterministic_fight", fixtures_dir=tmp_path)
+    enc = snapshot.encounter
+    assert enc is not None and enc.win_condition == "hp_depletion"
+
+    cores_by_name = {pc.core.name: pc.core for pc in snapshot.characters}
+    cores_by_name.update({npc.core.name: npc.core for npc in snapshot.npcs})
+    # Drop the opponent to 0 HP — the deterministic kill condition.
+    cores_by_name["Slag-Ghoul"].hp = HpPool(current=0, max=6, base_max=6)
+
+    result = check_hp_depletion(enc, lambda n: cores_by_name.get(n))
+
+    assert result is not None, "opponent at 0 HP must resolve the encounter"
+    assert enc.resolved is True
+    assert enc.outcome == "player_victory", (
+        f"standing PC vs downed opponent must be player_victory; got {enc.outcome!r}"
+    )
+
+
+# ── Part C: full deterministic fixture + backward-compat wiring lock ────────
+
+
+def test_wwn_deterministic_fixture_seeds_both_spellcasting_and_hp_depletion(
+    tmp_path: Path,
+) -> None:
+    """The end-to-end 90-4 shape: ONE fixture seeds a castable WWN spellcaster
+    AND an hp_depletion encounter — the single artifact a deterministic
+    playtest loads to prove ``wwn.spell.cast`` + ``wwn.*`` combat live without a
+    narrator. Both halves must coexist in one snapshot without clobbering each
+    other.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    _write_wwn_caster_fixture(
+        tmp_path,
+        "full_wwn",
+        magic_yaml=_EFFORT_BLOCK + _SPELLCASTING_BLOCK,
+        encounter_yaml=_HP_DEPLETION_ENCOUNTER,
+    )
+
+    snapshot = hydrate_fixture(name="full_wwn", fixtures_dir=tmp_path)
+
+    core = snapshot.characters[0].core
+    assert core.spellcasting is not None, "spellcasting must survive coexistence"
+    assert core.spellcasting.prepared == ["firebolt"]
+    assert core.effort["high_mage"].max == 3, "effort must survive coexistence"
+
+    enc = snapshot.encounter
+    assert enc is not None and enc.win_condition == "hp_depletion", (
+        "hp_depletion encounter must survive coexistence with the magic block"
+    )
+    assert len(enc.actors) == 2, "seated actors must survive coexistence"
+
+
+def test_canonical_fixtures_unaffected_by_wwn_hydration() -> None:
+    """AC (backward-compat WIRING lock, CLAUDE.md "Every Test Suite Needs a
+    Wiring Test"): the canonical fixtures predate 90-4 and declare no WWN magic
+    or hp_depletion keys. After the 90-4 branch lands they MUST keep hydrating
+    with every PC at ``core.spellcasting is None`` / ``core.effort == {}`` and
+    every encounter at ``win_condition == "dial_threshold"``.
+
+    Guards against a 90-4 implementation that requires the new blocks or
+    mis-detects their absence.
+    """
+    from sidequest.game.scene_harness import hydrate_fixture
+
+    real_fixtures = (
+        "combat_brawl_wasteland",
+        "combat_dogfight_space",
+        "social_negotiation_tea",
+        "social_poker_wasteland",
+    )
+    for fixture_name in real_fixtures:
+        snapshot = hydrate_fixture(name=fixture_name, fixtures_dir=CANONICAL_FIXTURES_DIR)
+        for idx, pc in enumerate(snapshot.characters):
+            assert pc.core.spellcasting is None, (
+                f"{fixture_name}: characters[{idx}] declared no spellcasting — "
+                f"must stay None; got {pc.core.spellcasting!r}"
+            )
+            assert pc.core.effort == {}, (
+                f"{fixture_name}: characters[{idx}] declared no effort — "
+                f"must stay {{}}; got {pc.core.effort!r}"
+            )
+        if snapshot.encounter is not None:
+            assert snapshot.encounter.win_condition == "dial_threshold", (
+                f"{fixture_name}: pre-90-4 encounter must keep the default "
+                f"'dial_threshold'; got {snapshot.encounter.win_condition!r}"
+            )

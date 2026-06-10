@@ -26,6 +26,15 @@ def test_create_app_uses_build_llm_client_by_default(monkeypatch):
     """
     monkeypatch.delenv("SIDEQUEST_LLM_BACKEND", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    # The factory-resolution assertion needs an AnthropicSdkClient instance,
+    # not a live SDK: shadow the 93-1 hermeticity guard (which raises) with
+    # an inert object so construction succeeds without touching the real
+    # AsyncAnthropic (the client resolves the SDK late-bound through
+    # ``llm_factory.build_async_anthropic`` — the single construction site).
+    monkeypatch.setattr(
+        "sidequest.agents.llm_factory.build_async_anthropic",
+        lambda: object(),
+    )
     app = create_app()
     from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 
@@ -138,8 +147,7 @@ def test_db_pool_opens_and_closes_with_app() -> None:
     app = create_app()
     with TestClient(app):
         assert db_pool._POOL is not None, (
-            "startup hook did not open the PG pool — _open_db_pool wiring in "
-            "app.py did not run"
+            "startup hook did not open the PG pool — _open_db_pool wiring in app.py did not run"
         )
         assert not db_pool._POOL.closed, "pool should be open after startup"
     # On TestClient exit the shutdown hook runs — pool must be closed + discarded.

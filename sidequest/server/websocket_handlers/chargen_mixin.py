@@ -86,6 +86,7 @@ from sidequest.server.session_state import (
 from sidequest.telemetry.spans import (
     SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED,
     SPAN_CHARGEN_ARCHETYPE_GATE_EVALUATED,
+    SPAN_CHARGEN_ARCHETYPE_INFERRED,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -620,6 +621,156 @@ class CharGenMixin:
 
         return True, block_reason
 
+    # ---- archetype inference (Story 93-1) --------------------------------
+    async def _maybe_infer_archetype_from_freeform(
+        self,
+        builder: CharacterBuilder,
+        character: Character,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> bool:
+        """Run the 93-1 Haiku inference when the gate would block on
+        ``missing_axes_with_pack_axes`` and freeform fodder exists.
+
+        Returns whether an inference was ATTEMPTED (used by the caller to
+        word the blocked error). On success the character carries a resolved
+        archetype + provenance (via the same ``_resolve_character_archetype``
+        path the preset flow uses) and the ``chargen.archetype_inferred``
+        span has fired; on any failure the character is left untouched so
+        the 45-6 gate blocks loudly downstream.
+        """
+        pack = sd.genre_pack
+        pack_has_axes = pack.base_archetypes is not None and pack.archetype_constraints is not None
+        would_block_missing_axes = (
+            character.archetype_provenance is None
+            and character.resolved_archetype is None
+            and pack_has_axes
+        )
+        if not would_block_missing_axes:
+            return False
+        freeform_answers = builder.freeform_answer_texts()
+        if not freeform_answers:
+            # No fodder: the existing fail-loud block stands, zero SDK calls.
+            return False
+
+        acc = builder.accumulated()
+        existing_hints: dict[str, str | None] = {
+            "jungian_hint": acc.jungian_hint,
+            "rpg_role_hint": acc.rpg_role_hint,
+        }
+        # Same session-identity ladder as the intent-router / seed-deck
+        # seams: room slug > game slug > deterministic composite.
+        if getattr(self, "_room", None) is not None:
+            session_id = self._room.slug  # type: ignore[attr-defined]
+        elif sd.game_slug is not None:
+            session_id = sd.game_slug
+        else:
+            session_id = f"{sd.genre_slug}::{sd.world_slug}::{player_id}"
+
+        # Late-bound function import (story 91-1 monkeypatch doctrine): the
+        # tests fake the SDK construction site underneath this call.
+        from sidequest.agents.llm_factory import infer_archetype_from_freeform
+
+        try:
+            inferred = await infer_archetype_from_freeform(
+                freeform_text="\n\n".join(freeform_answers),
+                base=pack.base_archetypes,
+                constraints=pack.archetype_constraints,
+                existing_hints=existing_hints,
+                session_id=session_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — see rationale below
+            # Review rework [HIGH]: the real SDK raises ``anthropic.*``
+            # exceptions (transport blips, 429/529, context-length 400s)
+            # that are NOT in our LlmClientError family, and a response-
+            # shape change can raise TypeError. ANY failure at this seam
+            # must degrade to the loud inference-failed chargen block —
+            # letting it propagate reaches websocket.py's outer catch,
+            # which sends a generic "Server error" and tears the player's
+            # WS session down mid-chargen. This is explicit handling, not
+            # swallowing (python.md #1/#4): the failure is logged WARNING
+            # here and the 45-6 gate blocks loudly downstream.
+            logger.warning(
+                "chargen.archetype_inference_failed player_id=%s session_id=%s error=%s",
+                player_id,
+                session_id,
+                exc,
+            )
+            return True
+
+        if inferred is None:
+            # Out-of-enum (already logged at WARNING inside the inference)
+            # or empty fodder after stripping. No coercion, no fallback.
+            return True
+        if not inferred:
+            # Haiku declined every missing axis — nothing shippable.
+            logger.warning(
+                "chargen.archetype_inference_declined player_id=%s session_id=%s "
+                "— no axis inferred from freeform answers",
+                player_id,
+                session_id,
+            )
+            return True
+
+        jungian = existing_hints["jungian_hint"] or inferred.get("jungian_hint")
+        rpg_role = existing_hints["rpg_role_hint"] or inferred.get("rpg_role_hint")
+        if jungian is None or rpg_role is None:
+            logger.warning(
+                "chargen.archetype_inference_incomplete player_id=%s session_id=%s "
+                "jungian=%s rpg_role=%s",
+                player_id,
+                session_id,
+                jungian,
+                rpg_role,
+            )
+            return True
+
+        # Resolve through the SAME path the preset flow uses (Don't
+        # Reinvent): write the raw pair and let _resolve_character_archetype
+        # run the four-tier shim + apply_archetype_resolved. On resolver
+        # rejection (e.g. forbidden pairing) it leaves the raw pair and the
+        # gate blocks with resolver_raised — still loud.
+        character.resolved_archetype = f"{jungian}/{rpg_role}"
+        self._resolve_character_archetype(character, sd, player_id, span)
+        if character.archetype_provenance is None:
+            logger.warning(
+                "chargen.archetype_inference_unresolvable player_id=%s session_id=%s "
+                "pair=%s/%s — inferred pair rejected by the resolver",
+                player_id,
+                session_id,
+                jungian,
+                rpg_role,
+            )
+            return True
+
+        # Success: the lie-detector span. Fires ONLY here — the GM panel
+        # must distinguish "inferred from the player's words" from "preset
+        # accumulation" (OTEL Observability Principle).
+        with tracer.start_as_current_span(
+            SPAN_CHARGEN_ARCHETYPE_INFERRED,
+            attributes={
+                "inferred_axes": sorted(inferred.keys()),
+                "jungian_hint": jungian,
+                "rpg_role_hint": rpg_role,
+                "source": "freeform",
+                "genre": sd.genre_slug,
+                "world": sd.world_slug,
+                "player_id": player_id,
+            },
+        ):
+            pass
+        logger.info(
+            "chargen.archetype_inferred player_id=%s session_id=%s inferred_axes=%s "
+            "jungian=%s rpg_role=%s",
+            player_id,
+            session_id,
+            sorted(inferred.keys()),
+            jungian,
+            rpg_role,
+        )
+        return True
+
     # ---- phase=confirmation (commit) ------------------------------------
     async def _chargen_confirmation(
         self,
@@ -684,6 +835,23 @@ class CharGenMixin:
         # source tier. Rust parity: connect.rs:1644-1737.
         self._resolve_character_archetype(character, sd, player_id, span)
 
+        # Story 93-1: Haiku archetype inference for all-freeform chargen
+        # ([BAR-1]). The builder only forms a pair when preset choices set
+        # BOTH hints; a player who answered hint-bearing scenes freeform
+        # accumulated none, so axis-bearing packs would dead-end at the
+        # 45-6 gate below with ``missing_axes_with_pack_axes``. Intercept
+        # that exact would-block state BEFORE the gate evaluates: when the
+        # player supplied real freeform answers (name-entry text excluded —
+        # see ``CharacterBuilder.freeform_answer_texts``), run a single
+        # Haiku call to infer the MISSING axis value(s), constrained to the
+        # pack's valid ids, then resolve through the same four-tier shim as
+        # the preset path. Preset-set hints are never overridden. With no
+        # freeform fodder the gate blocks exactly as before — zero SDK
+        # calls, no pack-default fallback (No Silent Fallbacks).
+        inference_attempted = await self._maybe_infer_archetype_from_freeform(
+            builder, character, sd, player_id, span
+        )
+
         # Story 45-6: archetype-resolution gate. After resolution runs
         # (or silently no-ops via one of the three early-return branches
         # at lines 574, 579, 595 of ``_resolve_character_archetype``),
@@ -693,6 +861,19 @@ class CharGenMixin:
         # three pass / fail paths.
         is_blocked, block_reason = self._gate_archetype_resolution(character, sd, player_id, span)
         if is_blocked:
+            if inference_attempted:
+                # The inference ran and did not produce a shippable pair
+                # (out-of-enum, declined axes, resolver rejection, or call
+                # failure — each already logged at WARNING). Name inference
+                # in the player-facing error so the operator can tell this
+                # apart from the plain missing-axes block.
+                return [
+                    _error_msg(
+                        "Character creation incomplete: archetype inference "
+                        f"failed ({block_reason}). Please re-run chargen.",
+                        code="chargen_archetype_unresolved",
+                    )
+                ]
             return [
                 _error_msg(
                     "Character creation incomplete: archetype resolution "

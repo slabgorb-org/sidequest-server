@@ -157,3 +157,58 @@ def magic_working_span(
     }
     with Span.open(SPAN_MAGIC_WORKING, attributes, tracer_override=_tracer) as span:
         yield span
+
+
+# ---------------------------------------------------------------------------
+# Scene-harness magic_state hydration lie-detector (story 90-8)
+# ---------------------------------------------------------------------------
+
+SPAN_MAGIC_STATE_HYDRATED = "magic.state_hydrated"
+SPAN_ROUTES[SPAN_MAGIC_STATE_HYDRATED] = SpanRoute(
+    event_type="state_transition",
+    component="magic",
+    extract=lambda span: {
+        "field": "magic_state",
+        "op": "state_hydrated",
+        "fixture": (span.attributes or {}).get("fixture", ""),
+        "world_slug": (span.attributes or {}).get("world_slug", ""),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+        "ledger_bars": (span.attributes or {}).get("ledger_bars", 0),
+        "confrontations": (span.attributes or {}).get("confrontations", 0),
+        "control_tier_actors": (span.attributes or {}).get("control_tier_actors", 0),
+    },
+)
+
+
+def magic_state_hydrated_span(
+    *,
+    fixture: str,
+    world_slug: str,
+    genre_slug: str,
+    ledger_bars: int,
+    confrontations: int,
+    control_tier_actors: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a magic.state_hydrated span (story 90-8).
+
+    Lie-detector proving a scene-harness fixture staged real ``MagicState``
+    rather than the narrator improvising one. Replaces 50-22's raw
+    ``watcher_hub.publish_event`` emit so the event reaches the typed
+    GM-panel Subsystems feed via the SPAN_ROUTES translation, not just the
+    dashboard RAW console (the 90-7 Reviewer finding).
+    """
+    attributes: dict[str, Any] = {
+        "field": "magic_state",
+        "op": "state_hydrated",
+        "fixture": fixture,
+        "world_slug": world_slug,
+        "genre_slug": genre_slug,
+        "ledger_bars": ledger_bars,
+        "confrontations": confrontations,
+        "control_tier_actors": control_tier_actors,
+        **attrs,
+    }
+    with Span.open(SPAN_MAGIC_STATE_HYDRATED, attributes, tracer_override=_tracer):
+        pass

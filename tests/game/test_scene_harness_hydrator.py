@@ -3230,6 +3230,10 @@ def _capture_wwn_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict
     ``scene_harness`` calls through, per its line-46 ``import ... as _hub``) so
     every emission is captured. Mirrors the canonical ``_capture_events`` harness
     in tests/server/test_render_mounts.py.
+
+    Post-90-8 this capture is the NEGATIVE half of the lie-detector contract:
+    the hydrator must no longer raw-publish ``wwn.magic_hydrated`` — the
+    routed span (see ``_capture_spans``) replaces it.
     """
     captured: list[tuple[str, dict, dict]] = []
 
@@ -3245,6 +3249,49 @@ def _capture_wwn_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict
 def _wwn_hydrated_events(captured: list[tuple[str, dict, dict]]) -> list[tuple[str, dict, dict]]:
     """Filter a capture list down to ``wwn.magic_hydrated`` emissions."""
     return [e for e in captured if e[0] == "wwn.magic_hydrated"]
+
+
+def _capture_spans(monkeypatch: pytest.MonkeyPatch):
+    """Install a local in-memory tracer behind ``spans.tracer`` (story 90-8).
+
+    ``Span.open`` with no ``tracer_override`` lazily resolves
+    ``sidequest.telemetry.spans.tracer()`` — monkeypatching the module
+    attribute intercepts the default production path, per the Span.open
+    docstring and the tests/integration/conftest.py ``watcher_setup``
+    precedent. Returns the exporter; filter with ``_wwn_hydrated_spans``.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    import sidequest.telemetry.spans as spans_module
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    local_tracer = provider.get_tracer("test-scene-harness-hydrator-90-8")
+    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
+    return exporter
+
+
+def _wwn_hydrated_spans(exporter) -> list:
+    """Filter finished spans down to ``wwn.magic_hydrated``."""
+    return [s for s in exporter.get_finished_spans() if s.name == "wwn.magic_hydrated"]
+
+
+def _typed_payload(span) -> dict:
+    """Recover the typed GM-panel payload the WatcherSpanProcessor would emit
+    for ``span`` — the SPAN_ROUTES extract is the production translation, so
+    asserting through it pins the full span→typed-feed path (story 90-8)."""
+    from sidequest.telemetry.spans import SPAN_ROUTES
+
+    assert span.name in SPAN_ROUTES, (
+        f"{span.name} must be routed in SPAN_ROUTES or the typed Subsystems "
+        f"feed never sees it (the exact gap story 90-8 closes)"
+    )
+    return SPAN_ROUTES[span.name].extract(span)
 
 
 # ── AC-1 / AC-3 / AC-5: _hydrate_character effort hydration ─────────────────
@@ -3524,87 +3571,114 @@ def test_spellcasting_non_string_key_raises(tmp_path: Path) -> None:
 def test_effort_hydration_emits_wwn_magic_hydrated_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-6 (wiring test): seeding an ``effort:`` block emits a single
-    ``wwn.magic_hydrated`` watcher event under component "magic", carrying the
-    sorted effort_sources and has_spellcasting=False. This is the GM-panel lie-
-    detector mandated by CLAUDE.md (OTEL span assertion, not a source-text grep).
+    """AC-6 (wiring test, 90-8 routed-span contract): seeding an ``effort:``
+    block opens a single ``wwn.magic_hydrated`` OTEL span whose ROUTED typed
+    payload carries the sorted effort_sources and has_spellcasting=False.
+    This is the GM-panel lie-detector mandated by CLAUDE.md — and post-90-8
+    it must arrive via SPAN_ROUTES (typed Subsystems feed), not a raw
+    publish_event that only the RAW console can see.
 
-    RED driver: no ``wwn.magic_hydrated`` emitter exists anywhere yet, so the
-    capture list is empty and this fails until 90-7 wires the span.
+    RED driver (90-8): the hydrator still calls ``_hub.publish_event``, so no
+    span is opened and the raw-emit negative assertion fails too.
     """
     _write_magic_fixture(tmp_path, "effort_span", extra_character_yaml=_EFFORT_YAML)
 
-    captured = _capture_wwn_events(monkeypatch)
+    raw_events = _capture_wwn_events(monkeypatch)
+    exporter = _capture_spans(monkeypatch)
     from sidequest.game.scene_harness import hydrate_fixture
 
     hydrate_fixture(name="effort_span", fixtures_dir=tmp_path)
 
-    events = _wwn_hydrated_events(captured)
-    assert len(events) == 1, (
-        f"effort hydration must emit exactly one wwn.magic_hydrated event; got {len(events)}"
+    spans = _wwn_hydrated_spans(exporter)
+    assert len(spans) == 1, (
+        f"effort hydration must open exactly one wwn.magic_hydrated span; got {len(spans)}"
     )
-    _event_type, fields, meta = events[0]
-    assert fields["effort_sources"] == ["high_mage"], (
-        f"span must report the seeded sources (sorted); got {fields.get('effort_sources')!r}"
+    payload = _typed_payload(spans[0])
+    sources = payload["effort_sources"]
+    assert not isinstance(sources, str), (
+        f"effort_sources must reach the typed feed as a JSON array; got {sources!r}"
     )
-    assert fields["has_spellcasting"] is False, (
-        f"effort-only fixture must report has_spellcasting=False; got {fields.get('has_spellcasting')!r}"
+    assert list(sources) == ["high_mage"], (
+        f"span must report the seeded sources (sorted); got {sources!r}"
     )
-    assert fields["actor"] == "Practitioner", (
-        f"span must name the actor; got {fields.get('actor')!r}"
+    assert payload["has_spellcasting"] is False, (
+        f"effort-only fixture must report has_spellcasting=False; got "
+        f"{payload.get('has_spellcasting')!r}"
     )
-    assert meta["component"] == "magic", f"span must be component 'magic'; got {meta['component']!r}"
+    assert payload["actor"] == "Practitioner", (
+        f"span must name the actor; got {payload.get('actor')!r}"
+    )
+    assert _wwn_hydrated_events(raw_events) == [], (
+        "the raw publish_event emit must be RETIRED by the routed span — a "
+        "double emit puts one raw + one typed event on the dashboard per "
+        f"hydration; got {_wwn_hydrated_events(raw_events)!r}"
+    )
 
 
 def test_spellcasting_hydration_emits_wwn_magic_hydrated_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-6: the lie-detector covers ALL WWN crunch, not just effort — a
-    spellcasting-only fixture (the #787 path) must also emit
-    ``wwn.magic_hydrated``, reporting has_spellcasting=True with the prepared
-    count and casts_per_day, and an empty effort_sources list.
+    """AC-6 (90-8 routed-span contract): the lie-detector covers ALL WWN
+    crunch, not just effort — a spellcasting-only fixture (the #787 path)
+    must also open ``wwn.magic_hydrated``, whose typed payload reports
+    has_spellcasting=True with the prepared count and casts_per_day, and an
+    EMPTY effort_sources array (the boundary shape most likely to be
+    silently dropped by OTEL attribute encoding).
     """
     _write_magic_fixture(tmp_path, "sc_span", extra_character_yaml=_SPELLCASTING_YAML)
 
-    captured = _capture_wwn_events(monkeypatch)
+    exporter = _capture_spans(monkeypatch)
     from sidequest.game.scene_harness import hydrate_fixture
 
     hydrate_fixture(name="sc_span", fixtures_dir=tmp_path)
 
-    events = _wwn_hydrated_events(captured)
-    assert len(events) == 1, (
-        f"spellcasting hydration must emit one wwn.magic_hydrated event; got {len(events)}"
+    spans = _wwn_hydrated_spans(exporter)
+    assert len(spans) == 1, (
+        f"spellcasting hydration must open one wwn.magic_hydrated span; got {len(spans)}"
     )
-    _event_type, fields, _meta = events[0]
-    assert fields["has_spellcasting"] is True, (
-        f"a spellcasting fixture must report has_spellcasting=True; got {fields.get('has_spellcasting')!r}"
+    payload = _typed_payload(spans[0])
+    assert payload["has_spellcasting"] is True, (
+        f"a spellcasting fixture must report has_spellcasting=True; got "
+        f"{payload.get('has_spellcasting')!r}"
     )
-    assert fields["prepared"] == 2, f"span must report prepared count; got {fields.get('prepared')!r}"
-    assert fields["casts_per_day"] == 2, (
-        f"span must report casts_per_day; got {fields.get('casts_per_day')!r}"
+    assert payload["prepared"] == 2, (
+        f"span must report prepared count; got {payload.get('prepared')!r}"
     )
-    assert fields["effort_sources"] == [], (
-        f"a spellcasting-only fixture seeds no effort; got {fields.get('effort_sources')!r}"
+    assert payload["casts_per_day"] == 2, (
+        f"span must report casts_per_day; got {payload.get('casts_per_day')!r}"
+    )
+    sources = payload["effort_sources"]
+    assert not isinstance(sources, str), (
+        f"effort_sources must be a JSON array even when empty; got {sources!r}"
+    )
+    assert list(sources) == [], (
+        f"a spellcasting-only fixture seeds no effort; got {sources!r}"
     )
 
 
 def test_non_caster_emits_no_wwn_magic_hydrated_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-6 (no-noise guard): a plain non-caster fixture (no effort, no
-    spellcasting) must emit NO ``wwn.magic_hydrated`` event — the GM panel must
-    not light up for the canonical dial fixtures.
+    """AC-6 (no-noise guard, 90-8 routed-span contract): a plain non-caster
+    fixture (no effort, no spellcasting) must open NO ``wwn.magic_hydrated``
+    span AND raw-publish nothing — the GM panel must not light up for the
+    canonical dial fixtures on either channel.
     """
     _write_magic_fixture(tmp_path, "plain_pc", extra_character_yaml="")
 
-    captured = _capture_wwn_events(monkeypatch)
+    raw_events = _capture_wwn_events(monkeypatch)
+    exporter = _capture_spans(monkeypatch)
     from sidequest.game.scene_harness import hydrate_fixture
 
     hydrate_fixture(name="plain_pc", fixtures_dir=tmp_path)
 
-    assert _wwn_hydrated_events(captured) == [], (
-        f"a non-caster fixture must not emit wwn.magic_hydrated; got "
-        f"{_wwn_hydrated_events(captured)!r}"
+    assert _wwn_hydrated_spans(exporter) == [], (
+        f"a non-caster fixture must not open wwn.magic_hydrated; got "
+        f"{[s.name for s in _wwn_hydrated_spans(exporter)]!r}"
+    )
+    assert _wwn_hydrated_events(raw_events) == [], (
+        f"a non-caster fixture must not raw-publish wwn.magic_hydrated; got "
+        f"{_wwn_hydrated_events(raw_events)!r}"
     )
 
 
@@ -3625,7 +3699,7 @@ def test_canonical_wwn_fixture_hydrates_effort_spellcasting_and_hp_depletion(
     drives the same CANONICAL_FIXTURES_DIR path the harness endpoint uses, so a
     schema drift in the committed fixture fails here, not silently in a playtest.
     """
-    captured = _capture_wwn_events(monkeypatch)
+    exporter = _capture_spans(monkeypatch)
     from sidequest.game.scene_harness import hydrate_fixture
 
     snapshot = hydrate_fixture(
@@ -3656,13 +3730,14 @@ def test_canonical_wwn_fixture_hydrates_effort_spellcasting_and_hp_depletion(
     assert {a.side for a in enc.actors} == {"player", "opponent"}, (
         f"both sides must seat for the cast defender lookup; got {[a.side for a in enc.actors]!r}"
     )
-    # Lie-detector span fired for the seeded crunch.
-    events = _wwn_hydrated_events(captured)
-    assert len(events) == 1, (
-        f"the WWN fixture must emit one wwn.magic_hydrated event; got {len(events)}"
+    # Lie-detector span fired for the seeded crunch (90-8: routed span, so
+    # the typed Subsystems feed — not just the RAW console — sees it).
+    spans = _wwn_hydrated_spans(exporter)
+    assert len(spans) == 1, (
+        f"the WWN fixture must open one wwn.magic_hydrated span; got {len(spans)}"
     )
-    _event_type, fields, _meta = events[0]
-    assert fields["effort_sources"] == ["channeler"], (
-        f"span must report the seeded effort source; got {fields.get('effort_sources')!r}"
+    payload = _typed_payload(spans[0])
+    assert list(payload["effort_sources"]) == ["channeler"], (
+        f"span must report the seeded effort source; got {payload.get('effort_sources')!r}"
     )
-    assert fields["has_spellcasting"] is True
+    assert payload["has_spellcasting"] is True

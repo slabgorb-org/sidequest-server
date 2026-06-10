@@ -21,6 +21,7 @@ from sidequest.game.monster_manual import EntryState, ManualEncounter, ManualNpc
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.server.dispatch import monster_manual_inject
+from sidequest.server.dispatch.pregen import EncounterSeedError
 
 
 def _snapshot() -> GameSnapshot:
@@ -166,6 +167,50 @@ def test_ensure_loaded_swallows_seed_errors(
     # Seed crashed; helper continues with whatever was on disk (empty Manual).
     assert loaded is not None
     assert sd.monster_manual is loaded
+
+
+def test_ensure_loaded_reraises_encounter_seed_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED (story 90-5, item 6): a ruleset-module pack with no bestiary makes
+    ``seed_manual`` raise ``EncounterSeedError`` — and ``ensure_loaded`` must let
+    it PROPAGATE, crashing the session bind loud, rather than swallowing it into a
+    warning and binding an empty Monster Manual pool.
+
+    Keith's policy decision (2026-06-10): strict fail-loud. The broad
+    ``except Exception`` at ``monster_manual_inject.py:~95`` currently catches
+    ``EncounterSeedError`` (it subclasses ``RuntimeError``), so a missing-bestiary
+    misconfiguration degrades to a silently-empty pool at runtime — behaviorally
+    the 87-4 bug, with better logs. This test fails on current ``develop`` (the
+    error is swallowed and ``ensure_loaded`` returns the empty Manual); it goes
+    green once the except special-cases ``EncounterSeedError`` to re-raise.
+
+    Contrast ``test_ensure_loaded_swallows_seed_errors`` above: a GENERIC
+    ``RuntimeError`` (a transient encountergen outage) still degrades gracefully
+    per ADR-006 — only the typed contract violation is fatal."""
+
+    class _Pack:
+        source_dir = tmp_path / "packs" / "heavy_metal"
+
+    sd = _FakeSessionData(genre_slug="heavy_metal", world_slug="evropi", genre_pack=_Pack())
+
+    def _raise_seed_error(**_kwargs: object) -> None:
+        raise EncounterSeedError(
+            "encounter seeding failed for ruleset-module pack 'heavy_metal' "
+            "(ruleset=wwn): bestiary.yaml (REQUIRED for ruleset-module packs) missing"
+        )
+
+    monkeypatch.setattr(
+        "sidequest.server.dispatch.pregen.seed_manual",
+        _raise_seed_error,
+    )
+    with (
+        mock.patch(
+            "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+        ),
+        pytest.raises(EncounterSeedError),
+    ):
+        monster_manual_inject.ensure_loaded(sd)
 
 
 # ---------------------------------------------------------------------------

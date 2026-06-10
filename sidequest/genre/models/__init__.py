@@ -53,6 +53,7 @@ from sidequest.genre.models.audio import (
 )
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig, AxisDefinition, AxisPreset
+from sidequest.genre.models.bestiary import Bestiary, BestiaryEntry
 from sidequest.genre.models.character import (
     BackstoryTables,
     CharCreationChoice,
@@ -262,6 +263,9 @@ __all__ = [
     "AxesConfig",
     "AxisDefinition",
     "AxisPreset",
+    # bestiary (ruleset-module pack combat-layer stat blocks — story 90-1)
+    "Bestiary",
+    "BestiaryEntry",
     # chassis (rig framework — slice scope)
     "BondTier",
     "ChassisClass",

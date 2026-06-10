@@ -1,9 +1,17 @@
 """Encounter generator CLI.
 
-Generates enemy stat blocks from genre pack data. When ``--world`` is provided
-and the world has a ``creatures.yaml`` (now nested as ``regions.{region}.creatures``
-post-2026-05-10 fold), samples creatures by tier from the bestiary. Otherwise
-generates humanoid NPCs from genre rules.
+Generates enemy stat blocks from genre pack data. Routing by the pack's bound
+ruleset:
+
+* **Ruleset-module packs** (``ruleset: wwn|cwn|swn|awn``) drop ``allowed_classes``,
+  so encountergen samples the content-authored ``bestiary.yaml`` (resolved
+  world-over-genre via ``GenrePack.effective_bestiary``) for the combat layer and
+  composes the narrative layers (OCEAN, visual prompt) on top. A ruleset-module
+  pack with no bestiary at either tier fails LOUD (story 90-1; No Silent Fallbacks).
+* **Native packs:** when ``--world`` is provided and the world has a
+  ``creatures.yaml`` (now nested as ``regions.{region}.creatures`` post-2026-05-10
+  fold), samples creatures by tier from it. Otherwise generates humanoid NPCs from
+  genre ``allowed_classes``.
 
 Ported from ``crates/sidequest-encountergen/src/main.rs``.
 

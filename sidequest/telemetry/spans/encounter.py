@@ -161,6 +161,17 @@ SPAN_ROUTES[SPAN_PARTICIPANT_LEFT] = SpanRoute(
         "reason": (span.attributes or {}).get("reason", ""),
     },
 )
+SPAN_CONFRONTATION_OPPONENT_DISENGAGED = "confrontation.opponent_disengaged"
+SPAN_ROUTES[SPAN_CONFRONTATION_OPPONENT_DISENGAGED] = SpanRoute(
+    event_type="state_transition",
+    component="confrontation",
+    extract=lambda span: {
+        "field": "confrontation.opponent_disengaged",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "name": (span.attributes or {}).get("name", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
 SPAN_ENCOUNTER_EMPTY_ACTOR_LIST = "encounter.empty_actor_list"
 SPAN_ROUTES[SPAN_ENCOUNTER_EMPTY_ACTOR_LIST] = SpanRoute(
     event_type="state_transition",
@@ -839,6 +850,35 @@ def participant_left_span(
             "name": name,
             "side": side,
             "reason": reason,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def confrontation_opponent_disengaged_span(
+    *,
+    encounter_type: str,
+    name: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """ADR-116 §4 (social path) — the narrator signalled that a seated opponent
+    LEFT the confrontation (``npcs_present`` mention ``disengaged=True``). Emitted
+    where the engine flips that opponent ``withdrawn``, so the GM panel sees the
+    confrontation is ending because the Other departed — not because a dial hit
+    threshold and not because the narrator improvised. The end-on-no-Other sweep
+    then resolves the encounter (sq-playtest 2026-06-10 long_foundry zombie
+    negotiation)."""
+    with Span.open(
+        SPAN_CONFRONTATION_OPPONENT_DISENGAGED,
+        {
+            "encounter_type": encounter_type,
+            "name": name,
+            "turn_number": int(turn_number),
             **attrs,
         },
         tracer_override=_tracer,

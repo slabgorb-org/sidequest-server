@@ -13,10 +13,11 @@ Pins the post-rewrite contract:
   narrator-facing; the silent fallback at ``orchestrator.py:979,1003``
   (``patch.get("npcs_present", patch.get("npcs_met", []))``) is removed.
 
-* **AC-2.** ``len(NARRATOR_OUTPUT_ONLY) <= 14600`` codepoints (~2,150 tok under
-  Anthropic's chars/4 rule-of-thumb). 61-12 compacted to 13,156; two later
-  load-bearing rules (anti-fabrication + ``is_creature``) lifted it to 14,416,
-  so the ceiling was raised 13,800 → 14,600 (2026-06-05) rather than re-compact.
+* **AC-2.** ``len(NARRATOR_OUTPUT_ONLY) <= 14900`` codepoints (~2,200 tok under
+  Anthropic's chars/4 rule-of-thumb). 61-12 compacted to 13,156; three later
+  load-bearing rules (anti-fabrication + ``is_creature`` + ``disengaged``) lifted
+  it to 14,813, so the ceiling was raised in steps 13,800 → 14,600 (2026-06-05) →
+  14,900 (2026-06-10) rather than re-compact.
 
 * **AC-3.** The three CRITICAL MAGIC banners — ``CRITICAL MAGIC EFFECT RULE``
   (§1), ``CRITICAL MAGIC RULE`` (§3 plugin-aware), ``CRITICAL MAGIC NEGATIVE
@@ -260,21 +261,27 @@ def test_output_only_prose_under_byte_budget() -> None:
     """``NARRATOR_OUTPUT_ONLY`` stays within the prompt token ceiling.
 
     Story 61-12 compacted the file to 13,156 (from a pre-compaction
-    24,784). Two later commits each appended a load-bearing narrator
-    rule — the ANTI-FABRICATION guard (playtest #431, +557) and the
-    ``is_creature`` routing field (npc #74, +625) — which pushed it to
-    14,416. Both rules are intentional and preserved verbatim, so the
-    ceiling was lifted 13,800 → 14,600 (decision 2026-06-05) rather than
+    24,784). Three later commits each appended a load-bearing narrator
+    rule — the ANTI-FABRICATION guard (playtest #431, +557), the
+    ``is_creature`` routing field (npc #74, +625), and the ``disengaged``
+    opponent-departure field (sq-playtest 2026-06-10 long_foundry zombie
+    negotiation, +~400 after compaction) — which pushed it to 14,813.
+    Each rule is intentional and kept as terse as the instruction allows,
+    so the ceiling was lifted in deliberate steps (13,800 → 14,600 on
+    2026-06-05, then 14,600 → 14,900 on 2026-06-10) rather than
     re-compacting prose at the risk of narrator-quality loss. The
+    ``disengaged`` field is the narrator-facing half of the ADR-116 §4
+    social end-on-no-Other fix — without it the narrator never emits the
+    departure signal and the engine half is dead in production. The
     prompt is primacy-cached (ADR-112), so the marginal per-turn cost of
     the extra tokens is amortized. The budget still guards against
-    unbounded growth — a future addition that crosses 14,600 must either
+    unbounded growth — a future addition that crosses 14,900 must either
     compact or make a fresh ceiling decision.
     """
     actual = len(NARRATOR_OUTPUT_ONLY)
-    assert actual <= 14_600, (
+    assert actual <= 14_900, (
         f"NARRATOR_OUTPUT_ONLY is {actual} codepoints, exceeds the "
-        f"14,600 budget (~ 2,150 tok ceiling). The narrator prompt grew "
+        f"14,900 budget (~ 2,200 tok ceiling). The narrator prompt grew "
         f"past its growth-discipline ceiling — compact the prose "
         f"(preservation-by-rewrite, keep every rule) or make a fresh "
         f"ceiling decision. Pre-61-12 baseline was 24,784."

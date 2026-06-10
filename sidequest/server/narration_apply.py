@@ -2070,6 +2070,66 @@ def _engagement_is_hostile_context(snapshot: GameSnapshot, mention: object, npc:
     )
 
 
+def _apply_opponent_disengagements(
+    *,
+    snapshot: GameSnapshot,
+    mentions: list[Any],
+    turn_num: int,
+) -> None:
+    """ADR-116 §4 (social path) — withdraw a seated opponent the narrator marked
+    ``disengaged``.
+
+    The narrator signals a departed Other via an ``npcs_present`` mention with
+    ``side="opponent"`` and ``disengaged=True`` (sq-playtest 2026-06-10
+    long_foundry zombie negotiation: the Other walked back into the smoke but the
+    Cold Negotiation stayed active with beats offered and plain Enter locked).
+    For each such mention, flip the matching ``side="opponent"`` actor
+    ``withdrawn`` so the end-on-no-Other sweep (``_resolve_if_no_opponent_remains``,
+    run later this same turn) resolves the encounter — instead of trapping the
+    player behind a contested DC Withdraw roll.
+
+    Grounded signal only — never prose inference (No Silent Fallbacks): absence of
+    the flag is never read as departure, and a ``disengaged`` flag on a non-
+    opponent mention withdraws nothing (the ADR-116 asymmetry — a player
+    disengaging is the player-side yield path). Name match reuses the comma-
+    inversion-aware ``_npc_name_match_keys`` so a seated actor is found whether the
+    mention is natural- or inverted-order. Emits
+    ``confrontation.opponent_disengaged`` per withdrawn opponent so the GM panel
+    can confirm the ENGINE — not improvisation — ended the scene.
+    """
+    enc = getattr(snapshot, "encounter", None)
+    if enc is None or enc.resolved:
+        return
+    from sidequest.telemetry.spans import confrontation_opponent_disengaged_span
+
+    for mention in mentions:
+        if (getattr(mention, "side", "") or "").strip().lower() != "opponent":
+            continue
+        if not getattr(mention, "disengaged", False):
+            continue
+        name_key = mention.name.casefold()
+        mention_keys = _npc_name_match_keys(mention.name)
+        for actor in enc.actors:
+            if actor.side != "opponent" or actor.withdrawn:
+                continue
+            if actor.name.casefold() == name_key or (
+                _npc_name_match_keys(actor.name) & mention_keys
+            ):
+                actor.withdrawn = True
+                with confrontation_opponent_disengaged_span(
+                    encounter_type=enc.encounter_type,
+                    name=actor.name,
+                    turn_number=turn_num,
+                ):
+                    logger.info(
+                        "confrontation.opponent_disengaged name=%r encounter_type=%s turn=%d",
+                        actor.name,
+                        enc.encounter_type,
+                        turn_num,
+                    )
+                break
+
+
 def _apply_npc_mentions(
     *,
     snapshot: GameSnapshot,
@@ -4590,6 +4650,17 @@ def _apply_narration_result_to_snapshot(
             pack=pack,
             world=world,
             monster_manual=monster_manual,
+        )
+
+        # ADR-116 §4 (social path) — a narrator-signalled opponent departure
+        # (``disengaged=True``) withdraws the matching opponent actor so the
+        # end-on-no-Other sweep below resolves the confrontation instead of
+        # zombie-ing it (sq-playtest 2026-06-10 long_foundry). Runs after the
+        # mention apply so the actor roster reflects this turn before the sweep.
+        _apply_opponent_disengagements(
+            snapshot=snapshot,
+            mentions=list(result.npcs_present),
+            turn_num=turn_num,
         )
 
         # Story 45-53: detect known recurring NPCs named in prose but missing

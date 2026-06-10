@@ -50,6 +50,11 @@ from sidequest.server.narration_apply import (
 
 logger = logging.getLogger(__name__)
 
+# Review S1: upper bound on the LLM-copied spell reference before it touches
+# the normalizer/catalog scan. Generous — the longest live spell display name
+# is well under 64 chars.
+_MAX_SPELL_REF_CHARS = 256
+
 
 def _norm_spell_name(value: str) -> str:
     """Fold a typed spell reference for catalog matching: casefold and
@@ -122,6 +127,22 @@ async def _run_wn_freeplay_cast(
             ),
             actor=actor,
         )
+    # Review S1 (CWE-400 hardening): the spell reference is LLM-copied from
+    # player free text — cap it before the regex normalize + catalog scan so
+    # an adversarially long value cannot tax the turn. No real spell id or
+    # display name approaches this length.
+    if len(spell_ref) > _MAX_SPELL_REF_CHARS:
+        return _failed_premise(
+            dispatch,
+            error="spell_ref_too_long",
+            payload=(
+                f"{actor} attempts a working, but the invocation is not a spell "
+                "this world recognizes — a failed premise. Nothing was cast and "
+                "nothing was spent."
+            ),
+            actor=actor,
+            spell_ref_chars=len(spell_ref),
+        )
 
     caster_core = snapshot.find_creature_core(actor)
     if caster_core is None or caster_core.spellcasting is None:
@@ -160,13 +181,22 @@ async def _run_wn_freeplay_cast(
         None,
     )
     if spell is None:
+        # Review S3: do NOT echo the player-typed spell reference into the
+        # narrator directive — the payload lands verbatim in the narrator
+        # prompt (orchestrator narrator_directives section) and would bypass
+        # the ADR-047 sanitization lane. The identity rides in ``data`` only,
+        # which never reaches the prompt (orchestrator forwards directives,
+        # not data) — kept there for forensics/OTEL alongside available_ids
+        # (same server-side audience as the beat path's
+        # ``wwn.cast_spell_unknown`` watcher payload).
         return _failed_premise(
             dispatch,
             error="unknown_spell",
             payload=(
-                f"{actor} invokes {spell_ref!r}, but no such spell exists in "
-                "this world's catalog — a failed premise. Nothing was cast and "
-                "nothing was spent; narrate the miscast honestly."
+                f"{actor} invokes a spell that does not exist in this world's "
+                "catalog — a failed premise. Nothing was cast and nothing was "
+                "spent; narrate the miscast honestly, without inventing a "
+                "working."
             ),
             actor=actor,
             spell=spell_ref,

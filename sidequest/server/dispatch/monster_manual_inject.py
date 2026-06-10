@@ -83,7 +83,7 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
     if manual.needs_seeding() and source_dir is not None:
         # Late import — pregen pulls the encountergen CLI, which is
         # heavy enough to keep out of session-handler import paths.
-        from sidequest.server.dispatch.pregen import seed_manual
+        from sidequest.server.dispatch.pregen import EncounterSeedError, seed_manual
 
         try:
             seed_manual(
@@ -92,11 +92,17 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
                 world=sd.world_slug or "",
                 manual=manual,
             )
+        except EncounterSeedError:
+            # Story 90-5 (item 6, Keith policy 2026-06-10): a ruleset-module
+            # pack with no bestiary is a fatal authoring/config error, not a
+            # transient outage — fail LOUD. Swallowing it here would bind a
+            # silently-empty Monster Manual pool, behaviorally the 87-4 bug.
+            # Re-raise so the session bind crashes instead of running blind.
+            raise
         except Exception as exc:  # noqa: BLE001
-            # Don't crash the turn on a pregen failure — the narrator
-            # can still run with whatever the Manual already had on disk.
-            # OTEL fires below regardless so the GM panel sees the seed
-            # attempt and its outcome.
+            # Don't crash the turn on a *transient* pregen failure (e.g. the
+            # encountergen CLI is briefly unavailable) — the narrator can still
+            # run with whatever the Manual already had on disk (ADR-006).
             logger.warning(
                 "monster_manual.seed_failed genre=%s world=%s error=%s",
                 sd.genre_slug,

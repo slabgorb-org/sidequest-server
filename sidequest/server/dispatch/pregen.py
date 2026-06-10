@@ -206,9 +206,14 @@ def seed_manual(
     Examines the genre pack's cultures and generates 3 NPCs per culture for
     **all** of the world's declared cultures (no cap — story 72-11; a world
     declaring N cultures seeds N × 3 NPCs). Generates 2 encounter blocks at
-    tier 1 and tier 2. When ``world`` is set, encountergen reads
-    ``worlds/{world}/creatures.yaml`` for creature definitions; otherwise
-    falls back to humanoid NPCs from rules.yaml.
+    tier 1 and tier 2 via encountergen, whose source depends on the bound
+    ruleset: a ruleset-module pack (``wwn|cwn|swn|awn``) samples its authored
+    ``bestiary.yaml`` and **fails loud** (``EncounterSeedError``) if seeding
+    produces nothing; a native pack reads ``worlds/{world}/creatures.yaml`` (or
+    falls back to humanoid ``allowed_classes`` NPCs) and keeps the legacy
+    warning-only skip. Either way the ``pregen.seed_manual`` span fires with the
+    outcome — including ``seed_error`` on a fail-loud — before the raise
+    propagates (story 90-5).
     """
     rng = rng if rng is not None else random.Random()
 
@@ -318,6 +323,12 @@ def seed_manual(
     # the no-culture fallback path is the legacy combat behavior.
     combat_encounters = getattr(getattr(pack, "rules", None), "combat_encounters", True)
     ruleset = getattr(getattr(pack, "rules", None), "ruleset", "native") if pack else "native"
+    # Story 90-5 (item 3): a ruleset-module seeding failure must still be
+    # OTEL-visible. Capture the failure message and BREAK instead of raising
+    # mid-loop — the ``pregen.seed_manual`` span below fires with this
+    # ``seed_error`` attribute BEFORE the raise, so the GM panel records the
+    # seeding-failure decision (the old raise-in-loop emitted no seeding span).
+    seed_error: str | None = None
     if combat_encounters:
         for tier in ENCOUNTER_TIERS:
             data = _generate_encounter(
@@ -335,13 +346,14 @@ def seed_manual(
                 # fails LOUD — the old warning-only skip shipped silently-empty
                 # encounter pools (No Silent Fallbacks). Native packs keep the
                 # legacy warning-only behavior.
-                raise EncounterSeedError(
+                seed_error = (
                     f"encounter seeding failed for ruleset-module pack "
                     f"'{genre}' (ruleset={ruleset}, world={world!r}, tier={tier}): "
                     "encountergen produced no output — check the pack's "
                     "bestiary.yaml (REQUIRED for ruleset-module packs) and the "
                     "pregen.encountergen_failed log line above"
                 )
+                break
     else:
         logger.info(
             "pregen.encounters_skipped (genre=%s, world=%s, reason=combat_encounters=false)",
@@ -387,8 +399,18 @@ def seed_manual(
             # effective archetype pool holds only named_individual templates
             # (GM-panel proof the skip gate fired instead of 9× WARN spam).
             "namegen_skipped": no_spawnable_archetypes,
+            # Story 90-5 (item 3): empty string on success, the loud failure
+            # message on a ruleset-module seeding failure — the GM-panel signal
+            # that distinguishes a healthy seed from a fail-loud one.
+            "seed_error": seed_error or "",
         },
     ):
         pass
+
+    # Story 90-5 (item 3): raise AFTER the span so the seeding-failure decision
+    # is recorded, but BEFORE ``save()`` so a failed seed never persists a
+    # silently-empty pool to disk (No Silent Fallbacks).
+    if seed_error is not None:
+        raise EncounterSeedError(seed_error)
 
     manual.save()

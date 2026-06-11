@@ -212,3 +212,91 @@ def test_chosen_ids_none_when_flow_has_no_stock_step() -> None:
     _walk_ids(builder, {})
     assert builder.chosen_stock_id is None
     assert builder.chosen_saint_id is None
+
+
+# ---------------------------------------------------------------------------
+# Review rework (103-2 review finding [HIGH]): back-navigation must be
+# branch-aware. go_back/revert previously targeted scene_index =
+# len(_results) — an invariant the requires_stock skip-walk breaks. Backing
+# up after a skip landed the player on the WRONG stock's branch scene
+# (a Sleeper shown the Saint spring), poisoning chosen_saint_id into a
+# loud confirm-time crash. Back-nav must return to the scene actually
+# ANSWERED, never to a skipped scene.
+# ---------------------------------------------------------------------------
+
+
+def _scenes_with_trailing_shared() -> list[CharCreationScene]:
+    """The discriminating shape: a skipped branch scene sits BETWEEN the
+    answered branch scene and the shared tail, so len(_results) no longer
+    equals the answered scene's index."""
+    return [
+        *_stock_scenes()[:4],  # origins, stock, the_cold_rack(sleeper), the_spring(harbor_seal)
+        CharCreationScene(
+            id="artifact",
+            title="The Thing You Found",
+            narration="One piece of the old world.",
+            choices=[_choice("Mystery Compass", item_hint="mystery_compass")],
+        ),
+        CharCreationScene(
+            id="confirmation",
+            title="The Wasteland Awaits",
+            narration="It is decided.",
+            choices=[],
+        ),
+    ]
+
+
+def _advance_to_artifact_as_harbor_seal(builder: CharacterBuilder) -> None:
+    """The discriminating walk: the SKIPPED scene (the_cold_rack, index 2)
+    precedes the ANSWERED branch scene (the_spring, index 3), so the
+    answered-scene count diverges from scene indices from the_spring on."""
+    builder.apply_response(ChoiceInput(index=0))  # origins
+    builder.apply_response(ChoiceInput(index=1))  # stock -> harbor_seal
+    # the_cold_rack (requires sleeper) skipped; the_spring presented:
+    assert builder.current_scene().id == "the_spring"
+    builder.apply_response(ChoiceInput(index=1))  # refuse the water
+    assert builder.current_scene().id == "artifact"
+
+
+def test_go_back_after_skip_returns_to_answered_scene() -> None:
+    """Harbor-seal player at the artifact scene goes Back: the previous
+    ANSWERED scene is the_spring (index 3). The review's [HIGH] bug: go_back
+    targeted len(_results)=2 — the_cold_rack, the SLEEPER-only branch —
+    offering this player implants their stock cannot take."""
+    builder = _builder(_scenes_with_trailing_shared())
+    _advance_to_artifact_as_harbor_seal(builder)
+    builder.go_back()
+    assert builder.current_scene().id == "the_spring", (
+        "go_back must return to the scene actually answered, never a "
+        f"requires_stock-skipped scene; got {builder.current_scene().id!r}"
+    )
+
+
+def test_revert_after_skip_returns_to_answered_scene() -> None:
+    """Same invariant through the revert() path (distinct error contract)."""
+    builder = _builder(_scenes_with_trailing_shared())
+    _advance_to_artifact_as_harbor_seal(builder)
+    builder.revert()
+    assert builder.current_scene().id == "the_spring"
+
+
+def test_go_back_then_forward_keeps_branch_coherent() -> None:
+    """After backing up across a skip and re-answering, the walk must skip
+    the foreign branch again — no residue from the popped result."""
+    builder = _builder(_scenes_with_trailing_shared())
+    _advance_to_artifact_as_harbor_seal(builder)
+    builder.go_back()
+    builder.apply_response(ChoiceInput(index=0))  # drink from Herman's spring
+    assert builder.current_scene().id == "artifact"
+    assert builder.chosen_stock_id == "harbor_seal"
+    assert builder.chosen_saint_id == "herman_of_the_acushnet"
+
+
+def test_double_go_back_across_skip_reaches_stock_scene() -> None:
+    """Backing up twice from the artifact scene must land on the stock
+    scene (index 1), stepping over the same skipped scene both times."""
+    builder = _builder(_scenes_with_trailing_shared())
+    _advance_to_artifact_as_harbor_seal(builder)
+    builder.go_back()
+    builder.go_back()
+    assert builder.current_scene().id == "stock"

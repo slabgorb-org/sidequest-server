@@ -373,3 +373,45 @@ class TestStockAppliedSpan:
         from sidequest.telemetry.spans._core import SPAN_ROUTES
 
         assert "awn.stock.applied" in SPAN_ROUTES
+
+
+# ---------------------------------------------------------------------------
+# Review rework (103-2 review finding [MEDIUM][EDGE]): trait application
+# must be atomic — validate every attr key BEFORE mutating any. The
+# per-attr-during-mutation check left a partially-mutated character when a
+# later key was unknown (a corrupting trap for any non-confirm caller).
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicAttrApplication:
+    def test_unknown_attr_leaves_stats_untouched(self) -> None:
+        """attr_mods {STR: 1, ZZZ: 1}: the loud ValueError must fire with
+        ZERO prior mutation — STR stays 10, not 11."""
+        registry = StockRegistry(
+            stocks=[
+                StockDef(
+                    id="bad_attr_stock",
+                    name="Bad Attr",
+                    attr_mods={"STR": 1, "ZZZ": 1},
+                )
+            ]
+        )
+        character = _character()
+        state = MutationState()
+        with pytest.raises(ValueError) as exc_info:
+            apply_stock(
+                character,
+                state,
+                _catalog(),
+                registry,
+                actor="Pup",
+                stock_id="bad_attr_stock",
+                session_id="stock-apply-test",
+            )
+        message = str(exc_info.value)
+        assert "bad_attr_stock" in message
+        assert "ZZZ" in message
+        assert character.stats == {"STR": 10, "DEX": 9, "WIS": 8}, (
+            "partial attr application — validation must complete before any mutation"
+        )
+        assert "Pup" not in state.characters, "no state may register on a failed apply"

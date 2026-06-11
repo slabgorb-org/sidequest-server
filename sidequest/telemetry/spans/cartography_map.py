@@ -46,6 +46,57 @@ SPAN_ROUTES[SPAN_CARTOGRAPHY_MAP_EMITTED] = SpanRoute(
 )
 
 
+SPAN_CARTOGRAPHY_CLUSTER_DETECTED = "sidequest.cartography.cluster_detected"
+
+
+SPAN_ROUTES[SPAN_CARTOGRAPHY_CLUSTER_DETECTED] = SpanRoute(
+    event_type="state_transition",
+    component="region_state",
+    extract=lambda span: {
+        "field": "is_cluster",
+        "op": "cluster_detected",
+        "world": (span.attributes or {}).get("world", ""),
+        "signal_source": (span.attributes or {}).get("signal_source", ""),
+        "system_count": (span.attributes or {}).get("system_count", 0),
+        "is_cluster": (span.attributes or {}).get("is_cluster", False),
+    },
+)
+
+
+@contextmanager
+def cluster_detected_span(
+    *,
+    world: str,
+    signal_source: str,
+    system_count: int,
+    is_cluster: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Single-vs-cluster decision for a space-opera world (Story 104-1 / M-A).
+
+    The GM-panel lie-detector for the multi-system flag: it records ``world``,
+    the ``signal_source`` that drove the count (``sector_graph`` /
+    ``systems_dir`` / ``none``), the resolved ``system_count``, and the
+    ``is_cluster`` result (``system_count > 1``). Fires on EVERY decision —
+    cluster and single alike — so a misclassification is visible rather than a
+    silent skip on the common single-system case.
+    """
+    attributes: dict[str, Any] = {
+        "world": world,
+        "signal_source": signal_source,
+        "system_count": system_count,
+        "is_cluster": is_cluster,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_CARTOGRAPHY_CLUSTER_DETECTED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 @contextmanager
 def cartography_map_emitted_span(
     *,
@@ -82,6 +133,8 @@ def cartography_map_emitted_span(
 
 
 __all__ = [
+    "SPAN_CARTOGRAPHY_CLUSTER_DETECTED",
     "SPAN_CARTOGRAPHY_MAP_EMITTED",
     "cartography_map_emitted_span",
+    "cluster_detected_span",
 ]

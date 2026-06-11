@@ -135,6 +135,14 @@ class World(BaseModel):
     lore: WorldLore
     legends: list[Legend] = Field(default_factory=list)
     cartography: CartographyConfig
+    is_cluster: bool = False
+    """Multi-system cluster flag (Story 104-1 / M-A). Loader-computed at load
+    time via ``detect_is_cluster(world_path)`` — True iff the world declares more
+    than one system (sector-graph ``system`` nodes, else ``systems/`` entries,
+    else a definite single). The in-game MAP_UPDATE payload reads this so the UI
+    (M-B) can retire its ``regionCount > 1`` heuristic. Defaults False: a World
+    is its own single system until detection proves otherwise (never None /
+    "unknown" — spec AC4)."""
     cultures: list[Culture] = Field(default_factory=list)
     tropes: list[TropeDefinition] = Field(default_factory=list)
     archetypes: list[NpcArchetype] = Field(default_factory=list)

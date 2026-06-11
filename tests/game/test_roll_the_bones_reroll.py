@@ -81,6 +81,16 @@ def _scenes() -> list[CharCreationScene]:
                 ),
             ],
         ),
+        # Review rework: rerolls are only legal while the bones scene is
+        # current, so the fixture carries the gated scene like production
+        # packs do (the original two-scene fixture rerolled from the name
+        # scene — now correctly rejected).
+        CharCreationScene(
+            id="the_bones",
+            title="The Bones",
+            narration="Six casts, in order.",
+            requires_stat_generation="roll_the_bones",
+        ),
         CharCreationScene(
             id="the_name",
             title="Your Name",
@@ -165,6 +175,7 @@ def test_reroll_outside_bones_mode_rejected() -> None:
 def test_rerolled_values_reach_built_character() -> None:
     b = _bones_builder(_ScriptedRng(_ALL_SIXES + [2, 2, 2]))
     b.reroll_stat("WIS")
+    b.apply_bones_confirm()
     b.apply_freeform("Knuckles")
     character = b.build("Knuckles")
     assert character.stats["WIS"] == 6

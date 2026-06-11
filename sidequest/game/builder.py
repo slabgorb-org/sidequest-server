@@ -2384,7 +2384,22 @@ class CharacterBuilder:
         # the popped result was ANSWERED at — len(_results) is wrong once
         # requires_stock skips break the one-result-per-scene invariant.
         target = popped.scene_index if popped.scene_index is not None else len(self._results)
+        self._undo_popped_effects(popped)
         self._phase = InProgress(scene_index=target)
+
+    def _undo_popped_effects(self, popped: SceneResult) -> None:
+        """Ledger-driven undo of builder-state mutations recorded on a
+        popped result (103-3 review [HIGH]).
+
+        Mode adoption mutates ``_stat_generation`` at apply time; popping
+        the adopting result must restore the pack default or the player's
+        next pick walks a stale branch (a default pick was still presented
+        the bones scene). The bones array/budget/rerolled-set are
+        PRESERVED so re-adoption is idempotent — no reroll-budget fishing
+        via Back (see ``_enter_roll_the_bones``).
+        """
+        if popped.effects_applied.stat_generation == "roll_the_bones":
+            self._stat_generation = self._rules.stat_generation
 
     def revert(self) -> None:
         """Revert the last scene — pop the SceneResult and go back one.
@@ -2398,6 +2413,7 @@ class CharacterBuilder:
             raise CannotRevertError()
         popped = self._results.pop()
         target = popped.scene_index if popped.scene_index is not None else len(self._results)
+        self._undo_popped_effects(popped)
         self._phase = InProgress(scene_index=target)
 
     # --- Finalizer ---
@@ -3017,8 +3033,16 @@ class CharacterBuilder:
         Eager roll at adoption (mirrors the construction-time eager roll
         for roll_3d6_strict): the rolled values are available for the
         bones scene's first frame. Budget initializes to two rerolls.
+
+        Idempotent re-adoption (103-3 review [MEDIUM]): when bones state
+        already exists on this builder (the player went Back and picked
+        Roll the Bones again), the existing array, remaining budget, and
+        once-each ledger stand — no new rolls, spans, or broadcasts.
+        Back + re-pick must not be a free full-array reroll.
         """
         self._stat_generation = "roll_the_bones"
+        if self._bones_budget is not None and self._rolled_stats is not None:
+            return
         self._rolled_stats = [
             (name, self._bones_roll_one(name)) for name in self._ability_score_names
         ]
@@ -3027,27 +3051,45 @@ class CharacterBuilder:
 
     @property
     def reroll_budget_remaining(self) -> int | None:
-        """Remaining Roll the Bones rerolls; None outside the mode."""
+        """Remaining Roll the Bones rerolls; None outside the mode.
+
+        Mode-aware, not storage-aware: after the player backs out of an
+        adoption the stored array/budget survive for idempotent re-adoption,
+        but the surface reads not-in-mode until the mode is active again.
+        """
+        if self._stat_generation != "roll_the_bones":
+            return None
         return self._bones_budget
 
     def reroll_stat(self, stat_name: str) -> None:
         """Reroll one stat's 3d6 in Roll the Bones mode (103-3).
 
         Replacement semantics — the new total stands even when lower.
-        Budget is two stats, once each. All rejections are loud:
+        Budget is two stats, once each. Rerolls are only legal while the
+        bones scene is the CURRENT scene — once ``apply_bones_confirm``
+        locks the array, leftover budget is dead (103-3 review [MEDIUM]:
+        no post-confirm rerolls from the name scene or the confirmation
+        summary). All rejections are loud:
 
         Raises:
-            RuntimeError: not in Roll the Bones mode.
+            RuntimeError: not in Roll the Bones mode, or the bones scene
+                is not the current scene (pre-adoption, post-confirm, or
+                summary phase).
             ValueError: ``stat_name`` is not an ability score.
             StatAlreadyRerolledError: this stat was already rerolled.
             RerollBudgetExhaustedError: both budget slots spent.
         """
         if self._bones_budget is None:
             raise RuntimeError("not in roll-the-bones mode")
-        if stat_name not in self._ability_score_names:
-            raise ValueError(
-                f"unknown stat '{stat_name}' — ability scores are {self._ability_score_names}"
+        if not isinstance(self._phase, InProgress) or (
+            self._scenes[self._phase.scene_index].requires_stat_generation is None
+        ):
+            raise RuntimeError(
+                "rerolls are only available while the roll-the-bones scene "
+                "is active — the confirmed array stands"
             )
+        if stat_name not in self._ability_score_names:
+            raise ValueError(f"unknown stat '{stat_name}'")
         if stat_name in self._bones_rerolled:
             raise StatAlreadyRerolledError(stat_name)
         if self._bones_budget <= 0:

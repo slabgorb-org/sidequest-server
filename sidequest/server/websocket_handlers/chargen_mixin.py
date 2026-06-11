@@ -121,20 +121,34 @@ def _stockify_scene_message(
     "<index+1>"}`` response maps unchanged. Choices WITHOUT a stock_id (the
     Wild path) ride along with empty deltas.
 
-    A stock_id that doesn't resolve against the roster fails loud (KeyError
-    from ``StockRegistry.by_id``) — that's a content bug the load-time
-    validation can't see (char_creation and stocks.yaml are separate files),
-    and improvising an empty stock would be a silent fallback.
+    Misconfigurations fail LOUD at the first wrong moment (review rework
+    2026-06-11, No Silent Fallbacks): stock_id choices against a world
+    with no stock roster raise naming the world and the offending ids
+    (char_creation.yaml and stocks.yaml are separate files the load-time
+    validation never cross-checks); a stock_id that doesn't resolve
+    against the roster raises KeyError from ``StockRegistry.by_id``; and
+    a granting stock with no mutation catalog raises rather than render
+    a false empty-mutations preview — a loaded registry guarantees a
+    catalog, so that combination is an upstream bug, never a no-op.
     """
     if not builder.is_in_progress():
         return
     scene = builder.current_scene()
-    if not any(c.mechanical_effects.stock_id is not None for c in scene.choices):
+    stock_ids = [
+        c.mechanical_effects.stock_id
+        for c in scene.choices
+        if c.mechanical_effects.stock_id is not None
+    ]
+    if not stock_ids:
         return
     world = sd.genre_pack.worlds.get(sd.world_slug)
     registry = world.stocks if world is not None else None
     if registry is None:
-        return
+        raise ValueError(
+            f"chargen scene {scene.id!r} offers stock choices {sorted(stock_ids)} but "
+            f"world {sd.world_slug!r} ships no stock roster (worlds/<slug>/stocks.yaml) — "
+            "a stock_id in char_creation.yaml requires a matching stocks.yaml entry"
+        )
     catalog = sd.genre_pack.mutations
     options: list[StockOption] = []
     for choice in scene.choices:
@@ -149,6 +163,12 @@ def _stockify_scene_message(
             )
             continue
         stock = registry.by_id(sid)
+        if catalog is None and stock.granted_mutations:
+            raise ValueError(
+                f"stock {stock.id!r} grants mutations but the pack has no mutation "
+                "catalog to resolve display names against — a loaded stock registry "
+                "guarantees a catalog; this is an upstream load bug"
+            )
         granted_names = (
             [catalog.positive_by_id(mid).name for mid in stock.granted_mutations]
             if catalog is not None

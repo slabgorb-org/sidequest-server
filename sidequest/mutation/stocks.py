@@ -202,12 +202,16 @@ def apply_stock(
         return state.characters[actor]
 
     eco = catalog.mp_economy
+    # Atomic application (review rework 2026-06-11): validate EVERY attr key
+    # before mutating any — a partial apply on a bad key is a corrupting
+    # trap for any caller that reuses the character object.
+    unknown_attrs = [attr for attr in stock.attr_mods if attr not in character.stats]
+    if unknown_attrs:
+        raise ValueError(
+            f"stock {stock.id!r} modifies attributes {unknown_attrs} which are not on "
+            f"{actor!r}'s sheet; known: {sorted(character.stats)}"
+        )
     for attr, mod in stock.attr_mods.items():
-        if attr not in character.stats:
-            raise ValueError(
-                f"stock {stock.id!r} modifies attribute {attr!r} which is not on "
-                f"{actor!r}'s sheet; known: {sorted(character.stats)}"
-            )
         character.stats[attr] += mod
     if stock.ac is not None:
         character.core.armor_class = stock.ac

@@ -422,6 +422,13 @@ class SceneResult:
     # scene list (e.g. the_story's StoryInput dispatch). Older paths leave
     # this as None — scene order is implicit in the results list.
     scene_id: str | None = None
+    # The scene-list index this result was produced at (103-2 review
+    # rework). go_back/revert target THIS index — the old formula
+    # ``len(_results)`` assumed every scene appends exactly one result,
+    # an invariant the requires_stock skip-walk broke (skipped scenes
+    # append nothing). None only for externally-constructed results;
+    # builder paths always stamp it.
+    scene_index: int | None = None
     # Name-scene followup correction (playtest 2026-06-05 RW-2). When the
     # name-entry scene has a hook_prompt, the followup answer is the player's
     # name correction — stored here so character_name()/vessel_name() can
@@ -1838,6 +1845,7 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=choice.description,
                 choice_label=choice.label,
+                scene_index=scene_index,
             )
         )
 
@@ -1936,6 +1944,7 @@ class CharacterBuilder:
                 # can exclude the name-entry scene from the archetype-inference
                 # fodder without re-deriving result→scene alignment.
                 scene_id=scene.id,
+                scene_index=scene_index,
             )
         )
 
@@ -2121,6 +2130,7 @@ class CharacterBuilder:
                 hooks_added=[],
                 anchors_added=[],
                 choice_description=None,
+                scene_index=scene_index,
             )
         )
 
@@ -2178,6 +2188,7 @@ class CharacterBuilder:
                 hooks_added=[],
                 anchors_added=[],
                 choice_description=None,
+                scene_index=scene_index,
             )
         )
         self._advance_scene(scene_index)
@@ -2245,6 +2256,7 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=None,
                 scene_id=scene.id,
+                scene_index=scene_index,
             )
         )
 
@@ -2262,8 +2274,11 @@ class CharacterBuilder:
                 expected="InProgress with history",
                 actual="no previous scenes to return to",
             )
-        self._results.pop()
-        target = len(self._results)
+        popped = self._results.pop()
+        # Branch-aware return (103-2 review [HIGH]): go back to the scene
+        # the popped result was ANSWERED at — len(_results) is wrong once
+        # requires_stock skips break the one-result-per-scene invariant.
+        target = popped.scene_index if popped.scene_index is not None else len(self._results)
         self._phase = InProgress(scene_index=target)
 
     def revert(self) -> None:
@@ -2276,8 +2291,9 @@ class CharacterBuilder:
         """
         if not self._results:
             raise CannotRevertError()
-        self._results.pop()
-        self._phase = InProgress(scene_index=len(self._results))
+        popped = self._results.pop()
+        target = popped.scene_index if popped.scene_index is not None else len(self._results)
+        self._phase = InProgress(scene_index=target)
 
     # --- Finalizer ---
 

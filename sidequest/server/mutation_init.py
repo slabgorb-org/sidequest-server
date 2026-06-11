@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 
+from sidequest.game.character import Character
 from sidequest.game.session import GameSnapshot
 from sidequest.mutation.chargen import seed_character_mutations
 from sidequest.mutation.models import MutationCatalog
 from sidequest.mutation.saints import SaintRegistry, apply_saint_preset
 from sidequest.mutation.state import MutationState
+from sidequest.mutation.stocks import StockRegistry, apply_stock
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,66 @@ def init_mutation_state_for_session(
     session_id: str,
     saints: SaintRegistry | None = None,
     saint_id: str | None = None,
+    stocks: StockRegistry | None = None,
+    stock_id: str | None = None,
+    character: Character | None = None,
 ) -> None:
+    if stock_id is not None:
+        # Stock route (story 103-2): the world's stock roster supplies a
+        # generic trait set; an optional saint_id layers 103-1's preset
+        # through the SAME call. A stock_id with no registry, no catalog,
+        # or no character sheet is a configuration error — fail loud,
+        # never improvise a stock (No Silent Fallbacks).
+        if stocks is None:
+            raise ValueError(
+                f"stock_id {stock_id!r} given but the active world ships no stock "
+                "roster (worlds/<slug>/stocks.yaml)"
+            )
+        if catalog is None:
+            raise ValueError(
+                f"stock_id {stock_id!r} given but the pack has no mutation catalog "
+                "(mutations.yaml) to resolve granted ids against"
+            )
+        if character is None:
+            raise ValueError(
+                f"stock_id {stock_id!r} given but no Character supplied — stock "
+                "trait sets need a sheet to land on"
+            )
+        if snapshot.mutation_state is None:
+            snapshot.mutation_state = MutationState()
+        seeded = apply_stock(
+            character,
+            snapshot.mutation_state,
+            catalog,
+            stocks,
+            actor=character_name,
+            stock_id=stock_id,
+            session_id=session_id,
+            saints=saints,
+            saint_id=saint_id,
+        )
+        logger.info(
+            "mutation_init: stock %r applied to %r (saint=%s) mp=%d granted=%s",
+            stock_id,
+            character_name,
+            saint_id,
+            seeded.mp_remaining,
+            seeded.positive_ids,
+        )
+        _watcher_publish(
+            "mutation.stock_init",
+            {
+                "session_id": session_id,
+                "actor": character_name,
+                "stock_id": stock_id,
+                "saint_id": saint_id or "",
+                "mp_remaining": seeded.mp_remaining,
+                "granted_count": len(seeded.positive_ids),
+            },
+            component="mutation",
+            severity="info",
+        )
+        return
     if saint_id is not None:
         # Saint-Marked route (story 103-1): the world's Saint canon supplies a
         # curated preset over the same MP economy. A saint_id with no registry

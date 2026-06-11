@@ -210,6 +210,53 @@ def awn_saint_applied_span(
         pass
 
 
+SPAN_AWN_STOCK_APPLIED = "awn.stock.applied"
+SPAN_ROUTES[SPAN_AWN_STOCK_APPLIED] = SpanRoute(
+    event_type="state_transition",
+    component="awn",
+    extract=lambda span: {
+        "field": "stock",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "stock_id": (span.attributes or {}).get("stock_id", ""),
+        "granted_count": (span.attributes or {}).get("granted_count", 0),
+        "attr_mods": (span.attributes or {}).get("attr_mods", ""),
+        "ac": (span.attributes or {}).get("ac", ""),
+        "move": (span.attributes or {}).get("move", ""),
+        "trauma_target_mod": (span.attributes or {}).get("trauma_target_mod", 0),
+        "saint_id": (span.attributes or {}).get("saint_id", ""),
+    },
+)
+
+
+def awn_stock_applied_span(
+    *,
+    actor: str,
+    stock_id: str,
+    granted_count: int,
+    attr_mods: str,
+    trauma_target_mod: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Stock trait set applied at chargen (story 103-2, build plan D-D).
+
+    The applied trait deltas must be auditable from the GM panel alone —
+    attr mods ride as a flat signed string ("STR +1, WIS -1"); ac/move
+    appear only when the stock overrides them (OTEL attrs cannot be None).
+    """
+    attributes: dict[str, Any] = {
+        "field": "stock",
+        "actor": actor,
+        "stock_id": stock_id,
+        "granted_count": granted_count,
+        "attr_mods": attr_mods,
+        "trauma_target_mod": trauma_target_mod,
+        **attrs,
+    }
+    with Span.open(SPAN_AWN_STOCK_APPLIED, attributes, tracer_override=_tracer):
+        pass
+
+
 SPAN_AWN_MUTATION_STIGMA = "awn.mutation.stigma"
 SPAN_ROUTES[SPAN_AWN_MUTATION_STIGMA] = SpanRoute(
     event_type="state_transition",

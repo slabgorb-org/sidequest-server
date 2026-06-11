@@ -121,6 +121,11 @@ class CreatureCore(BaseModel):
     effort: dict[str, EffortPool] = Field(default_factory=dict)
     spellcasting: SpellcastingState | None = None
     armor_class: int = 10  # SWN ascending AC; unarmored = 10. Seeded from content armor.
+    # Generic trait hooks (story 103-2, build plan §D-B): world-tier stock
+    # trait sets override Move / modify the Trauma Target for ANY creature —
+    # no per-stock special cases. None/0 = the engine defaults stand.
+    move: int | None = None  # meters per move action; None = ruleset default
+    trauma_target_mod: int = 0  # delta to the trauma target rolled against this creature
     # Vessel-attached composure pool (Epic 53, story 53-2). None for any
     # character without a rig in inventory; populated by
     # ``sidequest.game.vessel_tags.bind_rig_pool_from_inventory`` at

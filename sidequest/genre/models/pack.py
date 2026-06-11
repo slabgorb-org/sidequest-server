@@ -59,6 +59,7 @@ from sidequest.genre.models.world import CartographyConfig, WorldConfig
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.mutation.models import MutationCatalog
 from sidequest.mutation.saints import SaintRegistry
+from sidequest.mutation.stocks import StockRegistry
 
 
 class RecommendedPlayers(BaseModel):
@@ -232,6 +233,15 @@ class World(BaseModel):
     fallback. A present saints.yaml is cross-validated against
     ``GenrePack.mutations`` at load time and fails loud on any unresolvable id;
     saints.yaml in a pack with no mutation catalog is a configuration error."""
+    stocks: StockRegistry | None = None
+    """World-tier stock roster (``worlds/<slug>/stocks.yaml``), story 103-2.
+    Chargen entry-path trait sets built from AWN primitives (build plan §D-B);
+    one generic application path, zero per-stock engine cases. ``None`` when
+    the world authors no stocks — a valid authored choice (single-path chargen,
+    the flickering_reach shape), never a fallback. A present stocks.yaml is
+    cross-validated against ``GenrePack.mutations`` at load time and fails loud
+    on any unresolvable granted id; stocks.yaml in a pack with no mutation
+    catalog is a configuration error."""
     scenarios: dict[str, ScenarioPack] = Field(default_factory=dict)
     """ADR-053 scenarios authored at world tier (``worlds/<slug>/scenarios/``).
 

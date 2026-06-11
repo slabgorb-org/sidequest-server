@@ -422,6 +422,13 @@ class SceneResult:
     # scene list (e.g. the_story's StoryInput dispatch). Older paths leave
     # this as None — scene order is implicit in the results list.
     scene_id: str | None = None
+    # The scene-list index this result was produced at (103-2 review
+    # rework). go_back/revert target THIS index — the old formula
+    # ``len(_results)`` assumed every scene appends exactly one result,
+    # an invariant the requires_stock skip-walk broke (skipped scenes
+    # append nothing). None only for externally-constructed results;
+    # builder paths always stamp it.
+    scene_index: int | None = None
     # Name-scene followup correction (playtest 2026-06-05 RW-2). When the
     # name-entry scene has a hook_prompt, the followup answer is the player's
     # name correction — stored here so character_name()/vessel_name() can
@@ -1838,6 +1845,7 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=choice.description,
                 choice_label=choice.label,
+                scene_index=scene_index,
             )
         )
 
@@ -1936,6 +1944,7 @@ class CharacterBuilder:
                 # can exclude the name-entry scene from the archetype-inference
                 # fodder without re-deriving result→scene alignment.
                 scene_id=scene.id,
+                scene_index=scene_index,
             )
         )
 
@@ -2121,6 +2130,7 @@ class CharacterBuilder:
                 hooks_added=[],
                 anchors_added=[],
                 choice_description=None,
+                scene_index=scene_index,
             )
         )
 
@@ -2178,6 +2188,7 @@ class CharacterBuilder:
                 hooks_added=[],
                 anchors_added=[],
                 choice_description=None,
+                scene_index=scene_index,
             )
         )
         self._advance_scene(scene_index)
@@ -2245,6 +2256,7 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=None,
                 scene_id=scene.id,
+                scene_index=scene_index,
             )
         )
 
@@ -2262,8 +2274,11 @@ class CharacterBuilder:
                 expected="InProgress with history",
                 actual="no previous scenes to return to",
             )
-        self._results.pop()
-        target = len(self._results)
+        popped = self._results.pop()
+        # Branch-aware return (103-2 review [HIGH]): go back to the scene
+        # the popped result was ANSWERED at — len(_results) is wrong once
+        # requires_stock skips break the one-result-per-scene invariant.
+        target = popped.scene_index if popped.scene_index is not None else len(self._results)
         self._phase = InProgress(scene_index=target)
 
     def revert(self) -> None:
@@ -2276,8 +2291,9 @@ class CharacterBuilder:
         """
         if not self._results:
             raise CannotRevertError()
-        self._results.pop()
-        self._phase = InProgress(scene_index=len(self._results))
+        popped = self._results.pop()
+        target = popped.scene_index if popped.scene_index is not None else len(self._results)
+        self._phase = InProgress(scene_index=target)
 
     # --- Finalizer ---
 
@@ -3021,10 +3037,41 @@ class CharacterBuilder:
 
     # --- Private helpers ---
 
+    @property
+    def chosen_stock_id(self) -> str | None:
+        """The stock picked on the stock scene, if any (story 103-2).
+
+        Accumulated from applied choices so the chargen confirm handler can
+        plumb it to init_mutation_state_for_session without re-walking."""
+        for result in self._results:
+            if result.effects_applied.stock_id is not None:
+                return result.effects_applied.stock_id
+        return None
+
+    @property
+    def chosen_saint_id(self) -> str | None:
+        """The Saint picked on a branch scene, if any (103-1's selection
+        surface, delivered by 103-2)."""
+        for result in self._results:
+            if result.effects_applied.saint_id is not None:
+                return result.effects_applied.saint_id
+        return None
+
     def _advance_scene(self, current: int) -> None:
         """Advance to the next scene, or transition to Confirmation if
-        `current` was the last scene."""
+        `current` was the last scene.
+
+        Stock branching (103-2): scenes tagged ``requires_stock`` are
+        presented only when the tag matches the chosen stock; non-matching
+        scenes are skipped. The tag is a FILTER — with no stock chosen,
+        every tagged scene is skipped (single-path worlds walk unchanged)."""
         next_index = current + 1
+        chosen = self.chosen_stock_id
+        while next_index < len(self._scenes):
+            tag = self._scenes[next_index].requires_stock
+            if tag is None or tag == chosen:
+                break
+            next_index += 1
         if next_index >= len(self._scenes):
             self._phase = CONFIRMATION
         else:

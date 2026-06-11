@@ -139,6 +139,13 @@ class MechanicalEffects(BaseModel):
     # in world char_creation.yaml; seeded by the builder with OTEL.
     origin_trait: OriginTraitDef | None = None
 
+    # Stock chargen step (103-2, build plan §D-B): a choice on the stock
+    # scene records the picked stock; a choice on a Saint-branch scene
+    # records the Saint (103-1's deferred selection surface). The builder
+    # accumulates both for the chargen-confirm mutation init.
+    stock_id: str | None = None
+    saint_id: str | None = None
+
     model_config = {"extra": "forbid", "populate_by_name": True}
 
 
@@ -288,6 +295,11 @@ class CharCreationScene(BaseModel):
     allows_freeform: bool | None = None
     hook_prompt: str | None = None
     mechanical_effects: MechanicalEffects | None = None
+    # Stock branching (103-2): the scene is presented only when a prior
+    # choice carried a matching mechanical_effects.stock_id. The tag is a
+    # FILTER (no stock chosen -> tagged scenes skipped), never a demand
+    # that some stock exists — branching is authored data, not engine code.
+    requires_stock: str | None = None
 
 
 class BackstoryTables(BaseModel):

@@ -67,6 +67,8 @@ from sidequest.genre.models.world import NavigationMode
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
+    StockDeltas,
+    StockOption,
 )
 from sidequest.server import views
 from sidequest.server.dispatch.chargen_loadout import apply_starting_loadout
@@ -103,6 +105,91 @@ from sidequest.server.websocket_handlers.opening_helpers import (  # noqa: E402
     _populate_opening_directive_on_chargen_complete,
     _should_fire_opening_narration,
 )
+
+
+def _stockify_scene_message(
+    msg: CharacterCreationMessage,
+    builder: CharacterBuilder,
+    sd: _SessionData,
+) -> None:
+    """Upgrade a stock-selection scene frame to ``input_type="stock"`` (103-2).
+
+    When the builder's current scene carries ``stock_id`` choices and the
+    active world ships a stock roster, attach per-stock mechanical deltas so
+    the client can show the math BEFORE confirmation. Options stay aligned
+    1:1 with the scene's choices — the standard ``{phase: "scene", choice:
+    "<index+1>"}`` response maps unchanged. Choices WITHOUT a stock_id (the
+    Wild path) ride along with empty deltas.
+
+    Misconfigurations fail LOUD at the first wrong moment (review rework
+    2026-06-11, No Silent Fallbacks): stock_id choices against a world
+    with no stock roster raise naming the world and the offending ids
+    (char_creation.yaml and stocks.yaml are separate files the load-time
+    validation never cross-checks); a stock_id that doesn't resolve
+    against the roster raises KeyError from ``StockRegistry.by_id``; and
+    a granting stock with no mutation catalog raises rather than render
+    a false empty-mutations preview — a loaded registry guarantees a
+    catalog, so that combination is an upstream bug, never a no-op.
+    """
+    if not builder.is_in_progress():
+        return
+    scene = builder.current_scene()
+    stock_ids = [
+        c.mechanical_effects.stock_id
+        for c in scene.choices
+        if c.mechanical_effects.stock_id is not None
+    ]
+    if not stock_ids:
+        return
+    world = sd.genre_pack.worlds.get(sd.world_slug)
+    registry = world.stocks if world is not None else None
+    if registry is None:
+        raise ValueError(
+            f"chargen scene {scene.id!r} offers stock choices {sorted(stock_ids)} but "
+            f"world {sd.world_slug!r} ships no stock roster (worlds/<slug>/stocks.yaml) — "
+            "a stock_id in char_creation.yaml requires a matching stocks.yaml entry"
+        )
+    catalog = sd.genre_pack.mutations
+    options: list[StockOption] = []
+    for choice in scene.choices:
+        sid = choice.mechanical_effects.stock_id
+        if sid is None:
+            options.append(
+                StockOption(
+                    id=choice.label.lower().replace(" ", "_"),
+                    label=choice.label,
+                    description=choice.description,
+                )
+            )
+            continue
+        stock = registry.by_id(sid)
+        if catalog is None and stock.granted_mutations:
+            raise ValueError(
+                f"stock {stock.id!r} grants mutations but the pack has no mutation "
+                "catalog to resolve display names against — a loaded stock registry "
+                "guarantees a catalog; this is an upstream load bug"
+            )
+        granted_names = (
+            [catalog.positive_by_id(mid).name for mid in stock.granted_mutations]
+            if catalog is not None
+            else []
+        )
+        options.append(
+            StockOption(
+                id=stock.id,
+                label=choice.label,
+                description=choice.description,
+                deltas=StockDeltas(
+                    attr_mods=dict(stock.attr_mods),
+                    move=stock.move,
+                    ac=stock.ac,
+                    trauma_target_mod=stock.trauma_target_mod,
+                    granted_mutations=granted_names,
+                ),
+            )
+        )
+    msg.payload.input_type = "stock"
+    msg.payload.stock_options = options
 
 
 class CharGenMixin:
@@ -1101,15 +1188,24 @@ class CharGenMixin:
                 character_name=character.core.name,
                 character_class=character.char_class,
                 session_id=str(sd.repository.session_id),
-                # Story 103-1: plumb the active world's Saint canon. saint_id
-                # stays None until the stock chargen step (103-2) gives the
-                # player a selection surface; the route + loud validation are
-                # live now so the registry is production-consumed end to end.
+                # Story 103-1: the world's Saint canon; story 103-2: the
+                # stock roster + the builder-accumulated selections (the
+                # stock scene's stock_id and any Saint-branch saint_id).
+                # A stock-less walk leaves both None and the classic AWN
+                # seeding path fires exactly as before.
                 saints=(
                     sd.genre_pack.worlds[sd.world_slug].saints
                     if sd.world_slug in sd.genre_pack.worlds
                     else None
                 ),
+                saint_id=builder.chosen_saint_id,
+                stocks=(
+                    sd.genre_pack.worlds[sd.world_slug].stocks
+                    if sd.world_slug in sd.genre_pack.worlds
+                    else None
+                ),
+                stock_id=builder.chosen_stock_id,
+                character=character,
             )
 
             init_chassis_registry(sd.snapshot, sd.genre_pack)
@@ -1339,15 +1435,24 @@ class CharGenMixin:
                 character_name=character.core.name,
                 character_class=character.char_class,
                 session_id=str(sd.repository.session_id),
-                # Story 103-1: plumb the active world's Saint canon. saint_id
-                # stays None until the stock chargen step (103-2) gives the
-                # player a selection surface; the route + loud validation are
-                # live now so the registry is production-consumed end to end.
+                # Story 103-1: the world's Saint canon; story 103-2: the
+                # stock roster + the builder-accumulated selections (the
+                # stock scene's stock_id and any Saint-branch saint_id).
+                # A stock-less walk leaves both None and the classic AWN
+                # seeding path fires exactly as before.
                 saints=(
                     sd.genre_pack.worlds[sd.world_slug].saints
                     if sd.world_slug in sd.genre_pack.worlds
                     else None
                 ),
+                saint_id=builder.chosen_saint_id,
+                stocks=(
+                    sd.genre_pack.worlds[sd.world_slug].stocks
+                    if sd.world_slug in sd.genre_pack.worlds
+                    else None
+                ),
+                stock_id=builder.chosen_stock_id,
+                character=character,
             )
             # Re-bind active_scenario on this socket from whatever the
             # peer wrote — its presence on sd.active_scenario is what
@@ -1829,4 +1934,6 @@ class CharGenMixin:
                     world_slug=sd.snapshot.world_slug,
                 )
             ]
-        return [builder.to_scene_message(player_id)]
+        msg = builder.to_scene_message(player_id)
+        _stockify_scene_message(msg, builder, sd)
+        return [msg]

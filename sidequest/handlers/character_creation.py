@@ -118,6 +118,8 @@ class CharacterCreationHandler:
             return session._chargen_story_autogen(builder, payload, sd, player_id, span)
         if phase == "story_confirm":
             return session._chargen_story_confirm(builder, payload, sd, player_id, span)
+        if phase == "portrait_confirm":
+            return session._chargen_portrait_confirm(builder, payload, sd, player_id, span)
         return [_error_msg(f"Unknown chargen phase: {phase}")]
 
 

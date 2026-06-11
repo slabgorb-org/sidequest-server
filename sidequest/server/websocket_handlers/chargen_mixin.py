@@ -97,6 +97,7 @@ from sidequest.telemetry.spans import (
     SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED,
     SPAN_CHARGEN_ARCHETYPE_GATE_EVALUATED,
     SPAN_CHARGEN_ARCHETYPE_INFERRED,
+    SPAN_CHARGEN_PORTRAIT_SELECT,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -521,6 +522,80 @@ class CharGenMixin:
             return [_error_msg(f"story_confirm rejected: {exc!r}")]
         except BuilderError as exc:
             return [_error_msg(f"story_confirm failed: {exc!r}")]
+        return self._next_message(builder, sd, player_id)
+
+    # ---- the portrait picker step (Epic 66) ------------------------------
+    def _render_portrait_scene(
+        self,
+        builder: CharacterBuilder,
+        sd: _SessionData,
+        player_id: str,
+    ) -> CharacterCreationMessage:
+        """Render the one-time ``pick_portrait`` frame (Epic 66).
+
+        Emitted by ``_next_message`` on first arrival at the Confirmation
+        boundary. ``portraits_available`` tells the client whether this
+        world ships any ``type=player_picker`` portrait-manifest entries
+        (the client fetches the actual roster via
+        ``GET /api/chargen/portraits/{genre}/{world}``); the soft-suggest
+        hints surface the in-progress build's archetype/culture so the UI
+        can pre-sort the roster. Both hints are best-effort — ``None``
+        when the builder accumulated nothing usable.
+        """
+        # World-tier lookup matches the module idiom (see
+        # ``world_for_authored`` in ``_chargen_confirmation``) and the Epic
+        # 66 REST endpoint (``GET /api/chargen/portraits``): a world slug
+        # with no ``worlds/<slug>/`` override directory is a legitimate
+        # genre-tier-only world (e.g. caverns_and_claudes/grimvault), NOT a
+        # config error — it simply ships no picker portraits.
+        world_obj = sd.genre_pack.worlds.get(sd.world_slug)
+        has_pickers = world_obj is not None and any(
+            entry.character_type == "player_picker" for entry in world_obj.portrait_manifest
+        )
+        acc = builder.accumulated()
+        return CharacterCreationMessage(
+            payload=CharacterCreationPayload(
+                phase="scene",
+                prompt="Choose a portrait for your character — or skip to continue.",
+                input_type="pick_portrait",
+                portraits_available=has_pickers,
+                suggest_archetype=acc.jungian_hint or acc.rpg_role_hint or acc.class_hint,
+                suggest_culture=acc.race_hint,
+            ),
+            player_id=player_id,
+        )
+
+    # ---- phase=portrait_confirm ------------------------------------------
+    def _chargen_portrait_confirm(
+        self,
+        builder: CharacterBuilder,
+        payload: CharacterCreationPayload,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        """Record the player's portrait choice and advance to the summary.
+
+        ``selected_portrait_ref`` is the picker entry's slug; ``None`` (or
+        empty) means the player skipped. The choice is parked on the
+        session until ``_chargen_confirmation`` copies it onto the built
+        Character. Fires ``chargen.portrait_select`` on every pass —
+        skip included — so the GM panel sees the step engage (OTEL
+        Observability Principle).
+        """
+        selected = payload.selected_portrait_ref or None
+        sd.selected_portrait_ref = selected
+        with tracer.start_as_current_span(
+            SPAN_CHARGEN_PORTRAIT_SELECT,
+            attributes={
+                "genre": sd.genre_slug,
+                "world": sd.world_slug,
+                "selected_portrait_ref": selected or "",
+                "skipped": selected is None,
+                "player_id": player_id,
+            },
+        ):
+            pass
         return self._next_message(builder, sd, player_id)
 
     # ---- archetype resolution helper (Story 2.3 Slice A) ----------------
@@ -1000,6 +1075,11 @@ class CharGenMixin:
             character = builder.build(char_name)
         except BuilderError as exc:
             return [_error_msg(f"Character build failed: {exc!r}")]
+
+        # Epic 66: copy the parked portrait-picker choice onto the built
+        # Character before it lands on the snapshot. None = skipped picker
+        # (or a world with no sample portraits) — cosmetic only.
+        character.portrait_ref = sd.selected_portrait_ref
 
         # ADR-114: emit hp_current/hp_max (HP is the ablative pool per
         # ADR-114, reversing ADR-078). `schema=adr-114` lets us find
@@ -2020,6 +2100,16 @@ class CharGenMixin:
         # in improvised prose. Empty for every non-bones flow.
         dice_msgs = _bones_dice_messages(builder, sd, player_id)
         if builder.is_confirmation():
+            # Epic 66: interpose the one-time pick_portrait step at the
+            # confirmation boundary. First arrival at Confirmation renders
+            # the portrait scene; the client answers with
+            # phase=portrait_confirm (_chargen_portrait_confirm), which
+            # routes back through here with the gate flipped and falls
+            # through to the confirmation summary. Per-player by
+            # construction — _SessionData is per-session state.
+            if not sd.portrait_step_shown:
+                sd.portrait_step_shown = True
+                return [*dice_msgs, self._render_portrait_scene(builder, sd, player_id)]
             return [
                 *dice_msgs,
                 render_confirmation_summary(

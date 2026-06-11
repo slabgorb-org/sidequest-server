@@ -7,12 +7,14 @@ from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
 SPAN_CHARGEN_STAT_ROLL = "chargen.stat_roll"
 SPAN_CHARGEN_STATS_GENERATED = "chargen.stats_generated"
 SPAN_CHARGEN_BACKSTORY_COMPOSED = "chargen.backstory_composed"
+SPAN_CHARGEN_PORTRAIT_SELECT = "chargen.portrait_select"
 
 FLAT_ONLY_SPANS.update(
     {
         SPAN_CHARGEN_STAT_ROLL,
         SPAN_CHARGEN_STATS_GENERATED,
         SPAN_CHARGEN_BACKSTORY_COMPOSED,
+        SPAN_CHARGEN_PORTRAIT_SELECT,
     }
 )
 

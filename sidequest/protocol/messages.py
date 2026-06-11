@@ -432,6 +432,13 @@ class CharacterCreationPayload(ProtocolBase):
     ``input_type`` is ``"stock"``. Aligned 1:1 with the scene's choices so
     the standard ``{phase: "scene", choice: "<index+1>"}`` response maps."""
 
+    # --- the bones step (server → client, story 103-3) ---
+    reroll_budget_remaining: int | None = None
+    """Roll the Bones rerolls left (2 → 1 → 0); present only when
+    ``input_type`` is ``"roll_the_bones"``. Rolled values travel in the
+    existing ``rolled_stats`` field; per-die faces broadcast via
+    DiceResultMessage (ADR-074 visibility)."""
+
     # --- the_arrangement (server → client) ---
     pool: list[int] | None = None
     """Six 3d6 totals waiting to be assigned to stat slots."""

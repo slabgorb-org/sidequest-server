@@ -655,6 +655,27 @@ class NoQualifyingClassesError(Exception):
     """confirm_arrangement called but the arrangement qualifies for no classes."""
 
 
+class RerollBudgetExhaustedError(BuilderError):
+    """reroll_stat called after both reroll-budget slots were spent (103-3)."""
+
+    def __init__(self, stat_name: str) -> None:
+        self.stat_name = stat_name
+        super().__init__(
+            f"reroll budget exhausted: cannot reroll '{stat_name}' — "
+            "Roll the Bones allows two stat rerolls per character"
+        )
+
+
+class StatAlreadyRerolledError(BuilderError):
+    """reroll_stat called twice for the same stat (once-each rule, 103-3)."""
+
+    def __init__(self, stat_name: str) -> None:
+        self.stat_name = stat_name
+        super().__init__(
+            f"stat '{stat_name}' was already rerolled — Roll the Bones allows one reroll per stat"
+        )
+
+
 class ArrangementSceneActiveError(Exception):
     """apply_response called while the_arrangement scene is active.
 
@@ -1084,6 +1105,13 @@ class CharacterBuilder:
         # confirmed via confirm_arrangement, rejected via reject_arrangement.
         self._arrangement_pool: list[int] | None = None
         self._arrangement_assignment: dict[str, int | None] | None = None
+        # Roll the Bones (103-3): reroll budget is None until a choice
+        # adopts the mode; the rerolled set enforces once-each; pending
+        # broadcasts queue (stat, faces) pairs for the dispatch layer's
+        # DiceResult fan-out (ADR-074 visibility — dice on the wire).
+        self._bones_budget: int | None = None
+        self._bones_rerolled: set[str] = set()
+        self._bones_pending_broadcasts: list[tuple[str, list[int]]] = []
         self._classes: list[ClassDef] = []
         for s in scenes:
             eff = s.mechanical_effects
@@ -1661,6 +1689,11 @@ class CharacterBuilder:
                 scene = self._filter_class_choices(self._scenes[scene_index])
                 eff = scene.mechanical_effects
 
+                # the_bones — stat-generation-gated scenes get a custom
+                # payload (103-3): rolled values + reroll budget.
+                if scene.requires_stat_generation is not None:
+                    return self._render_bones_message(scene, scene_index, player_id)
+
                 # the_arrangement — assignment-required scenes get a custom payload.
                 if eff is not None and eff.assignment_required:
                     return self._render_arrangement_message(scene, scene_index, player_id)
@@ -1735,6 +1768,37 @@ class CharacterBuilder:
 
             case _:  # pragma: no cover — exhaustive
                 raise AssertionError(f"unknown phase: {self._phase!r}")
+
+    def _render_bones_message(
+        self,
+        scene: CharCreationScene,
+        scene_index: int,
+        player_id: str,
+    ) -> CharacterCreationMessage:
+        """Render the Roll the Bones scene: rolled values + reroll budget.
+
+        The scene is only reachable when the skip-walk matched the active
+        stat_generation, which rolled eagerly at adoption — a missing
+        rolled array here is a programmer error (no silent re-roll).
+        """
+        if self._rolled_stats is None or self._bones_budget is None:
+            raise RuntimeError(
+                f"bones scene {scene.id!r} presented without an active "
+                "roll-the-bones state — mode adoption must precede the scene"
+            )
+        payload = CharacterCreationPayload(
+            phase="scene",
+            scene_index=scene_index,
+            total_scenes=len(self._scenes),
+            prompt=self.interpolate_scene_narration(scene.narration),
+            input_type="roll_the_bones",
+            loading_text=scene.loading_text,
+            rolled_stats=[
+                RolledStat(name=ability, value=value) for ability, value in self._rolled_stats
+            ],
+            reroll_budget_remaining=self._bones_budget,
+        )
+        return CharacterCreationMessage(payload=payload, player_id=player_id)
 
     def _render_arrangement_message(
         self,
@@ -1834,6 +1898,15 @@ class CharacterBuilder:
 
         choice = scene.choices[index]
         effects = choice.mechanical_effects
+
+        # Roll the Bones (103-3): a choice-level stat_generation of
+        # "roll_the_bones" adopts the mode and rolls eagerly so the gated
+        # bones scene presents the values on its first frame. Other
+        # choice-level stat_generation strings remain scene-level-only
+        # directives (apply_freeform / auto_advance), unchanged.
+        if effects.stat_generation == "roll_the_bones":
+            self._enter_roll_the_bones()
+
         hooks = extract_hooks(scene.id, effects)
         anchors = extract_anchors(scene.id, effects)
 
@@ -2193,6 +2266,38 @@ class CharacterBuilder:
         )
         self._advance_scene(scene_index)
 
+    def apply_bones_confirm(self) -> None:
+        """Lock the Roll the Bones array and advance past the bones scene.
+
+        Records a SceneResult stamped with this scene's index so the
+        one-result-per-presented-scene ledger holds for go_back/revert
+        (the 103-2 doctrine). The rolled values are already materialized
+        in ``_rolled_stats``; confirm is purely a commit-and-advance.
+        """
+        if not isinstance(self._phase, InProgress):
+            raise WrongPhaseError(expected="InProgress", actual=self._phase_name())
+        scene_index = self._phase.scene_index
+        scene = self._scenes[scene_index]
+        if scene.requires_stat_generation is None:
+            raise RuntimeError(f"scene {scene.id!r} is not a roll-the-bones scene")
+        if self._rolled_stats is None or self._bones_budget is None:
+            raise RuntimeError(
+                f"bones scene {scene.id!r} confirmed without an active roll-the-bones state"
+            )
+        self._results.append(
+            SceneResult(
+                input_type=ChoiceInput(index=0),
+                effects_applied=scene.mechanical_effects
+                if scene.mechanical_effects is not None
+                else MechanicalEffects(),
+                hooks_added=[],
+                anchors_added=[],
+                choice_description=None,
+                scene_index=scene_index,
+            )
+        )
+        self._advance_scene(scene_index)
+
     def apply_arrangement_reject(self) -> None:
         """Reject the current pool, reroll, and stay on the arrangement scene."""
         if not isinstance(self._phase, InProgress):
@@ -2279,7 +2384,22 @@ class CharacterBuilder:
         # the popped result was ANSWERED at — len(_results) is wrong once
         # requires_stock skips break the one-result-per-scene invariant.
         target = popped.scene_index if popped.scene_index is not None else len(self._results)
+        self._undo_popped_effects(popped)
         self._phase = InProgress(scene_index=target)
+
+    def _undo_popped_effects(self, popped: SceneResult) -> None:
+        """Ledger-driven undo of builder-state mutations recorded on a
+        popped result (103-3 review [HIGH]).
+
+        Mode adoption mutates ``_stat_generation`` at apply time; popping
+        the adopting result must restore the pack default or the player's
+        next pick walks a stale branch (a default pick was still presented
+        the bones scene). The bones array/budget/rerolled-set are
+        PRESERVED so re-adoption is idempotent — no reroll-budget fishing
+        via Back (see ``_enter_roll_the_bones``).
+        """
+        if popped.effects_applied.stat_generation == "roll_the_bones":
+            self._stat_generation = self._rules.stat_generation
 
     def revert(self) -> None:
         """Revert the last scene — pop the SceneResult and go back one.
@@ -2293,6 +2413,7 @@ class CharacterBuilder:
             raise CannotRevertError()
         popped = self._results.pop()
         target = popped.scene_index if popped.scene_index is not None else len(self._results)
+        self._undo_popped_effects(popped)
         self._phase = InProgress(scene_index=target)
 
     # --- Finalizer ---
@@ -2888,6 +3009,106 @@ class CharacterBuilder:
                 {"class_ids": [c.id for c in qual]},
             )
 
+    def _bones_roll_one(self, name: str) -> int:
+        """Roll 3d6 for one stat in Roll the Bones mode.
+
+        Fires SPAN_CHARGEN_STAT_ROLL with the faces (GM-panel lie
+        detector) and queues a (stat, faces) broadcast for the dispatch
+        layer's DiceResult fan-out. Returns the total.
+        """
+        from sidequest.telemetry.spans import SPAN_CHARGEN_STAT_ROLL, Emitter
+
+        dice = [self._rng.randint(1, 6) for _ in range(3)]
+        total = sum(dice)
+        Emitter.fire(
+            SPAN_CHARGEN_STAT_ROLL,
+            {"stat": name, "dice": list(dice), "total": total},
+        )
+        self._bones_pending_broadcasts.append((name, dice))
+        return total
+
+    def _enter_roll_the_bones(self) -> None:
+        """Adopt Roll the Bones: 3d6 per stat, in order, dice stand.
+
+        Eager roll at adoption (mirrors the construction-time eager roll
+        for roll_3d6_strict): the rolled values are available for the
+        bones scene's first frame. Budget initializes to two rerolls.
+
+        Idempotent re-adoption (103-3 review [MEDIUM]): when bones state
+        already exists on this builder (the player went Back and picked
+        Roll the Bones again), the existing array, remaining budget, and
+        once-each ledger stand — no new rolls, spans, or broadcasts.
+        Back + re-pick must not be a free full-array reroll.
+        """
+        self._stat_generation = "roll_the_bones"
+        if self._bones_budget is not None and self._rolled_stats is not None:
+            return
+        self._rolled_stats = [
+            (name, self._bones_roll_one(name)) for name in self._ability_score_names
+        ]
+        self._bones_budget = 2
+        self._bones_rerolled = set()
+
+    @property
+    def reroll_budget_remaining(self) -> int | None:
+        """Remaining Roll the Bones rerolls; None outside the mode.
+
+        Mode-aware, not storage-aware: after the player backs out of an
+        adoption the stored array/budget survive for idempotent re-adoption,
+        but the surface reads not-in-mode until the mode is active again.
+        """
+        if self._stat_generation != "roll_the_bones":
+            return None
+        return self._bones_budget
+
+    def reroll_stat(self, stat_name: str) -> None:
+        """Reroll one stat's 3d6 in Roll the Bones mode (103-3).
+
+        Replacement semantics — the new total stands even when lower.
+        Budget is two stats, once each. Rerolls are only legal while the
+        bones scene is the CURRENT scene — once ``apply_bones_confirm``
+        locks the array, leftover budget is dead (103-3 review [MEDIUM]:
+        no post-confirm rerolls from the name scene or the confirmation
+        summary). All rejections are loud:
+
+        Raises:
+            RuntimeError: not in Roll the Bones mode, or the bones scene
+                is not the current scene (pre-adoption, post-confirm, or
+                summary phase).
+            ValueError: ``stat_name`` is not an ability score.
+            StatAlreadyRerolledError: this stat was already rerolled.
+            RerollBudgetExhaustedError: both budget slots spent.
+        """
+        if self._bones_budget is None:
+            raise RuntimeError("not in roll-the-bones mode")
+        if not isinstance(self._phase, InProgress) or (
+            self._scenes[self._phase.scene_index].requires_stat_generation is None
+        ):
+            raise RuntimeError(
+                "rerolls are only available while the roll-the-bones scene "
+                "is active — the confirmed array stands"
+            )
+        if stat_name not in self._ability_score_names:
+            raise ValueError(f"unknown stat '{stat_name}'")
+        if stat_name in self._bones_rerolled:
+            raise StatAlreadyRerolledError(stat_name)
+        if self._bones_budget <= 0:
+            raise RerollBudgetExhaustedError(stat_name)
+
+        total = self._bones_roll_one(stat_name)
+        assert self._rolled_stats is not None  # set by _enter_roll_the_bones
+        self._rolled_stats = [
+            (name, total if name == stat_name else value) for name, value in self._rolled_stats
+        ]
+        self._bones_rerolled.add(stat_name)
+        self._bones_budget -= 1
+
+    def consume_bones_broadcasts(self) -> list[tuple[str, list[int]]]:
+        """Drain queued (stat, faces) bones rolls for DiceResult fan-out."""
+        drained = self._bones_pending_broadcasts
+        self._bones_pending_broadcasts = []
+        return drained
+
     def _roll_3d6_stats(self) -> list[tuple[str, int]]:
         """Roll 3d6 for each ability score in order. Returns ``(name, total)``
         pairs in ``ability_score_names`` order.
@@ -2979,6 +3200,16 @@ class CharacterBuilder:
                 rolled = self._roll_3d6_stats()
                 stats = dict(rolled)
 
+        elif method == "roll_the_bones":
+            if self._rolled_stats is None:
+                # No silent re-roll: the mode rolls eagerly at adoption, so
+                # a missing array is a programmer error, not a fallback case.
+                raise RuntimeError(
+                    "roll_the_bones mode active but no rolled stats recorded — "
+                    "_enter_roll_the_bones must run at mode adoption"
+                )
+            stats = dict(self._rolled_stats)
+
         elif method == "standard_array":
             base_values = [15, 14, 13, 12, 10, 8]
             stats = dict(zip(self._ability_score_names, base_values, strict=False))
@@ -3068,8 +3299,14 @@ class CharacterBuilder:
         next_index = current + 1
         chosen = self.chosen_stock_id
         while next_index < len(self._scenes):
-            tag = self._scenes[next_index].requires_stock
-            if tag is None or tag == chosen:
+            candidate = self._scenes[next_index]
+            stock_tag = candidate.requires_stock
+            stock_ok = stock_tag is None or stock_tag == chosen
+            # Roll the Bones (103-3): same FILTER doctrine for the
+            # stat-generation gate — default-mode walks skip tagged scenes.
+            gen_tag = candidate.requires_stat_generation
+            gen_ok = gen_tag is None or gen_tag == self._stat_generation
+            if stock_ok and gen_ok:
                 break
             next_index += 1
         if next_index >= len(self._scenes):

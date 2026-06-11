@@ -300,6 +300,11 @@ class CharCreationScene(BaseModel):
     # FILTER (no stock chosen -> tagged scenes skipped), never a demand
     # that some stock exists — branching is authored data, not engine code.
     requires_stock: str | None = None
+    # Stat-generation branching (103-3): same FILTER doctrine as
+    # requires_stock — the scene is presented only when a prior choice
+    # adopted a matching mechanical_effects.stat_generation (e.g. the
+    # "roll_the_bones" rolling surface). Default-mode walks skip it.
+    requires_stat_generation: str | None = None
 
 
 class BackstoryTables(BaseModel):

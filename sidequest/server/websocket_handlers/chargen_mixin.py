@@ -64,9 +64,17 @@ from sidequest.game.world_materialization import (
 from sidequest.genre.archetype.shim import resolve_archetype
 from sidequest.genre.error import GenreValidationError
 from sidequest.genre.models.world import NavigationMode
+from sidequest.protocol.dice import (
+    DiceResultPayload,
+    DieGroupResult,
+    DieSpec,
+    RollOutcome,
+    ThrowParams,
+)
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
+    DiceResultMessage,
     StockDeltas,
     StockOption,
 )
@@ -105,6 +113,48 @@ from sidequest.server.websocket_handlers.opening_helpers import (  # noqa: E402
     _populate_opening_directive_on_chargen_complete,
     _should_fire_opening_narration,
 )
+
+
+def _bones_dice_messages(
+    builder: CharacterBuilder,
+    sd: _SessionData,
+    player_id: str,
+) -> list[DiceResultMessage]:
+    """Build visible DiceResult broadcasts from queued Roll the Bones rolls.
+
+    Reuses the existing ADR-074 result payload — no new message types.
+    ``request_id`` carries the stat (``chargen.bones.<STAT>``) so overlays
+    and tests can attribute faces to scores. Chargen rolls are server-
+    rolled with no check semantics: difficulty pins at 1, outcome Unknown,
+    and the throw params are neutral (no gesture to replay).
+    """
+    return [
+        DiceResultMessage(
+            payload=DiceResultPayload(
+                request_id=f"chargen.bones.{stat}",
+                rolling_player_id=player_id,
+                character_name=sd.player_name or "",
+                rolls=[
+                    DieGroupResult(
+                        spec=DieSpec(sides=6, count=3),
+                        faces=list(faces),
+                    )
+                ],
+                modifier=0,
+                total=sum(faces),
+                difficulty=1,
+                outcome=RollOutcome.Unknown,
+                seed=0,
+                throw_params=ThrowParams(
+                    velocity=(0.0, 0.0, 0.0),
+                    angular=(0.0, 0.0, 0.0),
+                    position=(0.0, 0.0),
+                ),
+            ),
+            player_id=player_id,
+        )
+        for stat, faces in builder.consume_bones_broadcasts()
+    ]
 
 
 def _stockify_scene_message(
@@ -285,6 +335,47 @@ class CharGenMixin:
             builder.apply_auto_advance()
         except BuilderError as exc:
             return [_error_msg(f"Cannot continue from current scene: {exc!r}")]
+        return self._next_message(builder, sd, player_id)
+
+    # ---- phase=bones_reroll (103-3) --------------------------------------
+    def _chargen_bones_reroll(
+        self,
+        builder: CharacterBuilder,
+        payload: CharacterCreationPayload,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        if payload.stat is None:
+            return [_error_msg("bones_reroll requires a stat field")]
+        span.add_event(
+            "character_creation.bones_reroll",
+            {"stat": payload.stat, "player_id": player_id},
+        )
+        try:
+            builder.reroll_stat(payload.stat)
+        except (BuilderError, ValueError, RuntimeError) as exc:
+            return [_error_msg(f"bones_reroll rejected: {exc!r}")]
+        return self._next_message(builder, sd, player_id)
+
+    # ---- phase=bones_confirm (103-3) -------------------------------------
+    def _chargen_bones_confirm(
+        self,
+        builder: CharacterBuilder,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        span.add_event(
+            "character_creation.bones_confirm",
+            {"player_id": player_id},
+        )
+        try:
+            builder.apply_bones_confirm()
+        except BuilderError as exc:
+            return [_error_msg(f"bones_confirm rejected: {exc!r}")]
+        except RuntimeError as exc:
+            return [_error_msg(f"bones_confirm failed: {exc!r}")]
         return self._next_message(builder, sd, player_id)
 
     # ---- phase=arrange_assign ------------------------------------------
@@ -1924,16 +2015,21 @@ class CharGenMixin:
         takes the pack + lobby_name directly because the builder does not
         own them.
         """
+        # Roll the Bones (103-3, ADR-074): drain queued bones rolls into
+        # visible DiceResult broadcasts — the dice land on the wire, not
+        # in improvised prose. Empty for every non-bones flow.
+        dice_msgs = _bones_dice_messages(builder, sd, player_id)
         if builder.is_confirmation():
             return [
+                *dice_msgs,
                 render_confirmation_summary(
                     builder,
                     sd.genre_pack,
                     sd.player_name,
                     player_id,
                     world_slug=sd.snapshot.world_slug,
-                )
+                ),
             ]
         msg = builder.to_scene_message(player_id)
         _stockify_scene_message(msg, builder, sd)
-        return [msg]
+        return [*dice_msgs, msg]

@@ -102,6 +102,10 @@ class CharacterCreationHandler:
             return session._chargen_continue(builder, sd, player_id, span)
         if phase == "confirmation":
             return await session._chargen_confirmation(builder, sd, player_id, span)
+        if phase == "bones_reroll":
+            return session._chargen_bones_reroll(builder, payload, sd, player_id, span)
+        if phase == "bones_confirm":
+            return session._chargen_bones_confirm(builder, sd, player_id, span)
         if phase == "arrange_assign":
             return session._chargen_arrange_assign(builder, payload, sd, player_id, span)
         if phase == "arrange_clear":

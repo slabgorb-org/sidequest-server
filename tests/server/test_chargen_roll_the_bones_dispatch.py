@@ -87,7 +87,23 @@ def bones_pack_root(minimal_pack_factory, tmp_path):
 
 
 @pytest.fixture
-def handler(bones_pack_root, tmp_path):
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Point the process db_pool at a fresh throwaway Postgres database.
+
+    ``seed_slug_for_test`` requires this (see its docstring) — without it
+    the connect path reads/writes whatever SIDEQUEST_DATABASE_URL points
+    at (the live dev database)."""
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+@pytest.fixture
+def handler(bones_pack_root, tmp_path, _pg_isolation):
     save_dir = tmp_path / "saves"
     save_dir.mkdir(exist_ok=True)
     return WebSocketSessionHandler(

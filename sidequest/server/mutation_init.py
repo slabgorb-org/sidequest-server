@@ -11,6 +11,7 @@ import logging
 from sidequest.game.session import GameSnapshot
 from sidequest.mutation.chargen import seed_character_mutations
 from sidequest.mutation.models import MutationCatalog
+from sidequest.mutation.saints import SaintRegistry, apply_saint_preset
 from sidequest.mutation.state import MutationState
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -24,7 +25,55 @@ def init_mutation_state_for_session(
     character_name: str,
     character_class: str,
     session_id: str,
+    saints: SaintRegistry | None = None,
+    saint_id: str | None = None,
 ) -> None:
+    if saint_id is not None:
+        # Saint-Marked route (story 103-1): the world's Saint canon supplies a
+        # curated preset over the same MP economy. A saint_id with no registry
+        # or no catalog is a configuration error — fail loud, never improvise
+        # a Saint (No Silent Fallbacks).
+        if saints is None:
+            raise ValueError(
+                f"saint_id {saint_id!r} given but the active world ships no Saint "
+                "registry (worlds/<slug>/saints.yaml)"
+            )
+        if catalog is None:
+            raise ValueError(
+                f"saint_id {saint_id!r} given but the pack has no mutation catalog "
+                "(mutations.yaml) to price the bundle against"
+            )
+        if snapshot.mutation_state is None:
+            snapshot.mutation_state = MutationState()
+        seeded = apply_saint_preset(
+            snapshot.mutation_state,
+            catalog,
+            saints,
+            actor=character_name,
+            saint_id=saint_id,
+            session_id=session_id,
+        )
+        logger.info(
+            "mutation_init: saint preset %r applied to %r mp=%d bundle=%s drawback=%s",
+            saint_id,
+            character_name,
+            seeded.mp_remaining,
+            seeded.positive_ids,
+            seeded.negative_ids,
+        )
+        _watcher_publish(
+            "mutation.saint_init",
+            {
+                "session_id": session_id,
+                "actor": character_name,
+                "saint_id": saint_id,
+                "mp_remaining": seeded.mp_remaining,
+                "bundle_count": len(seeded.positive_ids),
+            },
+            component="mutation",
+            severity="info",
+        )
+        return
     if catalog is None:
         # Pack has no mutation system — deliberate authoring choice. Per
         # the OTEL Observability Principle, surface justified

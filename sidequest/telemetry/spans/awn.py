@@ -158,6 +158,58 @@ def awn_mutation_mp_spend_span(
         pass
 
 
+SPAN_AWN_SAINT_APPLIED = "awn.saint.applied"
+SPAN_ROUTES[SPAN_AWN_SAINT_APPLIED] = SpanRoute(
+    event_type="state_transition",
+    component="awn",
+    extract=lambda span: {
+        "field": "saint",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "saint_id": (span.attributes or {}).get("saint_id", ""),
+        "drawback": (span.attributes or {}).get("drawback", ""),
+        "bundle_count": (span.attributes or {}).get("bundle_count", 0),
+        "mp_base": (span.attributes or {}).get("mp_base", 0),
+        "mp_from_drawback": (span.attributes or {}).get("mp_from_drawback", 0),
+        "mp_spent": (span.attributes or {}).get("mp_spent", 0),
+        "mp_remaining": (span.attributes or {}).get("mp_remaining", 0),
+    },
+)
+
+
+def awn_saint_applied_span(
+    *,
+    actor: str,
+    saint_id: str,
+    drawback: str,
+    bundle_count: int,
+    mp_base: int,
+    mp_from_drawback: int,
+    mp_spent: int,
+    mp_remaining: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Saint-Marked chargen preset applied (story 103-1, build plan D-D).
+
+    The MP arithmetic must be auditable from the GM panel alone — the span
+    carries every term of ``mp_base + mp_from_drawback - mp_spent``.
+    """
+    attributes: dict[str, Any] = {
+        "field": "saint",
+        "actor": actor,
+        "saint_id": saint_id,
+        "drawback": drawback,
+        "bundle_count": bundle_count,
+        "mp_base": mp_base,
+        "mp_from_drawback": mp_from_drawback,
+        "mp_spent": mp_spent,
+        "mp_remaining": mp_remaining,
+        **attrs,
+    }
+    with Span.open(SPAN_AWN_SAINT_APPLIED, attributes, tracer_override=_tracer):
+        pass
+
+
 SPAN_AWN_MUTATION_STIGMA = "awn.mutation.stigma"
 SPAN_ROUTES[SPAN_AWN_MUTATION_STIGMA] = SpanRoute(
     event_type="state_transition",

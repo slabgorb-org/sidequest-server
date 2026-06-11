@@ -1101,6 +1101,15 @@ class CharGenMixin:
                 character_name=character.core.name,
                 character_class=character.char_class,
                 session_id=str(sd.repository.session_id),
+                # Story 103-1: plumb the active world's Saint canon. saint_id
+                # stays None until the stock chargen step (103-2) gives the
+                # player a selection surface; the route + loud validation are
+                # live now so the registry is production-consumed end to end.
+                saints=(
+                    sd.genre_pack.worlds[sd.world_slug].saints
+                    if sd.world_slug in sd.genre_pack.worlds
+                    else None
+                ),
             )
 
             init_chassis_registry(sd.snapshot, sd.genre_pack)
@@ -1330,6 +1339,15 @@ class CharGenMixin:
                 character_name=character.core.name,
                 character_class=character.char_class,
                 session_id=str(sd.repository.session_id),
+                # Story 103-1: plumb the active world's Saint canon. saint_id
+                # stays None until the stock chargen step (103-2) gives the
+                # player a selection surface; the route + loud validation are
+                # live now so the registry is production-consumed end to end.
+                saints=(
+                    sd.genre_pack.worlds[sd.world_slug].saints
+                    if sd.world_slug in sd.genre_pack.worlds
+                    else None
+                ),
             )
             # Re-bind active_scenario on this socket from whatever the
             # peer wrote — its presence on sd.active_scenario is what

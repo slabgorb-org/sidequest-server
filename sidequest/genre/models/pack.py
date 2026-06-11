@@ -58,6 +58,7 @@ from sidequest.genre.models.visibility import VisibilityBaseline
 from sidequest.genre.models.world import CartographyConfig, WorldConfig
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.mutation.models import MutationCatalog
+from sidequest.mutation.saints import SaintRegistry
 
 
 class RecommendedPlayers(BaseModel):
@@ -222,6 +223,15 @@ class World(BaseModel):
     with a canonical roster (e.g. barsoom's Martian fauna) is never polluted by
     the genre's generic creatures. ``None`` when the world authors none, in
     which case the genre-tier ``GenrePack.bestiary`` serves."""
+    saints: SaintRegistry | None = None
+    """World-tier Saint canon (``worlds/<slug>/saints.yaml``), story 103-1.
+    Curated chargen presets over the genre-tier AWN mutation catalog (ADR-140:
+    the world owns the cast and catalog; the genre owns the mutation rulebook).
+    ``None`` when the world authors no Saints — a valid authored choice
+    (flickering_reach stays Saint-less per the AWN rebase addendum), never a
+    fallback. A present saints.yaml is cross-validated against
+    ``GenrePack.mutations`` at load time and fails loud on any unresolvable id;
+    saints.yaml in a pack with no mutation catalog is a configuration error."""
     scenarios: dict[str, ScenarioPack] = Field(default_factory=dict)
     """ADR-053 scenarios authored at world tier (``worlds/<slug>/scenarios/``).
 

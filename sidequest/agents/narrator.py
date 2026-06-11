@@ -481,6 +481,27 @@ class NarratorAgent(BaseAgent):
                 )
                 or "  (none)"
             )
+            # Tag-handling gate (playtest 2026-06-10): scene tags are engine-
+            # tracked persistent state, NOT a resource the narrator adjudicates.
+            # The engine does not yet spend leverage (EncounterTag v1 —
+            # docs/superpowers/specs/2026-04-25-dual-track-momentum-design.md),
+            # so a tag stays in play, owned by its creator, until the engine
+            # removes it. Without this gate the LLM narrates tags being "burned"
+            # or flipping to the opponent on a failed roll (the contact "now
+            # holds Positional Advantage"), desyncing prose from the stored tag
+            # the player can still spend next beat.
+            tag_gate_text = (
+                "TAGS_ARE_ENGINE_STATE\n"
+                "The tags above are persistent scene state the engine owns and "
+                "tracks. Reference a tag as fiction — the positioning or "
+                "advantage it represents — but DO NOT narrate it being spent, "
+                "consumed, transferred, burned, lost, or changing owner: the "
+                "engine has not done so and the tag is still in play for its "
+                "creator. `leverage` is engine bookkeeping; never claim a tag "
+                "granted or cost a bonus unless a resolved beat says so.\n"
+                if encounter.tags
+                else ""
+            )
             # Resolution-mode gate (combat fairness, 2026-04-26).
             # When the active confrontation is opposed_check, the engine
             # rolls dice for both sides and derives the outcome tier from
@@ -522,6 +543,7 @@ class NarratorAgent(BaseAgent):
                 f"Actors — emit a beat_selection for every non-withdrawn "
                 f"non-neutral actor:\n" + "\n".join(actor_lines) + "\n"
                 f"Encounter tags:\n{tag_lines}\n"
+                f"{tag_gate_text}"
                 f"</encounter-live>"
             )
             registry.register_section(

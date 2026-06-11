@@ -25,6 +25,7 @@ __all__ = [
     "force_initiative",
     "load_pack",
     "make_pc",
+    "seat_npc_ally",
     "seat_wn_combat",
     "spans_named",
 ]
@@ -117,6 +118,32 @@ def seat_wn_combat(
             "is a precondition of this suite, not its subject"
         )
     return snap, enc
+
+
+def seat_npc_ally(snap, enc, name: str, *, hp: int = 8, role: str = "ally") -> None:
+    """Seat a friendly NPC ally on the player side — the coyote_star crew shape.
+
+    Mirrors the story 59-35 ally seater (SOUL Guitar-Solo / ADR-116 friendly
+    half): an ``Npc`` in ``snap.npcs`` plus a ``side="player"`` EncounterActor.
+    Per 59-35 the ally carries no SWN ability scores and is NOT given an
+    initiative slot — it acts on narrator beats, never seals a Main Action.
+    The caller forces initiative WITHOUT this name (PC + opponent only), exactly
+    as the live coyote_star ship_combat snapshot did (the deadlock repro).
+    """
+    from sidequest.game.creature_core import CreatureCore, Inventory
+    from sidequest.game.encounter import EncounterActor
+    from sidequest.game.session import Npc
+
+    core = CreatureCore(
+        name=name,
+        description="crew at the second seat",
+        personality="steady",
+        inventory=Inventory(),
+        hp={"current": hp, "max": hp, "base_max": hp},
+        level=1,
+    )
+    snap.npcs.append(Npc(core=core))
+    enc.actors.append(EncounterActor(name=name, role=role, side="player"))
 
 
 def force_initiative(enc, order: list[tuple[str, int]]) -> None:

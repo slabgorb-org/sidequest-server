@@ -95,21 +95,46 @@ def seal_wn_commit(
     )
 
 
+def _seated_pc_names(snapshot: GameSnapshot) -> set[str]:
+    """Names of the human-controlled PCs (``snapshot.characters``).
+
+    The discriminator between a player-side participant that SEALS a Main
+    Action (a PC) and one that does not (an engine-driven friendly NPC ally,
+    which story 59-35 seats on side="player"). PCs live in
+    ``snapshot.characters``; NPC allies live in ``snapshot.npcs`` — a
+    player-side EncounterActor whose name is not a PC name is an ally.
+    """
+    return {ch.core.name for ch in snapshot.characters}
+
+
 def wn_waiting_actors(
     *,
     encounter: StructuredEncounter,
     snapshot: GameSnapshot,
 ) -> list[str]:
-    """Player-side actors the commit barrier is still waiting on.
+    """Player-side PCs the commit barrier is still waiting on.
 
-    Withdrawn and downed (0-HP) participants cannot commit and never hold
-    the barrier; an actor whose CreatureCore does not resolve is counted as
-    waiting (we cannot prove they are out of the fight).
+    Only HUMAN-CONTROLLED player characters seal a Main Action and hold the
+    barrier. Engine-driven friendly NPC allies (the story 59-35 / SOUL
+    Guitar-Solo ally seater puts them on side="player") never commit — they
+    carry no SWN ability scores, get no initiative slot, and act on narrator
+    beats — so counting them dangles the barrier forever (the coyote_star solo
+    ship_combat deadlock, 2026-06-10: the human commits the one PC, the crew
+    ally never does, the round never fires). A PC is a name in
+    ``snapshot.characters``; an NPC ally is in ``snapshot.npcs`` and is exempt.
+
+    Withdrawn and downed (0-HP) PCs cannot commit and never hold the barrier;
+    a PC whose CreatureCore does not resolve is counted as waiting (we cannot
+    prove they are out of the fight).
     """
+    pc_names = _seated_pc_names(snapshot)
     committed = {c.actor for c in encounter.wn_commits}
     waiting: list[str] = []
     for a in encounter.actors:
         if a.side != "player" or a.withdrawn or a.name in committed:
+            continue
+        if a.name not in pc_names:
+            # Engine-driven NPC ally — never seals a Main Action (59-35).
             continue
         core = snapshot.find_creature_core(a.name)
         if core is not None and core.hp.current <= 0:
@@ -118,12 +143,32 @@ def wn_waiting_actors(
     return waiting
 
 
+def wn_barrier_exempt_allies(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+) -> list[str]:
+    """Player-side NPC allies the commit barrier does NOT wait on.
+
+    The complement of the PC set among live, seated player-side actors: friendly
+    crew the engine drives via narrator beats, not sealed Main Actions (59-35).
+    Surfaced on the ``{slug}.round.committed`` span so the GM panel can see why
+    the barrier closed without every player-side actor committing.
+    """
+    pc_names = _seated_pc_names(snapshot)
+    return [
+        a.name
+        for a in encounter.actors
+        if a.side == "player" and not a.withdrawn and a.name not in pc_names
+    ]
+
+
 def wn_barrier_closed(
     *,
     encounter: StructuredEncounter,
     snapshot: GameSnapshot,
 ) -> bool:
-    """True when every live, seated player-side participant has committed."""
+    """True when every live, seated player-side PC has committed."""
     return not wn_waiting_actors(encounter=encounter, snapshot=snapshot)
 
 
@@ -174,7 +219,16 @@ def run_wn_round(
 
     slug = pack.rules.ruleset
     committed = ", ".join(c.actor for c in encounter.wn_commits)
-    wn_round_committed_span(slug=slug, committed_actors=committed)
+    # GM-panel lie-detector: when the barrier closed with fewer commits than
+    # player-side actors, the difference is the engine-driven NPC allies (59-35)
+    # that never seal a Main Action — record them so the short barrier is
+    # explainable, not a mystery (coyote_star solo ship_combat deadlock fix).
+    exempt_allies = ", ".join(
+        wn_barrier_exempt_allies(encounter=encounter, snapshot=snapshot)
+    )
+    wn_round_committed_span(
+        slug=slug, committed_actors=committed, exempt_allies=exempt_allies
+    )
 
     order = sorted(encounter.initiative, key=lambda e: e.value, reverse=True)
     wn_round_initiative_span(

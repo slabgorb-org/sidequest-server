@@ -29,6 +29,7 @@ for _slug in WN_FAMILY_SLUGS:
         extract=lambda span: {
             "field": "round_committed",
             "committed_actors": (span.attributes or {}).get("committed_actors", ""),
+            "exempt_allies": (span.attributes or {}).get("exempt_allies", ""),
         },
     )
     SPAN_ROUTES[f"{_slug}.round.initiative"] = SpanRoute(

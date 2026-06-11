@@ -79,6 +79,52 @@ def test_beat_applied_writes_event_row(sink) -> None:
     assert payload["outcome_tier"] == "Success"
 
 
+def test_narrator_dial_advance_writes_event_row(sink) -> None:
+    """A ``op="narrator_dial_advance"`` encounter publish lands an
+    ENCOUNTER_NARRATOR_DIAL_ADVANCE row with its before/after/delta preserved.
+
+    Playtest 2026-06-10 (coyote_star dogfight): the narrator advances the
+    dial_threshold dogfight's energy dials via the ``advance_confrontation``
+    tool. That tool emits this watcher event with full before/after/delta, but
+    ``narrator_dial_advance`` was absent from ``_KIND_BY_OP`` so the row was
+    silently dropped from the events table. Result: the GM-panel EncounterTab
+    timeline (and the DRIVER's ``/encounter_events`` forensic pull) showed
+    ENCOUNTER_BEAT_APPLIED with Δ0 and no dial-advance trail — the opponent's
+    energy climbed 10→20 with zero attribution. The dial move MUST leave a typed
+    ENCOUNTER_* row so "why is the enemy winning" is answerable from the trail.
+    """
+    _s, pool, sid = sink
+    publish_event(
+        "state_transition",
+        {
+            "field": "encounter",
+            "op": "narrator_dial_advance",
+            "encounter_type": "dogfight",
+            "axis": "opponent",
+            "delta": 5,
+            "reason": "contact climbs across the six",
+            "value_before": 10,
+            "value_after": 15,
+            "threshold": 30,
+            "crossed_threshold": False,
+            "source": "advance_confrontation",
+        },
+        component="encounter",
+    )
+
+    rows = _events(pool, sid)
+    kinds = [r[0] for r in rows]
+    assert "ENCOUNTER_NARRATOR_DIAL_ADVANCE" in kinds, (
+        "narrator dial advance must persist a typed ENCOUNTER_* row so the "
+        "dial move is attributable in the GM-panel timeline"
+    )
+    payload = next(json.loads(r[1]) for r in rows if r[0] == "ENCOUNTER_NARRATOR_DIAL_ADVANCE")
+    assert payload["axis"] == "opponent"
+    assert payload["delta"] == 5
+    assert payload["value_before"] == 10
+    assert payload["value_after"] == 15
+
+
 def test_resolution_writes_event_row_with_structured_outcome(sink) -> None:
     """A ``op="resolved"`` encounter publish lands ENCOUNTER_RESOLVED with the
     structured outcome preserved."""

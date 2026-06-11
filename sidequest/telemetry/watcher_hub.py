@@ -343,6 +343,18 @@ _KIND_BY_OP: dict[str, str] = {
     "started": "ENCOUNTER_STARTED",
     "beat_applied": "ENCOUNTER_BEAT_APPLIED",
     "metric_advance": "ENCOUNTER_METRIC_ADVANCE",
+    # Narrator-driven dial advance via the ``advance_confrontation`` tool
+    # (sq-playtest 2026-06-10 coyote_star dogfight). On a dial_threshold
+    # confrontation the narrator — not the beat-kind engine — moves the dials:
+    # apply_beat reports Δ0 for angle/tag beats while the dial climbs, because
+    # the dial delta rides this tool, decoupled from the beat. Without this
+    # mapping the narrator's dial move (which DOES emit full before/after/delta
+    # on this event) was dropped from the events table, so the GM-panel
+    # EncounterTab timeline showed a moving opponent dial with no attributing
+    # row — the exact "engine ran but the trail says nothing" lie CLAUDE.md
+    # forbids. Internal telemetry; added to _REPLAY_SKIP_KINDS so reconnect
+    # skips it cleanly (it is not fanned out to clients).
+    "narrator_dial_advance": "ENCOUNTER_NARRATOR_DIAL_ADVANCE",
     "beat_skipped": "ENCOUNTER_BEAT_SKIPPED",
     "tag_created": "ENCOUNTER_TAG_CREATED",
     "tag_backfire": "ENCOUNTER_TAG_CREATED",  # backfire is still a tag-creation row

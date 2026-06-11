@@ -50,9 +50,21 @@ _DETERMINER = r"(?:the|a|an|old|young)"
 # that gets MINTED (truncated to the leading words).
 _EPITHET_BODY = rf"{_DETERMINER}\s+[a-z][a-z'-]+(?:\s+[a-z][a-z'-]+){{0,2}}"
 
-# Finite present-tense 3rd-person scene verbs. Leads with the matrix verbs and
-# common scene verbs so the clause cases reject; the structural -s guard below
-# generalizes beyond the list without misclassifying -s NOUNS.
+# Finite present-tense 3rd-person scene verbs — the matrix verbs and the common
+# scene verbs that occupy the "the <noun> <verb>s" clause position an appositive
+# epithet can be mistaken for. This curated list is the SOLE finite-verb signal.
+#
+# Story 84-7 removed the prior structural "-s ending ⇒ finite verb" fallback: ``-s``
+# is genuinely ambiguous between a 3rd-person verb ("sputters") and a plural NOUN
+# ("spurs", "moons", "the silver spurs"), and the structural rule produced
+# false positives that wrongly REJECTED valid plural-noun epithets — the bug this
+# story fixes. No reliable structural separator exists without a full POS tagger
+# (out of scope: no nltk/spacy dependency), so the curated list — well-matched to
+# the narrow determiner-led syntactic position, where the clause verbs are common
+# and enumerable — carries the signal alone. Unlisted scene verbs in that position
+# now mint instead of being caught structurally; that is the accepted trade for not
+# misclassifying plural-noun descriptors (§A4 "miss before mint-garbage" still holds
+# for every verb in the list).
 _FINITE_VERB_STOPLIST: frozenset[str] = frozenset(
     {
         "sputters", "swings", "parts", "creaks", "howls", "walks", "enters", "dies",
@@ -64,29 +76,20 @@ _FINITE_VERB_STOPLIST: frozenset[str] = frozenset(
     }
 )
 
-# Noun endings that look 3rd-person-verb-ish (-s) but are NOT verbs — guards the
-# structural -s heuristic so "the duchess" / "the boss" / "the chaos" don't read as
-# clauses (TEA's explicit warning).
-_NOUN_S_SUFFIXES: tuple[str, ...] = ("ss", "us", "is", "ous", "ics", "ness", "ess")
-
 
 def _looks_like_finite_verb(word: str) -> bool:
     """True when ``word`` is a present-tense 3rd-person finite verb (a clause tell).
 
-    Curated stoplist first (covers the matrix + common scene verbs), then a
-    structural fallback: a word ending in a lone ``s`` (3rd-person present) that is
-    not one of the ``-ss``/``-us``/``-is`` noun shapes. Conservative on the noun
-    side — a false "not a verb" only risks minting one extra epithet, while a false
-    "is a verb" wrongly rejects a valid one; §A4 says miss before mint-garbage, so
-    the verb side stays tight (curated list + a guarded heuristic)."""
+    Membership in the curated :data:`_FINITE_VERB_STOPLIST` is the sole test. The
+    old structural ``-s`` fallback was removed in Story 84-7 (see the stoplist
+    comment): it could not tell a 3sg verb from a plural noun and so wrongly rejected
+    plural-noun epithets. The list is biased to the common scene verbs that share the
+    determiner-led position with an appositive, so a false "is a verb" — which would
+    wrongly reject a valid epithet — stays rare."""
     w = word.lower().strip("'-")
     if not w:
         return False
-    if w in _FINITE_VERB_STOPLIST:
-        return True
-    # Structural -s heuristic: ``parts``/``creaks`` shape, but never an -ss/-us/-is
-    # noun. Requires length > 3 so tiny words ("is" handled above) don't trip it.
-    return len(w) > 3 and w.endswith("s") and not w.endswith(_NOUN_S_SUFFIXES)
+    return w in _FINITE_VERB_STOPLIST
 
 
 def _phrase_has_finite_verb(phrase: str) -> bool:

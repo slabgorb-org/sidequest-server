@@ -1476,6 +1476,11 @@ def _build_cartography_map_message(
                     "starting_region": getattr(cart, "starting_region", ""),
                     "regions": region_dict,
                     "routes": routes_list,
+                    # Story 104-1 / M-A: the loader-cached multi-system flag,
+                    # supersedes the UI's regionCount>1 heuristic (M-B). Always a
+                    # concrete bool on the wire (never absent/None — the UI reads
+                    # it unconditionally).
+                    "is_cluster": bool(getattr(world, "is_cluster", False)),
                 },
             ),
             player_id=player_id,

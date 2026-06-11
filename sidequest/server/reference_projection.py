@@ -75,12 +75,18 @@ def build_lore_map_section(
     pack: str,
     world: str,
     portrait_on_r2_slugs: frozenset[str],
+    is_cluster: bool = False,
 ) -> dict:
     """Project ``cartography`` into the public ``map`` section dict.
 
     Fires the reference map spans at projection time (the decision point): one
     ``map_rendered`` census, a per-pin ``pin_resolved`` / ``pin_not_found``, and a
     ``dangling_edge`` WARN per dropped adjacency.
+
+    ``is_cluster`` (Story 104-1 / M-A) rides the section so the reference SPA's
+    Map surface (M-C) can branch single-system-collapse vs cluster-graph off the
+    same authoritative server flag as the in-game map. Defaults False — a single
+    system unless detection proves a cluster.
     """
     edges, dangling = _edges_and_dangling(cart)
     for source, missing in dangling:
@@ -121,6 +127,7 @@ def build_lore_map_section(
         "id": "map",
         "label": "Map",
         "starting_region": cart.starting_region,
+        "is_cluster": is_cluster,
         "regions": regions,
         "edges": [list(e) for e in edges],
         "dangling": [list(d) for d in dangling],
@@ -523,9 +530,18 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
             world=world,
             pack_dir=pack_dir,
         )
+        # Story 104-1 / M-A: detect single-vs-cluster on disk (this projection is
+        # session-free, so it has no loaded World — it inspects world_dir
+        # directly via the shared genre helper, which emits the decision span).
+        from sidequest.genre.cluster_detection import detect_is_cluster
+
         sections.append(
             build_lore_map_section(
-                cartography, pack=pack, world=world, portrait_on_r2_slugs=gated_map_slugs
+                cartography,
+                pack=pack,
+                world=world,
+                portrait_on_r2_slugs=gated_map_slugs,
+                is_cluster=detect_is_cluster(world_dir),
             )
         )
 

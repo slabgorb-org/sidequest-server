@@ -1562,11 +1562,19 @@ def _load_single_world(
             # here; the detail keeps the stock id + offending mutation id.
             raise GenreLoadError(path=stocks_path, detail=str(e)) from e
 
+    # Story 104-1 / M-A: single-vs-cluster is a system COUNT, decided at load
+    # time and cached on the World so the in-game MAP_UPDATE path (which holds
+    # only the World, not its dir) can ship the flag. Emits the decision span.
+    from sidequest.genre.cluster_detection import detect_is_cluster
+
+    is_cluster = detect_is_cluster(world_path)
+
     return World(
         config=config,
         lore=lore,
         legends=legends,
         cartography=cartography,
+        is_cluster=is_cluster,
         cultures=cultures,
         tropes=tropes,
         archetypes=archetypes,

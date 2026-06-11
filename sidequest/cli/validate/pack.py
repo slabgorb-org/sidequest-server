@@ -235,32 +235,95 @@ def _validate_single_model(path: Path, model: type[BaseModel], label: str) -> li
     return []
 
 
-def _validate_portrait_manifest(path: Path, label: str) -> list[str]:
+def _collect_poi_slugs(history_path: Path) -> set[str]:
+    """Return the set of ``slug`` values from all ``points_of_interest`` entries
+    across all chapters in a ``history.yaml``.
+
+    Uses ``_iter_history_chapters`` to accept both the top-level ``chapters:``
+    shape (world histories) and the ``history_structure.chapters:`` shape
+    (genre-tier templates). Returns an empty set when the file is absent,
+    unparseable, or has no POI slugs.
+    """
+    if not history_path.is_file():
+        return set()
+    data, _read_err = _read_yaml(history_path, "")
+    if data is None:
+        return set()
+    chapters = _iter_history_chapters(data)
+    slugs: set[str] = set()
+    for chapter in chapters:
+        pois = chapter.get("points_of_interest")
+        if not isinstance(pois, list):
+            continue
+        for poi in pois:
+            if isinstance(poi, dict) and poi.get("slug"):
+                slugs.add(str(poi["slug"]))
+    return slugs
+
+
+def _validate_portrait_manifest(
+    path: Path,
+    label: str,
+    known_poi_slugs: set[str] | None = None,
+) -> tuple[list[str], list[str]]:
     """Validate portrait_manifest.yaml in both supported shapes:
     ``{characters: [...]}`` and a bare list (loader._load_portrait_manifest
-    l.638-645). Skips absent/empty files and unrecognized top-level shapes."""
+    l.638-645). Skips absent/empty files and unrecognized top-level shapes.
+
+    Returns ``(errors, warnings)``.
+
+    - Pydantic ``PortraitManifestEntry`` failures → **errors**
+    - ``type=player_picker`` missing required fields (``id``, ``culture``,
+      ``archetype``, ``sex``) → **warnings** (content-gap signal; pack still loads)
+    - ``backdrop_poi`` slug not in ``known_poi_slugs`` → **warnings** when
+      ``known_poi_slugs`` is provided
+
+    NPC entries (any other type) are completely unaffected by the picker checks.
+    """
     if not path.is_file():
-        return []
+        return [], []
     data, read_err = _read_yaml(path, label)
     if read_err is not None:
-        return [read_err]
+        return [read_err], []
     if isinstance(data, dict) and "characters" in data:
         entries = data["characters"]
     elif isinstance(data, list):
         entries = data
     else:
-        return []
+        return [], []
     if not isinstance(entries, list):
-        return []
+        return [], []
     errors: list[str] = []
+    warnings: list[str] = []
     for idx, entry in enumerate(entries):
         try:
-            PortraitManifestEntry.model_validate(entry)
+            parsed = PortraitManifestEntry.model_validate(entry)
         except ValidationError as exc:
             errors.append(
                 f"{label}: {path.name} entry [{idx}] failed PortraitManifestEntry validation: {exc}"
             )
-    return errors
+            continue
+        if parsed.character_type == "player_picker":
+            missing = [
+                field
+                for field in ("id", "culture", "archetype", "sex")
+                if not getattr(parsed, field)
+            ]
+            if missing:
+                warnings.append(
+                    f"{label}: {path.name} entry [{idx}] player_picker is missing required"
+                    f" fields: {', '.join(missing)}"
+                )
+            if (
+                parsed.backdrop_poi
+                and known_poi_slugs is not None
+                and parsed.backdrop_poi not in known_poi_slugs
+            ):
+                warnings.append(
+                    f"{label}: {path.name} entry [{idx}] player_picker backdrop_poi"
+                    f" '{parsed.backdrop_poi}' does not match any known POI slug"
+                )
+    return errors, warnings
 
 
 def _validate_projection(path: Path, label: str) -> list[str]:
@@ -766,7 +829,14 @@ def _validate_world(
     content_errors.extend(
         _validate_list_of_model(world_dir / "tropes.yaml", TropeDefinition, label)
     )
-    content_errors.extend(_validate_portrait_manifest(world_dir / "portrait_manifest.yaml", label))
+    poi_slugs = _collect_poi_slugs(world_dir / "history.yaml")
+    manifest_errors, manifest_warnings = _validate_portrait_manifest(
+        world_dir / "portrait_manifest.yaml",
+        label,
+        known_poi_slugs=poi_slugs,
+    )
+    content_errors.extend(manifest_errors)
+    waiver_warnings.extend(manifest_warnings)
 
     # Epic 74 (story 74-3) — world lore must seed a non-empty LoreStore.
     content_errors.extend(_validate_world_lore_seedable(world_dir, label))

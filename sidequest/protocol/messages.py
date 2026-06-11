@@ -361,6 +361,29 @@ class SessionEventPayload(ProtocolBase):
 # ---------------------------------------------------------------------------
 
 
+class StockDeltas(ProtocolBase):
+    """Mechanical deltas of one stock option (story 103-2).
+
+    Rendered by the client BEFORE confirmation — the legible-math surface
+    for mechanics-first players. ``granted_mutations`` carries DISPLAY
+    NAMES (never catalog ids)."""
+
+    attr_mods: dict[str, int] = Field(default_factory=dict)
+    move: int | None = None
+    ac: int | None = None
+    trauma_target_mod: int = 0
+    granted_mutations: list[str] = Field(default_factory=list)
+
+
+class StockOption(ProtocolBase):
+    """One stock on the chargen stock step (input_type 'stock', 103-2)."""
+
+    id: str
+    label: str
+    description: str = ""
+    deltas: StockDeltas = Field(default_factory=StockDeltas)
+
+
 class CharacterCreationPayload(ProtocolBase):
     """Character creation flow payload.
 
@@ -402,6 +425,12 @@ class CharacterCreationPayload(ProtocolBase):
     """Completed character data."""
     action: str | None = None
     """Navigation action from client: 'back'."""
+
+    # --- the stock step (server → client, story 103-2) ---
+    stock_options: list[StockOption] | None = None
+    """Stock options with per-stock mechanical deltas; present only when
+    ``input_type`` is ``"stock"``. Aligned 1:1 with the scene's choices so
+    the standard ``{phase: "scene", choice: "<index+1>"}`` response maps."""
 
     # --- the_arrangement (server → client) ---
     pool: list[int] | None = None

@@ -72,6 +72,7 @@ from sidequest.genre.resolve import resolve_trope_inheritance
 from sidequest.mutation.catalog import load_mutation_catalog
 from sidequest.mutation.models import MutationCatalog
 from sidequest.mutation.saints import SaintRegistry, load_saint_registry
+from sidequest.mutation.stocks import StockRegistry, load_stock_registry
 
 # ---------------------------------------------------------------------------
 # Default search paths (mirrors Rust loader convention)
@@ -1537,6 +1538,30 @@ def _load_single_world(
             # file path; the detail keeps the saint id + offending mutation id.
             raise GenreLoadError(path=saints_path, detail=str(e)) from e
 
+    # === World-tier stock roster (worlds/<slug>/stocks.yaml, story 103-2) ===
+    # Chargen entry-path trait sets over the genre mutation catalog. Absence =
+    # single-path chargen (valid authored choice — the flickering_reach shape).
+    # Presence REQUIRES the genre mutation catalog to validate granted ids
+    # against, and every id must resolve, loudly (No Silent Fallbacks).
+    stocks_path = world_path / "stocks.yaml"
+    world_stocks: StockRegistry | None = None
+    if stocks_path.is_file():
+        if mutations is None:
+            raise GenreLoadError(
+                path=stocks_path,
+                detail=(
+                    f"World {world_path.name!r} authors stocks.yaml but the pack has "
+                    "no mutations.yaml catalog — stock trait sets grant genre "
+                    "mutation ids and cannot be validated without one"
+                ),
+            )
+        try:
+            world_stocks = load_stock_registry(stocks_path, mutations)
+        except ValueError as e:
+            # pydantic ValidationError subclasses ValueError — both shapes land
+            # here; the detail keeps the stock id + offending mutation id.
+            raise GenreLoadError(path=stocks_path, detail=str(e)) from e
+
     return World(
         config=config,
         lore=lore,
@@ -1566,6 +1591,7 @@ def _load_single_world(
         inventory=world_inventory,
         bestiary=world_bestiary,
         saints=world_saints,
+        stocks=world_stocks,
         scenarios=world_scenarios,
         premises=world_premises,
         blocs=world_blocs,

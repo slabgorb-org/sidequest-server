@@ -154,6 +154,85 @@ class TestPickerFieldValidation:
         assert errors == [], f"NPC entry should not trigger errors, got: {errors}"
         assert warnings == [], f"NPC entry should not trigger picker warnings, got: {warnings}"
 
+    def test_backdrop_poi_not_checked_without_known_slugs(self, tmp_path: Path) -> None:
+        """A picker with backdrop_poi set, validated WITHOUT known_poi_slugs
+        (None), produces no backdrop warning — the cross-ref check only fires
+        when the caller supplies a slug set (the ``is not None`` conditional)."""
+        manifest_path = _write_manifest(
+            tmp_path,
+            [
+                {
+                    "name": "Picker Without Slug Context",
+                    "type": "player_picker",
+                    "id": "picker_c",
+                    "culture": "voidborn",
+                    "archetype": "drifter",
+                    "sex": "female",
+                    "backdrop_poi": "anything_at_all",
+                },
+            ],
+        )
+
+        errors, warnings = _validate_portrait_manifest(manifest_path, "pack 'test_pack'")
+
+        assert errors == [], f"Expected no errors, got: {errors}"
+        assert warnings == [], (
+            f"backdrop_poi must not be checked when known_poi_slugs is None, got: {warnings}"
+        )
+
+
+class TestPickerValidationWiring:
+    """Wiring test (project rule: every test suite needs one) — exercises the
+    production composition exactly as the call site in ``_validate_world`` does:
+    ``_collect_poi_slugs(history.yaml)`` feeding ``_validate_portrait_manifest``,
+    with both files living in the same world directory."""
+
+    def test_history_slugs_feed_manifest_validation(self, tmp_path: Path) -> None:
+        """End-to-end through the production composition: a dangling backdrop_poi
+        warns; a valid one (resolved from the same history.yaml) does not."""
+        history_path = _write_history(tmp_path, ["vaskov_centrum", "mendes_post"])
+        manifest_path = _write_manifest(
+            tmp_path,
+            [
+                {
+                    "name": "Picker Good Backdrop",
+                    "type": "player_picker",
+                    "id": "picker_good",
+                    "culture": "voidborn",
+                    "archetype": "scout",
+                    "sex": "male",
+                    "backdrop_poi": "vaskov_centrum",
+                },
+                {
+                    "name": "Picker Dangling Backdrop",
+                    "type": "player_picker",
+                    "id": "picker_bad",
+                    "culture": "voidborn",
+                    "archetype": "drifter",
+                    "sex": "female",
+                    "backdrop_poi": "no_such_poi",
+                },
+            ],
+        )
+
+        # Mirror the call site in _validate_world (pack.py): collect POI slugs
+        # from the world's history.yaml, then pass them to the manifest validator.
+        poi_slugs = _collect_poi_slugs(history_path)
+        errors, warnings = _validate_portrait_manifest(
+            manifest_path,
+            "world 'test_world'",
+            known_poi_slugs=poi_slugs,
+        )
+
+        assert errors == [], f"Expected no errors, got: {errors}"
+        assert len(warnings) == 1, f"Expected exactly 1 warning, got: {warnings}"
+        assert "no_such_poi" in warnings[0], (
+            f"Expected dangling slug in warning: {warnings[0]}"
+        )
+        assert "vaskov_centrum" not in warnings[0], (
+            f"Valid backdrop must not warn: {warnings[0]}"
+        )
+
 
 class TestCollectPoiSlugs:
     def test_collects_slugs_from_history(self, tmp_path: Path) -> None:

@@ -246,6 +246,9 @@ def _collect_poi_slugs(history_path: Path) -> set[str]:
     """
     if not history_path.is_file():
         return set()
+    # Deliberate best-effort read: a malformed history.yaml yields set() here —
+    # history.yaml correctness is validated independently by the world validator
+    # (_validate_history_trope_refs), so slug collection can only false-negative.
     data, _read_err = _read_yaml(history_path, "")
     if data is None:
         return set()

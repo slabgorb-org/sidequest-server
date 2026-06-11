@@ -462,10 +462,12 @@ def _resolve_curve_along(
     orbits: OrbitsConfig,
     center_id: str,
     vp: _Viewport,
-) -> tuple[str, str, str, float, tuple[float, float]]:
-    """Resolve a `curve_along` reference to (path_id, path_d, resolved_body_id, circumference_px, midpoint_px).
+) -> tuple[str, str, str, float, tuple[float, float], bool]:
+    """Resolve a `curve_along` reference to (path_id, path_d, resolved_body_id, circumference_px, midpoint_px, needs_upright_flip).
 
     The fifth value is the SVG-pixel midpoint of the textpath at startOffset=50%.
+    The sixth value is whether the label's glyphs travel leftward at that
+    midpoint and therefore need the ADR-094 180° upright-flip (see below).
     Callers use it to determine whether the label falls on the far arc (y > 0 in
     SVG coordinates, i.e. below chart centre) and need the upright-flip.
 
@@ -483,9 +485,21 @@ def _resolve_curve_along(
     The path starts at the top of the ring and sweeps clockwise (sweep-flag=1)
     so textPath letters stay upright in the player's reading direction.
 
-    ADR-094 upright-flip: for orbit_* paths the 50% midpoint is always
-    the ellipse bottom (cx, cy+ry) — always on the far arc (y>0).  For
-    body: arc paths the midpoint is the arc's angular midpoint.
+    ADR-094 upright-flip (returned `needs_upright_flip`): a curved label
+    reads upside-down when its glyphs travel *leftward* (path tangent
+    x < 0) at the 50% midpoint, and must be rotated 180°.  The two path
+    families have OPPOSITE flip conditions, which is why a single
+    `midpoint.y > 0` heuristic is wrong (it inverts arc belts — the
+    "broken drift" bug, addendum §4 / Story M-D):
+
+      - `orbit_*` ellipse: drawn as a full ring from the top sweeping
+        clockwise, so its 50% point is ALWAYS the ellipse bottom where
+        travel is leftward → always flip.
+      - `body:` arc belt: drawn as a partial arc from `from_deg` to
+        `to_deg` (increasing angle).  Tangent x at the angular midpoint
+        is -sin(mid_deg), so it travels leftward (flip) when the midpoint
+        sits in the UPPER half (sin(mid_deg) > 0) — the opposite side
+        from the ellipse.
 
     Raises:
       ValueError: unknown reference scheme, body doesn't exist anywhere,
@@ -532,8 +546,10 @@ def _resolve_curve_along(
         circumference = _ellipse_perimeter_px(rx, ry)
         # ADR-094: at startOffset=50%, the two arcs are mirror-symmetric so the
         # midpoint is exactly the ellipse bottom (cx, cy+ry).  y > 0 → far arc.
+        # The clockwise-from-top ring travels leftward at the bottom, so the
+        # ellipse 50% point always needs the upright-flip.
         midpoint: tuple[float, float] = (cx, cy + ry)
-        return path_id, path_d, body_id, circumference, midpoint
+        return path_id, path_d, body_id, circumference, midpoint, True
 
     if value.startswith("body:"):
         body_id = value[len("body:") :]
@@ -568,7 +584,14 @@ def _resolve_curve_along(
         # ADR-094: midpoint of the circular arc is at the angular midpoint.
         mid_deg = (from_deg + to_deg) / 2.0
         midpoint = _polar_to_cartesian(body.semi_major_au, mid_deg, vp.au_to_px)
-        return path_id, path_d, body_id, circumference, midpoint
+        # The arc is traversed from from_deg → to_deg (increasing angle); the
+        # path tangent x at the midpoint is -sin(mid_deg), so the glyphs travel
+        # leftward (need the 180° flip) iff sin(mid_deg) > 0, i.e. the midpoint
+        # sits in the upper half of the chart.  This is the OPPOSITE side from
+        # the ellipse branch — see the docstring (Story M-D, the "broken drift"
+        # fix).
+        needs_upright_flip = math.sin(math.radians(mid_deg)) > 0
+        return path_id, path_d, body_id, circumference, midpoint, needs_upright_flip
 
     raise ValueError(
         f"curve_along={value!r}: unknown reference scheme; "
@@ -687,7 +710,7 @@ def _arc_belt_bodies_with_textpath_annotation(
         if annot.kind != "engraved_label" or annot.curve_along is None:
             continue
         try:
-            _, _, resolved_body_id, _, _ = _resolve_curve_along(
+            _, _, resolved_body_id, _, _, _ = _resolve_curve_along(
                 annot.curve_along, orbits, center_id, vp
             )
         except (_CurveScopeMismatch, ValueError):
@@ -1774,18 +1797,23 @@ def _render_engraved_layer(
         if annot.kind == "callout_label" and annot.body_ref:
             callout_label_by_body[annot.body_ref] = annot
 
-    # tuple: (path_id, circumference_px, midpoint_px)
-    textpath_by_body: dict[str, tuple[str, float, tuple[float, float]]] = {}
+    # tuple: (path_id, circumference_px, midpoint_px, needs_upright_flip)
+    textpath_by_body: dict[str, tuple[str, float, tuple[float, float], bool]] = {}
     for annot in chart.annotations:
         if annot.kind != "engraved_label" or annot.curve_along is None:
             continue
         try:
-            path_id, _path_d, resolved_body_id, circumference, midpoint = _resolve_curve_along(
-                annot.curve_along, orbits, center_id, vp
-            )
+            (
+                path_id,
+                _path_d,
+                resolved_body_id,
+                circumference,
+                midpoint,
+                needs_flip,
+            ) = _resolve_curve_along(annot.curve_along, orbits, center_id, vp)
         except (_CurveScopeMismatch, ValueError):
             continue
-        textpath_by_body[resolved_body_id] = (path_id, circumference, midpoint)
+        textpath_by_body[resolved_body_id] = (path_id, circumference, midpoint, needs_flip)
 
     strategy_inputs: list[_StrategyInput] = []
     anchor_by_id: dict[str, tuple[float, float, float]] = {}
@@ -1859,9 +1887,7 @@ def _render_engraved_layer(
     for d in decisions:
         if d.strategy == LabelStrategy.TEXTPATH:
             tp_data = textpath_by_body.get(d.body_id)
-            upright_flip_by_body[d.body_id] = (
-                tp_data is not None and tp_data[2][1] > 0
-            )
+            upright_flip_by_body[d.body_id] = tp_data is not None and tp_data[2][1] > 0
 
     # Per-body OTEL spans.
     for d in decisions:
@@ -1897,7 +1923,10 @@ def _render_engraved_layer(
             tp_data = textpath_by_body.get(d.body_id)
             if tp_data is not None:
                 midpoint = tp_data[2]
-                needs_flip = midpoint[1] > 0
+                # ADR-094 flip decision comes from the path geometry (resolved
+                # in _resolve_curve_along), not a midpoint.y heuristic — arc
+                # belts flip on the opposite side from ellipse orbits.
+                needs_flip = tp_data[3]
                 g.add(
                     _emit_textpath_label(
                         d,
@@ -1977,7 +2006,7 @@ def _render_annotation(
             return None
         if annot.curve_along is not None:
             try:
-                path_id, path_d, body_id, _, midpoint = _resolve_curve_along(
+                path_id, path_d, body_id, _, midpoint, needs_flip = _resolve_curve_along(
                     annot.curve_along, orbits, center_id, vp
                 )
             except _CurveScopeMismatch:
@@ -1989,9 +2018,9 @@ def _render_annotation(
             # textPath styling matches the body it represents (AC #6 — last
             # drift's textPath renders in prose register, not Orbitron).
             register = _effective_label_register(orbits.bodies[body_id])
-            # ADR-094: flip iff the label's 50%-offset midpoint is on the far
-            # arc (y > 0 in SVG coordinates = below chart centre).
-            needs_flip = midpoint[1] > 0
+            # ADR-094 flip: resolved from the path geometry, not midpoint.y —
+            # arc-belt labels flip on the upper arc, ellipse orbits on the far
+            # (bottom) arc (Story M-D, the "broken drift" fix).
             return (
                 _engraved_label_textpath(
                     annot.text,

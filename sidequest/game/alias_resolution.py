@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import re
 
+from sidequest.server.slug_fold import fold_to_ascii
+
 
 def _phrase_matches(phrase: str, action_text: str) -> bool:
     """True when ``phrase`` occurs in ``action_text`` as a whole word/phrase.
@@ -33,11 +35,22 @@ def _phrase_matches(phrase: str, action_text: str) -> bool:
     ``player_referenced_npcs_from_action``: a name/alias must occur as a complete
     token (or multi-token phrase), so "art" does not match inside "start". A blank
     phrase never matches (it would otherwise match everywhere).
+
+    Both sides are first folded through the SHARED 101-8 NFKD helper
+    (:func:`sidequest.server.slug_fold.fold_to_ascii`) so a diacritic-named entity
+    resolves a reference written without the accent — and vice-versa — closing the
+    §A4 diacritic split-brain (Story 84-7). The fold decomposes precomposed letters
+    and drops combining marks (``é`` → ``e``), folding BOTH the candidate phrase and
+    the action text so neither side's accent decides the match. ``IGNORECASE`` then
+    handles case and ``\\b`` the word boundary, on the folded text — the same shared
+    rule the slug surfaces use, not a second normalization.
     """
     phrase = phrase.strip()
     if not phrase:
         return False
-    return re.search(rf"\b{re.escape(phrase)}\b", action_text, re.IGNORECASE) is not None
+    folded_phrase = fold_to_ascii(phrase)
+    folded_action = fold_to_ascii(action_text)
+    return re.search(rf"\b{re.escape(folded_phrase)}\b", folded_action, re.IGNORECASE) is not None
 
 
 def resolve_mention(

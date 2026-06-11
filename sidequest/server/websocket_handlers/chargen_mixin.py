@@ -605,10 +605,12 @@ class CharGenMixin:
 
         # Validate against the world's player_picker slugs — same derivation
         # the REST roster endpoint serves (picker_portrait_slug[s], Epic 66).
+        # The set is computed on the skip path too: its size is the
+        # ``pool_size`` span attribute (spec §8) either way.
+        world_obj = sd.genre_pack.worlds.get(sd.world_slug)
+        known = picker_portrait_slugs(world_obj) if world_obj is not None else set()
         ref_known = True
         if selected is not None:
-            world_obj = sd.genre_pack.worlds.get(sd.world_slug)
-            known = picker_portrait_slugs(world_obj) if world_obj is not None else set()
             ref_known = selected in known
             if not ref_known:
                 logger.warning(
@@ -623,6 +625,19 @@ class CharGenMixin:
                 )
 
         sd.selected_portrait_ref = selected
+
+        # ``was_suggested`` (spec §8): a portrait was picked AND a soft-suggest
+        # archetype hint had been sent on the pick_portrait scene. Best-effort
+        # semantics: the hint isn't parked on the session, so it is re-derived
+        # here with the exact expression ``_render_portrait_scene`` used
+        # (``jungian_hint or rpg_role_hint or class_hint``) — builder state
+        # cannot change between the scene frame and this confirm, so the
+        # re-derivation equals what the client was actually sent. It does NOT
+        # claim the player *followed* the suggestion, only that one existed.
+        acc = builder.accumulated()
+        suggest_sent = (acc.jungian_hint or acc.rpg_role_hint or acc.class_hint) is not None
+        was_suggested = selected is not None and suggest_sent
+
         span.add_event(
             "character_creation.portrait_confirm",
             {
@@ -630,6 +645,8 @@ class CharGenMixin:
                 "selected_portrait_ref": selected or "",
                 "skipped": selected is None,
                 "ref_known": ref_known,
+                "pool_size": len(known),
+                "was_suggested": was_suggested,
                 "player_id": player_id,
             },
         )
@@ -641,6 +658,8 @@ class CharGenMixin:
                 "selected_portrait_ref": selected or "",
                 "skipped": selected is None,
                 "ref_known": ref_known,
+                "pool_size": len(known),
+                "was_suggested": was_suggested,
                 "player_id": player_id,
             },
         ):

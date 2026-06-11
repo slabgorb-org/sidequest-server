@@ -9,6 +9,7 @@ by the loader (Story 41-3). The individual components are validated models.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -132,16 +133,39 @@ class PortraitManifestEntry(BaseModel):
     backdrop_poi: str = ""
 
 
+def _slugify_picker_name(name: str) -> str:
+    """EXACT mirror of ``scripts/generate_portrait_images._slugify_name``
+    (orchestrator repo), which itself mirrors the daemon's
+    ``sidequest_daemon.media.catalogs._slugify_name``: lowercase, collapse
+    whitespace runs to ``_``, drop everything but ``[a-z0-9_-]``.
+
+    THREE divergent slug rules already exist in this codebase (render_common
+    keeps non-ASCII, slugify_player_name NFKD-folds, reference_slug
+    hyphenates) — do NOT "improve" this transform independently. The
+    generator names the on-disk ``<slug>.png`` with its ``_slugify_name``;
+    any drift here means the REST roster serves URLs that 404. The two
+    functions must stay in lockstep. (No NFKD fold here: the generator
+    doesn't fold, and matching its output is the load-bearing contract.)
+    """
+    lowered = name.strip().lower()
+    collapsed = re.sub(r"\s+", "_", lowered)
+    return re.sub(r"[^a-z0-9_-]", "", collapsed)
+
+
 def picker_portrait_slug(entry: PortraitManifestEntry) -> str:
     """Catalog slug for a picker portrait entry (Epic 66).
 
-    Explicit ``id`` wins; falls back to the entry ``name``. The slug doubles
-    as the rendered PNG filename and the ``Character.portrait_ref`` value —
-    the single derivation shared by the REST roster endpoint
-    (``GET /api/chargen/portraits``) and the chargen ``portrait_confirm``
-    validation, so the two surfaces can never disagree on a slug.
+    Explicit ``id`` wins (used verbatim, as the generator does); entries
+    without an ``id`` fall back to the slugified ``name`` via
+    :func:`_slugify_picker_name` — the exact transform the render script
+    (``scripts/generate_portrait_images._slugify_name``) applies when naming
+    the rendered PNG. The slug doubles as the rendered PNG filename and the
+    ``Character.portrait_ref`` value — the single derivation shared by the
+    REST roster endpoint (``GET /api/chargen/portraits``) and the chargen
+    ``portrait_confirm`` validation, so the two surfaces can never disagree
+    on a slug.
     """
-    return entry.id or entry.name
+    return entry.id or _slugify_picker_name(entry.name)
 
 
 def picker_portrait_slugs(world: World) -> set[str]:

@@ -77,6 +77,19 @@ characters:
     appearance: A looming figure in black armour.
 """
 
+# coyote_star shape: id-less pickers with space-separated names. The slug
+# (and thus the URL filename) must be the generator's slugified form
+# (scripts/generate_portrait_images._slugify_name), not the raw name.
+_MANIFEST_PICKER_NO_ID = """\
+characters:
+  - name: picker hegemonic officer f01
+    type: player_picker
+    role: officer
+    culture: hegemonic
+    archetype: ruler
+    sex: female
+"""
+
 _MANIFEST_NO_PICKERS = """\
 characters:
   - name: NPC Boss
@@ -113,13 +126,38 @@ def test_list_pickers_filters_and_resolves(minimal_pack_factory, tmp_path: Path)
             assert field in entry, f"field {field!r} missing from picker entry"
 
     a = next(p for p in body["portraits"] if p["slug"] == "picker_a")
+    # assets/portraits/ is the canonical world-portrait path the render
+    # script writes (scripts/render_common.py) and emitters/_resolve_npc_
+    # portrait_url resolves — NOT images/portraits/.
     assert a["portrait_url"].endswith(
-        f"/genre_packs/{pack.path.name}/worlds/{_WORLD}/images/portraits/picker_a.png"
+        f"/genre_packs/{pack.path.name}/worlds/{_WORLD}/assets/portraits/picker_a.png"
     ), f"unexpected portrait_url: {a['portrait_url']!r}"
     assert a["culture"] == "hegemonic"
     assert a["archetype"] == "ruler"
     assert a["sex"] == "female"
     assert a["role"] == "warrior"
+
+
+def test_list_pickers_idless_entry_slugifies_name(
+    minimal_pack_factory, tmp_path: Path
+) -> None:
+    """An entry without an explicit ``id`` serves the generator-parity
+    slugified name — slug and URL filename both — never the raw name
+    (which would 404 against the rendered ``<slug>.png``)."""
+    pack = minimal_pack_factory(tmp_path)
+    _write_manifest(pack.path, _MANIFEST_PICKER_NO_ID)
+    client = _make_client_for_pack(pack.path)
+
+    resp = client.get(f"/api/chargen/portraits/{pack.path.name}/{_WORLD}")
+    assert resp.status_code == 200
+    portraits = resp.json()["portraits"]
+    assert len(portraits) == 1
+    entry = portraits[0]
+    assert entry["slug"] == "picker_hegemonic_officer_f01"
+    assert entry["portrait_url"].endswith(
+        f"/genre_packs/{pack.path.name}/worlds/{_WORLD}/assets/portraits/"
+        "picker_hegemonic_officer_f01.png"
+    ), f"unexpected portrait_url: {entry['portrait_url']!r}"
 
 
 def test_list_pickers_empty_world_returns_empty_list(

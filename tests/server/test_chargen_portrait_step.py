@@ -394,6 +394,11 @@ class TestPortraitSelectSpan:
             assert attrs.get("genre") == "caverns_and_claudes"
             assert attrs.get("world") == "grimvault"
             assert attrs.get("player_id") == "pid"
+            # Spec §8: the installed manifest ships exactly one picker.
+            assert attrs.get("pool_size") == 1
+            # Spec §8: the default-1 walk always lands a jungian_hint (see
+            # TestPortraitStepInterposes), so a non-skip confirm is suggested.
+            assert attrs.get("was_suggested") is True
 
         run(body())
 
@@ -418,5 +423,8 @@ class TestPortraitSelectSpan:
             assert attrs.get("selected_portrait_ref") == "not_a_real_picker"
             assert attrs.get("ref_known") is False
             assert attrs.get("skipped") is False
+            # pool_size reflects the known set the ref was validated against.
+            assert attrs.get("pool_size") == 1
+            assert attrs.get("was_suggested") is True
 
         run(body())

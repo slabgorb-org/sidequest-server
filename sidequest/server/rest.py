@@ -955,8 +955,14 @@ def create_rest_router() -> APIRouter:
                     "archetype": entry.archetype,
                     "sex": entry.sex,
                     "role": entry.role,
+                    # Canonical world-portrait path convention: the render
+                    # script writes worlds/<world>/assets/portraits/<slug>.png
+                    # (scripts/render_common.py), and every other consumer
+                    # builds the same shape — see
+                    # emitters._resolve_npc_portrait_url and
+                    # reference_presenters/reference_renderer.
                     "portrait_url": resolve_asset_url(
-                        f"genre_packs/{genre}/worlds/{world}/images/portraits/{slug}.png"
+                        f"genre_packs/{genre}/worlds/{world}/assets/portraits/{slug}.png"
                     ),
                 })
         return {"portraits": portraits}

@@ -451,8 +451,7 @@ async def test_saint_marked_drawback_lives_through_confrontation_and_save(
 
     cs = snap.mutation_state.characters[pc_name]
     assert drawback_id in cs.negative_ids, (
-        "the Saint's drawback must be carried on the sheet as a live negative, "
-        "not narrator flavor"
+        "the Saint's drawback must be carried on the sheet as a live negative, not narrator flavor"
     )
 
     # --- the drawback is mechanical truth the narrator cannot forget --------

@@ -927,6 +927,39 @@ def create_rest_router() -> APIRouter:
             )
         return payload
 
+    @router.get("/api/chargen/portraits/{genre}/{world}")
+    async def list_chargen_portraits(genre: str, world: str, request: Request) -> dict[str, Any]:
+        """List player-picker sample portraits for a world (Epic 66).
+
+        Filters portrait_manifest entries to type=player_picker. Returns an
+        empty list (not an error) for worlds that ship no pickers, or for an
+        unknown world within a valid genre.
+        """
+        search_paths: list[Path] = getattr(
+            request.app.state,
+            "genre_pack_search_paths",
+            DEFAULT_GENRE_PACK_SEARCH_PATHS,
+        )
+        genre_pack = load_genre_pack_cached(genre, search_paths=search_paths)
+        world_obj = genre_pack.worlds.get(world)
+        portraits: list[dict[str, Any]] = []
+        if world_obj is not None:
+            for entry in world_obj.portrait_manifest:
+                if entry.character_type != "player_picker":
+                    continue
+                slug = entry.id or entry.name
+                portraits.append({
+                    "slug": slug,
+                    "culture": entry.culture,
+                    "archetype": entry.archetype,
+                    "sex": entry.sex,
+                    "role": entry.role,
+                    "portrait_url": resolve_asset_url(
+                        f"genre_packs/{genre}/worlds/{world}/images/portraits/{slug}.png"
+                    ),
+                })
+        return {"portraits": portraits}
+
     return router
 
 

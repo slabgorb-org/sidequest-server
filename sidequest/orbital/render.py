@@ -1887,7 +1887,11 @@ def _render_engraved_layer(
     for d in decisions:
         if d.strategy == LabelStrategy.TEXTPATH:
             tp_data = textpath_by_body.get(d.body_id)
-            upright_flip_by_body[d.body_id] = tp_data is not None and tp_data[2][1] > 0
+            # Use the geometry-resolved flag (tp_data[3]), NOT a midpoint.y
+            # heuristic — arc belts flip on the opposite side from ellipse
+            # orbits (Story M-D).  This single source keeps the OTEL span and
+            # the SVG element in agreement per the invariant above.
+            upright_flip_by_body[d.body_id] = tp_data is not None and tp_data[3]
 
     # Per-body OTEL spans.
     for d in decisions:
@@ -1923,10 +1927,9 @@ def _render_engraved_layer(
             tp_data = textpath_by_body.get(d.body_id)
             if tp_data is not None:
                 midpoint = tp_data[2]
-                # ADR-094 flip decision comes from the path geometry (resolved
-                # in _resolve_curve_along), not a midpoint.y heuristic — arc
-                # belts flip on the opposite side from ellipse orbits.
-                needs_flip = tp_data[3]
+                # Single source of truth: the same value emitted on the OTEL
+                # span above (resolved from path geometry, not midpoint.y).
+                needs_flip = upright_flip_by_body[d.body_id]
                 g.add(
                     _emit_textpath_label(
                         d,

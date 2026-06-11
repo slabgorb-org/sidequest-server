@@ -264,3 +264,28 @@ async def test_bones_confirm_advances_to_next_scene(handler) -> None:
     assert payload.input_type != "roll_the_bones"
     # the_bones is the last gated scene; next stop is the name scene
     assert "name" in (payload.prompt or "").lower() or payload.allows_freeform
+
+
+# ---------------------------------------------------------------------------
+# Review rework (2026-06-11 [HIGH]): back out of bones, pick default — the
+# wire must honor the player's final choice. No bones frame, no dice.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_back_then_default_choice_skips_bones_over_wire(handler) -> None:
+    await _connect(handler)
+    out = await _send(handler, CharacterCreationPayload(phase="scene", choice="2"))
+    assert _last_chargen_payload(out).input_type == "roll_the_bones"
+    out = await _send(handler, CharacterCreationPayload(action="back"))
+    payload = _last_chargen_payload(out)
+    assert payload.input_type != "roll_the_bones", "back must land on the wager scene"
+    out = await _send(handler, CharacterCreationPayload(phase="scene", choice="1"))
+    payload = _last_chargen_payload(out)
+    assert payload.input_type != "roll_the_bones", (
+        "stale bones mode leaked over the wire after the player chose default"
+    )
+    assert "name" in (payload.prompt or "").lower() or payload.allows_freeform
+    assert not [m for m in out if isinstance(m, DiceResultMessage)], (
+        "default path after back must not broadcast dice"
+    )

@@ -402,6 +402,83 @@ def test_reinjection_across_combat_turns_preserves_damaged_hp() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Playtest 2026-06-10 — junk-name cleansing at the injection boundary.
+#
+# The Monster Manual is a long-lived on-disk cache. A name minted by older
+# generator code (``Vesper (version)`` in a stale coyote_star manual)
+# survives every reload and reaches the player-facing snapshot verbatim.
+# inject() must strip never-valid junk (bracketed annotations, digits)
+# without touching intentional stylistic punctuation.
+# ---------------------------------------------------------------------------
+
+
+def test_inject_strips_parenthetical_annotation_from_creature_name() -> None:
+    """A stale ``Vesper (version)`` enemy must reach the snapshot as ``Vesper``."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="Vesper (version)", tier=1, hp=24)],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    assert [n.core.name for n in snap.npcs] == ["Vesper"]
+
+
+def test_inject_strips_parenthetical_annotation_from_human_name() -> None:
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(npcs=[_human("Demiloslava (npc)")])
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+    assert [n.core.name for n in snap.npcs] == ["Demiloslava"]
+
+
+def test_inject_preserves_intentional_callsign_and_drift_marker() -> None:
+    """Broken Drift mints quoted callsigns and comma drift-markers on purpose —
+    the cleanser must NOT mangle them (only brackets/digits are junk)."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[_human("Quija 'Salt'"), _human("Hush, off Tether")],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+    names = [n.core.name for n in snap.npcs]
+    assert "Quija 'Salt'" in names
+    assert "Hush, off Tether" in names
+
+
+def test_inject_drops_unsalvageable_name() -> None:
+    """A name that is nothing but a bracketed token sanitizes to empty — drop
+    the patch rather than inject a nameless NPC (and never crash on the
+    NpcPatch non-blank validator)."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="(version)", tier=1, hp=9)],
+    )
+    snap = _snapshot()
+    count = monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    assert count == 0
+    assert snap.npcs == []
+
+
+def test_inject_emits_names_sanitized_span_count() -> None:
+    """The registry decision is observable: the injected span reports how many
+    names were cleansed so the GM panel (lie detector) can see it fire."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="Vesper (version)", tier=1, hp=24)],
+    )
+    snap = _snapshot()
+    with mock.patch.object(monster_manual_inject.Span, "open") as span_open:
+        monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    # Span.open(SPAN, {attrs}) — find the injected-span attrs payload.
+    attrs = next(
+        call.args[1]
+        for call in span_open.call_args_list
+        if len(call.args) >= 2 and "names_sanitized" in call.args[1]
+    )
+    assert attrs["names_sanitized"] == 1
+
+
+# ---------------------------------------------------------------------------
 # Playtest 2026-05-11 regression — location stamp on injected NPCs.
 #
 # Manual-injected NPCs (humans + encounter creatures) were materialized

@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from sidequest.game.monster_manual import EntryState, MonsterManual
 from sidequest.game.session import NpcPatch, WorldStatePatch
+from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
 from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_INJECTED
 
@@ -55,6 +56,39 @@ _AVAILABLE_NPC_INJECT_LIMIT = 3
 # in ``snapshot.npcs``; out of combat we surface only the leading 2 so a
 # marketplace doesn't spawn eight monsters into the world state.
 _OUT_OF_COMBAT_ENCOUNTER_LIMIT = 2
+
+
+def _sanitize_patch_names(patches: list[NpcPatch]) -> tuple[list[NpcPatch], int]:
+    """Strip junk from Manual NPC names before they enter game state.
+
+    The Monster Manual is a long-lived on-disk cache: a name minted by older
+    generator code (playtest 2026-06-10: ``Vesper (version)`` in a stale
+    coyote_star manual) survives every reload and would otherwise reach the
+    player-facing snapshot verbatim. We clean at the injection boundary so the
+    surface is correct regardless of cache vintage.
+
+    Returns the kept patches (mutated in place with clean names) and the count
+    that were altered. A name that sanitizes to nothing is unsalvageable —
+    drop the patch loudly rather than inject a nameless NPC.
+    """
+    kept: list[NpcPatch] = []
+    sanitized = 0
+    for patch in patches:
+        clean = sanitize_display_name(patch.name)
+        if clean == patch.name:
+            kept.append(patch)
+            continue
+        if not clean:
+            logger.warning(
+                "monster_manual.name_unsalvageable — dropping NPC patch (raw=%r)",
+                patch.name,
+            )
+            continue
+        logger.warning("monster_manual.name_sanitized — raw=%r clean=%r", patch.name, clean)
+        patch.name = clean
+        sanitized += 1
+        kept.append(patch)
+    return kept, sanitized
 
 
 def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
@@ -324,6 +358,12 @@ def inject(
         if combat_encounters
         else []
     )
+    # Cleanse junk names (stale-cache annotations, corpus leakage) before they
+    # reach the snapshot. Loud per-name warnings + a span count below so the GM
+    # panel sees the registry decision (playtest 2026-06-10, "Vesper (version)").
+    human_patches, human_sanitized = _sanitize_patch_names(human_patches)
+    creature_patches, creature_sanitized = _sanitize_patch_names(creature_patches)
+    names_sanitized = human_sanitized + creature_sanitized
     all_patches = human_patches + creature_patches
 
     available_npcs = len(manual.available_npcs())
@@ -345,6 +385,7 @@ def inject(
             "total_encounters": len(manual.encounters),
             "npcs_injected": len(human_patches),
             "creatures_injected": len(creature_patches),
+            "names_sanitized": names_sanitized,
             "patches_with_location": patches_with_location,
             "in_combat": bool(in_combat),
             "combat_encounters": bool(combat_encounters),

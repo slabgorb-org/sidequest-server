@@ -69,6 +69,8 @@ from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.genre.premise_validate import validate_premises
 from sidequest.genre.resolve import resolve_trope_inheritance
 from sidequest.mutation.catalog import load_mutation_catalog
+from sidequest.mutation.models import MutationCatalog
+from sidequest.mutation.saints import SaintRegistry, load_saint_registry
 
 # ---------------------------------------------------------------------------
 # Default search paths (mirrors Rust loader convention)
@@ -1094,6 +1096,7 @@ def _load_single_world(
     *,
     genre_theme: GenreTheme | None = None,
     valid_act_ids: frozenset[str] = frozenset(),
+    mutations: MutationCatalog | None = None,
 ) -> World | None:
     """Load a single world from its directory.
 
@@ -1488,6 +1491,31 @@ def _load_single_world(
             class_kit_count=len(world_inventory.starting_equipment),
         )
 
+    # === World-tier Saint canon (worlds/<slug>/saints.yaml, story 103-1) ===
+    # Curated presets over the genre mutation catalog. Absence = the world
+    # ships no Saints (valid authored choice). Presence REQUIRES the genre
+    # mutation catalog — there is nothing else to validate bundle/drawback
+    # ids against — and every id must resolve, loudly (No Silent Fallbacks).
+    saints_path = world_path / "saints.yaml"
+    world_saints: SaintRegistry | None = None
+    if saints_path.is_file():
+        if mutations is None:
+            raise GenreLoadError(
+                path=saints_path,
+                detail=(
+                    f"World {world_path.name!r} authors saints.yaml but the pack has "
+                    "no mutations.yaml catalog — Saints are curated bundles of genre "
+                    "mutation ids and cannot be validated without one"
+                ),
+            )
+        try:
+            world_saints = load_saint_registry(saints_path, mutations)
+        except ValueError as e:
+            # pydantic ValidationError subclasses ValueError — both shapes land
+            # here. Re-raise as GenreLoadError so pack load failures carry the
+            # file path; the detail keeps the saint id + offending mutation id.
+            raise GenreLoadError(path=saints_path, detail=str(e)) from e
+
     return World(
         config=config,
         lore=lore,
@@ -1515,6 +1543,7 @@ def _load_single_world(
         items=items,
         inventory=world_inventory,
         bestiary=world_bestiary,
+        saints=world_saints,
         scenarios=world_scenarios,
         premises=world_premises,
         blocs=world_blocs,
@@ -1780,13 +1809,27 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     )
     valid_act_ids = frozenset(a.id for a in genre_witnessed_acts)
 
+    # === Genre-tier mutations.yaml — OPTIONAL (silent-skip when absent) ===
+    # Packs without a mutation system simply omit the file; that's a deliberate
+    # authoring choice (mirrors the magic.yaml pattern above). A present-but-
+    # invalid file still fails loud via ValidationError. Loaded BEFORE the
+    # worlds so each world's saints.yaml (story 103-1) can cross-validate its
+    # bundle/drawback ids against the catalog at load time.
+    mutations_path = path / "mutations.yaml"
+    mutations = load_mutation_catalog(mutations_path) if mutations_path.is_file() else None
+
     # Load worlds and scenarios from subdirectories.
     # _load_single_world returns None for worlds with draft: true — filter them out.
     worlds_raw: dict[str, World | None] = _load_subdirectories(
         path,
         "worlds",
         lambda p: _load_single_world(
-            p, genre_tropes, path, genre_theme=theme, valid_act_ids=valid_act_ids
+            p,
+            genre_tropes,
+            path,
+            genre_theme=theme,
+            valid_act_ids=valid_act_ids,
+            mutations=mutations,
         ),
     )
     worlds: dict[str, World] = {slug: w for slug, w in worlds_raw.items() if w is not None}
@@ -1983,13 +2026,6 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # Optional — packs in workshop without a theme yet simply omit it. When
     # absent, the UI keeps its pre-genre fallback (dark-mode shadcn defaults).
     client_theme_css = _load_text_optional(path / "client_theme.css")
-
-    # === Genre-tier mutations.yaml — OPTIONAL (silent-skip when absent) ===
-    # Packs without a mutation system simply omit the file; that's a deliberate
-    # authoring choice (mirrors the magic.yaml pattern above). A present-but-
-    # invalid file still fails loud via ValidationError.
-    mutations_path = path / "mutations.yaml"
-    mutations = load_mutation_catalog(mutations_path) if mutations_path.is_file() else None
 
     pack = GenrePack(
         meta=meta,

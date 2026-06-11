@@ -282,3 +282,17 @@ def test_edge_fraction_zero_max_returns_zero():
     c.core.hp.max = 0
     c.core.hp.current = 0
     assert c.hp_fraction() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# portrait_ref field (Epic 66)
+# ---------------------------------------------------------------------------
+
+
+def test_portrait_ref_roundtrip_and_defaults_none():
+    """portrait_ref defaults to None and survives a JSON round-trip."""
+    c = make_test_character()
+    assert c.portrait_ref is None
+    c2 = c.model_copy(update={"portrait_ref": "picker_hegemonic_officer_f01"})
+    back = Character.model_validate_json(c2.model_dump_json())
+    assert back.portrait_ref == "picker_hegemonic_officer_f01"

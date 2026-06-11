@@ -28,6 +28,7 @@ from sidequest.game.persistence import (
     GameMode,
 )
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, load_genre_pack_cached
+from sidequest.genre.models.pack import picker_portrait_slug
 from sidequest.server.asset_urls import resolve_asset_url
 
 logger = logging.getLogger(__name__)
@@ -926,6 +927,45 @@ def create_rest_router() -> APIRouter:
                 severity="error",
             )
         return payload
+
+    @router.get("/api/chargen/portraits/{genre}/{world}")
+    async def list_chargen_portraits(genre: str, world: str, request: Request) -> dict[str, Any]:
+        """List player-picker sample portraits for a world (Epic 66).
+
+        Filters portrait_manifest entries to type=player_picker. Returns an
+        empty list (not an error) for worlds that ship no pickers, or for an
+        unknown world within a valid genre.
+        """
+        search_paths: list[Path] = getattr(
+            request.app.state,
+            "genre_pack_search_paths",
+            DEFAULT_GENRE_PACK_SEARCH_PATHS,
+        )
+        genre_pack = load_genre_pack_cached(genre, search_paths=search_paths)
+        world_obj = genre_pack.worlds.get(world)
+        portraits: list[dict[str, Any]] = []
+        if world_obj is not None:
+            for entry in world_obj.portrait_manifest:
+                if entry.character_type != "player_picker":
+                    continue
+                slug = picker_portrait_slug(entry)
+                portraits.append({
+                    "slug": slug,
+                    "culture": entry.culture,
+                    "archetype": entry.archetype,
+                    "sex": entry.sex,
+                    "role": entry.role,
+                    # Canonical world-portrait path convention: the render
+                    # script writes worlds/<world>/assets/portraits/<slug>.png
+                    # (scripts/render_common.py), and every other consumer
+                    # builds the same shape — see
+                    # emitters._resolve_npc_portrait_url and
+                    # reference_presenters/reference_renderer.
+                    "portrait_url": resolve_asset_url(
+                        f"genre_packs/{genre}/worlds/{world}/assets/portraits/{slug}.png"
+                    ),
+                })
+        return {"portraits": portraits}
 
     return router
 

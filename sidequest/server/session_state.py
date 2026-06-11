@@ -210,6 +210,12 @@ class _SessionData:
     # _handle_character_creation's confirmation commit when the Character lands
     # on snapshot.characters.
     builder: CharacterBuilder | None = None
+    # Epic 66 portrait picker. portrait_step_shown gates the one-time
+    # interposition of the pick_portrait scene before the confirmation
+    # summary; selected_portrait_ref holds the player's choice until the
+    # confirmation commit copies it onto the built Character.
+    portrait_step_shown: bool = False
+    selected_portrait_ref: str | None = None
     # Opening-hook seed + directive (Story 2.3 Slice B). Resolved once at
     # connect time from pack/world.openings. Both consumed together by the
     # opening-turn bootstrap after chargen confirmation (Slice H): the seed

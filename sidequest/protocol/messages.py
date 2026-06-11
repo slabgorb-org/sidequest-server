@@ -482,6 +482,16 @@ class CharacterCreationPayload(ProtocolBase):
     seed: int | None = None
     """Optional seed for story_autogen reroll-determinism."""
 
+    # --- the portrait picker step (Epic 66) ---
+    selected_portrait_ref: str | None = None
+    """Player's chosen portrait slug (client → server, phase=portrait_confirm)."""
+    portraits_available: bool | None = None
+    """Server → client: whether this world ships any picker portraits."""
+    suggest_archetype: str | None = None
+    """Server → client: in-progress build archetype, for UI soft-suggest."""
+    suggest_culture: str | None = None
+    """Server → client: in-progress build culture hint, for UI soft-suggest."""
+
 
 # ---------------------------------------------------------------------------
 # TurnStatusPayload

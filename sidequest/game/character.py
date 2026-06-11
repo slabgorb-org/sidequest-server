@@ -169,6 +169,12 @@ class Character(BaseModel):
     # sets it; the renderer falls back to a chassis-default room.
     current_room: str | None = None
 
+    # Player-chosen avatar portrait slug (Epic 66), matching the picker
+    # entry's `id` (e.g. "picker_hegemonic_officer_f01") and the rendered
+    # PNG filename. None when the player skipped the picker or the world
+    # ships no sample portraits. Cosmetic only.
+    portrait_ref: str | None = None
+
     @field_validator("backstory")
     @classmethod
     def backstory_non_blank(cls, v: str) -> str:

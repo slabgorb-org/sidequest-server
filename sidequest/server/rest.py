@@ -28,6 +28,7 @@ from sidequest.game.persistence import (
     GameMode,
 )
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, load_genre_pack_cached
+from sidequest.genre.models.pack import picker_portrait_slug
 from sidequest.server.asset_urls import resolve_asset_url
 
 logger = logging.getLogger(__name__)
@@ -947,7 +948,7 @@ def create_rest_router() -> APIRouter:
             for entry in world_obj.portrait_manifest:
                 if entry.character_type != "player_picker":
                     continue
-                slug = entry.id or entry.name
+                slug = picker_portrait_slug(entry)
                 portraits.append({
                     "slug": slug,
                     "culture": entry.culture,

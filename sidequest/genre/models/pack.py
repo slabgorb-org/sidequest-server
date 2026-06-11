@@ -132,6 +132,31 @@ class PortraitManifestEntry(BaseModel):
     backdrop_poi: str = ""
 
 
+def picker_portrait_slug(entry: PortraitManifestEntry) -> str:
+    """Catalog slug for a picker portrait entry (Epic 66).
+
+    Explicit ``id`` wins; falls back to the entry ``name``. The slug doubles
+    as the rendered PNG filename and the ``Character.portrait_ref`` value —
+    the single derivation shared by the REST roster endpoint
+    (``GET /api/chargen/portraits``) and the chargen ``portrait_confirm``
+    validation, so the two surfaces can never disagree on a slug.
+    """
+    return entry.id or entry.name
+
+
+def picker_portrait_slugs(world: World) -> set[str]:
+    """All ``type=player_picker`` portrait slugs a world ships (Epic 66).
+
+    Empty set for worlds whose manifest holds only canon NPC entries (or no
+    manifest at all).
+    """
+    return {
+        picker_portrait_slug(entry)
+        for entry in world.portrait_manifest
+        if entry.character_type == "player_picker"
+    }
+
+
 class World(BaseModel):
     """A world within a genre pack, assembled from worlds/{slug}/.
 

@@ -63,6 +63,7 @@ from sidequest.game.world_materialization import (
 )
 from sidequest.genre.archetype.shim import resolve_archetype
 from sidequest.genre.error import GenreValidationError
+from sidequest.genre.models.pack import picker_portrait_slugs
 from sidequest.genre.models.world import NavigationMode
 from sidequest.protocol.dice import (
     DiceResultPayload,
@@ -582,9 +583,56 @@ class CharGenMixin:
         Character. Fires ``chargen.portrait_select`` on every pass —
         skip included — so the GM panel sees the step engage (OTEL
         Observability Principle).
+
+        An unknown ref is WARN-AND-ACCEPT, never rejected: the field is
+        cosmetic, and a stale client roster (e.g. content updated mid-
+        session) shouldn't dead-end chargen. The warning + ``ref_known``
+        span attribute keep the mismatch visible to the GM panel.
         """
+        # Out-of-order guard: portrait_confirm is only meaningful after the
+        # pick_portrait frame was interposed at the confirmation boundary.
+        # Reject wrong-state sends the same way siblings surface
+        # BuilderError-style rejections.
+        if not sd.portrait_step_shown:
+            return [
+                _error_msg(
+                    "portrait_confirm rejected: portrait step has not been "
+                    "shown (builder has not reached the confirmation boundary)"
+                )
+            ]
+
         selected = payload.selected_portrait_ref or None
+
+        # Validate against the world's player_picker slugs — same derivation
+        # the REST roster endpoint serves (picker_portrait_slug[s], Epic 66).
+        ref_known = True
+        if selected is not None:
+            world_obj = sd.genre_pack.worlds.get(sd.world_slug)
+            known = picker_portrait_slugs(world_obj) if world_obj is not None else set()
+            ref_known = selected in known
+            if not ref_known:
+                logger.warning(
+                    "chargen.portrait_select_unknown_ref selected=%s genre=%s "
+                    "world=%s known_count=%d player_id=%s "
+                    "(warn-and-accept: portrait_ref is cosmetic)",
+                    selected,
+                    sd.genre_slug,
+                    sd.world_slug,
+                    len(known),
+                    player_id,
+                )
+
         sd.selected_portrait_ref = selected
+        span.add_event(
+            "character_creation.portrait_confirm",
+            {
+                "event": "portrait_confirm",
+                "selected_portrait_ref": selected or "",
+                "skipped": selected is None,
+                "ref_known": ref_known,
+                "player_id": player_id,
+            },
+        )
         with tracer.start_as_current_span(
             SPAN_CHARGEN_PORTRAIT_SELECT,
             attributes={
@@ -592,6 +640,7 @@ class CharGenMixin:
                 "world": sd.world_slug,
                 "selected_portrait_ref": selected or "",
                 "skipped": selected is None,
+                "ref_known": ref_known,
                 "player_id": player_id,
             },
         ):
@@ -1906,6 +1955,12 @@ class CharGenMixin:
             self._room.transition_to_playing(player_id)
 
         sd.builder = None
+        # Epic 66: the parked portrait pick was applied to the built Character
+        # above; clear it (and re-arm the one-time portrait step) alongside the
+        # builder so a future re-chargen on this session can't inherit a stale
+        # pick or skip the pick_portrait frame.
+        sd.selected_portrait_ref = None
+        sd.portrait_step_shown = False
         # ADR-114 (supersedes ADR-078): HP is back as the personal vitality track.
         # Log surface-level mechanical state as hp=current/max.
         # `schema=adr-114` is grep-able so future audits can find this seam.

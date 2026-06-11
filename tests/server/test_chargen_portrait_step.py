@@ -30,6 +30,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
+from sidequest.genre.models.pack import PortraitManifestEntry
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
@@ -148,6 +149,30 @@ async def _walk_to_confirmation(handler: WebSocketSessionHandler) -> list:
     return out
 
 
+def _install_picker_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: WebSocketSessionHandler,
+    slugs: tuple[str, ...] = ("picker_a",),
+) -> None:
+    """Give the session's world a player_picker portrait manifest, in-memory.
+
+    grimvault is a genre-tier-only world (no ``worlds/grimvault/`` directory,
+    so no World entry in ``pack.worlds``). Borrow the pack's real
+    ``beneath_sunden`` World object, monkeypatch its manifest to the given
+    picker slugs, and map it under the session's world slug. monkeypatch
+    reverts both mutations at teardown, so the process-lifetime pack cache
+    stays clean for sibling tests.
+    """
+    sd = handler._session_data  # type: ignore[attr-defined]
+    entries = [
+        PortraitManifestEntry(name=f"Picker {slug}", type="player_picker", id=slug)
+        for slug in slugs
+    ]
+    donor_world = sd.genre_pack.worlds["beneath_sunden"]
+    monkeypatch.setattr(donor_world, "portrait_manifest", entries)
+    monkeypatch.setitem(sd.genre_pack.worlds, sd.world_slug, donor_world)
+
+
 def _last_chargen_payload(out: list) -> CharacterCreationPayload:
     msgs = [m for m in out if isinstance(m, CharacterCreationMessage)]
     assert msgs, f"no CharacterCreationMessage in {[type(m).__name__ for m in out]}"
@@ -179,8 +204,30 @@ class TestPortraitStepInterposes:
             payload = _last_chargen_payload(out)
             assert payload.phase == "scene"
             assert payload.input_type == "pick_portrait"
-            assert payload.portraits_available is not None
+            # grimvault is genre-tier-only: no world entry, no pickers.
+            assert payload.portraits_available is False
+            # Soft-suggest: the default-1 walk always lands a jungian_hint
+            # (the_calling's choice list is qualifying-class-filtered, so the
+            # exact value depends on rolled stats — pin to the pack's enum).
+            assert payload.suggest_archetype in {"hero", "magician", "caregiver", "outlaw"}
+            # caverns_and_claudes chargen scenes carry no race_hint.
+            assert payload.suggest_culture is None
             assert sd.portrait_step_shown is True
+
+        run(body())
+
+    def test_portraits_available_true_when_world_ships_pickers(
+        self, handler_factory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def body() -> None:
+            handler = handler_factory()
+            await _connect(handler)
+            _install_picker_manifest(monkeypatch, handler, slugs=("picker_a", "picker_b"))
+
+            out = await _walk_to_confirmation(handler)
+            payload = _last_chargen_payload(out)
+            assert payload.input_type == "pick_portrait"
+            assert payload.portraits_available is True
 
         run(body())
 
@@ -227,6 +274,62 @@ class TestPortraitConfirm:
 
         run(body())
 
+    def test_unknown_ref_is_warn_and_accept(
+        self, handler_factory, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An unknown slug is accepted (cosmetic field, never dead-end
+        chargen) but logged at WARNING."""
+
+        async def body() -> None:
+            handler = handler_factory()
+            await _connect(handler)
+            _install_picker_manifest(monkeypatch, handler, slugs=("picker_a",))
+            await _walk_to_confirmation(handler)
+            sd = handler._session_data  # type: ignore[attr-defined]
+
+            with caplog.at_level("WARNING"):
+                out = await _send(
+                    handler,
+                    CharacterCreationPayload(
+                        phase="portrait_confirm", selected_portrait_ref="not_a_real_picker"
+                    ),
+                )
+            assert sd.selected_portrait_ref == "not_a_real_picker"
+            assert _last_chargen_payload(out).phase == "confirmation"
+            assert any(
+                "chargen.portrait_select_unknown_ref" in rec.getMessage() for rec in caplog.records
+            )
+
+        run(body())
+
+
+# ---------------------------------------------------------------------------
+# Out-of-order guard: portrait_confirm before the portrait frame is rejected
+# ---------------------------------------------------------------------------
+
+
+class TestPortraitConfirmOrderGuard:
+    def test_portrait_confirm_before_portrait_step_is_rejected(self, handler_factory) -> None:
+        async def body() -> None:
+            handler = handler_factory()
+            await _connect(handler)
+            sd = handler._session_data  # type: ignore[attr-defined]
+            assert sd.portrait_step_shown is False
+
+            out = await _send(
+                handler,
+                CharacterCreationPayload(
+                    phase="portrait_confirm", selected_portrait_ref="picker_a"
+                ),
+            )
+            assert out and isinstance(out[0], ErrorMessage), (
+                f"expected wrong-state rejection, got {[type(m).__name__ for m in out]}"
+            )
+            assert "portrait_confirm rejected" in str(out[0].payload.message)
+            assert sd.selected_portrait_ref is None, "rejected confirm must not store the ref"
+
+        run(body())
+
 
 # ---------------------------------------------------------------------------
 # 3. MANDATORY wiring: the real confirmation commit applies portrait_ref
@@ -264,12 +367,13 @@ class TestPortraitRefAppliedAtCommit:
 
 
 class TestPortraitSelectSpan:
-    def test_portrait_confirm_fires_portrait_select_span(
-        self, handler_factory, otel_capture: InMemorySpanExporter
+    def test_portrait_confirm_fires_portrait_select_span_with_known_ref(
+        self, handler_factory, monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
     ) -> None:
         async def body() -> None:
             handler = handler_factory()
             await _connect(handler)
+            _install_picker_manifest(monkeypatch, handler, slugs=("picker_a",))
             await _walk_to_confirmation(handler)
 
             await _send(
@@ -286,8 +390,33 @@ class TestPortraitSelectSpan:
             attrs = spans[-1].attributes or {}
             assert attrs.get("selected_portrait_ref") == "picker_a"
             assert attrs.get("skipped") is False
+            assert attrs.get("ref_known") is True
             assert attrs.get("genre") == "caverns_and_claudes"
             assert attrs.get("world") == "grimvault"
             assert attrs.get("player_id") == "pid"
+
+        run(body())
+
+    def test_unknown_ref_span_carries_ref_known_false(
+        self, handler_factory, monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
+    ) -> None:
+        async def body() -> None:
+            handler = handler_factory()
+            await _connect(handler)
+            _install_picker_manifest(monkeypatch, handler, slugs=("picker_a",))
+            await _walk_to_confirmation(handler)
+
+            await _send(
+                handler,
+                CharacterCreationPayload(
+                    phase="portrait_confirm", selected_portrait_ref="not_a_real_picker"
+                ),
+            )
+            spans = _spans_named(otel_capture, "chargen.portrait_select")
+            assert spans
+            attrs = spans[-1].attributes or {}
+            assert attrs.get("selected_portrait_ref") == "not_a_real_picker"
+            assert attrs.get("ref_known") is False
+            assert attrs.get("skipped") is False
 
         run(body())

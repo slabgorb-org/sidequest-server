@@ -120,6 +120,16 @@ class PortraitManifestEntry(BaseModel):
     appearance: str = ""
     culture_aesthetic: str = ""
     element_visual: str = ""
+    # Picker metadata (Epic 66). Populated only on type=player_picker entries;
+    # blank on canon NPC entries. `id` is the explicit slug (also the rendered
+    # PNG filename and the catalog ref suffix); culture/archetype/sex drive the
+    # UI soft-suggest; backdrop_poi names the history.yaml POI used as the
+    # render backdrop (empty => plain portrait).
+    id: str = ""
+    culture: str = ""
+    archetype: str = ""
+    sex: str = ""
+    backdrop_poi: str = ""
 
 
 class World(BaseModel):

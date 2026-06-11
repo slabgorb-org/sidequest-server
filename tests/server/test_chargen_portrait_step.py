@@ -26,9 +26,6 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from opentelemetry import trace as otel_trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
@@ -94,21 +91,9 @@ def handler_factory(tmp_path: Path):
     return make
 
 
-@pytest.fixture
-def otel_capture():
-    """Install an in-memory OTEL exporter and yield it for assertions."""
-    from sidequest.telemetry.setup import init_tracer
-
-    init_tracer()
-    provider = otel_trace.get_tracer_provider()
-    assert isinstance(provider, TracerProvider)
-    exporter = InMemorySpanExporter()
-    processor = SimpleSpanProcessor(exporter)
-    provider.add_span_processor(processor)
-    try:
-        yield exporter
-    finally:
-        processor.shutdown()
+# OTEL capture: tests use the shared ``otel_capture`` fixture from
+# tests/server/conftest.py (global-provider exporter with the 45-36
+# stale-processor reset) — no local copy.
 
 
 # ---------------------------------------------------------------------------

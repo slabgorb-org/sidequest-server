@@ -48,7 +48,8 @@ def test_build_turn_context_populates_lethality_policy_from_pack():
 
     assert ctx.lethality_policy is not None
     assert ctx.lethality_policy.genre_key == "caverns_and_claudes"
-    assert ctx.lethality_policy.verdicts_on_zero_hp.pc == "humiliated"
+    # WWN port (2026-06-12): caverns is lethal_for_this_genre (permadeath).
+    assert ctx.lethality_policy.verdicts_on_zero_hp.pc == "dead"
 
 
 def test_build_turn_context_populates_empty_cores_when_no_pcs_or_npcs():

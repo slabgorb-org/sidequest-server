@@ -111,9 +111,17 @@ async def test_zero_edge_pc_in_mutant_wasteland_injects_permadeath_directives():
     assert "miraculous rescues" in prompt
 
 
-async def test_zero_edge_pc_in_caverns_injects_comedic_directives():
-    """caverns_and_claudes policy text ('slapstick') reaches the prompt."""
-    sd = _session("caverns_and_claudes", "mawdeep", _character("Alice", edge_current=0))
+async def test_zero_hp_pc_in_wry_whimsy_injects_recoverable_break_directives():
+    """A non-permadeath pack's recoverable-break lethality text reaches the prompt.
+
+    This proves the engine routes a pack's NON-lethal lethality_policy directives
+    all the way to the narrator prompt — the counterpart to the permadeath case
+    above. caverns_and_claudes was the comedic/no-permadeath example before its
+    2026-06-12 WWN port (now lethal_for_this_genre); wry_whimsy is the live pack
+    that still ships a recoverable, narrative-only break policy (Composure
+    substrate), so it stands in for the soft-lethality branch.
+    """
+    sd = _session("wry_whimsy", "oz", _character("Alice", edge_current=0))
     ctx = _build_turn_context(sd)
     ctx.dispatch_package = _dispatch_package()
     ctx.bank_result = BankResult()
@@ -123,10 +131,15 @@ async def test_zero_edge_pc_in_caverns_injects_comedic_directives():
         "retreat",
         ctx,
     )
-    # Comedic verdict — "humiliated" — with one-liner + slapstick cues:
-    assert "one-liner" in prompt or "slapstick" in prompt
-    # Must-not text surfaces too:
-    assert "permadeath" in prompt or "eulogy" in prompt
+    assert "must_narrate" in prompt
+    assert "must_not_narrate" in prompt
+    # Recoverable-break verdict — wry_whimsy's specific must_narrate text
+    # surfaces (not just any lethality prose; a vaguer match would mask a
+    # policy-routing regression):
+    assert "Render a BREAK, not a wound" in prompt
+    # Its specific must_not text surfaces too (no death / eulogy at this
+    # baseline):
+    assert "treats the loss as final or fatal at this lethality baseline" in prompt
 
 
 async def test_no_lethality_directives_when_character_above_zero_edge():

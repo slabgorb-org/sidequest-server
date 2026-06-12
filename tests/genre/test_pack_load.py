@@ -29,10 +29,50 @@ def load_pack(slug: str) -> GenrePack:
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-def test_caverns_and_claudes_pack_loads_with_dual_dial_schema():
+def test_caverns_and_claudes_pack_loads_with_wwn_combat_and_dial_schema():
+    """caverns_and_claudes is bound ruleset: wwn (2026-06-12 port): its
+    ``combat`` ("Dungeon Combat") moved off opposed_check dual-dial metrics to
+    ``resolution_mode: beat_selection`` + ``win_condition: hp_depletion`` —
+    combat resolves on HP reaching 0 and legitimately carries NO
+    player_metric/opponent_metric, mirroring elemental_harmony / heavy_metal.
+    The dual-dial invariant therefore only applies to its remaining dial
+    confrontations (chase "Corridor Pursuit", negotiation), which are
+    ``win_condition: dial_threshold`` (the model default) and still carry
+    metrics. Filter on win_condition so the metricless hp_depletion combat is
+    skipped rather than NPE-ing on ``player_metric.threshold``. At least one
+    dial confrontation must remain so this assertion does not pass vacuously."""
     pack = load_pack("caverns_and_claudes")
     assert pack.rules is not None
-    for cdef in pack.rules.confrontations:
+    # Positive WWN-combat guard: COMBAT_PACKS in test_confrontation_calibration
+    # is now empty, so this is the assertion that fails loudly if the combat
+    # def is ever deleted or falls off the wwn binding.
+    assert pack.rules.ruleset == "wwn"
+    combat_defs = [c for c in pack.rules.confrontations if c.confrontation_type == "combat"]
+    assert combat_defs, "caverns_and_claudes must expose a combat confrontation"
+    for cdef in combat_defs:
+        mode = (
+            cdef.resolution_mode.value
+            if hasattr(cdef.resolution_mode, "value")
+            else cdef.resolution_mode
+        )
+        win = (
+            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
+        )
+        assert mode == "beat_selection"
+        assert win == "hp_depletion"
+    dial_confrontations = [
+        cdef
+        for cdef in pack.rules.confrontations
+        if (
+            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
+        )
+        == "dial_threshold"
+    ]
+    assert dial_confrontations, (
+        "caverns_and_claudes must retain at least one dial_threshold confrontation "
+        "(chase/negotiation) for this dual-dial assertion to be meaningful"
+    )
+    for cdef in dial_confrontations:
         assert cdef.player_metric.threshold > 0
         assert cdef.opponent_metric.threshold > 0
         for beat in cdef.beats:

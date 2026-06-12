@@ -45,13 +45,17 @@ def cc_pack():
     return load_genre_pack(path)
 
 
-def _walk_chargen(pack, *, target_class: str = "Cleric", rng_seed: int = 42):
-    """Walk the 6-scene C&C chargen flow; returns (character, walk_log).
+def _walk_chargen(pack, *, target_class: str = "Warrior", rng_seed: int = 42):
+    """Walk the WWN 4-scene point-buy C&C chargen flow; returns (character, walk_log).
+
+    WWN port (2026-06-12): the flow is the_calling → the_story → the_kit →
+    the_mouth (no the_roll / the_arrangement — stats come from the point-buy
+    budget). Only the_calling (a choice) and the_story (freeform) are answered
+    scenes; the_kit / the_mouth auto-advance.
 
     ``walk_log`` records the answered scenes as the walk makes them:
     [(scene_id, scene_title, kind, expected_value), ...] — ground truth
-    for the provenance assertions, captured at answer time rather than
-    re-derived from content afterwards.
+    for the provenance assertions, captured at answer time.
     """
     builder = (
         CharacterBuilder(
@@ -64,19 +68,12 @@ def _walk_chargen(pack, *, target_class: str = "Cleric", rng_seed: int = 42):
         .with_equipment_tables(pack.equipment_tables)
         .with_classes(pack.classes)
     )
-    stat_order = list(pack.rules.ability_score_names)
-    builder._arrangement_pool = [18] * 6
-    for stat in stat_order:
-        builder.assign_stat(stat, 18)
 
     walk_log: list[tuple[str, str, str, str]] = []
 
-    # Scene 0: the_roll — auto-advance (not an answer).
-    builder.apply_auto_advance()
-    # Scene 1: the_arrangement — confirm (not a prompt/answer pair).
-    builder.apply_arrangement_confirm()
-    # Scene 2: the_calling — pick the target class by class_hint.
+    # Scene 0: the_calling — pick the target Calling by class_hint.
     scene = builder.current_scene()
+    assert scene.id == "the_calling", f"expected the_calling first, got {scene.id!r}"
     idx = next(
         (i for i, c in enumerate(scene.choices) if c.mechanical_effects.class_hint == target_class),
         None,
@@ -84,7 +81,7 @@ def _walk_chargen(pack, *, target_class: str = "Cleric", rng_seed: int = 42):
     assert idx is not None, f"{target_class!r} not among {scene.choices}"
     walk_log.append((scene.id, scene.title, "choice", scene.choices[idx].label))
     builder.apply_choice(idx)
-    # Scene 3: the_story — pronouns + freeform background/description.
+    # Scene 1: the_story — pronouns + freeform background/description.
     story_scene = builder.current_scene()
     builder.apply_response(
         StoryInput(
@@ -94,7 +91,7 @@ def _walk_chargen(pack, *, target_class: str = "Cleric", rng_seed: int = 42):
         )
     )
     walk_log.append((story_scene.id, story_scene.title, "freeform", _STORY_BACKGROUND))
-    # Scenes 4-5: the_kit / the_mouth — auto-advance (not answers).
+    # Scenes 2-3: the_kit / the_mouth — auto-advance (not answers).
     builder.apply_auto_advance()
     builder.apply_auto_advance()
 
@@ -170,9 +167,9 @@ def test_real_chargen_flow_exposes_creation_answers_in_sheet_payload(cc_pack) ->
                 f"words; {expected_value!r} not in {entry.value!r}"
             )
 
-    # Un-answered scenes (auto-advance, arrangement) must NOT leak in.
+    # Un-answered scenes (auto-advance) must NOT leak in.
     answered_ids = {a.scene_id for a in answers}
-    for absent in ("the_roll", "the_arrangement", "the_kit", "the_mouth"):
+    for absent in ("the_kit", "the_mouth"):
         assert absent not in answered_ids, (
             f"{absent} was never answered by the player — it must not appear in creation_answers"
         )

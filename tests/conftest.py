@@ -251,7 +251,10 @@ _CAVERNS_SUNDEN_DEPRECATED_TESTS = frozenset(
         # deprecated caverns_sunden world, so they are removed from this skip
         # set — re-included deliberately and visibly per this block's contract.
         "server/test_dice_throw_session_wiring.py",
-        "server/test_magic_init_caverns_and_claudes.py",
+        # test_magic_init_caverns_and_claudes.py was deleted with the
+        # 2026-06-12 WWN port: it asserted the retired B/X innate/learned
+        # surface (arcane_l1/divine_l1, Cleric/Fighter/Thief) and could never
+        # be un-skipped as-is.
         "server/test_magic_init_mp_second_commit.py",
         "server/test_magic_init.py",
         "server/test_merged_mp_emitter_projection.py",

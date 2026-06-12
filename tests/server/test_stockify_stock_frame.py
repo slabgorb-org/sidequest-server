@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sidequest.game.builder import CharacterBuilder, ChoiceInput
+from sidequest.game.builder import CharacterBuilder
 from sidequest.genre.models.character import (
     CharCreationChoice,
     CharCreationScene,

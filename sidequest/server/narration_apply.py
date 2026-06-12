@@ -185,7 +185,11 @@ def _entrance_room_name(
         payload = load_room_payload(
             world_dir, crossing_region, genre_slug=lookahead_handle.genre_slug
         )
-        return str(payload.get("name") or crossing_region)
+        # ``load_room_payload`` returns a TacticalGridPayload model (NOT a
+        # dict) — the display name is ``room_name``. (Spec review caught a
+        # ``payload.get("name")`` AttributeError here that the broad except
+        # silently degraded to the region id.)
+        return str(payload.room_name or crossing_region)
     except Exception as exc:  # noqa: BLE001 — loud, non-fatal
         logger.warning(
             "seam.entrance_room_name_unresolved region=%s error=%s — "
@@ -196,6 +200,44 @@ def _entrance_room_name(
             crossing_region,
         )
         return crossing_region
+
+
+def _reanchor_location_ledger(
+    snapshot: GameSnapshot,
+    *,
+    confabulated: str,
+    replacement: str | None,
+    actor_for_location: str | None,
+) -> None:
+    """Rewrite ``character_locations`` entries clobbered with a confabulated heading.
+
+    Story 105-2 guard-path fix: the per-character ledger write (and the MP
+    scene-cohort propagation) runs BEFORE region resolution, so by the time a
+    guard decides the narrator's heading was a confabulation, the acting PC —
+    and every co-located follower — already carries it. Guards call this to
+    make ledger and scene agree again:
+
+    * ``replacement`` is the honest value (restored prior location, canonical
+      region name, or the re-anchored entrance room name).
+    * ``replacement=None`` removes the actor's entry (there was no prior
+      location to restore). Cohort followers only exist when there WAS a
+      prior location (the follow is gated on ``old_loc`` truthy), so they are
+      only rewritten, never popped.
+
+    Only entries still equal to ``confabulated`` are touched — a peer at a
+    genuinely different location (party split) is never dragged along.
+    """
+    if actor_for_location and snapshot.character_locations.get(actor_for_location) == confabulated:
+        if replacement is None:
+            snapshot.character_locations.pop(actor_for_location, None)
+        else:
+            snapshot.character_locations[actor_for_location] = replacement
+    if replacement is not None:
+        for seated_name in snapshot.player_seats.values():
+            if not seated_name or seated_name == actor_for_location:
+                continue
+            if snapshot.character_locations.get(seated_name) == confabulated:
+                snapshot.character_locations[seated_name] = replacement
 
 
 def _resolve_innate_cast_for_beat(
@@ -3802,6 +3844,54 @@ def _apply_narration_result_to_snapshot(
                     # change. Flag it so the encounter abandon ladder below
                     # treats this turn as scene-continuous.
                     _same_region_drift = True
+                    # Story 105-2 drift-strip (Architect decision: strip, don't
+                    # cross). A seam region is a THRESHOLD — a narrator
+                    # sub-title over it is exactly how a confabulated deep gets
+                    # narrated ("The Dropmouth — The Deep", the 2026-06-12
+                    # turn-3 repro: the leading segment resolves to the seam
+                    # region, so this drift branch — not the unresolvable-
+                    # heading guard — catches that shape). We re-anchor to the
+                    # region's canonical display name rather than firing a real
+                    # crossing, because crossing off a drifted title would be
+                    # text-classification teleportation (spec §3 rejected the
+                    # lexical floor). Benign POI re-titles are flattened ONLY
+                    # in seam-owning regions — acceptable cost. Seam-less
+                    # regions (oz) keep the 90-6 cosmetic re-title unchanged.
+                    if seam_route_for(_region_cart, known_region_id) is not None:
+                        _drift_region_obj = getattr(_region_cart, "regions", {}).get(
+                            known_region_id
+                        )
+                        # str() pin: getattr over the duck-typed cartography is
+                        # Any — assigning Any into result.location would widen
+                        # pyright's str-narrowing for the whole block below.
+                        _canonical_display: str = str(
+                            getattr(_drift_region_obj, "name", "") or known_region_id
+                        )
+                        if result.location != _canonical_display:
+                            with region_entry_rejected_span(
+                                entry=result.location,
+                                reason="seam_region_sub_location_stripped",
+                                caller_path="narration_apply.location_update",
+                                player_name=player_name,
+                            ):
+                                logger.warning(
+                                    "region.seam_region_sub_location_stripped "
+                                    "entry=%r region=%s canonical=%r player=%s — "
+                                    "sub-title over a seam region re-anchored to "
+                                    "the canonical name (never narrate a deep the "
+                                    "engine didn't open)",
+                                    result.location,
+                                    known_region_id,
+                                    _canonical_display,
+                                    player_name,
+                                )
+                            _reanchor_location_ledger(
+                                snapshot,
+                                confabulated=result.location,
+                                replacement=_canonical_display,
+                                actor_for_location=actor_for_location,
+                            )
+                            result.location = _canonical_display
                 if _is_region_mode_world and snapshot.current_region != known_region_id:
                     _prior_region = snapshot.current_region
                     snapshot.current_region = known_region_id
@@ -3904,6 +3994,10 @@ def _apply_narration_result_to_snapshot(
                 _pc_region = snapshot.region_for(perspective=player_name) or ""
                 _seam_route = seam_route_for(_region_cart, _pc_region)
                 if _seam_route is not None:
+                    # The ledger write above already stamped the confabulated
+                    # heading onto the actor (and cohort followers); capture it
+                    # so both guard outcomes can rewrite the ledger honestly.
+                    _confab_heading = result.location
                     try:
                         _crossing = get_seam_resolver(str(_seam_route.to_id))(
                             snapshot=snapshot,
@@ -3937,16 +4031,38 @@ def _apply_narration_result_to_snapshot(
                             )
                         # Drop the patch; the outer ``if result.location:`` gate
                         # treats "" as falsy — all downstream location apply is
-                        # skipped; PC stays put, honestly.
+                        # skipped; PC stays put, honestly. Restore the ledger
+                        # entries the pre-resolution write clobbered with the
+                        # confabulation (back to old_loc; pop if there was none).
                         result.location = ""
+                        _reanchor_location_ledger(
+                            snapshot,
+                            confabulated=_confab_heading,
+                            replacement=old_loc,
+                            actor_for_location=actor_for_location,
+                        )
+                        # The PC did NOT move — this rejected re-title is not a
+                        # scene boundary. Without this flag, ``old_loc != ""``
+                        # downstream would sweep Scratch and abandon an anchored
+                        # combat — a regression vs the pre-105-2 drift handling
+                        # of this exact heading shape.
+                        _same_region_drift = True
                     else:
                         # Crossing performed: pc_region patch + movement.resolved
                         # span fired by the resolver. Re-anchor the scene to the
                         # authored entrance room's name so the narration record
-                        # carries the REAL room, not the confabulation.
+                        # carries the REAL room, not the confabulation — and
+                        # rewrite the ledger entries stamped with the confab so
+                        # ledger and scene agree.
                         result.location = _entrance_room_name(
                             crossing_region=_crossing.to_region,
                             lookahead_handle=lookahead_handle,
+                        )
+                        _reanchor_location_ledger(
+                            snapshot,
+                            confabulated=_confab_heading,
+                            replacement=result.location,
+                            actor_for_location=actor_for_location,
                         )
                         _same_region_drift = False
                 else:

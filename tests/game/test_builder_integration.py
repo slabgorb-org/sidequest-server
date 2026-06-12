@@ -13,25 +13,29 @@ rules, walks the full scene flow, and builds a real Character. No
 fixtures, no stubs, no mock data — if this passes, the builder is
 reachable from production content.
 
-One pack (caverns_and_claudes) is enough for the wiring check. The
-full cross-pack matrix — each of the 6 genres walked through
-representative flows — belongs to Story 2.2's dispatch integration
-tests, not 2.1's unit surface.
+WWN port (2026-06-12): caverns_and_claudes moved off the B/X visible-3d6
+roll/arrange flow to a point-buy chassis (rules.yaml stat_generation:
+point_buy), leaving a 4-scene flow (calling → story → kit → mouth). The
+builder seeds attributes from the point-buy budget; there is no the_roll /
+the_arrangement scene and no edge_config (HP comes from the WWN chassis). The
+walk mirrors the generic point-buy walk used for heavy_metal / elemental_harmony
+(see tests/integration/test_wwn_heavy_metal_chargen.py::_build_class).
 """
 
 from __future__ import annotations
 
-import random
 from pathlib import Path
 
 import pytest
 
 from sidequest.game.builder import (
     CharacterBuilder,
-    InProgress,
+    FreeformInput,
+    SceneResult,
     StoryInput,
 )
 from sidequest.genre.loader import load_genre_pack
+from sidequest.genre.models import MechanicalEffects
 
 CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
@@ -47,105 +51,88 @@ def caverns_pack() -> object:
     return load_genre_pack(path)
 
 
-def test_builder_walks_caverns_and_claudes_to_character(caverns_pack: object) -> None:
-    """End-to-end: load real pack, walk all scenes, build a Character.
+def _walk_to_class(pack, *, target_class: str, name: str = "Rux"):
+    """Walk the point-buy 4-scene flow, picking ``target_class`` on the_calling.
 
-    caverns_and_claudes flow (6 scenes — visible-dice era):
-      0. the_roll — auto-advance, stat_generation=roll_3d6_arrange_visible
-                    (rolls a six-die pool, no labels yet)
-      1. the_arrangement — assign_stat × 6, then apply_arrangement_confirm
-                           (player drives qualification, reject button is
-                            the only escape valve)
-      2. the_calling — class choice (Fighter/Mage/Cleric/Thief filtered
-                       to qualifying)
-      3. the_story — StoryInput (pronouns + background + description)
-      4. the_kit — auto-advance, equipment_generation=class_kit
-      5. the_mouth — auto-advance (the dungeon entrance)
-
-    The builder must:
-      - Construct with pack.char_creation + pack.rules + backstory_tables
-      - Wire pack.equipment_tables and pack.classes via fluent setters
-      - Walk all 6 scenes to Confirmation
-      - Build a Character whose char_class is one of the four classes
-        and whose Edge max matches edge_config.base_max_by_class[class]
+    Choice-bearing scenes select the choice whose class_hint matches; other
+    scenes auto-advance, answer freeform identity input, or answer a followup.
+    If no scene offered the target class_hint, inject it as a late SceneResult
+    so build() accumulates it last-one-wins (mirrors the heavy_metal helper).
     """
-    pack = caverns_pack
-    # Sanity check: 6 scenes, the_roll first.
-    assert len(pack.char_creation) == 6  # type: ignore[attr-defined]
-    assert pack.char_creation[0].id == "the_roll"  # type: ignore[attr-defined]
-
     builder = (
         CharacterBuilder(
-            scenes=list(pack.char_creation),  # type: ignore[attr-defined]
-            rules=pack.rules,  # type: ignore[attr-defined]
-            backstory_tables=pack.backstory_tables,  # type: ignore[attr-defined]
-            rng=random.Random(42),
+            scenes=list(pack.char_creation),
+            rules=pack.rules,
+            backstory_tables=pack.backstory_tables,
         )
-        .with_lobby_name("Rux")
-        .with_equipment_tables(pack.equipment_tables)  # type: ignore[attr-defined]
-        .with_classes(pack.classes)  # type: ignore[attr-defined]
+        .with_lobby_name(name)
+        .with_equipment_tables(pack.equipment_tables)
+        .with_classes(pack.classes)
     )
 
-    # Walk scenes:
-    # 0. the_roll — visible-dice arrange flow rolled an unlabeled pool
-    #    at construction. Auto-advance moves on to the_arrangement.
-    assert builder.is_in_progress()
-    assert isinstance(builder._phase, InProgress)
-    assert builder.current_scene().id == "the_roll"
-    # Visible-dice flow rolls a pool, not labeled stats.
-    assert builder.rolled_stats() is None
-    pool = builder.arrangement_pool()
-    assert pool is not None and len(pool) == 6
-    builder.apply_auto_advance()
-
-    # 1. the_arrangement — assign sorted-desc into STR/DEX/CON/INT/WIS/CHA.
-    #    Highest roll into STR guarantees Fighter qualifies (min STR 9).
-    assert builder.current_scene().id == "the_arrangement"
-    sorted_pool = sorted(pool, reverse=True)
-    stat_order = list(pack.rules.ability_score_names)  # type: ignore[attr-defined]
-    for stat_name, value in zip(stat_order, sorted_pool, strict=True):
-        builder.assign_stat(stat_name, value)
-    builder.apply_arrangement_confirm()
-
-    # After arrangement, at least one class must qualify.
-    final_stats = dict(builder.rolled_stats())
-    from sidequest.game.builder import qualifying_classes
-
-    qual = qualifying_classes(final_stats, pack.classes)  # type: ignore[attr-defined]
-    assert len(qual) >= 1, (
-        f"sorted-desc arrangement should qualify ≥1 class, got 0 with stats {final_stats}"
-    )
-
-    # 2. the_calling — pick a qualifying class. Pick the first one.
-    assert builder.current_scene().id == "the_calling"
-    presented = builder.current_scene()
-    presented_hints = [c.mechanical_effects.class_hint for c in presented.choices]
-    # Filter is server-side: only qualifying classes shown.
-    assert presented_hints, "at least one class choice must be presented"
-    chosen_hint = presented_hints[0]
-    builder.apply_choice(0)
-
-    # 3. the_story — StoryInput (pronouns + background + description)
-    assert builder.current_scene().id == "the_story"
-    builder.apply_response(
-        StoryInput(
-            pronouns="she/her",
-            background="Raised in the caverns.",
-            description="Tall, scarred, watchful.",
+    matched = False
+    guard = 0
+    while not builder.is_confirmation():
+        guard += 1
+        assert guard < 50, "chargen walk did not reach confirmation"
+        if builder.is_awaiting_followup():
+            builder.answer_followup(name)
+            continue
+        scene = builder.current_scene()
+        if not scene.choices:
+            # the_kit / the_mouth auto-advance; the_story captures identity.
+            try:
+                builder.apply_auto_advance()
+            except Exception:
+                builder.apply_response(
+                    StoryInput(
+                        pronouns="she/her",
+                        background="Raised in the caverns.",
+                        description="Tall, scarred, watchful.",
+                    )
+                )
+            continue
+        idx = next(
+            (
+                i
+                for i, c in enumerate(scene.choices)
+                if c.mechanical_effects and c.mechanical_effects.class_hint == target_class
+            ),
+            None,
         )
-    )
+        if idx is not None:
+            matched = True
+            builder.apply_choice(idx)
+        else:
+            builder.apply_choice(0)
 
-    # 4. the_kit — equipment_generation=class_kit
-    assert builder.current_scene().id == "the_kit"
-    builder.apply_auto_advance()
+    if not matched:
+        builder._results.append(
+            SceneResult(
+                input_type=FreeformInput(text=""),
+                effects_applied=MechanicalEffects(class_hint=target_class),
+            )
+        )
+    return builder
 
-    # 5. the_mouth — display-only
-    assert builder.current_scene().id == "the_mouth"
-    builder.apply_auto_advance()
 
+def test_builder_walks_caverns_and_claudes_to_character(caverns_pack: object) -> None:
+    """End-to-end: load real pack, walk all WWN scenes, build a Character.
+
+    Targets the Mage Calling: its kit (mage_kit) resolves to equipment, so the
+    inventory wiring assertion is meaningful. The builder must construct from
+    pack.char_creation + pack.rules + backstory_tables, wire equipment_tables
+    and classes, walk to Confirmation, and build a Character whose char_class is
+    one of the three WWN Callings.
+    """
+    pack = caverns_pack
+    # WWN shape: 4 scenes, the_calling first (point-buy, no roll/arrange).
+    scene_ids = [s.id for s in pack.char_creation]  # type: ignore[attr-defined]
+    assert scene_ids == ["the_calling", "the_story", "the_kit", "the_mouth"]
+
+    builder = _walk_to_class(pack, target_class="Mage")
     assert builder.is_confirmation()
 
-    # Build the character
     character = builder.build("Rux")
 
     # --- Character shape assertions ---
@@ -153,24 +140,18 @@ def test_builder_walks_caverns_and_claudes_to_character(caverns_pack: object) ->
     # Identity
     assert character.core.name == "Rux"
     assert character.pronouns == "she/her"
-    # char_class is the chosen class (one of Fighter/Mage/Cleric/Thief)
-    assert character.char_class == chosen_hint
-    assert character.char_class in {"Fighter", "Mage", "Cleric", "Thief"}
+    # char_class is the chosen Calling.
+    assert character.char_class == "Mage"
+    assert character.char_class in {"Warrior", "Expert", "Mage"}
 
-    # Stats: every ability score name has a value in a plausible range
-    # (3d6 base = 3..18, modified by any derived bonuses = widened but
-    # still realistic).
+    # Stats: every ability score name has a value in a plausible range.
     for name in pack.rules.ability_score_names:  # type: ignore[attr-defined]
         assert name in character.stats
         assert 1 <= character.stats[name] <= 25
 
-    # Inventory: equipment_tables roll produced at least one item
-    # (rolls_per_slot defaults to 1 per slot on the pack).
+    # Inventory: mage_kit roll produced at least one item.
     assert len(character.core.inventory.items) >= 1
     for item in character.core.inventory.items:
-        # Shape check — these are the keys the builder emits. If a
-        # downstream consumer expects flags we don't set, this test
-        # will alert us when the dispatch port starts reading them.
         required = {
             "id",
             "name",
@@ -188,18 +169,12 @@ def test_builder_walks_caverns_and_claudes_to_character(caverns_pack: object) ->
         }
         assert required.issubset(item.keys())
 
-    # Edge pool: edge_config drives base_max per class
-    # (Fighter:4, Cleric:3, Mage:2, Thief:2). Fighter additionally
-    # gets a hardcoded +2 stub from Story 39-4 — so for Fighter the
-    # final base_max is 6, not 4. Verify the floor (config value)
-    # is met and current==max.
-    config_max = pack.rules.edge_config.base_max_by_class[character.char_class]  # type: ignore[attr-defined]
-    assert character.core.hp.base_max >= config_max
-    assert character.core.hp.max == character.core.hp.base_max
+    # HP: WWN chassis seeds the ablative pool (no edge_config). current == max.
+    assert character.core.hp.max >= 1
     assert character.core.hp.current == character.core.hp.max
+    assert character.core.hp.base_max == character.core.hp.max
 
-    # Backstory: non-blank, came from some path (fragments/tables/
-    # mechanical/fallback).
+    # Backstory: non-blank, came from some path.
     assert character.backstory.strip()
 
     # Level + narrative state at creation

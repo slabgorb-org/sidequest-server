@@ -68,21 +68,18 @@ def _walk_chargen_calling(pack, *, calling_idx: int, lobby: str, rng_seed: int =
         .with_equipment_tables(pack.equipment_tables)
         .with_classes(pack.classes)
     )
-    builder._arrangement_pool = [18] * 6  # noqa: SLF001
-    for stat in list(pack.rules.ability_score_names):
-        builder.assign_stat(stat, 18)
-
-    # Scene 0 the_roll — auto-advance; Scene 1 the_arrangement — confirm.
-    builder.apply_auto_advance()
-    builder.apply_arrangement_confirm()
-    # Scene 2 the_calling — the differentiating pick.
+    # WWN port (2026-06-12): point-buy 4-scene flow (the_calling → the_story →
+    # the_kit → the_mouth); no the_roll / the_arrangement (stats come from the
+    # point-buy budget).
+    # Scene 0 the_calling — the differentiating pick.
     scene = builder.current_scene()
+    assert scene.id == "the_calling", f"expected the_calling first, got {scene.id!r}"
     assert len(scene.choices) > calling_idx, (
         f"the_calling needs >{calling_idx} choices, has {len(scene.choices)}"
     )
     chosen_label = scene.choices[calling_idx].label
     builder.apply_choice(calling_idx)
-    # Scene 3 the_story — freeform (not fragment-backed).
+    # Scene 1 the_story — freeform (not fragment-backed).
     builder.apply_response(
         StoryInput(
             pronouns="they/them",
@@ -90,7 +87,7 @@ def _walk_chargen_calling(pack, *, calling_idx: int, lobby: str, rng_seed: int =
             description="Soot-stained, steady-handed.",
         )
     )
-    # Scenes 4-5 the_kit / the_mouth — auto-advance.
+    # Scenes 2-3 the_kit / the_mouth — auto-advance.
     builder.apply_auto_advance()
     builder.apply_auto_advance()
 
@@ -162,8 +159,7 @@ def test_real_chargen_flow_exposes_lore_fragments_in_sheet_payload(cc_pack) -> N
     # The character's chosen calling is surfaced as one of the linked rows.
     titles = {f.title for f in fragments}
     assert chosen_label in titles, (
-        f"the chosen calling {chosen_label!r} must surface in the History "
-        f"lore; got titles {titles}"
+        f"the chosen calling {chosen_label!r} must surface in the History lore; got titles {titles}"
     )
     # Source is honest — these are creation-seed fragments.
     assert all(f.source == "character_creation" for f in fragments)
@@ -199,9 +195,7 @@ def test_unpicked_calling_choice_does_not_leak_into_sheet(cc_pack) -> None:
     )
     titles = {f.title for f in party_member.sheet.lore_fragments}
     for unpicked in other_labels:
-        assert unpicked not in titles, (
-            f"unpicked calling {unpicked!r} leaked into the PC's History"
-        )
+        assert unpicked not in titles, f"unpicked calling {unpicked!r} leaked into the PC's History"
 
 
 # ---------------------------------------------------------------------------

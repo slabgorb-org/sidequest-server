@@ -100,9 +100,22 @@ SHIPPED_PACKS = [
 # Parley", chase "Wasteland Pursuit") are still covered by the SHIPPED_PACKS
 # threshold tests above. This is the documented by-design calibration migration,
 # NOT a regression.
-COMBAT_PACKS = [
-    "caverns_and_claudes",
-]
+#
+# caverns_and_claudes is excluded as of the WWN binding (2026-06-12 port): its
+# combat confrontation ("Dungeon Combat") moved off resolution_mode:
+# opposed_check to ruleset:wwn beat_selection + win_condition: hp_depletion,
+# exactly mirroring the elemental_harmony→WWN / space_opera→SWN migrations.
+# caverns_and_claudes therefore intentionally carries ZERO opposed_check
+# confrontations. Its remaining dial confrontations (chase "Corridor Pursuit",
+# negotiation) are still covered by the SHIPPED_PACKS threshold tests above.
+#
+# Every shipped combat pack has now migrated its combat confrontation to an
+# SRD ruleset (beat_selection + hp_depletion), so COMBAT_PACKS is empty: there
+# is no longer any pack that must expose an opposed_check confrontation. The
+# per-pack opposed_check existence guard below parametrizes over this empty
+# list and so makes no assertion — the SHIPPED_PACKS threshold tests remain the
+# active calibration coverage.
+COMBAT_PACKS: list[str] = []
 
 CALIBRATED_THRESHOLD = 7
 SEALED_LETTER_THRESHOLD = 30

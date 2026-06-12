@@ -44,16 +44,17 @@ def test_cc_thief_kit_has_lockpicks():
 
 
 def test_cc_each_class_has_positive_starting_gold():
-    """Every B/X class must ship with non-zero starting gold so chargen-end
+    """Every WWN Calling must ship with non-zero starting gold so chargen-end
     cash gates (Recruiter's Post bonds, dungeon entry tolls) are reachable
     by every class. Playtest 2026-05-06: Carl-the-Cleric arrived with
     `gold_added=0` and could not engage Brenna's two-silver-bond gate at all,
-    locking the recruitment confrontation into a hard fail.
+    locking the recruitment confrontation into a hard fail. Re-keyed for the
+    WWN Callings (2026-06-12 port): Warrior/Expert/Mage.
     """
     loader = GenreLoader()
     pack = loader.load("caverns_and_claudes")
     starting_gold = pack.inventory.starting_gold
-    for class_name in ("Fighter", "Mage", "Cleric", "Thief"):
+    for class_name in ("Warrior", "Expert", "Mage"):
         assert class_name in starting_gold, (
             f"{class_name} missing from starting_gold — chargen will emit "
             f"gold_added=0 and the PC can't engage cash-gated content."

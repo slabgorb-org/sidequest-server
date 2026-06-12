@@ -22,7 +22,9 @@ from sidequest.genre.loader import load_genre_pack
 from tests._helpers.genre_paths import find_pack_path
 
 # We clone elemental_harmony (ruleset: wwn) for cases 1+2;
-# clone caverns_and_claudes (non-wwn) for case 3.
+# clone tea_and_murder (native ruleset, non-wwn) for case 3. caverns_and_claudes
+# was the non-wwn example before its 2026-06-12 WWN port; it is now a wwn pack and
+# can no longer stand in for the non-wwn branch.
 try:
     _EH_PACK_DIR = find_pack_path("elemental_harmony")
     _EH_AVAILABLE = _EH_PACK_DIR.is_dir()
@@ -31,11 +33,11 @@ except Exception:
     _EH_AVAILABLE = False
 
 try:
-    _CC_PACK_DIR = find_pack_path("caverns_and_claudes")
-    _CC_AVAILABLE = _CC_PACK_DIR.is_dir()
+    _NON_WWN_PACK_DIR = find_pack_path("tea_and_murder")
+    _NON_WWN_AVAILABLE = _NON_WWN_PACK_DIR.is_dir()
 except Exception:
-    _CC_PACK_DIR = Path("/nonexistent")
-    _CC_AVAILABLE = False
+    _NON_WWN_PACK_DIR = Path("/nonexistent")
+    _NON_WWN_AVAILABLE = False
 
 
 def _clone_pack(src: Path, dst: Path) -> Path:
@@ -227,10 +229,10 @@ def test_wwn_pack_with_spells_file_populates_catalog(tmp_path: Path) -> None:
     assert "river_step" in ids
 
 
-@pytest.mark.skipif(not _CC_AVAILABLE, reason="sidequest-content not on disk")
+@pytest.mark.skipif(not _NON_WWN_AVAILABLE, reason="sidequest-content not on disk")
 def test_non_wwn_pack_with_spells_file_does_not_load_catalog(tmp_path: Path) -> None:
     """A non-wwn pack ignores spells_wwn.yaml — field stays None."""
-    pack_dir = _clone_pack(_CC_PACK_DIR, tmp_path / "cc_with_wwn_spells")
+    pack_dir = _clone_pack(_NON_WWN_PACK_DIR, tmp_path / "non_wwn_with_wwn_spells")
     # Drop a spells_wwn.yaml in a non-wwn pack — it must be silently ignored.
     (pack_dir / "spells_wwn.yaml").write_text(_MINIMAL_SPELL_CATALOG, encoding="utf-8")
 

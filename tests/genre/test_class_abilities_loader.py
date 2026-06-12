@@ -13,14 +13,17 @@ from sidequest.genre.loader import load_genre_pack
 GENRE_ROOT = Path(__file__).parents[2] / "../sidequest-content/genre_packs"
 
 
-def test_caverns_and_claudes_loads_with_taunt_beat():
+def test_caverns_and_claudes_loads_with_committed_blow_beat():
+    """WWN port: the loader resolves a class's encounter_beat_choices against
+    the rules.yaml beat pool. The Warrior declares 'committed_blow' (the WWN
+    all-in strike), and rules.yaml's combat confrontation defines it."""
     pack = load_genre_pack(GENRE_ROOT.resolve() / "caverns_and_claudes")
-    fighter = next(c for c in pack.classes if c.id == "fighter")
-    assert "taunt" in fighter.encounter_beat_choices, (
-        "Fighter must declare 'taunt' in encounter_beat_choices"
+    warrior = next(c for c in pack.classes if c.id == "warrior")
+    assert "committed_blow" in warrior.encounter_beat_choices, (
+        "Warrior must declare 'committed_blow' in encounter_beat_choices"
     )
     all_beat_ids = {b.id for cd in pack.rules.confrontations for b in cd.beats}
-    assert "taunt" in all_beat_ids, "rules.yaml must declare a 'taunt' beat"
+    assert "committed_blow" in all_beat_ids, "rules.yaml must declare a 'committed_blow' beat"
 
 
 def test_class_def_parses_abilities_key():
@@ -73,23 +76,29 @@ def test_class_def_default_empty_abilities():
 
 
 def test_caverns_classes_have_signature_abilities():
+    """WWN port: the 3-chassis Callings carry their signature abilities.
+    Warrior gets the WWN Warrior pair (Killing Blow + Veteran's Luck, gated on
+    warrior: true); Expert reads the room (Read the Ledger); Mage reads the
+    worked stone."""
     pack = load_genre_pack(GENRE_ROOT.resolve() / "caverns_and_claudes")
 
     by_id = {c.id: c for c in pack.classes}
-    cleric, fighter, thief, mage = by_id["cleric"], by_id["fighter"], by_id["thief"], by_id["mage"]
+    warrior, expert, mage = by_id["warrior"], by_id["expert"], by_id["mage"]
 
-    assert len(cleric.abilities) == 1 and cleric.abilities[0].name == "Turn Undead"
-    assert len(fighter.abilities) == 1 and fighter.abilities[0].name == "Taunt"
-    assert len(thief.abilities) == 1 and thief.abilities[0].name == "Backstab"
-    assert mage.abilities == []  # signature filled by magic plugin
+    warrior_abilities = {a.name for a in warrior.abilities}
+    assert warrior_abilities == {"Killing Blow", "Veteran's Luck"}
+    assert len(expert.abilities) == 1 and expert.abilities[0].name == "Read the Ledger"
+    assert len(mage.abilities) == 1 and mage.abilities[0].name == "Read the Worked Stone"
 
     # Prose is non-empty (no {writer agent fills} placeholder).
-    for c in (cleric, fighter, thief):
-        gd = c.abilities[0].genre_description
-        assert gd and "{writer agent" not in gd, (
-            f"{c.id} genre_description still has placeholder text"
-        )
-        assert c.abilities[0].mechanical_effect, f"{c.id} mechanical_effect blank"
+    for c in (warrior, expert, mage):
+        for ability in c.abilities:
+            assert ability.genre_description and "{writer agent" not in ability.genre_description, (
+                f"{c.id} ability {ability.name!r} genre_description still has placeholder text"
+            )
+            assert ability.mechanical_effect, (
+                f"{c.id} ability {ability.name!r} mechanical_effect blank"
+            )
 
 
 def test_blank_genre_description_raises():

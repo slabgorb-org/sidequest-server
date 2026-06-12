@@ -175,6 +175,20 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_CONFRONTATION_VOCABULARY] = SpanRoute(
 )
 
 
+SPAN_INTENT_ROUTER_REGION_EXITS = "intent_router.region_exits"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_REGION_EXITS] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.region_exits",
+        "exit_count": (span.attributes or {}).get("exit_count", 0),
+        "seam_count": (span.attributes or {}).get("seam_count", 0),
+        "region_id": (span.attributes or {}).get("region_id", ""),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+    },
+)
+
+
 SPAN_INTENT_ROUTER_DISPATCH_GATED = "intent_router.dispatch.gated"
 SPAN_ROUTES[SPAN_INTENT_ROUTER_DISPATCH_GATED] = SpanRoute(
     event_type="state_transition",
@@ -298,6 +312,38 @@ def intent_router_dispatch_unregistered_span(
     with Span.open(
         SPAN_INTENT_ROUTER_DISPATCH_UNREGISTERED,
         {"subsystem": subsystem, "idempotency_key": idempotency_key, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def intent_router_region_exits_span(
+    *,
+    exit_count: int,
+    seam_count: int,
+    region_id: str,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires when the PC's current cartography region's real exits — adjacency
+    neighbors + seam routes — are injected into the router's state summary
+    (Story 105-2 Piece 2, the lexical bridge for movement classification).
+
+    A ``seam_count`` of zero on a region that DOES own a seam route would mean
+    the descent vocabulary never reached the router — exactly the turn-3 miss
+    this projection closes (the router was asked to recognize a descent it was
+    never told existed)."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_REGION_EXITS,
+        {
+            "exit_count": exit_count,
+            "seam_count": seam_count,
+            "region_id": region_id,
+            "genre_slug": genre_slug,
+            **attrs,
+        },
         tracer_override=_tracer,
     ) as span:
         yield span

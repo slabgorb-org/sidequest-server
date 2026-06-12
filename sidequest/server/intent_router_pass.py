@@ -42,6 +42,7 @@ from sidequest.agents.dispatch_precondition_gate import (
 from sidequest.agents.intent_router import IntentRouter, _serialize_state_summary
 from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch_bank
 from sidequest.game.npc_scene import is_npc_in_scene
+from sidequest.game.seams import seam_route_for
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
@@ -55,6 +56,7 @@ from sidequest.telemetry.spans.intent_router import (
     intent_router_call_budget_breach_span,
     intent_router_confrontation_classified_span,
     intent_router_confrontation_vocabulary_span,
+    intent_router_region_exits_span,
     intent_router_state_summary_slimmed_span,
     intent_router_witnessed_act_classified_span,
     intent_router_witnessed_act_vocabulary_span,
@@ -361,6 +363,40 @@ def _build_state_summary(
             genre_slug=snapshot.genre_slug or "",
         ):
             pass
+
+    # Story 105-2 (Piece 2): the PC's current cartography region's actual
+    # exits — adjacency neighbors + seam routes. The 2026-06-12 dive's
+    # turn-3 miss happened because the router was asked to recognize a
+    # descent it was never told existed; this is the lexical bridge
+    # (59-27 precedent: authored vocabulary beats inference). Region
+    # resolved in party-consensus mode (no perspective) to match the
+    # room/NPC projections above — a split party returns None and the
+    # projection passes through, loud, per the gaslighting doctrine.
+    if pack is not None:
+        _worlds = getattr(pack, "worlds", None)
+        _world = _worlds.get(snapshot.world_slug) if _worlds else None
+        _cart = getattr(_world, "cartography", None)
+        _region_id = snapshot.region_for() or ""
+        _region = _cart.regions.get(_region_id) if _cart and _region_id else None
+        if _region is not None:
+            region_exits: list[dict[str, str]] = []
+            for adj_id in getattr(_region, "adjacent", None) or []:
+                adj = _cart.regions.get(adj_id)
+                region_exits.append(
+                    {"name": getattr(adj, "name", None) or adj_id, "kind": "adjacent"}
+                )
+            seam = seam_route_for(_cart, _region_id)
+            if seam is not None:
+                region_exits.append({"name": seam.name, "kind": "seam"})
+            if region_exits:
+                summary["current_region_exits"] = region_exits
+                with intent_router_region_exits_span(
+                    exit_count=len(region_exits),
+                    seam_count=sum(1 for e in region_exits if e["kind"] == "seam"),
+                    region_id=_region_id,
+                    genre_slug=snapshot.genre_slug or "",
+                ):
+                    pass
 
     # 82-10 before/after evidence — fires once per pass, AFTER the
     # router-specific additions so bytes_after is what actually ships to

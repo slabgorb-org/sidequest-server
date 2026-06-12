@@ -479,6 +479,29 @@ def _resolve(
             scored.append((len(want & surface), e))
         scored = [s for s in scored if s[0] > 0]
         if not scored:
+            # sq-playtest 2026-06-12 (beneath_sunden-6 t6/t7): the router
+            # passes the player's words through verbatim, so the descriptor
+            # is often FLAVOR ("the heart of the dungeon"), not a way-name.
+            # A descriptor that matches NOTHING must not veto an otherwise
+            # unambiguous coarse direction — "I go deeper, into the heart
+            # of the dungeon" was refused twice as no_candidate_edges while
+            # a real deeper corridor existed. Fall back to the direction
+            # resolution (resolved_via carries the fallback for the GM
+            # panel). No direction → the honest refusal stands. An
+            # AMBIGUOUS descriptor (several real ways tie) still refuses
+            # below — "which corridor?" is a fair question; "no such way"
+            # for "go deeper" is a stonewall.
+            if direction in ("deeper", "back", "toward_exit"):
+                chosen, via, ambiguous = _resolve(
+                    candidates=candidates,
+                    graph=graph,
+                    from_region=from_region,
+                    from_depth=from_depth,
+                    direction=direction,
+                    exit_descriptor="",
+                    discovered_regions=discovered_regions,
+                )
+                return chosen, f"descriptor_fallback_{via}", ambiguous
             return None, "descriptor_match", False
         scored.sort(key=lambda s: (-s[0], s[1].to_region_id))
         if len(scored) >= 2 and scored[0][0] == scored[1][0]:

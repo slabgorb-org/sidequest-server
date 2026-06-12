@@ -1028,3 +1028,94 @@ def test_surface_descent_is_mechanically_backed_through_bank(capture_spans):
     last = transitions[-1]
     assert last.attributes["pc_name"] == "Rux"
     assert last.attributes["to_region"] in g.nodes
+
+
+# ---------------------------------------------------------------------------
+# sq-playtest 2026-06-12 (beneath_sunden-6, turns 6-7): "I go deeper, into
+# the heart of the dungeon" — the router passed the player's words through
+# as exit_descriptor (per its verbatim contract), and the descriptor branch
+# treated the unmatched FLAVOR phrase as a veto: it returned no-match
+# without ever consulting direction="deeper", so an unambiguous descent was
+# refused twice and the players gave up. A descriptor that matches NOTHING
+# must fall back to the direction resolution; a descriptor that matches
+# AMBIGUOUSLY (several real ways tie) still refuses — "which corridor?" is
+# an honest question, but "no such way" for "go deeper" is a stonewall.
+# ---------------------------------------------------------------------------
+
+
+def test_unmatched_descriptor_falls_back_to_direction(capture_spans):
+    g = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("deep_room", 5.0)],
+        [
+            ("entrance", "a", "corridor", False),
+            ("a", "deep_room", "corridor", False),
+        ],
+    )
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(direction="deeper", exit_descriptor="the heart of the dungeon"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=store,
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("to_region") == "deep_room", (
+        f"flavor descriptor vetoed an unambiguous 'deeper': {out.data}"
+    )
+    assert snap.pc_regions["Rux"] == "deep_room"
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert resolved[0].attributes["resolved_via"] == "descriptor_fallback_depth_delta"
+
+
+def test_unmatched_descriptor_without_direction_still_refuses(capture_spans):
+    g = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("deep_room", 5.0)],
+        [
+            ("entrance", "a", "corridor", False),
+            ("a", "deep_room", "corridor", False),
+        ],
+    )
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(direction="", exit_descriptor="the shimmering portal"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=store,
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("error") == "no_candidate_edges", (
+        "an unmappable way with NO coarse direction must still refuse loudly"
+    )
+    assert snap.pc_regions["Rux"] == "a", "refusal must not move the PC"
+
+
+def test_ambiguous_descriptor_still_refuses_even_with_direction(capture_spans):
+    # Two corridors tie on the descriptor token — "which corridor?" is the
+    # honest answer; direction must NOT silently pick one.
+    g = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("corridor_x", 5.0), ("corridor_y", 5.0)],
+        [
+            ("entrance", "a", "corridor", False),
+            ("a", "corridor_x", "corridor", False),
+            ("a", "corridor_y", "corridor", False),
+        ],
+    )
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(direction="deeper", exit_descriptor="the corridor"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=store,
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("error") == "ambiguous_descriptor"
+    assert snap.pc_regions["Rux"] == "a"

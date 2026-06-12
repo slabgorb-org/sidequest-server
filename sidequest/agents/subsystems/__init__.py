@@ -321,6 +321,11 @@ async def run_dispatch_bank(
                     "confidence": float(d.confidence),
                     "threshold": float(threshold),
                     "decision": "engaged",
+                    # The router's typed input — without it the audit says a
+                    # movement dispatch failed but not WHAT was asked
+                    # (descriptor/direction), forcing an offline replay
+                    # (the exact hole that hid the flavor-descriptor veto).
+                    "params": dict(d.params),
                 }
                 result.decisions.append(decision_entry)
                 if d.confidence < threshold:

@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from sidequest.agents.orchestrator import BeatSelection
+    from sidequest.dungeon.lookahead_worker import LookaheadWorkerHandle
     from sidequest.game.character import Character
     from sidequest.game.encounter import EncounterActor, EncounterPhase, StructuredEncounter
     from sidequest.game.monster_manual import MonsterManual
@@ -60,6 +61,9 @@ from sidequest.game.region_validation import (
     validate_region_name,
 )
 from sidequest.game.ruleset.registry import get_ruleset_module
+
+# Story 105-2: seam registry — static→procedural crossing recovery.
+from sidequest.game.seams import SeamCrossingError, get_seam_resolver, seam_route_for
 from sidequest.game.session import (
     _ACTIVE_STAKES_GUARDRAIL,  # re-exported; canonical home is session.py (Story 77-2)
     ContainerState,
@@ -154,6 +158,86 @@ def _extract_leading_bold_title(narration: str) -> str | None:
         return None
     title = match.group(1).strip()
     return title or None
+
+
+def _entrance_room_name(
+    *, crossing_region: str, lookahead_handle: LookaheadWorkerHandle | None
+) -> str:
+    """The authored entrance room's display name for the scene re-anchor.
+
+    Loads ``rooms/<region>.yaml`` via the same loader path map_emit uses.
+    A missing authored room is LOUD (warning + raw region id as the title)
+    but not fatal — the crossing itself already happened mechanically.
+
+    Story 105-2 §4 Piece 1: the narrator record must carry the REAL room
+    name, not the confabulated heading.
+    """
+    from sidequest.game.room_file_loader import load_room_payload
+    from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
+
+    if lookahead_handle is None or not lookahead_handle.genre_slug:
+        return crossing_region
+    try:
+        loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
+        world_dir = (
+            loader.find(lookahead_handle.genre_slug) / "worlds" / lookahead_handle.world_slug
+        )
+        payload = load_room_payload(
+            world_dir, crossing_region, genre_slug=lookahead_handle.genre_slug
+        )
+        # ``load_room_payload`` returns a TacticalGridPayload model (NOT a
+        # dict) — the display name is ``room_name``. (Spec review caught a
+        # ``payload.get("name")`` AttributeError here that the broad except
+        # silently degraded to the region id.)
+        return str(payload.room_name or crossing_region)
+    except Exception as exc:  # noqa: BLE001 — loud, non-fatal
+        logger.warning(
+            "seam.entrance_room_name_unresolved region=%s error=%s — "
+            "authored entrance room missing; using region id as scene title "
+            "(author rooms/%s.yaml — spec 2026-06-12 §4 Piece 1)",
+            crossing_region,
+            exc,
+            crossing_region,
+        )
+        return crossing_region
+
+
+def _reanchor_location_ledger(
+    snapshot: GameSnapshot,
+    *,
+    confabulated: str,
+    replacement: str | None,
+    actor_for_location: str | None,
+) -> None:
+    """Rewrite ``character_locations`` entries clobbered with a confabulated heading.
+
+    Story 105-2 guard-path fix: the per-character ledger write (and the MP
+    scene-cohort propagation) runs BEFORE region resolution, so by the time a
+    guard decides the narrator's heading was a confabulation, the acting PC —
+    and every co-located follower — already carries it. Guards call this to
+    make ledger and scene agree again:
+
+    * ``replacement`` is the honest value (restored prior location, canonical
+      region name, or the re-anchored entrance room name).
+    * ``replacement=None`` removes the actor's entry (there was no prior
+      location to restore). Cohort followers only exist when there WAS a
+      prior location (the follow is gated on ``old_loc`` truthy), so they are
+      only rewritten, never popped.
+
+    Only entries still equal to ``confabulated`` are touched — a peer at a
+    genuinely different location (party split) is never dragged along.
+    """
+    if actor_for_location and snapshot.character_locations.get(actor_for_location) == confabulated:
+        if replacement is None:
+            snapshot.character_locations.pop(actor_for_location, None)
+        else:
+            snapshot.character_locations[actor_for_location] = replacement
+    if replacement is not None:
+        for seated_name in snapshot.player_seats.values():
+            if not seated_name or seated_name == actor_for_location:
+                continue
+            if snapshot.character_locations.get(seated_name) == confabulated:
+                snapshot.character_locations[seated_name] = replacement
 
 
 def _resolve_innate_cast_for_beat(
@@ -3441,6 +3525,10 @@ def _apply_narration_result_to_snapshot(
     acting_character_name: str | None = None,
     monster_manual: MonsterManual | None = None,
     is_dice_replay: bool = False,
+    # Story 105-2: seam-recovery guard needs the dungeon store (via
+    # handle.persistence) to perform a missed crossing instead of
+    # accepting a confabulated deep. None for non-dungeon worlds.
+    lookahead_handle: LookaheadWorkerHandle | None = None,
 ) -> NarrationApplyOutcome:
     """Apply narrator-extracted fields to the snapshot.
 
@@ -3756,6 +3844,54 @@ def _apply_narration_result_to_snapshot(
                     # change. Flag it so the encounter abandon ladder below
                     # treats this turn as scene-continuous.
                     _same_region_drift = True
+                    # Story 105-2 drift-strip (Architect decision: strip, don't
+                    # cross). A seam region is a THRESHOLD — a narrator
+                    # sub-title over it is exactly how a confabulated deep gets
+                    # narrated ("The Dropmouth — The Deep", the 2026-06-12
+                    # turn-3 repro: the leading segment resolves to the seam
+                    # region, so this drift branch — not the unresolvable-
+                    # heading guard — catches that shape). We re-anchor to the
+                    # region's canonical display name rather than firing a real
+                    # crossing, because crossing off a drifted title would be
+                    # text-classification teleportation (spec §3 rejected the
+                    # lexical floor). Benign POI re-titles are flattened ONLY
+                    # in seam-owning regions — acceptable cost. Seam-less
+                    # regions (oz) keep the 90-6 cosmetic re-title unchanged.
+                    if seam_route_for(_region_cart, known_region_id) is not None:
+                        _drift_region_obj = getattr(_region_cart, "regions", {}).get(
+                            known_region_id
+                        )
+                        # str() pin: getattr over the duck-typed cartography is
+                        # Any — assigning Any into result.location would widen
+                        # pyright's str-narrowing for the whole block below.
+                        _canonical_display: str = str(
+                            getattr(_drift_region_obj, "name", "") or known_region_id
+                        )
+                        if result.location != _canonical_display:
+                            with region_entry_rejected_span(
+                                entry=result.location,
+                                reason="seam_region_sub_location_stripped",
+                                caller_path="narration_apply.location_update",
+                                player_name=player_name,
+                            ):
+                                logger.warning(
+                                    "region.seam_region_sub_location_stripped "
+                                    "entry=%r region=%s canonical=%r player=%s — "
+                                    "sub-title over a seam region re-anchored to "
+                                    "the canonical name (never narrate a deep the "
+                                    "engine didn't open)",
+                                    result.location,
+                                    known_region_id,
+                                    _canonical_display,
+                                    player_name,
+                                )
+                            _reanchor_location_ledger(
+                                snapshot,
+                                confabulated=result.location,
+                                replacement=_canonical_display,
+                                actor_for_location=actor_for_location,
+                            )
+                            result.location = _canonical_display
                 if _is_region_mode_world and snapshot.current_region != known_region_id:
                     _prior_region = snapshot.current_region
                     snapshot.current_region = known_region_id
@@ -3846,38 +3982,125 @@ def _apply_narration_result_to_snapshot(
                             not already_present,
                         )
             elif _is_region_mode_world:
-                # Location-tab bug (DRIVER 2026-06-04, the_circuit). The heading
-                # didn't resolve to a known cartography region AND this is a
-                # region-mode world whose region set is authored/closed — so the
-                # heading is a sub-location/POI WITHIN the current region (a
-                # narrator scene title like "Dunkelkurve — Inside the Tunnel"
-                # inside sturmichi), NOT a new region. Do NOT fork it into
-                # discovered_regions — that pollutes the Map node-graph with
-                # chapter titles ('Kanjō Loop — …', 'Dunkelkurve — …'). The Story
-                # 45-17 surface-form forking below is for room-graph worlds only.
-                # OTEL lie-detector: the GM panel must see the engine skip the
-                # pollution (No Silent Fallbacks — the skip is a decision, logged).
-                with region_entry_rejected_span(
-                    entry=result.location,
-                    reason="sub_location_in_region_mode_world",
-                    caller_path="narration_apply.location_update",
-                    player_name=player_name,
-                ):
-                    logger.info(
-                        "region.entry_skipped_sub_location entry=%r current_region=%r "
-                        "player=%s caller=narration_apply.location_update "
-                        "(region-mode world: scene title is a POI within the region, "
-                        "not a new cartography region)",
-                        result.location,
-                        snapshot.current_region,
-                        player_name,
-                    )
-                # Ping-pong 2026-06-07: the engine just concluded this heading
-                # is a POI WITHIN the current region — the same-region signal
-                # the encounter abandon ladder below must respect (the perseus
-                # repro: combat seated, then deactivated the SAME turn by
-                # 'New Kowloon, Yula' → 'New Kowloon — Transit Promenade').
-                _same_region_drift = True
+                # Story 105-2: seam recovery. The heading didn't resolve to a
+                # known cartography region. Before concluding it's a harmless
+                # POI sub-title (the 90-6 path), check whether the PC stands on
+                # a region that OWNS a seam route — if so, the unresolved
+                # heading is the relocation signal the intent router missed (the
+                # 2026-06-12 turn-3 repro: "The Dropmouth — The Deep").
+                # An engine MUST NOT narrate a crossing it did not perform:
+                # do the real crossing now, or reject the patch loud.
+                # Never accept the confabulated scene (No Silent Fallbacks).
+                _pc_region = snapshot.region_for(perspective=player_name) or ""
+                _seam_route = seam_route_for(_region_cart, _pc_region)
+                if _seam_route is not None:
+                    # The ledger write above already stamped the confabulated
+                    # heading onto the actor (and cohort followers); capture it
+                    # so both guard outcomes can rewrite the ledger honestly.
+                    _confab_heading = result.location
+                    try:
+                        _crossing = get_seam_resolver(str(_seam_route.to_id))(
+                            snapshot=snapshot,
+                            player_name=player_name,
+                            route=_seam_route,
+                            resolved_via="narration_seam_recovery",
+                            dungeon_store=(
+                                lookahead_handle.persistence
+                                if lookahead_handle is not None
+                                else None
+                            ),
+                        )
+                    except SeamCrossingError as _seam_err:
+                        # Crossing failed (no store, no entrance node, etc.).
+                        # Fail loud — never silently accept the confabulation.
+                        with region_entry_rejected_span(
+                            entry=result.location,
+                            reason="seam_crossing_unresolvable",
+                            caller_path="narration_apply.location_update",
+                            player_name=player_name,
+                        ):
+                            logger.error(
+                                "region.seam_crossing_unresolvable entry=%r pc=%s "
+                                "region=%s seam=%s reason=%s — location patch "
+                                "REJECTED (No Silent Fallbacks)",
+                                result.location,
+                                player_name,
+                                _pc_region,
+                                _seam_route.to_id,
+                                _seam_err.reason,
+                            )
+                        # Drop the patch. NOTE: we are already INSIDE the
+                        # ``if result.location:`` block — emptying it here does
+                        # NOT rewind the writes above (ledger: restored just
+                        # below; sweep/abandon: neutralized via the drift flag
+                        # just below). What the falsy value DOES protect is the
+                        # re-gated consumers downstream of this point: the
+                        # ``state.location_update`` log/watcher emit (re-gated
+                        # on truthiness) and callers that re-check
+                        # ``result.location`` after apply (e.g. the render
+                        # trigger). PC stays put, honestly. Restore the ledger
+                        # entries the pre-resolution write clobbered with the
+                        # confabulation (back to old_loc; pop if there was none).
+                        result.location = ""
+                        _reanchor_location_ledger(
+                            snapshot,
+                            confabulated=_confab_heading,
+                            replacement=old_loc,
+                            actor_for_location=actor_for_location,
+                        )
+                        # The PC did NOT move — this rejected re-title is not a
+                        # scene boundary. Without this flag, ``old_loc != ""``
+                        # downstream would sweep Scratch and abandon an anchored
+                        # combat — a regression vs the pre-105-2 drift handling
+                        # of this exact heading shape.
+                        _same_region_drift = True
+                    else:
+                        # Crossing performed: pc_region patch + movement.resolved
+                        # span fired by the resolver. Re-anchor the scene to the
+                        # authored entrance room's name so the narration record
+                        # carries the REAL room, not the confabulation — and
+                        # rewrite the ledger entries stamped with the confab so
+                        # ledger and scene agree.
+                        result.location = _entrance_room_name(
+                            crossing_region=_crossing.to_region,
+                            lookahead_handle=lookahead_handle,
+                        )
+                        _reanchor_location_ledger(
+                            snapshot,
+                            confabulated=_confab_heading,
+                            replacement=result.location,
+                            actor_for_location=actor_for_location,
+                        )
+                        _same_region_drift = False
+                else:
+                    # No seam route on this region — the heading is a
+                    # sub-location/POI WITHIN the current region (the original
+                    # 90-6 path: "Dunkelkurve — Inside the Tunnel" inside
+                    # sturmichi). Do NOT fork it into discovered_regions.
+                    # OTEL lie-detector: the GM panel must see the engine skip
+                    # the pollution (No Silent Fallbacks — the skip is a
+                    # decision, logged). See DRIVER 2026-06-04, the_circuit.
+                    with region_entry_rejected_span(
+                        entry=result.location,
+                        reason="sub_location_in_region_mode_world",
+                        caller_path="narration_apply.location_update",
+                        player_name=player_name,
+                    ):
+                        logger.info(
+                            "region.entry_skipped_sub_location entry=%r current_region=%r "
+                            "player=%s caller=narration_apply.location_update "
+                            "(region-mode world: scene title is a POI within the region, "
+                            "not a new cartography region)",
+                            result.location,
+                            snapshot.current_region,
+                            player_name,
+                        )
+                    # Ping-pong 2026-06-07: the engine just concluded this heading
+                    # is a POI WITHIN the current region — the same-region signal
+                    # the encounter abandon ladder below must respect (the perseus
+                    # repro: combat seated, then deactivated the SAME turn by
+                    # 'New Kowloon, Yula' → 'New Kowloon — Transit Promenade').
+                    _same_region_drift = True
             else:
                 # Story 45-17: canonical-slug dedup. The narrator emits
                 # surface variants for the same room across turns
@@ -3907,24 +4130,30 @@ def _apply_narration_result_to_snapshot(
                             existing_match,
                             new_slug,
                         )
-        logger.info(
-            "state.location_update old=%r new=%r player=%s",
-            old_loc,
-            result.location,
-            player_name,
-        )
-        _watcher_publish(
-            "state_transition",
-            {
-                "field": "location",
-                "before": old_loc,
-                "after": result.location,
-                "player_name": player_name,
-                "turn_number": snapshot.turn_manager.interaction,
-                "discovered_count": len(snapshot.discovered_regions),
-            },
-            component="state.location",
-        )
+        # Story 105-2 lie-detector hygiene: the seam-recovery REJECT path
+        # empties result.location mid-block (the patch was dropped; the PC
+        # did NOT move). Emitting a location_update with after="" on that
+        # turn would be the GM panel reporting a move the engine refused —
+        # the rejection already emitted its own region.entry_rejected span.
+        if result.location:
+            logger.info(
+                "state.location_update old=%r new=%r player=%s",
+                old_loc,
+                result.location,
+                player_name,
+            )
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "location",
+                    "before": old_loc,
+                    "after": result.location,
+                    "player_name": player_name,
+                    "turn_number": snapshot.turn_manager.interaction,
+                    "discovered_count": len(snapshot.discovered_regions),
+                },
+                component="state.location",
+            )
         # Scratch sweep on scene change. A location change is a scene
         # boundary by every TTRPG convention — the cough you took in the
         # previous room shouldn't pile onto the cough you take in the

@@ -170,6 +170,11 @@ For each player action:
          search / examine. NEVER emit a region id — you do not know the
          graph. Describe WHICH exit by exit_descriptor only; the engine
          resolves it.
+         When game_state.current_region_exits is present it lists the
+         REAL exits from where the party stands; an action that takes,
+         descends, or follows one of them IS movement — name it in
+         exit_descriptor. A "seam" exit leads down into the underworld:
+         going down it is direction "deeper".
        - reflect_absence: player addresses someone/something not present.
        - witnessed_act: the player commits an EARNED, PUBLIC act that
          contradicts a belief-powered authority or shows a cowed population

@@ -1097,6 +1097,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         # sub-block and stops every per-mention side effect from
                         # double-running (the blackthorn turn-1 double-apply).
                         is_dice_replay=suppress_intent_router,
+                        # Story 105-2: the seam-recovery guard needs the dungeon
+                        # store (handle.persistence) to perform a missed crossing
+                        # instead of accepting a confabulated deep.
+                        # None for non-dungeon worlds.
+                        lookahead_handle=sd.lookahead_handle,
                     )
                     applied_outcome = _apply_narration_result_to_snapshot(
                         snapshot,

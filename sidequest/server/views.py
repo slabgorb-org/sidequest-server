@@ -341,6 +341,7 @@ def party_member_from_character(
         PartyMember,
     )
     from sidequest.protocol.types import NonBlankString
+    from sidequest.server.asset_urls import resolve_player_portrait_url
     from sidequest.server.session_helpers import _resolve_location_display
 
     # Inventory is stored as list[dict] in Phase 1 (creature_core.py:158).
@@ -578,7 +579,9 @@ def party_member_from_character(
         # ADR-021 track 2: affinity tier promotions this turn (empty on turns
         # with none), so the player sees which affinity advanced and why.
         affinity_advancements=character.last_affinity_tier_ups,
-        portrait_url=None,
+        portrait_url=resolve_player_portrait_url(
+            sd.genre_slug, sd.world_slug, character.portrait_ref
+        ),
         current_location=location_nbs,
         sheet=sheet,
         inventory=inventory_payload,

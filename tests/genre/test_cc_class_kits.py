@@ -8,23 +8,36 @@ def _kit_item_ids(pack, kit_id: str) -> set[str]:
     return {item for slot, items in kit.items() for item in items}
 
 
-def test_cc_has_four_class_kits():
+def test_cc_has_three_class_kits():
     loader = GenreLoader()
     pack = loader.load("caverns_and_claudes")
     assert pack.equipment_tables is not None
     assert set(pack.equipment_tables.class_tables.keys()) == {
-        "fighter_kit",
+        "warrior_kit",
+        "expert_kit",
         "mage_kit",
-        "cleric_kit",
-        "thief_kit",
     }
+
+
+def test_cc_every_class_kit_table_resolves():
+    """Every ClassDef.kit_table must resolve to a class_tables block — a
+    missing key silently produces an empty starting inventory (the
+    No-Silent-Fallbacks failure mode behind the 2026-06-12 WWN-port re-key)."""
+    loader = GenreLoader()
+    pack = loader.load("caverns_and_claudes")
+    table_keys = set(pack.equipment_tables.class_tables.keys())
+    for cls in pack.classes:
+        assert cls.kit_table in table_keys, (
+            f"class '{cls.id}' kit_table '{cls.kit_table}' has no class_tables "
+            f"block — chargen would emit an empty inventory."
+        )
 
 
 def test_cc_kit_items_exist_in_inventory():
     loader = GenreLoader()
     pack = loader.load("caverns_and_claudes")
     catalog_ids = {item.id for item in pack.inventory.item_catalog}
-    for kit_id in ("fighter_kit", "mage_kit", "cleric_kit", "thief_kit"):
+    for kit_id in ("warrior_kit", "expert_kit", "mage_kit"):
         for item_id in _kit_item_ids(pack, kit_id):
             assert item_id in catalog_ids, f"{kit_id} references missing item: {item_id}"
 
@@ -36,11 +49,11 @@ def test_cc_mage_kit_has_no_armor():
     assert mage_kit.get("armor", []) == []
 
 
-def test_cc_thief_kit_has_lockpicks():
+def test_cc_expert_kit_has_lockpicks():
     loader = GenreLoader()
     pack = loader.load("caverns_and_claudes")
-    thief_kit = pack.equipment_tables.class_tables["thief_kit"]
-    assert "lockpicks" in {i for items in thief_kit.values() for i in items}
+    expert_kit = pack.equipment_tables.class_tables["expert_kit"]
+    assert "lockpicks" in {i for items in expert_kit.values() for i in items}
 
 
 def test_cc_each_class_has_positive_starting_gold():

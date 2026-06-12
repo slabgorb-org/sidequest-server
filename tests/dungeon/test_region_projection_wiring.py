@@ -465,6 +465,67 @@ async def test_cartography_region_is_not_self_healed(
         await session_integration.detach_dungeon_from_session(handle)
 
 
+async def test_pc_crossing_into_generated_room_projects_that_room(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+) -> None:
+    """sq-playtest 2026-06-12 (session ``2026-06-12-beneath_sunden-5``,
+    player Pip): the per-PC dungeon crossing writes ``pc_regions`` via the
+    ``WorldStatePatch.pc_region`` apply, but nothing synced the singular
+    ``current_region`` anchor — Pip stood in ``exp001.r0`` while
+    ``current_region`` stayed ``the_dropmouth`` (surface) forever. The
+    per-turn projection takes ``current_region`` by contract, so the
+    narrator NEVER received the generated room manifest and improvised the
+    whole crawl.
+
+    This walks the ticket's requested wire: entrance -> a generated room
+    via the REAL ``pc_region`` patch apply, then asserts the REAL
+    ``_project_current_region`` returns THAT room."""
+    from sidequest.dungeon import session_integration
+    from sidequest.game.session import GameSnapshot, WorldStatePatch
+    from sidequest.server.session_helpers import _project_current_region
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"cross_{uuid.uuid4().hex[:12]}"
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    # Seat the solo PC BEFORE attach so the entrance seed lands per-PC.
+    snap.player_seats = {"p1": "Pip"}
+    handle = None
+    try:
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        assert snap.current_region == "entrance"
+        assert snap.pc_regions.get("Pip") == "entrance"
+
+        # A REAL generated room adjacent to the entrance — the move the
+        # constrained vocabulary offers the player.
+        graph = repo.load_map(entrance_id="entrance")
+        adjacent = graph.neighbors("entrance")
+        assert adjacent, "entrance has no in-graph exit — corrupt seed"
+        target = adjacent[0]
+
+        # The production crossing: movement emits a pc_region world patch.
+        snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": target}))
+
+        assert snap.pc_regions["Pip"] == target
+        assert snap.current_region == target, (
+            "pc_region crossing did not advance the current_region anchor — "
+            "the projection below would starve (the split-brain)"
+        )
+
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
+        proj = _project_current_region(sd, snap)
+        assert proj is not None, (
+            "projection returned None for a PC standing in a generated room — "
+            "the narrator would improvise the crawl"
+        )
+        assert proj.region_id == target, (
+            f"projection returned {proj.region_id!r}, not the room the PC crossed into ({target!r})"
+        )
+    finally:
+        await session_integration.detach_dungeon_from_session(handle)
+
+
 async def test_dungeon_map_frame_is_emitted_to_ui(
     monkeypatch: pytest.MonkeyPatch,
     migrated_db: str,

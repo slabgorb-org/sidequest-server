@@ -115,6 +115,30 @@ SPAN_ROUTES[SPAN_REGION_QUERY] = SpanRoute(
 
 
 # ---------------------------------------------------------------------------
+# Region anchor sync — sq-playtest 2026-06-12 (beneath_sunden split-brain).
+# Emitted by ``GameSnapshot._apply_world_patch_inner`` when a per-PC
+# ``pc_region`` crossing leaves the seated party in CONSENSUS on a region
+# that differs from the singular ``current_region`` anchor: the anchor is
+# advanced to the consensus. Without this sync every anchor consumer (the
+# per-turn region projection, save forensics, the render trigger) reads a
+# stale surface region while the PCs stand inside the dungeon graph — the
+# narrator never receives the generated room manifest and improvises the
+# crawl. The GM panel sees from/to so a stuck anchor is visible, not silent.
+# ---------------------------------------------------------------------------
+SPAN_REGION_ANCHOR_SYNCED = "snapshot.region_anchor_synced"
+SPAN_ROUTES[SPAN_REGION_ANCHOR_SYNCED] = SpanRoute(
+    event_type="state_transition",
+    component="snapshot",
+    extract=lambda span: {
+        "field": "current_region",
+        "op": "anchor_synced",
+        "from_region": (span.attributes or {}).get("from_region", ""),
+        "to_region": (span.attributes or {}).get("to_region", ""),
+    },
+)
+
+
+# ---------------------------------------------------------------------------
 # Session lifecycle — sidequest/game/persistence.py
 # Fires every time SqliteStore.init_session() runs — including on a fresh
 # slot — so the GM panel gets the negative confirmation that reinit ran

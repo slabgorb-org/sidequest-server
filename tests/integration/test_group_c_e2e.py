@@ -133,10 +133,13 @@ async def test_zero_hp_pc_in_wry_whimsy_injects_recoverable_break_directives():
     )
     assert "must_narrate" in prompt
     assert "must_not_narrate" in prompt
-    # Recoverable-break verdict — must_narrate text surfaces:
-    assert "BREAK" in prompt or "loss of the\n" in prompt or "loss of the scene" in prompt
-    # Must-not text surfaces too (no death / eulogy at this baseline):
-    assert "eulogy" in prompt or "treats the loss as final" in prompt
+    # Recoverable-break verdict — wry_whimsy's specific must_narrate text
+    # surfaces (not just any lethality prose; a vaguer match would mask a
+    # policy-routing regression):
+    assert "Render a BREAK, not a wound" in prompt
+    # Its specific must_not text surfaces too (no death / eulogy at this
+    # baseline):
+    assert "treats the loss as final or fatal at this lethality baseline" in prompt
 
 
 async def test_no_lethality_directives_when_character_above_zero_edge():

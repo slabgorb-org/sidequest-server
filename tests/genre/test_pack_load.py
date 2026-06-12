@@ -43,6 +43,23 @@ def test_caverns_and_claudes_pack_loads_with_wwn_combat_and_dial_schema():
     dial confrontation must remain so this assertion does not pass vacuously."""
     pack = load_pack("caverns_and_claudes")
     assert pack.rules is not None
+    # Positive WWN-combat guard: COMBAT_PACKS in test_confrontation_calibration
+    # is now empty, so this is the assertion that fails loudly if the combat
+    # def is ever deleted or falls off the wwn binding.
+    assert pack.rules.ruleset == "wwn"
+    combat_defs = [c for c in pack.rules.confrontations if c.confrontation_type == "combat"]
+    assert combat_defs, "caverns_and_claudes must expose a combat confrontation"
+    for cdef in combat_defs:
+        mode = (
+            cdef.resolution_mode.value
+            if hasattr(cdef.resolution_mode, "value")
+            else cdef.resolution_mode
+        )
+        win = (
+            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
+        )
+        assert mode == "beat_selection"
+        assert win == "hp_depletion"
     dial_confrontations = [
         cdef
         for cdef in pack.rules.confrontations

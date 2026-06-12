@@ -13,6 +13,10 @@ if TYPE_CHECKING:
 
 SeamResolver = Callable[..., SeamCrossingResult]
 
+# NOTE: the intent-router prompt nudge (sidequest/agents/intent_router.py,
+# movement section) hardcodes deep_descent's semantics — a "seam" exit goes
+# DOWN, direction "deeper". A future seam kind with different geometry
+# (ascent, lateral crossing) must update that nudge alongside this registry.
 _REGISTRY: dict[str, SeamResolver] = {
     "deep_descent": resolve_deep_descent,
 }

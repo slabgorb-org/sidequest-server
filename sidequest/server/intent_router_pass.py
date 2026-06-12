@@ -370,33 +370,49 @@ def _build_state_summary(
     # descent it was never told existed; this is the lexical bridge
     # (59-27 precedent: authored vocabulary beats inference). Region
     # resolved in party-consensus mode (no perspective) to match the
-    # room/NPC projections above — a split party returns None and the
-    # projection passes through, loud, per the gaslighting doctrine.
+    # room/NPC projections above. A split party (or any unseeded seat)
+    # makes region_for() return None, so the projection is OMITTED — the
+    # router gets NO exit vocabulary that turn. The warning below is the
+    # GM-panel evidence distinguishing "split party swallowed the exits"
+    # from "this world has no cartography" (which is silent by design).
     if pack is not None:
         _worlds = getattr(pack, "worlds", None)
         _world = _worlds.get(snapshot.world_slug) if _worlds else None
         _cart = getattr(_world, "cartography", None)
-        _region_id = snapshot.region_for() or ""
-        _region = _cart.regions.get(_region_id) if _cart and _region_id else None
-        if _region is not None:
-            region_exits: list[dict[str, str]] = []
-            for adj_id in getattr(_region, "adjacent", None) or []:
-                adj = _cart.regions.get(adj_id)
-                region_exits.append(
-                    {"name": getattr(adj, "name", None) or adj_id, "kind": "adjacent"}
+        if _cart is not None:
+            _region_id = snapshot.region_for() or ""
+            if not _region_id:
+                logger.warning(
+                    "intent_router.region_exits projection_skipped "
+                    "reason=region_unresolved interaction=%d",
+                    snapshot.turn_manager.interaction,
                 )
-            seam = seam_route_for(_cart, _region_id)
-            if seam is not None:
-                region_exits.append({"name": seam.name, "kind": "seam"})
-            if region_exits:
-                summary["current_region_exits"] = region_exits
-                with intent_router_region_exits_span(
-                    exit_count=len(region_exits),
-                    seam_count=sum(1 for e in region_exits if e["kind"] == "seam"),
-                    region_id=_region_id,
-                    genre_slug=snapshot.genre_slug or "",
-                ):
-                    pass
+            _region = _cart.regions.get(_region_id) if _region_id else None
+            if _region is not None:
+                region_exits: list[dict[str, str]] = []
+                for adj_id in _region.adjacent:
+                    adj = _cart.regions.get(adj_id)
+                    # Raw-id fallback only for DANGLING adjacency — an
+                    # authored neighbor id with no region entry, which is
+                    # the pack validator's concern, not ours.
+                    region_exits.append(
+                        {
+                            "name": adj.name if adj is not None else adj_id,
+                            "kind": "adjacent",
+                        }
+                    )
+                seam = seam_route_for(_cart, _region_id)
+                if seam is not None:
+                    region_exits.append({"name": seam.name, "kind": "seam"})
+                if region_exits:
+                    summary["current_region_exits"] = region_exits
+                    with intent_router_region_exits_span(
+                        exit_count=len(region_exits),
+                        seam_count=sum(1 for e in region_exits if e["kind"] == "seam"),
+                        region_id=_region_id,
+                        genre_slug=snapshot.genre_slug or "",
+                    ):
+                        pass
 
     # 82-10 before/after evidence — fires once per pass, AFTER the
     # router-specific additions so bytes_after is what actually ships to

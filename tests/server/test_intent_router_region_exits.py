@@ -162,6 +162,29 @@ def test_no_cartography_no_projection(plain_snapshot_and_pack):
     assert "current_region_exits" not in summary
 
 
+def test_split_party_omits_projection(caplog):
+    """Disagreeing pc_regions → region_for() is None → projection OMITTED.
+
+    Pins the behavior the original comment misdescribed: the router gets no
+    exit vocabulary on a split party, and the skip is logged so the GM panel
+    can distinguish it from "no cartography".
+    """
+    cart = _hybrid_cartography()
+    pack = _pack_with_cartography("beneath_sunden", cart)
+    snap = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        pc_regions={"Groucho": "the_dropmouth", "Harpo": "ropefoot"},
+        player_seats={"p1": "Groucho", "p2": "Harpo"},
+    )
+    with caplog.at_level("WARNING", logger="sidequest.server.intent_router_pass"):
+        summary = _build_state_summary(snap, pack=pack)
+    assert "current_region_exits" not in summary
+    assert any(
+        "intent_router.region_exits projection_skipped" in r.getMessage() for r in caplog.records
+    )
+
+
 def test_no_pack_no_projection():
     snap = _snapshot("the_dropmouth")
     summary = _build_state_summary(snap)  # pack=None

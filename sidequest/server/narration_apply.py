@@ -4029,9 +4029,16 @@ def _apply_narration_result_to_snapshot(
                                 _seam_route.to_id,
                                 _seam_err.reason,
                             )
-                        # Drop the patch; the outer ``if result.location:`` gate
-                        # treats "" as falsy — all downstream location apply is
-                        # skipped; PC stays put, honestly. Restore the ledger
+                        # Drop the patch. NOTE: we are already INSIDE the
+                        # ``if result.location:`` block — emptying it here does
+                        # NOT rewind the writes above (ledger: restored just
+                        # below; sweep/abandon: neutralized via the drift flag
+                        # just below). What the falsy value DOES protect is the
+                        # re-gated consumers downstream of this point: the
+                        # ``state.location_update`` log/watcher emit (re-gated
+                        # on truthiness) and callers that re-check
+                        # ``result.location`` after apply (e.g. the render
+                        # trigger). PC stays put, honestly. Restore the ledger
                         # entries the pre-resolution write clobbered with the
                         # confabulation (back to old_loc; pop if there was none).
                         result.location = ""
@@ -4123,24 +4130,30 @@ def _apply_narration_result_to_snapshot(
                             existing_match,
                             new_slug,
                         )
-        logger.info(
-            "state.location_update old=%r new=%r player=%s",
-            old_loc,
-            result.location,
-            player_name,
-        )
-        _watcher_publish(
-            "state_transition",
-            {
-                "field": "location",
-                "before": old_loc,
-                "after": result.location,
-                "player_name": player_name,
-                "turn_number": snapshot.turn_manager.interaction,
-                "discovered_count": len(snapshot.discovered_regions),
-            },
-            component="state.location",
-        )
+        # Story 105-2 lie-detector hygiene: the seam-recovery REJECT path
+        # empties result.location mid-block (the patch was dropped; the PC
+        # did NOT move). Emitting a location_update with after="" on that
+        # turn would be the GM panel reporting a move the engine refused —
+        # the rejection already emitted its own region.entry_rejected span.
+        if result.location:
+            logger.info(
+                "state.location_update old=%r new=%r player=%s",
+                old_loc,
+                result.location,
+                player_name,
+            )
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "location",
+                    "before": old_loc,
+                    "after": result.location,
+                    "player_name": player_name,
+                    "turn_number": snapshot.turn_manager.interaction,
+                    "discovered_count": len(snapshot.discovered_regions),
+                },
+                component="state.location",
+            )
         # Scratch sweep on scene change. A location change is a scene
         # boundary by every TTRPG convention — the cough you took in the
         # previous room shouldn't pile onto the cough you take in the

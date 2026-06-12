@@ -447,6 +447,19 @@ def test_dead_store_rejection_keeps_combat_and_scratch(
     assert "scratch_sweep_skipped_same_region_drift" in events, (
         f"the scratch sweep must be SKIPPED (skip event present); got {sorted(events)}"
     )
+    # Lie-detector hygiene: a rejected patch is NOT a move — the GM panel
+    # must not see a ``state.location_update`` (state_transition
+    # field=location, after="") on a turn where the engine refused the
+    # relocation. The rejection's own region.entry_rejected span is the
+    # only location-shaped telemetry for this turn.
+    location_updates = [
+        e
+        for e in captured_watcher_events
+        if e["event_type"] == "state_transition" and e["fields"].get("field") == "location"
+    ]
+    assert location_updates == [], (
+        f"no location state_transition may fire on the reject path; got {location_updates!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

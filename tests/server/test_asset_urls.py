@@ -157,3 +157,19 @@ def test_resolve_asset_url_accepts_shared_scope(
     attrs = span_attrs_by_name(otel_capture, "server.asset_url.resolved")
     assert len(attrs) == 1
     assert attrs[0]["asset.scope"] == "shared"
+
+
+def test_player_portrait_url_resolves_slug(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    url = asset_urls.resolve_player_portrait_url(
+        "space_opera", "perseus_cloud", "drifter_voidborn_a1"
+    )
+    assert url == (
+        "https://cdn.slabgorb.com/genre_packs/space_opera/worlds/"
+        "perseus_cloud/assets/portraits/drifter_voidborn_a1.png"
+    )
+
+
+def test_player_portrait_url_none_for_falsy_ref() -> None:
+    assert asset_urls.resolve_player_portrait_url("space_opera", "perseus_cloud", None) is None
+    assert asset_urls.resolve_player_portrait_url("space_opera", "perseus_cloud", "") is None

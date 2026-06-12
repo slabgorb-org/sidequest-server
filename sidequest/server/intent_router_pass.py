@@ -41,6 +41,8 @@ from sidequest.agents.dispatch_precondition_gate import (
 )
 from sidequest.agents.intent_router import IntentRouter, _serialize_state_summary
 from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch_bank
+from sidequest.dungeon.region_projection import project_region
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _DUNGEON_ENTRANCE_ID
 from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.seams import seam_route_for
 from sidequest.game.session import GameSnapshot
@@ -224,6 +226,8 @@ def _build_state_summary(
     snapshot: GameSnapshot,
     *,
     pack: GenrePack | None = None,
+    dungeon_store: Any | None = None,
+    palette: Any | None = None,
 ) -> dict[str, Any]:
     """Build the slimmed JSON-able state summary the router consumes.
 
@@ -413,6 +417,49 @@ def _build_state_summary(
                         genre_slug=snapshot.genre_slug or "",
                     ):
                         pass
+            elif _region_id:
+                # Pingpong 2026-06-12: the PC's region is NOT a cartography
+                # region — post seam-crossing it is a dungeon graph node
+                # ('entrance' / 'expNNN.rN'). The silent skip here was root
+                # cause #2 of the confabulated-crawl bug: the router was never
+                # told the dungeon has exits, so in-dungeon descent intents
+                # never classified as movement. Project the REAL graph exits
+                # (hidden edges withheld unless the route is discovered —
+                # reverse-Illusionism, same rule as movement §Q1 step 3).
+                _graph = (
+                    dungeon_store.load_map(entrance_id=_DUNGEON_ENTRANCE_ID)
+                    if dungeon_store is not None
+                    else None
+                )
+                if _graph is not None and _region_id in _graph.nodes and palette is not None:
+                    _proj = project_region(_graph, _region_id, palette)
+                    _discovered_routes = set(snapshot.discovered_routes or [])
+                    dungeon_exits = [
+                        {"name": e.to_region_id, "kind": e.kind}
+                        for e in _proj.exits
+                        if (not e.hidden) or (e.to_region_id in _discovered_routes)
+                    ]
+                    if dungeon_exits:
+                        summary["current_region_exits"] = dungeon_exits
+                        with intent_router_region_exits_span(
+                            exit_count=len(dungeon_exits),
+                            seam_count=0,
+                            region_id=_region_id,
+                            genre_slug=snapshot.genre_slug or "",
+                        ):
+                            pass
+                else:
+                    # Neither cartography nor a reachable dungeon node — an
+                    # unmapped position. Loud skip (No Silent Fallbacks): the
+                    # GM panel must be able to tell "router got no exit
+                    # vocabulary" from "world has no cartography".
+                    logger.warning(
+                        "intent_router.region_exits projection_skipped "
+                        "reason=region_unmapped region_id=%s store=%s interaction=%d",
+                        _region_id,
+                        "present" if dungeon_store is not None else "absent",
+                        snapshot.turn_manager.interaction,
+                    )
 
     # 82-10 before/after evidence — fires once per pass, AFTER the
     # router-specific additions so bytes_after is what actually ships to
@@ -528,7 +575,9 @@ async def execute_intent_router_pre_narrator_pass(
     """
     _timings = phase_timings if phase_timings is not None else PhaseTimings.NULL
     with _timings.phase("intent_router_pass"):
-        state_summary = _build_state_summary(snapshot, pack=pack)
+        state_summary = _build_state_summary(
+            snapshot, pack=pack, dungeon_store=dungeon_store, palette=palette
+        )
         package = await intent_router.decompose(
             action=action,
             state_summary=state_summary,

@@ -853,7 +853,9 @@ def test_wiring_intent_router_pass_threads_context(capture_spans, monkeypatch):
 
     # _build_state_summary touches pack — stub it to a plain string.
     monkeypatch.setattr(
-        intent_router_pass, "_build_state_summary", lambda snapshot, *, pack: "summary"
+        intent_router_pass,
+        "_build_state_summary",
+        lambda snapshot, *, pack, dungeon_store=None, palette=None: "summary",
     )
 
     _run(

@@ -189,25 +189,29 @@ async def run_movement_dispatch(
                 }
             )
 
-        with movement_region_mode_span(
-            pc_name=player_name,
-            from_region=from_region,
-        ) as span:
-            span.set_attribute("intent.direction", direction)
-            span.set_attribute("intent.exit_descriptor", exit_descriptor)
-            span.set_attribute("world_slug", snapshot.world_slug)
-        logger.debug(
-            "movement.region_mode pc=%s world=%s direction=%s descriptor=%r "
-            "(deferred to narration_apply heading→region path)",
-            player_name,
-            snapshot.world_slug,
-            direction,
-            exit_descriptor,
+        # --- Pingpong 2026-06-12: the PC is already INSIDE the dungeon. ---
+        # A region-mode hybrid world's PC who has crossed the seam stands on
+        # a dungeon graph node (pc_regions == 'entrance' / 'expNNN.rN'), not
+        # a cartography region. Deferring here hands the in-dungeon crawl to
+        # the narration heading→region path — which cannot traverse the graph,
+        # so the narrator improvises the whole dungeon (the confabulated-crawl
+        # bug). When the PC's region is a live graph node, fall through to the
+        # §Q1 procedural navigator below; the region-mode defer is ONLY for
+        # PCs standing on surface cartography.
+        _in_dungeon = (
+            dungeon_store is not None
+            and bool(from_region)
+            and from_region in dungeon_store.load_map(entrance_id=_ENTRANCE_ID).nodes
         )
-        # No patch: the heading→region path owns the advance. No directive:
-        # the narrator resolves the move in prose. No error: this is the
-        # expected navigation mode, not a failure.
-        return SubsystemOutput(data={"resolved_via": "region_mode_deferred"})
+        if not _in_dungeon:
+            return _defer_region_mode(
+                snapshot=snapshot,
+                player_name=player_name,
+                from_region=from_region,
+                direction=direction,
+                exit_descriptor=exit_descriptor,
+            )
+        # In-dungeon: fall through to the §Q1 navigator below.
 
     # --- §Q1 step 1: no dungeon_store → non-procedural world, fail loud. ---
     # palette is threaded from the SAME lookahead handle as dungeon_store, so
@@ -586,6 +590,39 @@ async def _sync_materialize(
         return False
     fresh = dungeon_store.load_map(entrance_id=_ENTRANCE_ID)
     return target_id in fresh.nodes
+
+
+def _defer_region_mode(
+    *,
+    snapshot: GameSnapshot,
+    player_name: str,
+    from_region: str,
+    direction: str,
+    exit_descriptor: str,
+) -> SubsystemOutput:
+    """Region-mode defer: the narration_apply heading→region path owns the
+    advance for a PC standing on surface cartography. Observable (non-error
+    ``movement.region_mode`` span) — NOT a silent fallback; see the
+    region-mode block in ``run_movement_dispatch``."""
+    with movement_region_mode_span(
+        pc_name=player_name,
+        from_region=from_region,
+    ) as span:
+        span.set_attribute("intent.direction", direction)
+        span.set_attribute("intent.exit_descriptor", exit_descriptor)
+        span.set_attribute("world_slug", snapshot.world_slug)
+    logger.debug(
+        "movement.region_mode pc=%s world=%s direction=%s descriptor=%r "
+        "(deferred to narration_apply heading→region path)",
+        player_name,
+        snapshot.world_slug,
+        direction,
+        exit_descriptor,
+    )
+    # No patch: the heading→region path owns the advance. No directive:
+    # the narrator resolves the move in prose. No error: this is the
+    # expected navigation mode, not a failure.
+    return SubsystemOutput(data={"resolved_via": "region_mode_deferred"})
 
 
 def _unresolved(

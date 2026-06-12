@@ -19,6 +19,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import sidequest.telemetry.spans as spans_module
 from sidequest.agents.subsystems.movement import run_movement_dispatch
 from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.world import (
     CartographyConfig,
@@ -50,8 +51,6 @@ def _movement(direction: str, descriptor: str = "") -> SubsystemDispatch:
 # ---------------------------------------------------------------------------
 # Store doubles (content-free) — same shape as test_seam_deep_descent.py.
 # ---------------------------------------------------------------------------
-
-ENTRANCE_ID = "entrance"
 
 
 class _StoreWithEntrance:
@@ -152,13 +151,12 @@ def _pack_with_cartography(world_slug: str, cartography: CartographyConfig):
 # ---------------------------------------------------------------------------
 
 
-def _snapshot(pc_regions: dict[str, str], seats: dict[str, str], **kw) -> GameSnapshot:
+def _snapshot(pc_regions: dict[str, str], seats: dict[str, str]) -> GameSnapshot:
     return GameSnapshot(
         genre_slug="caverns_and_claudes",
         world_slug="beneath_sunden",
         pc_regions=dict(pc_regions),
         player_seats=dict(seats),
-        **kw,
     )
 
 
@@ -206,10 +204,10 @@ def hybrid_world_kit_empty_store():
 @pytest.fixture
 def oz_shaped_kit():
     cart = _oz_cartography()
-    pack = _pack_with_cartography("beneath_sunden", cart)
+    pack = _pack_with_cartography("oz", cart)
     snap = GameSnapshot(
         genre_slug="wry_whimsy",
-        world_slug="beneath_sunden",
+        world_slug="oz",
         pc_regions={"Dorothy": "munchkin_country"},
         player_seats={"p1": "Dorothy"},
     )
@@ -223,7 +221,14 @@ def oz_shaped_kit():
 
 @pytest.mark.parametrize(
     "direction,descriptor",
-    [("deeper", ""), ("toward_exit", ""), ("deeper", "down the rope")],
+    [
+        ("deeper", ""),
+        ("toward_exit", ""),
+        ("deeper", "down the rope"),
+        # Empty direction, descriptor-only intent: when the region owns a
+        # seam route, ANY movement intent except ``back`` crosses it.
+        ("", "follow the rope down"),
+    ],
 )
 def test_seam_region_movement_crosses_to_entrance(
     capture_spans, hybrid_world_kit, direction, descriptor
@@ -249,6 +254,11 @@ def test_seam_region_movement_crosses_to_entrance(
     assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
         f"PC not rebound to entrance; still at {kit.snapshot.region_for(perspective='Groucho')!r}"
     )
+    # OTEL proof the crossing was the seam resolver, not improvisation:
+    # the consumer-layer movement.resolved span carries the seam_kind.
+    resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
+    assert len(resolved) == 1, "expected exactly one movement.resolved span for the crossing"
+    assert (resolved[0].attributes or {})["seam_kind"] == "deep_descent"
 
 
 def test_seam_region_back_does_not_cross(capture_spans, hybrid_world_kit):

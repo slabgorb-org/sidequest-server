@@ -83,8 +83,9 @@ def _tokens(text: str) -> set[str]:
 
 
 def _cartography_for(*, pack: GenrePack | None, world_slug: str):
-    """The active world's cartography, or None (same probe shape as
-    _is_region_mode_world — keep the discriminator single-shaped)."""
+    """The active world's cartography, or None — the single pack/world probe
+    feeding ``_is_region_mode`` and ``seam_route_for`` (computed once per
+    dispatch; keep the discriminator single-shaped)."""
     if pack is None or not world_slug:
         return None
     worlds = getattr(pack, "worlds", None)
@@ -93,20 +94,19 @@ def _cartography_for(*, pack: GenrePack | None, world_slug: str):
     return getattr(worlds.get(world_slug), "cartography", None)
 
 
-def _is_region_mode_world(*, pack: GenrePack | None, world_slug: str) -> bool:
-    """True iff the active world's cartography is region-mode.
+def _is_region_mode(cart) -> bool:
+    """True iff the given cartography is region-mode.
 
     Region-mode worlds (``cartography.navigation_mode == region``) do not use
     the procedural-dungeon navigator — they carry no ``DungeonStore`` and
     resolve travel via the narration_apply heading→region path. Returns False
     (→ caller fails loud on ``no_dungeon_store``, never a silent skip) when the
-    pack, world, or cartography is absent or undeterminable. Mirrors the
-    ``getattr`` cartography probe used by ``narration_apply`` (#577) and
-    ``project_cartography_region`` so the discriminator stays single-shaped.
+    cartography is absent (``None`` from ``_cartography_for``) or
+    undeterminable. The pack/world probe lives in ``_cartography_for`` —
+    mirrors the ``getattr`` cartography probe used by ``narration_apply``
+    (#577) and ``project_cartography_region`` so the discriminator stays
+    single-shaped.
     """
-    cart = _cartography_for(pack=pack, world_slug=world_slug)
-    if cart is None:
-        return False
     return getattr(cart, "navigation_mode", None) == NavigationMode.region
 
 
@@ -145,17 +145,19 @@ async def run_movement_dispatch(
     # room_graph world that is genuinely missing its store still fails loud on
     # ``no_dungeon_store`` below, and an undeterminable pack/world (pack=None)
     # also falls through to fail-loud rather than silently deferring.
-    if _is_region_mode_world(pack=pack, world_slug=snapshot.world_slug):
+    cart = _cartography_for(pack=pack, world_slug=snapshot.world_slug)
+    if _is_region_mode(cart):
         from_region = snapshot.region_for(perspective=player_name) or ""
 
         # --- Story 105-2: the hybrid case de4f85c8 didn't anticipate. ---
         # A region-mode world whose current region owns a registered seam
         # route (beneath_sunden: the_dropmouth → deep_descent) IS the
-        # static→procedural boundary. Descent-shaped intents cross HERE —
-        # deferring them to the heading→region path is what made the
-        # 59-12 handoff dead code and the Deep unreachable (epic 105).
-        # ``back`` stays deferred: it is surface adjacency, not a seam.
-        cart = _cartography_for(pack=pack, world_slug=snapshot.world_slug)
+        # static→procedural boundary. When the PC's region owns a seam
+        # route, that seam is the region's onward boundary — ANY movement
+        # intent except ``back`` crosses it; ``back`` is surface adjacency,
+        # not a seam, so it stays deferred. Deferring the rest to the
+        # heading→region path is what made the 59-12 handoff dead code and
+        # the Deep unreachable (epic 105).
         seam_route = seam_route_for(cart, from_region)
         if seam_route is not None and direction != "back":
             try:
@@ -283,7 +285,7 @@ async def run_movement_dispatch(
                 snapshot=snapshot,
                 player_name=player_name,
                 route=Route(
-                    name="surface descent",
+                    name="(synthetic) surface descent",
                     description="room-graph surface→deep handoff (59-12)",
                     from_id=from_region,
                     to_id="deep_descent",

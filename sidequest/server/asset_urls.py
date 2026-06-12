@@ -75,6 +75,24 @@ def resolve_asset_url(relative_path: str, *, scope: Literal["pack", "shared"] = 
     return url
 
 
+def resolve_player_portrait_url(
+    genre_slug: str, world_slug: str, portrait_ref: str | None
+) -> str | None:
+    """Resolve a picked player-portrait slug to its R2 URL.
+
+    Returns None when ``portrait_ref`` is falsy (player skipped, or the world
+    ships no picker art). Otherwise builds the canonical world-portrait path
+    — ``genre_packs/<genre>/worlds/<world>/assets/portraits/<slug>.png``, the
+    same convention the render script writes and the chargen picker list reads
+    — and delegates to :func:`resolve_asset_url`.
+    """
+    if not portrait_ref:
+        return None
+    return resolve_asset_url(
+        f"genre_packs/{genre_slug}/worlds/{world_slug}/assets/portraits/{portrait_ref}.png"
+    )
+
+
 # Matches a CSS url() token, capturing the (optional) quote char and the inner
 # path. Only genre-pack-relative paths are rewritten; everything else (data:,
 # absolute http(s), unrelated relative paths) is left byte-for-byte intact.

@@ -48,7 +48,9 @@ _SPAN_COMMITTED = "wwn.round.committed"
 _SPAN_RESOLVED = "wwn.round.resolved"
 
 
-def test_solo_pc_with_npc_ally_closes_the_barrier_and_fires_the_round(otel_capture, monkeypatch):
+def test_solo_pc_with_npc_ally_closes_the_barrier_and_fires_the_round(
+    otel_capture, monkeypatch
+):
     """The load-bearing deadlock regression: in solo play, a seated friendly
     NPC ally must NOT hold the WN commit barrier. The human commits the one PC
     (the last *human* commit), so the barrier closes and the round walks."""

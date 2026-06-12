@@ -65,9 +65,7 @@ def _quest_card() -> EntityCard:
 
 
 def _trope_card() -> EntityCard:
-    return EntityCard.new(
-        EntityType.TROPE, "redemption", content="Redemption Arc — a second chance"
-    )
+    return EntityCard.new(EntityType.TROPE, "redemption", content="Redemption Arc — a second chance")
 
 
 # ===========================================================================
@@ -189,10 +187,14 @@ class TestActiveNotDoubleRendered:
         sd, _h = session_handler_factory(genre="caverns_and_claudes")
         # Use REAL pack trope ids so the TropeDefinition join (name/description)
         # resolves on the live dispatch path.
-        sd.snapshot.active_tropes.append(TropeState(id="the_keeper_stirs", status="progressing"))
+        sd.snapshot.active_tropes.append(
+            TropeState(id="the_keeper_stirs", status="progressing")
+        )
         # Dormant CONTROL: a resolved trope MUST be indexed, so "progressing not
         # indexed" can't pass vacuously by trope-indexing being dead.
-        sd.snapshot.active_tropes.append(TropeState(id="extraction_panic", status="resolved"))
+        sd.snapshot.active_tropes.append(
+            TropeState(id="extraction_panic", status="resolved")
+        )
 
         dispatch_entity_sync.sync_for_turn(handler=None, sd=sd)  # type: ignore[arg-type]
         indexed = {c.id for c in sd.entity_store.query_by_type(EntityType.TROPE)}
@@ -338,18 +340,14 @@ class TestTerminalQuestRoutingLive:
 
         sd, _h = session_handler_factory(genre="caverns_and_claudes")
         sd.snapshot.quest_log["q_failed"] = QuestEntry(title="Save the village", status="failed")
-        sd.snapshot.quest_log["q_resolved"] = QuestEntry(
-            title="Broker the truce", status="resolved"
-        )
+        sd.snapshot.quest_log["q_resolved"] = QuestEntry(title="Broker the truce", status="resolved")
         sd.snapshot.quest_log["q_active"] = QuestEntry(title="Find the heir", status="active")
 
         dispatch_entity_sync.sync_for_turn(handler=None, sd=sd)  # type: ignore[arg-type]
         indexed = {c.id for c in sd.entity_store.query_by_type(EntityType.QUEST)}
 
         assert "quest:q_failed" in indexed, "a FAILED quest must be indexed (terminal → dormant)"
-        assert "quest:q_resolved" in indexed, (
-            "a RESOLVED quest must be indexed (terminal → dormant)"
-        )
+        assert "quest:q_resolved" in indexed, "a RESOLVED quest must be indexed (terminal → dormant)"
         assert "quest:q_active" not in indexed, "an ACTIVE quest must NOT be indexed (rides floor)"
 
 
@@ -397,9 +395,9 @@ class TestLifecycleE2EWiring:
 
         # (1) live sync indexes the dormant quest.
         dispatch_entity_sync.sync_for_turn(handler=None, sd=sd)  # type: ignore[arg-type]
-        assert "quest:q_done" in {c.id for c in sd.entity_store.query_by_type(EntityType.QUEST)}, (
-            "completed quest must be indexed by the live sync sweep"
-        )
+        assert "quest:q_done" in {
+            c.id for c in sd.entity_store.query_by_type(EntityType.QUEST)
+        }, "completed quest must be indexed by the live sync sweep"
 
         # (2) a retrieved dormant quest renders into the prompt (render seam).
         context = _build_turn_context(sd, entity_retrieval=_retrieved(quests=[_quest_card()]))

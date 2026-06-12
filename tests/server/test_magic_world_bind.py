@@ -121,7 +121,8 @@ def test_init_world_magic_state_populates_without_character() -> None:
     # sanity / notice / vitality — none may appear yet.)
     char_keys = [k for k in snap.magic_state.ledger if k.startswith("character|")]
     assert char_keys == [], (
-        f"world-bind must not instantiate character bars before chargen; found {char_keys}"
+        f"world-bind must not instantiate character bars before chargen; "
+        f"found {char_keys}"
     )
 
     # The world-scope bar (coyote_star ships `hegemony_heat`, scope: world)
@@ -254,7 +255,8 @@ def test_init_world_magic_state_logs_loader_error_without_raising(
     assert ok is False
     assert snap.magic_state is None
     assert any(
-        "magic.init_failed" in rec.message and rec.levelname == "ERROR" for rec in caplog.records
+        "magic.init_failed" in rec.message and rec.levelname == "ERROR"
+        for rec in caplog.records
     ), "LoaderError must be logged at ERROR level (CLAUDE.md No Silent Fallbacks)"
     failed = [e for e in captured_magic_init_events if e["event_type"] == "magic.init_failed"]
     assert failed, "malformed config must emit a magic.init_failed watcher event"

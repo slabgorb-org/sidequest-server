@@ -253,10 +253,10 @@ def _ingame_payload(*, is_cluster_attr) -> dict:
         navigation_mode=NavigationMode.region,
         starting_region="edo",
         regions={
-            "edo": Region(
-                name="Edo", summary="Capital.", description="Capital.", adjacent=["hakone"]
+            "edo": Region(name="Edo", summary="Capital.", description="Capital.", adjacent=["hakone"]),
+            "hakone": Region(
+                name="Hakone", summary="Pass.", description="Pass.", adjacent=["edo"]
             ),
-            "hakone": Region(name="Hakone", summary="Pass.", description="Pass.", adjacent=["edo"]),
         },
     )
     world_kwargs = {"cartography": cart}

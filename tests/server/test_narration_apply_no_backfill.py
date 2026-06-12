@@ -374,7 +374,9 @@ def test_apply_narration_emits_scene_cohort_followed_watcher_event() -> None:
         napply._watcher_publish = original  # type: ignore[assignment]
 
     cohort_events = [
-        payload for _et, payload in seen_events if payload.get("kind") == "scene_cohort_followed"
+        payload
+        for _et, payload in seen_events
+        if payload.get("kind") == "scene_cohort_followed"
     ]
     assert len(cohort_events) == 1, (
         f"Expected exactly one scene_cohort_followed event, got: {cohort_events}"

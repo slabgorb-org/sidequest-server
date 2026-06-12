@@ -72,7 +72,9 @@ def _rel_card() -> EntityCard:
 
 
 class TestSessionHelpersRendersRelationship:
-    def test_build_turn_context_renders_relationship_section(self, session_handler_factory) -> None:
+    def test_build_turn_context_renders_relationship_section(
+        self, session_handler_factory
+    ) -> None:
         """``_build_turn_context`` must render a populated
         ``retrieved_relationships`` into a typed ``TurnContext`` field carrying the
         card's summary — mirroring ``retrieved_entity_npcs``. Today there is no such

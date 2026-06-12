@@ -47,21 +47,15 @@ def _make_npc(name: str) -> Npc:
 
 def _pack():
     humbug = PremiseDef(
-        premise_id="humbug",
-        authority="the_wizard",
+        premise_id="humbug", authority="the_wizard",
         claim=PremiseClaim(subject="the_wizard", proposition="great and terrible"),
-        belief_reserve=90,
-        propped_by=["munchkins"],
+        belief_reserve=90, propped_by=["munchkins"],
         drained_by=[PremiseDrain(act="expose", belief_delta=40)],
         collapse=PremiseCollapse(threshold=20, outcome="He flees."),
     )
     munchkins = BlocDef(
-        bloc_id="munchkins",
-        defiance=5,
-        grants_belief_to=["humbug"],
-        awakening_acts=[],
-        tipping_threshold=70,
-        tipped_outcome="Revolt.",
+        bloc_id="munchkins", defiance=5, grants_belief_to=["humbug"],
+        awakening_acts=[], tipping_threshold=70, tipped_outcome="Revolt.",
     )
     return SimpleNamespace(
         worlds={"oz": SimpleNamespace(premises=[humbug], blocs=[munchkins])},

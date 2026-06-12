@@ -223,8 +223,12 @@ def run_wn_round(
     # player-side actors, the difference is the engine-driven NPC allies (59-35)
     # that never seal a Main Action — record them so the short barrier is
     # explainable, not a mystery (coyote_star solo ship_combat deadlock fix).
-    exempt_allies = ", ".join(wn_barrier_exempt_allies(encounter=encounter, snapshot=snapshot))
-    wn_round_committed_span(slug=slug, committed_actors=committed, exempt_allies=exempt_allies)
+    exempt_allies = ", ".join(
+        wn_barrier_exempt_allies(encounter=encounter, snapshot=snapshot)
+    )
+    wn_round_committed_span(
+        slug=slug, committed_actors=committed, exempt_allies=exempt_allies
+    )
 
     order = sorted(encounter.initiative, key=lambda e: e.value, reverse=True)
     wn_round_initiative_span(

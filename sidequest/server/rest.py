@@ -949,16 +949,14 @@ def create_rest_router() -> APIRouter:
                 if entry.character_type != "player_picker":
                     continue
                 slug = picker_portrait_slug(entry)
-                portraits.append(
-                    {
-                        "slug": slug,
-                        "culture": entry.culture,
-                        "archetype": entry.archetype,
-                        "sex": entry.sex,
-                        "role": entry.role,
-                        "portrait_url": resolve_player_portrait_url(genre, world, slug),
-                    }
-                )
+                portraits.append({
+                    "slug": slug,
+                    "culture": entry.culture,
+                    "archetype": entry.archetype,
+                    "sex": entry.sex,
+                    "role": entry.role,
+                    "portrait_url": resolve_player_portrait_url(genre, world, slug),
+                })
         return {"portraits": portraits}
 
     return router

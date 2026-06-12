@@ -116,7 +116,6 @@ class CheckThrowHandler:
 
         room_broadcast = None
         if session._room is not None:
-
             def _broadcast(m: object) -> None:
                 assert session._room is not None
                 session._room.broadcast(m, exclude_socket_id=None)

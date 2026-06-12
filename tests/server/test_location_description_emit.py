@@ -477,7 +477,9 @@ def test_emit_populates_reference_url_when_region_is_a_known_poi(tmp_path, monke
     world_dir = genre_root / "worlds" / "test_world"
     # The region "test_room" is a point of interest with a lore page anchor.
     (world_dir / "history.yaml").write_text(
-        "points_of_interest:\n  - slug: test_room\n    name: Test Square\n"
+        "points_of_interest:\n"
+        "  - slug: test_room\n"
+        "    name: Test Square\n"
     )
     _patch_genre_loader_find(monkeypatch, genre_root)
 

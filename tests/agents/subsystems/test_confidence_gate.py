@@ -296,7 +296,8 @@ async def test_below_threshold_dispatch_does_not_engage_engine(probe_recorder):
     res = await run_dispatch_bank(pkg)
 
     assert probe_recorder == [], (
-        f"below-threshold dispatch must NOT engage its engine; probe was invoked: {probe_recorder}"
+        "below-threshold dispatch must NOT engage its engine; "
+        f"probe was invoked: {probe_recorder}"
     )
     assert "low" not in res.outputs_by_key, (
         "gated-out dispatch must not appear in outputs_by_key (engine didn't run)"
@@ -389,7 +390,8 @@ async def test_per_subsystem_threshold_override_changes_gate(probe_recorder):
     res = await run_dispatch_bank(pkg, context={"pack": pack})
 
     assert probe_recorder == [], (
-        "0.7 < per-subsystem override 0.9 must NOT engage even though it exceeds the 0.6 default"
+        "0.7 < per-subsystem override 0.9 must NOT engage even though it "
+        "exceeds the 0.6 default"
     )
     assert "mid" not in res.outputs_by_key
 
@@ -463,7 +465,9 @@ async def test_gate_emits_span_decision_degraded(probe_recorder, otel_capture):
 async def test_spine_intact_all_high_confidence_dispatches_engage(probe_recorder):
     """AC5: a turn of all-high-confidence dispatches behaves exactly as today —
     the gate does not drop any of them."""
-    dispatches = [_make_dispatch(PROBE, f"k{i}", confidence=0.85) for i in range(3)]
+    dispatches = [
+        _make_dispatch(PROBE, f"k{i}", confidence=0.85) for i in range(3)
+    ]
     pkg = _make_package(dispatches)
     res = await run_dispatch_bank(pkg)
 

@@ -491,10 +491,14 @@ def test_span_surfaces_prose_segment_count(otel_capture):
     snap = _snapshot([_pc("Willes"), _pc("Narder")])
     result = NarrationTurnResult(
         narration="Willes kneels at the chalk-cross, eyes closed.",
-        action_rewrite=ActionRewrite(you="You kneel", named="Willes kneels", intent="probe"),
+        action_rewrite=ActionRewrite(
+            you="You kneel", named="Willes kneels", intent="probe"
+        ),
         # No structured secret_routes (the withheld content came as
         # narrator PROSE) — yet a prose segment WAS partitioned.
-        private_prose_segments=[{"text": "Two auras, one active.", "anchor_pc": "Willes"}],
+        private_prose_segments=[
+            {"text": "Two auras, one active.", "anchor_pc": "Willes"}
+        ],
     )
     classify_narration_visibility(
         result=result,

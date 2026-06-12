@@ -245,7 +245,9 @@ def test_player_identity_resolved_span_fires_with_source_no_pii(
     captured: list[dict] = []
 
     def _capture(event_type, fields, *, component="sidequest-server", severity="info"):
-        captured.append({"event_type": event_type, "fields": fields, "component": component})
+        captured.append(
+            {"event_type": event_type, "fields": fields, "component": component}
+        )
 
     monkeypatch.setattr(connect_mod, "_watcher_publish", _capture)
 
@@ -300,28 +302,14 @@ def test_party_member_identity_present_for_connected_absent_for_disconnected():
     identities = {"p1": "alice@example.com"}  # room knows p1 (connected), not peer:Rux
 
     self_member = PartyMember(
-        player_id="p1",
-        name="Laverne",
-        player_identity=identities.get("p1"),
-        character_name="Laverne",
-        current_hp=10,
-        max_hp=10,
-        survivability_pool_label=None,
-        statuses=[],
-        **{"class": "Fighter"},
-        level=1,
+        player_id="p1", name="Laverne", player_identity=identities.get("p1"),
+        character_name="Laverne", current_hp=10, max_hp=10,
+        survivability_pool_label=None, statuses=[], **{"class": "Fighter"}, level=1,
     )
     peer_member = PartyMember(
-        player_id="peer:Rux",
-        name="Rux",
-        player_identity=identities.get("peer:Rux"),
-        character_name="Rux",
-        current_hp=10,
-        max_hp=10,
-        survivability_pool_label=None,
-        statuses=[],
-        **{"class": "Mage"},
-        level=1,
+        player_id="peer:Rux", name="Rux", player_identity=identities.get("peer:Rux"),
+        character_name="Rux", current_hp=10, max_hp=10,
+        survivability_pool_label=None, statuses=[], **{"class": "Mage"}, level=1,
     )
     assert self_member.player_identity == "alice@example.com"
     assert peer_member.player_identity is None

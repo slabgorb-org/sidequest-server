@@ -138,7 +138,9 @@ def test_list_pickers_filters_and_resolves(minimal_pack_factory, tmp_path: Path)
     assert a["role"] == "warrior"
 
 
-def test_list_pickers_idless_entry_slugifies_name(minimal_pack_factory, tmp_path: Path) -> None:
+def test_list_pickers_idless_entry_slugifies_name(
+    minimal_pack_factory, tmp_path: Path
+) -> None:
     """An entry without an explicit ``id`` serves the generator-parity
     slugified name — slug and URL filename both — never the raw name
     (which would 404 against the rendered ``<slug>.png``)."""
@@ -158,7 +160,9 @@ def test_list_pickers_idless_entry_slugifies_name(minimal_pack_factory, tmp_path
     ), f"unexpected portrait_url: {entry['portrait_url']!r}"
 
 
-def test_list_pickers_empty_world_returns_empty_list(minimal_pack_factory, tmp_path: Path) -> None:
+def test_list_pickers_empty_world_returns_empty_list(
+    minimal_pack_factory, tmp_path: Path
+) -> None:
     """A world whose manifest ships only NPC entries returns 200 with an empty
     list — not an error (empty is a valid response per spec)."""
     pack = minimal_pack_factory(tmp_path)

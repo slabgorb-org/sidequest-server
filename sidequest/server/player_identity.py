@@ -7,7 +7,6 @@ players by per-player Host names (player1.local, player2.local). Identity is the
 
 No silent fallback: if neither header yields a non-blank value, raise.
 """
-
 from __future__ import annotations
 
 from collections.abc import Mapping

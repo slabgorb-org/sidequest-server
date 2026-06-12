@@ -127,6 +127,7 @@ def test_record_call_feeds_instrumented_total(monkeypatch: pytest.MonkeyPatch) -
     Mocking watcher_hub so the detector events don't pollute test infra."""
     from unittest.mock import patch
 
+
     cost_ledger = ledger()
     cost = compute_cost_usd(
         input_tokens=2_000, output_tokens=80, cached_input_read_tokens=0, model=_HAIKU
@@ -164,9 +165,7 @@ def test_reset_for_tests_clears_instrumented_total() -> None:
     cost_ledger.update_cumulative(
         session_id="91-5-reset", cost_usd=cost, model=_HAIKU, ceiling_usd=_NO_CEILING
     )
-    assert cost_ledger.instrumented_total_usd() > 0.0, (
-        "pre-condition: total is non-zero before reset"
-    )
+    assert cost_ledger.instrumented_total_usd() > 0.0, "pre-condition: total is non-zero before reset"
 
     cost_ledger.reset_for_tests()
     total_after = cost_ledger.instrumented_total_usd()

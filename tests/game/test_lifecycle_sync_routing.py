@@ -77,9 +77,7 @@ class TestDormantOnlySync:
         from sidequest.game.entity_sync import sync_entity_cards
 
         store = EntityStore()
-        snap = _Snapshot(
-            quest_log={"q_fail": QuestEntry(title="Save the village", status="failed")}
-        )
+        snap = _Snapshot(quest_log={"q_fail": QuestEntry(title="Save the village", status="failed")})
         sync_entity_cards(store, snap)
         assert "quest:q_fail" in _ids(store, EntityType.QUEST), (
             "a FAILED quest must be indexed (it is a finished, recall-able note)"
@@ -179,7 +177,9 @@ class TestGovernorCapInterplay:
             TropeState(id="d1", status="dormant"),
             TropeState(id="d2", status="resolved"),
         ]
-        defs = _defs(("p1", "P1"), ("p2", "P2"), ("p3", "P3"), ("d1", "D1"), ("d2", "D2"))
+        defs = _defs(
+            ("p1", "P1"), ("p2", "P2"), ("p3", "P3"), ("d1", "D1"), ("d2", "D2")
+        )
         result = sync_entity_cards(store, _Snapshot(active_tropes=tropes), tropes=defs)
 
         indexed = _ids(store, EntityType.TROPE)

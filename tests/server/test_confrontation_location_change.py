@@ -133,7 +133,9 @@ def _attach_active_chase(
         opponent_metric=EncounterMetric(name="pursuit", current=0, starting=0, threshold=threshold),
         actors=[
             EncounterActor(name="Linus", role="driver", side="player"),
-            EncounterActor(name="Bōsōzoku formation riders", role="pursuer", side="opponent"),
+            EncounterActor(
+                name="Bōsōzoku formation riders", role="pursuer", side="opponent"
+            ),
         ],
     )
     snapshot.encounter = encounter

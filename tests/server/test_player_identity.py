@@ -3,7 +3,6 @@
 Resolution order: Cf-Access-Authenticated-User-Email (non-blank,
 case-insensitive) -> Host header -> raise. No silent default.
 """
-
 import pytest
 
 from sidequest.server.player_identity import (
@@ -16,10 +15,7 @@ CF = "cf-access-authenticated-user-email"
 
 
 def test_cf_access_email_wins():
-    assert (
-        resolve_player_identity({CF: "alice@example.com", "host": "p1.local"})
-        == "alice@example.com"
-    )
+    assert resolve_player_identity({CF: "alice@example.com", "host": "p1.local"}) == "alice@example.com"
 
 
 def test_cf_access_header_is_case_insensitive():

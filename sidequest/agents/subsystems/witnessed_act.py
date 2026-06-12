@@ -63,23 +63,13 @@ def _emit_political_events(
         elif ev.effect == "collapsed":
             with Span.open(
                 SPAN_PREMISE_COLLAPSED,
-                {
-                    "premise_id": ev.target_id,
-                    "act_id": act_id,
-                    "new_reserve": ev.new_value,
-                    "turn": turn,
-                },
+                {"premise_id": ev.target_id, "act_id": act_id, "new_reserve": ev.new_value, "turn": turn},
             ):
                 pass
         elif ev.effect == "tipped":
             with Span.open(
                 SPAN_BLOC_TIPPED,
-                {
-                    "bloc_id": ev.target_id,
-                    "act_id": act_id,
-                    "new_defiance": ev.new_value,
-                    "turn": turn,
-                },
+                {"bloc_id": ev.target_id, "act_id": act_id, "new_defiance": ev.new_value, "turn": turn},
             ):
                 pass
 
@@ -126,7 +116,9 @@ async def run_witnessed_act_dispatch(
 
     world = pack.worlds.get(snapshot.world_slug) if getattr(pack, "worlds", None) else None
     if world is None:
-        logger.warning("witnessed_act.world_not_found world=%s act=%s", snapshot.world_slug, act_id)
+        logger.warning(
+            "witnessed_act.world_not_found world=%s act=%s", snapshot.world_slug, act_id
+        )
         return SubsystemOutput(directives=[], data={"error": "world_not_found"})
 
     premises = list(getattr(world, "premises", None) or [])

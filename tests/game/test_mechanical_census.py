@@ -248,7 +248,9 @@ def test_one_bad_pc_is_isolated_others_and_trope_still_emit(repo_and_sink, caplo
 
         with caplog.at_level("WARNING"), repo.transaction() as tx:
             ev = tx.append_event(kind="NARRATION", payload_json="{}")
-            emit_mechanical_census(_Room(), _Snap(), tx=tx, event_seq=ev.seq)  # must not raise
+            emit_mechanical_census(
+                _Room(), _Snap(), tx=tx, event_seq=ev.seq
+            )  # must not raise
         with pool.connection() as conn:
             rows = conn.execute(
                 "SELECT event_type FROM turn_telemetry WHERE session_id = %s ORDER BY seq",

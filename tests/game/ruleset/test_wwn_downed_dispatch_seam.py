@@ -6,7 +6,6 @@ Also confirms it STILL raises for a plain SwnConfig (the non-cwn/wwn fallback
 guard stays live). Full pack-driven end-to-end is deferred to Plan 3 (when the
 WWN genre pack lands in content).
 """
-
 from __future__ import annotations
 
 import pytest

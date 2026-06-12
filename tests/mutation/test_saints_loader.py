@@ -130,10 +130,14 @@ class TestLoadSaintRegistry:
         assert saint.drawback == "negative/test_obsessive"
         assert saint.affinity == ["hybrid/test_salt_blood"]
 
-    def test_unknown_bundle_id_fails_loud_with_saint_and_mutation_id(self, tmp_path: Path) -> None:
+    def test_unknown_bundle_id_fails_loud_with_saint_and_mutation_id(
+        self, tmp_path: Path
+    ) -> None:
         """AC2 verbatim: the error surface carries the offending saint id AND
         the unresolvable mutation id — not a warning, not a skip."""
-        bad = _VALID_SAINTS_YAML.replace("structure/test_bone_density", "structure/does_not_exist")
+        bad = _VALID_SAINTS_YAML.replace(
+            "structure/test_bone_density", "structure/does_not_exist"
+        )
         path = _write(tmp_path, bad)
         with pytest.raises(ValueError) as exc_info:
             load_saint_registry(path, _catalog())
@@ -142,7 +146,9 @@ class TestLoadSaintRegistry:
         assert "structure/does_not_exist" in message
 
     def test_unknown_drawback_id_fails_loud(self, tmp_path: Path) -> None:
-        bad = _VALID_SAINTS_YAML.replace("negative/test_obsessive", "negative/does_not_exist")
+        bad = _VALID_SAINTS_YAML.replace(
+            "negative/test_obsessive", "negative/does_not_exist"
+        )
         path = _write(tmp_path, bad)
         with pytest.raises(ValueError) as exc_info:
             load_saint_registry(path, _catalog())
@@ -151,7 +157,9 @@ class TestLoadSaintRegistry:
         assert "negative/does_not_exist" in message
 
     def test_unknown_affinity_id_fails_loud(self, tmp_path: Path) -> None:
-        bad = _VALID_SAINTS_YAML.replace("hybrid/test_salt_blood", "hybrid/does_not_exist")
+        bad = _VALID_SAINTS_YAML.replace(
+            "hybrid/test_salt_blood", "hybrid/does_not_exist"
+        )
         path = _write(tmp_path, bad)
         with pytest.raises(ValueError) as exc_info:
             load_saint_registry(path, _catalog())
@@ -175,7 +183,9 @@ class TestLoadSaintRegistry:
         4 bundle marks. A 5-mark bundle is a pricing violation — the Saint
         would grant more than the economy pays for. Loud refusal at load."""
         five_bundle = _VALID_SAINTS_YAML.replace(
-            "    bundle:\n      - structure/test_bone_density\n      - sense/test_deep_sight\n",
+            "    bundle:\n"
+            "      - structure/test_bone_density\n"
+            "      - sense/test_deep_sight\n",
             "    bundle:\n"
             "      - structure/test_bone_density\n"
             "      - sense/test_deep_sight\n"
@@ -191,7 +201,9 @@ class TestLoadSaintRegistry:
     def test_four_mark_bundle_at_budget_loads(self, tmp_path: Path) -> None:
         """Boundary: exactly 4 marks == (2 + 2) // 1 — affordable, must load."""
         four_bundle = _VALID_SAINTS_YAML.replace(
-            "    bundle:\n      - structure/test_bone_density\n      - sense/test_deep_sight\n",
+            "    bundle:\n"
+            "      - structure/test_bone_density\n"
+            "      - sense/test_deep_sight\n",
             "    bundle:\n"
             "      - structure/test_bone_density\n"
             "      - sense/test_deep_sight\n"

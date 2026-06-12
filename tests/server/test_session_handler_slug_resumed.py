@@ -357,9 +357,7 @@ async def test_slug_connect_chargen_complete_character_name_is_display_name(
     from sidequest.game import db_pool as _db_pool
     from sidequest.server.session_state import _build_pg_repos_for_slug as _bld
 
-    _bld(
-        _db_pool.get_pool(), slug=slug, mode=str(GameMode.SOLO), genre_slug=genre, world_slug=world
-    )
+    _bld(_db_pool.get_pool(), slug=slug, mode=str(GameMode.SOLO), genre_slug=genre, world_slug=world)
 
     # Use a mock Claude client so the post-confirmation opening narration
     # doesn't try to shell out.
@@ -473,9 +471,7 @@ async def test_slug_chargen_complete_party_status_has_stats(
     from sidequest.game import db_pool as _db_pool
     from sidequest.server.session_state import _build_pg_repos_for_slug as _bld
 
-    _bld(
-        _db_pool.get_pool(), slug=slug, mode=str(GameMode.SOLO), genre_slug=genre, world_slug=world
-    )
+    _bld(_db_pool.get_pool(), slug=slug, mode=str(GameMode.SOLO), genre_slug=genre, world_slug=world)
 
     from tests.server.conftest import (
         mock_claude_client_factory as _mock_claude_client_factory,

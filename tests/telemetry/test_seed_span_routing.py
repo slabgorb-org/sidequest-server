@@ -187,7 +187,8 @@ def test_routed_seed_spans_use_state_transition_event_type() -> None:
         route = SPAN_ROUTES.get(span_name)
         assert route is not None, f"{span_name!r} missing from SPAN_ROUTES"
         assert route.event_type == "state_transition", (
-            f"{span_name!r} route has event_type={route.event_type!r}, expected 'state_transition'."
+            f"{span_name!r} route has event_type={route.event_type!r}, "
+            f"expected 'state_transition'."
         )
 
 
@@ -290,5 +291,6 @@ def test_seed_drawn_extractor_field_is_active_seeds() -> None:
 
     fields = route.extract(_FakeSpan())  # type: ignore[arg-type]
     assert fields.get("field") == "active_seeds", (
-        f"field={fields.get('field')!r}, expected 'active_seeds' for panel-side filtering."
+        f"field={fields.get('field')!r}, expected 'active_seeds' for "
+        f"panel-side filtering."
     )

@@ -167,7 +167,9 @@ async def test_live_path_overwrites_llm_player_id_with_submitting_seat() -> None
         "player_id must be normalized to the player_seats KEY for the submitting "
         f"player_name; expected {_SUBMITTING_SEAT_ID!r}, got {stamped!r}"
     )
-    assert stamped in snap.player_seats, "the stamped player_id must be a real player_seats key"
+    assert stamped in snap.player_seats, (
+        "the stamped player_id must be a real player_seats key"
+    )
 
 
 @pytest.mark.asyncio

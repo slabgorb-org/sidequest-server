@@ -139,11 +139,13 @@ def _build_synthetic_save(path: Path) -> None:
     )
     # events: T-isoformat created_at; seq 1 and 2 (preserve verbatim).
     conn.execute(
-        "INSERT INTO events (seq, kind, payload_json, created_at) VALUES (1, 'NARRATION', '{}', ?)",
+        "INSERT INTO events (seq, kind, payload_json, created_at) VALUES "
+        "(1, 'NARRATION', '{}', ?)",
         ("2026-05-17T18:06:48.217822+00:00",),
     )
     conn.execute(
-        "INSERT INTO events (seq, kind, payload_json, created_at) VALUES (2, 'NARRATION', '{}', ?)",
+        "INSERT INTO events (seq, kind, payload_json, created_at) VALUES "
+        "(2, 'NARRATION', '{}', ?)",
         ("2026-05-17T18:19:00.000000+00:00",),
     )
     # projection_cache FK → events(seq=1)
@@ -178,7 +180,8 @@ def test_synthetic_save_roundtrip(pool, tmp_path: Path) -> None:
 
         # (a) SPACE-format narrative created_at rewritten to T-isoformat.
         narr_ts = conn.execute(
-            "SELECT created_at FROM narrative_log WHERE session_id = %s ORDER BY round_number",
+            "SELECT created_at FROM narrative_log WHERE session_id = %s "
+            "ORDER BY round_number",
             (sid,),
         ).fetchall()
         for (ts,) in narr_ts:
@@ -196,7 +199,8 @@ def test_synthetic_save_roundtrip(pool, tmp_path: Path) -> None:
 
         # (c) projection_cache FK row present.
         proj = conn.execute(
-            "SELECT event_seq, player_id, include FROM projection_cache WHERE session_id = %s",
+            "SELECT event_seq, player_id, include FROM projection_cache "
+            "WHERE session_id = %s",
             (sid,),
         ).fetchall()
         assert proj == [(1, "alice", 1)]
@@ -239,7 +243,8 @@ def test_real_save_roundtrip(pool) -> None:
 
     with pool.connection() as conn:
         srow = conn.execute(
-            "SELECT session_id, session_slug, mode, genre_slug, world_slug FROM sessions"
+            "SELECT session_id, session_slug, mode, genre_slug, world_slug "
+            "FROM sessions"
         ).fetchone()
         sid, slug, mode, genre, world = srow
         assert slug == "2026-05-17-coyote_star-mp"

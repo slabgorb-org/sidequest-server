@@ -48,6 +48,8 @@ def test_only_witnesses_receive_the_contradicting_fact():
 
 def test_no_witnesses_injects_nothing():
     dorothy = _make_npc("Dorothy")
-    n = inject_witnessed_contradiction(npcs=[dorothy], witnesses=[], premise=_premise(), turn=1)
+    n = inject_witnessed_contradiction(
+        npcs=[dorothy], witnesses=[], premise=_premise(), turn=1
+    )
     assert n == 0
     assert dorothy.belief_state.beliefs == []

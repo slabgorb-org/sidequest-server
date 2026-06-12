@@ -147,11 +147,8 @@ def test_validator_still_flags_genuinely_unregistered_plugin(world_config):
         }
     )
     working = MagicWorking(
-        plugin="divine_v1",
-        mechanism="granted",
-        actor="rux",
-        domain="divinatory",
-        narrator_basis="a borrowed blessing",
+        plugin="divine_v1", mechanism="granted", actor="rux",
+        domain="divinatory", narrator_basis="a borrowed blessing",
     )
     reasons = [f.reason for f in validate(working, config)]
     assert "plugin_known_but_not_registered" in reasons, (

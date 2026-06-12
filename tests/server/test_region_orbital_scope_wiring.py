@@ -168,7 +168,9 @@ def test_region_relocation_recenters_orrery_and_emits_span(otel_capture) -> None
     assert room.session.party_body_id == "vorn"
     assert room.session.orbital_scope.center_body_id == "vorn"
 
-    bind_spans = [s for s in otel_capture.get_finished_spans() if s.name == "orbital.scope_bind"]
+    bind_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "orbital.scope_bind"
+    ]
     assert len(bind_spans) == 1
     assert bind_spans[0].attributes["region_id"] == "vorn"
     assert bind_spans[0].attributes["body_id"] == "vorn"

@@ -72,7 +72,8 @@ def _chase_events(captured: list[dict]) -> list[dict]:
     return [
         e
         for e in captured
-        if e.get("event_type") == "state_transition" and e.get("component") == "chase"
+        if e.get("event_type") == "state_transition"
+        and e.get("component") == "chase"
     ]
 
 
@@ -128,7 +129,9 @@ async def test_chase_span_carries_the_srd_decision(
     )
     await asyncio.sleep(0.05)
 
-    resolved = [e for e in _chase_events(captured) if e["fields"].get("op") == "pursuit_resolved"]
+    resolved = [
+        e for e in _chase_events(captured) if e["fields"].get("op") == "pursuit_resolved"
+    ]
     assert len(resolved) == 1, f"expected one resolved round (got {len(resolved)})"
     f = resolved[0]["fields"]
     assert f["pace"] == 15
@@ -210,5 +213,9 @@ async def test_each_round_fires_its_own_span(
     )
     await asyncio.sleep(0.05)
 
-    resolved = [e for e in _chase_events(captured) if e["fields"].get("op") == "pursuit_resolved"]
-    assert len(resolved) == 2, f"each chase round must fire its own span (got {len(resolved)})"
+    resolved = [
+        e for e in _chase_events(captured) if e["fields"].get("op") == "pursuit_resolved"
+    ]
+    assert len(resolved) == 2, (
+        f"each chase round must fire its own span (got {len(resolved)})"
+    )

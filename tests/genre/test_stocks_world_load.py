@@ -74,7 +74,9 @@ stocks:
     saint_affinity_allowed: true
 """
 
-_STOCKS_YAML_BAD_GRANT = _STOCKS_YAML.replace("hybrid/test_crushing_jaws", "hybrid/does_not_exist")
+_STOCKS_YAML_BAD_GRANT = _STOCKS_YAML.replace(
+    "hybrid/test_crushing_jaws", "hybrid/does_not_exist"
+)
 
 # The 5 spec implants (story scope, world design §13 via the addendum).
 _SPEC_IMPLANTS = {
@@ -190,14 +192,18 @@ def test_real_seaboard_proof_stocks_resolve_against_real_catalog(content_dir: Pa
     pack_root = content_dir / "genre_packs" / "mutant_wasteland"
     catalog = load_mutation_catalog(pack_root / "mutations.yaml")
     stocks_path = _seaboard(content_dir) / "stocks.yaml"
-    assert stocks_path.is_file(), "103-2 ships proof content: worlds/seaboard_of_saints/stocks.yaml"
+    assert stocks_path.is_file(), (
+        "103-2 ships proof content: worlds/seaboard_of_saints/stocks.yaml"
+    )
     registry = load_stock_registry(stocks_path, catalog)
     ids = {s.id for s in registry.stocks}
     assert "sleeper" in ids, "the Sleeper proof stock is in scope"
     sleeper = registry.by_id("sleeper")
     assert sleeper.granted_mutations == [], "Sleeper mutates nothing — implants are its lane"
     assert sleeper.saint_affinity_allowed is False
-    animals = [s for s in registry.stocks if s.id != "sleeper" and s.granted_mutations]
+    animals = [
+        s for s in registry.stocks if s.id != "sleeper" and s.granted_mutations
+    ]
     assert animals, "one Animal proof stock with a granted trait set is in scope"
     assert any(s.saint_affinity_allowed for s in animals), (
         "the Animal proof stock must allow one Saint affinity bundle (AC4)"

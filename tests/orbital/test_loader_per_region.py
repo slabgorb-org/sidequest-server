@@ -192,7 +192,9 @@ def test_resolution_hit_emits_system_resolve_span(otel_capture) -> None:
     assert len(spans) == 1
     attrs = spans[0].attributes
     assert attrs.get("region_id") == "yula"
-    assert "yula.yaml" in str(attrs.get("system_file")), "span must record which file was resolved"
+    assert "yula.yaml" in str(attrs.get("system_file")), (
+        "span must record which file was resolved"
+    )
     assert attrs.get("hit") is True
 
 

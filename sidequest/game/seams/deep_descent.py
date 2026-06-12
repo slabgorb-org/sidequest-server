@@ -16,6 +16,7 @@ from sidequest.game.session import WorldStatePatch
 from sidequest.telemetry.spans import movement_resolved_span
 
 if TYPE_CHECKING:
+    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.game.session import GameSnapshot
     from sidequest.genre.models.world import Route
 
@@ -28,7 +29,7 @@ def resolve_deep_descent(
     player_name: str,
     route: Route,
     resolved_via: str,
-    dungeon_store: Any = None,
+    dungeon_store: DungeonStore | None = None,
     direction: str = "deeper",
     exit_descriptor: str = "",
     **_context: Any,

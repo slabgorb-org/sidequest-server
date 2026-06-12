@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from sidequest.game.seams.base import UnknownSeamKindError
+from sidequest.game.seams.base import SeamCrossingResult, UnknownSeamKindError
 from sidequest.game.seams.deep_descent import resolve_deep_descent
 
 if TYPE_CHECKING:
     from sidequest.genre.models.world import CartographyConfig, Route
 
-SeamResolver = Callable[..., Any]
+SeamResolver = Callable[..., SeamCrossingResult]
 
 _REGISTRY: dict[str, SeamResolver] = {
     "deep_descent": resolve_deep_descent,

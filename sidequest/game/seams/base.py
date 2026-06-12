@@ -13,7 +13,15 @@ class SeamCrossingResult:
 
 
 class SeamCrossingError(Exception):
-    """A crossing that cannot resolve. Recoverable + fail-loud."""
+    """A crossing that cannot resolve. Recoverable + fail-loud.
+
+    Span-emission contract: resolvers intentionally emit NO span on the
+    failure path — span emission (``movement.unresolved`` /
+    ``region.entry_rejected``) is the CATCHER's obligation, because each
+    consumer door owns its own failure-span vocabulary (movement dispatch
+    emits ``movement.unresolved`` via ``_unresolved``; the narration guard
+    emits ``region.entry_rejected``).
+    """
 
     def __init__(self, *, reason: str, surface: str) -> None:
         super().__init__(f"seam crossing unresolvable: {reason}")

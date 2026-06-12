@@ -32,8 +32,10 @@ from sidequest.agents.subsystems import SubsystemOutput
 from sidequest.dungeon.region_graph.model import RegionGraph
 from sidequest.dungeon.region_projection import RegionExit, project_region
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
+from sidequest.game.seams import SeamCrossingError, get_seam_resolver, seam_route_for
+from sidequest.game.seams.deep_descent import resolve_deep_descent
 from sidequest.game.session import GameSnapshot, WorldStatePatch
-from sidequest.genre.models.world import NavigationMode
+from sidequest.genre.models.world import NavigationMode, Route
 from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch, VisibilityTag
 from sidequest.telemetry.spans import (
     movement_region_mode_span,
@@ -80,6 +82,17 @@ def _tokens(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z]+", (text or "").lower())}
 
 
+def _cartography_for(*, pack: GenrePack | None, world_slug: str):
+    """The active world's cartography, or None (same probe shape as
+    _is_region_mode_world — keep the discriminator single-shaped)."""
+    if pack is None or not world_slug:
+        return None
+    worlds = getattr(pack, "worlds", None)
+    if worlds is None:
+        return None
+    return getattr(worlds.get(world_slug), "cartography", None)
+
+
 def _is_region_mode_world(*, pack: GenrePack | None, world_slug: str) -> bool:
     """True iff the active world's cartography is region-mode.
 
@@ -91,13 +104,7 @@ def _is_region_mode_world(*, pack: GenrePack | None, world_slug: str) -> bool:
     ``getattr`` cartography probe used by ``narration_apply`` (#577) and
     ``project_cartography_region`` so the discriminator stays single-shaped.
     """
-    if pack is None or not world_slug:
-        return False
-    worlds = getattr(pack, "worlds", None)
-    if worlds is None:
-        return False
-    world_obj = worlds.get(world_slug)
-    cart = getattr(world_obj, "cartography", None)
+    cart = _cartography_for(pack=pack, world_slug=world_slug)
     if cart is None:
         return False
     return getattr(cart, "navigation_mode", None) == NavigationMode.region
@@ -140,6 +147,46 @@ async def run_movement_dispatch(
     # also falls through to fail-loud rather than silently deferring.
     if _is_region_mode_world(pack=pack, world_slug=snapshot.world_slug):
         from_region = snapshot.region_for(perspective=player_name) or ""
+
+        # --- Story 105-2: the hybrid case de4f85c8 didn't anticipate. ---
+        # A region-mode world whose current region owns a registered seam
+        # route (beneath_sunden: the_dropmouth → deep_descent) IS the
+        # static→procedural boundary. Descent-shaped intents cross HERE —
+        # deferring them to the heading→region path is what made the
+        # 59-12 handoff dead code and the Deep unreachable (epic 105).
+        # ``back`` stays deferred: it is surface adjacency, not a seam.
+        cart = _cartography_for(pack=pack, world_slug=snapshot.world_slug)
+        seam_route = seam_route_for(cart, from_region)
+        if seam_route is not None and direction != "back":
+            try:
+                crossing = get_seam_resolver(str(seam_route.to_id))(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    route=seam_route,
+                    resolved_via="surface_descent",
+                    dungeon_store=dungeon_store,
+                    direction=direction,
+                    exit_descriptor=exit_descriptor,
+                )
+            except SeamCrossingError as err:
+                return _unresolved(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    reason=err.reason,
+                    from_region=from_region,
+                    direction=direction,
+                    exit_descriptor=exit_descriptor,
+                    available=[],
+                    surface=err.surface,
+                )
+            return SubsystemOutput(
+                data={
+                    "to_region": crossing.to_region,
+                    "from_region": from_region,
+                    "resolved_via": "surface_descent",
+                }
+            )
+
         with movement_region_mode_span(
             pc_name=player_name,
             from_region=from_region,
@@ -226,43 +273,40 @@ async def run_movement_dispatch(
                     f"from here is down, into the dark below."
                 ),
             )
-        entrance_id = graph.entrance_id
-        if entrance_id not in graph.nodes:
-            # Corrupt seed — the entrance threshold is absent. Fail loud; the
-            # PC does not move into a dungeon that has not formed.
+        # --- §Q1 step 2b / Story 59-12: surface→deep handoff via shared resolver.
+        # One implementation, two doors: the hybrid (region-mode + seam route)
+        # door is in the region-mode block above; this door serves room-graph
+        # worlds whose PC is still bound to a surface cartography region. Both
+        # doors call resolve_deep_descent — the duplicate inline bind is GONE.
+        try:
+            crossing = resolve_deep_descent(
+                snapshot=snapshot,
+                player_name=player_name,
+                route=Route(
+                    name="surface descent",
+                    description="room-graph surface→deep handoff (59-12)",
+                    from_id=from_region,
+                    to_id="deep_descent",
+                ),
+                resolved_via="surface_descent",
+                dungeon_store=dungeon_store,
+                direction=direction,
+                exit_descriptor=exit_descriptor,
+            )
+        except SeamCrossingError as err:
             return _unresolved(
                 snapshot=snapshot,
                 player_name=player_name,
-                reason="no_dungeon_entrance",
+                reason=err.reason,
                 from_region=from_region,
                 direction=direction,
                 exit_descriptor=exit_descriptor,
                 available=[],
-                surface="The descent into the depths has not yet formed.",
+                surface=err.surface,
             )
-        snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: entrance_id}))
-        with movement_resolved_span(
-            pc_name=player_name,
-            from_region=from_region,
-            to_region=entrance_id,
-        ) as span:
-            span.set_attribute("intent.direction", direction)
-            span.set_attribute("intent.exit_descriptor", exit_descriptor)
-            span.set_attribute("resolved_via", "surface_descent")
-            span.set_attribute("candidate_exits", [entrance_id])
-            span.set_attribute("edge_kind", "surface_descent")
-            span.set_attribute("target_pre_materialized", True)
-            span.set_attribute("materialize_triggered", True)
-            span.set_attribute("party_split_after", snapshot.region_for() is None)
-        logger.debug(
-            "movement.resolved surface→deep pc=%s from=%s to=%s",
-            player_name,
-            from_region,
-            entrance_id,
-        )
         return SubsystemOutput(
             data={
-                "to_region": entrance_id,
+                "to_region": crossing.to_region,
                 "from_region": from_region,
                 "resolved_via": "surface_descent",
             }

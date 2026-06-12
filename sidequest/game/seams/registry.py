@@ -28,10 +28,15 @@ def get_seam_resolver(kind: str) -> SeamResolver:
 
 
 def seam_route_for(cartography: CartographyConfig | None, region_id: str) -> Route | None:
-    """The seam route owned by ``region_id``, or None."""
+    """The seam route owned by ``region_id``, or None.
+
+    Uses ``getattr`` for the ``routes`` attribute so duck-typed test doubles
+    that supply only ``navigation_mode`` (no ``routes`` field) do not raise —
+    they simply have no seam routes, which is correct for that fixture shape.
+    """
     if cartography is None:
         return None
-    for route in cartography.routes:
+    for route in getattr(cartography, "routes", ()):
         if route.from_id == region_id and (route.to_id or "") in _REGISTRY:
             return route
     return None

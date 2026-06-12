@@ -80,3 +80,29 @@ def test_no_portrait_ref_yields_none() -> None:
         MagicMock(), _sd(character), character, player_id="player:1", player_name="P"
     )
     assert pm.portrait_url is None
+
+
+def test_rest_picker_url_matches_helper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The /api/chargen/portraits route builds each portrait_url via the same
+    resolve_player_portrait_url helper as the PARTY_STATUS emit path — drive the
+    real HTTP route and assert URL equality so the two can never drift."""
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    from fastapi.testclient import TestClient
+
+    from sidequest.server.app import create_app
+
+    genre, world = "caverns_and_claudes", "beneath_sunden"
+    app = create_app(save_dir=tmp_path, genre_pack_search_paths=[CONTENT_GENRE_PACKS])
+    client = TestClient(app)
+
+    resp = client.get(f"/api/chargen/portraits/{genre}/{world}")
+    assert resp.status_code == 200
+    portraits = resp.json()["portraits"]
+    assert portraits, "beneath_sunden should ship player_picker portraits"
+
+    for entry in portraits:
+        assert entry["portrait_url"] == resolve_player_portrait_url(
+            genre, world, entry["slug"]
+        )

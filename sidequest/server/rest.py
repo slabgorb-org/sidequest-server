@@ -29,7 +29,7 @@ from sidequest.game.persistence import (
 )
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, load_genre_pack_cached
 from sidequest.genre.models.pack import picker_portrait_slug
-from sidequest.server.asset_urls import resolve_asset_url
+from sidequest.server.asset_urls import resolve_asset_url, resolve_player_portrait_url
 
 logger = logging.getLogger(__name__)
 
@@ -955,15 +955,7 @@ def create_rest_router() -> APIRouter:
                     "archetype": entry.archetype,
                     "sex": entry.sex,
                     "role": entry.role,
-                    # Canonical world-portrait path convention: the render
-                    # script writes worlds/<world>/assets/portraits/<slug>.png
-                    # (scripts/render_common.py), and every other consumer
-                    # builds the same shape — see
-                    # emitters._resolve_npc_portrait_url and
-                    # reference_presenters/reference_renderer.
-                    "portrait_url": resolve_asset_url(
-                        f"genre_packs/{genre}/worlds/{world}/assets/portraits/{slug}.png"
-                    ),
+                    "portrait_url": resolve_player_portrait_url(genre, world, slug),
                 })
         return {"portraits": portraits}
 

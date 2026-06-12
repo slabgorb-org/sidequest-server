@@ -180,6 +180,17 @@ async def test_projection_reaches_narrator_prompt_with_real_move_vocab(
         assert any(e.to_region_id in prompt_text for e in proj.exits), (
             "no real adjacent region id reached the narrator prompt"
         )
+        # sq-playtest 2026-06-12 (session -6, turn 3): the narrator invented
+        # "a passage that opens south" for an exit the engine knows only as
+        # a corridor; the player echoed "I go to the south" and the engine
+        # (correctly) had no such way — the vocabulary fork. The section
+        # must forbid compass-direction exit descriptions at the source.
+        assert "EXIT VOCABULARY" in prompt_text, (
+            "no exit-vocabulary constraint in the narrator prompt — the "
+            "narrator will teach the player compass directions the engine "
+            "cannot resolve"
+        )
+        assert "compass" in prompt_text
     finally:
         await session_integration.detach_dungeon_from_session(handle)
 

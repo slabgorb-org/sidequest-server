@@ -828,3 +828,28 @@ async def test_intent_router_accepts_stringified_per_player_without_retry(
     assert llm.emit_tool.await_count == 1, (
         "coercion must succeed on the FIRST attempt — no retry burned"
     )
+
+
+# ---------------------------------------------------------------------------
+# Movement instruction contract — sq-playtest 2026-06-12 (beneath_sunden -6,
+# turn 4): "I go to the south." at the dungeon entrance classified movement
+# at confidence 0.3 — below the 0.6 gate — because the router scored its
+# ability to MAP "south" onto the opaque exit ids instead of the player's
+# obvious intent to RELOCATE. The degraded hint let the narrator freelance
+# the move with no patch (the world forked: the player believed they were in
+# a corridor while the engine held them at the entrance). The system prompt
+# is the shipped contract; these assertions pin the two load-bearing rules.
+# ---------------------------------------------------------------------------
+
+
+def test_movement_instruction_scores_relocation_intent_not_exit_mapping() -> None:
+    from sidequest.agents.intent_router import _SYSTEM_PROMPT
+
+    assert "Confidence scores WHETHER the player intends to relocate" in _SYSTEM_PROMPT, (
+        "movement confidence rule missing — the router will keep degrading "
+        "unmappable-but-unambiguous moves to narrator hints"
+    )
+    assert "compass direction" in _SYSTEM_PROMPT, (
+        "the verbatim-descriptor rule (pass the player's own words, even a "
+        "compass direction, through exit_descriptor) is missing"
+    )

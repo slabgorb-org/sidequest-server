@@ -699,6 +699,19 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
             for e in hidden:
                 lines.append(f"- {e.kind} → {e.to_region_id} [hidden]")
 
+        # sq-playtest 2026-06-12 (beneath_sunden -6): the narrator described
+        # a listed corridor exit as "a passage that opens south"; the player
+        # echoed "I go to the south" and the movement engine — which has no
+        # compass — could not resolve it, so the move degraded to prose and
+        # the world forked. The exit vocabulary the narrator uses IS the
+        # vocabulary the player will speak back; constrain it at the source.
+        lines.append(
+            "EXIT VOCABULARY: describe the ways out ONLY in the terms "
+            "listed above (the stairs, the corridor, the shaft...). NEVER "
+            "assign a compass direction (north/south/east/west) to an exit "
+            "— this map has no compass, and a player who repeats your "
+            "invented direction will be told no such way exists."
+        )
         example_id = (visible or hidden)[0].to_region_id if (visible or hidden) else rp.region_id
         lines.append(
             "MOVEMENT RULE: when the party leaves this region, set "

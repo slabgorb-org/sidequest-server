@@ -57,6 +57,8 @@ def test_bind_is_noop_when_world_has_no_politics():
 
 def test_bind_is_noop_for_unknown_world():
     snap = GameSnapshot(world_slug="missing")
-    bound = bind_political_state(_pack_with_oz(), snap, genre_slug="wry_whimsy", world_slug="missing")
+    bound = bind_political_state(
+        _pack_with_oz(), snap, genre_slug="wry_whimsy", world_slug="missing"
+    )
     assert bound is False
     assert snap.political_state is None

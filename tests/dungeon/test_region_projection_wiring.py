@@ -537,6 +537,71 @@ async def test_pc_crossing_into_generated_room_projects_that_room(
         await session_integration.detach_dungeon_from_session(handle)
 
 
+async def test_post_dispatch_refresh_gives_narrator_the_moved_to_room(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+) -> None:
+    """sq-playtest 2026-06-12 (Keith): "why does the narrator just not get
+    the updated map?" — it should, and ADR-113 is engine-first, but
+    ``region_projection`` was computed in ``_build_turn_context`` BEFORE
+    the dispatch bank ran, and (unlike ``npcs``) never refreshed after.
+    On exactly the turns a move RESOLVES, the narrator's YOU-ARE-HERE
+    named the room the party just left.
+
+    Drives the real chain: attach → entrance projection (pre-dispatch
+    shape) → the movement engine's own patch apply moves the PC → the
+    post-dispatch refresh re-projects → the context now carries the room
+    the party stands in."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.dungeon import session_integration
+    from sidequest.game.session import GameSnapshot, WorldStatePatch
+    from sidequest.server.session_helpers import (
+        _project_current_region,
+        refresh_turn_context_post_dispatch,
+    )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"refresh_{uuid.uuid4().hex[:12]}"
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    snap.player_seats = {"p1": "Pip"}
+    handle = None
+    try:
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
+
+        # Pre-dispatch context build (the production order).
+        ctx = TurnContext(
+            character_name="Pip",
+            genre="caverns_and_claudes",
+            turn_number=4,
+            region_projection=_project_current_region(sd, snap),
+        )
+        assert ctx.region_projection is not None
+        assert ctx.region_projection.region_id == "entrance"
+
+        # The movement engine resolves a move mid-turn (its real §Q2 apply).
+        graph = repo.load_map(entrance_id="entrance")
+        target = graph.neighbors("entrance")[0]
+        snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": target}))
+
+        # Without the refresh the narrator would be handed the OLD room.
+        refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+
+        assert ctx.region_projection is not None, (
+            "post-dispatch refresh dropped the projection entirely"
+        )
+        assert ctx.region_projection.region_id == target, (
+            f"narrator context still holds {ctx.region_projection.region_id!r} "
+            f"after the engine moved the PC to {target!r} — the narrator "
+            "narrates the room the party just left"
+        )
+        # The npcs refresh consolidated into the same helper still works.
+        assert ctx.npcs == list(snap.npcs)
+    finally:
+        await session_integration.detach_dungeon_from_session(handle)
+
+
 async def test_dungeon_map_frame_is_emitted_to_ui(
     monkeypatch: pytest.MonkeyPatch,
     migrated_db: str,

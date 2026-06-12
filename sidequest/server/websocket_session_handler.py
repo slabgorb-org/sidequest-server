@@ -98,6 +98,7 @@ from sidequest.server.session_helpers import (
     _resolve_location_display,
     build_secret_note_events,
     player_log_content,
+    refresh_turn_context_post_dispatch,
 )
 from sidequest.server.session_state import (
     _build_pc_descriptor,
@@ -997,9 +998,13 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             raise
                     turn_context.dispatch_package = _dispatch_package
                     turn_context.bank_result = _bank_result
-                    # The dispatch bank may have mutated snapshot.npcs; refresh so
-                    # build_narrator_prompt sees post-dispatch state.
-                    turn_context.npcs = list(snapshot.npcs)
+                    # The dispatch bank mutates the snapshot before the narrator
+                    # prompt is built (ADR-113 engine-first): refresh npcs AND
+                    # the region projection so the narrator narrates the room
+                    # the party is actually in after a resolved move, not the
+                    # one _build_turn_context saw pre-dispatch (sq-playtest
+                    # 2026-06-12 — "the narrator just gets the updated map").
+                    refresh_turn_context_post_dispatch(turn_context, sd=sd, snapshot=snapshot)
 
                 with orchestrator_process_action_span(action_len=len(action)):
                     result = await sd.orchestrator.run_narration_turn(action, turn_context)
@@ -2550,6 +2555,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             phase_call_counts=timings.phase_call_counts,
                             total_duration_ms=timings.total_ms,
                             footnotes_count=len(result.footnotes or []),
+                            # sq-playtest 2026-06-12: persist the dispatch
+                            # bank's engage/degrade verdicts (previously
+                            # span-only — unauditable after the fact).
+                            dispatches=list(
+                                getattr(turn_context.bank_result, "decisions", None) or []
+                            ),
                         )
                         await self._validator.submit(record)
                         submitted = True

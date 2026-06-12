@@ -320,9 +320,7 @@ async def test_cached_prefix_byte_stable_across_turns_with_changing_ledger(
     """
     actor = "Kael"
     state = _magic_state_with_actor(actor)
-    fake = FakeAnthropicSdkClient(
-        responses=[_end_turn("t1"), _end_turn("t2"), _end_turn("t3")]
-    )
+    fake = FakeAnthropicSdkClient(responses=[_end_turn("t1"), _end_turn("t2"), _end_turn("t3")])
     from sidequest.agents.orchestrator import Orchestrator
 
     orch = Orchestrator(client=fake)

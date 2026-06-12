@@ -54,9 +54,9 @@ def test_every_wn_module_rolls_a_real_initiative_order(slug: str) -> None:
         f"{slug} initiative must sort descending; got {values}"
     )
     replay = module.roll_initiative(actor_dex_scores=dict(actors), rng=random.Random(7))
-    assert [(e.token_id, e.value) for e in replay] == [
-        (e.token_id, e.value) for e in entries
-    ], f"{slug} initiative must be deterministic under a seeded rng (ADR-128)"
+    assert [(e.token_id, e.value) for e in replay] == [(e.token_id, e.value) for e in entries], (
+        f"{slug} initiative must be deterministic under a seeded rng (ADR-128)"
+    )
 
 
 def test_native_rolls_no_initiative() -> None:

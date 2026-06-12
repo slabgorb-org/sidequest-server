@@ -59,9 +59,7 @@ def _yield_side_for() -> Any:
 @pytest.mark.parametrize("outcome,expected", _SIDE_MATRIX)
 def test_yield_side_for_matrix(outcome: str, expected: str | None) -> None:
     yield_side_for = _yield_side_for()
-    assert yield_side_for(outcome) == expected, (
-        f"yield_side_for({outcome!r}) must be {expected!r}"
-    )
+    assert yield_side_for(outcome) == expected, f"yield_side_for({outcome!r}) must be {expected!r}"
 
 
 def test_yield_side_for_is_orthogonal_to_is_player_victory() -> None:

@@ -62,9 +62,7 @@ class TestMissingTopLevelFields:
             "background",
         ],
     )
-    def test_missing_field_exits_nonzero(
-        self, tmp_path: Path, missing_field: str
-    ) -> None:
+    def test_missing_field_exits_nonzero(self, tmp_path: Path, missing_field: str) -> None:
         theme = {k: v for k, v in _COMPLETE_THEME.items() if k != missing_field}
         pack = _pack(tmp_path, "bad", theme)
         result = CliRunner().invoke(main, [str(pack)])
@@ -75,9 +73,7 @@ class TestMissingTopLevelFields:
 
 class TestMissingNestedDinkusFields:
     @pytest.mark.parametrize("glyph_key", ["light", "medium", "heavy"])
-    def test_missing_dinkus_glyph_exits_nonzero(
-        self, tmp_path: Path, glyph_key: str
-    ) -> None:
+    def test_missing_dinkus_glyph_exits_nonzero(self, tmp_path: Path, glyph_key: str) -> None:
         theme = {**_COMPLETE_THEME}
         glyphs = dict(_COMPLETE_THEME["dinkus"]["glyph"])
         del glyphs[glyph_key]

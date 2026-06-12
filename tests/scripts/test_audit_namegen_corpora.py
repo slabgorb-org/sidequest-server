@@ -706,12 +706,8 @@ def test_audit_per_culture_dir_skips_gitkeep_and_nameless_overlays(tmp_path: Pat
         f"audit raised on a nameless overlay instead of skipping it.\nstderr:\n{result.stderr}"
     )
     assert any(
-        "Real Culture" in line and "real_corpus.txt" in line
-        for line in result.stdout.splitlines()
-    ), (
-        "the real culture in a mixed cultures/ dir was not surfaced.\n"
-        f"stdout:\n{result.stdout}"
-    )
+        "Real Culture" in line and "real_corpus.txt" in line for line in result.stdout.splitlines()
+    ), f"the real culture in a mixed cultures/ dir was not surfaced.\nstdout:\n{result.stdout}"
 
 
 def test_audit_discovers_perseus_cloud_yulan_corpus() -> None:
@@ -794,8 +790,7 @@ def test_audit_world_culture_discovery_matches_loader(world: str) -> None:
 
     pack = load_genre_pack(SPACE_OPERA)
     assert world in pack.worlds, (
-        f"loader did not surface world {world!r} (draft? renamed?); "
-        "parity-test assumption broken."
+        f"loader did not surface world {world!r} (draft? renamed?); parity-test assumption broken."
     )
     expected = _loader_cultures_with_corpora(pack.worlds[world].cultures)
     assert expected, (

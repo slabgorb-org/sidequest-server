@@ -90,12 +90,7 @@ def _perseus_cloud_dir() -> Path:
     server_root = Path(__file__).resolve().parents[2]  # sidequest-server/
     repo_root = server_root.parent
     return (
-        repo_root
-        / "sidequest-content"
-        / "genre_packs"
-        / "space_opera"
-        / "worlds"
-        / "perseus_cloud"
+        repo_root / "sidequest-content" / "genre_packs" / "space_opera" / "worlds" / "perseus_cloud"
     )
 
 

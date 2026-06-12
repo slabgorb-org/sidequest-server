@@ -92,7 +92,9 @@ async def test_live_turn_emits_card_reason_span_and_watcher_fields(
 
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
     sd.snapshot.turn_manager.interaction = 4
-    _seed_npc_fill_card(sd, "wandering_minstrel", "A wandering minstrel who trades rumors for coin.")
+    _seed_npc_fill_card(
+        sd, "wandering_minstrel", "A wandering minstrel who trades rumors for coin."
+    )
 
     hub = wh_module.watcher_hub
     hub.bind_loop(asyncio.get_running_loop())
@@ -108,14 +110,10 @@ async def test_live_turn_emits_card_reason_span_and_watcher_fields(
 
         # (1) The span carries the per-card decomposition for the selected card.
         spans = [s for s in exporter.get_finished_spans() if s.name == _RETRIEVAL_SPAN_NAME]
-        assert len(spans) == 1, (
-            f"exactly one {_RETRIEVAL_SPAN_NAME} span; got {len(spans)}"
-        )
+        assert len(spans) == 1, f"exactly one {_RETRIEVAL_SPAN_NAME} span; got {len(spans)}"
         attrs = spans[0].attributes or {}
         raw = attrs.get("retrieval.card.reason")
-        assert raw is not None, (
-            "the live span must carry retrieval.card.reason (§A5) — WI-6 wiring"
-        )
+        assert raw is not None, "the live span must carry retrieval.card.reason (§A5) — WI-6 wiring"
         decoded = json.loads(raw)
         assert any(e["card_id"] == "npc:wandering_minstrel" for e in decoded), (
             "the selected fill card's decomposition must be on the live span"

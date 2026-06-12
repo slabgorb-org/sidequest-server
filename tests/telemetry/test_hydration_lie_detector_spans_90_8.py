@@ -98,8 +98,7 @@ def test_hydration_spans_route_state_transition_component_magic(span_name: str) 
         f"got {route.event_type!r}"
     )
     assert route.component == "magic", (
-        f"{span_name} must carry component=magic for the Subsystems tab; "
-        f"got {route.component!r}"
+        f"{span_name} must carry component=magic for the Subsystems tab; got {route.component!r}"
     )
 
 
@@ -133,8 +132,7 @@ def test_wwn_magic_hydrated_helper_emits_named_span_with_payload() -> None:
     assert payload["casts_per_day"] == 2
     sources = payload["effort_sources"]
     assert not isinstance(sources, str), (
-        f"effort_sources must reach the dashboard as a JSON array, not a "
-        f"string; got {sources!r}"
+        f"effort_sources must reach the dashboard as a JSON array, not a string; got {sources!r}"
     )
     assert list(sources) == ["channeler", "high_mage"], (
         f"effort_sources must round-trip in sorted order; got {sources!r}"

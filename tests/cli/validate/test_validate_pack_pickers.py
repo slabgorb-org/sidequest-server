@@ -38,8 +38,7 @@ def _write_history(tmp_path: Path, poi_slugs: list[str]) -> Path:
             "id": "ch1",
             "label": "Chapter 1",
             "points_of_interest": [
-                {"slug": slug, "name": slug.replace("_", " ").title()}
-                for slug in poi_slugs
+                {"slug": slug, "name": slug.replace("_", " ").title()} for slug in poi_slugs
             ],
         }
     ]
@@ -101,9 +100,7 @@ class TestPickerFieldValidation:
         )
 
         assert len(warnings) == 1, f"Expected 1 warning, got: {warnings}"
-        assert "nonexistent_poi" in warnings[0], (
-            f"Expected dangling slug in message: {warnings[0]}"
-        )
+        assert "nonexistent_poi" in warnings[0], f"Expected dangling slug in message: {warnings[0]}"
 
     def test_complete_picker_with_valid_backdrop_no_errors(self, tmp_path: Path) -> None:
         """A fully-specified player_picker with a valid backdrop_poi is clean."""
@@ -226,12 +223,8 @@ class TestPickerValidationWiring:
 
         assert errors == [], f"Expected no errors, got: {errors}"
         assert len(warnings) == 1, f"Expected exactly 1 warning, got: {warnings}"
-        assert "no_such_poi" in warnings[0], (
-            f"Expected dangling slug in warning: {warnings[0]}"
-        )
-        assert "vaskov_centrum" not in warnings[0], (
-            f"Valid backdrop must not warn: {warnings[0]}"
-        )
+        assert "no_such_poi" in warnings[0], f"Expected dangling slug in warning: {warnings[0]}"
+        assert "vaskov_centrum" not in warnings[0], f"Valid backdrop must not warn: {warnings[0]}"
 
 
 class TestCollectPoiSlugs:

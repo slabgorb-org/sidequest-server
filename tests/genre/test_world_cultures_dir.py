@@ -17,16 +17,22 @@ def test_load_cultures_from_directory(tmp_path: Path):
     cultures_dir = tmp_path / "cultures"
     cultures_dir.mkdir()
 
-    _write_yaml(cultures_dir / "highland_scots.yaml", {
-        "name": "Highland Scots",
-        "summary": "Hardy highland culture",
-        "description": "Hardy folk of the northern hills",
-    })
-    _write_yaml(cultures_dir / "english_gentry.yaml", {
-        "name": "English Gentry",
-        "summary": "The landed aristocracy",
-        "description": "The landed class",
-    })
+    _write_yaml(
+        cultures_dir / "highland_scots.yaml",
+        {
+            "name": "Highland Scots",
+            "summary": "Hardy highland culture",
+            "description": "Hardy folk of the northern hills",
+        },
+    )
+    _write_yaml(
+        cultures_dir / "english_gentry.yaml",
+        {
+            "name": "English Gentry",
+            "summary": "The landed aristocracy",
+            "description": "The landed class",
+        },
+    )
 
     cultures: list[Culture] = []
     for culture_file in sorted(cultures_dir.glob("*.yaml")):
@@ -44,14 +50,20 @@ def test_load_legends_from_directory(tmp_path: Path):
     legends_dir = tmp_path / "legends"
     legends_dir.mkdir()
 
-    _write_yaml(legends_dir / "the_silver_blade.yaml", {
-        "name": "The Silver Blade",
-        "summary": "A legendary weapon forged in moonlight",
-    })
-    _write_yaml(legends_dir / "the_lost_city.yaml", {
-        "name": "The Lost City",
-        "summary": "An ancient city swallowed by the earth",
-    })
+    _write_yaml(
+        legends_dir / "the_silver_blade.yaml",
+        {
+            "name": "The Silver Blade",
+            "summary": "A legendary weapon forged in moonlight",
+        },
+    )
+    _write_yaml(
+        legends_dir / "the_lost_city.yaml",
+        {
+            "name": "The Lost City",
+            "summary": "An ancient city swallowed by the earth",
+        },
+    )
 
     legends: list[Legend] = []
     for legend_file in sorted(legends_dir.glob("*.yaml")):

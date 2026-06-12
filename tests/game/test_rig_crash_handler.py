@@ -234,9 +234,7 @@ def test_handle_rig_crash_is_noop_when_rig_pool_is_none() -> None:
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        hp=HpPool(
-            current=5, max=5, base_max=5
-        ),
+        hp=HpPool(current=5, max=5, base_max=5),
         acquired_advancements=[],
     )
 
@@ -584,9 +582,7 @@ def test_apply_rig_damage_returns_none_when_no_rig_pool() -> None:
         xp=0,
         inventory=Inventory(),
         statuses=[],
-        hp=HpPool(
-            current=5, max=5, base_max=5
-        ),
+        hp=HpPool(current=5, max=5, base_max=5),
         acquired_advancements=[],
     )
 

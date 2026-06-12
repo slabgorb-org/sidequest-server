@@ -44,6 +44,7 @@ from sidequest.server.session_handler import WebSocketSessionHandler, _SessionDa
 
 CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
+
 # The mutant_wasteland / road_warrior tier ladder shape: ascending caps, the
 # final tier uncapped (``max_gold=None``). A gold value resolves to the first
 # tier whose cap still contains it; the boundary value ``gold == max_gold``
@@ -278,9 +279,7 @@ class TestWealthTierWiringThroughViews:
 
         views.party_member_from_character(handler, sd, pc, "p:solo", "Solo")
 
-        spans = [
-            s for s in otel_capture.get_finished_spans() if s.name == "inventory.wealth_tier"
-        ]
+        spans = [s for s in otel_capture.get_finished_spans() if s.name == "inventory.wealth_tier"]
         assert spans, (
             "expected an 'inventory.wealth_tier' span; saw "
             f"{[s.name for s in otel_capture.get_finished_spans()]}"
@@ -299,7 +298,5 @@ class TestWealthTierWiringThroughViews:
 
         views.party_member_from_character(handler, sd, pc, "p:solo", "Solo")
 
-        spans = [
-            s for s in otel_capture.get_finished_spans() if s.name == "inventory.wealth_tier"
-        ]
+        spans = [s for s in otel_capture.get_finished_spans() if s.name == "inventory.wealth_tier"]
         assert not spans, f"unexpected wealth-tier span with no authored tiers: {spans}"

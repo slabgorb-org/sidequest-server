@@ -988,9 +988,7 @@ def test_scene_harness_emits_magic_state_hydrated_span(
     r = client.post("/dev/scene/magic_otel")
     assert r.status_code == 200, f"fixture must hydrate; got {r.status_code} body={r.text}"
 
-    magic_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "magic.state_hydrated"
-    ]
+    magic_spans = [s for s in exporter.get_finished_spans() if s.name == "magic.state_hydrated"]
     assert magic_spans, (
         f"hydrating magic_state: must open a 'magic.state_hydrated' span; "
         f"finished spans: {sorted({s.name for s in exporter.get_finished_spans()})!r}"

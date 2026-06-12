@@ -102,9 +102,7 @@ def _handler(save_dir: Path, registry: RoomRegistry, socket_id: str) -> WebSocke
         save_dir=save_dir,
         genre_pack_search_paths=[_CONTENT_SEARCH_PATH],
     )
-    handler.attach_room_context(
-        registry=registry, socket_id=socket_id, out_queue=asyncio.Queue()
-    )
+    handler.attach_room_context(registry=registry, socket_id=socket_id, out_queue=asyncio.Queue())
     return handler
 
 

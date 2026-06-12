@@ -148,6 +148,15 @@ class BankResult:
     directives: list[NarratorDirective] = field(default_factory=list)
     outputs_by_key: dict[str, SubsystemOutput] = field(default_factory=dict)
     errors: list[tuple[str, str]] = field(default_factory=list)
+    # sq-playtest 2026-06-12: the durable per-dispatch audit trail. The
+    # engage/degrade verdicts previously lived only in OTEL spans — never
+    # persisted, evicted from the watcher ring buffer within minutes — so
+    # "did the engine engage or did the narrator improvise?" cost an
+    # offline turn replay to answer. The session handler threads this into
+    # TurnRecord.dispatches and the validator persists it in turn_complete.
+    # Entries: {subsystem, idempotency_key, confidence, threshold, decision
+    # [, error]}, decision ∈ engaged | degraded_to_hint | unknown_subsystem.
+    decisions: list[dict[str, Any]] = field(default_factory=list)
 
 
 # Registry populated at import time in _register_defaults().
@@ -304,6 +313,16 @@ async def run_dispatch_bank(
                 threshold = _threshold_for(d.subsystem, context)
                 sub_span.set_attribute("confidence", float(d.confidence))
                 sub_span.set_attribute("threshold", float(threshold))
+                # The durable audit entry (see BankResult.decisions) —
+                # mutated in place as the gate/handler outcome lands below.
+                decision_entry: dict[str, Any] = {
+                    "subsystem": d.subsystem,
+                    "idempotency_key": d.idempotency_key,
+                    "confidence": float(d.confidence),
+                    "threshold": float(threshold),
+                    "decision": "engaged",
+                }
+                result.decisions.append(decision_entry)
                 if d.confidence < threshold:
                     hint = NarratorDirective(
                         kind="must_narrate",
@@ -320,6 +339,7 @@ async def run_dispatch_bank(
                     result.directives.append(hint)
                     sub_span.set_attribute("decision", "degraded_to_hint")
                     sub_span.set_attribute("produced_directives", 1)
+                    decision_entry["decision"] = "degraded_to_hint"
                     continue
                 sub_span.set_attribute("decision", "engaged")
                 fn = _REGISTRY.get(d.subsystem)
@@ -331,6 +351,7 @@ async def run_dispatch_bank(
                     )
                     sub_span.set_attribute("error", "unknown_subsystem")
                     sub_span.set_attribute("produced_directives", 0)
+                    decision_entry["decision"] = "unknown_subsystem"
                     continue
                 # Filter ``context`` to only the kwargs ``fn`` declares —
                 # subsystems have heterogeneous signatures (e.g.,
@@ -351,6 +372,7 @@ async def run_dispatch_bank(
                     result.errors.append((d.idempotency_key, repr(exc)))
                     sub_span.set_attribute("error", type(exc).__name__)
                     sub_span.set_attribute("produced_directives", 0)
+                    decision_entry["error"] = type(exc).__name__
                     continue
 
                 result.outputs_by_key[d.idempotency_key] = out
@@ -361,6 +383,7 @@ async def run_dispatch_bank(
                 err_code = out.data.get("error") if isinstance(out.data, dict) else None
                 if err_code:
                     sub_span.set_attribute("error", str(err_code))
+                    decision_entry["error"] = str(err_code)
 
         for pd in package.per_player:
             result.directives.extend(pd.narrator_instructions)

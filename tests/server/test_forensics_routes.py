@@ -208,13 +208,10 @@ def test_snapshot_endpoint_returns_persisted_state(tmp_path, pg_isolation):
     from sidequest.game.pg import sessions
 
     pool = db_pool.get_pool()
-    sid = sessions.ensure_session(
-        pool, slug="snap_ok", mode="solo", genre_slug="g", world_slug="w"
-    )
+    sid = sessions.ensure_session(pool, slug="snap_ok", mode="solo", genre_slug="g", world_slug="w")
     with pool.connection() as conn, conn.transaction():
         conn.execute(
-            "INSERT INTO game_state (session_id, snapshot_json, saved_at) "
-            "VALUES (%s, %s, %s)",
+            "INSERT INTO game_state (session_id, snapshot_json, saved_at) VALUES (%s, %s, %s)",
             (sid, json.dumps({"location": "Cave"}), "2026-05-18T00:00:00+00:00"),
         )
 

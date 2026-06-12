@@ -92,7 +92,6 @@ async def bound_hub() -> WatcherHub:
     return watcher_hub
 
 
-
 async def _subscribe(bound_hub: WatcherHub) -> FakeSocket:
     sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]

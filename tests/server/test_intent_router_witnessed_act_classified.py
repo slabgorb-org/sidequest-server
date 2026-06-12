@@ -42,7 +42,9 @@ class _StubRouter:
 def _npc(name: str, *, location: str) -> Npc:
     return Npc(
         core=CreatureCore(
-            name=name, description="A Munchkin villager.", personality="Hopeful.",
+            name=name,
+            description="A Munchkin villager.",
+            personality="Hopeful.",
             hp=HpPool(current=10, max=10, base_max=10),
         ),
         belief_state=BeliefState(),
@@ -61,7 +63,9 @@ def _oz_snapshot() -> GameSnapshot:
 
 
 def _acts():
-    return [WitnessedActArchetype(id="expose_the_humbug", label="Expose the Humbug", description="x")]
+    return [
+        WitnessedActArchetype(id="expose_the_humbug", label="Expose the Humbug", description="x")
+    ]
 
 
 def _package_with_witnessed_act() -> DispatchPackage:
@@ -109,7 +113,8 @@ def otel_capture():
 
 def _classified_spans(exporter):
     return [
-        s for s in exporter.get_finished_spans()
+        s
+        for s in exporter.get_finished_spans()
         if s.name == "intent_router.witnessed_act_classified"
     ]
 
@@ -119,8 +124,11 @@ async def test_classified_span_fires_with_emitted_count(otel_capture):
     snap = _oz_snapshot()
     router = _StubRouter(_package_with_witnessed_act())
     await execute_intent_router_pre_narrator_pass(
-        intent_router=router, snapshot=snap, pack=_FakePack(_acts()),
-        action="I pull the curtain aside", player_name="Dorothy",
+        intent_router=router,
+        snapshot=snap,
+        pack=_FakePack(_acts()),
+        action="I pull the curtain aside",
+        player_name="Dorothy",
     )
     assert "witnessed_act_vocabulary" in router.seen_summary
     spans = _classified_spans(otel_capture)
@@ -135,8 +143,11 @@ async def test_classified_span_emitted_zero_when_router_declines(otel_capture):
     snap = _oz_snapshot()
     router = _StubRouter(_empty_package())
     await execute_intent_router_pre_narrator_pass(
-        intent_router=router, snapshot=snap, pack=_FakePack(_acts()),
-        action="I admire the scenery", player_name="Dorothy",
+        intent_router=router,
+        snapshot=snap,
+        pack=_FakePack(_acts()),
+        action="I admire the scenery",
+        player_name="Dorothy",
     )
     spans = _classified_spans(otel_capture)
     assert len(spans) == 1
@@ -149,7 +160,10 @@ async def test_no_classified_span_in_non_political_world(otel_capture):
     snap.political_state = None
     router = _StubRouter(_empty_package())
     await execute_intent_router_pre_narrator_pass(
-        intent_router=router, snapshot=snap, pack=_FakePack(_acts()),
-        action="I admire the scenery", player_name="Dorothy",
+        intent_router=router,
+        snapshot=snap,
+        pack=_FakePack(_acts()),
+        action="I admire the scenery",
+        player_name="Dorothy",
     )
     assert _classified_spans(otel_capture) == []

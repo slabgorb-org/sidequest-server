@@ -82,9 +82,7 @@ def test_no_portrait_ref_yields_none() -> None:
     assert pm.portrait_url is None
 
 
-def test_rest_picker_url_matches_helper(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_rest_picker_url_matches_helper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The /api/chargen/portraits route builds each portrait_url via the same
     resolve_player_portrait_url helper as the PARTY_STATUS emit path — drive the
     real HTTP route and assert URL equality so the two can never drift."""
@@ -103,6 +101,4 @@ def test_rest_picker_url_matches_helper(
     assert portraits, "beneath_sunden should ship player_picker portraits"
 
     for entry in portraits:
-        assert entry["portrait_url"] == resolve_player_portrait_url(
-            genre, world, entry["slug"]
-        )
+        assert entry["portrait_url"] == resolve_player_portrait_url(genre, world, entry["slug"])

@@ -259,6 +259,17 @@ def _make_snapshot_and_encounter(*, player_hp: int, player_ac: int = 10):
         mood_override=None,
         narrator_hints=[],
     )
+    # Story 106-2 (Option A): WWN reprisal resolves ONLY through the sealed
+    # initiative walk — a WWN hp_depletion fight with no persisted order now fails
+    # loud (dice.py), so this lethality fixture seats a deterministic order. PLAYER
+    # acts first, then OPPONENT reprises at its slot (preserving the legacy
+    # "player strikes, opponent answers" call order these tests' rng fakes assume).
+    from sidequest.protocol.models import InitiativeEntry
+
+    enc.initiative = [
+        InitiativeEntry(token_id=PLAYER, value=9),
+        InitiativeEntry(token_id=OPPONENT, value=2),
+    ]
     return snap, enc
 
 

@@ -292,6 +292,11 @@ def run_wn_round(
                     round_number=round_number,
                     rng=rng,
                     attacker_name=token,
+                    # Story 106-2 (Option A): the target's sealed defensive beat
+                    # this round (Brace mitigates the hit; Break Contact /
+                    # full-defend prevents it). None when the target committed an
+                    # offensive beat — the reprisal lands at full force.
+                    defender_commit=commits.get(target_name),
                 )
             )
             continue

@@ -559,8 +559,8 @@ def inject_environment_clock(
         )
         return
 
-    # Resolve the acting PC's cartography region (per-PC graph region, the same
-    # source the router's exit-vocabulary projection reads). region_for returns
+    # Resolve the acting PC's cartography region: the per-PC graph region
+    # (region_for with the acting player's perspective). region_for returns
     # None for a split party / unseeded PC; the tick still fires with an empty
     # region id and the default-unlit burn (No Silent Fallbacks: empty region is
     # the loud "unresolved" signal, not a substituted current_region).

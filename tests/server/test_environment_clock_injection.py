@@ -160,6 +160,43 @@ def test_absent_region_defaults_unlit():
     assert clock.params["region"] == "deep_generated_room_42"
 
 
+def test_lit_resolves_on_real_pydantic_region_attribute_branch():
+    """Production path: the loaded ``world.Region`` (extra='allow') exposes the
+    authored ``lit`` key as an ATTRIBUTE, not a dict key. The dict-subclass stub
+    used elsewhere only covers ``_region_is_lit``'s dict branch; this test
+    exercises the getattr branch with a real, non-dict pydantic Region so a
+    regression in that branch (the live one) cannot slip through.
+    """
+    from sidequest.genre.models.world import Region
+
+    lit_region = Region(
+        name="The Dropmouth",
+        summary="A daylit ledge.",
+        description="Sun spills over the rim.",
+        lit=True,  # lands in model_extra; exposed as an attribute (extra='allow')
+    )
+    # Sanity: this is the production shape — NOT a dict, ``lit`` is an attribute.
+    assert not isinstance(lit_region, dict)
+    assert lit_region.lit is True
+
+    class _RealCarto:
+        regions = {"the_dropmouth": lit_region}
+
+    class _RealWorld:
+        cartography = _RealCarto()
+
+    class _RealPack:
+        worlds = {"beneath_sunden": _RealWorld()}
+
+    pkg = _pkg("movement")
+    snap = _snap_with_light(region="the_dropmouth")
+    inject_environment_clock(pkg, snap, _RealPack(), player_name=ACTING_PC)
+    clock = next(
+        d for pd in pkg.per_player for d in pd.dispatch if d.subsystem == "environment_clock"
+    )
+    assert clock.params["lit"] is True
+
+
 def test_no_inject_on_pure_social_turn():
     pkg, snap = _pkg("npc_agency"), _snap_with_light()
     inject_environment_clock(pkg, snap, _Pack(), player_name=ACTING_PC)

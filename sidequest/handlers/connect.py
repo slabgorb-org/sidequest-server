@@ -790,6 +790,12 @@ class ConnectHandler:
                     region_id=_starting_region_for(genre_pack, row.world_slug),
                 )
                 snapshot = room.snapshot  # type: ignore[assignment]
+                # ADR-033 resource pools (e.g. caverns_and_claudes' `light`):
+                # init_resource_pools had no production caller, so declared
+                # pools were dead. Wire them onto the canonical fresh snapshot.
+                from sidequest.game.resource_wiring import wire_genre_resources
+
+                wire_genre_resources(snapshot, genre_pack)
                 # Story 95-1: center the per-location orrery on the world's
                 # starting system. Fails loud if starting_region has no matching
                 # body (No Silent Fallbacks). No-op for non-orbital worlds. The

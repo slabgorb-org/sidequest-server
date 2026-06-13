@@ -74,13 +74,19 @@ def _clear_darkness_penalty(core: CreatureCore) -> bool:
 
 
 def _find_torch(core: CreatureCore) -> dict | None:
-    """Return the first inventory item carrying the ``light`` tag with a
-    positive ``quantity`` (a usable torch), or None. Identity is by the
-    structured ``tags`` field (matches the content schema:
-    ``tags: [light, consumable, essential]``), not item name."""
+    """Return the first inventory item that is a genuine light source with a
+    positive ``quantity`` (a usable torch/lantern), or None.
+
+    Identity is the dedicated, explicit ``light_source`` tag — NOT the bare
+    ``light`` tag, which is overloaded: a light-WEIGHT weapon such as
+    ``dagger_iron`` carries ``tags: [melee, blade, one-handed, light]`` and the
+    light spell scroll (``scroll_light``) carries ``light`` among its tags too.
+    Matching ``light`` would consume/destroy the player's dagger or scroll as
+    torch fuel once the real torch ran out. A genuine light source (torch,
+    lantern) carries ``light_source``; a light-weight weapon does not."""
     for item in core.inventory.items:
         tags = item.get("tags") or []
-        if "light" in tags and int(item.get("quantity", 0) or 0) > 0:
+        if "light_source" in tags and int(item.get("quantity", 0) or 0) > 0:
             return item
     return None
 
@@ -115,9 +121,9 @@ def _run_relight(
     """Light a torch: consume one torch charge, set the ``light`` pool to its
     max, and clear the darkness penalty on the acting PC.
 
-    Charge model: a torch is an inventory item dict tagged ``light`` (content
-    schema ``tags: [light, consumable, essential]``); its ``quantity`` is the
-    charge count — one item = one relight to max. On relight ``quantity`` is
+    Charge model: a torch is an inventory item dict tagged ``light_source``
+    (the dedicated light-source tag — see :func:`_find_torch`); its ``quantity``
+    is the charge count — one item = one relight to max. On relight ``quantity`` is
     decremented; the item is removed when it hits zero. ``torch_charges_remaining``
     reports the remaining ``quantity`` of the consumed torch.
 

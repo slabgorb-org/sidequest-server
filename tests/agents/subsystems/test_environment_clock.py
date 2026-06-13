@@ -83,10 +83,12 @@ def _give_torch(snap: GameSnapshot, character_name: str, *, charges: int) -> Non
     """Seat a real torch item in the PC's real inventory structure.
 
     Mirrors the runtime item dict produced by chargen loadout
-    (``chargen_loadout._item_dict_from_catalog``): a ``light``/``consumable``
-    tagged catalog entry with a ``quantity`` field. The relight path treats
-    ``quantity`` as the charge count (one item = one relight to max), so
-    ``charges`` seeds ``quantity``.
+    (``chargen_loadout._item_dict_from_catalog``): a genuine light source
+    carrying the dedicated ``light_source`` tag with a ``quantity`` field. The
+    relight path treats ``quantity`` as the charge count (one item = one relight
+    to max), so ``charges`` seeds ``quantity``. The ``light`` tag is also
+    present (the content torch keeps it) but the matcher keys on
+    ``light_source`` so light-WEIGHT weapons are never eaten as fuel.
     """
     core = snap.find_creature_core(character_name)
     assert core is not None
@@ -96,7 +98,7 @@ def _give_torch(snap: GameSnapshot, character_name: str, *, charges: int) -> Non
             "name": "Torch",
             "description": "A pitch-soaked bundle of rags on a stick.",
             "category": "light",
-            "tags": ["light", "consumable", "essential"],
+            "tags": ["light", "light_source", "consumable", "essential"],
             "equipped": False,
             "quantity": charges,
             "uses_remaining": 6,
@@ -248,6 +250,73 @@ async def test_relight_does_not_burn_light():
     out = await run_environment_clock_dispatch(_relight("Delver"), snapshot=snap)
     assert out.data["burned"] is False
     assert snap.resources["light"].current == snap.resources["light"].max
+
+
+@pytest.mark.asyncio
+async def test_relight_never_consumes_a_light_weight_weapon():
+    """Regression (content-review SEV): the ``light`` tag is overloaded — a
+    light-WEIGHT weapon (``dagger_iron``: tags ``[melee, blade, one-handed,
+    light]``) is NOT a light source. The relight matcher keys on the dedicated
+    ``light_source`` tag, so a dagger is never consumed/destroyed as torch fuel
+    once the real torch runs out. This proves the fix WITHOUT depending on
+    content: a no-light_source weapon ⇒ ``no_torch`` and the weapon is untouched.
+
+    (If the matcher is reverted to ``"light" in tags``, the dagger is found,
+    relight succeeds, and these assertions fail.)
+    """
+    snap = _snap_with_light(0.0)
+    core = snap.find_creature_core("Delver")
+    assert core is not None
+    dagger = {
+        "id": "dagger_iron",
+        "name": "Iron Dagger",
+        "category": "weapon",
+        "tags": ["melee", "blade", "one-handed", "light"],  # "light" = light-WEIGHT
+        "equipped": True,
+        "quantity": 1,
+        "state": "Carried",
+    }
+    core.inventory.items.append(dagger)
+
+    out = await run_environment_clock_dispatch(_relight("Delver"), snapshot=snap)
+
+    assert out.data["error"] == "no_torch"
+    assert snap.resources["light"].current == 0.0  # not relit
+    # The weapon survives untouched — still carried, quantity unchanged.
+    survivors = [it for it in core.inventory.items if it.get("id") == "dagger_iron"]
+    assert len(survivors) == 1
+    assert survivors[0]["quantity"] == 1
+
+
+@pytest.mark.asyncio
+async def test_relight_finds_torch_among_light_weight_weapons():
+    """A genuine light source (``light_source`` tag) is found even when a
+    light-WEIGHT weapon sharing the bare ``light`` tag sits in the same
+    inventory; only the torch is consumed."""
+    snap = _snap_with_light(0.0)
+    core = snap.find_creature_core("Delver")
+    assert core is not None
+    core.inventory.items.append(
+        {
+            "id": "dagger_iron",
+            "name": "Iron Dagger",
+            "category": "weapon",
+            "tags": ["melee", "blade", "one-handed", "light"],
+            "equipped": True,
+            "quantity": 1,
+            "state": "Carried",
+        }
+    )
+    _give_torch(snap, "Delver", charges=1)
+
+    out = await run_environment_clock_dispatch(_relight("Delver"), snapshot=snap)
+
+    assert out.data["relit"] is True
+    assert out.data["torch_charges_remaining"] == 0
+    # Torch (last charge) removed; dagger untouched.
+    assert not [it for it in core.inventory.items if it.get("id") == "torch"]
+    daggers = [it for it in core.inventory.items if it.get("id") == "dagger_iron"]
+    assert len(daggers) == 1 and daggers[0]["quantity"] == 1
 
 
 @pytest.mark.asyncio

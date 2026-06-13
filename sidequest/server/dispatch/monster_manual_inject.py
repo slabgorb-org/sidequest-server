@@ -320,12 +320,73 @@ def _creature_patch_from_enemy(enemy: Any, *, tier: int, location: str | None) -
     )
 
 
+def _creature_patch_from_bestiary_entry(entry: Any, *, location: str | None) -> NpcPatch:
+    """Translate one :class:`BestiaryEntry` into a creature patch.
+
+    Story 107-2: the per-room binding sources the opponent directly from the
+    world bestiary by id, so the materialized NPC carries the bestiary's
+    AUTHORED name ("Gnaw-Swarm") instead of an improvised label. Mirrors the
+    encountergen creature-patch shape (:func:`_creature_patch_from_enemy`) but
+    reads typed bestiary fields rather than a raw ``enemies[i]`` dict.
+    """
+    abilities = list(entry.abilities) if entry.abilities else None
+    description = entry.description or entry.role or None
+    return NpcPatch(
+        name=entry.name,
+        description=description,
+        role=entry.role or None,
+        creature_id=entry.id,
+        threat_level=entry.level,
+        hp=entry.hp,
+        abilities=abilities,
+        location=location,
+        # Story 72-3: Monster Manual authorship marker (ADR-059).
+        manual_origin=True,
+    )
+
+
+def _npc_patches_for_room_binding(
+    sd: _SessionData, room_id: str, current_location: str
+) -> list[NpcPatch]:
+    """Build creature patches for the room's authored ``encounter_creatures``.
+
+    Resolves the room's structured binding (Story 107-2) and materializes each
+    bound bestiary creature under its authored name. The resolve step emits the
+    ``monster_manual.room_bound`` span and fails loud on a dangling ref (No
+    Silent Fallbacks). Returns ``[]`` when the room declares no binding.
+    """
+    pack = getattr(sd, "genre_pack", None)
+    if pack is None:
+        return []
+    world_slug = sd.world_slug or ""
+    # Late import — keeps the resolver (yaml read + bestiary lookup) out of the
+    # session-handler import path, matching the pregen late-import pattern above.
+    from sidequest.server.dispatch.room_creature_binding import resolve_room_creatures
+
+    bound_ids = resolve_room_creatures(pack, world_slug, room_id)
+    if not bound_ids:
+        return []
+    bestiary, _ = pack.effective_bestiary(world_slug)
+    by_id = {entry.id: entry for entry in bestiary.entries}
+    creature_location = current_location or None
+    patches: list[NpcPatch] = []
+    for cid in bound_ids:
+        entry = by_id.get(cid)
+        if entry is None:
+            # resolve_room_creatures already validated referential integrity;
+            # a miss here would be a TOCTOU between resolve and materialize.
+            continue
+        patches.append(_creature_patch_from_bestiary_entry(entry, location=creature_location))
+    return patches
+
+
 def inject(
     sd: _SessionData,
     snapshot: GameSnapshot,
     *,
     current_location: str,
     in_combat: bool,
+    room_id: str | None = None,
 ) -> int:
     """Materialize Manual entries into ``snapshot.npcs``.
 
@@ -336,10 +397,16 @@ def inject(
     Emits :data:`SPAN_MONSTER_MANUAL_INJECTED` with the same attribute
     shape as the Rust span so the existing GM-panel dashboard reads it
     without changes.
+
+    Story 107-2: when ``room_id`` is supplied (sourced from
+    ``snapshot.region_for()`` / ``pc_regions`` — 107-1's per-room key), the
+    room's structured ``encounter_creatures`` binding is resolved and its
+    authored bestiary creature is materialized under its real name, emitting
+    ``monster_manual.room_bound``. ``room_id=None`` (the default every existing
+    caller uses) preserves today's behavior exactly — the binding path is
+    strictly additive and gated on a room id being supplied.
     """
     manual = sd.monster_manual
-    if manual is None:
-        return 0
 
     # Social, Composure-only packs (combat_encounters=False) have no combat —
     # never inject combat-encounter enemies (hostile -20 NPCs carrying B/X HP
@@ -352,47 +419,53 @@ def inject(
     rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
     combat_encounters = getattr(rules, "combat_encounters", True)
 
-    human_patches = _npc_patches_for_available_humans(manual, current_location)
-    creature_patches = (
-        _npc_patches_for_encounters(manual, in_combat, current_location)
-        if combat_encounters
-        else []
-    )
-    # Cleanse junk names (stale-cache annotations, corpus leakage) before they
-    # reach the snapshot. Loud per-name warnings + a span count below so the GM
-    # panel sees the registry decision (playtest 2026-06-10, "Vesper (version)").
-    human_patches, human_sanitized = _sanitize_patch_names(human_patches)
-    creature_patches, creature_sanitized = _sanitize_patch_names(creature_patches)
-    names_sanitized = human_sanitized + creature_sanitized
-    all_patches = human_patches + creature_patches
+    all_patches: list[NpcPatch] = []
+    if manual is not None:
+        human_patches = _npc_patches_for_available_humans(manual, current_location)
+        creature_patches = (
+            _npc_patches_for_encounters(manual, in_combat, current_location)
+            if combat_encounters
+            else []
+        )
+        # Cleanse junk names (stale-cache annotations, corpus leakage) before they
+        # reach the snapshot. Loud per-name warnings + a span count below so the GM
+        # panel sees the registry decision (playtest 2026-06-10, "Vesper (version)").
+        human_patches, human_sanitized = _sanitize_patch_names(human_patches)
+        creature_patches, creature_sanitized = _sanitize_patch_names(creature_patches)
+        names_sanitized = human_sanitized + creature_sanitized
+        all_patches = human_patches + creature_patches
 
-    available_npcs = len(manual.available_npcs())
-    available_encounters = len(manual.available_encounters())
+        # Playtest 2026-05-11 lie-detector: count how many patches actually
+        # land with a bound location. Pre-fix this was always 0 (every patch
+        # had location=None) which silently masked every NPC from
+        # ``in_same_zone()``. Post-fix this matches ``len(all_patches)`` whenever
+        # ``current_location`` is meaningful.
+        patches_with_location = sum(1 for p in all_patches if p.location)
 
-    # Playtest 2026-05-11 lie-detector: count how many patches actually
-    # land with a bound location. Pre-fix this was always 0 (every patch
-    # had location=None) which silently masked every NPC from
-    # ``in_same_zone()``. Post-fix this matches ``len(all_patches)`` whenever
-    # ``current_location`` is meaningful.
-    patches_with_location = sum(1 for p in all_patches if p.location)
+        with Span.open(
+            SPAN_MONSTER_MANUAL_INJECTED,
+            {
+                "available_npcs": len(manual.available_npcs()),
+                "available_encounters": len(manual.available_encounters()),
+                "total_npcs": len(manual.npcs),
+                "total_encounters": len(manual.encounters),
+                "npcs_injected": len(human_patches),
+                "creatures_injected": len(creature_patches),
+                "names_sanitized": names_sanitized,
+                "patches_with_location": patches_with_location,
+                "in_combat": bool(in_combat),
+                "combat_encounters": bool(combat_encounters),
+                "location": current_location or "",
+            },
+        ):
+            pass
 
-    with Span.open(
-        SPAN_MONSTER_MANUAL_INJECTED,
-        {
-            "available_npcs": available_npcs,
-            "available_encounters": available_encounters,
-            "total_npcs": len(manual.npcs),
-            "total_encounters": len(manual.encounters),
-            "npcs_injected": len(human_patches),
-            "creatures_injected": len(creature_patches),
-            "names_sanitized": names_sanitized,
-            "patches_with_location": patches_with_location,
-            "in_combat": bool(in_combat),
-            "combat_encounters": bool(combat_encounters),
-            "location": current_location or "",
-        },
-    ):
-        pass
+    # Story 107-2 per-room binding: when the party's room id is supplied, surface
+    # the room's AUTHORED bestiary opponent (emits monster_manual.room_bound,
+    # fails loud on a dangling ref). Strictly additive to the Manual pool above
+    # and gated on combat — a non-combat pack never fields creatures.
+    if room_id and combat_encounters:
+        all_patches = all_patches + _npc_patches_for_room_binding(sd, room_id, current_location)
 
     if not all_patches:
         return 0

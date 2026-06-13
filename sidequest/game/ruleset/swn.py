@@ -21,6 +21,7 @@ from sidequest.game.ruleset.resolution import (
     JumpAdjudication,
     OpponentAttackOutcome,
 )
+from sidequest.game.status import status_roll_modifier
 from sidequest.game.wwn_magic import (
     DisciplineActivationResult,
     EffortCommitment,
@@ -118,8 +119,9 @@ class SwnRulesetModule(RulesetModule):
         attr_mod = self.stat_modifier(attacker_stats, beat.stat_check)
         combat_skill = int(getattr(beat, "combat_skill", 0) or 0)
         attack_bonus = int(getattr(beat, "attack_bonus", 0) or 0)
+        status_mod = status_roll_modifier(attacker_core)
         return AttackRollParams(
-            modifier=attack_bonus + combat_skill + attr_mod,
+            modifier=attack_bonus + combat_skill + attr_mod + status_mod,
             target_number=self.offer_difficulty(beat=beat, target_core=target_core),
         )
 

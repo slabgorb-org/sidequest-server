@@ -647,7 +647,12 @@ def build_session_start_party_status(
     player_id via the room. Falls back to ``peer:<name>`` when
     no seat record is available.
     """
-    from sidequest.protocol.messages import PartyStatusMessage, PartyStatusPayload
+    from sidequest.protocol.messages import (
+        PartyStatusMessage,
+        PartyStatusPayload,
+        ResourcePoolPayload,
+        ResourceThresholdPayload,
+    )
 
     seat_map: dict[str, str] = {}
     if handler._room is not None:
@@ -709,8 +714,37 @@ def build_session_start_party_status(
                 exc,
             )
 
+    # Project the snapshot's resource pools onto the wire so the UI's
+    # CharacterPanel light gauge (and the generic resource bars) render from
+    # real PARTY_STATUS data. The engine model stores the live amount as
+    # ``current``; the wire renames it to ``value`` to match what the UI reads
+    # (CharacterPanel.ResourcePool.value). Empty dict — never None — when the
+    # snapshot declares no pools, matching the UI's optional handling.
+    resources: dict[str, ResourcePoolPayload] = {}
+    for pool_name, pool in (sd.snapshot.resources or {}).items():
+        resources[pool_name] = ResourcePoolPayload(
+            name=pool.name,
+            label=pool.label,
+            value=pool.current,
+            min=pool.min,
+            max=pool.max,
+            voluntary=pool.voluntary,
+            thresholds=[
+                ResourceThresholdPayload(
+                    value=t.at,
+                    label=t.narrator_hint,
+                    direction="low" if t.direction == "down" else "high",
+                )
+                for t in pool.thresholds
+            ],
+        )
+
     return PartyStatusMessage(
         type="PARTY_STATUS",  # type: ignore[arg-type]
-        payload=PartyStatusPayload(members=members, companions=companions),
+        payload=PartyStatusPayload(
+            members=members,
+            resources=resources,
+            companions=companions,
+        ),
         player_id=player_id,
     )

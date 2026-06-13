@@ -605,18 +605,72 @@ class AsideAnswerPayload(ProtocolBase):
 # ---------------------------------------------------------------------------
 
 
+class ResourceThresholdPayload(ProtocolBase):
+    """Compact projection of a :class:`~sidequest.game.resource_pool.ResourceThreshold`
+    for the client resource surface.
+
+    Field names match the UI's ``GenericResourceBar.ResourceThreshold``
+    (``value``/``label``/``direction``) — NOT the engine model's
+    ``at``/``event_id``/``narrator_hint``. The engine's ``narrator_hint``
+    is GM-facing prose; the player-facing ``label`` reuses it as the
+    crossing caption. ``direction`` maps engine ``down``→``low`` and
+    ``up``→``high`` to match the UI bar's semantics.
+    """
+
+    value: float
+    """Boundary the pool value crosses (engine ``at``)."""
+    label: str = ""
+    """Player-facing caption for the crossing (engine ``narrator_hint``)."""
+    direction: Literal["low", "high"] = "low"
+    """``low`` fires on downward crossing, ``high`` on upward."""
+
+
+class ResourcePoolPayload(ProtocolBase):
+    """Compact projection of a :class:`~sidequest.game.resource_pool.ResourcePool`
+    onto the PARTY_STATUS wire.
+
+    The UI's ``CharacterPanel`` reads ``pool.value`` / ``pool.max`` /
+    ``pool.thresholds`` and the ``LightGauge`` reads ``current``/``max``
+    via ``pool.value``. The engine model stores the live amount as
+    ``current``; this payload renames it to ``value`` so the field name the
+    UI reads is the field the server projects (no lossy client-side cast).
+    """
+
+    name: str
+    """Pool key (e.g. ``"light"``, ``"fuel"``)."""
+    label: str = ""
+    """Human label declared by the genre pack (e.g. ``"Light"``)."""
+    value: float
+    """Live amount in the pool (engine ``current``)."""
+    min: float
+    """Floor of the pool range."""
+    max: float
+    """Ceiling of the pool range."""
+    voluntary: bool = False
+    """Whether players may spend this pool directly."""
+    thresholds: list[ResourceThresholdPayload] = Field(default_factory=list)
+    """Crossing boundaries, projected to the UI threshold shape."""
+
+
 class PartyStatusPayload(ProtocolBase):
     """Full party snapshot.
 
     Port of sidequest_protocol::PartyStatusPayload.
 
     ``companions`` was added in the 2026-05-06 recruitment wiring fix.
-    Older clients that don't know the field render only ``members`` —
+    ``resources`` was added in the 2026-06-13 Light & Darkness survival-clock
+    wiring fix — the UI's ``CharacterPanel`` light gauge consumes
+    ``payload.resources["light"]``; before this field existed the gauge was
+    dead in production (the consumer read a path the producer never sent).
+    Older clients that don't know either field render only ``members`` —
     forward-compat is fine because the payload is a strict superset.
     """
 
     members: list[PartyMember]
     """All party members."""
+    resources: dict[str, ResourcePoolPayload] = Field(default_factory=dict)
+    """Genre/world resource pools (light, fuel, luck, …) keyed by pool name.
+    Empty dict (never ``None``) when the snapshot declares no pools."""
     companions: list[CompanionMember] = Field(default_factory=list)
     """Narrator-recruited NPC companions on contract with the party.
     Empty when no companions have been hired."""

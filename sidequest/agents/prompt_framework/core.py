@@ -29,7 +29,9 @@ if TYPE_CHECKING:
     from sidequest.dungeon.region_projection import RegionProjection
     from sidequest.game.chassis import ChassisInstance
     from sidequest.game.npc_pool import NpcPoolMember
+    from sidequest.game.resource_pool import ResourcePool
     from sidequest.game.session import Npc, PartyPeer
+    from sidequest.game.status import Status
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +465,80 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
             agent_name,
             PromptSection.new(
                 "genre_resources",
+                "\n".join(lines),
+                AttentionZone.Valley,
+                SectionCategory.State,
+            ),
+        )
+
+    def register_light_section(
+        self,
+        agent_name: str,
+        *,
+        pool: ResourcePool | None,
+        statuses: list[Status],  # pre-filtered darkness Status objects (by source)
+    ) -> None:
+        """Surface the light survival-clock state to the narrator (Task 7.1).
+
+        Light & Darkness survival clock: the narrator's guttering / dark /
+        relit prose must be STATE-DRIVEN (gaslit by the snapshot), not
+        improvised. This injects a COMPACT block — live ``current``/``max``,
+        the active threshold's ``narrator_hint`` (e.g. "The torch is
+        guttering…", "The light is gone…"), and the active darkness status
+        (the −2 "every action is harder" penalty) when present.
+
+        Placed in the **Valley** zone: ``pool.current`` is VOLATILE (it
+        changes on every burn), so it must NOT ride the cached stable prefix
+        (Primacy/Early) or the prompt prefix cache would break each turn
+        (ADR-110 / ADR-112).
+
+        Zero-byte-leak: ``pool is None`` (a pack with no light clock) produces
+        no section. Only the active threshold hint is rendered — not the full
+        threshold ladder — to respect the token budget (ADR-110 slimming).
+        """
+        if pool is None:
+            return
+
+        current = float(pool.current)
+        maximum = float(pool.max)
+        # Compact, human-readable numbers: drop a trailing ``.0`` so the
+        # narrator sees "1/6", not "1.0/6.0".
+        cur_s = f"{current:g}"
+        max_s = f"{maximum:g}"
+
+        lines = [f"## LIGHT — survival clock: {cur_s}/{max_s}"]
+
+        # Active threshold hint: the DEEPEST downward boundary the pool has
+        # reached. For downward thresholds a lower ``at`` is more severe, so
+        # among the boundaries the pool has hit (``current <= at``) the active
+        # one is the smallest ``at``. For the light pool: guttering at
+        # current<=1, then dark at current<=0 (dark wins at the floor).
+        active_hint: str | None = None
+        active_at = float("inf")
+        for thr in pool.thresholds:
+            if thr.direction != "down":
+                continue
+            if current <= thr.at and thr.at <= active_at:
+                active_at = thr.at
+                active_hint = thr.narrator_hint
+        if active_hint:
+            lines.append(active_hint)
+
+        # Active darkness status — the structured penalty the environment_clock
+        # applies on the acting PC when light hits the floor in an unlit
+        # region. ``statuses`` is pre-filtered by the caller to the darkness
+        # status (matched on ``source``); surfacing its text makes "you are in
+        # the dark, everything is harder" prose state-driven, not invented.
+        for st in statuses:
+            if not st.text:
+                continue
+            suffix = f" (roll penalty {st.roll_modifier})" if st.roll_modifier else ""
+            lines.append(f"- {st.text}{suffix}")
+
+        self.register_section(
+            agent_name,
+            PromptSection.new(
+                "light_state",
                 "\n".join(lines),
                 AttentionZone.Valley,
                 SectionCategory.State,

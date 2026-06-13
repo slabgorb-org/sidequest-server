@@ -21,6 +21,7 @@ from sidequest.game.ruleset.resolution import (
     JumpAdjudication,
     OpponentAttackOutcome,
 )
+from sidequest.game.status import status_roll_modifier
 from sidequest.game.wwn_magic import (
     DisciplineActivationResult,
     EffortCommitment,
@@ -118,8 +119,9 @@ class SwnRulesetModule(RulesetModule):
         attr_mod = self.stat_modifier(attacker_stats, beat.stat_check)
         combat_skill = int(getattr(beat, "combat_skill", 0) or 0)
         attack_bonus = int(getattr(beat, "attack_bonus", 0) or 0)
+        status_mod = status_roll_modifier(attacker_core)
         return AttackRollParams(
-            modifier=attack_bonus + combat_skill + attr_mod,
+            modifier=attack_bonus + combat_skill + attr_mod + status_mod,
             target_number=self.offer_difficulty(beat=beat, target_core=target_core),
         )
 
@@ -227,7 +229,15 @@ class SwnRulesetModule(RulesetModule):
         )
 
     def check_params(
-        self, *, stats, attribute, skill_level, difficulty_key, label, cfg
+        self,
+        *,
+        stats,
+        attribute,
+        skill_level,
+        difficulty_key,
+        label,
+        cfg,
+        character_core: object | None = None,
     ) -> CheckRollParams:
         if attribute is None:
             raise ValueError(
@@ -238,12 +248,14 @@ class SwnRulesetModule(RulesetModule):
         return CheckRollParams(
             sides=6,
             count=2,
-            modifier=attr_mod + int(skill_level),
+            modifier=attr_mod + int(skill_level) + status_roll_modifier(character_core),
             difficulty=int(cfg.difficulties[difficulty_key]),
             label=label,
         )
 
-    def save_params(self, *, stats, save, level, label, cfg) -> CheckRollParams:
+    def save_params(
+        self, *, stats, save, level, label, cfg, character_core: object | None = None
+    ) -> CheckRollParams:
         if save not in self._SAVE_ATTRS:
             raise ValueError(
                 f"unknown save category {save!r}, expected one of {list(self._SAVE_ATTRS)}"
@@ -262,7 +274,7 @@ class SwnRulesetModule(RulesetModule):
         return CheckRollParams(
             sides=20,
             count=1,
-            modifier=best_mod,
+            modifier=best_mod + status_roll_modifier(character_core),
             difficulty=int(cfg.save_base)
             - (int(level) - 1),  # target; SRD p.46: 15 at level 1, -1/level
             label=label,

@@ -41,6 +41,7 @@ from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.ruleset.wwn import WwnRulesetModule
 from sidequest.game.session import GameSnapshot
+from sidequest.game.status import status_roll_modifier
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef, ResolutionMode
 from sidequest.protocol.dice import (
@@ -486,7 +487,8 @@ def dispatch_dice_throw(
         net_run_alert_modifier = int(encounter.opponent_metric.current)
         int_mod = ruleset.stat_modifier(character_stats, beat.stat_check)
         program_skill = int(beat.combat_skill)
-        modifier = int_mod + program_skill
+        runner_core = snapshot.find_creature_core(character_name)
+        modifier = int_mod + program_skill + status_roll_modifier(runner_core)
         difficulty = net_run_base_dc + net_run_alert_modifier
         request = _build_check_request_payload(
             request_id=payload.request_id,

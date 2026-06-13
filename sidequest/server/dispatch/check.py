@@ -56,6 +56,7 @@ def dispatch_check(
     pack,  # genre pack with .rules.ruleset and a .rules.ruleset_config() block
     rolling_player_id: str,
     character_name: str,
+    character_core: object | None = None,
     session_id: str,
     room_broadcast: Callable[[object], None] | None,
 ) -> CheckThrowOutcome:
@@ -76,6 +77,7 @@ def dispatch_check(
             difficulty_key=difficulty_key,
             label=label,
             cfg=cfg,
+            character_core=character_core,
         )
     elif kind == "save":
         params = ruleset.save_params(
@@ -84,6 +86,7 @@ def dispatch_check(
             level=level,
             label=label,
             cfg=cfg,
+            character_core=character_core,
         )
     else:
         raise ValueError(

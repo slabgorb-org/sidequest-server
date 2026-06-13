@@ -1352,6 +1352,13 @@ class CharGenMixin:
             world_for_authored = sd.genre_pack.worlds.get(sd.world_slug)
             if world_for_authored is not None:
                 preload_authored_npcs(materialized, list(world_for_authored.authored_npcs))
+            # ADR-033 resource pools (e.g. caverns_and_claudes' `light`) were
+            # dead in production — init_resource_pools had no caller. Wire them
+            # onto the fresh materialized snapshot here so a pack that declares
+            # a pool starts the session with it populated.
+            from sidequest.game.resource_wiring import wire_genre_resources
+
+            wire_genre_resources(materialized, sd.genre_pack)
             # Discard the "Adventurer" placeholder the fresh chapter may
             # author — the chargen-built character owns that slot.
             materialized.characters = [character]

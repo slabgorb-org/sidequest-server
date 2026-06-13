@@ -354,7 +354,7 @@ async def wn_skill_check(args: WnSkillCheckArgs, ctx: ToolContext) -> ToolResult
     actor = _resolve_actor(snapshot, args.actor)
     if actor is None:
         return ToolResult.not_found(f"unknown actor: {args.actor!r}")
-    _core, stats, _level = actor
+    actor_core, stats, _level = actor
 
     if args.difficulty not in cfg.difficulties:
         raise ValueError(
@@ -368,6 +368,7 @@ async def wn_skill_check(args: WnSkillCheckArgs, ctx: ToolContext) -> ToolResult
         difficulty_key=args.difficulty,
         label=f"{args.skill} check",
         cfg=cfg,
+        character_core=actor_core,
     )
     rolls = [random.randint(1, params.sides) for _ in range(params.count)]
     total = sum(rolls) + params.modifier
@@ -445,7 +446,7 @@ async def wn_save(args: WnSaveArgs, ctx: ToolContext) -> ToolResult:
     actor = _resolve_actor(snapshot, args.actor)
     if actor is None:
         return ToolResult.not_found(f"unknown actor: {args.actor!r}")
-    _core, stats, level = actor
+    actor_core, stats, level = actor
 
     # save_params raises ValueError naming an unknown category — let it propagate
     # as a loud dispatch error (No Silent Fallbacks).
@@ -455,6 +456,7 @@ async def wn_save(args: WnSaveArgs, ctx: ToolContext) -> ToolResult:
         level=level,
         label=f"{args.save} save",
         cfg=cfg,
+        character_core=actor_core,
     )
     d20 = random.randint(1, params.sides)
     success = (d20 + params.modifier) >= params.difficulty

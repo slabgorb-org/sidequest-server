@@ -205,6 +205,21 @@ For each player action:
          it. action defaults to equip; use unequip for take-off/remove/sheathe.
          The item MUST be one the character already carries; name it as the
          player named it and the engine resolves it against the inventory.
+       - environment_clock: the player deliberately LIGHTS a fresh torch (or
+         lantern) to push back the dark — "I light a torch", "I spark a fresh
+         torch", "I relight the lantern". params={
+           "mode": "relight",
+           "character_name": "<the acting PC's name>"
+         }.
+         Emit environment_clock with {"mode": "relight"} ONLY for a deliberate
+         relight action (lighting/sparking a torch or lantern to restore light).
+         The engine consumes one carried light-source charge, refills the light
+         pool, and clears the darkness penalty — so name the acting PC in
+         character_name. Do NOT emit this for moving through the dark, searching,
+         or merely holding a lit torch (the per-turn light burn is handled
+         automatically by the engine, not by you). A relight is a deliberate
+         intent: score its confidence on how clearly the player chose to light a
+         torch — do not force it.
      Every dispatch carries a per-dispatch confidence (0.0-1.0): how certain you
      are that THIS specific mechanical engagement is what the player intended.
      Score the confidence for each dispatch honestly — a high score fires the

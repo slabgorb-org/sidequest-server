@@ -86,9 +86,15 @@ class _PushResolutionBeat:
 # ── RED: the lie ─────────────────────────────────────────────────────────────
 
 
-def test_hp_depletion_strike_success_stamps_no_false_dial_move():
-    # THE BUG. A strike Success under hp_depletion suppresses the dial (the move
-    # goes to HP), so the stamped impact must NOT claim a dial advance.
+def test_hp_depletion_strike_success_reads_the_hp_channel():
+    # sq-playtest 2026-06-13 (impact-chip-gap) REVISED the 73-8 contract. 73-8
+    # assumed the overlay does not render last_beat_impact under hp_depletion (it
+    # draws HP bars), so it settled for the honest "inert / no dial motion". The
+    # playtest proved that assumption WRONG: BeatImpactPanel (ConfrontationOverlay
+    # line ~1256) renders the summary UNCONDITIONALLY, so a damaging crit showed
+    # the player "No change — moved nothing · Δ0" — a lie on the single most
+    # salient mechanical event. New contract: under hp_depletion a strike that
+    # ablated HP reads the HP CHANNEL — effect="advance" with the real HP delta.
     enc = _enc("hp_depletion")
     resolver, cores = _cores(pirate_hp=7)
     apply_beat(
@@ -97,26 +103,24 @@ def test_hp_depletion_strike_success_stamps_no_false_dial_move():
     )
     impact = enc.last_beat_impacts["player"]
 
-    # Load-bearing truth: no dial moved on-screen.
+    # Load-bearing truth (UNCHANGED from 73-8): no DIAL moved on-screen.
     assert impact["dial_moved"] is False
-    # And no false dial-motion category.
-    assert impact["effect"] not in ("advance", "setback")
-    # Honest classification within the existing union (see module docstring note).
-    assert impact["effect"] == "inert"
-    # The summary must not assert a dial edge gain that never happened.
+    # The HP it removed is the impact — not "inert".
+    assert impact["effect"] == "advance"
+    assert "3" in impact["summary"] and "hp" in impact["summary"].lower()
+    # Still no phantom dial-edge claim — the move landed on HP, not the edge.
     assert "to your edge" not in impact["summary"].lower()
 
-    # Cross-channel consistency (the POINT of the fix): the move landed on HP, not
-    # the dial — so the stamp saying "no dial" is consistent with HP actually
-    # changing, the exact cross-check the GM panel needs.
+    # Cross-channel consistency: the readout's HP delta matches the real ablation.
     assert cores["Pirate"].hp.current == 4  # 7 - 3 damage, no mitigation
 
 
-def test_hp_depletion_strike_critsuccess_reports_tag_not_advance():
-    # A strike CritSuccess grants the fleeting "Opening" tag AND nominally moves
-    # the dial. Under hp_depletion the dial is suppressed but the TAG still fires
-    # (apply_beat grants it regardless). The truthful readout is the tag, not a
-    # dial advance.
+def test_hp_depletion_strike_critsuccess_leads_with_hp_keeps_tag():
+    # A strike CritSuccess grants the fleeting "Opening" tag AND removes HP. Under
+    # the revised hp_depletion contract (sq-playtest 2026-06-13) the HP the strike
+    # ablated is the lead readout (effect="advance" with the HP delta) — but the
+    # tag still fired (apply_beat grants it regardless) and must remain visible in
+    # the summary, so a mechanics-first player sees both the damage and the angle.
     enc = _enc("hp_depletion")
     resolver, _ = _cores(pirate_hp=7)
     apply_beat(
@@ -126,8 +130,10 @@ def test_hp_depletion_strike_critsuccess_reports_tag_not_advance():
     impact = enc.last_beat_impacts["player"]
 
     assert impact["dial_moved"] is False
-    assert impact["effect"] == "tag"  # tags survive suppression; dial motion does not
-    assert impact["tag"] == "Opening"
+    assert impact["effect"] == "advance"  # HP channel leads under hp_depletion
+    assert "3" in impact["summary"] and "hp" in impact["summary"].lower()
+    assert impact["tag"] == "Opening"  # the tag still fired and is preserved
+    assert "Opening" in impact["summary"]  # …and stays visible in the readout
 
 
 # ── GREEN guards: behavior that is already truthful and must STAY truthful ────
@@ -194,6 +200,34 @@ def test_dial_threshold_strike_success_still_advances():
     assert impact["effect"] == "advance"
     assert impact["dial_moved"] is True
     assert enc.player_metric.current == 2  # dial really moved on a dial pack
+
+
+def test_describe_beat_impact_hp_channel_branch_is_advance():
+    # Pure-function pin of the new branch (sq-playtest 2026-06-13): under
+    # suppression, a positive hp_removed reads as an advance carrying the HP
+    # delta — the exact path that turns the overlay's "No change" on a crit into
+    # a truthful "−N to their HP". Gated on suppression: hp_removed is ignored on
+    # the dial path (a dial pack has no HP channel here).
+    hp_impact = describe_beat_impact(
+        ResolvedDeltas(),
+        kind=BeatKind.strike,
+        outcome=RollOutcome.CritSuccess,
+        hp_depletion_suppressed=True,
+        hp_removed=5,
+    )
+    assert hp_impact.effect == "advance"
+    assert hp_impact.dial_moved is False
+    assert "5" in hp_impact.summary and "hp" in hp_impact.summary.lower()
+
+    # Same deltas, no suppression → hp_removed is not consulted (dial path).
+    dial_impact = describe_beat_impact(
+        ResolvedDeltas(),
+        kind=BeatKind.strike,
+        outcome=RollOutcome.CritSuccess,
+        hp_depletion_suppressed=False,
+        hp_removed=5,
+    )
+    assert dial_impact.effect == "inert"
 
 
 def test_describe_beat_impact_pure_dial_path_unchanged():

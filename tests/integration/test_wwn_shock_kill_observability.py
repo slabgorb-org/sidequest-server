@@ -324,6 +324,125 @@ def test_player_hit_that_does_not_kill_anchors_opponent_alive(monkeypatch):
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
+def test_failed_player_strike_anchors_opponent_unharmed(monkeypatch):
+    """BUG A (sq-playtest 2026-06-13, beneath_sunden round 8): a FAILED player
+    strike (0 damage, fight not resolved) in HP combat must anchor the target's
+    aliveness so the narrator cannot render a KILL on a miss.
+
+    The repro: a tier=Fail strike removed 0 HP from an Other the engine kept
+    alive at 7/10, but the round-8 narration read 'the spear buries itself
+    through whatever passes for its chest … the passage goes quiet' — a decisive
+    kill on a mechanical miss. The damaging-hit kill-overclaim anchor only fires
+    when HP actually moved; the symmetric 0-damage path appended NO directive,
+    leaving the narrator free to invent the kill. This pins the failed-strike
+    anchor: real surviving HP + STILL STANDING + an explicit no-kill clause."""
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+
+    pack = _load_heavy_metal()
+    snap = GameSnapshot(
+        genre_slug="heavy_metal",
+        world_slug="barsoom",
+        turn_manager=TurnManager(interaction=7),
+    )
+    snap.characters.append(_make_warrior(shock_weapon=False))
+    snap.character_locations[_ATTACKER] = "The Pit"
+
+    enc = _seat_combat(snap, pack)
+    opponent_core = snap.find_creature_core(_OPPONENT)
+    assert opponent_core is not None
+    opponent_core.hp.current = 7  # the playtest's surviving Other
+    # Pin the reprisal's dice so the opponent's answer can't kill the 1-HP
+    # attacker and resolve the encounter through the OTHER close.
+    monkeypatch.setattr("sidequest.server.dispatch.damage_roll.random.randint", lambda a, b: a)
+
+    events = _capture_dice_watcher(monkeypatch)
+    _throw(snap, enc, pack, face=2)  # 2 + mods < DC → plain Fail, no damage
+
+    # ── Precondition: the strike genuinely failed — 0 HP removed, fight live ──
+    assert opponent_core.hp.current == 7, "a plain miss must not ablate the Other"
+    beat_events = [e for e in events if e.get("op") == "beat_applied"]
+    assert beat_events and beat_events[0]["opponent_hp_removed"] == 0
+    assert not enc.resolved
+
+    # ── The anchor: the narrator is told the swing failed and the Other lives ─
+    anchors = [
+        d
+        for d in snap.next_turn_directives
+        if "MECHANICAL TRUTH" in d and _OPPONENT in d and "STILL STANDING" in d
+    ]
+    assert anchors, (
+        f"a FAILED (0-damage, non-resolving) player strike in HP combat must "
+        f"anchor the Other's aliveness so the narrator cannot narrate a kill on "
+        f"a miss (BUG A); directives={snap.next_turn_directives!r}"
+    )
+    assert any(f"{opponent_core.hp.current}/{opponent_core.hp.max}" in d for d in anchors), (
+        f"the anchor must state the Other's REAL surviving HP "
+        f"({opponent_core.hp.current}/{opponent_core.hp.max}); got {anchors!r}"
+    )
+    # The no-kill clause is the load-bearing constraint — the prose must not
+    # render the death the playtest fabricated.
+    assert any("do NOT" in d and "killing thrust" in d for d in anchors), (
+        f"the anchor must forbid kill prose explicitly; got {anchors!r}"
+    )
+    # It is a wound/miss anchor, NOT a resolution — the fight is still live.
+    assert not any("RESOLVED" in d for d in snap.next_turn_directives)
+
+
+def test_failed_strike_anchor_gated_to_hp_combat():
+    """Gate: the failed-strike anchor is HP-framed ('unharmed / still standing')
+    and must NOT fire for a dial confrontation (negotiation, chase, poker), where
+    a 0-strike-damage beat is the normal case, not a missed blow. Drives the
+    shared close directly with both win_conditions on the same seated combat
+    encounter so only the gate varies."""
+    from sidequest.game.beat_kinds import BeatKind
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+    from sidequest.genre.models.rules import BeatDef
+    from sidequest.protocol.dice import RollOutcome
+    from sidequest.server.dispatch.dice import _emit_player_beat_resolution_close
+
+    pack = _load_heavy_metal()
+    snap = GameSnapshot(
+        genre_slug="heavy_metal",
+        world_slug="barsoom",
+        turn_manager=TurnManager(interaction=7),
+    )
+    snap.characters.append(_make_warrior(shock_weapon=False))
+    snap.character_locations[_ATTACKER] = "The Pit"
+    enc = _seat_combat(snap, pack)
+    opponent_core = snap.find_creature_core(_OPPONENT)
+    assert opponent_core is not None and opponent_core.hp.current == 10
+
+    beat = BeatDef(id="strike", label="Strike", kind=BeatKind.strike, stat_check="STR")
+    common = dict(
+        encounter=enc,
+        snapshot=snap,
+        character_name=_ATTACKER,
+        beat=beat,
+        actor_side="player",
+        outcome_tier=RollOutcome.Fail,
+        strike_hp_removed=0,
+        shock_hp_removed=0,
+        encounter_resolved=False,
+    )
+
+    # Dial confrontation → NO HP-framed anchor.
+    _emit_player_beat_resolution_close(**common, win_condition="dial_threshold")
+    assert not snap.next_turn_directives, (
+        f"a 0-damage beat in a DIAL confrontation must not get an HP-framed "
+        f"'still standing' anchor; got {snap.next_turn_directives!r}"
+    )
+
+    # HP combat → the anchor fires.
+    _emit_player_beat_resolution_close(**common, win_condition="hp_depletion")
+    assert any("STILL STANDING" in d for d in snap.next_turn_directives), (
+        f"a 0-damage non-resolving strike in HP combat must anchor aliveness; "
+        f"got {snap.next_turn_directives!r}"
+    )
+
+
+@pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_no_shock_no_fabrication_on_plain_miss(monkeypatch):
     """Guard rail: a missed strike with a shock-less weapon fabricates nothing —
     no HP removed, no shock event, no resolution signal, encounter live."""

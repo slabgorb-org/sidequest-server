@@ -20,7 +20,6 @@ from typing import Any
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from sidequest.game.game_slug import generate_slug
@@ -74,6 +73,9 @@ class CreateGameRequest(BaseModel):
     # Lobby companions to sidequest-ui develop 1436ebd. Both optional so older
     # clients (and curl-based smoke tests) keep working without a body change.
     player_name: str | None = None
+    # Deprecated (2026-06-13): slugs are now unique per create, so there is no
+    # same-slug collision to disambiguate. Accepted for request-shape
+    # back-compat with older clients; no longer consulted. See create_game.
     force_new: bool = False
 
 
@@ -93,37 +95,12 @@ class GameResponse(BaseModel):
     # orbits.yaml via content#383 + server#728 but the UI allowlist still
     # only contained coyote_star, so the orrery was unreachable).
     orbital: bool = False
-    # Silent-resume masquerade (sq-playtest 2026-06-07): the names of the
-    # characters already in the session when ``resumed=True`` — the lobby
-    # announces "resuming existing table — Groucho, Chico" instead of
-    # presenting a resume as a fresh creation. Empty for fresh games and
-    # for resumed sessions with no persisted snapshot yet.
+    # Retained for response-shape back-compat with the lobby (``useStartGame``
+    # reads it defensively). Always empty now: as of the unique-slug change
+    # (2026-06-13) ``POST /api/games`` always mints a fresh game, so a create
+    # never resumes an existing table. Resuming/joining happens by opening the
+    # exact ``/play/<slug>`` link, which loads the cast over the WebSocket.
     existing_characters: list[str] = []
-
-
-def _existing_character_names(pool: Any, slug: str) -> list[str]:
-    """Character names from the persisted snapshot of ``slug``'s session.
-
-    Read-only, lossy-empty: no session / no snapshot / unparseable snapshot
-    all yield ``[]`` (the forensics reader's documented contract) — the
-    create endpoint must never 500 on a forensic read.
-    """
-    from sidequest.game.pg import sessions as _pg_sessions
-    from sidequest.game.pg.forensic import PgForensicReader
-
-    session_id = _pg_sessions.resolve_session_id(pool, slug=slug)
-    if session_id is None:
-        return []
-    snapshot = PgForensicReader(pool).snapshot_json(session_id)
-    names: list[str] = []
-    for character in (snapshot or {}).get("characters") or []:
-        if not isinstance(character, dict):
-            continue
-        core = character.get("core") or {}
-        name = str(core.get("name") or "").strip() if isinstance(core, dict) else ""
-        if name:
-            names.append(name)
-    return names
 
 
 def _world_has_orbits(request: Request, genre_slug: str, world_slug: str) -> bool:
@@ -244,6 +221,20 @@ def create_rest_router() -> APIRouter:
                             genre_slug,
                             world_slug,
                             exc,
+                        )
+                        continue
+
+                    # Honor the same draft skip the pack loader uses
+                    # (_load_single_world returns None for draft: true). A draft
+                    # world the lobby offers cannot actually load its content —
+                    # the session would fall back silently to genre/sibling-world
+                    # defaults (No-Silent-Fallbacks violation). Skip it loudly.
+                    if wraw.get("draft"):
+                        logger.info(
+                            "list_genres: skipping draft world '%s/%s' — not offered "
+                            "in lobby (draft: true; loader excludes it)",
+                            genre_slug,
+                            world_slug,
                         )
                         continue
 
@@ -605,138 +596,65 @@ def create_rest_router() -> APIRouter:
         return PgForensicReader(pool).snapshot_json(session_id)
 
     @router.post("/api/games", status_code=201)
-    async def create_or_resume_game(req: CreateGameRequest, request: Request) -> Any:
-        """Create a new game (201) or resume an existing same-slug game (200, resumed=True).
+    async def create_game(req: CreateGameRequest, request: Request) -> Any:
+        """Create a new game — always a fresh, unique session (201).
 
-        The slug is derived from world_slug + today's date. If a game already
-        exists for that slug, it is returned in frozen mode — the original mode,
-        genre_slug, and world_slug are preserved and the new request's mode is
-        ignored.
+        The slug is ``<date>-<world>[-mp]-<token>`` with a per-game random
+        token (``game_slug.generate_slug``), so every POST mints a distinct
+        session. Resuming or joining an existing game is NOT done here — it
+        happens by opening that game's exact ``/play/<slug>`` link (the lobby's
+        Past Journeys history, or a shared link for co-play), which connects
+        the WebSocket to the stored session directly.
 
-        Lobby contract (companions to sidequest-ui develop 1436ebd):
-          - ``player_name``: typed name from the lobby; threaded onto the
-            response so the UI can confirm the server received it.
-          - ``force_new``: when True, a colliding base slug is *not* returned
-            as a resume — instead the server appends a numeric disambiguator
-            (``-2``, ``-3``, ...) and emits ``lobby.force_new_disambiguated``.
+        History (sq-playtest 2026-06-13): the slug used to be deterministic
+        (``<date>-<world>[-mp]``), so a same-day same-world POST resumed the
+        prior session and silently inherited its durable seat roster —
+        deadlocking the MP turn barrier on a phantom, never-reconnecting seat
+        (the Kael deadlock). Unique slugs remove that class at the root. The
+        ``force_new`` field is accepted for request-shape back-compat but no
+        longer consulted: every create is already fresh, and the deterministic
+        ``-2``/``-3`` disambiguation + MP-join-by-rederivation short-circuit it
+        drove are gone.
         """
-        from sidequest.telemetry.spans import (
-            lobby_force_new_disambiguated_span,
-            lobby_session_join_existing_span,
-            mp_game_created_span,
-        )
+        from sidequest.telemetry.spans import mp_game_created_span
 
         today_fn = getattr(request.app.state, "today_fn", _date_cls.today)
-        base_slug = generate_slug(world_slug=req.world_slug, today=today_fn(), mode=req.mode)
+        today = today_fn()
 
         from sidequest.game import db_pool as _db_pool
         from sidequest.game.pg import sessions as _pg_sessions
 
         _pg_pool = _db_pool.get_pool()
 
-        # ----- force_new: disambiguate before touching the store ---------
-        # When the lobby insists this is a fresh journey, a same-day same-mode
-        # collision must not silently resume the prior session. Walk -2, -3,
-        # ... until we find an unclaimed slug.
-        #
-        # MP-mode exception (playtest 2026-04-26 S4-UX): the lobby's
-        # ``force_new`` heuristic compares the typed name against the
-        # **per-browser** Past Journey list. Across hosts (P1 on
-        # ``player1.local``, P2 on ``player2.local``) that list is empty
-        # for P2, so the UI always sends ``force_new=True`` — and the
-        # disambiguator faithfully splits the table by minting ``-2``.
-        # In MP mode the correct semantics are "join the existing
-        # same-day same-world MP session", so we ignore ``force_new``
-        # whenever the existing same-slug game is itself a multiplayer
-        # game. Solo journeys are per-player and keep the original
-        # disambiguation behavior unchanged.
-        slug = base_slug
+        # Mint a unique slug. Regenerate on the astronomically-unlikely token
+        # collision rather than attach to an existing row (No Silent Fallbacks:
+        # a collision must never quietly resume a stranger's session).
+        slug = generate_slug(world_slug=req.world_slug, today=today, mode=req.mode)
         attempts = 1
-        mp_join_existing = False
-        if req.force_new:
-            existing_row = _pg_sessions.get_game(_pg_pool, slug=slug)
-            if existing_row is not None:
-                is_mp_request = req.mode == GameMode.MULTIPLAYER
-                is_mp_existing = existing_row.mode == GameMode.MULTIPLAYER
-                if is_mp_request and is_mp_existing:
-                    # MP-join short-circuit. Fall through to the
-                    # existing-row branch below; the join span fires
-                    # there once the row is opened on the canonical
-                    # pg repository (avoids span-on-probe drift).
-                    mp_join_existing = True
-                else:
-                    while True:
-                        attempts += 1
-                        candidate = f"{base_slug}-{attempts}"
-                        if _pg_sessions.get_game(_pg_pool, slug=candidate) is None:
-                            slug = candidate
-                            break
-                    with lobby_force_new_disambiguated_span(
-                        requested_slug=base_slug,
-                        final_slug=slug,
-                        attempts=attempts,
-                        player_name=req.player_name or "",
-                        mode=str(req.mode.value) if hasattr(req.mode, "value") else str(req.mode),
-                        genre_slug=req.genre_slug,
-                        world_slug=req.world_slug,
-                    ):
-                        pass
-
-        existing = _pg_sessions.get_game(_pg_pool, slug=slug)
-        if existing is not None:
-            # Existing row "wins" — emit span with the frozen metadata so GM
-            # panel sees which mode/genre/world are actually in effect, not
-            # what the client requested. (force_new path can land here ONLY
-            # via the MP-join short-circuit above; solo force_new+collision
-            # always picked an unused slug.)
-            if mp_join_existing:
-                with lobby_session_join_existing_span(
-                    slug=slug,
-                    mode=str(existing.mode)
-                    if not hasattr(existing.mode, "value")
-                    else str(existing.mode.value),
-                    genre_slug=existing.genre_slug,
-                    world_slug=existing.world_slug,
-                    player_name=req.player_name or "",
-                    force_new_requested=True,
-                ):
-                    pass
-            with mp_game_created_span(
-                slug=slug,
-                mode=str(existing.mode)
-                if not hasattr(existing.mode, "value")
-                else str(existing.mode.value),
-                genre_slug=existing.genre_slug,
-                world_slug=existing.world_slug,
-                resumed=True,
-            ):
-                payload = GameResponse(
-                    slug=slug,
-                    mode=existing.mode,
-                    genre_slug=existing.genre_slug,
-                    world_slug=existing.world_slug,
-                    resumed=True,
-                    player_name=req.player_name,
-                    orbital=_world_has_orbits(request, existing.genre_slug, existing.world_slug),
-                    # Silent-resume masquerade fix: name the existing table so
-                    # the lobby can announce the resume.
-                    existing_characters=_existing_character_names(_pg_pool, slug),
+        while _pg_sessions.get_game(_pg_pool, slug=slug) is not None:
+            attempts += 1
+            if attempts > 8:
+                raise HTTPException(
+                    status_code=500,
+                    detail="could not mint a unique game slug after 8 attempts",
                 )
-                return JSONResponse(status_code=200, content=payload.model_dump())
+            slug = generate_slug(world_slug=req.world_slug, today=today, mode=req.mode)
 
+        mode_str = str(req.mode.value) if hasattr(req.mode, "value") else str(req.mode)
         with mp_game_created_span(
             slug=slug,
-            mode=str(req.mode.value) if hasattr(req.mode, "value") else str(req.mode),
+            mode=mode_str,
             genre_slug=req.genre_slug,
             world_slug=req.world_slug,
             resumed=False,
             player_name=req.player_name or "",
             force_new=req.force_new,
+            attempts=attempts,
         ):
             _pg_sessions.ensure_session(
                 _pg_pool,
                 slug=slug,
-                mode=str(req.mode.value) if hasattr(req.mode, "value") else str(req.mode),
+                mode=mode_str,
                 genre_slug=req.genre_slug,
                 world_slug=req.world_slug,
             )
@@ -949,14 +867,16 @@ def create_rest_router() -> APIRouter:
                 if entry.character_type != "player_picker":
                     continue
                 slug = picker_portrait_slug(entry)
-                portraits.append({
-                    "slug": slug,
-                    "culture": entry.culture,
-                    "archetype": entry.archetype,
-                    "sex": entry.sex,
-                    "role": entry.role,
-                    "portrait_url": resolve_player_portrait_url(genre, world, slug),
-                })
+                portraits.append(
+                    {
+                        "slug": slug,
+                        "culture": entry.culture,
+                        "archetype": entry.archetype,
+                        "sex": entry.sex,
+                        "role": entry.role,
+                        "portrait_url": resolve_player_portrait_url(genre, world, slug),
+                    }
+                )
         return {"portraits": portraits}
 
     return router

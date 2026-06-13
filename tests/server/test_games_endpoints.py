@@ -12,9 +12,7 @@ from sidequest.server.rest import create_rest_router
 @pytest.fixture(autouse=True)
 def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
     """Bind the process pool to a per-worker throwaway PG database and truncate
-    between tests. POST /api/games consults PG for create-vs-resume; the
-    deterministic slugs would otherwise collide across tests on the shared db.
-    """
+    between tests. POST /api/games writes a sessions row each create."""
     import psycopg
 
     from sidequest.game import db_pool
@@ -44,6 +42,13 @@ def client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+# ---------------------------------------------------------------------------
+# Unique-slug create contract (2026-06-13). Every POST mints a fresh, distinct
+# session — there is no deterministic same-slug resume. Resuming/joining a game
+# happens by opening its exact /play/<slug> link, not by re-POSTing.
+# ---------------------------------------------------------------------------
+
+
 def test_post_games_creates_new_game(client: TestClient):
     r = client.post(
         "/api/games",
@@ -55,14 +60,17 @@ def test_post_games_creates_new_game(client: TestClient):
     )
     assert r.status_code == 201
     body = r.json()
-    # Multiplayer slugs carry a "-mp" suffix so they do not collide with
-    # same-day solo games of the same world (no silent mode downgrade).
-    assert body["slug"] == "2026-04-22-moldharrow-keep-mp"
+    # Readable date + world + "-mp" mode marker are preserved; a unique token
+    # is appended so two creates never collide.
+    assert body["slug"].startswith("2026-04-22-moldharrow-keep-mp-")
     assert body["mode"] == "multiplayer"
     assert body["resumed"] is False
 
 
-def test_post_games_same_mode_same_day_same_world_resumes(client: TestClient):
+def test_post_games_same_inputs_mint_distinct_fresh_games(client: TestClient):
+    """The Kael-deadlock fix: a second create with identical (world, day, mode)
+    must NOT resume the first — it mints a brand-new, distinct slug. (Before,
+    this silently resumed and could inherit a stale durable seat roster.)"""
     first = client.post(
         "/api/games",
         json={
@@ -80,79 +88,42 @@ def test_post_games_same_mode_same_day_same_world_resumes(client: TestClient):
             "mode": "multiplayer",
         },
     )
-    assert second.status_code == 200  # resumed, not created
-    body = second.json()
-    assert body["slug"] == "2026-04-22-moldharrow-keep-mp"
-    assert body["mode"] == "multiplayer"
-    assert body["resumed"] is True
+    assert second.status_code == 201, "second create is fresh, never a 200 resume"
+    assert second.json()["resumed"] is False
+    assert second.json()["slug"] != first.json()["slug"], (
+        "same world+day+mode must produce distinct slugs — no deterministic resume"
+    )
+    # Both still carry the readable prefix.
+    assert first.json()["slug"].startswith("2026-04-22-moldharrow-keep-mp-")
+    assert second.json()["slug"].startswith("2026-04-22-moldharrow-keep-mp-")
 
 
-def test_resume_announces_existing_characters(client: TestClient):
-    """sq-playtest 2026-06-07 (silent MP resume masquerade): a same-day
-    same-world "Start or Join" re-attached Charlie to the morning
-    Groucho+Chico session with NO resume signal — the lobby looked 100%
-    like a new game. The resume response must NAME the existing table so
-    the UI can say "resuming existing table — Groucho, Chico" before
-    chargen starts."""
-    import json as _json
-
-    from sidequest.game import db_pool
-
-    first = client.post(
+def test_post_games_ignores_force_new_and_still_creates_fresh(client: TestClient):
+    """force_new is deprecated/ignored: with unique slugs there is no collision
+    to disambiguate, so force_new=True is just a normal fresh create (no -2)."""
+    r = client.post(
         "/api/games",
         json={
             "genre_slug": "low_fantasy",
             "world_slug": "moldharrow-keep",
             "mode": "multiplayer",
+            "force_new": True,
         },
     )
-    assert first.status_code == 201
-    # A fresh game has no cast yet — empty list, present field.
-    assert first.json()["existing_characters"] == []
-
-    # Seed a persisted snapshot with two characters (raw-SQL idiom from
-    # test_rest_pg_forensic.py — the forensics reader consumes the same row).
-    snapshot = {
-        "characters": [
-            {"core": {"name": "Groucho"}},
-            {"core": {"name": "Chico"}},
-        ]
-    }
-    pool = db_pool.get_pool()
-    with pool.connection() as conn:
-        session_id = conn.execute(
-            "SELECT session_id FROM sessions WHERE session_slug = %s",
-            ("2026-04-22-moldharrow-keep-mp",),
-        ).fetchone()[0]
-        conn.execute(
-            "INSERT INTO game_state (session_id, snapshot_json, saved_at) VALUES (%s, %s, now())",
-            (session_id, _json.dumps(snapshot)),
-        )
-
-    second = client.post(
-        "/api/games",
-        json={
-            "genre_slug": "low_fantasy",
-            "world_slug": "moldharrow-keep",
-            "mode": "multiplayer",
-        },
-    )
-    assert second.status_code == 200
-    body = second.json()
-    assert body["resumed"] is True
-    assert body["existing_characters"] == ["Groucho", "Chico"], (
-        "the resume response must carry the existing table's character names "
-        "so the lobby can announce the resume instead of masquerading as a "
-        "fresh creation"
-    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["resumed"] is False
+    slug = body["slug"]
+    assert slug.startswith("2026-04-22-moldharrow-keep-mp-")
+    # The tail is a hex token, never a numeric "-2"/"-3" disambiguator.
+    token = slug.rsplit("-", 1)[-1]
+    assert all(c in "0123456789abcdef" for c in token) and len(token) >= 6, token
 
 
 def test_post_games_solo_and_multiplayer_do_not_collide(client: TestClient):
-    """Same world + same day in different modes must produce distinct games.
-
-    Pre-fix bug: multiplayer was silently downgraded to whatever mode the
-    existing same-day-same-world solo row carried.
-    """
+    """Same world + same day in different modes produce distinct slugs — the
+    "-mp" marker keeps mode from being silently downgraded (independent of the
+    unique token)."""
     solo = client.post(
         "/api/games",
         json={
@@ -162,7 +133,8 @@ def test_post_games_solo_and_multiplayer_do_not_collide(client: TestClient):
         },
     )
     assert solo.status_code == 201
-    assert solo.json()["slug"] == "2026-04-22-moldharrow-keep"
+    assert solo.json()["slug"].startswith("2026-04-22-moldharrow-keep-")
+    assert "-mp-" not in solo.json()["slug"]
     assert solo.json()["mode"] == "solo"
 
     mp = client.post(
@@ -173,10 +145,10 @@ def test_post_games_solo_and_multiplayer_do_not_collide(client: TestClient):
             "mode": "multiplayer",
         },
     )
-    assert mp.status_code == 201  # new game, not a resume
-    assert mp.json()["slug"] == "2026-04-22-moldharrow-keep-mp"
+    assert mp.status_code == 201
+    assert mp.json()["slug"].startswith("2026-04-22-moldharrow-keep-mp-")
     assert mp.json()["mode"] == "multiplayer"
-    assert mp.json()["resumed"] is False
+    assert mp.json()["slug"] != solo.json()["slug"]
 
 
 def test_post_games_rejects_invalid_mode(client: TestClient):
@@ -192,7 +164,7 @@ def test_post_games_rejects_invalid_mode(client: TestClient):
 
 
 def test_get_games_slug_returns_metadata(client: TestClient):
-    client.post(
+    created = client.post(
         "/api/games",
         json={
             "genre_slug": "low_fantasy",
@@ -200,17 +172,18 @@ def test_get_games_slug_returns_metadata(client: TestClient):
             "mode": "solo",
         },
     )
-    r = client.get("/api/games/2026-04-22-moldharrow-keep")
+    slug = created.json()["slug"]
+    r = client.get(f"/api/games/{slug}")
     assert r.status_code == 200
     body = r.json()
-    assert body["slug"] == "2026-04-22-moldharrow-keep"
+    assert body["slug"] == slug
     assert body["mode"] == "solo"
     assert body["genre_slug"] == "low_fantasy"
     assert body["world_slug"] == "moldharrow-keep"
 
 
 def test_get_games_slug_404_for_unknown(client: TestClient):
-    r = client.get("/api/games/2026-01-01-nowhere")
+    r = client.get("/api/games/2026-01-01-nowhere-deadbeef")
     assert r.status_code == 404
 
 
@@ -269,8 +242,8 @@ def test_post_games_announces_orbital_false_for_flat_world(orbital_client: TestC
 
 def test_get_games_slug_announces_orbital(orbital_client: TestClient):
     """The slug-mount metadata fetch — the one AppInner uses to gate the
-    Map tab — must carry the orbital flag on resume too."""
-    orbital_client.post(
+    Map tab — must carry the orbital flag for the created slug."""
+    created = orbital_client.post(
         "/api/games",
         json={
             "genre_slug": "space_opera",
@@ -278,14 +251,15 @@ def test_get_games_slug_announces_orbital(orbital_client: TestClient):
             "mode": "solo",
         },
     )
-    r = orbital_client.get("/api/games/2026-04-22-perseus_cloud")
+    slug = created.json()["slug"]
+    r = orbital_client.get(f"/api/games/{slug}")
     assert r.status_code == 200
     assert r.json()["orbital"] is True
 
 
 def test_get_games_slug_orbital_false_when_packs_missing(client: TestClient):
     """Empty search path (no packs on disk) → orbital=False, no crash."""
-    client.post(
+    created = client.post(
         "/api/games",
         json={
             "genre_slug": "low_fantasy",
@@ -293,6 +267,7 @@ def test_get_games_slug_orbital_false_when_packs_missing(client: TestClient):
             "mode": "solo",
         },
     )
-    r = client.get("/api/games/2026-04-22-moldharrow-keep")
+    slug = created.json()["slug"]
+    r = client.get(f"/api/games/{slug}")
     assert r.status_code == 200
     assert r.json()["orbital"] is False

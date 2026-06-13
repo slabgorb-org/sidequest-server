@@ -42,6 +42,24 @@ from sidequest.game.pg._conn import session_tx
 from sidequest.game.pg.events import _INSERT_TELEMETRY, PgSaveTransaction
 
 
+class OutOfFrameSessionMissing(Exception):
+    """Raised by :meth:`PgTelemetrySink.record` when the bound ``session_id``
+    has no ``sessions`` row.
+
+    Signals a stale sink (the room was torn down but the sink/ContextVar
+    binding outlived it) or a bind-before-commit race — NOT a sink bug. Lets
+    the out-of-frame telemetry path drop the write with one clean log line
+    instead of an opaque per-event ``ForeignKeyViolation`` traceback
+    (playtest 2026-06-11)."""
+
+    def __init__(self, session_id: int) -> None:
+        self.session_id = session_id
+        super().__init__(
+            f"out-of-frame telemetry write against session_id={session_id} "
+            "with no sessions row (stale sink or bind-before-commit race)"
+        )
+
+
 class PgTelemetrySink:
     """Postgres out-of-frame telemetry + encounter-event sink.
 
@@ -84,6 +102,16 @@ class PgTelemetrySink:
         watcher_hub._persist_turn_telemetry does today).
         """
         with session_tx(self._pool, self._sid) as conn:
+            # No Silent Fallbacks: session_tx's SELECT ... FOR UPDATE locks
+            # nothing when the row is absent, so a bare INSERT would throw an
+            # opaque ForeignKeyViolation. Detect the missing row inside the same
+            # tx and raise a typed, catchable error instead — the out-of-frame
+            # caller drops the write with one clean line, no per-event traceback.
+            exists = conn.execute(
+                "SELECT 1 FROM sessions WHERE session_id = %s", (self._sid,)
+            ).fetchone()
+            if exists is None:
+                raise OutOfFrameSessionMissing(self._sid)
             conn.execute(
                 _INSERT_TELEMETRY,
                 (self._sid, None, round, ts, component, event_type, payload_json),

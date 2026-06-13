@@ -789,6 +789,7 @@ def dispatch_dice_throw(
             strike_hp_removed=strike_hp_removed,
             shock_hp_removed=shock_hp_removed,
             encounter_resolved=encounter_resolved,
+            win_condition=cdef.win_condition,
         )
 
     # Seed drives spectator replay animation only — face values are already
@@ -1438,12 +1439,20 @@ def _emit_player_beat_resolution_close(
     strike_hp_removed: int,
     shock_hp_removed: int,
     encounter_resolved: bool,
+    win_condition: str = "",
     source: str = "dice_throw_beat",
 ) -> None:
     """Per-beat resolution close: the [ENCOUNTER RESOLVED] narrator signal on
-    a resolving beat, or the kill-overclaim HP anchor on a damaging one.
+    a resolving beat, the kill-overclaim HP anchor on a damaging one, or the
+    failed-strike anchor on a 0-damage non-resolving one (HP combat only).
     Shared by the legacy in-dispatch flow and the WN round walk (story 102-4)
     so the two closes cannot drift.
+
+    ``win_condition`` is the confrontation's ``cdef.win_condition``; the
+    0-damage failed-strike anchor fires ONLY when it is ``"hp_depletion"`` so
+    the HP-framed "unharmed / still standing" prose never leaks into a dial
+    confrontation (negotiation, chase, poker) where a 0-strike-damage beat is
+    the normal case, not a missed blow.
 
     ``source`` labels which seam closed the fight on the ``encounter.resolved``
     span and the persisted op="resolved" watcher row — "dice_throw_beat" for
@@ -1524,6 +1533,35 @@ def _emit_player_beat_resolution_close(
                 f"{_anchor_core.hp.current}/{_anchor_core.hp.max} HP and STILL "
                 "STANDING; the fight continues. Narrate a wound, not a kill — do "
                 "NOT describe their death, collapse, or incapacitation."
+            )
+    elif win_condition == "hp_depletion":
+        # Failed-strike anchor (sq-playtest 2026-06-13, beneath_sunden round 8):
+        # a 0-damage player beat that does NOT resolve the fight (Fail/CritFail,
+        # a Tie, or a hit that ablated nothing) invites KILL prose exactly like
+        # the damaging-hit case above — the replay text carries the beat +
+        # outcome_tier but never the target's surviving HP, so the narrator
+        # rendered "the spear buries itself through its chest … the passage goes
+        # quiet" on a tier=Fail / opponent_hp_removed=0 strike against an Other
+        # the engine kept alive at 7/10. The damaging-hit branch only fires when
+        # HP actually moved; this branch covers the SYMMETRIC miss/whiff so a
+        # failed swing cannot be narrated as a kill. Gated to hp_depletion so the
+        # HP-framed wording never reaches a dial confrontation, where a
+        # 0-strike-damage beat is the norm, not a missed blow.
+        _anchor_target = _opposite_side_first_actor(encounter, actor_side)
+        _anchor_core = (
+            snapshot.find_creature_core(_anchor_target) if _anchor_target is not None else None
+        )
+        if _anchor_core is not None and _anchor_core.hp.current > 0:
+            _tier = outcome_tier.value if hasattr(outcome_tier, "value") else str(outcome_tier)
+            _missed = outcome_tier in (RollOutcome.Fail, RollOutcome.CritFail)
+            _verb = "MISSED — the blow did not connect" if _missed else "landed no damage"
+            snapshot.next_turn_directives.append(
+                f"MECHANICAL TRUTH (weave into the narration): {character_name}'s "
+                f"{beat.label} {_verb} (outcome: {_tier}); 0 damage dealt to "
+                f"{_anchor_target}, who is UNHARMED at {_anchor_core.hp.current}/"
+                f"{_anchor_core.hp.max} HP and STILL STANDING; the fight continues. "
+                "Narrate the failed attack — do NOT describe a hit, a wound, a "
+                "killing thrust, their death, collapse, or incapacitation."
             )
 
 

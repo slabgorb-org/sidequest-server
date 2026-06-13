@@ -100,6 +100,7 @@ def describe_beat_impact(
     kind: BeatKind,
     outcome: RollOutcome,
     hp_depletion_suppressed: bool = False,
+    hp_removed: int = 0,
 ) -> BeatImpact:
     """Classify *resolved* deltas into a legible :class:`BeatImpact` (Story 73-4).
 
@@ -122,6 +123,15 @@ def describe_beat_impact(
     is ``False``, and the surfaced ``own``/``opponent`` numbers (shipped to the UI
     by 73-7) don't read as a phantom dial gain. Tag, resolution, and backfire are
     not dial motion and still fire (read from ``deltas``).
+
+    ``hp_removed`` (sq-playtest 2026-06-13 impact-chip-gap): the HP the strike
+    actually ablated on the suppressed-dial path. The early call (pre-damage)
+    passes 0 and reads "dial held / moved nothing"; ``apply_beat`` RE-derives
+    with the resolved ``hp_removed`` once the HP channel lands, so a damaging
+    strike (the most salient mechanical event — a crit removing HP) reads as an
+    ``advance`` with the real HP delta instead of "No change — moved nothing".
+    Only consulted under ``hp_depletion_suppressed``; takes precedence over the
+    inert/suppressed-dial branches (a strike that drew blood is never inert).
     """
     own = deltas.own
     opponent = deltas.opponent
@@ -142,7 +152,17 @@ def describe_beat_impact(
     unfavorable = own < 0 or opponent > 0
 
     effect: BeatEffect
-    if favorable:
+    if hp_depletion_suppressed and hp_removed > 0:
+        # HP combat: the strike's real impact is the HP it ablated, not the
+        # suppressed dial. Wins over the inert/suppressed-dial branches below so
+        # a damaging crit reads as an advance with its HP delta, not "No change"
+        # (sq-playtest 2026-06-13). The dial numbers stay zeroed (no dial moved);
+        # the HP bar — not this readout's dial — animates the actual loss.
+        effect = "advance"
+        summary = f"−{hp_removed} to their HP"
+        if tag:
+            summary = f"{summary} ({tag})"
+    elif favorable:
         effect = "advance"
         detail = []
         if own > 0:
@@ -931,6 +951,25 @@ def apply_beat(
                     target_mitigation=target_mitigation,
                     source_beat_id=getattr(beat, "id", "?"),
                 )
+
+    # Story 73-8 follow-up (sq-playtest 2026-06-13 impact-chip-gap): the early
+    # impact stamp above ran BEFORE the HP channel resolved, so under hp_depletion
+    # it could only say "dial held / moved nothing" — the overlay's beat-impact
+    # chip then read "No change" even on a crit that removed HP. Now that the
+    # strike's real HP loss is known, re-derive the descriptor with it so the
+    # most salient mechanical event reads as an advance (Sebastien/Jade "see the
+    # math"). Only re-stamps when damage actually landed; a true whiff keeps the
+    # honest "moved nothing".
+    if hp_depletion and hp_removed > 0:
+        enc.last_beat_impacts[actor.side] = asdict(
+            describe_beat_impact(
+                deltas,
+                kind=beat.kind,
+                outcome=outcome,
+                hp_depletion_suppressed=True,
+                hp_removed=hp_removed,
+            )
+        )
 
     enc.beat += 1
     enc.structured_phase = _phase_for_beat(enc.beat)

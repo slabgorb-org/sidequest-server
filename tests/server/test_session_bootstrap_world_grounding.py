@@ -112,6 +112,36 @@ def bare_pack(tmp_path: Path) -> tuple[Path, str]:
 
 
 @pytest.fixture
+def draft_world_pack(tmp_path: Path) -> tuple[Path, str]:
+    """A clone of test_genre with a SECOND world marked ``draft: true``.
+
+    flickering_reach stays loadable (so ``genre_pack.worlds`` is non-empty),
+    and a sibling ``seaboard_of_saints`` carries ``draft: true`` — the loader
+    excludes it from the pack, so a session bound to it cannot load its
+    content and would silently fall back to genre/sibling defaults
+    (playtest 2026-06-11, the No-Silent-Fallbacks bug this test pins)."""
+    slug = "draft_world_pack"
+    pack_dir = _clone_test_genre(tmp_path, slug)
+    draft_world_dir = pack_dir / "worlds" / "seaboard_of_saints"
+    draft_world_dir.mkdir(parents=True, exist_ok=True)
+    (draft_world_dir / "world.yaml").write_text(
+        yaml.dump(
+            {
+                "name": "Seaboard of Saints",
+                "slug": "seaboard_of_saints",
+                "description": "A drowned coast of salt-cured relics.",
+                "starting_location": "the tide market",
+                "draft": True,
+            },
+            default_flow_style=False,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path, slug
+
+
+@pytest.fixture
 def malformed_weather_pack(tmp_path: Path) -> tuple[Path, str]:
     """A clone of test_genre with a syntactically invalid weather.yaml.
     AC8: bootstrap must fail loud. Epic 74: weather is world-tier, so the
@@ -484,4 +514,81 @@ async def test_bootstrap_fails_loud_on_malformed_pack_weather_yaml(
             "connect: has_character=True alongside no fatal error. The "
             "loader silently fell back to no-weather, exactly the silent-"
             "fallback class of bug AC8 forbids."
+        )
+
+
+def _seed_solo_save_for_world(save_dir: Path, genre_slug: str, world_slug: str) -> None:
+    """Like ``_seed_solo_save`` but binds the session row + snapshot to an
+    arbitrary ``world_slug`` (used to seed a save pointed at a draft world)."""
+    core = CreatureCore(
+        name="Thorn",
+        description="A wandering investigator",
+        personality="Curious",
+        inventory=Inventory(),
+    )
+    char = Character(core=core, char_class="Fighter", race="Human", backstory="A wanderer.")
+    snap = GameSnapshot(genre_slug=genre_slug, world_slug=world_slug)
+    snap.characters = [char]
+
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=_SLUG,
+        mode=str(GameMode.SOLO),
+        genre_slug=genre_slug,
+        world_slug=world_slug,
+    )
+    repo.save(snap)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_fails_loud_on_draft_world(
+    draft_world_pack: tuple[Path, str],
+    tmp_path: Path,
+) -> None:
+    """No-Silent-Fallbacks (playtest 2026-06-11): a session bound to a world
+    that is NOT in the loaded pack — because it is ``draft: true`` — MUST fail
+    loud at connect, not run with empty overrides that silently serve
+    genre/sibling-world defaults under the draft world's name.
+
+    The genre pack still has a loadable world (flickering_reach), so this is
+    specifically the "requested world absent from a non-empty pack" case, not
+    a worldless genre."""
+    search_root, genre_slug = draft_world_pack
+    save_dir = tmp_path / "saves"
+    save_dir.mkdir()
+    _seed_solo_save_for_world(save_dir, genre_slug, "seaboard_of_saints")
+
+    handler, _queue = _build_handler(save_dir, search_root)
+
+    raised: Exception | None = None
+    out: list[Any] = []
+    try:
+        out = list(await handler.handle_message(_connect_msg()))
+    except Exception as exc:  # noqa: BLE001 — fail-loud surface check
+        raised = exc
+
+    if raised is not None:
+        return
+
+    error_msgs = [m for m in out if getattr(m, "type", None) == MessageType.ERROR]
+    assert error_msgs, (
+        "a draft world (absent from the loaded pack) connected silently with "
+        "no ERROR message and no exception — the exact genre/sibling-world "
+        "silent fallback CLAUDE.md forbids."
+    )
+
+    connected_events = [
+        m
+        for m in out
+        if getattr(m, "type", None) == MessageType.SESSION_EVENT
+        and getattr(m.payload, "event", "") == "connected"
+    ]
+    if connected_events:
+        has_character = getattr(connected_events[0].payload, "has_character", None)
+        assert has_character is not True, (
+            "draft world produced a normal Playing-state connect alongside no "
+            "fatal error — silent fallback to genre/sibling defaults."
         )

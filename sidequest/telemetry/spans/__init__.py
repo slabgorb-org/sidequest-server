@@ -70,7 +70,6 @@ from .inventory import *  # noqa: F401, F403
 from .journal import *  # noqa: F401, F403
 from .jump import *  # noqa: F401, F403
 from .light import *  # noqa: F401, F403
-from .lobby import *  # noqa: F401, F403
 from .location import *  # noqa: F401, F403
 from .lore import *  # noqa: F401, F403
 from .magic import *  # noqa: F401, F403

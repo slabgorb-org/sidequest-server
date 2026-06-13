@@ -107,6 +107,10 @@ _REPLAY_SKIP_KINDS: frozenset[str] = frozenset(
         "ENCOUNTER_RESOLVED",
         "ENCOUNTER_RESOLUTION_SIGNAL",
         "ENCOUNTER_OPPONENT_ATTACK",
+        # Damage roll split off from ENCOUNTER_OPPONENT_ATTACK so a reprisal's
+        # to-hit and damage rows are self-describing (sq-playtest 2026-06-13
+        # telemetry-gap). Same internal/replay-skip treatment as the to-hit kind.
+        "ENCOUNTER_OPPONENT_DAMAGE",
     }
 )
 

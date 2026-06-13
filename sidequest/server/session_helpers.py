@@ -155,7 +155,10 @@ _EXCLUDED_FROM_DUMP: tuple[str, ...] = (
 #       resource pool keys, quest ids, region/room/route slugs) where
 #       the key cardinality is itself a finite gameplay quantity.
 #   (e) List bounded by gameplay convention to small cardinality
-#       (companions, active_seeds, next_turn_directives, etc).
+#       (companions, active_seeds, etc). NOTE: next_turn_directives moved
+#       to _PHASE_B_DROP_FIELDS (sq-playtest 2026-06-13 directive-leak) —
+#       it is consumed into a dedicated Recency guardrail and must not ride
+#       the raw <game_state> JSON.
 #
 # Genuinely growing lists that the narrator reads in full but are
 # small-by-gameplay-convention (``lore_established``, ``world_history``,
@@ -218,7 +221,6 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "discovered_rooms",
     "discovered_routes",
     "lore_established",
-    "next_turn_directives",
     "notes",
     "npc_pool",
     "quest_anchors",

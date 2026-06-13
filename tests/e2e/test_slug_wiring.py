@@ -78,7 +78,8 @@ def test_create_game_then_connect_by_slug(app_client: TestClient):
     )
     assert r.status_code == 201, f"Failed to create game: {r.text}"
     slug = r.json()["slug"]
-    assert slug == "2026-04-22-grimvault", f"Unexpected slug: {slug}"
+    # Unique-slug contract: readable date+world+"-mp" prefix, unique token tail.
+    assert slug.startswith("2026-04-22-grimvault-mp-"), f"Unexpected slug: {slug}"
 
     # Step 2: Connect to the game via WebSocket using the slug
     with app_client.websocket_connect("/ws") as ws:

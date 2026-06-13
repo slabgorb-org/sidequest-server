@@ -62,3 +62,9 @@ class TurnRecord:
     # no location/quest/lore patches reads as `Patches: none, Delta empty:
     # true` on the dashboard (playtest 2026-04-30).
     footnotes_count: int = 0
+    # sq-playtest 2026-06-12: per-dispatch engage/degrade verdicts from the
+    # dispatch bank (BankResult.decisions). Persisted via turn_complete so
+    # "did the engine engage or did the narrator improvise?" is one
+    # turn_telemetry query instead of an offline turn replay. Entries:
+    # {subsystem, idempotency_key, confidence, threshold, decision[, error]}.
+    dispatches: list[dict[str, Any]] = field(default_factory=list)

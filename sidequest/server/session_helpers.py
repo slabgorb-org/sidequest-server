@@ -597,6 +597,32 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
         return proj
 
 
+def refresh_turn_context_post_dispatch(
+    turn_context: TurnContext,
+    *,
+    sd: _SessionData,
+    snapshot: GameSnapshot,
+) -> None:
+    """Refresh the TurnContext projections the dispatch bank may have
+    invalidated (ADR-113 engine-first: the bank mutates the snapshot BEFORE
+    the narrator prompt is built, but ``_build_turn_context`` ran before the
+    bank).
+
+    - ``npcs``: the bank may have materialized opponents into
+      ``snapshot.npcs`` (the pre-existing refresh, consolidated here).
+    - ``region_projection``: a resolved movement dispatch has already
+      advanced ``pc_regions`` + the ``current_region`` anchor; without the
+      re-projection the narrator's YOU-ARE-HERE names the room the party
+      just LEFT on exactly the turns a move lands — the narrator must just
+      get the updated map (sq-playtest 2026-06-12, Keith).
+
+    Emits a second ``dungeon.region_projection`` span on dungeon worlds
+    (pre/post-dispatch pair) — the GM panel sees both sides of the move.
+    """
+    turn_context.npcs = list(snapshot.npcs)
+    turn_context.region_projection = _project_current_region(sd, snapshot)
+
+
 def _build_turn_context(
     sd: _SessionData,
     *,

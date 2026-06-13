@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from sidequest.agents.subsystems import SubsystemOutput
 from sidequest.dungeon.region_graph.model import RegionGraph
-from sidequest.dungeon.region_projection import RegionExit, project_region
+from sidequest.dungeon.region_projection import RegionExit, project_region, requested_bearing
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
 from sidequest.game.seams import SeamCrossingError, get_seam_resolver, seam_route_for
 from sidequest.game.seams.deep_descent import resolve_deep_descent
@@ -80,6 +80,21 @@ _DEEPER_KIND_RANK: dict[str, int] = {
 def _tokens(text: str) -> set[str]:
     """Lowercased alpha tokens for descriptor token-overlap scoring."""
     return {t for t in re.findall(r"[a-z]+", (text or "").lower())}
+
+
+def _exit_sort_key(e: RegionExit) -> tuple[str, str]:
+    """Stable display order for exits: by bearing, then id."""
+    return (e.bearing, e.to_region_id)
+
+
+def _way_phrase(e: RegionExit) -> str:
+    """A player-facing description of one exit, by bearing + kind — never the
+    raw region id (an ``exp001.r1`` slug in voiced prose is its own leak)."""
+    if e.bearing in ("up", "down"):
+        return f"the {e.kind} leading {e.bearing}"
+    if e.bearing:
+        return f"the {e.bearing} {e.kind}"
+    return f"the {e.kind}"
 
 
 def _cartography_for(*, pack: GenrePack | None, world_slug: str):
@@ -189,25 +204,29 @@ async def run_movement_dispatch(
                 }
             )
 
-        with movement_region_mode_span(
-            pc_name=player_name,
-            from_region=from_region,
-        ) as span:
-            span.set_attribute("intent.direction", direction)
-            span.set_attribute("intent.exit_descriptor", exit_descriptor)
-            span.set_attribute("world_slug", snapshot.world_slug)
-        logger.debug(
-            "movement.region_mode pc=%s world=%s direction=%s descriptor=%r "
-            "(deferred to narration_apply heading→region path)",
-            player_name,
-            snapshot.world_slug,
-            direction,
-            exit_descriptor,
+        # --- Pingpong 2026-06-12: the PC is already INSIDE the dungeon. ---
+        # A region-mode hybrid world's PC who has crossed the seam stands on
+        # a dungeon graph node (pc_regions == 'entrance' / 'expNNN.rN'), not
+        # a cartography region. Deferring here hands the in-dungeon crawl to
+        # the narration heading→region path — which cannot traverse the graph,
+        # so the narrator improvises the whole dungeon (the confabulated-crawl
+        # bug). When the PC's region is a live graph node, fall through to the
+        # §Q1 procedural navigator below; the region-mode defer is ONLY for
+        # PCs standing on surface cartography.
+        _in_dungeon = (
+            dungeon_store is not None
+            and bool(from_region)
+            and from_region in dungeon_store.load_map(entrance_id=_ENTRANCE_ID).nodes
         )
-        # No patch: the heading→region path owns the advance. No directive:
-        # the narrator resolves the move in prose. No error: this is the
-        # expected navigation mode, not a failure.
-        return SubsystemOutput(data={"resolved_via": "region_mode_deferred"})
+        if not _in_dungeon:
+            return _defer_region_mode(
+                snapshot=snapshot,
+                player_name=player_name,
+                from_region=from_region,
+                direction=direction,
+                exit_descriptor=exit_descriptor,
+            )
+        # In-dungeon: fall through to the §Q1 navigator below.
 
     # --- §Q1 step 1: no dungeon_store → non-procedural world, fail loud. ---
     # palette is threaded from the SAME lookahead handle as dungeon_store, so
@@ -348,6 +367,7 @@ async def run_movement_dispatch(
     )
 
     if ambiguous:
+        ways = ", ".join(_way_phrase(e) for e in sorted(candidates, key=_exit_sort_key))
         return _unresolved(
             snapshot=snapshot,
             player_name=player_name,
@@ -356,10 +376,7 @@ async def run_movement_dispatch(
             direction=direction,
             exit_descriptor=exit_descriptor,
             available=available_ids,
-            surface=(
-                f"{player_name} could mean any of several ways from here: "
-                f"{', '.join(sorted(available_ids))}."
-            ),
+            surface=(f"{player_name} could go more than one way from here: {ways}. Which way?"),
         )
 
     if resolved is None:
@@ -463,6 +480,21 @@ def _resolve(
     # Total deterministic baseline ordering: ascending to_region_id.
     ordered = sorted(candidates, key=lambda e: e.to_region_id)
 
+    # --- bearing match (highest priority) → the player named a direction. ---
+    # "I go north", "down the stairs", "the eastern passage" — each exit
+    # carries a distinct bearing (assign_bearings), so a named bearing
+    # resolves to AT MOST one edge: no tie is possible, and the 4-way "the
+    # corridor ahead" ambiguity that made movement unresolvable is gone the
+    # moment the narrator names the ways out by their bearings. A named
+    # bearing that matches nothing falls through to the coarse/descriptor
+    # paths (so "north corridor" can still land on the corridor token) rather
+    # than hard-refusing on the bearing alone.
+    want_bearing = requested_bearing(exit_descriptor) or requested_bearing(direction)
+    if want_bearing:
+        matched = [e for e in ordered if e.bearing == want_bearing]
+        if len(matched) == 1:
+            return matched[0], "bearing", False
+
     # --- exit_descriptor present → token-overlap match. ---
     if exit_descriptor.strip():
         want = _tokens(exit_descriptor)
@@ -475,6 +507,29 @@ def _resolve(
             scored.append((len(want & surface), e))
         scored = [s for s in scored if s[0] > 0]
         if not scored:
+            # sq-playtest 2026-06-12 (beneath_sunden-6 t6/t7): the router
+            # passes the player's words through verbatim, so the descriptor
+            # is often FLAVOR ("the heart of the dungeon"), not a way-name.
+            # A descriptor that matches NOTHING must not veto an otherwise
+            # unambiguous coarse direction — "I go deeper, into the heart
+            # of the dungeon" was refused twice as no_candidate_edges while
+            # a real deeper corridor existed. Fall back to the direction
+            # resolution (resolved_via carries the fallback for the GM
+            # panel). No direction → the honest refusal stands. An
+            # AMBIGUOUS descriptor (several real ways tie) still refuses
+            # below — "which corridor?" is a fair question; "no such way"
+            # for "go deeper" is a stonewall.
+            if direction in ("deeper", "back", "toward_exit"):
+                chosen, via, ambiguous = _resolve(
+                    candidates=candidates,
+                    graph=graph,
+                    from_region=from_region,
+                    from_depth=from_depth,
+                    direction=direction,
+                    exit_descriptor="",
+                    discovered_regions=discovered_regions,
+                )
+                return chosen, f"descriptor_fallback_{via}", ambiguous
             return None, "descriptor_match", False
         scored.sort(key=lambda s: (-s[0], s[1].to_region_id))
         if len(scored) >= 2 and scored[0][0] == scored[1][0]:
@@ -588,6 +643,39 @@ async def _sync_materialize(
     return target_id in fresh.nodes
 
 
+def _defer_region_mode(
+    *,
+    snapshot: GameSnapshot,
+    player_name: str,
+    from_region: str,
+    direction: str,
+    exit_descriptor: str,
+) -> SubsystemOutput:
+    """Region-mode defer: the narration_apply heading→region path owns the
+    advance for a PC standing on surface cartography. Observable (non-error
+    ``movement.region_mode`` span) — NOT a silent fallback; see the
+    region-mode block in ``run_movement_dispatch``."""
+    with movement_region_mode_span(
+        pc_name=player_name,
+        from_region=from_region,
+    ) as span:
+        span.set_attribute("intent.direction", direction)
+        span.set_attribute("intent.exit_descriptor", exit_descriptor)
+        span.set_attribute("world_slug", snapshot.world_slug)
+    logger.debug(
+        "movement.region_mode pc=%s world=%s direction=%s descriptor=%r "
+        "(deferred to narration_apply heading→region path)",
+        player_name,
+        snapshot.world_slug,
+        direction,
+        exit_descriptor,
+    )
+    # No patch: the heading→region path owns the advance. No directive:
+    # the narrator resolves the move in prose. No error: this is the
+    # expected navigation mode, not a failure.
+    return SubsystemOutput(data={"resolved_via": "region_mode_deferred"})
+
+
 def _unresolved(
     *,
     snapshot: GameSnapshot,
@@ -618,9 +706,23 @@ def _unresolved(
         exit_descriptor,
         available,
     )
+    # The directive is a GM instruction, not just in-fiction prose: the
+    # narrator must NOT paper over a refused move with a confabulated room
+    # (sq-playtest 2026-06-12 — narrator flipped the title to "First
+    # Corridor" and seeded a monster while the PC stayed frozen at the
+    # entrance). Make the non-advance explicit and hand it the honest surface
+    # to voice.
+    payload = (
+        f"MOVEMENT REFUSED ({reason}): {player_name} has NOT moved and is still in "
+        f"the same region. Do NOT change the location title or scene heading, do NOT "
+        f"describe entering/traversing/arriving anywhere, and do NOT introduce a new "
+        f"room or its contents. In fiction, surface this honestly and — if the way was "
+        f"ambiguous — ask which of the listed exits they take (name them by their "
+        f"bearings). Honest text to voice: {surface}"
+    )
     directive = NarratorDirective(
         kind="must_narrate",
-        payload=surface,
+        payload=payload,
         visibility=VisibilityTag(visible_to="all"),
     )
     return SubsystemOutput(directives=[directive], data={"error": reason})

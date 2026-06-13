@@ -567,6 +567,11 @@ class Validator:
                     p.patch_type for p in record.patches_applied
                 ],  # legacy short-form
                 "beats_fired": [{"trope": t, "threshold": th} for t, th in record.beats_fired],
+                # Per-dispatch engage/degrade verdicts (BankResult.decisions,
+                # sq-playtest 2026-06-12): the durable answer to "did the
+                # engine fire or did the narrator improvise?" — previously
+                # span-only and unpersisted, costing an offline replay.
+                "dispatches": list(record.dispatches),
                 # Knowledge entries surfaced as footnotes this turn. The
                 # narrator's footnote pipeline is independent of the
                 # `patch.discovered_facts` path, so a turn that introduces

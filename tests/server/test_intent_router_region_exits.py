@@ -19,6 +19,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from sidequest.dungeon.region_graph.model import RegionEdge, RegionGraph, RegionNode
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.world import (
     CartographyConfig,
@@ -96,6 +98,39 @@ class _Kit:
     def __init__(self, snapshot, pack):
         self.snapshot = snapshot
         self.pack = pack
+
+
+# ---------------------------------------------------------------------------
+# Dungeon doubles (pingpong 2026-06-12: PC standing ON the dungeon graph).
+# Mirrors tests/agents/subsystems/test_movement_seam_crossing.py.
+# ---------------------------------------------------------------------------
+
+
+class _StoreWithDeepGraph:
+    """DungeonStore double: entrance + one deep region + one HIDDEN side passage."""
+
+    def load_map(self, *, entrance_id):
+        g = RegionGraph(entrance_id=entrance_id)
+        g.add_node(
+            RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar", depth_score=0.0)
+        )
+        g.add_node(
+            RegionNode(id="exp001.r0", expansion_id=1, theme="shaft_collar", depth_score=7.9)
+        )
+        g.add_node(
+            RegionNode(id="exp001.r1", expansion_id=1, theme="shaft_collar", depth_score=9.1)
+        )
+        g.add_edge(RegionEdge(a=entrance_id, b="exp001.r0", kind="shaft"))
+        g.add_edge(RegionEdge(a=entrance_id, b="exp001.r1", kind="secret", hidden=True))
+        return g
+
+
+class _FakePalette:
+    def get(self, theme_id: str):
+        return types.SimpleNamespace(
+            display_name=theme_id,
+            narrator=types.SimpleNamespace(register="grave", flavor="cold", motifs=["stone"]),
+        )
 
 
 @pytest.fixture
@@ -189,6 +224,64 @@ def test_no_pack_no_projection():
     snap = _snapshot("the_dropmouth")
     summary = _build_state_summary(snap)  # pack=None
     assert "current_region_exits" not in summary
+
+
+def test_dungeon_node_pc_projects_graph_exits(hybrid_world_kit):
+    """Pingpong 2026-06-12: a PC whose region is a dungeon graph node (post
+    seam-crossing) must get the DUNGEON exits as the lexical bridge — the
+    silent skip here is why descent intents never classified as movement."""
+    kit = hybrid_world_kit
+    kit.snapshot.pc_regions["Groucho"] = ENTRANCE_ID
+    summary = _build_state_summary(
+        kit.snapshot, pack=kit.pack, dungeon_store=_StoreWithDeepGraph(), palette=_FakePalette()
+    )
+    exits = summary["current_region_exits"]
+    assert {"name": "exp001.r0", "kind": "shaft"} in exits
+
+
+def test_dungeon_hidden_exit_omitted_unless_discovered(hybrid_world_kit):
+    """Secret edges are never volunteered (reverse-Illusionism) unless the
+    route is already in snapshot.discovered_routes."""
+    kit = hybrid_world_kit
+    kit.snapshot.pc_regions["Groucho"] = ENTRANCE_ID
+    summary = _build_state_summary(
+        kit.snapshot, pack=kit.pack, dungeon_store=_StoreWithDeepGraph(), palette=_FakePalette()
+    )
+    names = {e["name"] for e in summary["current_region_exits"]}
+    assert "exp001.r1" not in names
+
+    kit.snapshot.discovered_routes.append("exp001.r1")
+    summary = _build_state_summary(
+        kit.snapshot, pack=kit.pack, dungeon_store=_StoreWithDeepGraph(), palette=_FakePalette()
+    )
+    names = {e["name"] for e in summary["current_region_exits"]}
+    assert "exp001.r1" in names
+
+
+def test_dungeon_node_pc_without_store_logs_skip(caplog, hybrid_world_kit):
+    """A PC region in neither cartography nor a reachable dungeon graph is an
+    unmapped position — skip LOUDLY (the old silent skip is the bug)."""
+    kit = hybrid_world_kit
+    kit.snapshot.pc_regions["Groucho"] = ENTRANCE_ID
+    with caplog.at_level("WARNING", logger="sidequest.server.intent_router_pass"):
+        summary = _build_state_summary(kit.snapshot, pack=kit.pack)
+    assert "current_region_exits" not in summary
+    assert any(
+        "intent_router.region_exits projection_skipped" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_dungeon_projection_emits_span(otel_capture, hybrid_world_kit):
+    kit = hybrid_world_kit
+    kit.snapshot.pc_regions["Groucho"] = ENTRANCE_ID
+    _build_state_summary(
+        kit.snapshot, pack=kit.pack, dungeon_store=_StoreWithDeepGraph(), palette=_FakePalette()
+    )
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == "intent_router.region_exits"]
+    assert len(spans) == 1
+    attrs = spans[0].attributes or {}
+    assert attrs.get("exit_count") == 1  # hidden edge excluded
+    assert attrs.get("region_id") == ENTRANCE_ID
 
 
 def test_projection_emits_span(otel_capture, hybrid_world_kit):

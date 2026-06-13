@@ -180,17 +180,22 @@ async def test_projection_reaches_narrator_prompt_with_real_move_vocab(
         assert any(e.to_region_id in prompt_text for e in proj.exits), (
             "no real adjacent region id reached the narrator prompt"
         )
-        # sq-playtest 2026-06-12 (session -6, turn 3): the narrator invented
-        # "a passage that opens south" for an exit the engine knows only as
-        # a corridor; the player echoed "I go to the south" and the engine
-        # (correctly) had no such way — the vocabulary fork. The section
-        # must forbid compass-direction exit descriptions at the source.
+        # sq-playtest 2026-06-13 (commit 1d21c71d): directions are now
+        # FIRST-CLASS, not banned. Each exit carries a stable, distinct
+        # bearing (assign_bearings) that the engine resolves and the narrator
+        # names the way out by — the inverse of the earlier (wrong) compass
+        # ban that papered over a graph with no geometry. The section must
+        # endorse bearings AND a real exit's bearing must reach the prompt so
+        # the narrator names a way out the engine can actually match.
         assert "EXIT VOCABULARY" in prompt_text, (
             "no exit-vocabulary constraint in the narrator prompt — the "
-            "narrator will teach the player compass directions the engine "
-            "cannot resolve"
+            "narrator will not name the ways out by their resolvable bearings"
         )
-        assert "compass" in prompt_text
+        assert any(e.bearing and e.bearing in prompt_text for e in proj.exits), (
+            "no real exit bearing reached the narrator prompt — the narrator "
+            "cannot name a way out the engine can resolve, so the player's "
+            "natural 'I go north' has no edge to land on"
+        )
     finally:
         await session_integration.detach_dungeon_from_session(handle)
 

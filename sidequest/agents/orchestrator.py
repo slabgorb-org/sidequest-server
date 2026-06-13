@@ -2619,7 +2619,12 @@ class Orchestrator:
                         "mechanical facts and intent notes from the previous turn. "
                         "Weave their substance into your narration, but do NOT "
                         "mention this note, do NOT say 'directive(s)', and do NOT "
-                        "cite dice rolls, to-hit, or AC in the player-facing prose:"
+                        "cite dice rolls, to-hit, or AC in the player-facing prose. "
+                        "You were NOT given any die result this turn, so NEVER write "
+                        "'the roll of N', 'you rolled N', 'a roll of N', 'd20', "
+                        "'vs AC', or any number-bearing mechanic — any such number is "
+                        "fabricated. Narrate only the fictional outcome (the blow "
+                        "lands or goes wide), never a mechanical summary line:"
                         f"\n{_intent_directive_block}",
                         AttentionZone.Recency,
                         SectionCategory.Guardrail,
@@ -3054,8 +3059,105 @@ class Orchestrator:
         # (playtest 2026-06-07, operator-directed): narration is delivered
         # complete-only — no partial-narration chunks ride the WebSocket.
         if isinstance(self._client, ToolingLlmClient):
-            return await self._run_narration_turn_sdk(action, context)
-        return await self._run_narration_turn_synchronous(action, context)
+            result = await self._run_narration_turn_sdk(action, context)
+        else:
+            result = await self._run_narration_turn_synchronous(action, context)
+        # sq-playtest 2026-06-13 — fabricated-roll lie detector + prose-only
+        # repair. The narrator never sees server-rolled dice (reprisals,
+        # opposed NPC checks), so any roll/AC NUMBER it printed when no
+        # dice tool fired this turn is an invented mechanic. Emit the
+        # narrator.fabricated_roll span (GM panel) and launder the prose via
+        # a toolless rewrite so the player never reads the fabrication.
+        return await self._maybe_repair_fabricated_roll(action=action, result=result)
+
+    async def _maybe_repair_fabricated_roll(
+        self,
+        *,
+        action: str,
+        result: NarrationTurnResult,
+    ) -> NarrationTurnResult:
+        """Detect + repair fabricated dice/AC numbers in finished narration.
+
+        The narrator never sees server-rolled dice; a roll/AC number printed
+        when no ``roll_dice`` tool fired this turn is a fabricated mechanic
+        ("the worst lie the narrator can tell"). On a hit, emit the
+        ``narrator.fabricated_roll`` OTEL span — the GM-panel lie detector —
+        and, on the tooling path, reprompt a TOOLLESS prose-only rewrite
+        (``tools=[]`` so it cannot re-run WRITE tools / double-apply state)
+        that launders the invented mechanic out while preserving the fiction.
+        """
+        from sidequest.agents.fabricated_roll_guard import (
+            ROLL_TOOL_NAMES,
+            detect_fabricated_roll,
+        )
+        from sidequest.telemetry.spans.span import Span
+
+        narration = result.narration or ""
+        roll_tool_fired = any(
+            (tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")) in ROLL_TOOL_NAMES
+            for tc in (result.tool_calls or [])
+        )
+        matched = detect_fabricated_roll(narration, roll_tool_fired=roll_tool_fired)
+        if matched is None:
+            return result
+
+        repaired_text: str | None = None
+        if isinstance(self._client, ToolingLlmClient):
+            try:
+                repaired_text = await self._rewrite_prose_without_fabricated_roll(narration)
+            except Exception:  # noqa: BLE001 — repair is best-effort; never fail the turn
+                logger.warning(
+                    "narrator.fabricated_roll repair_failed matched=%r", matched, exc_info=True
+                )
+                repaired_text = None
+            # Only accept a rewrite that is actually clean.
+            if repaired_text and detect_fabricated_roll(repaired_text, roll_tool_fired=False):
+                logger.warning("narrator.fabricated_roll repair_still_dirty matched=%r", matched)
+                repaired_text = None
+
+        repaired = repaired_text is not None
+        with Span.open(
+            "narrator.fabricated_roll",
+            {
+                "matched": matched[:120],
+                "repaired": repaired,
+                "roll_tool_fired": roll_tool_fired,
+                "action": action[:120],
+            },
+        ):
+            pass
+        logger.warning(
+            "narrator.fabricated_roll matched=%r repaired=%s — narrator printed a "
+            "die/AC number with no dice tool this turn",
+            matched,
+            repaired,
+        )
+        if repaired and repaired_text is not None:
+            result.narration = repaired_text
+        return result
+
+    async def _rewrite_prose_without_fabricated_roll(self, narration: str) -> str | None:
+        """Toolless rewrite pass that strips invented roll/AC numbers.
+
+        Runs through the production tooling client with ``tools=[]`` so it makes
+        a plain completion — no WRITE tools, no state mutation, no double-apply.
+        Returns the cleaned prose, or None if the model returned nothing.
+        """
+        from sidequest.agents.fabricated_roll_guard import FABRICATED_ROLL_REWRITE_SYSTEM
+        from sidequest.agents.model_routing import CallType, resolve_model
+        from sidequest.agents.tooling_protocol import CacheableBlock, Message
+
+        if not isinstance(self._client, ToolingLlmClient):
+            return None
+        rewrite = await self._client.complete_with_tools(
+            system_blocks=[CacheableBlock(text=FABRICATED_ROLL_REWRITE_SYSTEM, cache=False)],
+            messages=[Message(role="user", content=f"Narration to clean:\n\n{narration}")],
+            tools=[],
+            model=resolve_model(CallType.SCRATCH),
+            caller="fabricated_roll_repair",
+        )
+        cleaned = (rewrite.text or "").strip()
+        return cleaned or None
 
     async def _invoke_with_retry_once(
         self,

@@ -5,7 +5,11 @@ from sidequest.game.seams.base import (
     SeamCrossingResult,
     UnknownSeamKindError,
 )
-from sidequest.game.seams.registry import get_seam_resolver, seam_route_for
+from sidequest.game.seams.registry import (
+    get_seam_resolver,
+    seam_route_for,
+    surface_owner_for_entrance,
+)
 
 __all__ = [
     "SeamCrossingError",
@@ -13,4 +17,5 @@ __all__ = [
     "UnknownSeamKindError",
     "get_seam_resolver",
     "seam_route_for",
+    "surface_owner_for_entrance",
 ]

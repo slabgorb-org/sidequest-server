@@ -44,3 +44,24 @@ def seam_route_for(cartography: CartographyConfig | None, region_id: str) -> Rou
         if route.from_id == region_id and (route.to_id or "") in _REGISTRY:
             return route
     return None
+
+
+def surface_owner_for_entrance(cartography: CartographyConfig | None) -> Route | None:
+    """The seam route a PC at the dungeon entrance ascends back along (Story 105-3).
+
+    The reverse of ``seam_route_for``: instead of "which route does this surface
+    region own", it answers "which surface region owns the deep crossing" — the
+    route whose ``to_id`` is a registered seam kind. Its ``from_id`` is the
+    surface cartography region the entrance node returns to.
+
+    Returns None when no route owns a crossing OR the owner is ambiguous (more
+    than one distinct ``from_id`` among registered-kind routes) — in the
+    ambiguous case the caller does NOT invent a surface (No Silent Fallbacks);
+    multi-descent worlds are a documented follow-up.
+    """
+    if cartography is None:
+        return None
+    owners = [r for r in getattr(cartography, "routes", ()) if (r.to_id or "") in _REGISTRY]
+    if len({r.from_id for r in owners}) != 1:
+        return None
+    return owners[0]

@@ -183,12 +183,15 @@ For each player action:
          When game_state.current_region_exits is present it lists the
          REAL exits from where the party stands; an action that takes,
          descends, or follows one of them IS movement — name it in
-         exit_descriptor. A "seam" exit leads down into the underworld:
-         going down it is direction "deeper". Exits of kind "corridor",
-         "stairs", "shaft", or "chute" are passages WITHIN the
-         underworld: pressing on, descending, or heading through one IS
-         movement (direction "deeper" to push on down, "back" to
-         retreat the way the party came).
+         exit_descriptor. A "seam" exit is the threshold between the surface
+         and the underworld. From the surface, crossing it goes DOWN —
+         direction "deeper". From the dungeon entrance, the seam exit named in
+         current_region_exits leads back UP to the surface — climbing or
+         heading back out it is direction "back" (or "toward_exit").
+         Exits of kind "corridor", "stairs", "shaft", or "chute" are
+         passages WITHIN the underworld: pressing on, descending, or
+         heading through one IS movement (direction "deeper" to push on
+         down, "back" to retreat the way the party came).
        - reflect_absence: player addresses someone/something not present.
        - witnessed_act: the player commits an EARNED, PUBLIC act that
          contradicts a belief-powered authority or shows a cowed population

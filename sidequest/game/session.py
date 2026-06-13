@@ -1530,6 +1530,29 @@ class GameSnapshot(BaseModel):
                         from_region=prev or None,
                         to_region=to_region,
                     )
+            # Anchor sync (sq-playtest 2026-06-12, beneath_sunden split-brain):
+            # when the crossing leaves the seated party in CONSENSUS on a
+            # region, advance the singular ``current_region`` anchor to it.
+            # ``pc_regions`` stays the per-PC truth and ``region_for`` still
+            # never falls back to the anchor — this is the REVERSE edge: the
+            # anchor follows the party. Without it the per-turn region
+            # projection (which takes ``current_region`` by contract) reads
+            # the stale surface region forever while the PCs stand inside the
+            # dungeon graph, starving the narrator of the generated room
+            # manifest. Split party → no consensus → anchor stays put (the
+            # spawn/teleport anchor semantics are preserved).
+            from sidequest.telemetry.spans import SPAN_REGION_ANCHOR_SYNCED, Span
+
+            consensus = self.region_for()
+            if consensus and consensus != self.current_region:
+                with Span.open(
+                    SPAN_REGION_ANCHOR_SYNCED,
+                    {
+                        "from_region": self.current_region or "",
+                        "to_region": consensus,
+                    },
+                ):
+                    self.current_region = consensus
         if patch.current_region is not None:
             # The party-level spawn/teleport ANCHOR (ADR-011 WorldStatePatch
             # apply). Retained for the seed/spawn-anchor + scripted-teleport

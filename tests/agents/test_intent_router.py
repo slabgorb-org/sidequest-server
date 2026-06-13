@@ -281,6 +281,48 @@ async def test_intent_router_prompt_documents_confrontation_opponent(
 
 
 @pytest.mark.asyncio
+async def test_intent_router_prompt_forbids_fabricating_other_from_anticipation(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """Regression (playtest 2026-06-12 beneath_sunden-6): "I draw my dagger and
+    prepare for the attack" — an anticipatory/defensive posture with NO adversary
+    present — engaged ``confrontation=combat`` at confidence 0.7 and seated a
+    fabricated Other ``{name: "Unknown Adversary", description: "the attack
+    Pipster is preparing to defend against or initiate"}``. The description is the
+    player's OWN intent, not a being: the router invented a filler Other, violating
+    its own step-1 "do NOT invent a filler" principle. The engine cannot catch this
+    (the phantom is structurally identical to a legitimate materialized threat —
+    ship_combat's "Raider Frigate", burning_peace's unseated watcher), so the fix
+    lives in the producer: the router must NOT fabricate an Other from the player's
+    anticipation, and a readying posture with no adversary present is prose, not a
+    confrontation (DRIVER call 2026-06-12: defer to prose; wait for a real Other).
+
+    Behavioral assertion on the system prompt the router sends — not a source grep.
+    """
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(
+        action="I draw my dagger and prepare for the attack",
+        state_summary={},
+    )
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert "anticipatory" in system, (
+        "router prompt must name the anticipatory/preparatory posture (readying, "
+        "drawing a weapon, bracing to defend with no adversary present) as a "
+        "non-trigger — without it the router engages combat against a phantom"
+    )
+    assert "fabricate" in system, (
+        "router prompt must forbid fabricating an Other from the player's OWN "
+        "action — the Other must be a real adversary present or named in the "
+        "fiction, never invented from the player's anticipation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_intent_router_decompose_quiet_turn_empty_dispatch(
     haiku_response_quiet_turn: str,
 ) -> None:
@@ -827,4 +869,29 @@ async def test_intent_router_accepts_stringified_per_player_without_retry(
     )
     assert llm.emit_tool.await_count == 1, (
         "coercion must succeed on the FIRST attempt — no retry burned"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Movement instruction contract — sq-playtest 2026-06-12 (beneath_sunden -6,
+# turn 4): "I go to the south." at the dungeon entrance classified movement
+# at confidence 0.3 — below the 0.6 gate — because the router scored its
+# ability to MAP "south" onto the opaque exit ids instead of the player's
+# obvious intent to RELOCATE. The degraded hint let the narrator freelance
+# the move with no patch (the world forked: the player believed they were in
+# a corridor while the engine held them at the entrance). The system prompt
+# is the shipped contract; these assertions pin the two load-bearing rules.
+# ---------------------------------------------------------------------------
+
+
+def test_movement_instruction_scores_relocation_intent_not_exit_mapping() -> None:
+    from sidequest.agents.intent_router import _SYSTEM_PROMPT
+
+    assert "Confidence scores WHETHER the player intends to relocate" in _SYSTEM_PROMPT, (
+        "movement confidence rule missing — the router will keep degrading "
+        "unmappable-but-unambiguous moves to narrator hints"
+    )
+    assert "compass direction" in _SYSTEM_PROMPT, (
+        "the verbatim-descriptor rule (pass the player's own words, even a "
+        "compass direction, through exit_descriptor) is missing"
     )

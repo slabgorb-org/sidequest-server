@@ -1476,10 +1476,14 @@ class CharacterIncapacitatedMessage(ProtocolBase):
 
 class DungeonMapExit(ProtocolBase):
     """One typed adjacency. ``target`` is the EXACT region-graph node id;
-    ``exit_type`` is the edge kind (corridor|stairs|shaft|chute|secret)."""
+    ``exit_type`` is the edge kind (corridor|stairs|shaft|chute|secret).
+    ``bearing`` is the stable, distinct direction this exit leaves the
+    region by (north/east/south/west or up/down) — the geometry the UI can
+    place an exit by and the same label the narrator names it with."""
 
     target: str
     exit_type: str
+    bearing: str = ""
 
 
 class DungeonMapLocation(ProtocolBase):

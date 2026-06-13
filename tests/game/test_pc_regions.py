@@ -236,6 +236,89 @@ def test_split_party_two_distinct_transitions() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Anchor sync — sq-playtest 2026-06-12 (beneath_sunden current_region /
+# pc_regions split-brain). A pc_region crossing that leaves the seated party
+# in CONSENSUS must advance the singular ``current_region`` anchor too —
+# otherwise every anchor consumer (region projection, forensics, render
+# trigger) reads the stale surface region while the PCs stand in the dungeon,
+# the narrator never receives the generated room manifest, and it improvises
+# the whole crawl.
+# ---------------------------------------------------------------------------
+
+
+def test_pc_region_consensus_advances_current_region_solo() -> None:
+    # The live repro shape: Pip descended the_dropmouth -> entrance ->
+    # exp001.r0 via pc_region world patches; current_region stayed on the
+    # surface forever.
+    snap = _seated_snapshot("Pip", region="the_dropmouth")
+    snap.pc_regions = {"Pip": "the_dropmouth"}
+
+    snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": "entrance"}))
+    assert snap.current_region == "entrance", (
+        "solo PC crossed regions but the current_region anchor did not "
+        "follow — the projection/forensics split-brain"
+    )
+
+    snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": "exp001.r0"}))
+    assert snap.current_region == "exp001.r0"
+
+
+def test_pc_region_split_party_does_not_move_anchor() -> None:
+    snap = _seated_snapshot("Rux", "Gorm", region="entrance")
+    snap.pc_regions = {"Rux": "entrance", "Gorm": "entrance"}
+
+    snap.apply_world_patch(WorldStatePatch(pc_region={"Rux": "r2"}))
+
+    assert snap.current_region == "entrance", (
+        "a split party has no consensus — the anchor must not jump to one PC's region"
+    )
+
+
+def test_pc_region_consensus_regained_advances_anchor() -> None:
+    snap = _seated_snapshot("Rux", "Gorm", region="entrance")
+    snap.pc_regions = {"Rux": "entrance", "Gorm": "entrance"}
+
+    snap.apply_world_patch(WorldStatePatch(pc_region={"Rux": "r2"}))
+    assert snap.current_region == "entrance", "split party moved the anchor"
+
+    snap.apply_world_patch(WorldStatePatch(pc_region={"Gorm": "r2"}))
+    assert snap.current_region == "r2", (
+        "party regained consensus on r2 but the anchor did not advance"
+    )
+
+
+def test_pc_region_anchor_sync_emits_span() -> None:
+    from sidequest.telemetry.spans import SPAN_REGION_ANCHOR_SYNCED
+
+    snap = _seated_snapshot("Pip", region="the_dropmouth")
+    snap.pc_regions = {"Pip": "the_dropmouth"}
+
+    spans = _capture_spans(
+        lambda: snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": "entrance"}))
+    )
+    synced = [s for s in spans if s.name == SPAN_REGION_ANCHOR_SYNCED]
+    assert synced, (
+        "anchor sync fired with no snapshot.region_anchor_synced span — "
+        "invisible to the GM panel (OTEL Observability Principle)"
+    )
+    attrs = synced[-1].attributes or {}
+    assert attrs.get("from_region") == "the_dropmouth"
+    assert attrs.get("to_region") == "entrance"
+
+
+def test_pc_region_no_consensus_change_emits_no_sync_span() -> None:
+    from sidequest.telemetry.spans import SPAN_REGION_ANCHOR_SYNCED
+
+    snap = _seated_snapshot("Rux", "Gorm", region="entrance")
+    snap.pc_regions = {"Rux": "entrance", "Gorm": "entrance"}
+
+    spans = _capture_spans(lambda: snap.apply_world_patch(WorldStatePatch(pc_region={"Rux": "r2"})))
+    assert not [s for s in spans if s.name == SPAN_REGION_ANCHOR_SYNCED], (
+        "split-party move must not emit an anchor-sync span (nothing synced)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # frontier_hook signature — pc_name is required
 # ---------------------------------------------------------------------------
 
@@ -391,9 +474,7 @@ def test_current_region_anchor_no_seated_pc_fires_single_sentinel_transition() -
         "no-seated-PC spawn bootstrap must fire exactly one sentinel transition"
     )
     assert snap.current_region == "entrance"
-    assert "__anchor__" not in snap.pc_regions, (
-        "the sentinel pc_name must NOT leak into pc_regions"
-    )
+    assert "__anchor__" not in snap.pc_regions, "the sentinel pc_name must NOT leak into pc_regions"
     assert snap.pc_regions == {}, "no seated PC / character → nothing to seed"
 
 

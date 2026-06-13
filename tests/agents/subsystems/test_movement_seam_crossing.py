@@ -18,7 +18,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import sidequest.telemetry.spans as spans_module
 from sidequest.agents.subsystems.movement import run_movement_dispatch
-from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
+from sidequest.dungeon.region_graph.model import RegionEdge, RegionGraph, RegionNode
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.world import (
@@ -67,6 +67,27 @@ class _EmptyStore:
 
     def load_map(self, *, entrance_id):
         return RegionGraph(entrance_id=entrance_id)
+
+
+class _StoreWithDeepGraph:
+    """DungeonStore double: entrance + one materialized deep region below it.
+
+    The post-crossing shape of the live 2026-06-12 session (pingpong): the PC
+    stands ON the dungeon graph (pc_regions == 'entrance') in a region-mode
+    world; the deep is materialized and adjacent. In-dungeon movement must
+    traverse THIS graph, not defer to the narrator.
+    """
+
+    def load_map(self, *, entrance_id):
+        g = RegionGraph(entrance_id=entrance_id)
+        g.add_node(
+            RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar", depth_score=0.0)
+        )
+        g.add_node(
+            RegionNode(id="exp001.r0", expansion_id=1, theme="shaft_collar", depth_score=7.9)
+        )
+        g.add_edge(RegionEdge(a=entrance_id, b="exp001.r0", kind="shaft"))
+        return g
 
 
 class _FakePalette:
@@ -202,6 +223,16 @@ def hybrid_world_kit_empty_store():
 
 
 @pytest.fixture
+def in_dungeon_kit():
+    """Region-mode hybrid world with the PC ALREADY inside the dungeon graph."""
+    cart = _hybrid_cartography()
+    pack = _pack_with_cartography("beneath_sunden", cart)
+    snap = _snapshot({"Groucho": ENTRANCE_ID}, {"p1": "Groucho"})
+    snap.discovered_regions.append(ENTRANCE_ID)
+    return _HybridKit(snap, pack, _StoreWithDeepGraph(), _FakePalette())
+
+
+@pytest.fixture
 def oz_shaped_kit():
     cart = _oz_cartography()
     pack = _pack_with_cartography("oz", cart)
@@ -299,6 +330,55 @@ def test_non_seam_region_mode_world_still_defers(capture_spans, oz_shaped_kit):
     assert out.data["resolved_via"] == "region_mode_deferred", (
         f"oz-shaped world must defer, got: {out.data}"
     )
+
+
+def test_in_dungeon_pc_traverses_graph_not_defers(capture_spans, in_dungeon_kit):
+    """Pingpong 2026-06-12 (beneath_sunden confabulated crawl): a region-mode
+    world's PC standing ON a dungeon graph node must run the §Q1 procedural
+    navigator — NOT region_mode_deferred (which hands the crawl to the
+    narrator, who improvises it)."""
+    kit = in_dungeon_kit
+    out = _run(
+        run_movement_dispatch(
+            _movement("deeper"),
+            snapshot=kit.snapshot,
+            player_name="Groucho",
+            dungeon_store=kit.store,
+            palette=kit.palette,
+            pack=kit.pack,
+        )
+    )
+    assert out.data.get("resolved_via") == "depth_delta", (
+        f"in-dungeon movement must resolve via the graph navigator, got: {out.data}"
+    )
+    assert out.data["to_region"] == "exp001.r0"
+    assert kit.snapshot.region_for(perspective="Groucho") == "exp001.r0", (
+        "PC must advance to the deeper region"
+    )
+    resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
+    assert len(resolved) == 1, "expected exactly one movement.resolved span for the traversal"
+
+
+def test_in_dungeon_back_traverses_toward_entrance(capture_spans, in_dungeon_kit):
+    """In-dungeon ``back`` is graph traversal toward the surface, not a defer."""
+    kit = in_dungeon_kit
+    kit.snapshot.pc_regions["Groucho"] = "exp001.r0"
+    kit.snapshot.discovered_regions.append("exp001.r0")
+    out = _run(
+        run_movement_dispatch(
+            _movement("back"),
+            snapshot=kit.snapshot,
+            player_name="Groucho",
+            dungeon_store=kit.store,
+            palette=kit.palette,
+            pack=kit.pack,
+        )
+    )
+    assert out.data.get("resolved_via") == "depth_delta", (
+        f"in-dungeon back must resolve via the graph navigator, got: {out.data}"
+    )
+    assert out.data["to_region"] == ENTRANCE_ID
+    assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID
 
 
 def test_seam_region_with_dead_store_fails_loud(capture_spans, hybrid_world_kit_empty_store):

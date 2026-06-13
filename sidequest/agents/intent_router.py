@@ -162,19 +162,33 @@ For each player action:
        - movement: the party physically relocates between dungeon regions
          (descend, ascend, go through an exit, retreat). params={
            "direction": "<one of: deeper | back | toward_exit>",
-           "exit_descriptor": "<optional free-text label of the exit the
-                               player named, e.g. 'the iron stair', 'the
-                               crack in the east wall'>"
+           "exit_descriptor": "<the way the player named, IN THEIR OWN
+                               WORDS, e.g. 'the iron stair', 'the crack
+                               in the east wall', 'south'>"
          }.
          Emit movement ONLY for genuine region relocation, not look-around /
          search / examine. NEVER emit a region id — you do not know the
          graph. Describe WHICH exit by exit_descriptor only; the engine
          resolves it.
+         Confidence scores WHETHER the player intends to relocate — NOT
+         whether you can map their words onto a listed exit. "I go
+         south", "I head through the archway", "I press on" are
+         unambiguous relocation: score them HIGH and pass the player's
+         own words (even a compass direction) through exit_descriptor
+         verbatim. The engine matches the descriptor against the real
+         exits and refuses honestly when nothing matches — that loud
+         refusal is the correct outcome for an unmappable way; a
+         low-confidence dispatch is not, because it degrades to prose
+         and the move silently becomes fiction.
          When game_state.current_region_exits is present it lists the
          REAL exits from where the party stands; an action that takes,
          descends, or follows one of them IS movement — name it in
          exit_descriptor. A "seam" exit leads down into the underworld:
-         going down it is direction "deeper".
+         going down it is direction "deeper". Exits of kind "corridor",
+         "stairs", "shaft", or "chute" are passages WITHIN the
+         underworld: pressing on, descending, or heading through one IS
+         movement (direction "deeper" to push on down, "back" to
+         retreat the way the party came).
        - reflect_absence: player addresses someone/something not present.
        - witnessed_act: the player commits an EARNED, PUBLIC act that
          contradicts a belief-powered authority or shows a cowed population

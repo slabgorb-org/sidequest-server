@@ -180,6 +180,22 @@ async def test_projection_reaches_narrator_prompt_with_real_move_vocab(
         assert any(e.to_region_id in prompt_text for e in proj.exits), (
             "no real adjacent region id reached the narrator prompt"
         )
+        # sq-playtest 2026-06-13 (commit 1d21c71d): directions are now
+        # FIRST-CLASS, not banned. Each exit carries a stable, distinct
+        # bearing (assign_bearings) that the engine resolves and the narrator
+        # names the way out by — the inverse of the earlier (wrong) compass
+        # ban that papered over a graph with no geometry. The section must
+        # endorse bearings AND a real exit's bearing must reach the prompt so
+        # the narrator names a way out the engine can actually match.
+        assert "EXIT VOCABULARY" in prompt_text, (
+            "no exit-vocabulary constraint in the narrator prompt — the "
+            "narrator will not name the ways out by their resolvable bearings"
+        )
+        assert any(e.bearing and e.bearing in prompt_text for e in proj.exits), (
+            "no real exit bearing reached the narrator prompt — the narrator "
+            "cannot name a way out the engine can resolve, so the player's "
+            "natural 'I go north' has no edge to land on"
+        )
     finally:
         await session_integration.detach_dungeon_from_session(handle)
 
@@ -462,6 +478,132 @@ async def test_cartography_region_is_not_self_healed(
         )
     finally:
         _spans_module.tracer = original  # type: ignore[method-assign]
+        await session_integration.detach_dungeon_from_session(handle)
+
+
+async def test_pc_crossing_into_generated_room_projects_that_room(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+) -> None:
+    """sq-playtest 2026-06-12 (session ``2026-06-12-beneath_sunden-5``,
+    player Pip): the per-PC dungeon crossing writes ``pc_regions`` via the
+    ``WorldStatePatch.pc_region`` apply, but nothing synced the singular
+    ``current_region`` anchor — Pip stood in ``exp001.r0`` while
+    ``current_region`` stayed ``the_dropmouth`` (surface) forever. The
+    per-turn projection takes ``current_region`` by contract, so the
+    narrator NEVER received the generated room manifest and improvised the
+    whole crawl.
+
+    This walks the ticket's requested wire: entrance -> a generated room
+    via the REAL ``pc_region`` patch apply, then asserts the REAL
+    ``_project_current_region`` returns THAT room."""
+    from sidequest.dungeon import session_integration
+    from sidequest.game.session import GameSnapshot, WorldStatePatch
+    from sidequest.server.session_helpers import _project_current_region
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"cross_{uuid.uuid4().hex[:12]}"
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    # Seat the solo PC BEFORE attach so the entrance seed lands per-PC.
+    snap.player_seats = {"p1": "Pip"}
+    handle = None
+    try:
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        assert snap.current_region == "entrance"
+        assert snap.pc_regions.get("Pip") == "entrance"
+
+        # A REAL generated room adjacent to the entrance — the move the
+        # constrained vocabulary offers the player.
+        graph = repo.load_map(entrance_id="entrance")
+        adjacent = graph.neighbors("entrance")
+        assert adjacent, "entrance has no in-graph exit — corrupt seed"
+        target = adjacent[0]
+
+        # The production crossing: movement emits a pc_region world patch.
+        snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": target}))
+
+        assert snap.pc_regions["Pip"] == target
+        assert snap.current_region == target, (
+            "pc_region crossing did not advance the current_region anchor — "
+            "the projection below would starve (the split-brain)"
+        )
+
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
+        proj = _project_current_region(sd, snap)
+        assert proj is not None, (
+            "projection returned None for a PC standing in a generated room — "
+            "the narrator would improvise the crawl"
+        )
+        assert proj.region_id == target, (
+            f"projection returned {proj.region_id!r}, not the room the PC crossed into ({target!r})"
+        )
+    finally:
+        await session_integration.detach_dungeon_from_session(handle)
+
+
+async def test_post_dispatch_refresh_gives_narrator_the_moved_to_room(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+) -> None:
+    """sq-playtest 2026-06-12 (Keith): "why does the narrator just not get
+    the updated map?" — it should, and ADR-113 is engine-first, but
+    ``region_projection`` was computed in ``_build_turn_context`` BEFORE
+    the dispatch bank ran, and (unlike ``npcs``) never refreshed after.
+    On exactly the turns a move RESOLVES, the narrator's YOU-ARE-HERE
+    named the room the party just left.
+
+    Drives the real chain: attach → entrance projection (pre-dispatch
+    shape) → the movement engine's own patch apply moves the PC → the
+    post-dispatch refresh re-projects → the context now carries the room
+    the party stands in."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.dungeon import session_integration
+    from sidequest.game.session import GameSnapshot, WorldStatePatch
+    from sidequest.server.session_helpers import (
+        _project_current_region,
+        refresh_turn_context_post_dispatch,
+    )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"refresh_{uuid.uuid4().hex[:12]}"
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    snap.player_seats = {"p1": "Pip"}
+    handle = None
+    try:
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
+
+        # Pre-dispatch context build (the production order).
+        ctx = TurnContext(
+            character_name="Pip",
+            genre="caverns_and_claudes",
+            turn_number=4,
+            region_projection=_project_current_region(sd, snap),
+        )
+        assert ctx.region_projection is not None
+        assert ctx.region_projection.region_id == "entrance"
+
+        # The movement engine resolves a move mid-turn (its real §Q2 apply).
+        graph = repo.load_map(entrance_id="entrance")
+        target = graph.neighbors("entrance")[0]
+        snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": target}))
+
+        # Without the refresh the narrator would be handed the OLD room.
+        refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+
+        assert ctx.region_projection is not None, (
+            "post-dispatch refresh dropped the projection entirely"
+        )
+        assert ctx.region_projection.region_id == target, (
+            f"narrator context still holds {ctx.region_projection.region_id!r} "
+            f"after the engine moved the PC to {target!r} — the narrator "
+            "narrates the room the party just left"
+        )
+        # The npcs refresh consolidated into the same helper still works.
+        assert ctx.npcs == list(snap.npcs)
+    finally:
         await session_integration.detach_dungeon_from_session(handle)
 
 

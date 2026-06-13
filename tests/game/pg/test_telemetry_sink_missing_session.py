@@ -68,8 +68,8 @@ def test_persist_turn_telemetry_drops_missing_session_with_one_clean_line(
     """The out-of-frame path drops a write to a non-existent session with
     exactly ONE warning and NO traceback (``exc_info`` unset) — distinct from
     the generic ``sink_failed`` path that keeps the stack for real bugs."""
-    from sidequest.telemetry import watcher_hub
     from sidequest.game.pg.telemetry import PgTelemetrySink
+    from sidequest.telemetry import watcher_hub
 
     stale_sink = PgTelemetrySink(db_pool.get_pool(), _MISSING_SID)
     monkeypatch.setattr(watcher_hub, "_resolve_out_of_frame_sink", lambda: stale_sink)

@@ -1,13 +1,11 @@
 """Lethality span-parity net for the WN-family ruleset modules (ADR-142 DD-4).
 
-Pins the CURRENT span names emitted by WWN and CWN lethality events, and
-asserts the CORRECTED awn.* names that AWN SHOULD emit (but currently
-does not — it inherits CwnRulesetModule verbatim and emits cwn.* instead).
-
-Structure:
-  - wwn + cwn params: plain (must PASS now and after Task 6).
-  - awn params: wrapped in xfail(strict=True) — must FAIL now (emits cwn.*),
-    must PASS after Task 6 when slug-parameterised emitters land.
+Pins the span names emitted by each WN sibling's lethality events. After the
+core extraction (ADR-142), all three lethality-bearing siblings emit spans
+namespaced by ``self.slug``: WWN → ``wwn.*``, CWN → ``cwn.*``, and AWN →
+``awn.*`` (the honest-slug correction — AWN no longer inherits CWN's hardcoded
+``cwn.*`` emitters; it is a clean WN sibling that drives ``awn.*`` via the core's
+slug-parameterized emitters).
 
 Four lethality events, one parametrised test each:
   1. trauma.roll       — resolve_trauma with a weapon that has a trauma_die.
@@ -92,21 +90,12 @@ def _downed_core() -> CreatureCore:
 # Parametrize helpers
 # ---------------------------------------------------------------------------
 
-# Plain params for wwn and cwn; awn is xfail(strict=True) because it
-# currently inherits CwnRulesetModule verbatim and emits cwn.* spans.
-_AWN_XFAIL = pytest.mark.xfail(
-    reason=(
-        "awn.* lethality spans land in Task 6 (ADR-142 DD-4); "
-        "current code emits cwn.* because AwnRulesetModule subclasses "
-        "CwnRulesetModule with no overrides"
-    ),
-    strict=True,
-)
-
+# All three lethality-bearing WN siblings emit slug-namespaced spans after the
+# ADR-142 core extraction: AWN now emits awn.* (was the inherited cwn.* mislabel).
 _PARAMS = [
     ("wwn", "wwn"),
     ("cwn", "cwn"),
-    pytest.param("awn", "awn", marks=_AWN_XFAIL),
+    ("awn", "awn"),
 ]
 
 

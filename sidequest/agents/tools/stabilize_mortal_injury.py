@@ -46,7 +46,7 @@ from sidequest.agents.tool_registry import (
     tool,
 )
 from sidequest.game.ruleset import get_ruleset_module
-from sidequest.game.ruleset.cwn import CwnRulesetModule
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 from sidequest.game.status import Status, StatusSeverity
 
 _MORTAL_INJURY_MARKER = "Mortal Injury"
@@ -87,15 +87,16 @@ class StabilizeMortalInjuryArgs(BaseModel):
 @tool(
     name="stabilize_mortal_injury",
     description=(
-        "Resolve a CWN-family stabilization attempt against a character's Mortal Injury. "
-        "CWN-family only (cwn/awn) — raises if the loaded pack's ruleset is not cwn or awn. "
-        "A Heal check (Dex/Heal or Int/Heal) vs difficulty 8 + rounds_elapsed. On success "
-        "the Mortal Injury clears and the character downgrades to a 'Frail' Wound "
+        "Resolve a stabilization attempt against a Without Number character's Mortal Injury. "
+        "The strain-bearing WN rulesets (wwn/cwn/awn) — raises if the loaded pack is not one "
+        "of them (Mortal Injury is WN-core lethality, ADR-142; SWN carries no mortal-injury "
+        "surface). A Heal check (Dex/Heal or Int/Heal) vs difficulty 8 + rounds_elapsed. On "
+        "success the Mortal Injury clears and the character downgrades to a 'Frail' Wound "
         "(recovers at 1 HP); on failure the Mortal Injury stays and the death timer "
         "keeps running."
     ),
     category=ToolCategory.WRITE,
-    ruleset=("cwn", "awn"),
+    ruleset=("wwn", "cwn", "awn"),
 )
 async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()
@@ -103,20 +104,20 @@ async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolCont
         return ToolResult.error("no active session", recoverable=False)
 
     # Capability gate (not a slug string): the Mortal Injury / stabilize-at-0
-    # rule is a CwnRulesetModule mechanic, so the tool serves any module that IS
-    # a CwnRulesetModule — covers cwn AND awn (AwnRulesetModule subclasses it).
-    # Resolve the bound module and check the capability rather than
-    # `ruleset != "cwn"`, which silently excluded awn.
+    # rule is a Without Number lethality mechanic hoisted to the WN core
+    # (ADR-142), so the tool serves any module that IS a
+    # WithoutNumberRulesetModule — swn/wwn/cwn/awn. Resolve the bound module and
+    # check the capability rather than a slug string.
     pack = ctx.genre_pack
     module = (
         get_ruleset_module(pack.rules.ruleset)
         if pack is not None and pack.rules is not None
         else None
     )
-    if not isinstance(module, CwnRulesetModule):
+    if not isinstance(module, WithoutNumberRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
         raise ValueError(
-            f"stabilize_mortal_injury requires a CWN-family ruleset (cwn/awn); "
+            f"stabilize_mortal_injury requires a Without Number ruleset (swn/wwn/cwn/awn); "
             f"loaded pack has ruleset={ruleset!r}"
         )
 

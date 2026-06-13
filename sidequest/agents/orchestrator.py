@@ -289,7 +289,8 @@ class BeatSelection:
     # Story 102-6 — when the applied beat is a ``psionic_activation``, the
     # narrator nominates WHICH discipline via this sidecar (the spell_id /
     # mutation_id mirror). None on every non-psionic beat; the activation handler
-    # routes it through ``SwnRulesetModule.activate_discipline``.
+    # routes it through ``WithoutNumberRulesetModule.activate_discipline`` (ADR-142:
+    # any WN sibling that ships a discipline catalog, swn or wwn).
     discipline_id: str | None = None
     # Table confrontations (poker/auction): raise/bet chips. None on every
     # non-table beat. The existing ``target`` field carries the Read/Accuse

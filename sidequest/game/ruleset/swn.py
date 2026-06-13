@@ -11,33 +11,25 @@ from __future__ import annotations
 
 import random
 
-from opentelemetry import trace
-
-from sidequest.game.creature_core import CreatureCore
 from sidequest.game.ruleset.resolution import (
     AttackRollParams,
     JumpAdjudication,
 )
 from sidequest.game.ruleset.without_number import (
+    PSIONIC_EFFORT_SOURCE,
     WithoutNumberRulesetModule,
     _stat,
     swn_attribute_modifier,
 )
-from sidequest.game.wwn_magic import DisciplineActivationResult
-from sidequest.genre.models.psionics import PsionicDiscipline
-from sidequest.genre.models.rules import SwnConfig
 from sidequest.genre.models.world import Route
-from sidequest.telemetry.spans.psionics import discipline_activated_span
 
-# ``swn_attribute_modifier`` / ``_stat`` are the WN-family attribute helpers,
-# now homed on ``WithoutNumberRulesetModule`` (ADR-142). Re-exported here so the
-# established ``from sidequest.game.ruleset.swn import swn_attribute_modifier``
-# import surface (builder.py + chargen tests) keeps resolving unchanged.
+# ``swn_attribute_modifier`` / ``_stat`` are the WN-family attribute helpers, and
+# ``PSIONIC_EFFORT_SOURCE`` / ``activate_discipline`` are the psionic surface —
+# all now homed on ``WithoutNumberRulesetModule`` (ADR-142). ``PSIONIC_EFFORT_SOURCE``
+# is re-exported here so the established
+# ``from sidequest.game.ruleset.swn import PSIONIC_EFFORT_SOURCE`` import surface
+# (magic_working + chargen tests) keeps resolving unchanged.
 __all__ = ["PSIONIC_EFFORT_SOURCE", "SwnRulesetModule", "_stat", "swn_attribute_modifier"]
-
-# Source key for the SWN psionic Effort pool. SWN psionics draw every discipline
-# from ONE Effort pool (SRD §6), so the pool keys ``core.effort`` under this slug.
-PSIONIC_EFFORT_SOURCE = "psionic"
 
 # SWN spike-drive jump model (SRD Revised, Sine Nomine 2017, "Spike Drives" p.211):
 # a spike drill crosses up to ``rating`` hexes and takes roughly six days of
@@ -115,107 +107,4 @@ class SwnRulesetModule(WithoutNumberRulesetModule):
             hazard=route.hazard,
             hazard_roll=hazard_roll,
             source="route",
-        )
-
-    # ------------------------------------------------------------------
-    # Psionic discipline activation (SWN SRD §6) — the cast-spine mirror.
-    # ------------------------------------------------------------------
-
-    def activate_discipline(
-        self,
-        *,
-        core: CreatureCore,
-        discipline: PsionicDiscipline,
-        source: str = PSIONIC_EFFORT_SOURCE,
-        cfg: SwnConfig | None = None,
-        _tracer: trace.Tracer | None = None,
-    ) -> DisciplineActivationResult:
-        """Activate a psionic discipline: commit its ``effort_cost`` from the
-        psychic's Effort pool and, on a push (``strain_cost`` > 0), route the
-        System Strain through the SAME ``core.system_strain`` counter the
-        lethality seam uses (AC3 — no forked strain field).
-
-        Zero free Effort → REFUSED loudly (``applied=False``, pool unchanged) —
-        never a silent success. Emits ``{slug}.discipline.activated`` on EVERY
-        call (``refused`` reflects the outcome), plus ``{slug}.effort.commit``
-        and (on a push) ``{slug}.system_strain.delta`` when applied. A missing
-        Effort pool raises ValueError (No Silent Fallbacks).
-
-        A ``strain_cost`` discipline requires a seeded ``core.system_strain``
-        pool (only the strain-bearing rulesets — WWN/CWN/AWN — carry one; SWN
-        psionics is Effort-only). This precondition is checked BEFORE any Effort
-        is committed: a strain push on a strainless core is REFUSED loudly
-        (``applied=False``, pool unchanged), never a partial Effort spend and
-        never an opaque ``AttributeError`` from the missing strain engine."""
-        pool = core.effort.get(source)
-        if pool is None:
-            raise ValueError(
-                f"{core.name!r} has no {source!r} Effort pool; a psychic seeds one at chargen"
-            )
-        cost = int(discipline.effort_cost)
-        strain_cost = int(discipline.strain_cost or 0)
-
-        # Precondition FIRST, before any mutation: a push needs a strain pool.
-        # Checked here so a content/config mismatch (a strain discipline on a
-        # strainless ruleset) is a clean loud refusal, not a half-committed
-        # Effort spend that then AttributeErrors on the absent strain engine.
-        if strain_cost > 0 and core.system_strain is None:
-            reason = (
-                f"{discipline.id!r} costs {strain_cost} System Strain but "
-                f"{core.name!r} has no System Strain pool — this ruleset has no "
-                "Strain engine (SWN psionics is Effort-only); author the strain "
-                "discipline on a WWN/CWN/AWN pack"
-            )
-            discipline_activated_span(
-                ruleset=self.slug,
-                actor=core.name,
-                discipline_id=discipline.id,
-                refused=True,
-                _tracer=_tracer,
-            )
-            return DisciplineActivationResult(
-                applied=False,
-                discipline_id=discipline.id,
-                available=pool.available,
-                strained=0,
-                reason=reason,
-            )
-
-        applied = cost <= pool.available
-        strained = 0
-        if applied:
-            self.commit_effort(
-                core=core,
-                source=source,
-                points=cost,
-                duration=discipline.duration,
-                label=discipline.name,
-                _tracer=_tracer,
-            )
-            if strain_cost > 0:
-                # Precondition above guarantees core.system_strain is seeded here,
-                # which only the strain-bearing rulesets (WWN/CWN/AWN) do — and
-                # those define apply_system_strain. Safe to route the push.
-                self.apply_system_strain(
-                    core=core,
-                    kind="temporary",
-                    amount=strain_cost,
-                    source=f"psionic:{discipline.id}",
-                    cfg=cfg,
-                    _tracer=_tracer,
-                )
-                strained = strain_cost
-        discipline_activated_span(
-            ruleset=self.slug,
-            actor=core.name,
-            discipline_id=discipline.id,
-            refused=not applied,
-            _tracer=_tracer,
-        )
-        return DisciplineActivationResult(
-            applied=applied,
-            discipline_id=discipline.id,
-            available=pool.available,
-            strained=strained,
-            reason="" if applied else f"only {pool.available} of {cost} Effort available",
         )

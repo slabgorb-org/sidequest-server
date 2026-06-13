@@ -1,6 +1,6 @@
 """In-play mutation use — ownership, usage limits, Strain, save-vs.
 
-Strain routes through the EXISTING CwnRulesetModule.apply_system_strain
+Strain routes through the EXISTING WithoutNumberRulesetModule.apply_system_strain
 with kind="temporary" and source="mutation:<id>" (plan deviation note 1:
 the kind taxonomy is mechanical; provenance rides source). Save-vs uses
 the resolver-callable shape codified by innate_v1_cast.
@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.ruleset.cwn import CwnRulesetModule
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 from sidequest.game.system_strain import StrainResult
 from sidequest.genre.models.rules import CwnConfig
 from sidequest.mutation.models import MutationCatalog
@@ -46,7 +46,7 @@ def use_mutation(
     *,
     state: MutationState,
     catalog: MutationCatalog,
-    module: CwnRulesetModule,
+    module: WithoutNumberRulesetModule,
     cfg: CwnConfig | None,
     core: CreatureCore,
     actor: str,

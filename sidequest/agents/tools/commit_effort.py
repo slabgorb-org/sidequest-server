@@ -1,8 +1,10 @@
-"""Tool: commit_effort — narrator-driven WWN Effort commitment.
+"""Tool: commit_effort — narrator-driven Without Number Effort commitment.
 
 This is the PRODUCTION CALLER that makes the Effort engine reachable in a
 real game. It is a THIN wrapper — all rules (pool lookup, over-commit refusal,
-commitment recording, span emission) live in WwnRulesetModule.commit_effort.
+commitment recording, span emission) live in
+WithoutNumberRulesetModule.commit_effort (the Effort economy is WN-core, ADR-142,
+so every WN sibling — swn/wwn/cwn/awn — exposes this tool).
 
     narrator: commit_effort(actor=Kael, source=channeler, points=2, ...)
                     |
@@ -13,7 +15,8 @@ commitment recording, span emission) live in WwnRulesetModule.commit_effort.
     pool:     EffortPool.commitments updated in place
 
 Guards (fail loud — no silent fallbacks per CLAUDE.md):
-- ``ctx.genre_pack.rules.ruleset != "wwn"`` → ValueError (tool is WWN-only)
+- bound module ``not isinstance(module, WithoutNumberRulesetModule)`` → ValueError
+  (tool requires a Without Number ruleset — swn/wwn/cwn/awn)
 - actor not found in snapshot → NOT_FOUND
 - no active session → ERROR_FATAL
 - unknown source pool → ValueError raised by the module (propagates)
@@ -36,7 +39,7 @@ from sidequest.agents.tool_registry import (
     tool,
 )
 from sidequest.game.ruleset import get_ruleset_module
-from sidequest.game.ruleset.wwn import WwnRulesetModule
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 
 
 class CommitEffortArgs(BaseModel):
@@ -75,36 +78,44 @@ class CommitEffortArgs(BaseModel):
 @tool(
     name="commit_effort",
     description=(
-        "Commit WWN Effort from a class-source pool. WWN-only tool — raises "
-        "if the loaded pack is not ruleset 'wwn'. "
-        "source: the class pool key (e.g. 'channeler', 'vowed'). "
+        "Commit Without Number Effort from a class-source pool. Available on every "
+        "WN ruleset (swn/wwn/cwn/awn) — raises if the loaded pack is not a WN ruleset. "
+        "source: the class pool key (e.g. 'channeler', 'vowed', 'psionic'). "
         "duration: 'scene' (auto-cleared at scene end), 'day' (released on long rest), "
         "'maintained' (released by Instant action). "
         "Over-commit is refused (applied=False); the refusal reason is returned so "
         "the narrator can describe the Effort limit being hit."
     ),
     category=ToolCategory.WRITE,
-    ruleset="wwn",
+    ruleset=("swn", "wwn", "cwn", "awn"),
 )
 async def commit_effort(args: CommitEffortArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
+    # Capability gate (not a slug string): the Effort economy is hoisted to the
+    # WN core (ADR-142), so the tool serves any module that IS a
+    # WithoutNumberRulesetModule — swn/wwn/cwn/awn. Resolve the bound module and
+    # check the capability rather than `ruleset != "wwn"`, which silently
+    # excluded the other WN siblings.
     pack = ctx.genre_pack
-    if pack is None or pack.rules is None or pack.rules.ruleset != "wwn":
+    module = (
+        get_ruleset_module(pack.rules.ruleset)
+        if pack is not None and pack.rules is not None
+        else None
+    )
+    if not isinstance(module, WithoutNumberRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
-        raise ValueError(f"commit_effort is wwn-only; loaded pack has ruleset={ruleset!r}")
+        raise ValueError(
+            f"commit_effort requires a Without Number ruleset (swn/wwn/cwn/awn); "
+            f"loaded pack has ruleset={ruleset!r}"
+        )
 
     snapshot = session.snapshot
     core = snapshot.find_creature_core(args.actor)
     if core is None:
         return ToolResult.not_found(f"unknown actor: {args.actor!r}")
-
-    module = get_ruleset_module(pack.rules.ruleset)
-    assert isinstance(module, WwnRulesetModule), (
-        f"expected WwnRulesetModule for slug 'wwn', got {type(module).__name__!r}"
-    )
 
     # commit_effort raises ValueError for an unknown source pool — let it propagate.
     result = module.commit_effort(

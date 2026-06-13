@@ -86,19 +86,24 @@ def _wwn_cast_module(pack: Any):
 
 def _psionic_module(pack: Any):
     """Return the pack's ruleset module when it can activate psionic disciplines
-    (an SWN-family module — the Effort engine lives on ``SwnRulesetModule``),
-    else None. Capability (isinstance), never the genre slug — the ADR-117
-    one-seam rule. The catalog-presence + psychic-effort checks live at the call
-    site (mirroring the cast spine's spellcasting check)."""
+    (any WN module — the Effort engine and ``activate_discipline`` live on
+    ``WithoutNumberRulesetModule`` after ADR-142), else None. Capability
+    (isinstance), never the genre slug — the ADR-117 one-seam rule. The
+    catalog-presence + psychic-effort checks at the call site are what narrow
+    this to packs that actually ship psionics (e.g. swn space_opera AND wwn
+    heavy_metal — Story 102-6's "WWN has both psionics and a strain seam"). The
+    gate is WithoutNumberRulesetModule, not SwnRulesetModule, because the WN
+    siblings were flattened — WWN no longer inherits SWN, so an SwnRulesetModule
+    gate would silently drop a wwn psychic."""
     from sidequest.game.ruleset import get_ruleset_module
-    from sidequest.game.ruleset.swn import SwnRulesetModule
+    from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 
     rules = getattr(pack, "rules", None)
     slug = getattr(rules, "ruleset", None) if rules is not None else None
     if not slug:
         return None
     module = get_ruleset_module(slug)
-    return module if isinstance(module, SwnRulesetModule) else None
+    return module if isinstance(module, WithoutNumberRulesetModule) else None
 
 
 def _has_psionic_catalog(pack: Any, world_slug: str | None) -> bool:
@@ -113,10 +118,14 @@ def _has_psionic_catalog(pack: Any, world_slug: str | None) -> bool:
 
 def _awn_mutation_module(pack: Any):
     """Return the pack's ruleset module when the pack carries the AWN
-    mutation surface (a CWN-family module + a loaded mutations.yaml catalog),
-    else None. Capability + catalog presence, never the genre slug."""
+    mutation surface (an AWN module + a loaded mutations.yaml catalog),
+    else None. Capability + catalog presence, never the genre slug.
+
+    Mutations are AWN-specific (ADR-142): they previously matched any CWN-family
+    module only because AWN was an ``Awn(Cwn)`` subclass; the flattened WN
+    hierarchy narrows this gate to ``AwnRulesetModule``."""
     from sidequest.game.ruleset import get_ruleset_module
-    from sidequest.game.ruleset.cwn import CwnRulesetModule
+    from sidequest.game.ruleset.awn import AwnRulesetModule
 
     if getattr(pack, "mutations", None) is None:
         return None
@@ -125,7 +134,7 @@ def _awn_mutation_module(pack: Any):
     if not slug:
         return None
     module = get_ruleset_module(slug)
-    return module if isinstance(module, CwnRulesetModule) else None
+    return module if isinstance(module, AwnRulesetModule) else None
 
 
 def _failed_premise(
@@ -316,10 +325,11 @@ async def _run_psionic_freeplay_activation(
     module: Any,
 ) -> SubsystemOutput:
     """Story 102-6: route a named free-play psionic discipline activation through
-    ``SwnRulesetModule.activate_discipline`` — the 102-3 cast-spine mirror for
-    psionics. The router's param contract is reused verbatim: the discipline AS
-    THE PLAYER TYPED IT rides the ``spell`` key; the HANDLER resolves it against
-    the pack's discipline catalog (by id or display name)."""
+    ``WithoutNumberRulesetModule.activate_discipline`` — the 102-3 cast-spine
+    mirror for psionics (any WN sibling that ships a catalog, swn or wwn). The
+    router's param contract is reused verbatim: the discipline AS THE PLAYER
+    TYPED IT rides the ``spell`` key; the HANDLER resolves it against the pack's
+    discipline catalog (by id or display name)."""
     from sidequest.game.ruleset.swn import PSIONIC_EFFORT_SOURCE
     from sidequest.server.dispatch.psionic_discipline_resolve import (
         resolve_psionic_discipline_catalog,

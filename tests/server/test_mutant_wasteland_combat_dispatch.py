@@ -40,6 +40,7 @@ import pytest
 from sidequest.game.ruleset.awn import AwnRulesetModule
 from sidequest.game.ruleset.cwn import CwnRulesetModule
 from sidequest.game.ruleset.registry import get_ruleset_module
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
@@ -219,17 +220,21 @@ def _drive_strike(*, snap, enc, pack, attacker, beat_id, face, request_id, round
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_mutant_wasteland_binds_awn_module_in_production_registry() -> None:
     """The bound ruleset resolves to the AWN module through the same registry the
-    production dispatcher uses — the binding is reachable, not just declared. AWN IS
-    a CwnRulesetModule (so capability binding covers it for free)."""
+    production dispatcher uses — the binding is reachable, not just declared. AWN is
+    a clean WithoutNumberRulesetModule sibling (ADR-142, no longer Awn(Cwn)), so the
+    WN-core capability gates cover it; it is NOT a CwnRulesetModule."""
     pack = _load_pack()
     module = get_ruleset_module(pack.rules.ruleset)
     assert isinstance(module, AwnRulesetModule), (
         "mutant_wasteland's bound ruleset must resolve to AwnRulesetModule in the "
         f"production registry; got {type(module).__name__} for slug {pack.rules.ruleset!r}"
     )
-    assert isinstance(module, CwnRulesetModule), (
-        "AwnRulesetModule must inherit CwnRulesetModule so the cwn capability gates "
-        "fire for awn-bound combat"
+    assert isinstance(module, WithoutNumberRulesetModule), (
+        "AwnRulesetModule must inherit WithoutNumberRulesetModule so the WN-core "
+        "capability gates (lethality, Effort) fire for awn-bound combat"
+    )
+    assert not isinstance(module, CwnRulesetModule), (
+        "ADR-142: AWN is a clean WN sibling, NOT a CwnRulesetModule subclass"
     )
 
 
@@ -277,10 +282,10 @@ def test_mutant_wasteland_strike_depletes_ablative_hp_on_real_turn(
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_mutant_wasteland_downed_target_routes_through_cwn_seam(otel_capture, monkeypatch) -> None:
     """A real mutant_wasteland strike that drops a target to 0 HP runs the inherited
-    CWN downed seam and declares a Mortal Injury — the lethality lie-detector span
-    firing on a real awn turn (the player can actually lose). RED while the pack is
-    native (the seam is capability-gated on a cwn/awn binding) or while the strike
-    beat deals no HP.
+    WN-core downed seam and declares a Mortal Injury — the lethality lie-detector span
+    (awn.mortal_injury.declared) firing on a real awn turn (the player can actually
+    lose). RED while the pack is native (the seam is capability-gated on a WN binding)
+    or while the strike beat deals no HP.
 
     Opponent seeded at hp=1 so one strike (faces forced low → 1 damage) drops it to 0;
     trauma die forced low so the hit is non-traumatic (no Major-Injury branch)."""
@@ -309,9 +314,9 @@ def test_mutant_wasteland_downed_target_routes_through_cwn_seam(otel_capture, mo
         f"hp={target.hp.current}"
     )
     span_names = [s.name for s in otel_capture.get_finished_spans()]
-    assert "cwn.mortal_injury.declared" in span_names, (
+    assert "awn.mortal_injury.declared" in span_names, (
         "a mutant_wasteland target dropped to 0 HP must declare a Mortal Injury — the "
-        "inherited CWN downed seam must run for the awn-bound pack on a real turn; "
+        "inherited WN-core downed seam must run for the awn-bound pack on a real turn; "
         f"got spans: {span_names}"
     )
     assert any("Mortal Injury" in s.text for s in target.statuses), (

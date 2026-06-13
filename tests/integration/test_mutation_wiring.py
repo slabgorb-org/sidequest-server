@@ -8,9 +8,9 @@ Chain exercised:
   synthetic awn GenrePack with mutations catalog
   → init_mutation_state_for_session (Task 10)
   → use_mutation resolved from default_registry by name (barrel-import wiring)
-  → CwnRulesetModule.apply_system_strain pays System Strain on real core
+  → WithoutNumberRulesetModule.apply_system_strain pays System Strain on real core
   → awn.mutation.used span fires
-  → cwn.system_strain.delta span fires
+  → awn.system_strain.delta span fires (slug-namespaced via the WN core, ADR-142)
 
 The test is self-contained: no real genre-pack content required.
 PG isolation follows the same pattern as tests/agents/tools/conftest.py
@@ -256,7 +256,7 @@ async def test_mutation_wiring_end_to_end(
 ) -> None:
     """Full chain: synthetic AWN pack + mutations → chargen init → registry
     tool resolution → strain paid → both awn.mutation.used AND
-    cwn.system_strain.delta spans captured.
+    awn.system_strain.delta spans captured.
 
     This is the lie detector: if any link is missing (barrel import, registry
     lookup, init importability, strain routing), the test fails loudly.
@@ -342,6 +342,6 @@ async def test_mutation_wiring_end_to_end(
     assert "awn.mutation.used" in span_names, (
         f"Expected 'awn.mutation.used' span; captured spans: {span_names}"
     )
-    assert "cwn.system_strain.delta" in span_names, (
-        f"Expected 'cwn.system_strain.delta' span; captured spans: {span_names}"
+    assert "awn.system_strain.delta" in span_names, (
+        f"Expected 'awn.system_strain.delta' span; captured spans: {span_names}"
     )

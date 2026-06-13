@@ -736,6 +736,14 @@ class ConnectHandler:
                 # binding (which may differ from our local ``snapshot`` if
                 # we lost the bind race).
                 snapshot = room.snapshot  # type: ignore[assignment]
+                # ADR-033 resource pools on resume: idempotent upsert that
+                # preserves each pool's ``current`` (see init_resource_pools).
+                # A mid-delve `light` value survives the reload; a save that
+                # predates a newly-declared pool gains it. No-op for packs
+                # without declared resources.
+                from sidequest.game.resource_wiring import wire_genre_resources
+
+                wire_genre_resources(snapshot, genre_pack)
                 if renamed:
                     room.save()
                     logger.info(

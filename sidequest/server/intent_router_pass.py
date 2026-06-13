@@ -435,59 +435,65 @@ def _build_state_summary(
                     if dungeon_store is not None
                     else None
                 )
-                if _graph is not None and _region_id in _graph.nodes and palette is not None:
+                _is_graph_node = (
+                    _graph is not None and _region_id in _graph.nodes and palette is not None
+                )
+                node_exits: list[dict[str, str]] = []
+                if _is_graph_node:
+                    assert _graph is not None and palette is not None
                     _proj = project_region(_graph, _region_id, palette)
                     _discovered_routes = set(snapshot.discovered_routes or [])
-                    dungeon_exits = [
+                    node_exits.extend(
                         {"name": e.to_region_id, "kind": e.kind}
                         for e in _proj.exits
                         if (not e.hidden) or (e.to_region_id in _discovered_routes)
-                    ]
-                    # Story 105-3: at the entrance node the onward vocabulary
-                    # ALSO includes the seam back UP to the surface region that
-                    # owns the crossing — the reverse of the 105-2 descent
-                    # bridge. Without it a "back up the rope" intent has no exit
-                    # to map onto and the party is stranded below. Derivable
-                    # from cartography alone (the registered-kind route's
-                    # from_id); no owner (or an ambiguous map) → no fabricated
-                    # exit (No Silent Fallbacks).
-                    if _region_id == _DUNGEON_ENTRANCE_ID:
-                        ascent = surface_owner_for_entrance(_cart)
-                        if ascent is not None:
-                            surface_id = ascent.from_id
-                            owner = (
-                                _cart.regions.get(surface_id) if surface_id else None
-                            )
-                            dungeon_exits.append(
-                                {
-                                    "name": owner.name
-                                    if owner is not None
-                                    else (surface_id or _region_id),
-                                    "kind": "seam",
-                                }
-                            )
-                    if dungeon_exits:
-                        summary["current_region_exits"] = dungeon_exits
-                        with intent_router_region_exits_span(
-                            exit_count=len(dungeon_exits),
-                            seam_count=sum(
-                                1 for e in dungeon_exits if e["kind"] == "seam"
-                            ),
-                            region_id=_region_id,
-                            genre_slug=snapshot.genre_slug or "",
-                        ):
-                            pass
-                else:
-                    # Neither cartography nor a reachable dungeon node — an
-                    # unmapped position. Loud skip (No Silent Fallbacks): the
-                    # GM panel must be able to tell "router got no exit
-                    # vocabulary" from "world has no cartography".
+                    )
+                # Story 105-3: at the entrance node the onward vocabulary ALSO
+                # includes the seam back UP to the surface region that owns the
+                # crossing — the reverse of the 105-2 descent bridge. Without it
+                # a "back up the rope" intent has no exit to map onto and the
+                # party is stranded below. This is derivable from cartography
+                # ALONE (the registered-kind route's from_id), so it is added
+                # independently of the dungeon graph above — the router must
+                # offer the ascent even before the dungeon store is attached. No
+                # owner (or an ambiguous map) → no fabricated exit (No Silent
+                # Fallbacks).
+                if _region_id == _DUNGEON_ENTRANCE_ID:
+                    ascent = surface_owner_for_entrance(_cart)
+                    if ascent is not None:
+                        surface_id = ascent.from_id
+                        owner = _cart.regions.get(surface_id) if surface_id else None
+                        node_exits.append(
+                            {
+                                "name": owner.name
+                                if owner is not None
+                                else (surface_id or _region_id),
+                                "kind": "seam",
+                            }
+                        )
+                if node_exits:
+                    summary["current_region_exits"] = node_exits
+                    with intent_router_region_exits_span(
+                        exit_count=len(node_exits),
+                        seam_count=sum(1 for e in node_exits if e["kind"] == "seam"),
+                        region_id=_region_id,
+                        genre_slug=snapshot.genre_slug or "",
+                    ):
+                        pass
+                elif not _is_graph_node:
+                    # Neither a reachable dungeon node nor a cartography-derivable
+                    # ascent — an unmapped position. Loud skip (No Silent
+                    # Fallbacks): the GM panel must be able to tell "router got
+                    # no exit vocabulary" from "world has no cartography". A valid
+                    # graph node that simply has no open exits is NOT warned —
+                    # that is an honest dead-end, not a wiring gap.
                     logger.warning(
                         "intent_router.region_exits projection_skipped "
                         "reason=region_unmapped region_id=%s store=%s interaction=%d",
                         _region_id,
                         "present" if dungeon_store is not None else "absent",
                         snapshot.turn_manager.interaction,
+                    )
 
     # 82-10 before/after evidence — fires once per pass, AFTER the
     # router-specific additions so bytes_after is what actually ships to

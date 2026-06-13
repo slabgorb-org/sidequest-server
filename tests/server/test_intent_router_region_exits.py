@@ -260,9 +260,16 @@ def test_dungeon_hidden_exit_omitted_unless_discovered(hybrid_world_kit):
 
 def test_dungeon_node_pc_without_store_logs_skip(caplog, hybrid_world_kit):
     """A PC region in neither cartography nor a reachable dungeon graph is an
-    unmapped position — skip LOUDLY (the old silent skip is the bug)."""
+    unmapped position — skip LOUDLY (the old silent skip is the bug).
+
+    Story 105-3: the ENTRANCE node is no longer such a position — its ascent
+    seam back to the surface owner is derivable from cartography ALONE (no
+    dungeon store needed), so an entrance with no store now projects that one
+    exit rather than warning. The genuinely-unmapped case this test pins is a
+    DEEP graph node (``exp001.r1``) reached with no store to resolve it.
+    """
     kit = hybrid_world_kit
-    kit.snapshot.pc_regions["Groucho"] = ENTRANCE_ID
+    kit.snapshot.pc_regions["Groucho"] = "exp001.r1"
     with caplog.at_level("WARNING", logger="sidequest.server.intent_router_pass"):
         summary = _build_state_summary(kit.snapshot, pack=kit.pack)
     assert "current_region_exits" not in summary
@@ -280,7 +287,11 @@ def test_dungeon_projection_emits_span(otel_capture, hybrid_world_kit):
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "intent_router.region_exits"]
     assert len(spans) == 1
     attrs = spans[0].attributes or {}
-    assert attrs.get("exit_count") == 1  # hidden edge excluded
+    # 1 visible graph edge (the hidden 'secret' side passage excluded) + 1
+    # cartography-derived ascent seam back UP to the surface owner (Story
+    # 105-3: the entrance's onward vocabulary includes the way out).
+    assert attrs.get("exit_count") == 2
+    assert attrs.get("seam_count") == 1
     assert attrs.get("region_id") == ENTRANCE_ID
 
 

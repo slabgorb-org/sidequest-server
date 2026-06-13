@@ -6,7 +6,10 @@ tick against a real ``light`` pool — both the unlit burn path and the lit
 no-burn path — so the panel sees the survival clock turning (or holding) on
 every time-advancing turn, never a narrator improvising the dark.
 
-The relight span ``light.relit`` is added in Phase 4.
+``light.relit`` (INFO) fires when a player attempts to relight — both the
+successful torch burn (``relit`` True) and the failed no-torch attempt
+(``relit`` False, ``error`` set) — so the GM panel sees a real player decision
+to relight resolve, never a narrator improvising a fresh torch.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from .span import Span
 # ---------------------------------------------------------------------------
 
 SPAN_LIGHT_TICK = "light.tick"
+SPAN_LIGHT_RELIT = "light.relit"
 
 # ---------------------------------------------------------------------------
 # Routing registration
@@ -48,6 +52,20 @@ SPAN_ROUTES[SPAN_LIGHT_TICK] = SpanRoute(
         "light.max": _attr("light.max")(s),
         "crossed_threshold": _attr("crossed_threshold")(s),
         "penalty_applied": _attr("penalty_applied")(s),
+    },
+)
+
+SPAN_ROUTES[SPAN_LIGHT_RELIT] = SpanRoute(
+    event_type="state_transition",
+    component="environment_clock",
+    extract=lambda s: {
+        "field": "resources",
+        "op": "light.relit",
+        "region": _attr("region")(s),
+        "relit": _attr("relit")(s),
+        "torch_charges_remaining": _attr("torch_charges_remaining")(s),
+        "light.max": _attr("light.max")(s),
+        "error": _attr("error")(s),
     },
 )
 
@@ -93,7 +111,43 @@ def light_tick_span(
         yield span
 
 
+@contextmanager
+def light_relit_span(
+    *,
+    region: str,
+    relit: bool,
+    torch_charges_remaining: int,
+    light_max: float,
+    error: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open the ``light.relit`` INFO span for one relight attempt.
+
+    ``relit`` distinguishes the successful torch burn (True) from the failed
+    no-torch attempt (False); both are real player-attempted decisions and so
+    both emit, mirroring how ``light.tick`` emits on its burn AND lit-clear
+    paths. ``torch_charges_remaining`` is the consumed torch's remaining
+    charges (0 on the failure path). ``error`` is the structured failure code
+    ("" on success — OTEL attributes cannot be None)."""
+    with Span.open(
+        SPAN_LIGHT_RELIT,
+        {
+            "region": region,
+            "relit": relit,
+            "torch_charges_remaining": torch_charges_remaining,
+            "light.max": light_max,
+            "error": error,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 __all__ = [
     "SPAN_LIGHT_TICK",
+    "SPAN_LIGHT_RELIT",
     "light_tick_span",
+    "light_relit_span",
 ]

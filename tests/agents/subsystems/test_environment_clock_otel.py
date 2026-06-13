@@ -80,6 +80,30 @@ def _dispatch(
     )
 
 
+def _snap_with_torch(
+    current: float = 0.0, *, charges: int = 2, character_name: str = "Delver"
+) -> GameSnapshot:
+    """A light pool plus a torch (``light_source``-tagged, ``quantity`` charges)
+    seated on the acting PC, for the relight path."""
+    snap = _snap_with_light(current, character_name=character_name)
+    snap.characters[0].core.inventory.items.append(
+        {"name": "torch", "tags": ["light_source"], "quantity": charges}
+    )
+    return snap
+
+
+def _relight_dispatch(
+    *, region: str = "entrance", character_name: str = "Delver"
+) -> SubsystemDispatch:
+    return SubsystemDispatch(
+        subsystem="environment_clock",
+        params={"region": region, "mode": "relight", "character_name": character_name},
+        idempotency_key="environment_clock_relight_1",
+        confidence=1.0,
+        visibility=_tag_all(),
+    )
+
+
 @pytest.fixture
 def capture_spans(monkeypatch):
     exporter = InMemorySpanExporter()
@@ -151,3 +175,39 @@ async def test_no_light_pool_emits_no_tick(capture_spans):
     snap = GameSnapshot()
     await run_environment_clock_dispatch(_dispatch(lit=False), snapshot=snap)
     assert not _spans_named(capture_spans, "light.tick")
+
+
+@pytest.mark.asyncio
+async def test_successful_relight_emits_light_relit(capture_spans):
+    """A successful relight burns a torch charge and emits one ``light.relit``
+    span carrying the relight's mechanical truth: ``relit`` True, the consumed
+    torch's remaining charges, the pool max, and the region."""
+    snap = _snap_with_torch(current=0.0, charges=2)
+    await run_environment_clock_dispatch(_relight_dispatch(region="black_pit"), snapshot=snap)
+
+    relits = _spans_named(capture_spans, "light.relit")
+    assert len(relits) == 1
+    attrs = relits[0].attributes or {}
+    assert attrs["relit"] is True
+    assert attrs["torch_charges_remaining"] == 1
+    assert attrs["light.max"] == 6.0
+    assert attrs["region"] == "black_pit"
+    assert attrs["error"] == ""
+
+
+@pytest.mark.asyncio
+async def test_no_torch_relight_emits_failed_light_relit(capture_spans):
+    """A relight attempt with no usable torch fails loud and still emits a
+    ``light.relit`` span — ``relit`` False, ``error`` set — so the GM panel
+    sees the failed player decision rather than a narrator improvising fire."""
+    snap = _snap_with_light(0.0)  # PC has no torch
+    await run_environment_clock_dispatch(_relight_dispatch(region="black_pit"), snapshot=snap)
+
+    relits = _spans_named(capture_spans, "light.relit")
+    assert len(relits) == 1
+    attrs = relits[0].attributes or {}
+    assert attrs["relit"] is False
+    assert attrs["error"] == "no_torch"
+    assert attrs["torch_charges_remaining"] == 0
+    assert attrs["light.max"] == 6.0
+    assert attrs["region"] == "black_pit"

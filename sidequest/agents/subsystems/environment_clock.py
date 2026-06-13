@@ -31,7 +31,7 @@ from sidequest.game.resource_pool import ResourcePatchOp, ResourcePool
 from sidequest.game.session import GameSnapshot
 from sidequest.game.status import Status, StatusSeverity
 from sidequest.protocol.dispatch import SubsystemDispatch
-from sidequest.telemetry.spans import light_tick_span
+from sidequest.telemetry.spans import light_relit_span, light_tick_span
 
 DARKNESS_STATUS_TEXT = "Plunged into darkness — every action is harder."
 # Stable MACHINE identity for the darkness status (Status.source), used by
@@ -112,6 +112,23 @@ def _emit_light_tick(data: dict[str, object], pool_max: float) -> None:
         pass
 
 
+def _emit_light_relit(data: dict[str, object], pool_max: float) -> None:
+    """Emit the ``light.relit`` lie-detector span from the assembled ``data``
+    dict (the single source of truth, so the span never drifts from the
+    returned mechanical result). Every relight ATTEMPT — successful torch burn
+    and failed no-torch attempt alike — emits, so the GM panel sees the player
+    decision resolve. OTEL attributes cannot be None: ``torch_charges_remaining``
+    coerces to int/0 and ``error`` to "" when absent."""
+    with light_relit_span(
+        region=str(data.get("region", "")),
+        relit=bool(data.get("relit", False)),
+        torch_charges_remaining=int(data.get("torch_charges_remaining", 0) or 0),
+        light_max=float(pool_max),
+        error=str(data.get("error", "") or ""),
+    ):
+        pass
+
+
 def _run_relight(
     dispatch: SubsystemDispatch,
     *,
@@ -131,8 +148,8 @@ def _run_relight(
     "no_torch"`` and NOTHING is mutated (light unchanged, penalty unchanged) so
     the relight visibly fails and the player knows.
 
-    Does NOT burn light. The OTEL ``light.relit`` span is Task 4.3 — the data
-    dict here carries ``relit`` / ``torch_charges_remaining`` for it to read.
+    Does NOT burn light. Every return path emits the ``light.relit`` OTEL span
+    (success and no-torch failure alike) from the assembled ``data`` dict.
     """
     character_name = dispatch.params.get("character_name")
     core = snapshot.find_creature_core(character_name) if character_name else None
@@ -150,12 +167,14 @@ def _run_relight(
         # A name was given but no seated PC matched — surface it, mutate nothing.
         data["character_unresolved"] = character_name
         data["error"] = "no_torch"
+        _emit_light_relit(data, pool.max)
         return SubsystemOutput(directives=[], data=data)
 
     torch = _find_torch(core) if core is not None else None
     if torch is None:
         # No usable torch: fail loud, mutate nothing.
         data["error"] = "no_torch"
+        _emit_light_relit(data, pool.max)
         return SubsystemOutput(directives=[], data=data)
 
     # Consume one charge. Remove the item dict when its last charge is spent.
@@ -177,6 +196,7 @@ def _run_relight(
 
     data["relit"] = True
     data["torch_charges_remaining"] = remaining
+    _emit_light_relit(data, pool.max)
     return SubsystemOutput(directives=[], data=data)
 
 

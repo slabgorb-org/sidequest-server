@@ -226,14 +226,34 @@ async def run_movement_dispatch(
         if from_region == _ENTRANCE_ID and direction != "deeper":
             ascent_route = surface_owner_for_entrance(cart)
             if ascent_route is not None:
-                crossing = resolve_surface_ascent(
-                    snapshot=snapshot,
-                    player_name=player_name,
-                    route=ascent_route,
-                    resolved_via="surface_ascent",
-                    direction=direction,
-                    exit_descriptor=exit_descriptor,
-                )
+                # Symmetric to the descent block above: a recoverable seam fault
+                # (a malformed registered-kind route — null or unmapped from_id)
+                # raises SeamCrossingError and must fail LOUD through
+                # movement.unresolved (the OTEL lie-detector), never an uncaught
+                # raise and never a silent region_mode defer. surface_owner_for_entrance
+                # intentionally still returns the malformed route so the resolver
+                # raises here and the GM panel sees the wiring fault.
+                try:
+                    crossing = resolve_surface_ascent(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        route=ascent_route,
+                        resolved_via="surface_ascent",
+                        direction=direction,
+                        exit_descriptor=exit_descriptor,
+                        cartography=cart,
+                    )
+                except SeamCrossingError as err:
+                    return _unresolved(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        reason=err.reason,
+                        from_region=from_region,
+                        direction=direction,
+                        exit_descriptor=exit_descriptor,
+                        available=[],
+                        surface=err.surface,
+                    )
                 return SubsystemOutput(
                     data={
                         "to_region": crossing.to_region,

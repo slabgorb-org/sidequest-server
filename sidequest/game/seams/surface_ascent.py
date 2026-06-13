@@ -22,7 +22,7 @@ from sidequest.telemetry.spans import movement_resolved_span
 
 if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
-    from sidequest.genre.models.world import Route
+    from sidequest.genre.models.world import CartographyConfig, Route
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ def resolve_surface_ascent(
     resolved_via: str = "surface_ascent",
     direction: str = "",
     exit_descriptor: str = "",
+    cartography: CartographyConfig | None = None,
     **_context: Any,
 ) -> SeamCrossingResult:
     """Bind THIS PC back to the surface owner region (``route.from_id``), or raise."""
@@ -46,6 +47,21 @@ def resolve_surface_ascent(
             surface=(
                 "There is a way up from here, but the surface it returns to "
                 "has not been mapped — this is a wiring fault, not a sealed shaft."
+            ),
+        )
+    # Symmetric to the descent's ``entrance_id in graph.nodes`` guard
+    # (deep_descent.py): never bind the PC to a surface region that isn't on the
+    # map. A registered-kind route whose ``from_id`` names an unmapped region is
+    # a wiring fault — fail loud (the caller routes this to ``movement.unresolved``),
+    # never strand the PC in a phantom region. When no cartography is supplied we
+    # cannot verify membership, so we fail loud rather than bind blindly.
+    regions = getattr(cartography, "regions", None) or {}
+    if surface_id not in regions:
+        raise SeamCrossingError(
+            reason="dangling_surface_owner",
+            surface=(
+                "There is a way up from here, but it returns to a place that "
+                "isn't on the map — this is a wiring fault, not a sealed shaft."
             ),
         )
     snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: surface_id}))

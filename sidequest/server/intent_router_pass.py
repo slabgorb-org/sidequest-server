@@ -454,12 +454,15 @@ def _build_state_summary(
                     if _region_id == _DUNGEON_ENTRANCE_ID:
                         ascent = surface_owner_for_entrance(_cart)
                         if ascent is not None:
-                            owner = _cart.regions.get(ascent.from_id)
+                            surface_id = ascent.from_id
+                            owner = (
+                                _cart.regions.get(surface_id) if surface_id else None
+                            )
                             dungeon_exits.append(
                                 {
                                     "name": owner.name
                                     if owner is not None
-                                    else ascent.from_id,
+                                    else (surface_id or _region_id),
                                     "kind": "seam",
                                 }
                             )
@@ -485,7 +488,6 @@ def _build_state_summary(
                         _region_id,
                         "present" if dungeon_store is not None else "absent",
                         snapshot.turn_manager.interaction,
-                    )
 
     # 82-10 before/after evidence — fires once per pass, AFTER the
     # router-specific additions so bytes_after is what actually ships to

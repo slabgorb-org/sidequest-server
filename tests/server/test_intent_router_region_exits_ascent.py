@@ -142,9 +142,7 @@ def test_no_seam_world_entrance_has_no_surface_exit(deep_oz_kit):
     crossing, so the entrance node must not project a fabricated seam exit."""
     kit = deep_oz_kit
     summary = _build_state_summary(kit.snapshot, pack=kit.pack)
-    seam_exits = [
-        e for e in summary.get("current_region_exits", []) if e.get("kind") == "seam"
-    ]
+    seam_exits = [e for e in summary.get("current_region_exits", []) if e.get("kind") == "seam"]
     assert seam_exits == [], (
         f"no-seam world must not invent a surface exit at the entrance, got: {seam_exits}"
     )

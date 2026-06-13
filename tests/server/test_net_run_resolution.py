@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import uuid
 
+from sidequest.game.character import Character
+from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import (
     EncounterActor,
     EncounterMetric,
     StructuredEncounter,
 )
 from sidequest.game.session import GameSnapshot
+from sidequest.game.status import Status, StatusSeverity
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import (
     BeatDef,
@@ -87,10 +90,29 @@ def _encounter(alert_current: int = 0, security_tier: str = "black_site") -> Str
     )
 
 
-def _drive(*, faces, alert_current, security_tier="black_site"):
+def _runner_core(roll_modifier: int) -> CreatureCore:
+    core = CreatureCore(name="Rux", description="a netrunner", personality="cool")
+    if roll_modifier:
+        core.statuses.append(
+            Status(
+                text="jacked-in penalty", severity=StatusSeverity.Wound, roll_modifier=roll_modifier
+            )
+        )
+    return core
+
+
+def _drive(*, faces, alert_current, security_tier="black_site", runner_roll_modifier=0):
     captured: list = []
     snap = GameSnapshot()
     snap.genre_slug = "test_neon"
+    snap.characters = [
+        Character(
+            core=_runner_core(runner_roll_modifier),
+            backstory="A netrunner.",
+            char_class="Runner",
+            race="Human",
+        )
+    ]
     payload = DiceThrowPayload(
         request_id=str(uuid.uuid4()),
         throw_params=_THROW,
@@ -132,6 +154,27 @@ def test_net_run_controlled_faces_resolve_tier():
     # Use faces well clear of the DC so the tier (Fail) is unambiguous.
     outcome, _ = _drive(faces=[2, 3], alert_current=0, security_tier="office")
     assert outcome.outcome == RollOutcome.Fail
+
+
+def test_net_run_status_roll_modifier_drops_modifier():
+    """A dark/penalized runner's net-run modifier is 2 lower than a clean one.
+
+    Phase 2 of the light & darkness survival-clock spec: the hacking roll site
+    must read the actor's aggregate status roll_modifier, so a -2 status (e.g.
+    running in the dark) drags the Program check down by 2.
+    """
+
+    def _modifier(runner_roll_modifier: int) -> int:
+        _, captured = _drive(
+            faces=[3, 3], alert_current=0, runner_roll_modifier=runner_roll_modifier
+        )
+        req_msgs = [m for m in captured if isinstance(m, DiceRequestMessage)]
+        assert req_msgs, "expected a DiceRequest broadcast"
+        return req_msgs[0].payload.modifier
+
+    lit_modifier = _modifier(0)
+    dark_modifier = _modifier(-2)
+    assert dark_modifier == lit_modifier - 2
 
 
 def test_net_run_fires_security_check_span(otel_capture):

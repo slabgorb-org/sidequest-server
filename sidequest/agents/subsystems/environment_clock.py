@@ -31,6 +31,7 @@ from sidequest.game.resource_pool import ResourcePatchOp
 from sidequest.game.session import GameSnapshot
 from sidequest.game.status import Status, StatusSeverity
 from sidequest.protocol.dispatch import SubsystemDispatch
+from sidequest.telemetry.spans import light_tick_span
 
 DARKNESS_STATUS_TEXT = "Plunged into darkness — every action is harder."
 # Stable MACHINE identity for the darkness status (Status.source), used by
@@ -70,6 +71,27 @@ def _clear_darkness_penalty(core: CreatureCore) -> bool:
     before = len(core.statuses)
     core.statuses[:] = [s for s in core.statuses if s.source != DARKNESS_STATUS_SOURCE]
     return len(core.statuses) != before
+
+
+def _emit_light_tick(data: dict[str, object], pool_max: float) -> None:
+    """Emit the ``light.tick`` lie-detector span from the assembled ``data``
+    dict (the single source of truth, so the span never drifts from the
+    returned mechanical result). Every tick against a real ``light`` pool —
+    lit no-burn and unlit burn alike — emits, so the GM panel sees the clock
+    turning. OTEL attributes cannot be None: ``crossed`` (a list or None) is
+    joined into a string ("" when none)."""
+    crossed = data.get("crossed")
+    crossed_threshold = ",".join(crossed) if isinstance(crossed, list) else ""
+    with light_tick_span(
+        region=str(data.get("region", "")),
+        lit=bool(data.get("lit", False)),
+        burned=bool(data.get("burned", False)),
+        light_current=float(data.get("light_current", 0.0) or 0.0),
+        light_max=float(pool_max),
+        crossed_threshold=crossed_threshold,
+        penalty_applied=bool(data.get("penalty_applied", False)),
+    ):
+        pass
 
 
 async def run_environment_clock_dispatch(
@@ -118,6 +140,7 @@ async def run_environment_clock_dispatch(
         # Lit region: no burn; clear any darkness penalty.
         if core is not None and _clear_darkness_penalty(core):
             data["penalty_cleared"] = True
+        _emit_light_tick(data, pool.max)
         return SubsystemOutput(directives=[], data=data)
 
     # Unlit region: burn one unit (clamped at the pool floor). Mutates through
@@ -137,4 +160,5 @@ async def run_environment_clock_dispatch(
         elif _clear_darkness_penalty(core):
             data["penalty_cleared"] = True
 
+    _emit_light_tick(data, pool.max)
     return SubsystemOutput(directives=[], data=data)

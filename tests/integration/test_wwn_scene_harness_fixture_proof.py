@@ -244,6 +244,17 @@ def test_hydrated_wwn_fixture_drives_deterministic_strike(otel_capture, monkeypa
     assert enc.win_condition == "hp_depletion", (
         f"the fixture combat must hydrate as hp_depletion; got {enc.win_condition!r}"
     )
+    # Story 106-2 (Option A): a WWN hp_depletion combat dispatched through
+    # dispatch_dice_throw now resolves via the sealed initiative walk and fails
+    # loud without a persisted order (the production seating seam always rolls
+    # one). Seat a deterministic order so the strike-spine proof drives the real
+    # walk; the caster acts first, the opponent answers at its slot.
+    from sidequest.protocol.models import InitiativeEntry
+
+    enc.initiative = [
+        InitiativeEntry(token_id=_CASTER, value=9),
+        InitiativeEntry(token_id=_OPPONENT, value=2),
+    ]
 
     opponent_core = snapshot.find_creature_core(_OPPONENT)
     assert opponent_core is not None, "opponent must be reachable to ablate"

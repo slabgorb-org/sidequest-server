@@ -32,9 +32,19 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from sidequest.game.beat_kinds import _opposite_side_first_actor, apply_beat_hp_channel
+from sidequest.game.beat_kinds import (
+    BeatKind,
+    _opposite_side_first_actor,
+    apply_beat_hp_channel,
+    resolve_tier_deltas,
+)
 from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
-from sidequest.game.encounter import EncounterActor, EncounterPhase, StructuredEncounter
+from sidequest.game.encounter import (
+    EncounterActor,
+    EncounterPhase,
+    StructuredEncounter,
+    WnSealedCommit,
+)
 from sidequest.game.hp_depletion import check_hp_depletion
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.base import RulesetModule
@@ -644,6 +654,24 @@ def dispatch_dice_throw(
         and isinstance(ruleset, SwnRulesetModule)
         and cdef.win_condition == "hp_depletion"
     ):
+        # Story 106-2 (Option A): WWN combat resolves the opponent attack ONLY
+        # through the sealed initiative walk — a committed full-defend can make
+        # the opponent's slot miss, which the legacy unconditional reprisal can
+        # never honor. So a WWN hp_depletion fight with no persisted initiative
+        # is a real failure, not a cue to silently degrade to the legacy rider
+        # (No Silent Fallbacks). Bound to the WWN module class (ADR-117), NOT the
+        # whole SWN family: space_opera/perseus_cloud (story 71-21) deliberately
+        # reprises with no initiative on the legacy path and must keep doing so.
+        if isinstance(ruleset, WwnRulesetModule):
+            raise DiceDispatchError(
+                "WWN hp_depletion combat dispatched without a persisted "
+                f"initiative order (encounter={encounter.encounter_type!r}). The "
+                "WWN reprisal model (story 106-2, Option A) resolves the opponent "
+                "attack only through the sealed initiative walk so a defensive "
+                "beat can blunt or prevent it — there is no WWN fallback to the "
+                "legacy unconditional reprisal. Seat the fight with a rolled "
+                "initiative order (the P4 spine) before dispatching a beat."
+            )
         logger.warning(
             "dice.wn_round_skipped reason=no_persisted_initiative encounter=%s "
             "— WN combat dispatched without a P4 initiative order; resolving "
@@ -1565,6 +1593,54 @@ def _emit_player_beat_resolution_close(
             )
 
 
+def _defensive_posture_for_reprisal(
+    cdef: ConfrontationDef,
+    defender_commit: WnSealedCommit | None,
+) -> tuple[str, int, bool]:
+    """Read the reprisal target's sealed beat into a defensive posture (story 106-2).
+
+    Returns ``(defender_beat_id, mitigation, prevents)``:
+    - ``defender_beat_id`` — the target's committed beat id when it is a defensive
+      beat (brace / push-to-disengage), else ``""`` (the GM-panel span label).
+    - ``mitigation`` — flat HP damage reduction from a committed **brace**, sized
+      from the brace beat's OWN authored magnitude at its commit outcome
+      (``resolve_tier_deltas`` — the same dial-drain value the brace already
+      drains from the opponent; no invented number, content-tunable per
+      "Crunch in the Genre"). 0 when not bracing or the brace failed.
+    - ``prevents`` — True when the target committed a **push** beat (Break Contact
+      / full-defend / disengage) that did not fail: the opponent's attack does not
+      land this round (WWN-faithful disengage — there are no opportunity attacks).
+
+    Bound to beat KIND, not pack strings — works for any WWN/CWN/SWN content that
+    authors a brace or push beat. ``None`` commit (legacy SWN path) → no posture.
+    """
+    if defender_commit is None:
+        return "", 0, False
+    beat = next((b for b in cdef.beats if b.id == defender_commit.beat_id), None)
+    if beat is None:
+        return "", 0, False
+    try:
+        outcome = RollOutcome(defender_commit.outcome)
+    except ValueError:
+        return "", 0, False
+    failed = outcome in (RollOutcome.Fail, RollOutcome.CritFail)
+    if beat.kind is BeatKind.push:
+        # Break Contact / full-defend: the disengage prevents the hit unless botched.
+        return (beat.id, 0, not failed)
+    if beat.kind is BeatKind.brace:
+        if failed:
+            return beat.id, 0, False
+        deltas = resolve_tier_deltas(
+            kind=BeatKind.brace,
+            base=int(getattr(beat, "base", 0) or 0),
+            outcome=outcome,
+            overrides=getattr(beat, "deltas", None),
+            target_tag=None,
+        )
+        return beat.id, abs(int(deltas.opponent)), False
+    return "", 0, False
+
+
 def _resolve_opponent_reprisal(
     *,
     encounter: StructuredEncounter,
@@ -1577,6 +1653,7 @@ def _resolve_opponent_reprisal(
     round_number: int,
     rng: random.Random,
     attacker_name: str | None = None,
+    defender_commit: WnSealedCommit | None = None,
 ) -> list[object]:
     """Server-driven opponent attack turn (story 71-21, SWN hp_depletion combat).
 
@@ -1637,6 +1714,66 @@ def _resolve_opponent_reprisal(
         return messages
     target_ac = int(player_core.armor_class)
 
+    # Story 106-2 (Option A): the reprisal reads the target's sealed defensive
+    # beat. A committed Break Contact / full-defend (push) PREVENTS the hit this
+    # round; a committed Brace supplies flat damage mitigation to the strike
+    # below. The defensive choice changes the enemy's roll — and the span proves
+    # it (the GM-panel lie detector; "you brace and it glances off" must be
+    # mechanically backed).
+    defender_beat_id, defense_mitigation, defense_prevents = _defensive_posture_for_reprisal(
+        cdef, defender_commit
+    )
+
+    if defense_prevents:
+        # Full-defend / disengage: no to-hit, no damage this round. Emit the
+        # lie-detector span (hit=False, defender_beat set) so the GM panel sees
+        # the prevented attack, anchor the mechanical truth for the narrator, and
+        # INFO-log for text-log forensics (parity with the hit/miss lines).
+        with encounter_opponent_attack_resolved_span(
+            encounter_type=encounter.encounter_type,
+            attacker=opponent_name,
+            target=player_name,
+            d20=0,
+            modifier=0,
+            attack_total=0,
+            target_ac=target_ac,
+            hit=False,
+            defender_beat=defender_beat_id,
+            defense_mitigation=defense_mitigation,
+            defense_prevented=True,
+        ):
+            pass
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "opponent_attack_prevented",
+                "attacker": opponent_name,
+                "target": player_name,
+                "defender_beat": defender_beat_id,
+                "source": "opponent_reprisal",
+            },
+            component="encounter",
+        )
+        logger.info(
+            "dice.opponent_reprisal_prevented attacker=%s target=%s defender_beat=%s "
+            "hp_unchanged=%s/%s",
+            opponent_name,
+            player_name,
+            defender_beat_id,
+            player_core.hp.current,
+            player_core.hp.max,
+        )
+        snapshot.next_turn_directives.append(
+            f"MECHANICAL TRUTH (weave into the narration): {player_name} committed "
+            f"to a full defense ({defender_beat_id}); {opponent_name}'s attack did "
+            f"NOT land this round — no damage, {player_name} remains at "
+            f"{player_core.hp.current}/{player_core.hp.max} HP. Narrate the defense "
+            "turning the attack aside; do NOT narrate the blow connecting or invent "
+            "any damage."
+        )
+        return messages
+
     d20 = rng.randint(1, 20)
     outcome = ruleset.resolve_opponent_attack(
         attacker_stats=opponent_stats,
@@ -1647,7 +1784,10 @@ def _resolve_opponent_reprisal(
         d20=d20,
     )
 
-    # Lie-detector: the to-hit decision, every attempt (hit or miss).
+    # Lie-detector: the to-hit decision, every attempt (hit or miss). The
+    # defensive fields (story 106-2) carry the target's committed defensive beat
+    # and the mitigation magnitude so a reviewer can confirm in OTEL that a Brace
+    # actually reduced the enemy's damage.
     with encounter_opponent_attack_resolved_span(
         encounter_type=encounter.encounter_type,
         attacker=opponent_name,
@@ -1657,6 +1797,8 @@ def _resolve_opponent_reprisal(
         attack_total=outcome.attack_total,
         target_ac=outcome.target_ac,
         hit=outcome.hit,
+        defender_beat=defender_beat_id,
+        defense_mitigation=defense_mitigation,
     ):
         pass
     _watcher_publish(
@@ -1672,6 +1814,8 @@ def _resolve_opponent_reprisal(
             "attack_total": outcome.attack_total,
             "target_ac": outcome.target_ac,
             "hit": outcome.hit,
+            "defender_beat": defender_beat_id,
+            "defense_mitigation": defense_mitigation,
             "source": "opponent_reprisal",
         },
         component="encounter",
@@ -1853,35 +1997,49 @@ def _resolve_opponent_reprisal(
     )
     dmg_total = dmg_resolved.total
 
-    # SWN damage is gated by AC (the to-hit roll), not further reduced by armor —
-    # mitigation is 0, matching the player-side strike/shock channel.
-    apply_beat_hp_channel(
+    # SWN damage is gated by AC (the to-hit roll), not further reduced by armor.
+    # Story 106-2 (Option A): a committed **Brace** supplies flat HP mitigation
+    # here (``defense_mitigation``, sized from the brace beat's own authored
+    # magnitude) — the brace finally "mitigates incoming HP damage this round"
+    # the BeatDef always promised. 0 for a non-bracing target (parity with the
+    # player-side strike/shock channel).
+    applied_damage = apply_beat_hp_channel(
         target=player_core,
         channel="strike",
         damage_total=dmg_total,
-        target_mitigation=0,
+        target_mitigation=defense_mitigation,
         source_beat_id=f"{opponent_beat.id}:opponent_attack",
     )
     # Text-log forensics line (sq-playtest 2026-06-07 silent death-spiral): the
     # success path was span/watcher-only — a log grep on the dead session saw
     # NOTHING for a reprisal that ablated a PC. WARNING-on-skip already existed;
-    # INFO-on-hit completes the pair.
+    # INFO-on-hit completes the pair. ``damage`` is the NET applied HP (after a
+    # Brace's mitigation), not the raw roll — the log must not overstate the hit.
     logger.info(
-        "dice.opponent_reprisal_hit attacker=%s target=%s beat=%s damage=%s hp_after=%s/%s",
+        "dice.opponent_reprisal_hit attacker=%s target=%s beat=%s damage=%s "
+        "rolled=%s mitigation=%s hp_after=%s/%s",
         opponent_name,
         player_name,
         opponent_beat.id,
+        applied_damage,
         dmg_total,
+        defense_mitigation,
         player_core.hp.current,
         player_core.hp.max,
     )
     # The narrator never sees server-rolled reprisal damage (the dice messages
     # go to the table, not the prompt) — without this directive the prose
     # narrates around a hit the engine already applied, and state/story diverge
-    # (SOUL: mechanical state must back the story; sq-playtest 2026-06-07).
+    # (SOUL: mechanical state must back the story; sq-playtest 2026-06-07). When a
+    # Brace mitigated, anchor the NET damage and name the brace so the prose can
+    # honestly narrate the defense softening the blow.
+    _brace_note = (
+        f" (a Brace absorbed {defense_mitigation} of {dmg_total})" if defense_mitigation else ""
+    )
     snapshot.next_turn_directives.append(
         f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
-        f"{opponent_beat.label} struck {player_name} for {dmg_total} damage — "
+        f"{opponent_beat.label} struck {player_name} for {applied_damage} damage"
+        f"{_brace_note} — "
         f"{player_name} is now at {player_core.hp.current}/{player_core.hp.max} HP. "
         "Narrate the hit landing; do not soften or omit it."
     )

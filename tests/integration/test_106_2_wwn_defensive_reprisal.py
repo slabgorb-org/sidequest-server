@@ -106,7 +106,9 @@ def test_brace_takes_strictly_less_reprisal_damage_than_strike(monkeypatch):
     pack, snap, enc = _solo_wwn_combat()
     force_initiative(enc, [(_OPP, 9), (_PC, 2)])
     hp0 = _pc_hp(snap)
-    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_STRIKE)
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_STRIKE
+    )
     strike_loss = hp0 - _pc_hp(snap)
     assert strike_loss > 0, (
         "fixture precondition: the undefended reprisal must land (the opponent "
@@ -143,7 +145,9 @@ def test_brace_round_resolves_through_the_wwn_initiative_walk(monkeypatch, otel_
     pack, snap, enc = _solo_wwn_combat()
     force_initiative(enc, [(_OPP, 9), (_PC, 2)])
 
-    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE)
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE
+    )
 
     assert spans_named(otel_capture, _SPAN_ROUND_RESOLVED), (
         "the braced round must resolve through the WWN sealed-initiative walk "
@@ -174,7 +178,9 @@ def test_brace_mitigation_surfaces_on_opponent_attack_span(monkeypatch, otel_cap
     pack, snap, enc = _solo_wwn_combat()
     force_initiative(enc, [(_OPP, 9), (_PC, 2)])
 
-    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE)
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE
+    )
 
     spans = spans_named(otel_capture, _SPAN_OPP_ATTACK)
     assert len(spans) == 1, (
@@ -199,7 +205,9 @@ def test_undefended_strike_span_reports_zero_mitigation(monkeypatch, otel_captur
     pack, snap, enc = _solo_wwn_combat()
     force_initiative(enc, [(_OPP, 9), (_PC, 2)])
 
-    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_STRIKE)
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_STRIKE
+    )
 
     spans = spans_named(otel_capture, _SPAN_OPP_ATTACK)
     assert len(spans) == 1, f"one opponent-attack span expected; got {len(spans)}"

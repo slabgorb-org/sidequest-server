@@ -69,6 +69,7 @@ def _install_combat(sd, opponent: str = "Furnace Thrall") -> None:
         StructuredEncounter,
     )
     from sidequest.game.session import Npc
+    from sidequest.protocol.models import InitiativeEntry
 
     sd.snapshot.npcs.append(
         Npc(
@@ -98,6 +99,14 @@ def _install_combat(sd, opponent: str = "Furnace Thrall") -> None:
         mood_override=None,
         narrator_hints=[],
     )
+    # Story 106-2 (Option A): WWN hp_depletion combat resolves through the sealed
+    # initiative walk; a WWN fight with no persisted order now fails loud. Seat a
+    # deterministic order (Rux first, then the opponent) so the cast wiring drives
+    # through the production walk exactly as a P4-seated fight would.
+    sd.snapshot.encounter.initiative = [
+        InitiativeEntry(token_id="Rux", value=9),
+        InitiativeEntry(token_id=opponent, value=2),
+    ]
 
 
 def _cast_throw_message():

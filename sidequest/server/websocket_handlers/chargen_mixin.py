@@ -80,7 +80,10 @@ from sidequest.protocol.messages import (
     StockOption,
 )
 from sidequest.server import views
-from sidequest.server.dispatch.chargen_loadout import apply_starting_loadout
+from sidequest.server.dispatch.chargen_loadout import (
+    apply_starting_loadout,
+    equip_starting_armor,
+)
 from sidequest.server.dispatch.chargen_summary import render_confirmation_summary
 from sidequest.server.dispatch.premise_bind import bind_political_state
 from sidequest.server.dispatch.scenario_bind import bind_scenario
@@ -1236,9 +1239,24 @@ class CharGenMixin:
         # inventory tab in coyote_star + evropi).
         from sidequest.server.dispatch.inventory_resolve import resolve_inventory
 
+        resolved_inventory = resolve_inventory(sd.genre_pack, sd.snapshot.world_slug)
         apply_starting_loadout(
             character,
-            resolve_inventory(sd.genre_pack, sd.snapshot.world_slug),
+            resolved_inventory,
+            genre=sd.snapshot.genre_slug,
+            world=sd.snapshot.world_slug,
+            player_id=player_id,
+        )
+
+        # Story 106-1: equip the kit-rolled armor and derive core.armor_class
+        # from its content (WWN SRD) armor_class. Runs AFTER the loadout/dedup
+        # pass so the full inventory (kit-roll + starting_equipment) is present.
+        # Without this every Warrior shipped with Leather Armor equipped:false
+        # and fought at the unarmored base AC 10 (beneath_sunden meat-grinder,
+        # 2026-06-13). Reuses the SAME resolved inventory config as the loadout.
+        equip_starting_armor(
+            character,
+            resolved_inventory,
             genre=sd.snapshot.genre_slug,
             world=sd.snapshot.world_slug,
             player_id=player_id,

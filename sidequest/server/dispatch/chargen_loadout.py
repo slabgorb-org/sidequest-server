@@ -27,6 +27,8 @@ from sidequest.telemetry.spans import (
     SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING,
     SPAN_CHARGEN_STARTING_KIT_DEDUP_EVALUATED,
     SPAN_CHARGEN_STARTING_KIT_DEDUP_FIRED,
+    chargen_armor_equipped_span,
+    chargen_armor_unresolved_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -309,3 +311,124 @@ def apply_starting_loadout(
         )
 
     return (items_added, gold)
+
+
+def equip_starting_armor(
+    character: Character,
+    inventory_config: InventoryConfig | None,
+    *,
+    genre: str = "",
+    world: str = "",
+    player_id: str = "",
+) -> int:
+    """Equip the kit-rolled armor and derive ``core.armor_class`` from content.
+
+    Story 106-1 (WWN combat hardening). The kit-roll loop (builder.py) appends
+    every item ``equipped: False`` and nothing recomputes ``armor_class``, so
+    every Warrior fought at the unarmored base AC 10 even with Leather Armor in
+    the pack. This post-loadout step flips the equipped flag on armor-category
+    items and recomputes ``character.core.armor_class`` from the equipped armor's
+    catalog ``armor_class`` — the value is **sourced from content (WWN SRD)**,
+    never an invented engine constant.
+
+    WWN uses best-armor AC (a torso piece sets AC; armor is not additive), so the
+    derived AC is the maximum catalog ``armor_class`` among the equipped armor
+    pieces. The multi-piece combination/shield-bonus rule is deferred (story
+    scope); today ``warrior_kit`` rolls a single armor piece.
+
+    No Silent Fallback: an armor item whose catalog entry declares no
+    ``armor_class`` (or has no catalog entry) is NOT equipped/derived — it emits
+    a loud ``chargen.armor_unresolved`` span so the content gap surfaces at
+    chargen instead of the PC silently fighting at AC 10. A character with no
+    armor item at all is legitimately unarmored: no spans, AC stays 10.
+
+    Returns the resulting ``core.armor_class`` (for logging/assertion).
+    """
+    core = character.core
+    ac_before = int(core.armor_class)
+
+    armor_items = [
+        item
+        for item in core.inventory.items
+        if str(item.get("category", "")).strip().lower() == "armor"
+    ]
+    if not armor_items:
+        # Legitimately unarmored — not a content gap. Stay silent at AC 10.
+        return ac_before
+
+    catalog_by_id: dict[str, CatalogItem] = (
+        {item.id: item for item in inventory_config.item_catalog}
+        if inventory_config is not None
+        else {}
+    )
+
+    pc_name = core.name
+    valued: list[tuple[dict, int]] = []
+    for item in armor_items:
+        item_id = str(item.get("id", ""))
+        item_name = str(item.get("name", ""))
+        catalog_item = catalog_by_id.get(item_id)
+        catalog_ac = catalog_item.armor_class if catalog_item is not None else None
+        if catalog_ac is None:
+            reason = (
+                "no_catalog_entry"
+                if catalog_item is None
+                else "catalog_armor_class_missing"
+            )
+            logger.warning(
+                "chargen.armor_unresolved item=%s pc=%s genre=%s world=%s reason=%s "
+                "— equipped armor has no catalog armor_class to derive from; the PC "
+                "is NOT silently left at AC 10 (content gap surfaced at chargen)",
+                item_id,
+                pc_name,
+                genre,
+                world,
+                reason,
+            )
+            with chargen_armor_unresolved_span(
+                item_id=item_id,
+                item_name=item_name,
+                reason=reason,
+                pc_name=pc_name,
+                genre=genre,
+                world=world,
+                player_id=player_id,
+            ):
+                pass
+            continue
+        valued.append((item, int(catalog_ac)))
+
+    if not valued:
+        # Armor present but none had a derivable value — already surfaced loudly.
+        return ac_before
+
+    ac_after = max(ac for _, ac in valued)
+    core.armor_class = ac_after
+
+    for item, catalog_ac in valued:
+        item["equipped"] = True
+        with chargen_armor_equipped_span(
+            item_id=str(item.get("id", "")),
+            item_name=str(item.get("name", "")),
+            armor_class=catalog_ac,
+            ac_before=ac_before,
+            ac_after=ac_after,
+            equipped_after=True,
+            pc_name=pc_name,
+            genre=genre,
+            world=world,
+            player_id=player_id,
+        ):
+            pass
+
+    logger.info(
+        "chargen.armor_equipped pc=%s ac %d -> %d (equipped %d armor piece(s)) "
+        "genre=%s world=%s",
+        pc_name,
+        ac_before,
+        ac_after,
+        len(valued),
+        genre,
+        world,
+    )
+    return ac_after

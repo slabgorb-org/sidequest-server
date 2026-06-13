@@ -44,7 +44,7 @@ from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch
 from sidequest.dungeon.region_projection import project_region
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _DUNGEON_ENTRANCE_ID
 from sidequest.game.npc_scene import is_npc_in_scene
-from sidequest.game.seams import seam_route_for
+from sidequest.game.seams import seam_route_for, surface_owner_for_entrance
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import (
@@ -396,8 +396,8 @@ def _build_state_summary(
                     snapshot.turn_manager.interaction,
                 )
             _region = _cart.regions.get(_region_id) if _region_id else None
+            region_exits: list[dict[str, str]] = []
             if _region is not None:
-                region_exits: list[dict[str, str]] = []
                 for adj_id in _region.adjacent:
                     adj = _cart.regions.get(adj_id)
                     # Raw-id fallback only for DANGLING adjacency — an
@@ -443,11 +443,33 @@ def _build_state_summary(
                         for e in _proj.exits
                         if (not e.hidden) or (e.to_region_id in _discovered_routes)
                     ]
+                    # Story 105-3: at the entrance node the onward vocabulary
+                    # ALSO includes the seam back UP to the surface region that
+                    # owns the crossing — the reverse of the 105-2 descent
+                    # bridge. Without it a "back up the rope" intent has no exit
+                    # to map onto and the party is stranded below. Derivable
+                    # from cartography alone (the registered-kind route's
+                    # from_id); no owner (or an ambiguous map) → no fabricated
+                    # exit (No Silent Fallbacks).
+                    if _region_id == _DUNGEON_ENTRANCE_ID:
+                        ascent = surface_owner_for_entrance(_cart)
+                        if ascent is not None:
+                            owner = _cart.regions.get(ascent.from_id)
+                            dungeon_exits.append(
+                                {
+                                    "name": owner.name
+                                    if owner is not None
+                                    else ascent.from_id,
+                                    "kind": "seam",
+                                }
+                            )
                     if dungeon_exits:
                         summary["current_region_exits"] = dungeon_exits
                         with intent_router_region_exits_span(
                             exit_count=len(dungeon_exits),
-                            seam_count=0,
+                            seam_count=sum(
+                                1 for e in dungeon_exits if e["kind"] == "seam"
+                            ),
                             region_id=_region_id,
                             genre_slug=snapshot.genre_slug or "",
                         ):

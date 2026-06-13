@@ -32,8 +32,14 @@ from sidequest.agents.subsystems import SubsystemOutput
 from sidequest.dungeon.region_graph.model import RegionGraph
 from sidequest.dungeon.region_projection import RegionExit, project_region, requested_bearing
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
-from sidequest.game.seams import SeamCrossingError, get_seam_resolver, seam_route_for
+from sidequest.game.seams import (
+    SeamCrossingError,
+    get_seam_resolver,
+    seam_route_for,
+    surface_owner_for_entrance,
+)
 from sidequest.game.seams.deep_descent import resolve_deep_descent
+from sidequest.game.seams.surface_ascent import resolve_surface_ascent
 from sidequest.game.session import GameSnapshot, WorldStatePatch
 from sidequest.genre.models.world import NavigationMode, Route
 from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch, VisibilityTag
@@ -203,6 +209,38 @@ async def run_movement_dispatch(
                     "resolved_via": "surface_descent",
                 }
             )
+
+        # --- Story 105-3: the reverse seam — leaving the Deep. ---
+        # A PC standing on the dungeon entrance node is at the static→procedural
+        # threshold seen from BELOW. Any intent except going deeper is a
+        # departure: ascend back to the surface cartography region that OWNS the
+        # deep crossing (the registered-kind route's from_id), via the same
+        # per-PC patch path the descent uses. Symmetric to the descent rule
+        # above ("any intent except back crosses down"). Without this, an
+        # exit-ward intent at the entrance deferred to the heading→region path,
+        # which has no surface node to head to — stranding the party below
+        # (epic 105 reverse crossing). No seam owner found (a non-dungeon
+        # region-mode world, or an ambiguous multi-descent map) → fall through
+        # to the in-dungeon / defer logic below, never an invented surface
+        # (No Silent Fallbacks).
+        if from_region == _ENTRANCE_ID and direction != "deeper":
+            ascent_route = surface_owner_for_entrance(cart)
+            if ascent_route is not None:
+                crossing = resolve_surface_ascent(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    route=ascent_route,
+                    resolved_via="surface_ascent",
+                    direction=direction,
+                    exit_descriptor=exit_descriptor,
+                )
+                return SubsystemOutput(
+                    data={
+                        "to_region": crossing.to_region,
+                        "from_region": from_region,
+                        "resolved_via": "surface_ascent",
+                    }
+                )
 
         # --- Pingpong 2026-06-12: the PC is already INSIDE the dungeon. ---
         # A region-mode hybrid world's PC who has crossed the seam stands on

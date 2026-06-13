@@ -223,12 +223,8 @@ def run_wn_round(
     # player-side actors, the difference is the engine-driven NPC allies (59-35)
     # that never seal a Main Action — record them so the short barrier is
     # explainable, not a mystery (coyote_star solo ship_combat deadlock fix).
-    exempt_allies = ", ".join(
-        wn_barrier_exempt_allies(encounter=encounter, snapshot=snapshot)
-    )
-    wn_round_committed_span(
-        slug=slug, committed_actors=committed, exempt_allies=exempt_allies
-    )
+    exempt_allies = ", ".join(wn_barrier_exempt_allies(encounter=encounter, snapshot=snapshot))
+    wn_round_committed_span(slug=slug, committed_actors=committed, exempt_allies=exempt_allies)
 
     order = sorted(encounter.initiative, key=lambda e: e.value, reverse=True)
     wn_round_initiative_span(
@@ -387,6 +383,7 @@ def run_wn_round(
             strike_hp_removed=application.strike_hp_removed,
             shock_hp_removed=application.shock_hp_removed,
             encounter_resolved=application.encounter_resolved,
+            win_condition=cdef.win_condition,
             # Review rework r1: the walk closed this fight — the
             # encounter.resolved span and the persisted op="resolved" row
             # must say so (honest seam label for the GM panel / ADR-124).

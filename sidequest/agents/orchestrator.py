@@ -2608,8 +2608,19 @@ class Orchestrator:
                     agent_name,
                     PromptSection.new(
                         "intent_directives",
-                        f"GM-NOTE: One or more inferred intent suggestions from "
-                        f"the previous turn:\n{_intent_directive_block}",
+                        # Header hardening (sq-playtest 2026-06-13 directive-leak):
+                        # these notes are INTERNAL scaffolding. The narrator must
+                        # apply their content to the prose but never surface the
+                        # machinery — no quoting the note, no naming "directives",
+                        # no citing dice rolls or AC. Paired with dropping
+                        # next_turn_directives from the <game_state> JSON so the
+                        # raw field name can no longer be echoed either.
+                        "GM-NOTE (internal — apply silently, never quote): "
+                        "mechanical facts and intent notes from the previous turn. "
+                        "Weave their substance into your narration, but do NOT "
+                        "mention this note, do NOT say 'directive(s)', and do NOT "
+                        "cite dice rolls, to-hit, or AC in the player-facing prose:"
+                        f"\n{_intent_directive_block}",
                         AttentionZone.Recency,
                         SectionCategory.Guardrail,
                     ),

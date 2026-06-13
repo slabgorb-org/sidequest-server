@@ -76,6 +76,17 @@ _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
     # handler's must_narrate directive, not the ledger. DROP affects only
     # the prompt payload; the ledger persists in the save.
     "mutation_use_log",
+    # next_turn_directives (sq-playtest 2026-06-13 directive-leak). The
+    # one-shot directive queue is rendered into the dedicated `intent_directives`
+    # Recency guardrail (orchestrator `_consume_next_turn_directives`) — the
+    # narrator reads the directive CONTENT there, in natural language. It must
+    # NOT also ride the `<game_state>` blob as a raw JSON field: when it did,
+    # the narrator echoed the literal field name into player prose ("…per the
+    # next_turn_directives, the entity's Strike missed…"). DROP affects only the
+    # prompt payload; the queue persists in the save (populate-this-turn /
+    # consume-next-turn discipline survives a save/reload — see
+    # tests/game/test_snapshot_next_turn_directives.py).
+    "next_turn_directives",
 )
 
 # Story 61-2 / ADR-110 — projection tunings for the four growing fields

@@ -45,7 +45,11 @@ from sidequest.game.npc_scene import is_npc_in_scene
 from sidequest.game.seams import seam_route_for
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
-from sidequest.protocol.dispatch import DispatchPackage
+from sidequest.protocol.dispatch import (
+    DispatchPackage,
+    SubsystemDispatch,
+    VisibilityTag,
+)
 from sidequest.server.ability_invocation_telemetry import (
     emit_ability_invocation_unrouted,
 )
@@ -483,6 +487,107 @@ def effective_dispatch_turn_number(turn_manager: Any, *, is_opening_turn: bool) 
     return interaction if is_opening_turn else interaction + 1
 
 
+# Light & darkness survival clock (Task 3.2). The set of subsystems whose
+# emission means "game time advanced this turn" — the only turns the survival
+# clock should tick. Conservative on purpose: movement (a step deeper) and
+# confrontation (a fight) are unambiguously time-advancing. Widen this set via
+# OTEL evidence (spec §12), not speculation — a too-wide set burns light on
+# turns the table doesn't perceive as time passing.
+TIME_ADVANCING_SUBSYSTEMS = frozenset({"movement", "confrontation"})
+
+
+def _region_is_lit(region_obj: Any) -> bool:
+    """Read the ``lit`` flag off a cartography region.
+
+    The real runtime object is a pydantic ``world.Region`` (``extra='allow'``)
+    that exposes the authored ``lit`` key as an attribute; a test stub may pass
+    a plain dict. Cover both. Absent ⇒ False (unlit → burns), which is also the
+    intended default for a region that isn't in ``cartography.regions`` at all
+    (e.g. beneath_sunden's procedurally generated DEEP).
+    """
+    if isinstance(region_obj, dict):
+        return bool(region_obj.get("lit", False))
+    return bool(getattr(region_obj, "lit", False))
+
+
+def inject_environment_clock(
+    package: DispatchPackage,
+    snapshot: GameSnapshot,
+    pack: GenrePack | None,
+    *,
+    player_name: str,
+) -> None:
+    """Deterministically append an ``environment_clock`` tick on time-advancing
+    turns (light & darkness survival clock, Phase 3).
+
+    NOT LLM-emitted — the time-advancing signal is derived from the router's own
+    dispatch set ({movement, confrontation}) so phrasing cannot dodge the burn.
+    No-op when there is no ``light`` pool or no time-advancing dispatch present.
+
+    ``character_name`` is set to ``player_name`` — the acting PC's creature-core
+    NAME, which is what ``environment_clock``'s ``snapshot.find_creature_core``
+    matches (``core.name``). The LLM-emitted ``player_id`` is a SEAT id and would
+    silently no-op the darkness penalty if passed instead. Single-acting-PC
+    targeting: the survival clock reconciles the acting PC's darkness penalty;
+    MP multi-core targeting is out of scope here (the burn is global to the
+    ``light`` pool either way).
+
+    ``lit`` is read from the acting PC's cartography region. A region absent from
+    ``cartography.regions`` defaults to ``lit=False`` (unlit → burns) — intended
+    for procedurally generated DEEP regions, NOT a silent fallback.
+    """
+    if snapshot.resources.get("light") is None:
+        return
+
+    all_dispatches = [d for pd in package.per_player for d in pd.dispatch] + [
+        d for ca in package.cross_player for d in ca.dispatch
+    ]
+    if not any(d.subsystem in TIME_ADVANCING_SUBSYSTEMS for d in all_dispatches):
+        return
+
+    if not package.per_player:
+        # A time-advancing dispatch was found in cross_player but there is no
+        # per_player seat to attach the tick to. The burn targets a PC core;
+        # with no per_player entry there is no acting PC to reconcile. Surface
+        # loud rather than guess a target.
+        logger.warning(
+            "environment_clock.inject_skipped reason=no_per_player_seat "
+            "world=%s player=%s — a time-advancing dispatch fired with an empty "
+            "per_player; cannot attach the survival-clock tick",
+            getattr(snapshot, "world_slug", ""),
+            player_name,
+        )
+        return
+
+    # Resolve the acting PC's cartography region (per-PC graph region, the same
+    # source the router's exit-vocabulary projection reads). region_for returns
+    # None for a split party / unseeded PC; the tick still fires with an empty
+    # region id and the default-unlit burn (No Silent Fallbacks: empty region is
+    # the loud "unresolved" signal, not a substituted current_region).
+    region_name = snapshot.region_for(perspective=player_name) or ""
+    lit = False
+    worlds = getattr(pack, "worlds", None) or {}
+    world = worlds.get(getattr(snapshot, "world_slug", "") or "")
+    carto = getattr(world, "cartography", None)
+    if carto is not None and region_name:
+        region_obj = getattr(carto, "regions", {}).get(region_name)
+        if region_obj is not None:
+            lit = _region_is_lit(region_obj)
+
+    clock = SubsystemDispatch(
+        subsystem="environment_clock",
+        params={
+            "region": region_name,
+            "lit": lit,
+            "character_name": player_name,
+        },
+        idempotency_key=f"environment_clock_{snapshot.turn_manager.interaction}",
+        confidence=1.0,
+        visibility=VisibilityTag(visible_to="all"),
+    )
+    package.per_player[0].dispatch.append(clock)
+
+
 async def execute_intent_router_pre_narrator_pass(
     *,
     intent_router: IntentRouter,
@@ -669,6 +774,15 @@ async def execute_intent_router_pre_narrator_pass(
         # fires when the precondition is unmet.
         package = run_dispatch_precondition_gate(package=package, snapshot=snapshot)
 
+        # Light & darkness survival clock (Task 3.2). Deterministically append an
+        # environment_clock tick when this turn is time-advancing (the router
+        # emitted a movement/confrontation dispatch) AND a light pool exists.
+        # Placed AFTER the gates (so a gated-away movement dispatch does not
+        # trigger a phantom burn) and BEFORE the bank (so the tick engages in the
+        # SAME single pass, on the snapshot, before the narrator). Derives the
+        # signal from the router's own emission — phrasing cannot dodge the burn.
+        inject_environment_clock(package, snapshot, pack, player_name=player_name)
+
         bank_result = await run_dispatch_bank(
             package,
             context={
@@ -718,7 +832,9 @@ async def execute_intent_router_pre_narrator_pass(
 
 __all__ = [
     "INTENT_ROUTER_CALL_BUDGET_PER_TURN",
+    "TIME_ADVANCING_SUBSYSTEMS",
     "_normalize_per_player_ids",
     "effective_dispatch_turn_number",
     "execute_intent_router_pre_narrator_pass",
+    "inject_environment_clock",
 ]

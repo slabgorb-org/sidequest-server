@@ -224,6 +224,20 @@ def create_rest_router() -> APIRouter:
                         )
                         continue
 
+                    # Honor the same draft skip the pack loader uses
+                    # (_load_single_world returns None for draft: true). A draft
+                    # world the lobby offers cannot actually load its content —
+                    # the session would fall back silently to genre/sibling-world
+                    # defaults (No-Silent-Fallbacks violation). Skip it loudly.
+                    if wraw.get("draft"):
+                        logger.info(
+                            "list_genres: skipping draft world '%s/%s' — not offered "
+                            "in lobby (draft: true; loader excludes it)",
+                            genre_slug,
+                            world_slug,
+                        )
+                        continue
+
                     wname = str(wraw.get("name", world_slug))
                     wdesc = str(wraw.get("description", ""))
                     wera = wraw.get("era")

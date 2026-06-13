@@ -524,6 +524,64 @@ class ConnectHandler:
                 )
                 return [_error_msg(f"Failed to load genre pack '{row.genre_slug}': {exc}")]
 
+            # No Silent Fallbacks (playtest 2026-06-11, seaboard_of_saints): a
+            # session bound to a world whose ``world.yaml`` carries
+            # ``draft: true`` must refuse loudly. The loader excludes draft
+            # worlds (``_load_single_world`` returns None at the same
+            # ``config.draft`` check), so connecting to one runs with empty
+            # overrides that silently serve genre/sibling-world defaults under
+            # the draft world's name (chargen/openings/lore all wrong), costing
+            # hours of "why isn't this quite right." Scope: ONLY a present
+            # world.yaml whose ``draft`` is truthy. A missing world dir is NOT
+            # handled here — the connect path deliberately tolerates a
+            # nonexistent world via genre-tier fallback (load-bearing for fixture
+            # world slugs), and ``genre_pack.worlds`` membership is unreliable
+            # (only partially populated in some load contexts).
+            _world_yaml = world_dir / "world.yaml"
+            if row.world_slug and _world_yaml.is_file():
+                import yaml  # noqa: PLC0415
+
+                try:
+                    _wraw = yaml.safe_load(_world_yaml.read_text(encoding="utf-8")) or {}
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "session.world_yaml_unreadable genre=%s world=%s slug=%s error=%s",
+                        row.genre_slug,
+                        row.world_slug,
+                        slug,
+                        exc,
+                    )
+                    return [
+                        _error_msg(
+                            f"World '{row.world_slug}' in genre '{row.genre_slug}' "
+                            f"has an unreadable world.yaml: {exc}"
+                        )
+                    ]
+                if _wraw.get("draft"):
+                    logger.error(
+                        "session.world_is_draft genre=%s world=%s slug=%s",
+                        row.genre_slug,
+                        row.world_slug,
+                        slug,
+                    )
+                    _watcher_publish(
+                        "world_is_draft",
+                        {
+                            "genre_slug": row.genre_slug,
+                            "world_slug": row.world_slug,
+                            "slug": slug,
+                        },
+                        component="genre_loader",
+                        severity="error",
+                    )
+                    return [
+                        _error_msg(
+                            f"World '{row.world_slug}' is draft (draft: true) and not "
+                            f"playable in genre '{row.genre_slug}'. It cannot load its "
+                            "own content and must not fall back to genre defaults."
+                        )
+                    ]
+
             # Story 24-10: world-grounding bootstrap (Epic 24 wiring). Read
             # the pack-level weather.yaml + world-level demographics/calendar
             # once at connect time, construct a WeatherGenerator and sample a

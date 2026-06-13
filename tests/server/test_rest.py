@@ -27,6 +27,7 @@ def _create_mock_genre_pack(
     cover_poi: str | None = None,
     *,
     cartography: bool | str = False,
+    draft: bool = False,
 ) -> None:
     """Write minimal pack.yaml + world/world.yaml under packs_dir.
 
@@ -75,6 +76,8 @@ def _create_mock_genre_pack(
     }
     if cover_poi is not None:
         world_yaml["cover_poi"] = cover_poi
+    if draft:
+        world_yaml["draft"] = True
     (world_dir / "world.yaml").write_text(yaml.dump(world_yaml), encoding="utf-8")
 
     if cartography:
@@ -217,6 +220,30 @@ def test_list_genres_skips_symlinked_world_aliases(tmp_path):
     worlds = client.get("/api/genres").json()["caverns_and_claudes"]["worlds"]
     slugs = [w["slug"] for w in worlds]
     assert slugs == ["dungeon_survivor"], f"symlinked alias must be skipped; got {slugs}"
+
+
+def test_list_genres_skips_draft_world(tmp_path):
+    """A world with ``draft: true`` in world.yaml must NOT be offered in the
+    lobby. The pack loader (``_load_single_world``) skips draft worlds at load
+    time, so a draft world the lobby DOES list cannot actually load its
+    content — the session falls back silently to genre/sibling-world defaults
+    (No-Silent-Fallbacks violation). The lobby must honor the same draft skip.
+    """
+    packs_dir = tmp_path / "genre_packs"
+    packs_dir.mkdir()
+    _create_mock_genre_pack(packs_dir, "mutant_wasteland", "flickering_reach")
+    _create_mock_genre_pack(packs_dir, "mutant_wasteland", "seaboard_of_saints", draft=True)
+
+    saves_dir = tmp_path / "saves"
+    saves_dir.mkdir()
+    app = create_app(
+        genre_pack_search_paths=[packs_dir],
+        save_dir=saves_dir,
+    )
+    client = TestClient(app)
+    worlds = client.get("/api/genres").json()["mutant_wasteland"]["worlds"]
+    slugs = [w["slug"] for w in worlds]
+    assert slugs == ["flickering_reach"], f"draft world must be skipped; got {slugs}"
 
 
 def _make_app_with_cover_poi(

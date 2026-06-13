@@ -1,10 +1,11 @@
 """Story 106-1 (RED) — AC3: the opponent reprisal rolls vs the DERIVED armor class.
 
 End-to-end proof that the chargen armor-derivation step (story 106-1) flows all the
-way to the lethality seam: ``dice.py:1636`` reads ``player_core.armor_class`` for the
-opponent reprisal, so once ``equip_starting_armor`` raises a Warrior's AC from the
-unarmored 10 to the WWN-SRD leather value (13), the reprisal's
-``encounter.opponent_attack_resolved`` span must show ``target_ac = 13``, not 10.
+way to the lethality seam: ``resolve_opponent_attack`` (dispatch/dice.py) reads
+``player_core.armor_class`` for the opponent reprisal, so once ``equip_starting_armor``
+raises a Warrior's AC from the unarmored 10 to the WWN-SRD leather value (13), the
+reprisal's ``encounter.opponent_attack_resolved`` span must show ``target_ac = 13``,
+not 10.
 
 Reuses the canonical reprisal harness (``tests/integration/test_opponent_reprisal_e2e``
 patterns) against the REAL space_opera pack. Skips gracefully when sidequest-content
@@ -167,7 +168,8 @@ def _target_ac_from_span(otel_capture) -> int:
 
 def test_reprisal_rolls_vs_derived_ac_after_chargen_armor_equip(otel_capture):
     """AC3: after the chargen armor step derives AC 13 from content, the opponent
-    reprisal rolls against 13 — proving the derivation reaches dice.py:1636."""
+    reprisal rolls against 13 — proving the derivation reaches
+    ``resolve_opponent_attack`` (it reads ``player_core.armor_class``)."""
     from sidequest.server.dispatch.chargen_loadout import equip_starting_armor
 
     pack = _load_space_opera_pack()

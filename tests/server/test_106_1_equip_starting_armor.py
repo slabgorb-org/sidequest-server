@@ -26,8 +26,6 @@ Span-name contracts pinned here (the GM-panel lie-detector reads these):
 
 from __future__ import annotations
 
-import pytest
-
 # Span names the chargen armor-derivation step MUST emit. Pinned as the contract
 # Dev implements (mirrors the reprisal e2e test pinning SPAN_OPPONENT_ATTACK).
 SPAN_ARMOR_EQUIPPED = "chargen.armor_equipped"
@@ -103,6 +101,34 @@ def _catalog(*, leather_ac: int | None = 13):
                 name="Iron Mace",
                 description="A brutal bludgeon.",
                 category="weapon",
+            ),
+        ]
+    )
+
+
+def _multi_armor_catalog(*, leather_ac: int | None, chain_ac: int | None):
+    """InventoryConfig with two armor entries — torso (leather) + a heavier
+    piece (chain) — for exercising the best-armor ``max()`` combination rule.
+    ``None`` on either reproduces the missing-value gap for that piece."""
+    from sidequest.genre.models.inventory import CatalogItem, InventoryConfig
+
+    return InventoryConfig(
+        item_catalog=[
+            CatalogItem(
+                id="leather_armor",
+                name="Leather Armor",
+                description="Hardened leather.",
+                category="armor",
+                tags=["light-armor", "torso"],
+                armor_class=leather_ac,
+            ),
+            CatalogItem(
+                id="chain_shirt",
+                name="Chain Shirt",
+                description="Interlocking iron rings.",
+                category="armor",
+                tags=["medium-armor", "torso"],
+                armor_class=chain_ac,
             ),
         ]
     )
@@ -203,9 +229,7 @@ def test_missing_catalog_armor_class_fails_loud(otel_capture):
     attrs = dict(unresolved[0].attributes or {})
     assert attrs.get("item_id") == "leather_armor"
     # And it must NOT have fabricated an AC out of nothing.
-    equipped_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == SPAN_ARMOR_EQUIPPED
-    ]
+    equipped_spans = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_ARMOR_EQUIPPED]
     assert not equipped_spans, "no derivation span when there is no value to derive"
 
 
@@ -243,3 +267,174 @@ def test_weapons_remain_equipped_after_armor_step():
     by_id = {i["id"]: i for i in character.core.inventory.items}
     assert by_id["short_sword"]["equipped"] is True, "equipped weapon must stay equipped"
     assert by_id["hand_axe"]["equipped"] is False, "armor step must not touch weapons"
+
+
+# ---------------------------------------------------------------------------
+# AC2 (best-armor combination) — multiple equipped armor pieces resolve to the
+# MAX catalog armor_class (WWN best-armor rule, NOT additive). Reviewer
+# [MEDIUM][TEST]: the ``ac_after = max(...)`` branch in equip_starting_armor
+# was implemented but no test exercised >1 armor item — a dead-on-arrival
+# branch. A later story that mistakenly made armor additive (sum) or picked
+# the FIRST/last piece instead of the best would slip through without these.
+# ---------------------------------------------------------------------------
+
+
+def test_best_armor_max_wins_over_lower_piece():
+    """Two equipped armor pieces (leather 13 + chain 15) → core.armor_class is
+    the MAX (15), not the sum (28), not the first-listed (13). WWN uses
+    best-armor AC, not additive stacking."""
+    character = _make_character(
+        [
+            _armor_item("leather_armor", equipped=False),
+            _armor_item("chain_shirt", equipped=False),
+        ]
+    )
+
+    ac = _equip_starting_armor(character, _multi_armor_catalog(leather_ac=13, chain_ac=15))
+
+    assert ac == 15, "best-armor rule: derived AC is the max piece, not sum/first"
+    assert character.core.armor_class == 15
+    # BOTH pieces flip equipped — the step equips every armor-category item,
+    # the AC is just derived from the best of them.
+    by_id = {i["id"]: i for i in character.core.inventory.items}
+    assert by_id["leather_armor"]["equipped"] is True
+    assert by_id["chain_shirt"]["equipped"] is True
+
+
+def test_best_armor_max_independent_of_item_order():
+    """Order-independence guard: listing the heavier piece FIRST must still
+    yield the max — catches a regression that took the first/last piece's AC
+    rather than the best."""
+    character = _make_character(
+        [
+            _armor_item("chain_shirt", equipped=False),  # higher AC, listed first
+            _armor_item("leather_armor", equipped=False),
+        ]
+    )
+
+    ac = _equip_starting_armor(character, _multi_armor_catalog(leather_ac=13, chain_ac=15))
+
+    assert ac == 15, "max must win regardless of inventory order"
+
+
+def test_best_armor_fires_one_equipped_span_per_armor_piece(otel_capture):
+    """Each equipped armor piece emits its own ``chargen.armor_equipped`` span,
+    and EVERY span carries the same derived ``ac_after`` (the max). The GM panel
+    must see one row per equipped piece, all agreeing on the final AC."""
+    character = _make_character(
+        [
+            _armor_item("leather_armor", equipped=False),
+            _armor_item("chain_shirt", equipped=False),
+        ]
+    )
+
+    _equip_starting_armor(character, _multi_armor_catalog(leather_ac=13, chain_ac=15))
+
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_ARMOR_EQUIPPED]
+    assert len(spans) == 2, "one equipped span per armor piece"
+    item_ids = {dict(s.attributes or {}).get("item_id") for s in spans}
+    assert item_ids == {"leather_armor", "chain_shirt"}
+    # Both spans report the derived max as ac_after — not each piece's own AC.
+    assert all(dict(s.attributes or {}).get("ac_after") == 15 for s in spans)
+    # ac_before is the pre-derivation unarmored 10 on every span.
+    assert all(dict(s.attributes or {}).get("ac_before") == 10 for s in spans)
+
+
+def test_best_armor_skips_missing_piece_but_derives_from_valued_one(otel_capture):
+    """Mixed batch: leather has a catalog armor_class (13), chain does NOT
+    (None). The valued piece derives AC 13; the value-less piece fires a loud
+    unresolved span and is NOT equipped — partial coverage must not poison the
+    derivable piece, nor silently swallow the gap."""
+    character = _make_character(
+        [
+            _armor_item("leather_armor", equipped=False),
+            _armor_item("chain_shirt", equipped=False),
+        ]
+    )
+
+    ac = _equip_starting_armor(character, _multi_armor_catalog(leather_ac=13, chain_ac=None))
+
+    assert ac == 13, "derive from the one valued piece"
+    by_id = {i["id"]: i for i in character.core.inventory.items}
+    assert by_id["leather_armor"]["equipped"] is True, "valued piece is equipped"
+    assert by_id["chain_shirt"]["equipped"] is False, "value-less piece is NOT equipped"
+    names = {s.name for s in otel_capture.get_finished_spans()}
+    assert SPAN_ARMOR_EQUIPPED in names, "the valued piece derives + equips"
+    assert SPAN_ARMOR_UNRESOLVED in names, "the value-less piece fails loud"
+
+
+# ---------------------------------------------------------------------------
+# AC4 (No Silent Fallback) — reason discriminator coverage. Reviewer
+# [MEDIUM][TEST]: only the ``catalog_armor_class_missing`` reason was
+# exercised; the ``no_catalog_entry`` path and ``inventory_config=None`` (both
+# real production branches) were untested, and the ``reason`` span attribute —
+# the GM-panel discriminator that tells "author forgot the value" apart from
+# "item isn't in the catalog at all" — was never asserted. A regression that
+# collapsed both reasons to one string would blunt the GM panel and pass
+# unnoticed.
+# ---------------------------------------------------------------------------
+
+
+def _unresolved_span(otel_capture):
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_ARMOR_UNRESOLVED]
+    assert len(spans) == 1, f"exactly one {SPAN_ARMOR_UNRESOLVED} span must fire"
+    return dict(spans[0].attributes or {})
+
+
+def test_unresolved_reason_is_catalog_armor_class_missing(otel_capture):
+    """AC4 discriminator: a catalog entry that EXISTS but declares no
+    armor_class fires reason='catalog_armor_class_missing' (author forgot the
+    value)."""
+    character = _make_character([_armor_item("leather_armor")])
+
+    ac = _equip_starting_armor(character, _catalog(leather_ac=None))
+
+    assert character.core.armor_class == 10, "no silent AC fabrication"
+    assert ac == 10
+    attrs = _unresolved_span(otel_capture)
+    assert attrs.get("reason") == "catalog_armor_class_missing", (
+        "the reason discriminator distinguishes 'value missing' from "
+        "'no catalog entry' — the GM panel filters on it"
+    )
+    assert attrs.get("item_id") == "leather_armor"
+
+
+def test_unresolved_reason_is_no_catalog_entry(otel_capture):
+    """AC4 discriminator: an armor item whose id is absent from the catalog
+    ENTIRELY fires reason='no_catalog_entry' (item isn't catalogued at all) —
+    a distinct production branch from the missing-value case above."""
+    # ``mystery_plate`` is not in _catalog() (only leather_armor + iron_mace).
+    character = _make_character([_armor_item("mystery_plate")])
+
+    ac = _equip_starting_armor(character, _catalog(leather_ac=13))
+
+    assert character.core.armor_class == 10, "uncatalogued armor → no silent AC"
+    assert ac == 10
+    attrs = _unresolved_span(otel_capture)
+    assert attrs.get("reason") == "no_catalog_entry", (
+        "an armor id with no catalog row must be discriminated from a row "
+        "that merely lacks armor_class"
+    )
+    assert attrs.get("item_id") == "mystery_plate"
+    # And it must NOT have fabricated a derivation span.
+    assert not [s for s in otel_capture.get_finished_spans() if s.name == SPAN_ARMOR_EQUIPPED], (
+        "no derivation span when there is nothing to derive from"
+    )
+
+
+def test_none_inventory_config_armor_fails_loud_no_catalog_entry(otel_capture):
+    """AC4: when ``inventory_config`` is None (pack has no inventory.yaml) but
+    the character still carries a kit-rolled armor item, the step must fail
+    LOUD (reason='no_catalog_entry') rather than silently leave AC 10 with the
+    gap hidden — the empty-catalog branch is a real production path."""
+    character = _make_character([_armor_item("leather_armor")])
+
+    ac = _equip_starting_armor(character, None)
+
+    assert character.core.armor_class == 10
+    assert ac == 10
+    attrs = _unresolved_span(otel_capture)
+    assert attrs.get("reason") == "no_catalog_entry", (
+        "None config → no catalog row for the armor → no_catalog_entry, NOT a silent AC-10 fallback"
+    )
+    assert attrs.get("item_id") == "leather_armor"

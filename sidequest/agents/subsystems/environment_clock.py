@@ -33,17 +33,29 @@ from sidequest.game.status import Status, StatusSeverity
 from sidequest.protocol.dispatch import SubsystemDispatch
 
 DARKNESS_STATUS_TEXT = "Plunged into darkness — every action is harder."
+# Stable MACHINE identity for the darkness status (Status.source), used by
+# reconcile to find/remove exactly its own status. Distinct from the
+# human-readable ``text`` so a wording/i18n change can never silently break the
+# clear-by-identity logic.
+DARKNESS_STATUS_SOURCE = "environment_clock"
 DARKNESS_PENALTY = -2  # spec §9 default N; tunable later via threshold metadata
 
 
 def _ensure_darkness_penalty(core: CreatureCore) -> bool:
     """Ensure exactly one darkness penalty status is present. Returns True
-    when one was newly added (False when already present — idempotent)."""
-    if any(s.text == DARKNESS_STATUS_TEXT for s in core.statuses):
+    when one was newly added (False when already present — idempotent).
+
+    Identity is by ``source`` (structured marker), not ``text``. The status is
+    ``StatusSeverity.Wound``, which a narrator-explicit clear or rest could
+    remove — that is fine: this penalty is environment-derived and re-asserted
+    against current state on every tick, so a premature clear heals only until
+    the next unlit tick re-applies it."""
+    if any(s.source == DARKNESS_STATUS_SOURCE for s in core.statuses):
         return False
     core.statuses.append(
         Status(
             text=DARKNESS_STATUS_TEXT,
+            source=DARKNESS_STATUS_SOURCE,
             severity=StatusSeverity.Wound,
             roll_modifier=DARKNESS_PENALTY,
         )
@@ -53,9 +65,10 @@ def _ensure_darkness_penalty(core: CreatureCore) -> bool:
 
 def _clear_darkness_penalty(core: CreatureCore) -> bool:
     """Remove the darkness penalty status if present. Returns True when one
-    was removed. Touches only the sentinel-text status — never a wound."""
+    was removed. Keys on ``source`` so it touches only this subsystem's own
+    status — never a combat wound that happens to share wording."""
     before = len(core.statuses)
-    core.statuses[:] = [s for s in core.statuses if s.text != DARKNESS_STATUS_TEXT]
+    core.statuses[:] = [s for s in core.statuses if s.source != DARKNESS_STATUS_SOURCE]
     return len(core.statuses) != before
 
 
@@ -87,7 +100,7 @@ async def run_environment_clock_dispatch(
     character_name = dispatch.params.get("character_name")
     core = snapshot.find_creature_core(character_name) if character_name else None
 
-    data: dict = {
+    data: dict[str, object] = {
         "region": region,
         "lit": lit,
         "burned": False,
@@ -95,14 +108,22 @@ async def run_environment_clock_dispatch(
         "crossed": None,
     }
 
+    # No silent fallback: a name was given but no seated PC matched. Surface it
+    # (still burn light below); penalty reconcile is skipped because there is no
+    # core to reconcile against.
+    if character_name and core is None:
+        data["character_unresolved"] = character_name
+
     if lit:
         # Lit region: no burn; clear any darkness penalty.
         if core is not None and _clear_darkness_penalty(core):
             data["penalty_cleared"] = True
         return SubsystemOutput(directives=[], data=data)
 
-    # Unlit region: burn one unit (clamped at the pool floor).
-    result = pool._apply_and_clamp(ResourcePatchOp.Subtract, 1.0)
+    # Unlit region: burn one unit (clamped at the pool floor). Mutates through
+    # the public GameSnapshot surface (not the private pool method) so the
+    # snapshot's resource-patch invariants run.
+    result = snapshot.apply_resource_patch_by_name("light", ResourcePatchOp.Subtract, 1.0)
     data["burned"] = True
     data["light_current"] = result.new_value
     crossed = [t.event_id for t in result.crossed_thresholds]

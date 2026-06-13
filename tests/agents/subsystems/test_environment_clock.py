@@ -14,6 +14,7 @@ import pytest
 from sidequest.agents.subsystems import SubsystemOutput, get_registered
 from sidequest.agents.subsystems.environment_clock import (
     DARKNESS_PENALTY,
+    DARKNESS_STATUS_SOURCE,
     DARKNESS_STATUS_TEXT,
     run_environment_clock_dispatch,
 )
@@ -146,3 +147,43 @@ async def test_missing_light_pool_returns_error_data():
     out = await run_environment_clock_dispatch(_dispatch(lit=False), snapshot=snap)
     assert out.directives == []
     assert out.data["error"] == "no_light_pool"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_character_is_surfaced_not_silently_skipped():
+    """No Silent Fallbacks: a character_name that matches no seated PC still
+    burns light but surfaces the miss in data rather than silently skipping
+    the penalty reconcile."""
+    snap = _snap_with_light(1.0, character_name="Delver")
+    out = await run_environment_clock_dispatch(
+        _dispatch(lit=False, character_name="Nobody"), snapshot=snap
+    )
+    assert out.data["character_unresolved"] == "Nobody"
+    assert out.data["burned"] is True
+    # Light still burned; no penalty applied to the real PC (it wasn't the target).
+    assert snap.resources["light"].current == 0.0
+    core = snap.find_creature_core("Delver")
+    assert core is not None
+    assert not [s for s in core.statuses if s.source == DARKNESS_STATUS_SOURCE]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_keys_on_source_not_text():
+    """The reconcile clears by structured source, so a pre-existing combat
+    wound that shares the darkness wording is NOT removed when the region is lit."""
+    snap = _snap_with_light(0.0)
+    core = snap.find_creature_core("Delver")
+    assert core is not None
+    # A look-alike wound with the same display text but no machine source.
+    from sidequest.game.status import Status, StatusSeverity
+
+    core.statuses.append(
+        Status(text=DARKNESS_STATUS_TEXT, severity=StatusSeverity.Wound, roll_modifier=-1)
+    )
+    await run_environment_clock_dispatch(_dispatch(lit=False), snapshot=snap)  # applies -2
+    await run_environment_clock_dispatch(_dispatch(lit=True), snapshot=snap)  # clears source
+    # The environment penalty is gone; the look-alike combat wound survives.
+    sourced = [s for s in core.statuses if s.source == DARKNESS_STATUS_SOURCE]
+    look_alikes = [s for s in core.statuses if s.text == DARKNESS_STATUS_TEXT and s.source is None]
+    assert sourced == []
+    assert len(look_alikes) == 1

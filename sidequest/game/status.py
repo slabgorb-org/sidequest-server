@@ -68,6 +68,19 @@ class Status(BaseModel):
     recoverable ``Recovering`` setback leaves it False (the PC keeps agency).
     Additive default (False) → existing saves migrate cleanly."""
 
+    source: str | None = None
+    """Machine identity for reconcilable / system-applied statuses.
+
+    Distinct from the human-readable ``text`` (which is for display and the
+    narrator). System subsystems that re-assert a status against current state
+    each tick (e.g. the light & darkness ``environment_clock``) tag their own
+    status with a stable ``source`` so reconcile can find and remove *exactly*
+    its own status without string-matching ``text`` — which is fragile under
+    wording/i18n changes (CLAUDE.md: structured markers, not text scraping; cf.
+    the ``incapacitating`` field added for the same reason). ``None`` (default)
+    = an ordinary status with no machine owner, back-compat for every existing
+    construction and save under ``extra='forbid'``."""
+
     roll_modifier: int = 0
     """-N/+N applied to ALL rolls while this status is active.
 

@@ -339,8 +339,9 @@ def equip_starting_armor(
     No Silent Fallback: an armor item whose catalog entry declares no
     ``armor_class`` (or has no catalog entry) is NOT equipped/derived — it emits
     a loud ``chargen.armor_unresolved`` span so the content gap surfaces at
-    chargen instead of the PC silently fighting at AC 10. A character with no
-    armor item at all is legitimately unarmored: no spans, AC stays 10.
+    chargen instead of the PC silently fighting at the unraised AC. A character
+    with no armor item at all is legitimately unarmored: no spans, AC unchanged
+    (the unarmored default, normally 10 — but a world override may pre-seed it).
 
     Returns the resulting ``core.armor_class`` (for logging/assertion).
     """
@@ -353,7 +354,7 @@ def equip_starting_armor(
         if str(item.get("category", "")).strip().lower() == "armor"
     ]
     if not armor_items:
-        # Legitimately unarmored — not a content gap. Stay silent at AC 10.
+        # Legitimately unarmored — not a content gap. Stay silent, AC unchanged.
         return ac_before
 
     catalog_by_id: dict[str, CatalogItem] = (
@@ -370,11 +371,7 @@ def equip_starting_armor(
         catalog_item = catalog_by_id.get(item_id)
         catalog_ac = catalog_item.armor_class if catalog_item is not None else None
         if catalog_ac is None:
-            reason = (
-                "no_catalog_entry"
-                if catalog_item is None
-                else "catalog_armor_class_missing"
-            )
+            reason = "no_catalog_entry" if catalog_item is None else "catalog_armor_class_missing"
             logger.warning(
                 "chargen.armor_unresolved item=%s pc=%s genre=%s world=%s reason=%s "
                 "— equipped armor has no catalog armor_class to derive from; the PC "
@@ -422,8 +419,7 @@ def equip_starting_armor(
             pass
 
     logger.info(
-        "chargen.armor_equipped pc=%s ac %d -> %d (equipped %d armor piece(s)) "
-        "genre=%s world=%s",
+        "chargen.armor_equipped pc=%s ac %d -> %d (equipped %d armor piece(s)) genre=%s world=%s",
         pc_name,
         ac_before,
         ac_after,

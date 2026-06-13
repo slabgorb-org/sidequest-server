@@ -322,8 +322,12 @@ def item_resource_depleted_span(
 # armor item's catalog ``armor_class`` (content-sourced, WWN SRD). The GM panel
 # reads these as proof the derivation fired (vs. every Warrior silently fighting
 # at the unarmored AC 10). ``chargen.armor_equipped`` (INFO) on a successful
-# derive; ``chargen.armor_unresolved`` (ERROR) when an armor item carries no
-# catalog ``armor_class`` to derive from — the No-Silent-Fallback gate.
+# derive; ``chargen.armor_unresolved`` (WARN) when an armor item carries no
+# catalog ``armor_class`` to derive from — the No-Silent-Fallback gate. WARN
+# (not ERROR) matches the sibling content-gap convention
+# (``chargen.starting_equipment_missing``): an unvalued armor entry is a content
+# authoring gap surfaced loudly at chargen, not a runtime engine failure like
+# ``equip.unresolved``.
 SPAN_CHARGEN_ARMOR_EQUIPPED = "chargen.armor_equipped"
 SPAN_ROUTES[SPAN_CHARGEN_ARMOR_EQUIPPED] = SpanRoute(
     event_type="state_transition",
@@ -415,8 +419,11 @@ def chargen_armor_unresolved_span(
     **attrs: Any,
 ) -> Iterator[trace.Span]:
     """Fail-loud chargen armor span: an armor item carries no catalog ``armor_class``
-    to derive from. ERROR status so the GM panel surfaces the content gap at
-    chargen rather than the PC silently fighting at unarmored AC 10."""
+    to derive from. Logged at WARNING (the GM panel surfaces the content gap at
+    chargen rather than the PC silently fighting unarmored) — WARN, not ERROR, to
+    match the sibling content-gap span ``chargen.starting_equipment_missing``. An
+    unvalued armor entry is a content authoring gap, not a runtime engine failure
+    like ``equip.unresolved`` (which is ERROR)."""
     with Span.open(
         SPAN_CHARGEN_ARMOR_UNRESOLVED,
         {
@@ -431,5 +438,4 @@ def chargen_armor_unresolved_span(
         },
         tracer_override=_tracer,
     ) as span:
-        span.set_status(Status(StatusCode.ERROR, reason))
         yield span

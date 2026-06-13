@@ -281,6 +281,48 @@ async def test_intent_router_prompt_documents_confrontation_opponent(
 
 
 @pytest.mark.asyncio
+async def test_intent_router_prompt_forbids_fabricating_other_from_anticipation(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """Regression (playtest 2026-06-12 beneath_sunden-6): "I draw my dagger and
+    prepare for the attack" — an anticipatory/defensive posture with NO adversary
+    present — engaged ``confrontation=combat`` at confidence 0.7 and seated a
+    fabricated Other ``{name: "Unknown Adversary", description: "the attack
+    Pipster is preparing to defend against or initiate"}``. The description is the
+    player's OWN intent, not a being: the router invented a filler Other, violating
+    its own step-1 "do NOT invent a filler" principle. The engine cannot catch this
+    (the phantom is structurally identical to a legitimate materialized threat —
+    ship_combat's "Raider Frigate", burning_peace's unseated watcher), so the fix
+    lives in the producer: the router must NOT fabricate an Other from the player's
+    anticipation, and a readying posture with no adversary present is prose, not a
+    confrontation (DRIVER call 2026-06-12: defer to prose; wait for a real Other).
+
+    Behavioral assertion on the system prompt the router sends — not a source grep.
+    """
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(
+        action="I draw my dagger and prepare for the attack",
+        state_summary={},
+    )
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert "anticipatory" in system, (
+        "router prompt must name the anticipatory/preparatory posture (readying, "
+        "drawing a weapon, bracing to defend with no adversary present) as a "
+        "non-trigger — without it the router engages combat against a phantom"
+    )
+    assert "fabricate" in system, (
+        "router prompt must forbid fabricating an Other from the player's OWN "
+        "action — the Other must be a real adversary present or named in the "
+        "fiction, never invented from the player's anticipation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_intent_router_decompose_quiet_turn_empty_dispatch(
     haiku_response_quiet_turn: str,
 ) -> None:

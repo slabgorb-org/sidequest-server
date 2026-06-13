@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from sidequest.agents.subsystems import SubsystemOutput
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.resource_pool import ResourcePatchOp
+from sidequest.game.resource_pool import ResourcePatchOp, ResourcePool
 from sidequest.game.session import GameSnapshot
 from sidequest.game.status import Status, StatusSeverity
 from sidequest.protocol.dispatch import SubsystemDispatch
@@ -73,6 +73,18 @@ def _clear_darkness_penalty(core: CreatureCore) -> bool:
     return len(core.statuses) != before
 
 
+def _find_torch(core: CreatureCore) -> dict | None:
+    """Return the first inventory item carrying the ``light`` tag with a
+    positive ``quantity`` (a usable torch), or None. Identity is by the
+    structured ``tags`` field (matches the content schema:
+    ``tags: [light, consumable, essential]``), not item name."""
+    for item in core.inventory.items:
+        tags = item.get("tags") or []
+        if "light" in tags and int(item.get("quantity", 0) or 0) > 0:
+            return item
+    return None
+
+
 def _emit_light_tick(data: dict[str, object], pool_max: float) -> None:
     """Emit the ``light.tick`` lie-detector span from the assembled ``data``
     dict (the single source of truth, so the span never drifts from the
@@ -92,6 +104,74 @@ def _emit_light_tick(data: dict[str, object], pool_max: float) -> None:
         penalty_applied=bool(data.get("penalty_applied", False)),
     ):
         pass
+
+
+def _run_relight(
+    dispatch: SubsystemDispatch,
+    *,
+    snapshot: GameSnapshot,
+    pool: ResourcePool,
+) -> SubsystemOutput:
+    """Light a torch: consume one torch charge, set the ``light`` pool to its
+    max, and clear the darkness penalty on the acting PC.
+
+    Charge model: a torch is an inventory item dict tagged ``light`` (content
+    schema ``tags: [light, consumable, essential]``); its ``quantity`` is the
+    charge count — one item = one relight to max. On relight ``quantity`` is
+    decremented; the item is removed when it hits zero. ``torch_charges_remaining``
+    reports the remaining ``quantity`` of the consumed torch.
+
+    Fail loud (No Silent Fallbacks): no usable torch ⇒ ``data["error"] =
+    "no_torch"`` and NOTHING is mutated (light unchanged, penalty unchanged) so
+    the relight visibly fails and the player knows.
+
+    Does NOT burn light. The OTEL ``light.relit`` span is Task 4.3 — the data
+    dict here carries ``relit`` / ``torch_charges_remaining`` for it to read.
+    """
+    character_name = dispatch.params.get("character_name")
+    core = snapshot.find_creature_core(character_name) if character_name else None
+
+    data: dict[str, object] = {
+        "region": dispatch.params.get("region", ""),
+        "lit": True,
+        "burned": False,
+        "light_current": pool.current,
+        "crossed": None,
+        "relit": False,
+    }
+
+    if character_name and core is None:
+        # A name was given but no seated PC matched — surface it, mutate nothing.
+        data["character_unresolved"] = character_name
+        data["error"] = "no_torch"
+        return SubsystemOutput(directives=[], data=data)
+
+    torch = _find_torch(core) if core is not None else None
+    if torch is None:
+        # No usable torch: fail loud, mutate nothing.
+        data["error"] = "no_torch"
+        return SubsystemOutput(directives=[], data=data)
+
+    # Consume one charge. Remove the item dict when its last charge is spent.
+    remaining = int(torch.get("quantity", 0) or 0) - 1
+    if remaining <= 0:
+        core.inventory.items.remove(torch)
+        remaining = 0
+    else:
+        torch["quantity"] = remaining
+
+    # Set the light pool to its max via the public resource-patch surface (Set
+    # bypasses the voluntary guard that rejects Subtract on this non-voluntary
+    # pool).
+    result = snapshot.apply_resource_patch_by_name("light", ResourcePatchOp.Set, pool.max)
+    data["light_current"] = result.new_value
+
+    if _clear_darkness_penalty(core):
+        data["penalty_cleared"] = True
+
+    data["relit"] = True
+    data["torch_charges_remaining"] = remaining
+    return SubsystemOutput(directives=[], data=data)
 
 
 async def run_environment_clock_dispatch(
@@ -116,6 +196,9 @@ async def run_environment_clock_dispatch(
     pool = snapshot.resources.get("light")
     if pool is None:
         return SubsystemOutput(directives=[], data={"error": "no_light_pool"})
+
+    if dispatch.params.get("mode") == "relight":
+        return _run_relight(dispatch, snapshot=snapshot, pool=pool)
 
     lit = bool(dispatch.params.get("lit", False))
     region = dispatch.params.get("region", "")

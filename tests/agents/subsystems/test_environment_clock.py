@@ -79,6 +79,42 @@ def _dispatch(
     )
 
 
+def _give_torch(snap: GameSnapshot, character_name: str, *, charges: int) -> None:
+    """Seat a real torch item in the PC's real inventory structure.
+
+    Mirrors the runtime item dict produced by chargen loadout
+    (``chargen_loadout._item_dict_from_catalog``): a ``light``/``consumable``
+    tagged catalog entry with a ``quantity`` field. The relight path treats
+    ``quantity`` as the charge count (one item = one relight to max), so
+    ``charges`` seeds ``quantity``.
+    """
+    core = snap.find_creature_core(character_name)
+    assert core is not None
+    core.inventory.items.append(
+        {
+            "id": "torch",
+            "name": "Torch",
+            "description": "A pitch-soaked bundle of rags on a stick.",
+            "category": "light",
+            "tags": ["light", "consumable", "essential"],
+            "equipped": False,
+            "quantity": charges,
+            "uses_remaining": 6,
+            "state": "Carried",
+        }
+    )
+
+
+def _relight(character_name: str = "Delver") -> SubsystemDispatch:
+    return SubsystemDispatch(
+        subsystem="environment_clock",
+        params={"mode": "relight", "character_name": character_name},
+        idempotency_key="environment_clock_relight_2",
+        confidence=0.9,
+        visibility=_tag_all(),
+    )
+
+
 def test_environment_clock_is_registered():
     """Wiring: the dispatcher's registry resolves ``environment_clock``."""
     assert "environment_clock" in get_registered()
@@ -165,6 +201,53 @@ async def test_unresolved_character_is_surfaced_not_silently_skipped():
     core = snap.find_creature_core("Delver")
     assert core is not None
     assert not [s for s in core.statuses if s.source == DARKNESS_STATUS_SOURCE]
+
+
+@pytest.mark.asyncio
+async def test_relight_sets_light_to_max_consumes_torch_and_clears_penalty():
+    snap = _snap_with_light(0.0)  # dark
+    await run_environment_clock_dispatch(_dispatch(lit=False), snapshot=snap)  # penalty on
+    _give_torch(snap, "Delver", charges=1)
+    out = await run_environment_clock_dispatch(_relight("Delver"), snapshot=snap)
+    assert snap.resources["light"].current == snap.resources["light"].max
+    core = snap.find_creature_core("Delver")
+    assert core is not None
+    assert not [s for s in core.statuses if s.text == DARKNESS_STATUS_TEXT]
+    assert out.data["relit"] is True
+    assert out.data["torch_charges_remaining"] == 0
+
+
+@pytest.mark.asyncio
+async def test_relight_fails_loudly_with_no_torch():
+    snap = _snap_with_light(0.0)
+    out = await run_environment_clock_dispatch(_relight("Delver"), snapshot=snap)
+    assert out.data["error"] == "no_torch"
+    assert snap.resources["light"].current == 0.0  # unchanged — no silent fallback
+
+
+@pytest.mark.asyncio
+async def test_relight_decrements_quantity_when_multiple_torches():
+    """A kit with several torches relights and reports the remaining count;
+    the torch item is not removed until the last charge is consumed."""
+    snap = _snap_with_light(0.0)
+    _give_torch(snap, "Delver", charges=3)
+    out = await run_environment_clock_dispatch(_relight("Delver"), snapshot=snap)
+    assert out.data["relit"] is True
+    assert out.data["torch_charges_remaining"] == 2
+    core = snap.find_creature_core("Delver")
+    assert core is not None
+    torch = next(it for it in core.inventory.items if it.get("id") == "torch")
+    assert torch["quantity"] == 2
+
+
+@pytest.mark.asyncio
+async def test_relight_does_not_burn_light():
+    """The relight branch sets light to max and must not also burn a unit."""
+    snap = _snap_with_light(0.0)
+    _give_torch(snap, "Delver", charges=1)
+    out = await run_environment_clock_dispatch(_relight("Delver"), snapshot=snap)
+    assert out.data["burned"] is False
+    assert snap.resources["light"].current == snap.resources["light"].max
 
 
 @pytest.mark.asyncio

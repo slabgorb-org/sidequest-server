@@ -68,6 +68,29 @@ class Status(BaseModel):
     recoverable ``Recovering`` setback leaves it False (the PC keeps agency).
     Additive default (False) → existing saves migrate cleanly."""
 
+    roll_modifier: int = 0
+    """-N/+N applied to ALL rolls while this status is active.
+
+    The single generic "status modifies rolls" lever (Phase 2 of the
+    light & darkness survival-clock spec). Penalties (e.g. fighting in the
+    dark) are negative, boons (blessed, heightened senses) positive. Every
+    roll site reads the aggregate via ``status_roll_modifier`` so a
+    status-driven modifier can never silently no-op at one call site.
+    Additive default (0) → existing saves migrate cleanly."""
+
+
+def status_roll_modifier(core: object | None) -> int:
+    """Sum ``roll_modifier`` across all statuses on a creature core.
+
+    0 when ``core`` is None or carries no statuses. Bonuses and penalties
+    stack additively. This is the single aggregation point every roll site
+    calls so status-driven modifiers cannot silently no-op at one site.
+    """
+    if core is None:
+        return 0
+    statuses = getattr(core, "statuses", None) or []
+    return sum(int(getattr(s, "roll_modifier", 0)) for s in statuses)
+
 
 def migrate_legacy_statuses(raw: list[object]) -> list[Status]:
     """Forward-migrate a save's ``statuses`` field to structured Status list.

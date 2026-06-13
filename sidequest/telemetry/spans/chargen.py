@@ -188,6 +188,53 @@ SPAN_ROUTES[SPAN_CHARGEN_STARTING_KIT_DEDUP_FIRED] = SpanRoute(
     },
 )
 
+# Story 106-1 (Epic 106 ramp lever #1): chargen armor equip + AC derivation.
+# The kit-roll loop (builder.py:2570) ships armor ``equipped: false`` and nothing
+# recomputes ``core.armor_class`` from it, so every WWN Warrior fought at the
+# unarmored AC 10 and opponent reprisals (dice.py:1636 ``target_ac =
+# int(player_core.armor_class)``) rolled vs 10 all session (the single biggest
+# lethality driver, playtest 2026-06-13). ``chargen.armor_equipped`` fires when
+# the chargen step equips the kit armor and recomputes AC from the equipped
+# item's catalog ``armor_class`` (sourced from the WWN SRD, not invented). The GM
+# panel reads it as proof the derivation engaged vs. the PC silently staying at 10.
+SPAN_CHARGEN_ARMOR_EQUIPPED = "chargen.armor_equipped"
+SPAN_ROUTES[SPAN_CHARGEN_ARMOR_EQUIPPED] = SpanRoute(
+    event_type="state_transition",
+    component="character_creation",
+    extract=lambda span: {
+        "field": "armor_class",
+        "op": "armor_equipped",
+        "class_name": (span.attributes or {}).get("class_name", ""),
+        "armor_item_id": (span.attributes or {}).get("armor_item_id", ""),
+        "armor_class": (span.attributes or {}).get("armor_class", 0),
+        "ac_before": (span.attributes or {}).get("ac_before", 0),
+        "ac_after": (span.attributes or {}).get("ac_after", 0),
+        "equipped": (span.attributes or {}).get("equipped", False),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
+
+# Loud-fail counterpart (No Silent Fallbacks): a kit armor item whose catalog
+# entry declares no ``armor_class`` cannot be derived from. Rather than silently
+# leave the PC at AC 10 (the bug's other half — the content gap), the step emits
+# this span + a WARNING so the GM panel surfaces the content defect at chargen.
+SPAN_CHARGEN_ARMOR_CLASS_MISSING = "chargen.armor_class_missing"
+SPAN_ROUTES[SPAN_CHARGEN_ARMOR_CLASS_MISSING] = SpanRoute(
+    event_type="state_transition",
+    component="character_creation",
+    extract=lambda span: {
+        "field": "armor_class",
+        "op": "missing",
+        "class_name": (span.attributes or {}).get("class_name", ""),
+        "armor_item_id": (span.attributes or {}).get("armor_item_id", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
+
 
 # Story 2026-05-10: Class abilities seeding.
 # See docs/superpowers/specs/2026-05-10-class-mechanical-surface-design.md.

@@ -138,11 +138,19 @@ class RulesetModule(ABC):
         raise NotImplementedError(f"{self.slug} ruleset has no server-driven enemy-attack turn")
 
     def check_params(
-        self, *, stats, attribute, skill_level, difficulty_key, label, cfg, character_core=None
+        self,
+        *,
+        stats,
+        attribute,
+        skill_level,
+        difficulty_key,
+        label,
+        cfg,
+        character_core: object | None = None,
     ):
         raise NotImplementedError(f"{self.slug} ruleset has no non-beat skill-check resolution")
 
-    def save_params(self, *, stats, save, level, label, cfg, character_core=None):
+    def save_params(self, *, stats, save, level, label, cfg, character_core: object | None = None):
         raise NotImplementedError(f"{self.slug} ruleset has no saving-throw resolution")
 
     def roll_initiative(

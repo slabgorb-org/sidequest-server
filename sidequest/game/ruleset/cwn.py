@@ -34,7 +34,9 @@ from sidequest.telemetry.spans.cwn import (
 class CwnRulesetModule(SwnRulesetModule):
     slug = "cwn"
 
-    def save_params(self, *, stats, save, level, label, cfg, character_core=None) -> CheckRollParams:
+    def save_params(
+        self, *, stats, save, level, label, cfg, character_core: object | None = None
+    ) -> CheckRollParams:
         """CWN saves: three attribute saves inherited from SWN, plus Luck (no attribute)."""
         if save == "luck":
             return CheckRollParams(

@@ -53,6 +53,7 @@ from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot
+from sidequest.game.status import Status, StatusSeverity
 from sidequest.game.turn import TurnManager
 from sidequest.genre.models.rules import AwnConfig, CwnConfig, SwnConfig, WwnConfig
 
@@ -124,6 +125,17 @@ def _pc(
         race="Human",
         stats=dict(_STATS),
     )
+
+
+def _dark_pc(name: str, *, level: int = 1) -> Character:
+    """A PC carrying an in-the-dark Status (roll_modifier=-2) — the marquee
+    light-and-darkness penalty. Same stats as _pc so the only difference in a
+    resolved modifier is the status term."""
+    pc = _pc(name, level=level)
+    pc.core.statuses.append(
+        Status(text="in the dark", severity=StatusSeverity.Wound, roll_modifier=-2)
+    )
+    return pc
 
 
 def _snapshot(characters: list[Character]) -> GameSnapshot:
@@ -543,6 +555,56 @@ async def test_save_emits_module_span(otel_capture) -> None:
     assert resolution, "no wwn.save.resolved span — the save is invisible to the GM panel"
     assert resolution[0].get("actor") == "Vesska"
     assert resolution[0].get("save") == "mental"
+
+
+# ===========================================================================
+# Light & darkness: the status roll_modifier must reach the NARRATOR path
+# (wn_skill_check / wn_save), not just the player-initiated check_throw handler.
+# The whole point of the feature is the dark is undodgeable — the failed
+# find-the-rope-back search/save kills by degrees regardless of who triggers it.
+# ===========================================================================
+
+
+async def test_wn_skill_check_applies_darkness_penalty() -> None:
+    """A narrator-adjudicated search in the dark gets the -2 status penalty.
+    Non-vacuous: the dark actor's resolved modifier is exactly 2 below the
+    clean actor's, with identical stats/skill/attribute."""
+    clean_store = _store_with(_snapshot([_pc("Vesska")]))
+    clean_ctx = _make_ctx(clean_store, genre_pack=_pack("wwn"), session_id="dark-check-clean")
+    args = {
+        "actor": "Vesska",
+        "skill": "Notice",
+        "attribute": "WISDOM",
+        "skill_level": 1,
+        "difficulty": "hard",
+    }
+    clean = _payload(await _call("wn_skill_check", args, clean_ctx))
+
+    dark_store = _store_with(_snapshot([_dark_pc("Vesska")]))
+    dark_ctx = _make_ctx(dark_store, genre_pack=_pack("wwn"), session_id="dark-check-dark")
+    dark = _payload(await _call("wn_skill_check", args, dark_ctx))
+
+    assert dark["modifier"] == clean["modifier"] - 2, (
+        "the in-the-dark status (-2) must reach the narrator-driven skill check, "
+        "not only the player-initiated check_throw path"
+    )
+
+
+async def test_wn_save_applies_darkness_penalty() -> None:
+    """A narrator-adjudicated save in the dark gets the -2 status penalty on the
+    d20 modifier (same derivation, only the status term differs)."""
+    clean_store = _store_with(_snapshot([_pc("Vesska", level=3)]))
+    clean_ctx = _make_ctx(clean_store, genre_pack=_pack("wwn"), session_id="dark-save-clean")
+    args = {"actor": "Vesska", "save": "physical", "effect": "the long fall in the dark"}
+    clean = _payload(await _call("wn_save", args, clean_ctx))
+
+    dark_store = _store_with(_snapshot([_dark_pc("Vesska", level=3)]))
+    dark_ctx = _make_ctx(dark_store, genre_pack=_pack("wwn"), session_id="dark-save-dark")
+    dark = _payload(await _call("wn_save", args, dark_ctx))
+
+    assert dark["modifier"] == clean["modifier"] - 2, (
+        "the in-the-dark status (-2) must reach the narrator-driven save"
+    )
 
 
 # ===========================================================================

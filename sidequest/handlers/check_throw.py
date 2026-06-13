@@ -60,7 +60,7 @@ def handle_check_throw(
     # The acting character's CreatureCore carries the statuses whose
     # roll_modifier the bound ruleset folds into the check/save modifier
     # (Task 2.3 — e.g. the in-the-dark Status drags a find-the-rope search).
-    character_core = character.core if character is not None else None
+    character_core: object | None = character.core if character is not None else None
 
     return dispatch_check(
         kind=payload.kind,

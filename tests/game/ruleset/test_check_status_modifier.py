@@ -70,17 +70,29 @@ def test_save_applies_darkness_penalty() -> None:
     rs = SwnRulesetModule()
     stats = {"con": 12, "str": 12}
     base = rs.save_params(
-        stats=stats, save="physical", level=1, label="endure", cfg=_Cfg(), character_core=_clean_core()
+        stats=stats,
+        save="physical",
+        level=1,
+        label="endure",
+        cfg=_Cfg(),
+        character_core=_clean_core(),
     )
     dark = rs.save_params(
-        stats=stats, save="physical", level=1, label="endure", cfg=_Cfg(), character_core=_dark_core()
+        stats=stats,
+        save="physical",
+        level=1,
+        label="endure",
+        cfg=_Cfg(),
+        character_core=_dark_core(),
     )
     assert dark.modifier == base.modifier - 2
 
 
 def test_save_params_core_defaults_none() -> None:
     rs = SwnRulesetModule()
-    p = rs.save_params(stats={"con": 12, "str": 12}, save="physical", level=1, label="endure", cfg=_Cfg())
+    p = rs.save_params(
+        stats={"con": 12, "str": 12}, save="physical", level=1, label="endure", cfg=_Cfg()
+    )
     assert isinstance(p.modifier, int)
 
 

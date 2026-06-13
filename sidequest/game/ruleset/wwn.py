@@ -57,7 +57,9 @@ class WwnRulesetModule(SwnRulesetModule):
         """WWN has no ship gunnery — fail loud rather than inherit SWN's dogfight math."""
         raise NotImplementedError("wwn ruleset has no ship-gunnery resolution")
 
-    def save_params(self, *, stats, save, level, label, cfg, character_core=None) -> CheckRollParams:
+    def save_params(
+        self, *, stats, save, level, label, cfg, character_core: object | None = None
+    ) -> CheckRollParams:
         """WWN saves: three attribute saves inherited from SWN, plus Luck (no attribute)."""
         if save == "luck":
             return CheckRollParams(

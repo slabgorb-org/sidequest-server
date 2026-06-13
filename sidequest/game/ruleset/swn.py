@@ -229,7 +229,15 @@ class SwnRulesetModule(RulesetModule):
         )
 
     def check_params(
-        self, *, stats, attribute, skill_level, difficulty_key, label, cfg, character_core=None
+        self,
+        *,
+        stats,
+        attribute,
+        skill_level,
+        difficulty_key,
+        label,
+        cfg,
+        character_core: object | None = None,
     ) -> CheckRollParams:
         if attribute is None:
             raise ValueError(
@@ -245,7 +253,9 @@ class SwnRulesetModule(RulesetModule):
             label=label,
         )
 
-    def save_params(self, *, stats, save, level, label, cfg, character_core=None) -> CheckRollParams:
+    def save_params(
+        self, *, stats, save, level, label, cfg, character_core: object | None = None
+    ) -> CheckRollParams:
         if save not in self._SAVE_ATTRS:
             raise ValueError(
                 f"unknown save category {save!r}, expected one of {list(self._SAVE_ATTRS)}"

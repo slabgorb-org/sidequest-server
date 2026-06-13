@@ -1596,6 +1596,8 @@ def _emit_player_beat_resolution_close(
 def _defensive_posture_for_reprisal(
     cdef: ConfrontationDef,
     defender_commit: WnSealedCommit | None,
+    *,
+    encounter_type: str = "?",
 ) -> tuple[str, int, bool]:
     """Read the reprisal target's sealed beat into a defensive posture (story 106-2).
 
@@ -1607,28 +1609,54 @@ def _defensive_posture_for_reprisal(
       (``resolve_tier_deltas`` — the same dial-drain value the brace already
       drains from the opponent; no invented number, content-tunable per
       "Crunch in the Genre"). 0 when not bracing or the brace failed.
-    - ``prevents`` — True when the target committed a **push** beat (Break Contact
-      / full-defend / disengage) that did not fail: the opponent's attack does not
-      land this round (WWN-faithful disengage — there are no opportunity attacks).
+    - ``prevents`` — True only when the target committed a **push** beat (Break
+      Contact / full-defend / disengage) and it **succeeded** (Success/CritSuccess):
+      the opponent's attack does not land this round (WWN-faithful disengage — no
+      opportunity attacks). A Tie/Fail does NOT prevent — it mirrors the dial
+      engine, where ``DEFAULT_DELTAS[push][Tie] == {}`` (a tied disengage resolves
+      nothing), so a half-made break must not negate the attack.
 
     Bound to beat KIND, not pack strings — works for any WWN/CWN/SWN content that
     authors a brace or push beat. ``None`` commit (legacy SWN path) → no posture.
+
+    Fails LOUD, not silent (No Silent Fallbacks): a commit naming a beat absent
+    from the cdef, or carrying an unrecognised outcome (``RollOutcome._missing_``
+    maps any bad wire value to ``Unknown`` — it does NOT raise), degrades to "no
+    defensive posture" so the opponent's attack still resolves, but emits a WARNING
+    so the dropped defense is visible in the logs and the empty ``defender_beat``
+    shows on the GM-panel span. (The player-beat APPLY path in ``wn_round`` raises
+    for the same drift because it cannot apply a phantom beat; the reprisal only
+    READS a posture, so it warns-and-continues rather than crashing combat.)
     """
     if defender_commit is None:
         return "", 0, False
     beat = next((b for b in cdef.beats if b.id == defender_commit.beat_id), None)
     if beat is None:
+        logger.warning(
+            "dice.defensive_posture_unknown_beat beat_id=%r encounter=%s — sealed "
+            "commit names a beat absent from the cdef (content drift mid-round); "
+            "reprisal proceeds with NO defensive mitigation",
+            defender_commit.beat_id,
+            encounter_type,
+        )
         return "", 0, False
-    try:
-        outcome = RollOutcome(defender_commit.outcome)
-    except ValueError:
+    outcome = RollOutcome(defender_commit.outcome)
+    if outcome is RollOutcome.Unknown:
+        logger.warning(
+            "dice.defensive_posture_unknown_outcome beat_id=%r outcome=%r encounter=%s "
+            "— unrecognised commit outcome (RollOutcome._missing_ → Unknown); reprisal "
+            "proceeds with NO defensive mitigation",
+            defender_commit.beat_id,
+            defender_commit.outcome,
+            encounter_type,
+        )
         return "", 0, False
-    failed = outcome in (RollOutcome.Fail, RollOutcome.CritFail)
+    succeeded = outcome in (RollOutcome.Success, RollOutcome.CritSuccess)
     if beat.kind is BeatKind.push:
-        # Break Contact / full-defend: the disengage prevents the hit unless botched.
-        return (beat.id, 0, not failed)
+        # Break Contact / full-defend: only a SUCCESSFUL disengage prevents.
+        return beat.id, 0, succeeded
     if beat.kind is BeatKind.brace:
-        if failed:
+        if outcome in (RollOutcome.Fail, RollOutcome.CritFail):
             return beat.id, 0, False
         deltas = resolve_tier_deltas(
             kind=BeatKind.brace,
@@ -1721,7 +1749,7 @@ def _resolve_opponent_reprisal(
     # it (the GM-panel lie detector; "you brace and it glances off" must be
     # mechanically backed).
     defender_beat_id, defense_mitigation, defense_prevents = _defensive_posture_for_reprisal(
-        cdef, defender_commit
+        cdef, defender_commit, encounter_type=encounter.encounter_type
     )
 
     if defense_prevents:
@@ -1901,6 +1929,13 @@ def _resolve_opponent_reprisal(
                 "do NOT invent damage, and do NOT state any other HP value."
             )
             return messages
+        # Story 106-2: a committed Brace mitigates the DIRECT HIT (below), but NOT
+        # the Shock chip. Shock is the WWN "even a miss draws blood" guaranteed-graze
+        # mechanic — a fixed chip that bypasses the to-hit roll entirely; a Brace
+        # (which blunts a connecting blow) does not negate the graze. A successful
+        # Break Contact prevents the whole attack earlier (the prevention return
+        # above), so no Shock fires on a full disengage. Intentional asymmetry, not
+        # an oversight — target_mitigation stays 0 here.
         apply_beat_hp_channel(
             target=player_core,
             channel="strike",
@@ -2033,16 +2068,28 @@ def _resolve_opponent_reprisal(
     # (SOUL: mechanical state must back the story; sq-playtest 2026-06-07). When a
     # Brace mitigated, anchor the NET damage and name the brace so the prose can
     # honestly narrate the defense softening the blow.
-    _brace_note = (
-        f" (a Brace absorbed {defense_mitigation} of {dmg_total})" if defense_mitigation else ""
-    )
-    snapshot.next_turn_directives.append(
-        f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
-        f"{opponent_beat.label} struck {player_name} for {applied_damage} damage"
-        f"{_brace_note} — "
-        f"{player_name} is now at {player_core.hp.current}/{player_core.hp.max} HP. "
-        "Narrate the hit landing; do not soften or omit it."
-    )
+    if applied_damage == 0 and defense_mitigation > 0:
+        # The Brace fully absorbed the blow: 0 HP lost. Commanding "narrate the
+        # hit landing" here would be a lie (no damage). Direct the prose to a
+        # block/deflection so it matches the mechanical truth.
+        snapshot.next_turn_directives.append(
+            f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
+            f"{opponent_beat.label} connected but {player_name}'s Brace absorbed the "
+            f"full {dmg_total} damage — NO HP was lost; {player_name} remains at "
+            f"{player_core.hp.current}/{player_core.hp.max} HP. Narrate the brace "
+            "turning the blow, NOT a wounding hit; do NOT invent damage."
+        )
+    else:
+        _brace_note = (
+            f" (a Brace absorbed {defense_mitigation} of {dmg_total})" if defense_mitigation else ""
+        )
+        snapshot.next_turn_directives.append(
+            f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
+            f"{opponent_beat.label} struck {player_name} for {applied_damage} damage"
+            f"{_brace_note} — "
+            f"{player_name} is now at {player_core.hp.current}/{player_core.hp.max} HP. "
+            "Narrate the hit landing; do not soften or omit it."
+        )
     _watcher_publish(
         "state_transition",
         {

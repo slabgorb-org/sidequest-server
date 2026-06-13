@@ -337,3 +337,127 @@ def test_swn_sibling_without_initiative_keeps_legacy_reprisal_no_raise():
         "the SWN legacy reprisal must still fire with no initiative (WWN "
         "fail-loud must not regress 71-21's space_opera path)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Review-round hardening (Reviewer panel, 2026-06-13): the posture helper must
+# fail loud (not crash, not wrongly prevent) on a corrupt/Unknown commit, and a
+# Tie disengage must not prevent. RollOutcome._missing_ maps any bad wire value
+# to Unknown (it does NOT raise), so the original `except ValueError` was dead.
+# ---------------------------------------------------------------------------
+
+
+def _combat_cdef(pack):
+    return next(c for c in pack.rules.confrontations if c.win_condition == "hp_depletion")
+
+
+def test_posture_helper_corrupt_outcome_is_safe_no_crash_no_posture():
+    """A brace/push commit carrying an unrecognised outcome string must NOT crash
+    (`resolve_tier_deltas` raises on RollOutcome.Unknown) and must NOT grant a
+    defensive posture — it degrades loudly to no-defense. RED before the fix: a
+    garbage outcome → RollOutcome.Unknown → brace branch → resolve_tier_deltas
+    ValueError, or push branch → wrongful prevent."""
+    from sidequest.game.encounter import WnSealedCommit
+    from sidequest.server.dispatch.dice import _defensive_posture_for_reprisal
+
+    pack = load_pack("heavy_metal")
+    cdef = _combat_cdef(pack)
+
+    bad_brace = WnSealedCommit(
+        actor=_PC, beat_id=_BRACE, outcome="garbage", target=_OPP, spell_id=None
+    )
+    assert _defensive_posture_for_reprisal(cdef, bad_brace, encounter_type="combat") == (
+        "",
+        0,
+        False,
+    ), "a corrupt-outcome brace must not crash and must grant no mitigation"
+
+    bad_push = WnSealedCommit(
+        actor=_PC, beat_id=_BREAK_CONTACT, outcome="Unknown", target=_OPP, spell_id=None
+    )
+    assert _defensive_posture_for_reprisal(cdef, bad_push, encounter_type="combat") == (
+        "",
+        0,
+        False,
+    ), "a corrupt-outcome push must NOT prevent the opponent's attack"
+
+
+def test_posture_helper_push_prevents_only_on_success_not_tie():
+    """Break Contact prevents the attack only on Success/CritSuccess. A Tie push
+    resolves nothing in the dial engine (DEFAULT_DELTAS[push][Tie] == {}), so it
+    must not prevent the reprisal either."""
+    from sidequest.game.encounter import WnSealedCommit
+    from sidequest.server.dispatch.dice import _defensive_posture_for_reprisal
+
+    pack = load_pack("heavy_metal")
+    cdef = _combat_cdef(pack)
+
+    _, _, prev_tie = _defensive_posture_for_reprisal(
+        cdef,
+        WnSealedCommit(
+            actor=_PC, beat_id=_BREAK_CONTACT, outcome="Tie", target=_OPP, spell_id=None
+        ),
+        encounter_type="combat",
+    )
+    assert prev_tie is False, "a Tie break_contact must NOT prevent the attack"
+
+    _, _, prev_ok = _defensive_posture_for_reprisal(
+        cdef,
+        WnSealedCommit(
+            actor=_PC, beat_id=_BREAK_CONTACT, outcome="Success", target=_OPP, spell_id=None
+        ),
+        encounter_type="combat",
+    )
+    assert prev_ok is True, "a successful break_contact must prevent the attack"
+
+
+def test_posture_helper_unknown_beat_id_is_loud_no_posture():
+    """A sealed commit naming a beat absent from the cdef (content drift) degrades
+    to no-defense rather than mitigating from a phantom beat."""
+    from sidequest.game.encounter import WnSealedCommit
+    from sidequest.server.dispatch.dice import _defensive_posture_for_reprisal
+
+    pack = load_pack("heavy_metal")
+    cdef = _combat_cdef(pack)
+    assert _defensive_posture_for_reprisal(
+        cdef,
+        WnSealedCommit(
+            actor=_PC, beat_id="no_such_beat", outcome="Success", target=_OPP, spell_id=None
+        ),
+        encounter_type="combat",
+    ) == ("", 0, False)
+
+
+def test_brace_fully_absorbed_hit_directive_says_block_not_wounding_hit(monkeypatch):
+    """When a Brace's mitigation >= the damage roll, 0 HP is lost — the narrator
+    directive must say the brace ABSORBED the blow (a block), NOT 'narrate the hit
+    landing'. Pins the fully-absorbed honesty fix (Reviewer edge finding).
+
+    Arg-dispatching rng fake (damage_roll.random IS the global random singleton,
+    so two setattrs would clobber): the opponent to-hit d20 (1,20) → 20 (a
+    guaranteed HIT), the 1d8 damage (1,8) → 1, so brace mitigation (1) >= damage
+    (1) → 0 HP applied."""
+
+    def _fake_randint(a, b):
+        return b if (a, b) == (1, 20) else a
+
+    monkeypatch.setattr("random.randint", _fake_randint)
+
+    pack, snap, enc = _solo_wwn_combat()
+    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
+    hp0 = _pc_hp(snap)
+
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE
+    )
+
+    assert _pc_hp(snap) == hp0, (
+        f"a fully-absorbed brace must lose no HP; before={hp0} after={_pc_hp(snap)}"
+    )
+    dirs = snap.next_turn_directives
+    assert any("absorbed the full" in d and _PC in d for d in dirs), (
+        f"the directive must state the brace absorbed the blow; got {dirs!r}"
+    )
+    assert not any("Narrate the hit landing" in d for d in dirs), (
+        "a fully-absorbed brace must NOT command the narrator to narrate a wounding hit"
+    )

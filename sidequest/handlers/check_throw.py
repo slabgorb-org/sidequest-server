@@ -57,6 +57,10 @@ def handle_check_throw(
     stats: dict[str, int] = dict(character.stats) if character is not None else {}
     level: int = character.core.level if character is not None else 1
     name: str = character.core.name if character is not None else "Unknown"
+    # The acting character's CreatureCore carries the statuses whose
+    # roll_modifier the bound ruleset folds into the check/save modifier
+    # (Task 2.3 — e.g. the in-the-dark Status drags a find-the-rope search).
+    character_core = character.core if character is not None else None
 
     return dispatch_check(
         kind=payload.kind,
@@ -71,6 +75,7 @@ def handle_check_throw(
         pack=pack,
         rolling_player_id=rolling_player_id,
         character_name=name,
+        character_core=character_core,
         session_id=session_id,
         room_broadcast=room_broadcast,
     )

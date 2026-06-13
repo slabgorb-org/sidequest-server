@@ -229,7 +229,7 @@ class SwnRulesetModule(RulesetModule):
         )
 
     def check_params(
-        self, *, stats, attribute, skill_level, difficulty_key, label, cfg
+        self, *, stats, attribute, skill_level, difficulty_key, label, cfg, character_core=None
     ) -> CheckRollParams:
         if attribute is None:
             raise ValueError(
@@ -240,12 +240,12 @@ class SwnRulesetModule(RulesetModule):
         return CheckRollParams(
             sides=6,
             count=2,
-            modifier=attr_mod + int(skill_level),
+            modifier=attr_mod + int(skill_level) + status_roll_modifier(character_core),
             difficulty=int(cfg.difficulties[difficulty_key]),
             label=label,
         )
 
-    def save_params(self, *, stats, save, level, label, cfg) -> CheckRollParams:
+    def save_params(self, *, stats, save, level, label, cfg, character_core=None) -> CheckRollParams:
         if save not in self._SAVE_ATTRS:
             raise ValueError(
                 f"unknown save category {save!r}, expected one of {list(self._SAVE_ATTRS)}"
@@ -264,7 +264,7 @@ class SwnRulesetModule(RulesetModule):
         return CheckRollParams(
             sides=20,
             count=1,
-            modifier=best_mod,
+            modifier=best_mod + status_roll_modifier(character_core),
             difficulty=int(cfg.save_base)
             - (int(level) - 1),  # target; SRD p.46: 15 at level 1, -1/level
             label=label,

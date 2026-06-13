@@ -21,7 +21,7 @@ from sidequest.game.creature_core import CreatureCore
 from sidequest.game.lethality import DownedResult, LethalityResult, major_injury_entry
 from sidequest.game.ruleset.resolution import AttackRollParams, CheckRollParams
 from sidequest.game.ruleset.swn import SwnRulesetModule
-from sidequest.game.status import Status, StatusSeverity
+from sidequest.game.status import Status, StatusSeverity, status_roll_modifier
 from sidequest.game.system_strain import StrainResult
 from sidequest.game.wwn_magic import (
     CastInput,
@@ -57,17 +57,19 @@ class WwnRulesetModule(SwnRulesetModule):
         """WWN has no ship gunnery — fail loud rather than inherit SWN's dogfight math."""
         raise NotImplementedError("wwn ruleset has no ship-gunnery resolution")
 
-    def save_params(self, *, stats, save, level, label, cfg) -> CheckRollParams:
+    def save_params(self, *, stats, save, level, label, cfg, character_core=None) -> CheckRollParams:
         """WWN saves: three attribute saves inherited from SWN, plus Luck (no attribute)."""
         if save == "luck":
             return CheckRollParams(
                 sides=20,
                 count=1,
-                modifier=0,
+                modifier=status_roll_modifier(character_core),
                 difficulty=int(cfg.save_base) - (int(level) - 1),
                 label=label,
             )
-        return super().save_params(stats=stats, save=save, level=level, label=label, cfg=cfg)
+        return super().save_params(
+            stats=stats, save=save, level=level, label=label, cfg=cfg, character_core=character_core
+        )
 
     def resolve_shock(
         self,

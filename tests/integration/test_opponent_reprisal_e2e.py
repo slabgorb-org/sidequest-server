@@ -654,5 +654,9 @@ def test_reprisal_ops_persist_to_encounter_rows():
     from sidequest.telemetry.watcher_hub import _KIND_BY_OP
 
     assert _KIND_BY_OP.get("opponent_attack_resolved") == "ENCOUNTER_OPPONENT_ATTACK"
-    assert _KIND_BY_OP.get("opponent_damage_roll_resolved") == "ENCOUNTER_OPPONENT_ATTACK"
+    # The damage roll is a DISTINCT kind from the to-hit roll (sq-playtest
+    # 2026-06-13 telemetry-gap): sharing one display name surfaced the damage
+    # row as a "null" duplicate ENCOUNTER_OPPONENT_ATTACK (d20=None/hit=None).
+    assert _KIND_BY_OP.get("opponent_damage_roll_resolved") == "ENCOUNTER_OPPONENT_DAMAGE"
     assert "ENCOUNTER_OPPONENT_ATTACK" in _REPLAY_SKIP_KINDS
+    assert "ENCOUNTER_OPPONENT_DAMAGE" in _REPLAY_SKIP_KINDS

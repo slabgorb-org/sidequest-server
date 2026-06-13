@@ -36,6 +36,7 @@ from sidequest.game.shared_world_delta import (
     build_shared_world_delta,
     merge_shared_delta_into_snapshot,
 )
+from sidequest.game.status import Status
 from sidequest.genre.models.ocean import DramaThresholds
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
@@ -1080,6 +1081,29 @@ def _build_turn_context(
     ):
         pass
 
+    # Light & Darkness survival clock (Task 7.1). Surface the ``light``
+    # ResourcePool (current/max + threshold narrator_hints) and the acting PC's
+    # active darkness statuses so the narrator's guttering/dark prose is
+    # state-driven, not improvised. Both default to None/empty on packs without
+    # a light clock (zero-byte-leak). The darkness status is matched by its
+    # structured ``source`` marker (never by wording), so a combat wound that
+    # happens to share text can never leak into the light block.
+    light_pool = snapshot.resources.get("light")
+    darkness_statuses: list[Status] = []
+    if light_pool is not None:
+        # Lazy import: ``environment_clock`` pulls ``game.session`` which
+        # transitively reaches ``narration_apply`` → ``session_helpers``, so a
+        # module-top import here is circular. Local import breaks the cycle.
+        from sidequest.agents.subsystems.environment_clock import (  # noqa: PLC0415
+            DARKNESS_STATUS_SOURCE,
+        )
+
+        acting_core = snapshot.find_creature_core(char_name)
+        if acting_core is not None:
+            darkness_statuses = [
+                st for st in acting_core.statuses if st.source == DARKNESS_STATUS_SOURCE
+            ]
+
     return TurnContext(
         pacing_hint=pacing_hint,
         in_combat=in_combat,
@@ -1209,6 +1233,9 @@ def _build_turn_context(
         # the narrator improvising geography and gives it the real
         # adjacent region ids as the constrained move vocabulary.
         region_projection=_project_current_region(sd, snapshot),
+        # Light & Darkness survival clock (Task 7.1) — see the block above.
+        light_pool=light_pool,
+        darkness_statuses=darkness_statuses,
     )
 
 

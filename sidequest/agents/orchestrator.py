@@ -872,6 +872,17 @@ class TurnContext:
     # ``encounter: Any``.
     statuses_by_actor: dict[str, list[Any]] = field(default_factory=dict)
 
+    # Light & Darkness survival clock (Task 7.1). The ``light`` ResourcePool
+    # (current/max + threshold narrator_hints) and the acting PC's active
+    # darkness statuses (the environment_clock −2 penalty), surfaced to the
+    # narrator so guttering/dark prose is state-driven, not improvised. Both
+    # are VOLATILE (light.current changes every burn) → registered in the
+    # Valley zone, never the cached prefix. ``None``/empty on packs without a
+    # light clock (zero-byte-leak). Typed as Any to avoid a ResourcePool/Status
+    # circular import in this layer (same pattern as statuses_by_actor).
+    light_pool: Any = None
+    darkness_statuses: list[Any] = field(default_factory=list)
+
     # Per-PC class + spell-slot lookup for the live encounter zone (Task 7,
     # C&C B/X class beats). Maps PC actor name → (ClassDef, spell_slots_remaining).
     # When non-empty, build_encounter_context renders class-distinct beat menus
@@ -2133,6 +2144,18 @@ class Orchestrator:
             registry.register_region_section(
                 agent_name,
                 region_projection=context.region_projection,
+            )
+
+        # Light & Darkness survival clock (Task 7.1). Surface the compact light
+        # state (current/max + active threshold hint) and the acting PC's
+        # darkness penalty so guttering/dark prose is state-driven. Valley
+        # (volatile) zone — light.current changes every burn, must not ride the
+        # cached prefix. None pool → no section (zero-byte-leak).
+        if context.light_pool is not None:
+            registry.register_light_section(
+                agent_name,
+                pool=context.light_pool,
+                statuses=context.darkness_statuses,
             )
 
         # Chassis voices — chassis as named speakers with bond-tier name-form.

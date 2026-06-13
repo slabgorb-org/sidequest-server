@@ -324,6 +324,138 @@ async def _run_pass_with_confrontation_and_light():
     return returned, bank_result, snap
 
 
+async def _run_pass_with_llm_emitted_relight():
+    """Drive the live pre-narrator pass with a router that EMITS a relight
+    dispatch (environment_clock, mode=relight) — the deliberate player intent
+    path, distinct from the server-injected burn.
+
+    Seats a light_source-tagged torch (quantity 2) and a darkness penalty on the
+    acting PC, and starts the light pool BELOW max (so "now at max" genuinely
+    proves the relight ran, not a no-op on an already-full pool).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sidequest.agents.subsystems.environment_clock import DARKNESS_STATUS_SOURCE
+    from sidequest.game.status import Status, StatusSeverity
+    from sidequest.genre.models.pack import GenrePack
+    from sidequest.genre.models.rules import RulesConfig
+    from sidequest.server.intent_router_pass import (
+        execute_intent_router_pre_narrator_pass,
+    )
+
+    pack = MagicMock(spec=GenrePack)
+    pack.rules = RulesConfig()
+    pack.witnessed_acts = None
+    pack.worlds = {}
+
+    snap = _snap_with_light()
+    snap.genre_slug = "test_pack"
+    # Start the light pool BELOW max so a successful relight is observable as a
+    # state change (6.0 -> would be a no-op against the 6.0 max).
+    snap.resources["light"].current = 2.0
+    # Seat a usable torch (the dedicated light_source tag; quantity 2 so the
+    # decrement-to-1 is observable, not a remove-on-last-charge).
+    core = snap.find_creature_core(ACTING_PC)
+    core.inventory.items.append(
+        {"id": "torch", "name": "Torch", "tags": ["light_source"], "quantity": 2}
+    )
+    # Seat a darkness penalty the relight must clear (keyed on the structured
+    # source, exactly as the burn path mints it).
+    core.statuses.append(
+        Status(
+            text="Plunged into darkness — every action is harder.",
+            source=DARKNESS_STATUS_SOURCE,
+            severity=StatusSeverity.Wound,
+            roll_modifier=-2,
+        )
+    )
+
+    relight_key = "k-relight-1"
+    package = DispatchPackage(
+        turn_id="t-relight",
+        confidence_global=0.8,
+        per_player=[
+            PlayerDispatch(
+                player_id="seat-1",
+                raw_action="I light a fresh torch.",
+                dispatch=[
+                    SubsystemDispatch(
+                        subsystem="environment_clock",
+                        params={"mode": "relight", "character_name": ACTING_PC},
+                        idempotency_key=relight_key,
+                        confidence=0.8,
+                        visibility=_tag_all(),
+                    )
+                ],
+            )
+        ],
+    )
+
+    router = MagicMock()
+    router.decompose = AsyncMock(return_value=package)
+
+    returned, bank_result = await execute_intent_router_pre_narrator_pass(
+        intent_router=router,
+        snapshot=snap,
+        pack=pack,
+        action="I light a fresh torch.",
+        player_name=ACTING_PC,
+    )
+    return returned, bank_result, snap, core, relight_key
+
+
+def test_llm_emitted_relight_engages_through_live_bank():
+    """End-to-end: a player's DELIBERATE relight (LLM-emitted environment_clock
+    with mode=relight) routes parse -> unregistered gate -> precondition gate ->
+    bank -> run_environment_clock_dispatch(mode=relight) and ACTUALLY relights.
+
+    Distinct from the server-injected burn (test_injector_fires_inside_live_pre
+    _narrator_pass): here the router emits the dispatch itself, proving the
+    decomposer path engages the relight branch end-to-end. The relit assertion
+    depends on the dispatch actually running through the bank — if the relight
+    were dropped at any gate, outputs_by_key would not carry its key and the
+    light pool would stay at 2.0.
+    """
+    import asyncio
+
+    from sidequest.agents.subsystems.environment_clock import DARKNESS_STATUS_SOURCE
+
+    returned, bank_result, snap, core, relight_key = asyncio.run(
+        _run_pass_with_llm_emitted_relight()
+    )
+
+    # The relight dispatch survived both gates into the package the bank consumed.
+    kinds = [d.subsystem for pd in returned.per_player for d in pd.dispatch]
+    assert "environment_clock" in kinds, (
+        "the LLM-emitted relight dispatch must survive the unregistered + "
+        f"precondition gates into the bank-consumed package; got {kinds}"
+    )
+
+    # It engaged through the real bank under its OWN idempotency key (the
+    # deliberate-intent key, not the injected-burn key).
+    assert relight_key in bank_result.outputs_by_key, (
+        "the bank must have executed the LLM-emitted relight dispatch; "
+        f"outputs_by_key keys={list(bank_result.outputs_by_key)}"
+    )
+    out = bank_result.outputs_by_key[relight_key]
+    assert out.data["relit"] is True, (
+        f"run_environment_clock_dispatch(mode=relight) must have run and relit; got data={out.data}"
+    )
+
+    # The light pool is now at max (relit from 2.0 -> 6.0).
+    assert snap.resources["light"].current == snap.resources["light"].max == 6.0
+
+    # The torch was consumed (quantity 2 -> 1).
+    torch = next(i for i in core.inventory.items if "light_source" in (i.get("tags") or []))
+    assert torch["quantity"] == 1, f"the torch charge must decrement; got {torch}"
+
+    # The darkness penalty (keyed on the structured source) is cleared.
+    assert not any(s.source == DARKNESS_STATUS_SOURCE for s in core.statuses), (
+        "the relight must clear the darkness penalty Status; "
+        f"remaining statuses={[s.source for s in core.statuses]}"
+    )
+
+
 def test_injector_fires_inside_live_pre_narrator_pass():
     import asyncio
 

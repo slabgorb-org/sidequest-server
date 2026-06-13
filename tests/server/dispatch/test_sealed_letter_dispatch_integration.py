@@ -127,10 +127,28 @@ def cac_pack() -> GenrePack:
     return load_genre_pack(CONTENT_ROOT / "caverns_and_claudes")
 
 
+def _make_wwn_pc(name: str) -> Character:
+    """Minimal caverns_and_claudes (WWN ruleset) PC carrying the WWN attribute
+    block. cac was ported to WWN (PR #429), so combat instantiation rolls
+    initiative (1d8+DEX) and resolves each player-side actor's DEX from
+    ``snapshot.characters`` — failing loud on a seated player that isn't a real
+    Character. The WWN DEXTERITY flavor is "DEX" (rules.yaml attribute_map)."""
+    return Character(
+        core=CreatureCore(name=name, description="A delver.", personality="Steady."),
+        backstory="Sünden-born.",
+        char_class="Warrior",
+        race="Human",
+        stats={"STR": 12, "DEX": 12, "CON": 12, "INT": 10, "WIS": 10, "CHA": 10},
+    )
+
+
 @pytest.fixture
 def cac_snap(cac_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
     snap = GameSnapshot(genre="caverns_and_claudes")
     snap.genre_slug = "caverns_and_claudes"
+    # Seat the PC the legacy-beat regression tests drive ("Rux") so the WWN
+    # initiative seam can resolve its DEX (No Silent Fallbacks).
+    snap.characters.append(_make_wwn_pc("Rux"))
     return snap, cac_pack
 
 
@@ -497,14 +515,14 @@ def test_legacy_beat_selection_path_still_works(
     cac_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """The CAC ``combat`` confrontation must continue to resolve through
-    the legacy non-sealed-letter path; ``resolution_mode`` is now
-    ``opposed_check`` after PR #130 (CAC combat was migrated off
-    ``beat_selection``). The test name retains the historical
-    ``legacy_beat_selection_path`` framing because what's being pinned
-    is the legacy code path that handles non-sealed-letter resolution
-    via apply_beat — not the specific resolution_mode value. If the
-    sealed-letter branch were wired too greedily, this test would
-    diverge from prior behavior.
+    the legacy non-sealed-letter path. After the WWN port (PR #429) CAC
+    combat resolves via ``beat_selection`` (the literal legacy beat path
+    this test is named for). What's being pinned is the legacy code path
+    that handles non-sealed-letter resolution via apply_beat — not the
+    specific resolution_mode value; the only invariant that matters here
+    is that it is NOT ``sealed_letter_lookup``. If the sealed-letter
+    branch were wired too greedily, this test would diverge from prior
+    behavior.
     """
     snap, pack = cac_snap
 
@@ -529,22 +547,26 @@ def test_legacy_beat_selection_path_still_works(
         "combat",
     )
     assert cdef is not None
-    assert cdef.resolution_mode == ResolutionMode.opposed_check
+    assert cdef.resolution_mode != ResolutionMode.sealed_letter_lookup, (
+        "the legacy beat path must not be the sealed-letter branch; CAC "
+        f"combat resolves via {cdef.resolution_mode} after the WWN port"
+    )
     assert all(a.role in ("combatant", "participant") for a in enc.actors), (
         f"legacy combat encounter should keep legacy role tags, got "
         f"{[(a.name, a.role) for a in enc.actors]}"
     )
 
-    # Pick a beat that exists on CAC combat — the standard "attack"
+    # Pick a damage beat that exists on CAC combat. The WWN port (PR #429)
+    # renamed the attack beat to "strike" (ablative-HP damage channel).
     beat_ids = {b.id for b in cdef.beats}
-    assert "attack" in beat_ids, (
-        f"CAC combat needs an 'attack' beat for this regression test; has {beat_ids}"
+    assert "strike" in beat_ids, (
+        f"CAC combat needs a 'strike' beat for this regression test; has {beat_ids}"
     )
 
     starting_opp = enc.opponent_metric.current
 
-    # Turn 2: player attacks — this MUST go through apply_beat (which
-    # advances the opponent dial via the resolve_attack mechanic).
+    # Turn 2: player strikes — this MUST go through apply_beat (the legacy
+    # non-sealed-letter resolution path).
     _apply_narration_result_to_snapshot(
         snap,
         NarrationTurnResult(
@@ -552,7 +574,7 @@ def test_legacy_beat_selection_path_still_works(
             beat_selections=[
                 BeatSelection(
                     actor="Rux",
-                    beat_id="attack",
+                    beat_id="strike",
                     outcome=RollOutcome.Success,
                 ),
             ],

@@ -98,16 +98,16 @@ def _spans_named(otel_capture, name: str) -> list[Any]:
 
 
 class TestSeaboardContentResolvesAgainstCatalog:
-    def test_draft_world_is_skipped_by_pack_load(self) -> None:
-        """The trap these tests work around: while ``draft: true`` (until the
-        103-9 asset gate), ``load_genre_pack`` skips the world entirely, so its
-        content is validated by no production path. This pins the current
-        state and explains why the sibling tests drive the loaders directly."""
+    def test_live_world_is_loaded_by_pack_load(self) -> None:
+        """seaboard_of_saints went LIVE on 2026-06-11 (PR #423: asset gate met,
+        draft key removed from world.yaml). Per the prior version of this test's
+        own instruction ("if it now loads, flip this test to assert it appears
+        in pack.worlds"), this now pins the live state: ``load_genre_pack`` must
+        surface the world through the production path alongside its sibling."""
         pack = _load_pack()
-        assert _WORLD not in pack.worlds, (
-            "seaboard_of_saints is draft: true and must be skipped by "
-            "load_genre_pack until the 103-9 asset gate lifts draft — if it "
-            "now loads, flip this test to assert it appears in pack.worlds"
+        assert _WORLD in pack.worlds, (
+            "seaboard_of_saints is live (no draft key in world.yaml since "
+            "PR #423) and must be loaded by load_genre_pack"
         )
         assert "flickering_reach" in pack.worlds, "the non-draft sibling must still load"
 

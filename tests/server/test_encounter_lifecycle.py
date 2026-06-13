@@ -12,6 +12,39 @@ def cac_pack():
     return GenreLoader(DEFAULT_GENRE_PACK_SEARCH_PATHS).load("caverns_and_claudes")
 
 
+# caverns_and_claudes was ported to the WWN ruleset (PR #429), so combat
+# instantiation now rolls initiative (1d8+DEX) for every player-side actor and
+# resolves each PC's DEX from ``snapshot.characters`` — failing loud when a
+# seated player isn't a real Character (No Silent Fallbacks,
+# encounter_lifecycle.py). Pre-WWN these tests could seat a player_name with an
+# empty snapshot because the native ruleset short-circuited initiative; under
+# WWN the PC must actually exist. ``_seat_wwn_pcs`` registers minimal but real
+# Characters carrying the WWN attribute block (DEXTERITY flavor = "DEX").
+_WWN_STATS = {"STR": 12, "DEX": 12, "CON": 12, "INT": 10, "WIS": 10, "CHA": 10}
+
+
+def _seat_wwn_pcs(snap, *names: str) -> None:
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore, Inventory
+
+    for name in names:
+        snap.characters.append(
+            Character(
+                core=CreatureCore(
+                    name=name,
+                    description="Sünden delver.",
+                    personality="bold",
+                    inventory=Inventory(items=[]),
+                    hp={"current": 10, "max": 10, "base_max": 10},
+                ),
+                char_class="Warrior",
+                race="Human",
+                backstory="Born to the deep dark.",
+                stats=dict(_WWN_STATS),
+            )
+        )
+
+
 def test_instantiate_combat_creates_encounter(cac_pack) -> None:
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.server.dispatch.encounter_lifecycle import (
@@ -19,6 +52,7 @@ def test_instantiate_combat_creates_encounter(cac_pack) -> None:
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    _seat_wwn_pcs(snap, "Rux")
     enc = instantiate_encounter_from_trigger(
         snapshot=snap,
         pack=cac_pack,
@@ -33,11 +67,14 @@ def test_instantiate_combat_creates_encounter(cac_pack) -> None:
     actor_names = [a.name for a in enc.actors]
     assert "Rux" in actor_names
     assert "Goblin" in actor_names
-    # caverns_and_claudes combat dual-dial: player_metric and opponent_metric.
-    # Threshold 7 per ADR-093 calibration (was 10 pre-calibration).
-    assert enc.player_metric.name == "momentum"
+    # caverns_and_claudes was ported to the WWN ruleset (PR #429): combat is now
+    # an ablative-HP confrontation (ADR-114), so both dials track "hp" rather
+    # than the pre-WWN "momentum" dual-dial. Resolution is by HP depletion, so
+    # the dial threshold is the hp-depletion sentinel, not an ADR-093 momentum
+    # cap — assert the metric identity, not the sentinel value.
+    assert enc.player_metric.name == "hp"
+    assert enc.opponent_metric.name == "hp"
     assert enc.player_metric.starting == 0
-    assert enc.player_metric.threshold == 7
 
 
 def test_instantiate_unknown_type_raises(cac_pack) -> None:
@@ -84,6 +121,7 @@ def test_instantiate_replaces_resolved_encounter(cac_pack) -> None:
     )
     prior.resolved = True
     snap.encounter = prior
+    _seat_wwn_pcs(snap, "Rux")
     # Story 45-33: combat now requires an opponent post-fallback. The original
     # test fixture passed npcs_present=[] because the focus is the resolved
     # encounter replacement, not opponent supply — adding an explicit
@@ -137,6 +175,7 @@ def test_resolution_turn_same_type_suppresses_initiated_span(cac_pack) -> None:
     try:
         snap = GameSnapshot(genre_slug="caverns_and_claudes")
         snap.character_locations["Rux"] = "Cavern Mouth"
+        _seat_wwn_pcs(snap, "Rux")
 
         # Turn 1 — initiation. The span fires exactly once here.
         enc = instantiate_encounter_from_trigger(
@@ -389,6 +428,7 @@ def test_instantiate_seats_additional_pcs_for_mp_bundle(cac_pack) -> None:
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    _seat_wwn_pcs(snap, "Scratchy", "Itchy")
     enc = instantiate_encounter_from_trigger(
         snapshot=snap,
         pack=cac_pack,
@@ -413,6 +453,7 @@ def test_instantiate_additional_pcs_dedup_against_primary(cac_pack) -> None:
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    _seat_wwn_pcs(snap, "Scratchy", "Itchy")
     # Story 45-33: combat requires an opponent post-fallback; this test's
     # focus is PC-list dedup, so supply a stub opponent and assert against
     # only the player-side actors.
@@ -440,6 +481,7 @@ def test_instantiate_additional_pcs_default_none_keeps_solo_behavior(cac_pack) -
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    _seat_wwn_pcs(snap, "Rux")
     # Story 45-33: combat requires an opponent. The test's focus is the
     # solo-PC roster shape (no MP bundle), not opponent supply.
     enc = instantiate_encounter_from_trigger(

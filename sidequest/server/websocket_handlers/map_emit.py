@@ -814,6 +814,7 @@ def _build_dungeon_map_payload(
     is the SHARED fog-of-war set — a region any PC entered is on the whole
     table's map; only the YOU-ARE-HERE marker (``is_current_room`` /
     ``current_location`` / ``region``) is per-PC."""
+    from sidequest.dungeon.region_projection import assign_bearings
     from sidequest.protocol.messages import (
         DungeonMapExit,
         DungeonMapLocation,
@@ -836,8 +837,15 @@ def _build_dungeon_map_payload(
             display = palette.get(node.theme).display_name
         except KeyError:
             display = rid  # fail-soft label; the span/log below is loud
+        # Same bearings the narrator names and the resolver matches — one
+        # source (assign_bearings), so the map agrees with the prose.
+        bearings = assign_bearings(graph, rid)
         room_exits = [
-            DungeonMapExit(target=(e.b if e.a == rid else e.a), exit_type=e.kind)
+            DungeonMapExit(
+                target=(target := (e.b if e.a == rid else e.a)),
+                exit_type=e.kind,
+                bearing=bearings.get(target, ""),
+            )
             for e in edges
             if rid in (e.a, e.b) and not e.hidden  # secrets stay off the map
         ]

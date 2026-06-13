@@ -684,7 +684,8 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
             lines.append("Exits from this region (describe these as the way out):")
             for e in visible:
                 tag = " (a shortcut back toward the surface)" if e.shortcut else ""
-                lines.append(f"- {e.kind} → {e.to_region_id}{tag}")
+                bearing = f"{e.bearing} — " if e.bearing else ""
+                lines.append(f"- {bearing}{e.kind} → {e.to_region_id}{tag}")
         else:
             lines.append(
                 "Exits from this region: none obvious — this is a dead end "
@@ -697,20 +698,28 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
                 "actively searches and finds one):"
             )
             for e in hidden:
-                lines.append(f"- {e.kind} → {e.to_region_id} [hidden]")
+                bearing = f"{e.bearing} — " if e.bearing else ""
+                lines.append(f"- {bearing}{e.kind} → {e.to_region_id} [hidden]")
 
-        # sq-playtest 2026-06-12 (beneath_sunden -6): the narrator described
-        # a listed corridor exit as "a passage that opens south"; the player
-        # echoed "I go to the south" and the movement engine — which has no
-        # compass — could not resolve it, so the move degraded to prose and
-        # the world forked. The exit vocabulary the narrator uses IS the
-        # vocabulary the player will speak back; constrain it at the source.
+        # sq-playtest 2026-06-13: directions are now FIRST-CLASS, not banned.
+        # Each exit above carries a real bearing (assign_bearings, stable +
+        # distinct per region), the engine resolves a player's "I go north" /
+        # "down the shaft" against it, and the DUNGEON_MAP renders it. The
+        # earlier guard that forbade the narrator from naming directions was
+        # backwards (the Zork Problem in reverse — narrowing the player's
+        # natural language instead of resolving it): a player WILL say "north",
+        # and now the map knows which edge that is. Name the ways out BY those
+        # bearings so the player's natural echo lands on a real edge.
         lines.append(
-            "EXIT VOCABULARY: describe the ways out ONLY in the terms "
-            "listed above (the stairs, the corridor, the shaft...). NEVER "
-            "assign a compass direction (north/south/east/west) to an exit "
-            "— this map has no compass, and a player who repeats your "
-            "invented direction will be told no such way exists."
+            "EXIT VOCABULARY: every way out has a BEARING listed above "
+            "(north/east/south/west for a passage; up/down for stairs or a "
+            "shaft). Name the ways out by those bearings and their kind — "
+            "'a corridor runs north, stairs climb up, a shaft drops away "
+            "south'. These bearings are REAL geometry: a player who says 'I "
+            "go north' or 'down the shaft' is moved along the exit you named "
+            "that way. Use ONLY the bearings shown above; never assign a "
+            "direction the list does not carry (that edge does not exist and "
+            "the player will be told there is no such way)."
         )
         example_id = (visible or hidden)[0].to_region_id if (visible or hidden) else rp.region_id
         lines.append(

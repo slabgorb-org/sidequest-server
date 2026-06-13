@@ -1119,3 +1119,93 @@ def test_ambiguous_descriptor_still_refuses_even_with_direction(capture_spans):
     )
     assert out.data.get("error") == "ambiguous_descriptor"
     assert snap.pc_regions["Rux"] == "a"
+
+
+# ---------------------------------------------------------------------------
+# Bearings (sq-playtest 2026-06-13): a player who NAMES a direction resolves
+# to the single exit that leaves the region that way — directions are
+# first-class input, no longer refused.
+# ---------------------------------------------------------------------------
+
+
+def test_named_bearing_resolves_the_four_way_corridor_tie(capture_spans):
+    # The exact playtest bug: from 'entrance' three corridors + one shaft.
+    # "the corridor ahead" tied 4 ways and the move was refused. Now the
+    # narrator names them by bearing and the player picks one — "I go <that
+    # corridor's bearing>" resolves to exactly that edge.
+    g = _graph_with(
+        [("entrance", 0.0), ("r0", 1.0), ("r1", 1.0), ("r2", 2.0), ("deep", 3.0)],
+        [
+            ("entrance", "r0", "corridor", False),
+            ("entrance", "r1", "corridor", False),
+            ("entrance", "r2", "corridor", False),
+            ("entrance", "deep", "shaft", False),
+        ],
+    )
+    from sidequest.dungeon.region_projection import assign_bearings
+
+    bearings = assign_bearings(g, "entrance")
+    # pick a real corridor bearing the generator assigned (not the shaft's down)
+    corridor_bearing = bearings["r1"]
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": "entrance"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor=f"I head {corridor_bearing}"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=store,
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("error") is None, f"named bearing refused: {out.data}"
+    assert out.data["to_region"] == "r1"
+    assert snap.pc_regions["Rux"] == "r1"
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert resolved[0].attributes["resolved_via"] == "bearing"
+
+
+def test_named_down_resolves_the_shaft(capture_spans):
+    g = _graph_with(
+        [("entrance", 0.0), ("r0", 1.0), ("deep", 3.0)],
+        [
+            ("entrance", "r0", "corridor", False),
+            ("entrance", "deep", "shaft", False),
+        ],
+    )
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": "entrance"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="I climb down the shaft"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=store,
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data["to_region"] == "deep"
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert resolved[0].attributes["resolved_via"] == "bearing"
+
+
+def test_unresolved_directive_forbids_advancing_the_room(capture_spans):
+    # When a move IS genuinely unresolved, the must_narrate directive is an
+    # explicit GM instruction NOT to advance the title/room — the narrator
+    # must not paper over the refusal with a confabulated corridor.
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(direction="deeper"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=None,  # → no_dungeon_store unresolved
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data["error"] == "no_dungeon_store"
+    assert len(out.directives) == 1
+    payload = out.directives[0].payload
+    assert "MOVEMENT REFUSED" in payload
+    assert "has NOT moved" in payload
+    assert "Do NOT change the location title" in payload

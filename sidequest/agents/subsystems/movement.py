@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from sidequest.agents.subsystems import SubsystemOutput
 from sidequest.dungeon.region_graph.model import RegionGraph
-from sidequest.dungeon.region_projection import RegionExit, project_region
+from sidequest.dungeon.region_projection import RegionExit, project_region, requested_bearing
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
 from sidequest.game.seams import SeamCrossingError, get_seam_resolver, seam_route_for
 from sidequest.game.seams.deep_descent import resolve_deep_descent
@@ -80,6 +80,21 @@ _DEEPER_KIND_RANK: dict[str, int] = {
 def _tokens(text: str) -> set[str]:
     """Lowercased alpha tokens for descriptor token-overlap scoring."""
     return {t for t in re.findall(r"[a-z]+", (text or "").lower())}
+
+
+def _exit_sort_key(e: RegionExit) -> tuple[str, str]:
+    """Stable display order for exits: by bearing, then id."""
+    return (e.bearing, e.to_region_id)
+
+
+def _way_phrase(e: RegionExit) -> str:
+    """A player-facing description of one exit, by bearing + kind — never the
+    raw region id (an ``exp001.r1`` slug in voiced prose is its own leak)."""
+    if e.bearing in ("up", "down"):
+        return f"the {e.kind} leading {e.bearing}"
+    if e.bearing:
+        return f"the {e.bearing} {e.kind}"
+    return f"the {e.kind}"
 
 
 def _cartography_for(*, pack: GenrePack | None, world_slug: str):
@@ -352,6 +367,7 @@ async def run_movement_dispatch(
     )
 
     if ambiguous:
+        ways = ", ".join(_way_phrase(e) for e in sorted(candidates, key=_exit_sort_key))
         return _unresolved(
             snapshot=snapshot,
             player_name=player_name,
@@ -360,10 +376,7 @@ async def run_movement_dispatch(
             direction=direction,
             exit_descriptor=exit_descriptor,
             available=available_ids,
-            surface=(
-                f"{player_name} could mean any of several ways from here: "
-                f"{', '.join(sorted(available_ids))}."
-            ),
+            surface=(f"{player_name} could go more than one way from here: {ways}. Which way?"),
         )
 
     if resolved is None:
@@ -466,6 +479,21 @@ def _resolve(
     """Deterministic §Q1 resolution. Returns (chosen, resolved_via, ambiguous)."""
     # Total deterministic baseline ordering: ascending to_region_id.
     ordered = sorted(candidates, key=lambda e: e.to_region_id)
+
+    # --- bearing match (highest priority) → the player named a direction. ---
+    # "I go north", "down the stairs", "the eastern passage" — each exit
+    # carries a distinct bearing (assign_bearings), so a named bearing
+    # resolves to AT MOST one edge: no tie is possible, and the 4-way "the
+    # corridor ahead" ambiguity that made movement unresolvable is gone the
+    # moment the narrator names the ways out by their bearings. A named
+    # bearing that matches nothing falls through to the coarse/descriptor
+    # paths (so "north corridor" can still land on the corridor token) rather
+    # than hard-refusing on the bearing alone.
+    want_bearing = requested_bearing(exit_descriptor) or requested_bearing(direction)
+    if want_bearing:
+        matched = [e for e in ordered if e.bearing == want_bearing]
+        if len(matched) == 1:
+            return matched[0], "bearing", False
 
     # --- exit_descriptor present → token-overlap match. ---
     if exit_descriptor.strip():
@@ -678,9 +706,23 @@ def _unresolved(
         exit_descriptor,
         available,
     )
+    # The directive is a GM instruction, not just in-fiction prose: the
+    # narrator must NOT paper over a refused move with a confabulated room
+    # (sq-playtest 2026-06-12 — narrator flipped the title to "First
+    # Corridor" and seeded a monster while the PC stayed frozen at the
+    # entrance). Make the non-advance explicit and hand it the honest surface
+    # to voice.
+    payload = (
+        f"MOVEMENT REFUSED ({reason}): {player_name} has NOT moved and is still in "
+        f"the same region. Do NOT change the location title or scene heading, do NOT "
+        f"describe entering/traversing/arriving anywhere, and do NOT introduce a new "
+        f"room or its contents. In fiction, surface this honestly and — if the way was "
+        f"ambiguous — ask which of the listed exits they take (name them by their "
+        f"bearings). Honest text to voice: {surface}"
+    )
     directive = NarratorDirective(
         kind="must_narrate",
-        payload=surface,
+        payload=payload,
         visibility=VisibilityTag(visible_to="all"),
     )
     return SubsystemOutput(directives=[directive], data={"error": reason})

@@ -149,6 +149,65 @@ def _oz_cartography() -> CartographyConfig:
     )
 
 
+def _null_from_id_cartography() -> CartographyConfig:
+    """Malformed seam: a registered-kind (``deep_descent``) route whose
+    ``from_id`` is null — the exact homebrew fat-finger the reviewer's Devil's
+    Advocate flagged (Jade authors packs now; ``Route.from_id`` is
+    ``str | None = None`` with NO validator, so this loads and plays fine on the
+    surface and on descent — the bomb only goes off on the way back up).
+
+    ``surface_owner_for_entrance`` returns this route (its distinct-from_id set
+    is ``{None}``, length 1), so the ascent branch reaches ``resolve_surface_ascent``
+    with a null surface owner.
+    """
+    return CartographyConfig(
+        starting_region="the_dropmouth",
+        navigation_mode=NavigationMode.region,
+        regions={
+            "the_dropmouth": Region(
+                name="The Dropmouth",
+                summary="The lip of the shaft.",
+                description="The mouth of the descent.",
+            ),
+        },
+        routes=[
+            Route(
+                name="Down the Rope",
+                description="A descent whose surface owner was never wired.",
+                from_id=None,  # the wiring fault
+                to_id="deep_descent",
+            ),
+        ],
+    )
+
+
+def _dangling_from_id_cartography() -> CartographyConfig:
+    """Malformed seam: the registered-kind route's ``from_id`` names a surface
+    region that does NOT exist in ``cartography.regions`` (a typo'd id). The
+    descent guards its target (``entrance_id in graph.nodes``); the ascent must
+    guard symmetrically, or it binds the PC to a phantom region.
+    """
+    return CartographyConfig(
+        starting_region="the_dropmouth",
+        navigation_mode=NavigationMode.region,
+        regions={
+            "the_dropmouth": Region(
+                name="The Dropmouth",
+                summary="The lip of the shaft.",
+                description="The mouth of the descent.",
+            ),
+        },
+        routes=[
+            Route(
+                name="Down the Rope",
+                description="A descent that returns to a region that isn't mapped.",
+                from_id="ghost_dropmouth",  # NOT present in regions
+                to_id="deep_descent",
+            ),
+        ],
+    )
+
+
 def _pack_with_cartography(world_slug: str, cartography: CartographyConfig):
     """Duck-typed GenrePack: exposes pack.worlds[slug].cartography."""
     world = types.SimpleNamespace(cartography=cartography)
@@ -214,6 +273,24 @@ def deep_oz_kit():
         pc_regions={"Dorothy": ENTRANCE_ID},
         player_seats={"p1": "Dorothy"},
     )
+    return _HybridKit(snap, pack, _StoreWithEntrance(), _FakePalette())
+
+
+@pytest.fixture
+def deep_null_owner_kit():
+    """PC ``Groucho`` is deep, but the seam route has a null ``from_id``."""
+    cart = _null_from_id_cartography()
+    pack = _pack_with_cartography("beneath_sunden", cart)
+    snap = _snapshot({"Groucho": ENTRANCE_ID}, {"p1": "Groucho"})
+    return _HybridKit(snap, pack, _StoreWithEntrance(), _FakePalette())
+
+
+@pytest.fixture
+def deep_dangling_owner_kit():
+    """PC ``Groucho`` is deep; the seam route's ``from_id`` names an unmapped region."""
+    cart = _dangling_from_id_cartography()
+    pack = _pack_with_cartography("beneath_sunden", cart)
+    snap = _snapshot({"Groucho": ENTRANCE_ID}, {"p1": "Groucho"})
     return _HybridKit(snap, pack, _StoreWithEntrance(), _FakePalette())
 
 
@@ -309,4 +386,99 @@ def test_no_seam_world_does_not_invent_surface(capture_spans, deep_oz_kit):
     )
     assert kit.snapshot.region_for(perspective="Dorothy") == ENTRANCE_ID, (
         "PC must not be moved to an invented surface region"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reviewer rework (REJECTED 2026-06-13): the error geometry is asymmetric with
+# the descent it claims to mirror. A registered-kind (deep_descent) route IS a
+# seam — a MALFORMED one is a wiring fault that must fail LOUD through
+# movement.unresolved (the OTEL lie-detector), never an uncaught raise and never
+# a silent region_mode defer (which would hand a confabulated 'way up' to the
+# narrator — the exact "convincing narration, zero mechanical backing" the OTEL
+# principle exists to catch). These pin findings #1 (null from_id) and #3
+# (dangling from_id). Finding #2 (pyright str|None) is a static-type fix covered
+# by `uv run pyright`, not a runtime behavior — no test here.
+# ---------------------------------------------------------------------------
+
+
+def test_null_from_id_seam_fails_loud_not_raises(capture_spans, deep_null_owner_kit):
+    """Reviewer finding #1 (HIGH): a registered-kind (``deep_descent``) route with
+    a null ``from_id`` must NOT crash the turn.
+
+    ``surface_owner_for_entrance`` returns it (its distinct-from_id set is
+    ``{None}``, length 1), and today ``resolve_surface_ascent`` raises
+    ``SeamCrossingError(no_surface_owner)`` uncaught out of
+    ``run_movement_dispatch`` — skipping the mandated span and blinding the GM
+    panel. The descent twin wraps its resolver in ``try/except SeamCrossingError
+    → _unresolved``; the ascent must too. The malformed seam fails LOUD via
+    ``movement.unresolved``, never an uncaught raise, never a silent defer.
+    """
+    kit = deep_null_owner_kit
+    # The bug IS the uncaught SeamCrossingError on this call — it must not raise.
+    out = _run(
+        run_movement_dispatch(
+            _movement("back"),
+            snapshot=kit.snapshot,
+            player_name="Groucho",
+            dungeon_store=kit.store,
+            palette=kit.palette,
+            pack=kit.pack,
+        )
+    )
+    # PC never bound to a null/phantom surface — stays put on the entrance node.
+    assert out.data.get("resolved_via") != "surface_ascent", (
+        f"a null-from_id seam must not complete an ascent, got: {out.data}"
+    )
+    assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
+        "a malformed seam must not move the PC off the entrance node; still at "
+        f"{kit.snapshot.region_for(perspective='Groucho')!r}"
+    )
+    # Fail LOUD: a registered-kind route IS a seam, so a malformed one is a
+    # wiring fault the GM panel must see — movement.unresolved, NOT a silent
+    # region_mode defer.
+    span_names = [s.name for s in capture_spans.get_finished_spans()]
+    unresolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.unresolved"]
+    assert len(unresolved) == 1, (
+        f"expected exactly one movement.unresolved span for the malformed seam; "
+        f"spans seen: {span_names}"
+    )
+    # And no false movement.resolved span (no PC was actually moved).
+    assert "movement.resolved" not in span_names, (
+        "a malformed seam must not emit a movement.resolved span"
+    )
+
+
+def test_dangling_from_id_does_not_bind_phantom_region(capture_spans, deep_dangling_owner_kit):
+    """Reviewer finding #3 (MEDIUM): the ascent binds the PC to ``route.from_id``
+    without verifying it names a real cartography region.
+
+    The descent guards its target (``entrance_id in graph.nodes``) and fails loud
+    otherwise; the ascent must guard symmetrically. A route whose ``from_id`` is a
+    typo'd / unmapped id must NOT strand the PC in a phantom region — it fails
+    loud via ``movement.unresolved``.
+    """
+    kit = deep_dangling_owner_kit
+    out = _run(
+        run_movement_dispatch(
+            _movement("back"),
+            snapshot=kit.snapshot,
+            player_name="Groucho",
+            dungeon_store=kit.store,
+            palette=kit.palette,
+            pack=kit.pack,
+        )
+    )
+    assert out.data.get("resolved_via") != "surface_ascent", (
+        f"ascent must not bind to an unmapped surface region, got: {out.data}"
+    )
+    assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
+        "PC bound to a phantom region "
+        f"{kit.snapshot.region_for(perspective='Groucho')!r}; the resolved surface "
+        "id must exist in cartography.regions"
+    )
+    span_names = [s.name for s in capture_spans.get_finished_spans()]
+    unresolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.unresolved"]
+    assert len(unresolved) == 1, (
+        f"expected movement.unresolved for the dangling surface id; spans seen: {span_names}"
     )

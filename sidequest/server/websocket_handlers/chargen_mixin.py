@@ -1239,25 +1239,24 @@ class CharGenMixin:
         # inventory tab in coyote_star + evropi).
         from sidequest.server.dispatch.inventory_resolve import resolve_inventory
 
-        loadout_inventory = resolve_inventory(sd.genre_pack, sd.snapshot.world_slug)
+        resolved_inventory = resolve_inventory(sd.genre_pack, sd.snapshot.world_slug)
         apply_starting_loadout(
             character,
-            loadout_inventory,
+            resolved_inventory,
             genre=sd.snapshot.genre_slug,
             world=sd.snapshot.world_slug,
             player_id=player_id,
         )
 
-        # Story 106-1 (Epic 106 ramp lever #1): equip the kit-rolled armor and
-        # derive core.armor_class from its WWN-SRD catalog armor_class. Runs AFTER
-        # the loadout/dedup pass so the full inventory is present. Without this the
-        # kit armor sits equipped:false and every Warrior fights at the unarmored
-        # AC 10 (opponent reprisals roll vs 10 — the lethality driver, playtest
-        # 2026-06-13). Loud-fails (warn + span) on a kit armor item with no catalog
-        # armor_class rather than silently leaving AC at 10.
+        # Story 106-1: equip the kit-rolled armor and derive core.armor_class
+        # from its content (WWN SRD) armor_class. Runs AFTER the loadout/dedup
+        # pass so the full inventory (kit-roll + starting_equipment) is present.
+        # Without this every Warrior shipped with Leather Armor equipped:false
+        # and fought at the unarmored base AC 10 (beneath_sunden meat-grinder,
+        # 2026-06-13). Reuses the SAME resolved inventory config as the loadout.
         equip_starting_armor(
             character,
-            loadout_inventory,
+            resolved_inventory,
             genre=sd.snapshot.genre_slug,
             world=sd.snapshot.world_slug,
             player_id=player_id,

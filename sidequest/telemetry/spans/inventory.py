@@ -315,3 +315,127 @@ def item_resource_depleted_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+# Chargen armor derivation (story 106-1) — the post-loadout step equips the
+# kit-rolled armor and recomputes ``CreatureCore.armor_class`` from the equipped
+# armor item's catalog ``armor_class`` (content-sourced, WWN SRD). The GM panel
+# reads these as proof the derivation fired (vs. every Warrior silently fighting
+# at the unarmored AC 10). ``chargen.armor_equipped`` (INFO) on a successful
+# derive; ``chargen.armor_unresolved`` (WARN) when an armor item carries no
+# catalog ``armor_class`` to derive from — the No-Silent-Fallback gate. WARN
+# (not ERROR) matches the sibling content-gap convention
+# (``chargen.starting_equipment_missing``): an unvalued armor entry is a content
+# authoring gap surfaced loudly at chargen, not a runtime engine failure like
+# ``equip.unresolved``.
+SPAN_CHARGEN_ARMOR_EQUIPPED = "chargen.armor_equipped"
+SPAN_ROUTES[SPAN_CHARGEN_ARMOR_EQUIPPED] = SpanRoute(
+    event_type="state_transition",
+    component="inventory",
+    extract=lambda span: {
+        "field": "armor_class",
+        "op": "chargen.armor_equipped",
+        "pc_name": (span.attributes or {}).get("pc_name", ""),
+        "item_id": (span.attributes or {}).get("item_id", ""),
+        "item_name": (span.attributes or {}).get("item_name", ""),
+        "armor_class": (span.attributes or {}).get("armor_class"),
+        "ac_before": (span.attributes or {}).get("ac_before"),
+        "ac_after": (span.attributes or {}).get("ac_after"),
+        "equipped_after": (span.attributes or {}).get("equipped_after"),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
+
+SPAN_CHARGEN_ARMOR_UNRESOLVED = "chargen.armor_unresolved"
+SPAN_ROUTES[SPAN_CHARGEN_ARMOR_UNRESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="inventory",
+    extract=lambda span: {
+        "field": "armor_class",
+        "op": "chargen.armor_unresolved",
+        "pc_name": (span.attributes or {}).get("pc_name", ""),
+        "item_id": (span.attributes or {}).get("item_id", ""),
+        "item_name": (span.attributes or {}).get("item_name", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
+
+
+@contextmanager
+def chargen_armor_equipped_span(
+    *,
+    item_id: str,
+    item_name: str,
+    armor_class: int,
+    ac_before: int,
+    ac_after: int,
+    equipped_after: bool,
+    pc_name: str = "",
+    genre: str = "",
+    world: str = "",
+    player_id: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """One span per kit armor item equipped + AC-derived at chargen. ``armor_class``
+    is the equipped item's catalog value; ``ac_before``/``ac_after`` bracket the
+    recompute of ``CreatureCore.armor_class`` (10 → derived)."""
+    with Span.open(
+        SPAN_CHARGEN_ARMOR_EQUIPPED,
+        {
+            "item_id": item_id,
+            "item_name": item_name,
+            "armor_class": armor_class,
+            "ac_before": ac_before,
+            "ac_after": ac_after,
+            "equipped_after": equipped_after,
+            "pc_name": pc_name,
+            "genre": genre,
+            "world": world,
+            "player_id": player_id,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def chargen_armor_unresolved_span(
+    *,
+    item_id: str,
+    item_name: str,
+    reason: str,
+    pc_name: str = "",
+    genre: str = "",
+    world: str = "",
+    player_id: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fail-loud chargen armor span: an armor item carries no catalog ``armor_class``
+    to derive from. Logged at WARNING (the GM panel surfaces the content gap at
+    chargen rather than the PC silently fighting unarmored) — WARN, not ERROR, to
+    match the sibling content-gap span ``chargen.starting_equipment_missing``. An
+    unvalued armor entry is a content authoring gap, not a runtime engine failure
+    like ``equip.unresolved`` (which is ERROR)."""
+    with Span.open(
+        SPAN_CHARGEN_ARMOR_UNRESOLVED,
+        {
+            "item_id": item_id,
+            "item_name": item_name,
+            "reason": reason,
+            "pc_name": pc_name,
+            "genre": genre,
+            "world": world,
+            "player_id": player_id,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span

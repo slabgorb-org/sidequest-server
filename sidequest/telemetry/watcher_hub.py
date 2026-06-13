@@ -462,6 +462,8 @@ def _persist_turn_telemetry(
     """
     if event_type in _EPHEMERAL_EVENT_TYPES:
         return
+    from sidequest.game.pg.telemetry import OutOfFrameSessionMissing  # noqa: PLC0415
+
     rnd = fields.get("round") if isinstance(fields, dict) else None
     if not isinstance(rnd, int):
         rnd = None
@@ -488,6 +490,18 @@ def _persist_turn_telemetry(
                 event_type=event_type,
                 payload_json=payload_json,
             )
+    except OutOfFrameSessionMissing as exc:
+        # Stale sink / bind-before-commit race: the session row is gone, so this
+        # out-of-frame write has nowhere to land. Drop it with ONE clean line
+        # (no traceback) — distinct from the sink_failed path below, which keeps
+        # the stack for genuine sink bugs (playtest 2026-06-11).
+        logger.warning(
+            "turn_telemetry.dropped_no_session session_id=%s component=%s event_type=%s",
+            exc.session_id,
+            component,
+            event_type,
+        )
+        return
     except Exception:  # noqa: BLE001 — telemetry must never crash a turn
         logger.warning(
             "turn_telemetry.sink_failed component=%s event_type=%s",

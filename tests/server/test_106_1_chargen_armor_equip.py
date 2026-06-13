@@ -324,7 +324,7 @@ def test_derived_ac_lands_on_the_field_the_reprisal_reads() -> None:
     equip_starting_armor(char, _config())
 
     # The reprisal reads exactly this attribute (dice.py:1636).
-    assert getattr(char.core, "armor_class") == WWN_LEATHER_AC, (
+    assert char.core.armor_class == WWN_LEATHER_AC, (
         "the reprisal's target_ac is int(player_core.armor_class) — chargen must "
         "raise this exact field so the opponent rolls vs 13."
     )
@@ -530,7 +530,9 @@ def test_real_warrior_armor_equips_and_derives_against_real_content(otel_capture
         f"([leather_armor, shield_wood, helmet_iron]); inventory: "
         f"{[(i.get('id'), i.get('category')) for i in char.core.inventory.items]}"
     )
-    assert armor["equipped"] is False, "precondition: kit armor ships equipped:false (builder.py:2570)"
+    assert armor["equipped"] is False, (
+        "precondition: kit armor ships equipped:false (builder.py:2570)"
+    )
 
     from sidequest.server.dispatch.inventory_resolve import resolve_inventory
 

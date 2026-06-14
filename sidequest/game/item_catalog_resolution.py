@@ -84,12 +84,14 @@ def item_dict_from_catalog(item: CatalogItem, *, quantity: int = 1) -> dict:
         item_dict["mitigation"] = item.mitigation
     if item.armor_class is not None:
         item_dict["armor_class"] = item.armor_class
+    # Story 106-4: a narrator-granted consumable carries its heal effect so it
+    # works the moment it's picked up (parity with the chargen kit path).
+    if item.heal_amount:
+        item_dict["heal_amount"] = item.heal_amount
     return item_dict
 
 
-def resolve_gained_item_dict(
-    entry: dict, catalog: list[CatalogItem] | None
-) -> dict | None:
+def resolve_gained_item_dict(entry: dict, catalog: list[CatalogItem] | None) -> dict | None:
     """Return a runtime item dict built from a matching ``CatalogItem``, else None.
 
     Matching is conservative and exact — never fuzzy — so "a sword" can never

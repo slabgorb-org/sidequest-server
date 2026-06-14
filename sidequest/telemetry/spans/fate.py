@@ -263,6 +263,7 @@ SPAN_ROUTES["fate.exchange.resolved"] = SpanRoute(
         "field": "exchange_resolved",
         "resolution_order": (span.attributes or {}).get("resolution_order", ""),
         "resolved": (span.attributes or {}).get("resolved", False),
+        "round_number": (span.attributes or {}).get("round_number", 0),
     },
 )
 SPAN_ROUTES["fate.aspect.created"] = SpanRoute(

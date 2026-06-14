@@ -454,3 +454,34 @@ def test_tie_attack_grants_defender_boost():
     boosts = [a for a in enc.situation_aspects if a.kind == "boost"]
     assert len(boosts) == 1  # defender got a boost
     assert "fate.aspect.created" in [s.name for s in exporter.get_finished_spans()]
+
+
+def test_create_advantage_succeed_with_style_grants_two_invokes():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.server.dispatch.fate_conflict import run_fate_exchange
+
+    module = get_ruleset_module("fate")
+    enc = _enc([EncounterActor(name="Hero", role="lead", side="player")])
+    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Notice": 4})], encounter=enc)
+    outcome = module.resolve_action(skill_rating=4, opposition=Opposition(value=0, kind="passive"), rng=_FixedRng(0))
+    seal_fate_commit(
+        encounter=enc, actor=enc.find_actor("Hero"), action="create_advantage", skill="Notice",
+        difficulty=1, ladder_total=outcome.ladder_total, aspect_text="Flanked",
+    )  # shifts = 4 - 1 = 3 → Succeed-with-Style → 2 free invokes
+
+    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0))
+
+    assert [a.text for a in enc.situation_aspects] == ["Flanked"]
+    assert enc.situation_aspects[0].free_invokes == 2
+
+
+def test_concede_rejects_unseated_actor():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.server.dispatch.fate_conflict import FateConflictError, concede_in_conflict
+
+    module = get_ruleset_module("fate")
+    enc = _enc([EncounterActor(name="Hero", role="lead", side="player")])
+    ghost = _pc("Ghost", {"Fight": 2})  # has a sheet but is NOT seated in enc.actors
+    snap = GameSnapshot(genre_slug="fate_test", characters=[ghost], encounter=enc)
+    with pytest.raises(FateConflictError, match="not seated"):
+        concede_in_conflict(encounter=enc, snapshot=snap, ruleset=module, actor="Ghost")

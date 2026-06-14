@@ -561,15 +561,18 @@ def concede_in_conflict(
     core = snapshot.find_creature_core(actor)
     if core is None or core.fate_sheet is None:
         raise FateConflictError(f"{actor!r} has no Fate sheet to concede with")
+    actor_obj = encounter.find_actor(actor)
+    if actor_obj is None:
+        raise FateConflictError(
+            f"{actor!r} is not seated in this encounter — cannot concede"
+        )
     filled = sum(1 for c in core.fate_sheet.consequences if c.aspect is not None)
     earned = 1 + filled
     for _ in range(earned):
         ruleset.earn_fate_point(
             sheet=core.fate_sheet, reason="concede", actor=actor, _tracer=_tracer
         )
-    actor_obj = encounter.find_actor(actor)
-    if actor_obj is not None:
-        actor_obj.withdrawn = True
+    actor_obj.withdrawn = True
     fate_conceded_span(actor=actor, fate_points_earned=earned, _tracer=_tracer)
     _maybe_resolve_side_cleared(encounter)
     return earned

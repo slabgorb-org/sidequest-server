@@ -1,0 +1,45 @@
+# SYNTHETIC FIXTURE — NOT the real CWN SRD.
+#
+# This file mimics the *text layout* of the Cities Without Number SRD §3.0.0
+# equipment chapter so the CWN extraction tool (story 114-5) can be exercised in
+# unit tests without depending on the real, out-of-repo SRD PDF. The rows below
+# are invented, schema-shaped stand-ins. Values are deliberately NOT the real SRD
+# numbers — this is a parser fixture, not bound content.
+#
+# Per ADR-145 D4 the four Without Number SRDs share ONE item schema, so the
+# Armor / Melee / Ranged / General sections use the same column layout as the WWN
+# fixture. CWN's net-new section is **Cyberware**, whose defining mechanical extra
+# is **System Strain** (ADR-145 D4: "system_strain for cyberware"). The cyberware
+# row exercises the new typed-field path:
+#
+#   Name   Strain   Cost   TL
+#
+# A cyberware item costs a flat, non-negative System Strain count (it is a count,
+# never a die expression — installed cyberware raises the permanent-strain floor).
+
+§3.0.0 Equipment
+
+§3.0.1 Armor
+Name                AC    Cost    Enc
+Test Armor Weave    14    300     1
+Test Combat Frame   17    4000    2
+
+§3.0.2 Melee Weapons
+Name                Damage   Shock      Enc   Cost   Attribute
+Test Mono Katana    1d8      2/AC15     1     500    Dex
+Test Shock Baton    1d6      1/AC13     1     100    Str
+
+§3.0.3 Ranged Weapons
+Name                Damage   Range      Mag   Enc   Cost
+Test Mag Pistol     1d6      pistol     9     1     250
+Test Combat Rifle   1d10     rifle      30    2     900
+
+§3.0.4 General Equipment
+Name                Cost    Enc
+Test Datajack Cable 10      0
+Test Med Patch      25      0
+
+§3.0.5 Cyberware
+Name                Strain   Cost    TL
+Test Wired Reflexes 2        5000    4
+Test Subdermal Mesh 1        2000    4

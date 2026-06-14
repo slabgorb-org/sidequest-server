@@ -5,10 +5,10 @@ the Rust prototype `sidequest-api` per ADR-082 (2026-04-19).
 
 ## CRITICAL: Personal Project
 
-This is a personal project under the `slabgorb` GitHub account.
+This is a personal project under the `slabgorb-org` GitHub organization.
 - **No Jira integration.** Never create, reference, or interact with Jira tickets.
 - **No 1898 org.** Nothing goes to the work GitHub org. Ever.
-- All repos live under `github.com/slabgorb/`.
+- All live repos are under `github.com/slabgorb-org/` (use `gh ... -R slabgorb-org/<repo>`). The historical Rust prototype `sidequest-api` remains under `github.com/slabgorb/`.
 
 ## SideQuest System Overview
 

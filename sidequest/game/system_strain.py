@@ -20,9 +20,13 @@ from pydantic import BaseModel
 class SystemStrainPool(BaseModel):
     model_config = {"extra": "forbid"}
 
-    current: int = 0
+    # current/permanent are float: CWN cyberware costs fractional System Strain
+    # (0.25/0.5), so accumulated totals can be fractional (Keith's ruling,
+    # 2026-06-14; see CatalogItem.system_strain). ``max`` is the CON-derived
+    # ceiling and stays an integer.
+    current: float = 0
     max: int
-    permanent: int = 0
+    permanent: float = 0
 
 
 class StrainResult(BaseModel):
@@ -31,8 +35,8 @@ class StrainResult(BaseModel):
     model_config = {"extra": "forbid"}
 
     applied: bool
-    current: int
+    current: float
     max: int
-    permanent: int
-    delta: int
+    permanent: float
+    delta: float
     reason: str = ""

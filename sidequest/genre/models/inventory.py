@@ -213,6 +213,17 @@ class CatalogItem(BaseModel):
     tech_level: int | None = None  # SWN/AWN/CWN TL tag
     range_band: str | None = None  # ranged: "thrown" | "pistol" | "rifle" | ... (SRD bands)
     magazine: int | None = None  # ranged: shots per reload
+    # CWN cyberware: the System Strain cost of installing this item (ADR-145 D4
+    # names system_strain as the WN-schema "category extra for cyberware"; story
+    # 114-5). A typed, non-negative number — never free-form prose. It is a
+    # **float**, not an int: the CWN SRD prices its most common cyberware in
+    # fractional strain (Cybereyes/Cyberears/Skillplug Jack I = 0.25; Viper
+    # Sting/Skillplug Jack II = 0.5), so an int would truncate 0.25→0 and make
+    # the genre's iconic chrome "free" — a verbatim-fidelity violation (Keith's
+    # ruling, 2026-06-14). None on non-cyberware items. It is a verbatim
+    # mechanical field, so the inventory merge locks it against world re-stat
+    # (see inventory_resolve._MECHANICAL_FIELDS).
+    system_strain: float | None = Field(default=None, ge=0)
 
 
 class CarryMode(StrEnum):

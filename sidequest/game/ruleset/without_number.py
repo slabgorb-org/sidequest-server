@@ -391,7 +391,7 @@ class WithoutNumberRulesetModule(RulesetModule):
         *,
         core: CreatureCore,
         kind: str,
-        amount: int,
+        amount: float,
         source: str,
         cfg: SwnConfig | None,
         _tracer: trace.Tracer | None = None,
@@ -417,7 +417,9 @@ class WithoutNumberRulesetModule(RulesetModule):
         before = pool.current
         applied = True
         reason = ""
-        requested: int = 0
+        # float: CWN cyberware costs fractional System Strain (0.25/0.5), so a
+        # temporary/permanent install amount can be fractional (Keith, 2026-06-14).
+        requested: float = 0
 
         if kind == "first_aid":
             requested = scfg.first_aid_cost
@@ -651,7 +653,9 @@ class WithoutNumberRulesetModule(RulesetModule):
                     max_spell_level=max_spell_level,
                 )
 
-        return ChargenResources(effort=effort, spellcasting=spellcasting, system_strain=system_strain)
+        return ChargenResources(
+            effort=effort, spellcasting=spellcasting, system_strain=system_strain
+        )
 
     # ------------------------------------------------------------------
     # Chargen contribution methods (ADR-143 Task 10) — background skills +

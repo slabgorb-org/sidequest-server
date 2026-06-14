@@ -280,7 +280,7 @@ def test_mutant_wasteland_strike_depletes_ablative_hp_on_real_turn(
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-def test_mutant_wasteland_downed_target_routes_through_cwn_seam(otel_capture, monkeypatch) -> None:
+def test_mutant_wasteland_downed_target_gets_mortal_injury(otel_capture, monkeypatch) -> None:
     """A real mutant_wasteland strike that drops a target to 0 HP runs the inherited
     WN-core downed seam and declares a Mortal Injury — the lethality lie-detector span
     (awn.mortal_injury.declared) firing on a real awn turn (the player can actually

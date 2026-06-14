@@ -1,9 +1,9 @@
-"""Tool: stabilize_mortal_injury — narrator-driven CWN-family (cwn/awn) Mortal Injury stabilization.
+"""Tool: stabilize_mortal_injury — narrator-driven WN lethality (wwn/cwn/awn) Mortal Injury stabilization.
 
 This is the PRODUCTION CALLER that lets the narrator resolve a stabilization
-attempt against a CWN Mortal Injury (the Scar Status that CwnRulesetModule.
-resolve_downed attaches to a 0-HP character — the character dies at the end of
-``mortal_injury_rounds`` unless stabilized).
+attempt against a WN-core Mortal Injury (the Scar Status that
+WithoutNumberRulesetModule.resolve_downed attaches to a 0-HP character — the
+character dies at the end of ``mortal_injury_rounds`` unless stabilized).
 
     narrator: stabilize_mortal_injury(actor=Jax, skill=Heal, attribute=Reflex,
                                       rounds_elapsed=1, roll=18)
@@ -14,15 +14,16 @@ resolve_downed attaches to a 0-HP character — the character dies at the end of
        success ->  remove the Mortal Injury Status, append a "Frail" Wound
        failure ->  leave the Mortal Injury in place (the timer keeps running)
 
-The CWN rule (Cities Without Number, Sine Nomine, CC0): a Dex/Heal or Int/Heal
+The WN rule (Without Number family, Sine Nomine, CC0): a Dex/Heal or Int/Heal
 check vs ``8 + rounds_elapsed`` stabilizes a Mortal Injury. On success the
 victim "Recovers at 1 HP + Frail" — the Mortal Injury (a Scar) clears and a
 Frail Wound (clears with rest, per StatusSeverity.Wound) takes its place.
 
 Guards (fail loud — no silent fallbacks per CLAUDE.md):
-- bound module ``not isinstance(module, CwnRulesetModule)`` → ValueError (the tool
-  requires a CWN-family ruleset — ``cwn`` or its ``awn`` subclass — since the
-  Mortal Injury / stabilize-at-0 rule is a CwnRulesetModule mechanic)
+- bound module ``not isinstance(module, WithoutNumberRulesetModule)`` → ValueError (the tool
+  requires a strain-bearing WN ruleset — wwn/cwn/awn — since the Mortal Injury /
+  stabilize-at-0 rule is a WN-core lethality mechanic; SWN carries no mortal-injury
+  surface)
 - actor not found in snapshot → NOT_FOUND
 - no active session → ERROR_FATAL
 
@@ -106,7 +107,7 @@ async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolCont
     # Capability gate (not a slug string): the Mortal Injury / stabilize-at-0
     # rule is a Without Number lethality mechanic hoisted to the WN core
     # (ADR-142), so the tool serves any module that IS a
-    # WithoutNumberRulesetModule — swn/wwn/cwn/awn. Resolve the bound module and
+    # WithoutNumberRulesetModule — wwn/cwn/awn. Resolve the bound module and
     # check the capability rather than a slug string.
     pack = ctx.genre_pack
     module = (
@@ -117,7 +118,7 @@ async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolCont
     if not isinstance(module, WithoutNumberRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
         raise ValueError(
-            f"stabilize_mortal_injury requires a Without Number ruleset (swn/wwn/cwn/awn); "
+            f"stabilize_mortal_injury requires a Without Number ruleset (wwn/cwn/awn); "
             f"loaded pack has ruleset={ruleset!r}"
         )
 

@@ -9,7 +9,7 @@ so every WN sibling — swn/wwn/cwn/awn — exposes this tool).
     narrator: commit_effort(actor=Kael, source=channeler, points=2, ...)
                     |
                     v
-    engine:   WwnRulesetModule.commit_effort(core=kael.core, ...)
+    engine:   WithoutNumberRulesetModule.commit_effort(core=kael.core, ...)
                     |
                     v
     pool:     EffortPool.commitments updated in place

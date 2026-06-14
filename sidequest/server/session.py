@@ -85,8 +85,8 @@ class Session:
         semantically.
         """
         clear_scratch_on_scene_end(self._snapshot, reason=reason, turn=turn)
-        # SWN-family scene-boundary Effort reclaim (SRD §1.4.4 / §6). The Effort
-        # engine is shared SWN-family crunch (Story 102-6 lifted it to the base),
+        # WN-family scene-boundary Effort reclaim (SRD §1.4.4 / §6). The Effort
+        # engine is shared WN-family crunch (Story 102-6 lifted it to the base),
         # so a swn psychic's scene-committed Effort reclaims at scene end exactly
         # as a wwn caster's does. Gated on the bound module being an
         # ``WithoutNumberRulesetModule`` (swn/cwn/awn/wwn) so native sessions are completely

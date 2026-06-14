@@ -1,21 +1,21 @@
-"""Tool: adjust_system_strain — narrator-driven CWN-family (cwn/awn) System Strain changes.
+"""Tool: adjust_system_strain — narrator-driven WN lethality (wwn/cwn/awn) System Strain changes.
 
 This is the PRODUCTION CALLER that makes the strain engine reachable in a
 real game. It is a THIN wrapper — all rules (gating, permanent floor, rest
-recovery, first-aid cost) live in CwnRulesetModule.apply_system_strain.
+recovery, first-aid cost) live in WithoutNumberRulesetModule.apply_system_strain.
 
     narrator: adjust_system_strain(actor=Jax, kind=temporary, amount=2, ...)
                     |
                     v
-    engine:   CwnRulesetModule.apply_system_strain(core=jax.core, ...)
+    engine:   WithoutNumberRulesetModule.apply_system_strain(core=jax.core, ...)
                     |
                     v
     pool:     SystemStrainPool.current updated in place
 
 Guards (fail loud — no silent fallbacks per CLAUDE.md):
-- bound module ``not isinstance(module, CwnRulesetModule)`` → ValueError (the tool
-  requires a CWN-family ruleset — ``cwn`` or its ``awn`` subclass — since System
-  Strain is a CwnRulesetModule mechanic)
+- bound module ``not isinstance(module, WithoutNumberRulesetModule)`` → ValueError (the tool
+  requires a strain-bearing WN ruleset — wwn/cwn/awn — since System Strain is a
+  WN-core lethality mechanic; SWN carries no System Strain surface)
 - actor not found in snapshot → NOT_FOUND
 - no active session → ERROR_FATAL
 
@@ -91,7 +91,7 @@ async def adjust_system_strain(args: AdjustSystemStrainArgs, ctx: ToolContext) -
 
     # Capability gate (not a slug string): System Strain is a Without Number
     # lethality mechanic hoisted to the WN core (ADR-142), so the tool serves
-    # any module that IS a WithoutNumberRulesetModule — swn/wwn/cwn/awn. Resolve
+    # any module that IS a WithoutNumberRulesetModule — wwn/cwn/awn. Resolve
     # the bound module and check the capability rather than a slug string.
     pack = ctx.genre_pack
     module = (
@@ -102,7 +102,7 @@ async def adjust_system_strain(args: AdjustSystemStrainArgs, ctx: ToolContext) -
     if not isinstance(module, WithoutNumberRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
         raise ValueError(
-            f"adjust_system_strain requires a Without Number ruleset (swn/wwn/cwn/awn); "
+            f"adjust_system_strain requires a Without Number ruleset (wwn/cwn/awn); "
             f"loaded pack has ruleset={ruleset!r}"
         )
 

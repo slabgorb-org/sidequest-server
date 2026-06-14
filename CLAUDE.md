@@ -12,11 +12,13 @@ This is a personal project under the `slabgorb-org` GitHub organization.
 
 ## SideQuest System Overview
 
-Four repos compose the SideQuest stack:
+Six repos compose the SideQuest stack:
 - **sidequest-server** *(this repo)* — Python/FastAPI game engine and WebSocket API on port 8765
 - **sidequest-ui** — React/TypeScript game client (Vite, port 5173)
 - **sidequest-daemon** — Python media services (Z-Image image gen, ACE-Step music)
 - **sidequest-content** — Genre packs (YAML configs, audio, images, world data)
+- **sidequest-composer** — Standalone CLI: public-domain notation → rights-free audio (offline; not wired into the runtime)
+- **sidequest-understudy** — Naive simulated-player playtest client (bots join real sessions through the UI)
 
 Orchestrator repo (`orc-quest`, also cloned as `oq-1` / `oq-2`) coordinates sprint tracking, docs, ADRs, and cross-repo scripts.
 
@@ -163,8 +165,12 @@ sidequest/
 │                     #   db_config.py, db_pool.py — connection config + psycopg_pool
 │                     #   importer.py — read-only legacy SQLite→Postgres importer
 │                     #   ruleset/ — pluggable SRD ruleset modules (registry.py, base.py
-│                     #     RulesetModule ABC, native.py default, swn.py Stars Without Number)
+│                     #     RulesetModule ABC, native.py default; without_number.py parent
+│                     #     with swn/awn/cwn/wwn siblings — ADR-142/143)
 │                     #   creature_core.py — HpPool ablative HP on CreatureCore (Character + Npc)
+├── dungeon/          # Runtime procedural Jaquaysed megadungeon — frontier hooks,
+│                     #   lookahead, materializer, region projection (ADR-106)
+├── mutation/         # AWN mutation system — acquire/use ops, stocks, chargen integration (ADR-102)
 ├── genre/            # YAML loader, layered genre/world pack models
 ├── audio/            # Music + SFX coordination
 ├── media/            # Image generation orchestration
@@ -202,17 +208,30 @@ is **required** with no silent default (fail-loud per the No Silent Fallbacks ru
 The legacy SQLite write layer has been **deleted**; SQLite survives only as a
 read-only import *source* via `sidequest/game/importer.py`.
 
-### Pluggable rulesets (ADR-033/-114, live)
+### Pluggable rulesets (ADR-033/-114/-117/-142/-143)
 
 `sidequest/game/ruleset/` holds pluggable SRD ruleset modules behind the
-`RulesetModule` ABC (`base.py`), resolved through `registry.py`. A pack binds one
-via `ruleset:` in its `rules.yaml`; an unknown name raises `UnknownRulesetError`
-(fail loud). Two modules are implemented: `native.py` (the dial/confrontation
-engine, ADR-033 — default) and `swn.py` (Stars Without Number). Ablative HP
-(`creature_core.py`) layers `HpPool` (`current`/`max`/`base_max`) onto
-`CreatureCore`, shared by `Character` and `Npc`: damage flows through the strike
-channel, 0 HP triggers the `hp_depletion` win condition, and each delta emits a
-`state_patch_hp` OTEL span. **ADR-114 is partial** — only Part 1 is live.
+`RulesetModule` ABC (`base.py`), resolved through `registry.py` (ADR-117). A pack
+binds one via `ruleset:` in its `rules.yaml`; an unknown name raises
+`UnknownRulesetError` (fail loud). Modules: `native.py` (the dial/confrontation
+engine, ADR-033 — default) plus a **Without Number family** — `without_number.py`
+(the honest shared base extracted per ADR-142) with `swn.py` (Stars), `wwn.py`
+(Worlds), `cwn.py` (Cities), and `awn.py` (the AWN mutation variant) as siblings.
+Live bindings: SWN→space_opera, WWN→elemental_harmony + heavy_metal/barsoom +
+caverns_and_claudes/beneath_sunden, CWN→neon_dystopia, AWN→mutant_wasteland.
+
+Ablative HP (`creature_core.py`) layers `HpPool` (`current`/`max`/`base_max`)
+onto `CreatureCore`, shared by `Character` and `Npc`: damage flows through the
+strike channel, 0 HP triggers the `hp_depletion` win condition, and each delta
+emits a `state_patch_hp` OTEL span.
+
+**Doctrine (ADR-143, ruled 2026-06-14 — see SOUL.md "Bind the Ruleset, Don't
+Balance It"):** when a pack binds a Without Number ruleset, that ruleset's engine
+**replaces** the native combat engine for what it covers — it is not layered on
+top and tuned to fit. The native beat/dial scaffolding is *removed* from a
+Without-Number combat path, not balanced against it. **ADR-114/-143 are partial**
+— the WN-owns-the-round work (de-nativizing combat under a WN binding, the
+dying/down window, solo-actuator) is in flight (epic 108).
 
 ### Intent Router (ADR-113, live/partial)
 
@@ -240,7 +259,7 @@ is still backlog.
 | Prompt engineering | 008 (three-tier taxonomy), 009 (attention-aware zones), 066 (persistent Opus sessions, Full/Delta tier — *superseded by 098*) |
 | Agent system | 011 (JSON patches), 012 (session mgmt), 057 (narrator-crunch separation), 059 (monster manual server-side pregen), 067 (unified narrator agent — supersedes 010), **098 (stateless narrator turns — supersedes 066)**, **102 (tool-use protocol for structured output — supersedes 039)**, 113 (intent router — mechanical-engagement spine, *live/partial*) |
 | Characters | 007 (unified model), 014 (diamonds/coal), 015 (builder FSM), 016 (three-mode chargen), 080 (unified narrative weight) |
-| Encounters | 033 (confrontation engine — `ruleset/native.py`), 077 (dogfight subsystem), 078 (edge/composure combat), 093 (confrontation difficulty calibration), 114 (ablative HP substrate — `creature_core.py`, *partial: Part 1 live*) |
+| Encounters | 033 (confrontation engine — `ruleset/native.py`), 077 (dogfight subsystem), 078 (edge/composure combat), 093 (confrontation difficulty calibration), 114 (ablative HP substrate — `creature_core.py`, *partial*), 116 (a confrontation requires an Other), 117 (pluggable ruleset module system — the `RulesetModule` seam), 139 (confrontation integrity invariants — *partial*), **142 (Without Number core extraction — `without_number.py` base + reparented siblings, *partial*)**, **143 (WN combat owns the WN round — bind, don't balance; *partial*)** |
 | World / NPCs | 018 (trope engine), 020 (NPC disposition), 022 (world maturity), 042 (OCEAN evolution), 055 (room graph navigation), 091 (culture-corpus Markov naming) |
 | Progression | 021 (four-track), 052 (narrative axis), 081 (advancement effect variants — deferred), 095 (class mechanical surface) |
 | Narrative pacing | 024 (dual-track tension), 025 (pacing detection), 050 (image pacing throttle), 051 (two-tier turn counter — see DRIFT) |

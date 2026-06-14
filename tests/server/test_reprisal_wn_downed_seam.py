@@ -381,11 +381,14 @@ def test_wwn_reprisal_kill_declares_mortal_injury_for_pc(otel_capture, monkeypat
     )
 
 
-def test_wwn_reprisal_kill_attaches_death_clock_alongside_generic_downed(otel_capture, monkeypatch):
-    """The WN seam is ADDITIVE: the dying PC carries BOTH the WN Mortal Injury
-    death-clock status (from resolve_downed) AND the generic Downed status, and
-    the generic post_resolution_lethality span still fires (decision=lethal_down).
-    The module crunch backs the genre verdict; it never replaces it."""
+def test_wwn_reprisal_kill_supersedes_death_clock_window_for_terminal_pc(otel_capture, monkeypatch):
+    """sq-playtest #239 (death dual-status): the genre policy rules the PC
+    terminally dead (incapacitating Downed verdict) FIRST, so the WN seam must
+    SUPERSEDE its contradictory "dies in N rounds unless stabilized" window — the
+    PC shows ONE coherent status, not the dead+stabilizable pair the playtest
+    found 3×. The WN ``mortal_injury.declared`` span STILL fires (GM-panel proof
+    WN lethality engaged), now marked ``superseded_by_terminal=True``; the generic
+    post_resolution_lethality span still fires (decision=lethal_down)."""
     monkeypatch.setattr("sidequest.server.dispatch.dice.random.randint", lambda a, b: b)
 
     pack = _make_reprisal_pack("wwn", pc_verdict="dying")
@@ -396,12 +399,19 @@ def test_wwn_reprisal_kill_attaches_death_clock_alongside_generic_downed(otel_ca
     player_core = snap.find_creature_core(PLAYER)
     assert player_core is not None
     status_texts = [s.text for s in player_core.statuses]
-    assert any("Mortal Injury" in t for t in status_texts), (
-        f"the dying PC must carry the WN Mortal Injury death-clock status; statuses={status_texts}"
-    )
     assert any(t.startswith("Downed") for t in status_texts), (
-        f"the generic Downed status must STILL apply (the WN seam is additive); "
-        f"statuses={status_texts}"
+        f"the generic incapacitating Downed verdict must apply; statuses={status_texts}"
+    )
+    assert not any("dies in" in t and "unless stabilized" in t for t in status_texts), (
+        f"the terminally-dead PC must NOT also carry the stabilizable 'dies in N "
+        f"rounds' window (superseded for coherence, #239); statuses={status_texts}"
+    )
+
+    # The WN lie-detector span still fires — superseded, not silenced.
+    mortal = _mortal_injury_spans(otel_capture)
+    assert len(mortal) == 1, f"the WN Mortal Injury span must still fire once; got {len(mortal)}"
+    assert dict(mortal[0].attributes or {}).get("superseded_by_terminal") is True, (
+        f"the span must mark the window superseded; attrs={dict(mortal[0].attributes or {})}"
     )
 
     generic = _spans_named(otel_capture, SPAN_POST_RESOLUTION_LETHALITY)

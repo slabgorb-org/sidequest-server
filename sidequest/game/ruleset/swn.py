@@ -45,6 +45,24 @@ UNDERRATED_DRIVE_FUEL_PENALTY = 1
 class SwnRulesetModule(WithoutNumberRulesetModule):
     slug = "swn"
 
+    def save_params(self, *, stats, save, level, label, cfg, character_core: object | None = None):
+        """SWN's honest save vocabulary is Physical / Evasion / Mental only — it
+        has NO Luck save (the Luck save is a WWN/CWN/AWN trait that the WN core
+        owns and those siblings inherit). SWN must therefore reject a ``luck``
+        save loudly rather than silently resolving the core's inherited Luck
+        branch (No Silent Fallbacks). Every other category delegates to the
+        core's three-attribute resolution unchanged."""
+        if save == "luck":
+            raise ValueError("swn ruleset has no Luck save; SWN saves are physical/evasion/mental")
+        return super().save_params(
+            stats=stats,
+            save=save,
+            level=level,
+            label=label,
+            cfg=cfg,
+            character_core=character_core,
+        )
+
     def ship_attack_params(
         self, *, attacker_stats, pilot_skill, attack_bonus, geometry_modifier, target_ac, cfg
     ) -> AttackRollParams:

@@ -1,18 +1,15 @@
 """Characterization net pinning chargen output across the ADR-143 extraction.
 
-Pins builder.generate_stats + seed_system_strain + seed_wwn_magic byte-identical
-before and after the move onto the RulesetModule surface. Synthetic fixtures only.
+Pins builder.generate_stats + seed_chargen_resources byte-identical before and
+after the move onto the RulesetModule surface. Synthetic fixtures only.
 """
 
 from __future__ import annotations
 
 import random
 
-from sidequest.game.builder import (
-    CharacterBuilder,
-    seed_system_strain,
-    seed_wwn_magic,
-)
+from sidequest.game.builder import CharacterBuilder
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.genre.models.character import (
     CharCreationChoice,
     CharCreationScene,
@@ -104,40 +101,40 @@ def _high_mage_class() -> ClassDef:
 
 
 # ---------------------------------------------------------------------------
-# seed_system_strain — pinned behavior
+# seed_chargen_resources — pinned behavior (migrated from seed_system_strain +
+# seed_wwn_magic, ADR-143 Task 2)
 # ---------------------------------------------------------------------------
 
 
-def test_seed_system_strain_none_for_wwn() -> None:
+def test_seed_chargen_resources_no_system_strain_for_wwn() -> None:
     """WWN has no System Strain (that's a CWN/AWN mechanic). Must return None."""
     rules = _wwn_rules()
-    result = seed_system_strain(rules, {"CON": 11})
-    assert result is None
+    module = get_ruleset_module("wwn")
+    res = module.seed_chargen_resources(rules=rules, stats={"CON": 11}, class_def=None)
+    assert res.system_strain is None
 
 
-def test_seed_system_strain_none_for_various_con_scores() -> None:
-    """Multiple CON scores — all must be None for WWN (no System Strain)."""
+def test_seed_chargen_resources_no_system_strain_for_various_con_scores() -> None:
+    """Multiple CON scores — all must be None system_strain for WWN (no System Strain)."""
     rules = _wwn_rules()
+    module = get_ruleset_module("wwn")
     for con in [7, 10, 14, 18]:
-        assert seed_system_strain(rules, {"CON": con}) is None, (
-            f"WWN seed_system_strain should be None for CON={con}"
+        res = module.seed_chargen_resources(rules=rules, stats={"CON": con}, class_def=None)
+        assert res.system_strain is None, (
+            f"WWN seed_chargen_resources should have no system_strain for CON={con}"
         )
 
 
-# ---------------------------------------------------------------------------
-# seed_wwn_magic — pinned behavior
-# ---------------------------------------------------------------------------
-
-
-def test_seed_wwn_magic_empty_for_none_class_def() -> None:
+def test_seed_chargen_resources_empty_for_none_class_def() -> None:
     """No class_def → no Effort pools, no spellcasting state."""
     rules = _wwn_rules()
-    effort, sc = seed_wwn_magic(rules, {"INT": 14}, class_def=None)
-    assert effort == {}
-    assert sc is None
+    module = get_ruleset_module("wwn")
+    res = module.seed_chargen_resources(rules=rules, stats={"INT": 14}, class_def=None)
+    assert res.effort == {}
+    assert res.spellcasting is None
 
 
-def test_seed_wwn_magic_seeds_effort_and_spellcasting_for_magic_class() -> None:
+def test_seed_chargen_resources_seeds_effort_and_spellcasting_for_magic_class() -> None:
     """Pin the INTERESTING case: a synthetic WWN magic class.
 
     Effort pool max = effort_base (1) + starting_skill_level (1) +
@@ -147,24 +144,26 @@ def test_seed_wwn_magic_seeds_effort_and_spellcasting_for_magic_class() -> None:
     casts_remaining=2 (full at chargen), max_spell_level=1, and both starting
     prepared spells survive (no prepared_by_level cap → no truncation).
 
-    This pins the magic-seeding contract byte-identical BEFORE it moves onto
-    the RulesetModule surface in Task 2.
+    Pinned values are UNCHANGED from the pre-migration Task-1 net — the
+    migration is byte-identical (ADR-143).
     """
     rules = _wwn_rules()
+    module = get_ruleset_module("wwn")
     # WWN standard_array → STR=14, DEX=12, CON=11, INT=10, WIS=9, CHA=7.
     # Override WIS to 14 so we exercise a non-zero attribute modifier (+1).
     stats = {"STR": 14, "DEX": 12, "CON": 11, "INT": 10, "WIS": 14, "CHA": 7}
-    effort, sc = seed_wwn_magic(rules, stats, class_def=_high_mage_class())
+    res = module.seed_chargen_resources(rules=rules, stats=stats, class_def=_high_mage_class())
 
     # Effort: one pool keyed by source, max pinned at 3.
-    assert set(effort.keys()) == {"high_mage"}
-    pool = effort["high_mage"]
+    assert set(res.effort.keys()) == {"high_mage"}
+    pool = res.effort["high_mage"]
     assert pool.source == "high_mage"
     assert pool.max == 3  # 1 (effort_base) + 1 (skill) + 1 (mod for WIS 14)
     assert pool.available == 3  # full at chargen
     assert pool.committed == 0
 
     # Spellcasting state pinned from the level-1 tables.
+    sc = res.spellcasting
     assert sc is not None
     assert sc.casts_per_day == 2
     assert sc.casts_remaining == 2  # full at chargen
@@ -172,31 +171,33 @@ def test_seed_wwn_magic_seeds_effort_and_spellcasting_for_magic_class() -> None:
     assert sc.prepared == ["magic_dart", "ward"]
 
 
-def test_seed_wwn_magic_floor_when_low_wisdom() -> None:
+def test_seed_chargen_resources_floor_when_low_wisdom() -> None:
     """Pin the negative-modifier path: WIS=7 gives swn modifier -1.
 
     pool max = 1 (effort_base) + 1 (skill) + (-1) (mod) = 1. The SRD floor
     (a caster's Effort is always at least 1) leaves it at 1 here.
     """
     rules = _wwn_rules()
+    module = get_ruleset_module("wwn")
     stats = {"STR": 14, "DEX": 12, "CON": 11, "INT": 10, "WIS": 7, "CHA": 7}
-    effort, sc = seed_wwn_magic(rules, stats, class_def=_high_mage_class())
+    res = module.seed_chargen_resources(rules=rules, stats=stats, class_def=_high_mage_class())
 
-    assert effort["high_mage"].max == 1  # 1 + 1 + (-1) = 1
-    assert sc is not None
-    assert sc.casts_per_day == 2
+    assert res.effort["high_mage"].max == 1  # 1 + 1 + (-1) = 1
+    assert res.spellcasting is not None
+    assert res.spellcasting.casts_per_day == 2
 
 
-def test_seed_wwn_magic_empty_for_non_wwn_rules() -> None:
-    """A native-ruleset RulesConfig must produce ({}, None) — no WWN magic."""
+def test_seed_chargen_resources_empty_for_non_wwn_rules() -> None:
+    """A native-ruleset RulesConfig must produce empty effort, None spellcasting."""
     native_rules = RulesConfig(
         stat_generation="standard_array",
         ability_score_names=list(WWN_ABILITY_NAMES),
         point_buy_budget=27,
     )
-    effort, sc = seed_wwn_magic(native_rules, {"INT": 14}, class_def=None)
-    assert effort == {}
-    assert sc is None
+    module = get_ruleset_module("native")
+    res = module.seed_chargen_resources(rules=native_rules, stats={"INT": 14}, class_def=None)
+    assert res.effort == {}
+    assert res.spellcasting is None
 
 
 # ---------------------------------------------------------------------------

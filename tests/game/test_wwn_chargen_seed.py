@@ -1,8 +1,8 @@
-"""seed_wwn_magic seeds Effort pools + spellcasting state at chargen (Task 7).
+"""seed_chargen_resources seeds Effort pools + spellcasting state at chargen (ADR-143).
 
 Mirrors test_builder_seeds_strain.py's idiom: synthetic RulesConfig +
-synthetic WwnClassMagic, exercising the module-level seed_wwn_magic helper
-directly, plus an end-to-end synthetic builder build proving the build()
+synthetic WwnClassMagic, exercising the RulesetModule.seed_chargen_resources
+surface directly, plus an end-to-end synthetic builder build proving the build()
 attachment seam wires effort/spellcasting onto the CreatureCore exactly
 as system_strain is.
 
@@ -17,12 +17,13 @@ Locked behaviors (pinned here so they can't silently drift):
   (spells chosen at rest, Plan 3).
 - Effort-only Art user (effort_sources but empty casts tables) =>
   spellcasting is None but the effort dict is still returned.
-- Non-wwn ruleset OR class with no wwn_magic => ({}, None) — no half state.
+- Non-wwn ruleset OR class with no wwn_magic => empty effort, None — no half state.
 """
 
 from __future__ import annotations
 
-from sidequest.game.builder import CharacterBuilder, seed_wwn_magic
+from sidequest.game.builder import CharacterBuilder
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.swn import swn_attribute_modifier
 from sidequest.genre.models.character import (
     CharCreationChoice,
@@ -138,8 +139,14 @@ def fighter_def() -> ClassDef:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests for the seed_wwn_magic helper
+# Unit tests for seed_chargen_resources (migrated from seed_wwn_magic, ADR-143)
 # ---------------------------------------------------------------------------
+
+def _wwn_module():
+    return get_ruleset_module("wwn")
+
+def _native_module():
+    return get_ruleset_module("native")
 
 
 class TestSeedWwnMagicHelper:
@@ -149,22 +156,22 @@ class TestSeedWwnMagicHelper:
         stats = {"Might": 10, "Grace": 12, "Vigor": 13, "Wits": 11, "Spirit": 16, "Presence": 9}
         cls = high_mage_def()
 
-        effort, spellcasting = seed_wwn_magic(rules, stats, cls)
+        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=cls)
 
         # effort_base(1) + starting_skill_level(1) + mod(+1) == 3
-        assert set(effort.keys()) == {"high_mage"}
-        pool = effort["high_mage"]
+        assert set(res.effort.keys()) == {"high_mage"}
+        pool = res.effort["high_mage"]
         assert pool.source == "high_mage"
         assert pool.max == 1 + 1 + swn_attribute_modifier(16)
         assert pool.max == 3
         assert pool.commitments == []
 
-        assert spellcasting is not None
+        assert res.spellcasting is not None
         # Level 1 cast tables.
-        assert spellcasting.casts_per_day == 2
-        assert spellcasting.casts_remaining == 2  # full at chargen
-        assert spellcasting.max_spell_level == 1
-        assert spellcasting.prepared == []  # chosen at rest (Plan 3)
+        assert res.spellcasting.casts_per_day == 2
+        assert res.spellcasting.casts_remaining == 2  # full at chargen
+        assert res.spellcasting.max_spell_level == 1
+        assert res.spellcasting.prepared == []  # chosen at rest (Plan 3)
 
     def test_partial_class_drops_effort_by_one_floor_at_one(self) -> None:
         rules = wwn_rules()
@@ -172,13 +179,13 @@ class TestSeedWwnMagicHelper:
         stats = {"Might": 10, "Grace": 10, "Vigor": 10, "Wits": 10, "Spirit": 8, "Presence": 10}
         cls = vowed_def()
 
-        effort, spellcasting = seed_wwn_magic(rules, stats, cls)
+        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=cls)
 
-        assert set(effort.keys()) == {"vowed"}
+        assert set(res.effort.keys()) == {"vowed"}
         # 1 + 1 + 0 == 2, Partial -1 == 1.
-        assert effort["vowed"].max == 1
+        assert res.effort["vowed"].max == 1
         # Effort-only Art user: no spell economy.
-        assert spellcasting is None
+        assert res.spellcasting is None
 
     def test_partial_floor_clamps_to_one_when_formula_would_be_below(self) -> None:
         rules = wwn_rules()
@@ -187,8 +194,8 @@ class TestSeedWwnMagicHelper:
         cls = vowed_def()
         cls.wwn_magic.effort_sources[0].starting_skill_level = 0  # type: ignore[union-attr]
 
-        effort, _ = seed_wwn_magic(rules, stats, cls)
-        assert effort["vowed"].max == 1
+        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=cls)
+        assert res.effort["vowed"].max == 1
 
     def test_non_partial_low_stat_still_floors_at_one(self) -> None:
         """Unconditional floor: a NON-partial caster whose formula is below 1
@@ -200,8 +207,8 @@ class TestSeedWwnMagicHelper:
         assert cls.wwn_magic.partial is False  # type: ignore[union-attr]
         cls.wwn_magic.effort_sources[0].starting_skill_level = 0  # type: ignore[union-attr]
 
-        effort, _ = seed_wwn_magic(rules, stats, cls)
-        assert effort["high_mage"].max == 1
+        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=cls)
+        assert res.effort["high_mage"].max == 1
 
     def test_multiple_effort_sources_each_seed_their_own_pool(self) -> None:
         """A dual-source caster (e.g. Elementalist + High Mage Art) seeds one
@@ -239,17 +246,17 @@ class TestSeedWwnMagicHelper:
             ),
         )
 
-        effort, spellcasting = seed_wwn_magic(rules, stats, cls)
+        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=cls)
 
-        assert set(effort.keys()) == {"elemental", "high_mage"}
+        assert set(res.effort.keys()) == {"elemental", "high_mage"}
         # elemental: base 1 + skill 2 + mod(Wits=14 -> +1) == 4
-        assert effort["elemental"].max == 1 + 2 + swn_attribute_modifier(14)
-        assert effort["elemental"].max == 4
+        assert res.effort["elemental"].max == 1 + 2 + swn_attribute_modifier(14)
+        assert res.effort["elemental"].max == 4
         # high_mage: base 1 + skill 1 + mod(Spirit=16 -> +1) == 3
-        assert effort["high_mage"].max == 1 + 1 + swn_attribute_modifier(16)
-        assert effort["high_mage"].max == 3
-        assert spellcasting is not None
-        assert spellcasting.casts_per_day == 2
+        assert res.effort["high_mage"].max == 1 + 1 + swn_attribute_modifier(16)
+        assert res.effort["high_mage"].max == 3
+        assert res.spellcasting is not None
+        assert res.spellcasting.casts_per_day == 2
 
     def test_governing_attr_resolves_canonical_to_flavor_to_score(self) -> None:
         """WISDOM -> attribute_map['WISDOM'] == 'Spirit' -> stats['Spirit']."""
@@ -258,29 +265,29 @@ class TestSeedWwnMagicHelper:
         stats = {"Might": 8, "Grace": 8, "Vigor": 8, "Wits": 8, "Spirit": 18, "Presence": 8}
         cls = high_mage_def()
 
-        effort, _ = seed_wwn_magic(rules, stats, cls)
-        assert effort["high_mage"].max == 1 + 1 + 2
+        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=cls)
+        assert res.effort["high_mage"].max == 1 + 1 + 2
 
     def test_non_wwn_ruleset_returns_empty_and_none(self) -> None:
         rules = native_rules()
         stats = {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
-        effort, spellcasting = seed_wwn_magic(rules, stats, fighter_def())
-        assert effort == {}
-        assert spellcasting is None
+        res = _native_module().seed_chargen_resources(rules=rules, stats=stats, class_def=fighter_def())
+        assert res.effort == {}
+        assert res.spellcasting is None
 
     def test_non_magic_class_returns_empty_and_none(self) -> None:
         rules = wwn_rules()
         stats = {"Might": 10, "Grace": 10, "Vigor": 10, "Wits": 10, "Spirit": 10, "Presence": 10}
-        effort, spellcasting = seed_wwn_magic(rules, stats, fighter_def())
-        assert effort == {}
-        assert spellcasting is None
+        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=fighter_def())
+        assert res.effort == {}
+        assert res.spellcasting is None
 
     def test_none_class_def_returns_empty_and_none(self) -> None:
         rules = wwn_rules()
         stats = {"Might": 10, "Grace": 10, "Vigor": 10, "Wits": 10, "Spirit": 10, "Presence": 10}
-        effort, spellcasting = seed_wwn_magic(rules, stats, None)
-        assert effort == {}
-        assert spellcasting is None
+        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=None)
+        assert res.effort == {}
+        assert res.spellcasting is None
 
 
 # ---------------------------------------------------------------------------

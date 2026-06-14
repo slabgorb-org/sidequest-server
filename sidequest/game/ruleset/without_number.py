@@ -555,6 +555,67 @@ class WithoutNumberRulesetModule(RulesetModule):
         )
 
     # ------------------------------------------------------------------
+    # Chargen resource seeding (ADR-143) — migrated from builder.seed_system_strain
+    # + builder.seed_wwn_magic onto the module surface.
+    # ------------------------------------------------------------------
+
+    def seed_chargen_resources(self, *, rules, stats, class_def):
+        """WN-family Effort pools + spellcasting + system strain (migrated from
+        builder.seed_wwn_magic + seed_system_strain, ADR-143)."""
+        from sidequest.game.chargen_contribution import ChargenResources
+        from sidequest.game.system_strain import SystemStrainPool
+        from sidequest.game.wwn_magic import EffortPool, SpellcastingState
+
+        # CwnConfig is imported at module level (~line 48); no local re-import.
+        # SystemStrainPool seeding (CWN/AWN): max == CONSTITUTION-flavor score.
+        # Gates on isinstance(cfg, CwnConfig) (covers CWN + AWN + future subclasses)
+        # rather than a slug string — consistent with the legacy seed_system_strain.
+        system_strain = None
+        cfg = rules.ruleset_config()
+        if isinstance(cfg, CwnConfig):
+            con_flavor = cfg.attribute_map["CONSTITUTION"]
+            body_score = int(stats.get(con_flavor, 10))
+            system_strain = SystemStrainPool(current=0, max=max(1, body_score), permanent=0)
+
+        # WWN Effort pools + spellcasting state (wwn packs, magic classes).
+        # Non-wwn / non-magic classes get ({}, None) — no silent partial state.
+        effort: dict[str, EffortPool] = {}
+        spellcasting: SpellcastingState | None = None
+        if (
+            rules.ruleset == "wwn"
+            and rules.wwn is not None
+            and class_def is not None
+            and class_def.wwn_magic is not None
+        ):
+            cm = class_def.wwn_magic
+            effort_base = rules.wwn.magic.effort_base
+            attr_map = rules.wwn.attribute_map
+
+            for src in cm.effort_sources:
+                flavor = attr_map[src.governing_attr]
+                score = int(stats.get(flavor, 10))
+                pool_max = effort_base + src.starting_skill_level + swn_attribute_modifier(score)
+                if cm.partial:
+                    pool_max -= 1
+                pool_max = max(1, pool_max)
+                effort[src.source] = EffortPool(source=src.source, max=pool_max)
+
+            level_key = "1"
+            if cm.casts_per_day_by_level:
+                casts_per_day = cm.casts_per_day_by_level.get(level_key, 0)
+                max_spell_level = cm.max_spell_level_by_level.get(level_key, 0)
+                capacity = cm.prepared_by_level.get(level_key, len(cm.starting_prepared))
+                prepared = cm.starting_prepared[:capacity]
+                spellcasting = SpellcastingState(
+                    prepared=prepared,
+                    casts_remaining=casts_per_day,
+                    casts_per_day=casts_per_day,
+                    max_spell_level=max_spell_level,
+                )
+
+        return ChargenResources(effort=effort, spellcasting=spellcasting, system_strain=system_strain)
+
+    # ------------------------------------------------------------------
     # Effort engine (SWN/WWN SRD §1.4.4 / §6) — shared SWN-family crunch.
     #
     # Lifted to the family base in Story 102-6 so a swn-bound psychic commits

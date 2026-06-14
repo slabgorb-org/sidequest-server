@@ -183,6 +183,14 @@ class RulesetModule(ABC):
         """
         return None
 
+    def seed_chargen_resources(self, *, rules, stats, class_def):
+        """Effort/spellcasting/system-strain seeded at chargen. Default: none.
+        Only WithoutNumberRulesetModule overrides (Effort + Strain are WN-family).
+        Returns ChargenResources. Imported lazily to keep lean rulesets free of
+        the wwn_magic/system_strain import at module load."""
+        from sidequest.game.chargen_contribution import ChargenResources
+        return ChargenResources()
+
     def resolve_trauma(
         self, *, spec, base_total, cfg, rng, actor="", _tracer=None
     ) -> LethalityResult:

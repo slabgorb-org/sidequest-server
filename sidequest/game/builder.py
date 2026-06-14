@@ -25,9 +25,7 @@ from sidequest.game.creature_core import (
 from sidequest.game.creature_core import (
     HpConfigMissingClassError as _CoreHpConfigMissingClassError,
 )
-from sidequest.game.ruleset.swn import swn_attribute_modifier
-from sidequest.game.system_strain import SystemStrainPool
-from sidequest.game.wwn_magic import EffortPool, SpellcastingState
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.genre.models.character import (
     BackstoryTables,
     CharCreationScene,
@@ -37,7 +35,7 @@ from sidequest.genre.models.character import (
     MechanicalEffects,
     OriginTraitDef,
 )
-from sidequest.genre.models.rules import CwnConfig, EdgeConfig, RulesConfig
+from sidequest.genre.models.rules import EdgeConfig, RulesConfig
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
@@ -80,97 +78,6 @@ def qualifying_classes_arrangement(
     as 0 — they cannot satisfy any minimum.
     """
     return [c for c in classes if (arrangement.get(c.prime_requisite) or 0) >= c.minimum_score]
-
-
-def seed_system_strain(rules: RulesConfig, stats: dict[str, int]) -> SystemStrainPool | None:
-    """Return a SystemStrainPool for a CWN-family pack (max = CONSTITUTION-flavor score), else None.
-
-    System Strain is a CwnConfig mechanic, shared by CWN and AWN (which subclasses
-    CWN). We gate on the CAPABILITY (``isinstance(cfg, CwnConfig)``) rather than a
-    slug string so AWN — and any future CWN sister module — gets a strain pool for
-    free, instead of silently falling through the ``ruleset == "cwn"`` check.
-    ``attribute_map["CONSTITUTION"]`` gives the flavor stat name (e.g. "Body");
-    the pool max is clamped to at least 1. The ruleset's validator guarantees the
-    CONSTITUTION key exists in attribute_map.
-    """
-    cfg = rules.ruleset_config()
-    if not isinstance(cfg, CwnConfig):  # covers CWN + AWN + future subclasses
-        return None
-    con_flavor = cfg.attribute_map["CONSTITUTION"]  # validated present by the ruleset validator
-    body_score = int(stats.get(con_flavor, 10))
-    return SystemStrainPool(current=0, max=max(1, body_score), permanent=0)
-
-
-def seed_wwn_magic(
-    rules: RulesConfig,
-    stats: dict[str, int],
-    class_def: ClassDef | None,
-) -> tuple[dict[str, EffortPool], SpellcastingState | None]:
-    """Seed WWN Effort pools + spellcasting state at chargen (SRD §1.4.4, §4.2).
-
-    Returns ``({}, None)`` for non-wwn rulesets and for non-magic classes
-    (no ``wwn_magic`` on the class def) — no silent partial state.
-
-    For a magic class:
-      * One ``EffortPool`` per ``WwnEffortSource``, keyed by ``source.source``,
-        with ``max = rules.wwn.magic.effort_base + source.starting_skill_level
-        + swn_attribute_modifier(score-of-governing-attr)``. WWN shares the SWN
-        attribute curve. A Partial class subtracts 1 (floor 1). The governing
-        attr is a CANONICAL key ("WISDOM") resolved through
-        ``rules.wwn.attribute_map`` to the pack's flavor stat name, then to the
-        score in ``stats`` (mirrors ``seed_system_strain``).
-      * A ``SpellcastingState`` from the level-1 cast tables (chargen level is
-        always 1): ``casts_per_day`` / ``max_spell_level`` from the by-level
-        dicts (default 0 if absent), ``casts_remaining = casts_per_day`` (full
-        at chargen), ``prepared`` seeded from ``class_def.wwn_magic.starting_prepared``
-        capped at the level-1 prepared capacity (``prepared_by_level["1"]``); when
-        that key is absent no truncation is applied.  A class with effort sources
-        but NO cast tables (an Effort-only Art user, e.g. the Vowed) yields
-        ``spellcasting = None`` but still returns its effort dict.
-        ``prepared_by_level`` is capacity metadata for the rest/prepare action.
-    """
-    if rules.ruleset != "wwn" or rules.wwn is None:
-        return {}, None
-    if class_def is None or class_def.wwn_magic is None:
-        return {}, None
-
-    cm = class_def.wwn_magic
-    effort_base = rules.wwn.magic.effort_base
-    attr_map = rules.wwn.attribute_map  # validated complete by _validate_wwn
-
-    effort: dict[str, EffortPool] = {}
-    for src in cm.effort_sources:
-        flavor = attr_map[src.governing_attr]  # canonical -> flavor stat name
-        score = int(stats.get(flavor, 10))
-        pool_max = effort_base + src.starting_skill_level + swn_attribute_modifier(score)
-        if cm.partial:
-            pool_max -= 1  # Partial class: Effort -1
-        pool_max = max(1, pool_max)  # WWN SRD: a caster's Effort is always at least 1
-        effort[src.source] = EffortPool(source=src.source, max=pool_max)
-
-    # Chargen level is always 1 (build() constructs level=1).
-    level_key = "1"
-    spellcasting: SpellcastingState | None = None
-    # casts_per_day_by_level is the canonical "is this a spell-caster class" signal:
-    # an Effort-only Art user (e.g. Vowed) has effort sources but no cast tables, so
-    # max_spell_level_by_level may be absent — gate the whole state on casts only.
-    if cm.casts_per_day_by_level:
-        casts_per_day = cm.casts_per_day_by_level.get(level_key, 0)
-        max_spell_level = cm.max_spell_level_by_level.get(level_key, 0)
-        # Seed prepared from the class's starting_prepared list, capped at
-        # the level-1 prepared capacity.  When "1" is absent in prepared_by_level,
-        # len(cm.starting_prepared) is used as the fallback cap — effectively
-        # no truncation.
-        capacity = cm.prepared_by_level.get(level_key, len(cm.starting_prepared))
-        prepared = cm.starting_prepared[:capacity]
-        spellcasting = SpellcastingState(
-            prepared=prepared,
-            casts_remaining=casts_per_day,
-            casts_per_day=casts_per_day,
-            max_spell_level=max_spell_level,
-        )
-
-    return effort, spellcasting
 
 
 def _seed_class_abilities(
@@ -1109,6 +1016,9 @@ class CharacterBuilder:
         self._standard_array: list[int] | None = rules.standard_array
         self._race_label: str = rules.race_label or "Race"
         self._class_label: str = rules.class_label or "Class"
+        # ADR-143: ruleset module bound once at construction; build() delegates
+        # chargen resource seeding to seed_chargen_resources.
+        self._ruleset = get_ruleset_module(rules.ruleset)
 
         # Eager roll at construction — scan scenes for the first
         # `stat_generation: roll_3d6_strict` directive so stat values
@@ -2882,15 +2792,16 @@ class CharacterBuilder:
                 },
             )
 
-        # SystemStrainPool seeding (CWN): max == Body/CON-flavor score.
-        # Non-cwn packs get None; seed_system_strain is a module-level
-        # pure helper (unit-testable without constructing a full builder).
-        system_strain = seed_system_strain(self._rules, stats)
-
-        # WWN Effort pools + spellcasting state (wwn packs, magic classes).
-        # Non-wwn / non-magic classes get ({}, None) — no silent partial state.
-        # _resolved_class_def is the ClassDef resolved from class_str above.
-        wwn_effort, wwn_spellcasting = seed_wwn_magic(self._rules, stats, _resolved_class_def)
+        # Chargen resource seeding (ADR-143): Effort pools + spellcasting +
+        # SystemStrainPool delegated to the bound RulesetModule.  The module
+        # returns ChargenResources with empty defaults for rulesets that seed
+        # nothing (native, swn); CWN/AWN return a system_strain pool; WWN
+        # returns effort + spellcasting for magic classes.
+        _res = self._ruleset.seed_chargen_resources(
+            rules=self._rules, stats=stats, class_def=_resolved_class_def
+        )
+        system_strain = _res.system_strain
+        wwn_effort, wwn_spellcasting = _res.effort, _res.spellcasting
 
         # Resolved archetype: pairs jungian_hint / rpg_role_hint if both
         # are present. archetype_provenance is populated downstream by

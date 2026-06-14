@@ -46,8 +46,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from sidequest.cli.validate.pack import load_pack_schema, validate_pack_structure
 
 # Four levels up: tests/cli/validate/ → tests/cli/ → tests/ → sidequest-server/

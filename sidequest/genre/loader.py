@@ -63,7 +63,7 @@ from sidequest.genre.models.premises import PremisesFile, WitnessedActsFile
 from sidequest.genre.models.progression import ProgressionConfig
 from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldConfig
-from sidequest.genre.models.rules import RulesConfig
+from sidequest.genre.models.rules import RulesConfig, WinCondition
 from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
@@ -667,17 +667,73 @@ def _validate_opening_bank_coverage(
 # ---------------------------------------------------------------------------
 
 
+def _is_without_number(ruleset: str) -> bool:
+    """True when ``ruleset`` binds a Without Number module (swn/wwn/cwn/awn).
+
+    The WN family shares one engine that owns the combat action set, so the
+    native beat scaffolding is *removed* — not balanced — from its path
+    (ADR-143, SOUL "Bind the Ruleset, Don't Balance It"). Local import avoids a
+    load-time cycle (mirrors get_ruleset_module's use lower in this module).
+    """
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
+
+    return isinstance(get_ruleset_module(ruleset), WithoutNumberRulesetModule)
+
+
+def _emit_wn_beat_optional(ruleset: str, confrontation_type: str) -> None:
+    """Fire a ``state_transition`` watcher span when the loader allows a beatless
+    WN combat def, so the GM panel (the lie detector) can prove the WN gate
+    engaged rather than the beat-count check having been silently removed
+    (story 108-7). Mirrors the other loader ``_emit_*`` load spans."""
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "wn_beat_optional",
+            "ruleset": ruleset,
+            "confrontation_type": confrontation_type,
+        },
+        component="genre.loader",
+    )
+
+
+def _validate_confrontation_beats(rules: RulesConfig) -> None:
+    """Every confrontation must declare at least one beat — EXCEPT a
+    ``category=combat`` / ``win_condition=hp_depletion`` def under a bound
+    Without Number ruleset, where the WN initiative engine (wn_round.py) supplies
+    attack/move/item-use/cast and the def authors ZERO native beats (story
+    108-7, unblocks 108-3; ADR-143). This gate lived on ``ConfrontationDef``'s
+    model validator, but the model can't see ``rules.ruleset`` — so it lives here
+    now. Native packs, and non-combat (dial) defs even under WN, still fail loud.
+    """
+    is_wn = _is_without_number(rules.ruleset)
+    for cd in rules.confrontations:
+        if cd.beats:
+            continue
+        wn_combat = (
+            is_wn and cd.category == "combat" and cd.win_condition == WinCondition.hp_depletion
+        )
+        if not wn_combat:
+            raise PackError(f"confrontation '{cd.confrontation_type}' must have at least one beat")
+        _emit_wn_beat_optional(rules.ruleset, cd.confrontation_type)
+
+
 def _validate_class_filter_refs(rules: RulesConfig, classes: list[ClassDef]) -> None:
     """Loud-fail if any beat.class_filter references a class not in classes.yaml,
     if any class.encounter_beat_choices references a missing beat ID,
     or if a class in allowed_classes has empty encounter_beat_choices.
 
     Only runs when classes list is non-empty (packs without classes.yaml are
-    not subject to these rules).
+    not subject to these rules). Under a Without Number binding the WN engine
+    owns the action set, so WN classes may leave encounter_beat_choices empty
+    (story 108-7, ADR-143); native packs still require it.
     """
     if not classes:
         return
 
+    is_wn = _is_without_number(rules.ruleset)
     declared_classes = {c.display_name for c in classes}
     all_beat_ids: set[str] = set()
     for cd in rules.confrontations:
@@ -694,6 +750,10 @@ def _validate_class_filter_refs(rules: RulesConfig, classes: list[ClassDef]) -> 
     for c in classes:
         if c.display_name in rules.allowed_classes:
             if not c.encounter_beat_choices:
+                if is_wn:
+                    # WN engine owns the action set — a WN class need not declare
+                    # encounter_beat_choices (story 108-7, ADR-143).
+                    continue
                 raise PackError(
                     f"class '{c.display_name}' encounter_beat_choices is empty "
                     f"(class is in allowed_classes and must declare beat choices)"
@@ -1949,6 +2009,12 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     archetype_constraints: ArchetypeConstraints | None = _load_yaml_optional(
         path / "archetype_constraints.yaml", ArchetypeConstraints
     )
+
+    # Beat-count gate (moved off the ConfrontationDef model validator, story
+    # 108-7): every confrontation needs >=1 beat, except a WN combat/hp_depletion
+    # def whose action set the WN engine owns. Runs before the class-filter check
+    # so a beatless native def fails loud here regardless of classes.yaml.
+    _validate_confrontation_beats(rules)
 
     # Cross-reference validation: class_filter / encounter_beat_choices consistency.
     # Only enforced when a classes.yaml is present (classes_list is non-empty).

@@ -14,7 +14,7 @@ from typing import Literal
 
 from opentelemetry import trace
 
-from sidequest.game.fate_sheet import FateSheet
+from sidequest.game.fate_sheet import Aspect, FateSheet
 from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.fate_resolution import FateOutcome, Opposition, resolve_action
 from sidequest.telemetry.spans.fate import (
@@ -22,7 +22,9 @@ from sidequest.telemetry.spans.fate import (
     fate_aspect_invoked_span,
     fate_compel_accepted_span,
     fate_compel_offered_span,
+    fate_consequence_taken_span,
     fate_point_delta_span,
+    fate_stress_applied_span,
 )
 
 _NO_D20_SURFACE = (
@@ -176,6 +178,63 @@ class FateRulesetModule(RulesetModule):
             actor=actor, aspect=aspect_text, fate_points_after=after, _tracer=_tracer
         )
         return after
+
+    # --- Stress + consequence atomic mutators (F1c orchestrates absorption) ---
+
+    def mark_stress(
+        self,
+        *,
+        sheet: FateSheet,
+        track: str,
+        box_value: int,
+        actor: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> int:
+        """Check the unused stress box of value ``box_value`` on ``track`` and
+        return the shifts it absorbs (== box_value). Fails loud on an unknown
+        track, a missing box value, or an already-checked box. Choosing WHICH box
+        absorbs a hit is F1c's orchestration; this is the atomic mark."""
+        stress_track = sheet.stress.get(track)
+        if stress_track is None:
+            raise FateEconomyError(
+                f"{actor or 'actor'} has no '{track}' stress track (have: {sorted(sheet.stress)})"
+            )
+        box = next((b for b in stress_track.boxes if b.value == box_value and not b.checked), None)
+        if box is None:
+            raise FateEconomyError(
+                f"{actor or 'actor'} has no unchecked {track} stress box of value "
+                f"{box_value} to mark"
+            )
+        box.checked = True
+        fate_stress_applied_span(actor=actor, track=track, box_value=box_value, _tracer=_tracer)
+        return box_value
+
+    def take_consequence(
+        self,
+        *,
+        sheet: FateSheet,
+        level: str,
+        aspect_text: str,
+        actor: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> int:
+        """Fill the ``level`` consequence slot with an aspect and return the
+        shifts it absorbs (the slot value). The filled slot BECOMES an aspect with
+        one free invoke for the attacker (SRD). Fails loud if the slot is already
+        filled or the level is unknown."""
+        slot = next((c for c in sheet.consequences if c.level == level), None)
+        if slot is None:
+            raise FateEconomyError(
+                f"{actor or 'actor'} has no '{level}' consequence slot "
+                f"(have: {[c.level for c in sheet.consequences]})"
+            )
+        if slot.aspect is not None:
+            raise FateEconomyError(
+                f"{actor or 'actor'} {level} consequence is already filled ({slot.aspect.text!r})"
+            )
+        slot.aspect = Aspect(text=aspect_text, kind="consequence", free_invokes=1)
+        fate_consequence_taken_span(actor=actor, level=level, aspect=aspect_text, _tracer=_tracer)
+        return slot.value
 
     # --- d20/beat surface: not Fate's paradigm (fail loud until F5 re-cut) ---
 

@@ -167,3 +167,73 @@ def test_accept_compel_earns_a_point_and_emits_both_spans():
     names = _names(exporter)
     assert "fate.compel.accepted" in names
     assert "fate.fate_point.delta" in names  # the earn rides the delta span too
+
+
+def test_mark_stress_checks_the_named_box_and_emits_span():
+    module = get_ruleset_module("fate")
+    sheet = FateSheet()
+    exporter, tracer = _exporter()
+
+    absorbed = module.mark_stress(
+        sheet=sheet, track="physical", box_value=2, actor="Sleuth", _tracer=tracer
+    )
+
+    assert absorbed == 2  # a value-2 box absorbs 2 shifts
+    assert sheet.stress["physical"].boxes[1].checked is True
+    assert sheet.stress["physical"].boxes[0].checked is False
+    assert "fate.stress.applied" in _names(exporter)
+    span = next(s for s in exporter.get_finished_spans() if s.name == "fate.stress.applied")
+    assert span.attributes["track"] == "physical"
+    assert span.attributes["box_value"] == 2
+
+
+def test_mark_stress_already_checked_fails_loud():
+    module = get_ruleset_module("fate")
+    sheet = FateSheet()
+    module.mark_stress(sheet=sheet, track="physical", box_value=1, actor="Sleuth")
+    with pytest.raises(FateEconomyError):
+        module.mark_stress(sheet=sheet, track="physical", box_value=1, actor="Sleuth")
+
+
+def test_mark_stress_unknown_track_or_box_fails_loud():
+    module = get_ruleset_module("fate")
+    sheet = FateSheet()
+    with pytest.raises(FateEconomyError):
+        module.mark_stress(sheet=sheet, track="spiritual", box_value=1, actor="x")
+    with pytest.raises(FateEconomyError):
+        module.mark_stress(sheet=sheet, track="physical", box_value=9, actor="x")
+
+
+def test_take_consequence_fills_slot_becomes_aspect_with_free_invoke():
+    module = get_ruleset_module("fate")
+    sheet = FateSheet()
+    exporter, tracer = _exporter()
+
+    absorbed = module.take_consequence(
+        sheet=sheet,
+        level="moderate",
+        aspect_text="Dislocated Shoulder",
+        actor="Sleuth",
+        _tracer=tracer,
+    )
+
+    assert absorbed == 4  # moderate absorbs 4 shifts
+    moderate = next(c for c in sheet.consequences if c.level == "moderate")
+    assert moderate.aspect is not None
+    assert moderate.aspect.text == "Dislocated Shoulder"
+    assert moderate.aspect.kind == "consequence"
+    assert moderate.aspect.free_invokes == 1  # SRD: free invoke for the attacker
+    # The filled consequence now surfaces in all_aspects().
+    assert "Dislocated Shoulder" in [a.text for a in sheet.all_aspects()]
+    assert "fate.consequence.taken" in _names(exporter)
+    span = next(s for s in exporter.get_finished_spans() if s.name == "fate.consequence.taken")
+    assert span.attributes["level"] == "moderate"
+    assert span.attributes["aspect"] == "Dislocated Shoulder"
+
+
+def test_take_consequence_already_filled_fails_loud():
+    module = get_ruleset_module("fate")
+    sheet = FateSheet()
+    module.take_consequence(sheet=sheet, level="mild", aspect_text="Bruised", actor="x")
+    with pytest.raises(FateEconomyError):
+        module.take_consequence(sheet=sheet, level="mild", aspect_text="Again", actor="x")

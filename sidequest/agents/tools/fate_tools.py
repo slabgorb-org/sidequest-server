@@ -29,10 +29,18 @@ from sidequest.game.ruleset.fate import FateRulesetModule
 
 
 class ProposeFateCompelArgs(BaseModel):
-    actor: str = Field(..., description="The PC the compel targets.")
-    aspect_text: str = Field(..., description="The aspect being compelled (verbatim).")
+    actor: str = Field(..., min_length=1, max_length=64, description="The PC the compel targets.")
+    aspect_text: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="The aspect being compelled (verbatim).",
+    )
     compel_reason: str = Field(
-        ..., description="The complication the compel introduces into the scene."
+        ...,
+        min_length=1,
+        max_length=500,
+        description="The complication the compel introduces into the scene.",
     )
 
 
@@ -62,8 +70,8 @@ async def propose_fate_compel(args: ProposeFateCompelArgs, ctx: ToolContext) -> 
     if not isinstance(module, FateRulesetModule):  # registry contract backstop (fail loud)
         raise ValueError(f"ruleset 'fate' resolved a non-Fate module: {type(module).__name__}")
     # offer_compel fires fate.compel.offered (no economy change). The GM panel sees the
-    # offer even when the player declines.
-    module.offer_compel(aspect_text=args.aspect_text, actor=args.actor)
+    # offer even when the player declines — including the proposed complication (reason).
+    module.offer_compel(aspect_text=args.aspect_text, actor=args.actor, reason=args.compel_reason)
     return ToolResult.ok(
         {"offered": args.aspect_text, "actor": args.actor, "reason": args.compel_reason}
     )

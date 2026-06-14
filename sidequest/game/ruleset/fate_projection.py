@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from sidequest.protocol.sanitize import sanitize_player_text
+
 if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
 
@@ -38,9 +40,20 @@ def build_fate_projection(snapshot: GameSnapshot) -> dict[str, Any]:
             continue
         skills[ch.core.name] = dict(sheet.skills)
         fate_points[ch.core.name] = sheet.fate_points
-        character_aspects[ch.core.name] = [a.text for a in sheet.all_aspects()]
+        # Aspect text is player-authored (chargen) or LLM-authored (create_advantage);
+        # it flows into the narrator prompt, so sanitize at this single source of truth
+        # (ADR-047) — covers both the narrator section and the router state summary.
+        character_aspects[ch.core.name] = [
+            sanitize_player_text(a.text) for a in sheet.all_aspects()
+        ]
     enc = snapshot.encounter
-    scene_aspects = [a.text for a in enc.situation_aspects] if enc is not None else []
+    # A resolved encounter's situation aspects are stale fiction — gate them on
+    # `not enc.resolved`, the same condition `active_conflict` reads below.
+    scene_aspects = (
+        [sanitize_player_text(a.text) for a in enc.situation_aspects]
+        if enc is not None and not enc.resolved
+        else []
+    )
     return {
         "skills": skills,
         "fate_points": fate_points,

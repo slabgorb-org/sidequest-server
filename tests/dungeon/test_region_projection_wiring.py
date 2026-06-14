@@ -150,7 +150,9 @@ async def test_projection_reaches_narrator_prompt_with_real_move_vocab(
 
         graph = repo.load_map(entrance_id="entrance")
         world_dir = _beneath_sunden_world_dir()
-        palette = load_theme_palette(world_dir.parent.parent)
+        # ADR-140 (story 113-1): themes/ is world-tier — resolve from the world
+        # dir, not the genre-pack root (world_dir.parent.parent).
+        palette = load_theme_palette(world_dir)
 
         proj = project_region(graph, snap.current_region, palette)
         assert proj.region_id == "entrance"

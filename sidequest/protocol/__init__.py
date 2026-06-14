@@ -40,6 +40,9 @@ from sidequest.protocol.dispatch import (
 # Foundation types
 from sidequest.protocol.enums import MessageType, NarratorVerbosity, NarratorVocabulary
 
+# Fate Core payloads (ADR-144 F1d)
+from sidequest.protocol.fate import FateActionPayload
+
 # Phase 1 payload classes
 from sidequest.protocol.messages import (
     ActionQueueMessage,
@@ -55,6 +58,7 @@ from sidequest.protocol.messages import (
     DiceThrowMessage,
     ErrorMessage,
     ErrorPayload,
+    FateActionMessage,
     GameMessage,
     LocationDescriptionMessage,
     LocationOverlayChangedMessage,
@@ -152,6 +156,8 @@ __all__ = [
     "MessageType",
     "NarratorVerbosity",
     "NarratorVocabulary",
+    # Fate Core payloads (ADR-144 F1d)
+    "FateActionPayload",
     "ContributionKind",
     "MergeStep",
     "Provenance",
@@ -202,6 +208,7 @@ __all__ = [
     "ChapterMarkerPayload",
     "ErrorMessage",
     "ErrorPayload",
+    "FateActionMessage",
     "GameMessage",
     "LocationDescriptionMessage",
     "LocationOverlayChangedMessage",

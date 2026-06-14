@@ -28,10 +28,12 @@ from sidequest.game.creature_core import (
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.base import _DEFAULT_STANDARD_ARRAY
 from sidequest.genre.models.character import (
+    Background,
     BackstoryTables,
     CharCreationScene,
     ClassDef,
     EquipmentTables,
+    Focus,
     GuaranteedGrant,
     MechanicalEffects,
     OriginTraitDef,
@@ -1043,6 +1045,11 @@ class CharacterBuilder:
         self._bones_rerolled: set[str] = set()
         self._bones_pending_broadcasts: list[tuple[str, list[int]]] = []
         self._classes: list[ClassDef] = []
+        # ADR-143: chargen defs (backgrounds, foci) populated via with_chargen_defs().
+        # Default empty dicts so existing construction is unaffected (Task 10 consumes
+        # them; Task 9 only stores them).
+        self._backgrounds: dict[str, Background] = {}
+        self._foci: dict[str, Focus] = {}
         for s in scenes:
             eff = s.mechanical_effects
             if eff is None or eff.stat_generation is None:
@@ -1090,6 +1097,25 @@ class CharacterBuilder:
         """Attach the genre pack's class definitions for qualification loop
         and class_kit equipment selection."""
         self._classes = list(classes)
+        return self
+
+    def with_chargen_defs(
+        self,
+        *,
+        backgrounds: dict[str, Background],
+        foci: dict[str, Focus],
+    ) -> CharacterBuilder:
+        """Attach resolved background and focus catalogs for chargen application.
+
+        ADR-143 Task 9. Called from connect.py after ``resolve_backgrounds`` /
+        ``resolve_foci`` (world-first); Task 10 reads ``self._backgrounds`` and
+        ``self._foci`` in ``build()`` to seed the character. Defaults to empty
+        dicts in ``__init__`` so packs without these files are unaffected.
+
+        Returns self for fluent chaining (mirrors ``with_classes``).
+        """
+        self._backgrounds = dict(backgrounds)
+        self._foci = dict(foci)
         return self
 
     def with_pack_id(self, pack_id: str) -> CharacterBuilder:

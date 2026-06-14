@@ -29,10 +29,12 @@ from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig
 from sidequest.genre.models.bestiary import Bestiary
 from sidequest.genre.models.character import (
+    Background,
     BackstoryTables,
     CharCreationScene,
     ClassDef,
     EquipmentTables,
+    Focus,
     NpcArchetype,
     VisualStyle,
 )
@@ -1562,6 +1564,49 @@ def _load_single_world(
             # here; the detail keeps the stock id + offending mutation id.
             raise GenreLoadError(path=stocks_path, detail=str(e)) from e
 
+    # === World-tier backgrounds.yaml — OPTIONAL (ADR-143) ===
+    # A world's background CATALOG is a world-tier CAST/CATALOG surface — the
+    # backgrounds a world ships. Absent file → empty dict (a valid authored
+    # choice; the genre-tier default serves). A present-but-malformed file
+    # fails loud via pydantic validation. Mirrors the world classes pattern.
+    world_backgrounds_path = world_path / "backgrounds.yaml"
+    world_backgrounds: dict[str, Background] = {}
+    if world_backgrounds_path.exists():
+        raw_world_backgrounds = _load_yaml_raw_optional(world_backgrounds_path)
+        if raw_world_backgrounds is not None and not isinstance(raw_world_backgrounds, list):
+            raise GenreLoadError(
+                path=world_backgrounds_path,
+                detail="expected a list of background definitions",
+            )
+        world_backgrounds = {
+            bg.id: bg
+            for bg in (
+                Background.model_validate(item)
+                for item in (
+                    raw_world_backgrounds if isinstance(raw_world_backgrounds, list) else []
+                )
+            )
+        }
+
+    # === World-tier foci.yaml — OPTIONAL (ADR-143) ===
+    # Same pattern as backgrounds above.
+    world_foci_path = world_path / "foci.yaml"
+    world_foci: dict[str, Focus] = {}
+    if world_foci_path.exists():
+        raw_world_foci = _load_yaml_raw_optional(world_foci_path)
+        if raw_world_foci is not None and not isinstance(raw_world_foci, list):
+            raise GenreLoadError(
+                path=world_foci_path,
+                detail="expected a list of focus definitions",
+            )
+        world_foci = {
+            f.id: f
+            for f in (
+                Focus.model_validate(item)
+                for item in (raw_world_foci if isinstance(raw_world_foci, list) else [])
+            )
+        }
+
     # Story 104-1 / M-A: single-vs-cluster is a system COUNT, decided at load
     # time and cached on the World so the in-game MAP_UPDATE path (which holds
     # only the World, not its dir) can ship the flag. Emits the decision span.
@@ -1603,6 +1648,8 @@ def _load_single_world(
         scenarios=world_scenarios,
         premises=world_premises,
         blocs=world_blocs,
+        backgrounds=world_backgrounds,
+        foci=world_foci,
         client_theme_css=client_theme_css,
     )
 
@@ -1806,6 +1853,53 @@ def load_genre_pack(path: Path | str) -> GenrePack:
                 detail="expected a list of class definitions",
             )
         classes_list = [ClassDef.model_validate(item) for item in raw_classes]
+
+    # === Genre-tier backgrounds.yaml — OPTIONAL (ADR-143) ===
+    # Absent file → empty dict (documented correct state, NOT a silent fallback
+    # masking a config error). A present-but-malformed file fails loud via
+    # pydantic validation. Mirrors the classes.yaml loading pattern exactly.
+    backgrounds_path = path / "backgrounds.yaml"
+    genre_backgrounds: dict[str, Background] = {}
+    if backgrounds_path.exists():
+        with backgrounds_path.open("r", encoding="utf-8") as f:
+            raw_backgrounds = yaml.safe_load(f) or []
+        if not isinstance(raw_backgrounds, list):
+            raise GenreLoadError(
+                path=backgrounds_path,
+                detail="expected a list of background definitions",
+            )
+        genre_backgrounds = {
+            bg.id: bg for bg in (Background.model_validate(item) for item in raw_backgrounds)
+        }
+
+    # === Genre-tier foci.yaml — OPTIONAL (ADR-143) ===
+    # Same absent-OK contract as backgrounds.yaml.
+    foci_path = path / "foci.yaml"
+    genre_foci: dict[str, Focus] = {}
+    if foci_path.exists():
+        with foci_path.open("r", encoding="utf-8") as f:
+            raw_foci = yaml.safe_load(f) or []
+        if not isinstance(raw_foci, list):
+            raise GenreLoadError(
+                path=foci_path,
+                detail="expected a list of focus definitions",
+            )
+        genre_foci = {f.id: f for f in (Focus.model_validate(item) for item in raw_foci)}
+
+    # === Genre-tier skills.yaml — OPTIONAL (ADR-143) ===
+    # A flat list of skill-name strings. Absent → empty list (no catalog
+    # required). A present-but-malformed file fails loud.
+    skills_path = path / "skills.yaml"
+    genre_skills: list[str] = []
+    if skills_path.exists():
+        with skills_path.open("r", encoding="utf-8") as f:
+            raw_skills = yaml.safe_load(f) or []
+        if not isinstance(raw_skills, list):
+            raise GenreLoadError(
+                path=skills_path,
+                detail="expected a list of skill names",
+            )
+        genre_skills = [str(s) for s in raw_skills]
 
     archetype_constraints: ArchetypeConstraints | None = _load_yaml_optional(
         path / "archetype_constraints.yaml", ArchetypeConstraints
@@ -2138,6 +2232,9 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         psionic_discipline_catalog=genre_psionic_catalog,
         bestiary=bestiary,
         mutations=mutations,
+        backgrounds=genre_backgrounds,
+        foci=genre_foci,
+        skills=genre_skills,
         source_dir=path,
         client_theme_css=client_theme_css,
     )

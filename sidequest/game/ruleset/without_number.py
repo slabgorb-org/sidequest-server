@@ -464,30 +464,53 @@ class WithoutNumberRulesetModule(RulesetModule):
         scene_traumatic: bool,
         cfg: SwnConfig | None,
         rng: random.Random,
+        created_turn: int = 0,
+        created_in_encounter: str | None = None,
+        superseded_by_terminal: bool = False,
         _tracer: trace.Tracer | None = None,
     ) -> DownedResult:
         """Resolve a WN character dropped to 0 HP.
 
-        Always declares a Mortal Injury (Scar status; dies at the end of
-        cfg.trauma.mortal_injury_rounds unless stabilized). If a Traumatic Hit
-        landed this scene, additionally rolls a Physical save (1d20 vs
-        save_target); on failure, rolls 1d12 on the Major Injury table and
-        attaches a second Scar. Emits {slug}.mortal_injury.declared and (when
-        rolled) {slug}.major_injury.roll.
+        Declares a Mortal Injury (Scar status; dies at the end of
+        cfg.trauma.mortal_injury_rounds unless stabilized) stamped with the
+        caller's ``created_turn`` / ``created_in_encounter`` provenance. If a
+        Traumatic Hit landed this scene, additionally rolls a Physical save
+        (1d20 vs save_target); on failure, rolls 1d12 on the Major Injury table
+        and attaches a second Scar. Emits {slug}.mortal_injury.declared and
+        (when rolled) {slug}.major_injury.roll.
+
+        ``superseded_by_terminal`` (sq-playtest #239 death dual-status): when the
+        genre lethality policy has ALREADY ruled this actor terminally dead (an
+        ``incapacitating`` "Downed — ... (mortally wounded)" status is present),
+        a coexisting non-incapacitating "dies in N rounds unless stabilized"
+        window is a CONTRADICTORY second status — terminal-dead vs. stabilizable.
+        The real WWN dying window is deferred to story 106-5 (and is unactionable
+        in solo per .pennyfarthing/sidecars/gm-decisions.md). So we SUPERSEDE:
+        the WN lethality span still fires (GM-panel lie-detector — WN lethality
+        IS engaged), carrying ``superseded_by_terminal=True``, but the
+        contradictory window status (and any Major Injury scar) is NOT appended.
+        A terminally-dead PC then shows exactly ONE coherent status.
         """
         if not isinstance(cfg, (CwnConfig, WwnConfig)):
             raise ValueError(
                 f"resolve_downed requires a CwnConfig/WwnConfig; got {type(cfg).__name__!r}"
             )
         rounds = cfg.trauma.mortal_injury_rounds
-        core.statuses.append(
-            Status(
-                text=f"Mortal Injury — dies in {rounds} rounds unless stabilized",
-                severity=StatusSeverity.Scar,
+        if not superseded_by_terminal:
+            core.statuses.append(
+                Status(
+                    text=f"Mortal Injury — dies in {rounds} rounds unless stabilized",
+                    severity=StatusSeverity.Scar,
+                    created_turn=created_turn,
+                    created_in_encounter=created_in_encounter,
+                )
             )
-        )
         mortal_injury_declared_span(
-            ruleset=self.slug, actor=core.name, rounds_to_die=rounds, _tracer=_tracer
+            ruleset=self.slug,
+            actor=core.name,
+            rounds_to_die=rounds,
+            superseded_by_terminal=superseded_by_terminal,
+            _tracer=_tracer,
         )
 
         major = False
@@ -501,8 +524,18 @@ class WithoutNumberRulesetModule(RulesetModule):
                 major = True
                 major_roll = rng.randint(1, 12)
                 major_text = major_injury_entry(major_roll)
+                # A maiming Major Injury scar is NOT the #239 contradiction — a
+                # dead-AND-maimed body is coherent. Only the stabilizable "dies in
+                # N rounds" death-clock conflicts with a terminal-dead verdict, so
+                # the Major Injury is appended even when the Mortal Injury window
+                # above is superseded. Provenance stamped like every status.
                 core.statuses.append(
-                    Status(text=f"Major Injury — {major_text}", severity=StatusSeverity.Scar)
+                    Status(
+                        text=f"Major Injury — {major_text}",
+                        severity=StatusSeverity.Scar,
+                        created_turn=created_turn,
+                        created_in_encounter=created_in_encounter,
+                    )
                 )
             major_injury_roll_span(
                 ruleset=self.slug,

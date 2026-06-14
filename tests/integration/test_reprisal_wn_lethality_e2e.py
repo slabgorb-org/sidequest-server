@@ -192,8 +192,17 @@ def test_heavy_metal_reprisal_kill_emits_wwn_mortal_injury_for_pc(otel_capture, 
         f"lie-detector the 2026-06-10 long_foundry playtest found missing; "
         f"got spans: {span_names}"
     )
-    assert dict(mortal[0].attributes or {}).get("actor") == PLAYER, (
-        f"the mortal-injury actor must be the dying PC; attrs={dict(mortal[0].attributes or {})}"
+    mattrs = dict(mortal[0].attributes or {})
+    assert mattrs.get("actor") == PLAYER, (
+        f"the mortal-injury actor must be the dying PC; attrs={mattrs}"
+    )
+    # sq-playtest #239 (death dual-status): the WN lethality span STILL fires
+    # (GM-panel proof WN lethality engaged) but is marked superseded — the genre
+    # policy already ruled this PC terminally dead, so the dying-window STATUS is
+    # not appended (see the status-coherence assertion below).
+    assert mattrs.get("superseded_by_terminal") is True, (
+        f"a PC the genre policy already ruled terminally dead must declare the WN "
+        f"Mortal Injury span as superseded_by_terminal; attrs={mattrs}"
     )
 
     # ── And the generic genre verdict still applied beside it ─────────────
@@ -205,9 +214,17 @@ def test_heavy_metal_reprisal_kill_emits_wwn_mortal_injury_for_pc(otel_capture, 
     assert gattrs.get("decision") == "lethal_down" and gattrs.get("verdict") == "dead", (
         f"heavy_metal's pc=dead verdict must hold the PC down; attrs={gattrs}"
     )
-    assert any(s.text.startswith("Downed") for s in player_core.statuses) and any(
-        "Mortal Injury" in s.text for s in player_core.statuses
-    ), (
-        f"the dead PC must carry BOTH the generic Downed status and the WN Mortal "
-        f"Injury death-clock status; statuses={[s.text for s in player_core.statuses]}"
+    # sq-playtest #239: ONE coherent status. The terminally-dead PC carries the
+    # incapacitating "Downed — ... (mortally wounded)" verdict and NO coexisting
+    # non-terminal "dies in N rounds unless stabilized" window (the contradiction
+    # the playtest found 3× — Zeppo/Chico/Mercutio). The real WWN dying window is
+    # deferred to story 106-5 (unactionable in solo per gm-decisions).
+    statuses = player_core.statuses
+    assert any(s.text.startswith("Downed") and s.incapacitating for s in statuses), (
+        f"the dead PC must carry the incapacitating Downed verdict; "
+        f"statuses={[(s.text, s.incapacitating) for s in statuses]}"
+    )
+    assert not any("dies in" in s.text and "unless stabilized" in s.text for s in statuses), (
+        f"the terminally-dead PC must NOT also carry a stabilizable 'dies in N rounds' "
+        f"window (superseded for coherence, #239); statuses={[s.text for s in statuses]}"
     )

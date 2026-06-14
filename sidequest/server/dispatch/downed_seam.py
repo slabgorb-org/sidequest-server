@@ -156,10 +156,23 @@ def run_cwn_wwn_downed_seam(
         core=down_core,
         cfg=cfg,
     )
+    # sq-playtest #239 (death dual-status): if the genre lethality policy has
+    # ALREADY ruled this actor terminally dead, an incapacitating terminal
+    # status is present (the structured out-of-play marker set by
+    # ``post_resolution_lethality`` for LETHAL verdicts). In the reprisal close
+    # that verdict runs BEFORE this seam, so a dying PC arrives here already
+    # flagged dead; a dropped OPPONENT (strike/cast paths) never carries one.
+    # When terminally dead we SUPERSEDE the WN dying-window so the PC shows ONE
+    # coherent status — the WN ``mortal_injury.declared`` span still fires
+    # (GM-panel proof WN lethality engaged), marked ``superseded_by_terminal``.
+    superseded = any(getattr(s, "incapacitating", False) for s in down_core.statuses)
     ruleset.resolve_downed(
         core=down_core,
         save_target=save_target,
         scene_traumatic=scene_traumatic,
         cfg=cfg,
         rng=rng,
+        created_turn=snapshot.turn_manager.interaction,
+        created_in_encounter=encounter.encounter_type,
+        superseded_by_terminal=superseded,
     )

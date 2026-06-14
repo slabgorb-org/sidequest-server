@@ -295,6 +295,58 @@ def test_characterize_resolve_downed(slug):
     assert "Mortal Injury" in core.statuses[0].text
 
 
+@pytest.mark.parametrize("slug", ["wwn", "cwn", "awn"])
+def test_resolve_downed_stamps_real_provenance_when_window_emitted(slug):
+    """sq-playtest #239: when the Mortal Injury window IS emitted (the actor is
+    NOT already terminally dead — e.g. a dropped opponent), it must carry the
+    caller's real created_turn / created_in_encounter, not the 0/None default the
+    playtest forensics flagged on the phantom status (created_turn:0, enc:None)."""
+    core = _downed_core()
+    _MOD[slug].resolve_downed(
+        core=core,
+        save_target=15,
+        scene_traumatic=False,
+        cfg=_CFG[slug],
+        rng=random.Random(0),
+        created_turn=7,
+        created_in_encounter="combat",
+    )
+    assert len(core.statuses) == 1
+    window = core.statuses[0]
+    assert window.created_turn == 7, (
+        f"the dying-window status must carry the real turn, not 0; got {window.created_turn}"
+    )
+    assert window.created_in_encounter == "combat", (
+        f"the dying-window status must carry the real encounter, not None; "
+        f"got {window.created_in_encounter!r}"
+    )
+
+
+@pytest.mark.parametrize("slug", ["wwn", "cwn", "awn"])
+def test_resolve_downed_supersedes_window_for_terminal_actor(slug):
+    """sq-playtest #239: when the actor is already terminally dead
+    (superseded_by_terminal=True), resolve_downed must NOT append the
+    contradictory "dies in N rounds unless stabilized" window status — so the
+    actor shows ONE coherent status — while still returning mortal=True (the WN
+    lethality span fires, marked superseded, at the call site)."""
+    core = _downed_core()
+    result = _MOD[slug].resolve_downed(
+        core=core,
+        save_target=15,
+        scene_traumatic=False,
+        cfg=_CFG[slug],
+        rng=random.Random(0),
+        created_turn=7,
+        created_in_encounter="combat",
+        superseded_by_terminal=True,
+    )
+    assert result.mortal is True
+    assert not any("Mortal Injury" in s.text for s in core.statuses), (
+        f"a terminally-dead actor must NOT get a stabilizable dying-window status; "
+        f"statuses={[s.text for s in core.statuses]}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task 8 — hierarchy-lock tests (ADR-142)
 #

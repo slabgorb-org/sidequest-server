@@ -205,12 +205,25 @@ class RulesetModule(ABC):
         return 0
 
     def resolve_downed(
-        self, *, core, save_target, scene_traumatic, cfg, rng, _tracer=None
+        self,
+        *,
+        core,
+        save_target,
+        scene_traumatic,
+        cfg,
+        rng,
+        created_turn=0,
+        created_in_encounter=None,
+        superseded_by_terminal=False,
+        _tracer=None,
     ) -> DownedResult | None:
         """Resolve a 0-HP character. Default: no special consequence (None).
 
-        CWN overrides to declare Mortal Injury and (if a Traumatic Hit landed
-        this scene) roll the Major Injury table. Returns DownedResult | None."""
+        CWN/WWN override to declare Mortal Injury and (if a Traumatic Hit landed
+        this scene) roll the Major Injury table. The ``created_turn`` /
+        ``created_in_encounter`` provenance and ``superseded_by_terminal`` flag
+        are consumed by the WN override (#239); the default ignores them.
+        Returns DownedResult | None."""
         return None
 
     def resolve_hacking(

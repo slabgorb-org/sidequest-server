@@ -26,6 +26,7 @@ from sidequest.game.creature_core import (
     HpConfigMissingClassError as _CoreHpConfigMissingClassError,
 )
 from sidequest.game.ruleset import get_ruleset_module
+from sidequest.game.ruleset.base import _DEFAULT_STANDARD_ARRAY
 from sidequest.genre.models.character import (
     BackstoryTables,
     CharCreationScene,
@@ -1048,6 +1049,8 @@ class CharacterBuilder:
                 self._roll_3d6_strict()
             elif eff.stat_generation == "roll_3d6_arrange_visible":
                 self._roll_3d6_arrange_visible()
+            elif eff.stat_generation == "standard_array_arrange":
+                self._seed_standard_array_arrange()
             break
 
         self._backstory_tables: BackstoryTables | None = backstory_tables
@@ -1252,10 +1255,19 @@ class CharacterBuilder:
         self._arrangement_assignment = None
 
     def reject_arrangement(self) -> None:
-        """Discard the current pool and reroll. Stays in arrange mode."""
+        """Discard the current pool and reset. Stays in arrange mode.
+
+        For ``roll_3d6_arrange_visible`` this rerolls the pool.
+        For ``standard_array_arrange`` this re-seeds from the fixed standard
+        array (ADR-143 DD-3) — the values are unchanged, but all assignments
+        are cleared so the player can re-assign from scratch.
+        """
         if self._arrangement_assignment is None:
             raise RuntimeError("not in arrangement mode")
-        self._roll_3d6_arrange_visible()
+        if self._stat_generation == "standard_array_arrange":
+            self._seed_standard_array_arrange()
+        else:
+            self._roll_3d6_arrange_visible()
 
     @property
     def rules(self) -> RulesConfig:
@@ -1899,7 +1911,7 @@ class CharacterBuilder:
         if effects.stat_generation is not None:
             if effects.stat_generation == "roll_3d6_strict":
                 self._roll_3d6_strict()
-            elif effects.stat_generation == "roll_3d6_arrange_visible":
+            elif effects.stat_generation in ("roll_3d6_arrange_visible", "standard_array_arrange"):
                 # Scene-flow method, not a generate_stats method.
                 # confirm_arrangement materializes _rolled_stats.
                 pass
@@ -2113,8 +2125,8 @@ class CharacterBuilder:
                         "chargen.class_qualifying",
                         {"class_ids": [c.id for c in qual]},
                     )
-            elif effects.stat_generation == "roll_3d6_arrange_visible":
-                # The pool was rolled at construction; arrangement
+            elif effects.stat_generation in ("roll_3d6_arrange_visible", "standard_array_arrange"):
+                # The pool was seeded at construction; arrangement
                 # materializes _rolled_stats. generate_stats() reuses the
                 # ``roll_3d6_strict`` branch — both materialize stats
                 # before generate_stats runs, so don't override
@@ -2960,6 +2972,21 @@ class CharacterBuilder:
         ]
         self._arrangement_assignment = {name: None for name in self._ability_score_names}
         # rolled_stats stays None until confirm_arrangement materializes it.
+
+    def _seed_standard_array_arrange(self) -> None:
+        """Seed the arrange pool from the pack's standard array (ADR-143 DD-3).
+
+        Parallel to _roll_3d6_arrange_visible, but the six values are the fixed
+        standard array (default [15,14,13,12,10,8] when unset) instead of 3d6
+        rolls. The existing arrange picker/handlers/FSM are reused unchanged.
+        """
+        base = (
+            self._standard_array
+            if self._standard_array is not None
+            else _DEFAULT_STANDARD_ARRAY
+        )
+        self._arrangement_pool = list(base)
+        self._arrangement_assignment = {name: None for name in self._ability_score_names}
 
     def _roll_3d6_strict(self) -> None:
         """Roll 3d6 stats once into self._rolled_stats.

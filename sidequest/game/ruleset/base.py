@@ -25,6 +25,13 @@ if TYPE_CHECKING:
     from sidequest.genre.models.world import Route
 
 
+# Legacy D&D 5e standard array, used when a pack authors `stat_generation:
+# standard_array` (or `standard_array_arrange`, ADR-143) but does not author its
+# own `rules.standard_array`. Single source of truth for both the non-arrange
+# path (generate_attributes, below) and the builder's arrange-pool seeder.
+_DEFAULT_STANDARD_ARRAY: list[int] = [15, 14, 13, 12, 10, 8]
+
+
 def _roll_3d6_stats(ability_names: list[str], rng: random.Random) -> list[tuple[str, int]]:
     """Roll 3d6 for each ability score in order. Returns ``(name, total)``
     pairs in ``ability_names`` order, emitting one ``SPAN_CHARGEN_STAT_ROLL``
@@ -308,7 +315,7 @@ class RulesetModule(ABC):
             return (
                 list(standard_array)
                 if standard_array is not None
-                else [15, 14, 13, 12, 10, 8]
+                else list(_DEFAULT_STANDARD_ARRAY)
             )
 
         elif method == "point_buy":

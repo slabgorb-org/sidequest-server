@@ -19,12 +19,16 @@ from __future__ import annotations
 
 import logging
 
+from opentelemetry import trace
+
 from sidequest.game.encounter import (
     EncounterActor,
     FateAction,
     FateSealedCommit,
     StructuredEncounter,
 )
+from sidequest.game.fate_sheet import FateSheet, StressTrackName
+from sidequest.game.ruleset.fate import FateRulesetModule
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -139,3 +143,76 @@ def fate_turn_order(
         a for a in encounter.actors if not a.withdrawn and a.side in ("player", "opponent")
     ]
     return [a.name for a in sorted(seated, key=lambda a: rating(a.name), reverse=True)]
+
+
+def absorb_shifts(
+    *,
+    module: FateRulesetModule,
+    sheet: FateSheet,
+    track: StressTrackName,
+    shifts: int,
+    actor: str,
+    source: str,
+    _tracer: trace.Tracer | None = None,
+) -> bool:
+    """Absorb a ``shifts``-shift hit into ``track`` stress + consequences.
+
+    SRD: a hit may be absorbed by AT MOST ONE stress box plus any number of
+    consequence slots. Prefer the smallest single stress box that covers the
+    whole hit; otherwise spend the largest available box to shave the hit and
+    fill consequence slots smallest-first for the remainder. Returns ``True`` if
+    fully absorbed (actor survives), ``False`` if capacity is exhausted (the
+    caller takes them out). Delegates the atomic marks to the F1b mutators so
+    each emits its own ``fate.stress.applied`` / ``fate.consequence.taken`` span.
+
+    Precondition: ``shifts`` MUST be >= 1 — ties and misses are resolved by the
+    caller before absorption is ever reached (a zero-or-negative hit, or an
+    unknown track, fails loud per No Silent Fallbacks).
+    """
+    if shifts <= 0:
+        raise FateConflictError(
+            f"absorb_shifts requires shifts >= 1 (got {shifts}); "
+            "ties and misses are handled by the caller before absorption"
+        )
+    if track not in sheet.stress:
+        raise FateConflictError(
+            f"absorb_shifts: {actor!r} has no {track!r} stress track "
+            f"(have: {sorted(sheet.stress)})"
+        )
+    remaining = shifts
+    stress_track = sheet.stress[track]
+
+    # One stress box (SRD: one per hit). Smallest box that alone covers the hit;
+    # else the largest available box to shave it.
+    covering = [b for b in stress_track.boxes if not b.checked and b.value >= remaining]
+    chosen = (
+        min(covering, key=lambda b: b.value)
+        if covering
+        else max(
+            (b for b in stress_track.boxes if not b.checked),
+            key=lambda b: b.value,
+            default=None,
+        )
+    )
+    if chosen is not None:
+        module.mark_stress(
+            sheet=sheet, track=track, box_value=chosen.value, actor=actor, _tracer=_tracer
+        )
+        remaining = max(0, remaining - chosen.value)
+
+    # Consequences, smallest-first, until the hit is covered.
+    for slot in sorted(
+        (c for c in sheet.consequences if c.aspect is None), key=lambda c: c.value
+    ):
+        if remaining <= 0:
+            break
+        module.take_consequence(
+            sheet=sheet,
+            level=slot.level,
+            aspect_text=f"{slot.level.title()} consequence inflicted by {source}",
+            actor=actor,
+            _tracer=_tracer,
+        )
+        remaining = max(0, remaining - slot.value)
+
+    return remaining <= 0

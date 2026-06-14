@@ -38,8 +38,9 @@ them" is verified by 108-3, not here — today the live packs still carry beats)
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 import yaml
@@ -263,8 +264,7 @@ def test_denativized_wn_pack_emits_beat_optional_span(
     relaxed = [
         e
         for e in captured_events
-        if e["event_type"] == "state_transition"
-        and e["fields"].get("field") == "wn_beat_optional"
+        if e["event_type"] == "state_transition" and e["fields"].get("field") == "wn_beat_optional"
     ]
     assert len(relaxed) >= 1, (
         "loader must publish a wn_beat_optional state_transition span when it "

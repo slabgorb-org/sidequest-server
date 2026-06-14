@@ -695,7 +695,7 @@ def _emit_wn_beat_optional(ruleset: str, confrontation_type: str) -> None:
             "ruleset": ruleset,
             "confrontation_type": confrontation_type,
         },
-        component="genre.loader",
+        component="genre",  # matches the other loader load-spans (GM-panel grouping)
     )
 
 
@@ -752,7 +752,11 @@ def _validate_class_filter_refs(rules: RulesConfig, classes: list[ClassDef]) -> 
             if not c.encounter_beat_choices:
                 if is_wn:
                     # WN engine owns the action set — a WN class need not declare
-                    # encounter_beat_choices (story 108-7, ADR-143).
+                    # encounter_beat_choices (story 108-7, ADR-143). NOTE the
+                    # asymmetry: only an EMPTY list is skipped. A WN class that
+                    # still carries stale choices against a de-nativized (zero-beat)
+                    # pool falls through to the missing_beats check below and fails
+                    # loud per ref — the signal to strip them, not just empty them.
                     continue
                 raise PackError(
                     f"class '{c.display_name}' encounter_beat_choices is empty "

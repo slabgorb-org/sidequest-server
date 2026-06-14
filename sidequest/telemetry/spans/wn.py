@@ -116,6 +116,46 @@ def _mortal_injury_declared_extract(span: _SpanLike) -> dict[str, Any]:
         "field": "mortal_injury",
         "actor": attrs.get("actor", ""),
         "rounds_to_die": attrs.get("rounds_to_die", 0),
+        # #846 (story 108-6): the supersede decision (terminal-dead overrode the
+        # stabilizable window) must reach the GM panel, not be dropped from the
+        # projection. The emitter already forwards it via **attrs.
+        "superseded_by_terminal": attrs.get("superseded_by_terminal", False),
+    }
+
+
+def _dying_window_opened_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "dying_window_opened",
+        "actor": attrs.get("actor", ""),
+        "created_turn": attrs.get("created_turn", 0),
+        "mortal_injury_rounds": attrs.get("mortal_injury_rounds", 0),
+        "deadline_round": attrs.get("deadline_round", 0),
+        "reason": attrs.get("reason", ""),
+    }
+
+
+def _dying_window_tick_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "dying_window_tick",
+        "actor": attrs.get("actor", ""),
+        "rounds_elapsed": attrs.get("rounds_elapsed", 0),
+        "difficulty": attrs.get("difficulty", 0),
+        "action_was_stabilization": attrs.get("action_was_stabilization", False),
+        "roll": attrs.get("roll", 0),
+        "success": attrs.get("success", False),
+    }
+
+
+def _dying_window_resolved_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "dying_window_resolved",
+        "actor": attrs.get("actor", ""),
+        "outcome": attrs.get("outcome", ""),
+        "final_rounds_elapsed": attrs.get("final_rounds_elapsed", 0),
+        "resulting_status": attrs.get("resulting_status", ""),
     }
 
 
@@ -137,6 +177,9 @@ _WN_LETHALITY_EXTRACTS = {
     "shock.applied": _shock_applied_extract,
     "mortal_injury.declared": _mortal_injury_declared_extract,
     "major_injury.roll": _major_injury_roll_extract,
+    "dying_window.opened": _dying_window_opened_extract,
+    "dying_window.tick": _dying_window_tick_extract,
+    "dying_window.resolved": _dying_window_resolved_extract,
 }
 
 for _slug in WN_LETHALITY_SLUGS:
@@ -247,6 +290,81 @@ def mortal_injury_declared_span(
         **attrs,
     }
     with Span.open(f"{ruleset}.mortal_injury.declared", attributes, tracer_override=_tracer):
+        pass
+
+
+def dying_window_opened_span(
+    *,
+    ruleset: str,
+    actor: str,
+    created_turn: int,
+    mortal_injury_rounds: int,
+    deadline_round: int,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.dying_window.opened`` — the WWN dying window opened (vs terminal)."""
+    attributes: dict[str, Any] = {
+        "field": "dying_window_opened",
+        "actor": actor,
+        "created_turn": created_turn,
+        "mortal_injury_rounds": mortal_injury_rounds,
+        "deadline_round": deadline_round,
+        "reason": reason,
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.dying_window.opened", attributes, tracer_override=_tracer):
+        pass
+
+
+def dying_window_tick_span(
+    *,
+    ruleset: str,
+    actor: str,
+    rounds_elapsed: int,
+    difficulty: int,
+    action_was_stabilization: bool,
+    roll: int = 0,
+    success: bool = False,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.dying_window.tick`` — one engine-owned dying-window round."""
+    attributes: dict[str, Any] = {
+        "field": "dying_window_tick",
+        "actor": actor,
+        "rounds_elapsed": rounds_elapsed,
+        "difficulty": difficulty,
+        "action_was_stabilization": action_was_stabilization,
+        "roll": roll,
+        "success": success,
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.dying_window.tick", attributes, tracer_override=_tracer):
+        pass
+
+
+def dying_window_resolved_span(
+    *,
+    ruleset: str,
+    actor: str,
+    outcome: str,
+    final_rounds_elapsed: int,
+    resulting_status: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.dying_window.resolved`` — window exit (stabilized | died)."""
+    attributes: dict[str, Any] = {
+        "field": "dying_window_resolved",
+        "actor": actor,
+        "outcome": outcome,
+        "final_rounds_elapsed": final_rounds_elapsed,
+        "resulting_status": resulting_status,
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.dying_window.resolved", attributes, tracer_override=_tracer):
         pass
 
 

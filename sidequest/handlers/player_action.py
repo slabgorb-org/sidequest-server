@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING
 
 from sidequest.game.incapacitation import find_incapacitating_status
+from sidequest.game.ruleset.without_number import is_dying_window_status
 from sidequest.game.turn import TurnPhase
 from sidequest.protocol import sanitize_player_text
 from sidequest.protocol.messages import (
@@ -35,6 +36,32 @@ if TYPE_CHECKING:
     from sidequest.server.websocket_session_handler import WebSocketSessionHandler
 
 logger = logging.getLogger(__name__)
+
+
+def _bound_wn_slug(sd) -> str | None:
+    """The bound ruleset slug for OTEL namespacing, or None when unavailable."""
+    rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
+    ruleset = getattr(rules, "ruleset", None)
+    return ruleset if isinstance(ruleset, str) else None
+
+
+def _dying_window_expired(sd, status) -> bool:
+    """True when a WWN dying window has passed its deadline (story 108-6, AC4).
+
+    The deadline is ``created_turn + cfg.trauma.mortal_injury_rounds`` against the
+    current interaction round. Reads the bound WN cfg from the session's genre
+    pack (a capability gate, not a slug string — same idiom as the downed seam):
+    with no Cwn/Wwn config bound there is no deadline to enforce, so the window is
+    not expired this turn (it still blocks normal play via ``incapacitating``).
+    """
+    from sidequest.genre.models.rules import CwnConfig, WwnConfig
+
+    rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
+    cfg = rules.ruleset_config() if rules is not None else None
+    if not isinstance(cfg, (CwnConfig, WwnConfig)):
+        return False
+    deadline = status.created_turn + cfg.trauma.mortal_injury_rounds
+    return sd.snapshot.turn_manager.interaction >= deadline
 
 
 def initiative_preamble(encounter: object | None) -> str | None:
@@ -545,6 +572,59 @@ class PlayerActionHandler:
             None,
         )
         downed_status = find_incapacitating_status(downed_core) if downed_core is not None else None
+        # Story 108-6 dying-window carve. A stabilizable window is incapacitating
+        # (the PC can't take normal actions) but the downed soloist may still ACT
+        # (free-text) to try to stabilize — and each submission spends a round on
+        # the engine-owned clock. Two outcomes on the player's own turn:
+        #   - deadline passed → convert the window to terminal-dead and block
+        #     (AC4: stalling can't pause the clock), then fall through to the
+        #     existing terminal block below.
+        #   - still within the window → emit the per-round tick (lie-detector for
+        #     the clock) and PERMIT the action — route it to the narrator.
+        if (
+            downed_status is not None
+            and downed_core is not None
+            and is_dying_window_status(downed_status)
+        ):
+            from sidequest.game.status import Status, StatusSeverity
+            from sidequest.telemetry.spans.wn import (
+                dying_window_resolved_span,
+                dying_window_tick_span,
+            )
+
+            slug = _bound_wn_slug(sd) or "wwn"
+            rounds_elapsed = max(
+                0, sd.snapshot.turn_manager.interaction - downed_status.created_turn
+            )
+            if _dying_window_expired(sd, downed_status):
+                downed_core.statuses = [
+                    s for s in downed_core.statuses if not is_dying_window_status(s)
+                ]
+                terminal = Status(
+                    text="Downed — dead (mortally wounded)",
+                    severity=StatusSeverity.Scar,
+                    created_turn=downed_status.created_turn,
+                    created_in_encounter=downed_status.created_in_encounter,
+                    incapacitating=True,
+                )
+                downed_core.statuses.append(terminal)
+                dying_window_resolved_span(
+                    ruleset=slug,
+                    actor=acting_name,
+                    outcome="died",
+                    final_rounds_elapsed=rounds_elapsed,
+                    resulting_status="terminal-dead",
+                )
+                downed_status = terminal  # fall through to the terminal block
+            else:
+                dying_window_tick_span(
+                    ruleset=slug,
+                    actor=acting_name,
+                    rounds_elapsed=rounds_elapsed,
+                    difficulty=8 + rounds_elapsed,
+                    action_was_stabilization=False,
+                )
+                downed_status = None  # permit — route to the narrator
         if downed_status is not None:
             from sidequest.server.post_resolution_lethality import (
                 build_incapacitated_message,

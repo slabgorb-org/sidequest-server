@@ -53,9 +53,12 @@ def test_window_status_is_incapacitating_and_stabilizable():
         created_turn=3,
         created_in_encounter="combat",
         superseded_by_terminal=False,
+        dying_window=True,  # the no-live-hostile solo case the seam selects
     )
     windows = [s for s in core.statuses if is_dying_window_status(s)]
-    assert len(windows) == 1, f"expected exactly one dying-window status; got {[s.text for s in core.statuses]}"
+    assert len(windows) == 1, (
+        f"expected exactly one dying-window status; got {[s.text for s in core.statuses]}"
+    )
     window = windows[0]
     assert window.incapacitating is True, "window must block normal actions"
     assert window.stabilizable is True

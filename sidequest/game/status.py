@@ -68,6 +68,18 @@ class Status(BaseModel):
     recoverable ``Recovering`` setback leaves it False (the PC keeps agency).
     Additive default (False) → existing saves migrate cleanly."""
 
+    stabilizable: bool = False
+    """True only for the WWN dying-window Mortal Injury status.
+
+    A dying window is ``incapacitating`` (the PC can't take normal actions) AND
+    ``stabilizable`` — the structured marker the turn-intake gate
+    (handlers/player_action.py) reads to PERMIT a downed soloist's free-text
+    submission (and route it to the narrator) instead of blocking it the way a
+    terminal-dead status does (story 108-6). Keyed on the flag, never on
+    ``text`` (CLAUDE.md: structured markers, not text scraping; cf.
+    ``incapacitating``). Additive default (False) → existing saves migrate
+    cleanly under ``extra='forbid'``."""
+
     source: str | None = None
     """Machine identity for reconcilable / system-applied statuses.
 

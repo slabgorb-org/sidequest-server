@@ -25,9 +25,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-AspectKind = Literal[
-    "high_concept", "trouble", "character", "situation", "consequence", "boost"
-]
+AspectKind = Literal["high_concept", "trouble", "character", "situation", "consequence", "boost"]
 ConsequenceLevel = Literal["mild", "moderate", "severe", "extreme"]
 StressTrackName = Literal["physical", "mental"]
 

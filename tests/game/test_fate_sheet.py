@@ -43,9 +43,7 @@ def test_all_aspects_includes_filled_consequences_only():
         "Can't Resist a Sob Story",
     ]
     # Fill the mild slot — it now surfaces as an aspect.
-    sheet.consequences[0].aspect = Aspect(
-        text="Cracked Ribs", kind="consequence", free_invokes=1
-    )
+    sheet.consequences[0].aspect = Aspect(text="Cracked Ribs", kind="consequence", free_invokes=1)
     assert [a.text for a in sheet.all_aspects()] == [
         "Last Honest Cop in Vice",
         "Can't Resist a Sob Story",

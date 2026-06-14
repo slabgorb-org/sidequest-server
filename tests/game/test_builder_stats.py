@@ -256,6 +256,18 @@ class TestGenerateStats:
         stats = b.generate_stats(AccumulatedChoices())
         assert stats == {"STR": 15, "DEX": 14, "CON": 13, "INT": 12, "WIS": 10, "CHA": 8}
 
+    def test_standard_array_too_short_raises(self) -> None:
+        """ADR-142 Step 2A: when standard_array is shorter than ability_score_names,
+        the validator raises immediately — no silent padding (No Silent Fallbacks)."""
+        with pytest.raises(ValueError, match="no silent padding"):
+            RulesConfig(
+                stat_generation="standard_array",
+                ability_score_names=list(ABILITY_NAMES),  # 6 scores
+                point_buy_budget=27,
+                default_class="Fighter",
+                standard_array=[14, 12, 11],  # only 3 entries for 6 scores
+            )
+
     def test_standard_array_applies_explicit_bonuses(self) -> None:
         b = CharacterBuilder(scenes=one_choice_scene(), rules=rules_standard_array())
         acc = AccumulatedChoices(stat_bonuses={"STR": 2, "DEX": -1})

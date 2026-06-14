@@ -3,6 +3,7 @@ from __future__ import annotations
 from sidequest.game.ruleset.awn import AwnRulesetModule
 from sidequest.game.ruleset.base import RulesetModule, UnknownRulesetError
 from sidequest.game.ruleset.cwn import CwnRulesetModule
+from sidequest.game.ruleset.fate import FateRulesetModule
 from sidequest.game.ruleset.native import NativeRulesetModule
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.ruleset.wwn import WwnRulesetModule
@@ -14,6 +15,7 @@ _REGISTRY: dict[str, RulesetModule] = {
     CwnRulesetModule.slug: CwnRulesetModule(),
     WwnRulesetModule.slug: WwnRulesetModule(),
     AwnRulesetModule.slug: AwnRulesetModule(),
+    FateRulesetModule.slug: FateRulesetModule(),
 }
 
 

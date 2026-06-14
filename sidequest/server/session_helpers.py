@@ -570,8 +570,9 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
 
         loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
         world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
-        # pack root holds themes/ — mirrors session_integration._theme_pack_root
-        palette = load_theme_palette(world_dir.parent.parent)
+        # ADR-140 (story 113-1): themes/ is world-tier — resolve from the world
+        # dir, mirroring session_integration._theme_pack_root.
+        palette = load_theme_palette(world_dir)
 
         try:
             proj = project_region(graph, current_region, palette)

@@ -359,20 +359,30 @@ def _validate_projection(path: Path, label: str) -> list[str]:
 
 
 def _validate_theme_palette(pack_dir: Path, label: str) -> list[str]:
-    """Validate themes/*.yaml through the strict palette loader when a themes/
-    dir is present. Absent themes/ dir is not an error (palette is
-    dungeon-specific)."""
-    if not (pack_dir / "themes").is_dir():
+    """Validate WORLD-tier themes/*.yaml through the strict palette loader.
+
+    ADR-140 (story 113-1): the dungeon theme palette is world-tier content,
+    living at ``worlds/<world>/themes/`` — not at the genre-pack root. Scan
+    each world for a themes/ dir and validate it through the loader. A world
+    with no themes/ dir is not an error (the palette is dungeon-specific)."""
+    worlds_dir = pack_dir / "worlds"
+    if not worlds_dir.is_dir():
         return []
     from sidequest.dungeon.themes import ThemePaletteMissingError, load_theme_palette
 
-    try:
-        load_theme_palette(pack_dir)
-    except ThemePaletteMissingError:
-        return []
-    except Exception as exc:  # noqa: BLE001 — palette loader fails loud with filename
-        return [f"{label}: themes/ failed palette validation: {exc}"]
-    return []
+    errors: list[str] = []
+    for world_dir in sorted(worlds_dir.iterdir()):
+        if not (world_dir / "themes").is_dir():
+            continue
+        try:
+            load_theme_palette(world_dir)
+        except ThemePaletteMissingError:
+            continue
+        except Exception as exc:  # noqa: BLE001 — palette loader fails loud with filename
+            errors.append(
+                f"{label}: worlds/{world_dir.name}/themes/ failed palette validation: {exc}"
+            )
+    return errors
 
 
 # ---------------------------------------------------------------------------

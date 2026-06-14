@@ -73,12 +73,15 @@ def _save_key(game_slug: str) -> str:
 
 
 def _theme_pack_root(world_dir: Path) -> Path:
-    """The genre-pack dir holding ``themes/`` (Plan 4 layout
-    ``genre_packs/<genre>/themes/``). ``world_dir`` is
-    ``…/genre_packs/<genre>/worlds/<world>`` → parents[1] is the pack
-    root. Verified loud by load_theme_palette (raises if themes/ absent).
+    """The dir holding ``themes/`` for this world's dungeon palette.
+
+    ADR-140 (story 113-1): the dungeon theme palette is WORLD-tier content
+    (the genre tier is the rulebook only; the world owns cast and catalog),
+    so ``themes/`` lives at ``worlds/<world>/themes/`` — i.e. ``world_dir``
+    itself, not ``world_dir.parent.parent`` (the genre-pack root). Verified
+    loud by load_theme_palette (raises if themes/ absent).
     """
-    return world_dir.parent.parent
+    return world_dir
 
 
 async def attach_dungeon_to_session(

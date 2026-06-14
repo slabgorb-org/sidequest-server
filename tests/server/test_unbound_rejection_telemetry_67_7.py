@@ -45,8 +45,10 @@ import pytest
 
 from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
 from sidequest.protocol.enums import MessageType
+from sidequest.protocol.fate import FateActionPayload
 from sidequest.protocol.messages import (
     DiceThrowMessage,
+    FateActionMessage,
     OrbitalIntent,
     OrbitalIntentMessage,
     PlayerActionMessage,
@@ -242,6 +244,46 @@ async def test_orbital_intent_unbound_emits_watcher_event(
     assert "orbital_intent" in flat, (
         "the rejection event must record the rejected frame type "
         f"(expected ORBITAL_INTENT); fields were {rejections[0]['fields']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC5 — FATE_ACTION (the Fate dispatch channel, ADR-144 F1d) is on the same
+# critical-action tier as DICE_THROW and must surface its unbound rejection too.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_fate_action_unbound_emits_watcher_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sidequest.handlers.fate_action import HANDLER
+
+    calls = _capture_publish_event(monkeypatch)
+    session = _unbound_session()
+    msg = FateActionMessage(
+        payload=FateActionPayload(
+            request_id="req-1", action="attack", skill="Fight", target="Thug"
+        ),
+        player_id="p1",
+    )
+
+    outbound = await HANDLER.handle(session, msg)
+
+    assert outbound[0].type == "ERROR"
+    assert outbound[0].payload.code == "session_unbound"
+
+    rejections = _unbound_rejection_calls(calls)
+    assert rejections, (
+        "FATE_ACTION rejected while unbound must emit a watcher event "
+        "carrying the 'session_unbound' classification (AC5)"
+    )
+    flat = _flatten_values(rejections[0]["fields"])
+    assert "fate_action" in flat, (
+        "the rejection event must record the rejected frame type "
+        f"(expected FATE_ACTION); fields were {rejections[0]['fields']!r}"
+    )
+    assert "awaitingconnect" in flat, (
+        f"the rejection event must record state=AwaitingConnect; "
+        f"fields were {rejections[0]['fields']!r}"
     )
 
 

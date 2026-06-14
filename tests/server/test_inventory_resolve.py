@@ -98,8 +98,14 @@ class TestResolveInventory:
         )
         result = resolve_inventory(pack, "coyote_star")
         assert result is not None
+        # Currency still REPLACES wholesale per world (ADR-145 D3: kit/gold/currency
+        # are world-owned and not unioned).
         assert result.currency is not None and result.currency.name == "credits"
-        assert [i.id for i in result.item_catalog] == ["blaster"]
+        # The item_catalog now UNIONS by id (ADR-145 D3 / story 114-11): the genre
+        # baseline "torch" is non-droppable and survives alongside the world
+        # "blaster". The merge documents baseline-order-first then world-added, so
+        # pin the ordered list, not just the set.
+        assert [i.id for i in result.item_catalog] == ["torch", "blaster"]
 
     def test_world_without_inventory_falls_back_to_genre(self) -> None:
         pack = _make_pack(

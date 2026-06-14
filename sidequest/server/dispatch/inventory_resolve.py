@@ -54,6 +54,7 @@ _MECHANICAL_FIELDS = (
     "value",
     "resource_ticks",
     "heal_amount",
+    "system_strain",  # CWN cyberware strain cost — SRD-bound, locked (114-5)
 )
 _PRESENTATION_FIELDS = (
     "name",
@@ -81,6 +82,7 @@ _FIELD_DEFAULTS: dict[str, object] = {
     "value": 0,
     "resource_ticks": None,
     "heal_amount": None,
+    "system_strain": None,
 }
 
 

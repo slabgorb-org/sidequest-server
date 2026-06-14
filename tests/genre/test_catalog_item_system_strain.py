@@ -8,9 +8,12 @@ string ("Costs System Strain. Worth it when the bullet stops.") and the item
 carried nothing but a cosmetic ``cyberware`` tag.
 
 Contract:
-* ``CatalogItem`` grows ``system_strain: int | None = None``.
+* ``CatalogItem`` grows ``system_strain: float | None = None``.
 * ``None``-defaulted, so every existing non-cyberware item validates unchanged.
-* It is a real ``int``, not free-form prose — ``"permanent"`` is rejected.
+* It is a real ``float``, not free-form prose — ``"permanent"`` is rejected.
+* It holds FRACTIONAL strain verbatim — CWN prices common chrome at 0.25/0.5, so
+  ``0.25`` must round-trip (an int would truncate it to a "free" implant; Keith's
+  ruling, 2026-06-14).
 * A strain cost is non-negative — a negative value is rejected (``ge=0``).
 * The strict ``extra="forbid"`` config is NOT relaxed by the delta.
 
@@ -49,10 +52,18 @@ def _cyberware(**overrides: object) -> CatalogItem:
 
 
 def test_catalog_item_accepts_typed_system_strain() -> None:
-    """system_strain is a first-class typed int on CatalogItem (ADR-145 D4)."""
+    """system_strain is a first-class typed float on CatalogItem (ADR-145 D4)."""
     item = _cyberware()
     assert item.system_strain == 2
-    assert isinstance(item.system_strain, int)
+    assert isinstance(item.system_strain, float)
+
+
+def test_catalog_item_holds_fractional_system_strain_verbatim() -> None:
+    """CWN prices its most common cyberware at fractional strain (Cybereyes = 0.25);
+    the field must hold it verbatim, not truncate to 0 (Keith's float ruling)."""
+    item = _cyberware(system_strain=0.25)
+    assert item.system_strain == 0.25
+    assert isinstance(item.system_strain, float)
 
 
 def test_system_strain_defaults_none_for_non_cyberware() -> None:

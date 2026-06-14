@@ -15,7 +15,10 @@ Contract under test (ADR-145, mirroring story 114-3's WWN tool):
 * CWN's net-new section is **Cyberware**, whose defining mechanical extra is a
   typed **system_strain** (ADR-145 D4 lists "system_strain for cyberware" as the
   WN-schema category extra). Each extracted cyberware item carries
-  ``category="cyberware"`` and a typed ``system_strain: int`` reproduced verbatim.
+  ``category="cyberware"`` and a typed ``system_strain: float`` reproduced
+  verbatim — a ``float`` because CWN prices common chrome at fractional strain
+  (0.25/0.5); an int would truncate 0.25→0 and make the implant "free" (Keith's
+  ruling, 2026-06-14).
 * The licensing invariant (ADR-145 D4): the tool refuses to emit a ``verbatim``
   item under a license that does not permit verbatim reuse (``none``/``na``/``ccby``).
 * The SRD source path is a required, configurable argument that fails LOUD when
@@ -53,7 +56,6 @@ from sidequest.cli.cwn_equip_extract.cwn_equip_extract import (
     extract_catalog,
     main,
 )
-
 from sidequest.genre.models.inventory import CatalogItem
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "cwn_srd" / "equipment_chapter.txt"
@@ -123,26 +125,32 @@ def test_srd_ref_names_cwn_not_wwn() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cyberware_section_emits_typed_system_strain() -> None:
-    """A cyberware row carries category=cyberware and a typed system_strain int,
-    reproduced verbatim from the SRD (ADR-145 D4: 'system_strain for cyberware')."""
+def test_cyberware_section_emits_typed_fractional_system_strain() -> None:
+    """A cyberware row carries category=cyberware and a typed FLOAT system_strain,
+    reproduced verbatim from the real CWN layout (ADR-145 D4: 'system_strain for
+    cyberware'). The fixture's Cybereyes cost 0.25 strain — the fractional value an
+    int would have truncated to a 'free' implant (Keith's float ruling)."""
     items = _by_id(extract_catalog(_read_fixture(), srd="cwn"))
-    reflexes = next(it for it in items.values() if "Wired Reflexes" in it.name)
-    assert reflexes.category == "cyberware"
-    assert reflexes.system_strain == 2  # verbatim strain cost from the fixture
-    assert reflexes.tech_level == 4  # TL carried verbatim
-    assert reflexes.value == 5000  # cost verbatim
+    cybereyes = next(it for it in items.values() if "Cybereyes" in it.name)
+    assert cybereyes.category == "cyberware"
+    assert cybereyes.system_strain == 0.25  # verbatim FRACTIONAL strain — held, not truncated
+    assert cybereyes.value == 10000  # cost (first arabic number) verbatim
+    # Location/Concealment grades are carried in tags (the real CWN columns).
+    assert "location:sensory" in cybereyes.tags
+    assert "concealment:sight" in cybereyes.tags
+    assert cybereyes.description == "Flash-protected synthetic eyes"  # Effect → description
 
 
-def test_cyberware_system_strain_is_int_not_prose() -> None:
-    """The defining defect this story fixes: system_strain must be a real typed int,
-    not free-form prose (the audit found cyberware cost living in a lore string)."""
+def test_cyberware_system_strain_is_number_not_prose() -> None:
+    """The defining defect this story fixes: system_strain must be a real typed
+    number, not free-form prose (the audit found cyberware cost living in a lore
+    string). It is a float (CWN's fractional strain), never a bool."""
     items = extract_catalog(_read_fixture(), srd="cwn")
     cyber = [it for it in items if it.category == "cyberware"]
     assert len(cyber) == 2, f"expected 2 cyberware items, got {len(cyber)}"
     for it in cyber:
-        assert isinstance(it.system_strain, int), (
-            f"{it.id} system_strain {it.system_strain!r} is not a typed int"
+        assert isinstance(it.system_strain, (int, float)), (
+            f"{it.id} system_strain {it.system_strain!r} is not a typed number"
         )
         assert not isinstance(it.system_strain, bool)  # bool is an int subclass — exclude it
 
@@ -232,7 +240,11 @@ def test_cli_entrypoint_reachable() -> None:
     assert all(item["provenance"]["mode"] == "verbatim" for item in catalog)
     assert all(item["provenance"]["srd"] == "cwn" for item in catalog)
     assert all(item["provenance"]["license"] == "wn-free" for item in catalog)
-    # The cyberware items carry a typed integer system_strain in the JSON.
+    # The cyberware items carry a typed numeric (float) system_strain in the JSON.
     cyber = [item for item in catalog if item["category"] == "cyberware"]
     assert cyber, "no cyberware items emitted"
-    assert all(isinstance(item["system_strain"], int) for item in cyber)
+    assert all(isinstance(item["system_strain"], (int, float)) for item in cyber)
+    assert all(not isinstance(item["system_strain"], bool) for item in cyber)
+    # The fractional strain survives the JSON round-trip (not truncated to 0).
+    cybereyes = next(item for item in cyber if "Cybereyes" in item["name"])
+    assert cybereyes["system_strain"] == 0.25

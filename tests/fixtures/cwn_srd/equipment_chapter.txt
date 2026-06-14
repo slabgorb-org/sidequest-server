@@ -9,13 +9,16 @@
 # Per ADR-145 D4 the four Without Number SRDs share ONE item schema, so the
 # Armor / Melee / Ranged / General sections use the same column layout as the WWN
 # fixture. CWN's net-new section is **Cyberware**, whose defining mechanical extra
-# is **System Strain** (ADR-145 D4: "system_strain for cyberware"). The cyberware
-# row exercises the new typed-field path:
+# is **System Strain** (ADR-145 D4: "system_strain for cyberware"). The real CWN
+# §3.6.7 cyberware column layout is:
 #
-#   Name   Strain   Cost   TL
+#   Name   Cost   Location   Concealment   System Strain   Effect
 #
-# A cyberware item costs a flat, non-negative System Strain count (it is a count,
-# never a die expression — installed cyberware raises the permanent-strain floor).
+# System Strain is a non-negative **number** raising the permanent-strain floor on
+# install. It is often FRACTIONAL — CWN prices common chrome at 0.25/0.5 — so the
+# first row below carries strain 0.25 to exercise the float path (an int would
+# truncate it to a "free" implant). The first arabic number in a row is the Cost,
+# the second is the System Strain; Roman-numeral name grades are safe.
 
 §3.0.0 Equipment
 
@@ -40,6 +43,6 @@ Test Datajack Cable 10      0
 Test Med Patch      25      0
 
 §3.0.5 Cyberware
-Name                Strain   Cost    TL
-Test Wired Reflexes 2        5000    4
-Test Subdermal Mesh 1        2000    4
+Name                 Cost    Location    Concealment    System Strain   Effect
+Test Cybereyes       10000   Sensory     Sight          0.25            Flash-protected synthetic eyes
+Test Dermal Plating  40000   Skin        Obvious        2               Subdermal armor weave

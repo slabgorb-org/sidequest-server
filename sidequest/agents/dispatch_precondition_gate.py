@@ -127,10 +127,24 @@ def _magic_working_precondition_unmet(snapshot: GameSnapshot) -> str | None:
     )
 
 
+def _fate_action_precondition_unmet(snapshot: GameSnapshot) -> str | None:
+    # ``fate_action`` engages dispatch_fate_action, which is conflict-scoped: it
+    # requires an active, unresolved encounter and raises FateConflictError
+    # otherwise. With no live conflict the dispatch can never engage, so it is
+    # structurally inert (an out-of-conflict overcome is a separate, unbuilt
+    # path — epic F2 §7.1, flagged not silently handled). The gate's loud
+    # intent_router.dispatch.gated span keeps the GM panel honest about the skip.
+    enc = snapshot.encounter
+    if enc is None or enc.resolved:
+        return "snapshot.encounter is None or resolved (no active Fate conflict to act within)"
+    return None
+
+
 _INERT_PRECONDITIONS: dict[str, Callable[[GameSnapshot], str | None]] = {
     "scenario_clue": _scenario_clue_precondition_unmet,
     "witnessed_act": _witnessed_act_precondition_unmet,
     "magic_working": _magic_working_precondition_unmet,
+    "fate_action": _fate_action_precondition_unmet,
 }
 
 # Identifying param per subsystem for the gated span's dispatched_type —
@@ -140,6 +154,7 @@ _GATE_DISPATCHED_TYPE_KEY: dict[str, str] = {
     "scenario_clue": "fact_id",
     "witnessed_act": "act_id",
     "magic_working": "actor",
+    "fate_action": "action",
 }
 
 

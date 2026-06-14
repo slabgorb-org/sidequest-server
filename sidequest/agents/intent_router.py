@@ -100,6 +100,35 @@ def _dispatch_tool_schema() -> dict[str, Any]:
     return DispatchPackage.model_json_schema()
 
 
+FATE_ROUTING_RULES = """
+## Fate action classification (only when <game_state> contains a "fate" block)
+
+When — and ONLY when — the game state includes a top-level "fate" object, this is
+a Fate Core pack. Classify a player's freeform action that engages the four-action
+core into a single dispatch with subsystem "fate_action" and these params:
+  - action: one of "overcome", "create_advantage", "attack", "concede"
+      * attack — they try to harm/defeat an opponent (deals stress).
+      * create_advantage — they set up a situation aspect (pin, distract, scout).
+      * overcome — they push past an obstacle that isn't an opponent's defense.
+      * concede — they choose to lose on their own terms (pre-roll, voluntary).
+  - skill: the Fate skill used, chosen from the acting PC's skills in
+    fate.skills[<character>]. Pick the single best-fitting skill name verbatim.
+  - target: the opposed actor's name for an attack/create_advantage against a
+    foe; null otherwise.
+  - difficulty: the passive opposition rung (integer) when there is no opposed
+    target; 0 when target is set.
+  - invoke_aspect: the exact text of an aspect from fate.scene_aspects or
+    fate.character_aspects[<character>] the player explicitly leverages for +2;
+    "" if none.
+  - aspect_text: for create_advantage, the short name of the situation aspect
+    being placed (e.g. "Pinned Down"); "" otherwise.
+
+Only emit a fate_action dispatch when fate.active_conflict is true. Do NOT emit
+it for narration, movement, or table-talk. Do NOT emit a confrontation dispatch
+for the same action — fate_action operates inside an already-active conflict.
+"""
+
+
 _SYSTEM_PROMPT = (
     """You are the Intent Router — an impartial structured-output reader.
 
@@ -260,6 +289,7 @@ perception_fidelity unless the state clearly names asymmetric visibility.
 
 Pydantic rejects unknown fields. Stay inside the schema. Emit everything
 through the tool input — no preamble, no commentary, no extra text blocks."""
+    + FATE_ROUTING_RULES
 )
 
 

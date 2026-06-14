@@ -226,6 +226,36 @@ def _beat_invocations_outside_confrontation(
     return hits
 
 
+def _build_fate_summary(snapshot: GameSnapshot) -> dict[str, Any]:
+    """Compact Fate vocabulary for the router (ADR-144 F2a).
+
+    Gives the Haiku classifier the per-PC skills it can name, the fate points it
+    can spend, the character aspects + live situation aspects it can invoke, and
+    whether a conflict is active (the in-conflict scope of dispatch_fate_action).
+    Only PCs with a Fate sheet contribute; on a non-Fate pack the caller never
+    invokes this builder.
+    """
+    skills: dict[str, dict[str, int]] = {}
+    fate_points: dict[str, int] = {}
+    character_aspects: dict[str, list[str]] = {}
+    for ch in snapshot.characters:
+        sheet = ch.core.fate_sheet
+        if sheet is None:
+            continue
+        skills[ch.core.name] = dict(sheet.skills)
+        fate_points[ch.core.name] = sheet.fate_points
+        character_aspects[ch.core.name] = [a.text for a in sheet.all_aspects()]
+    enc = snapshot.encounter
+    scene_aspects = [a.text for a in enc.situation_aspects] if enc is not None else []
+    return {
+        "skills": skills,
+        "fate_points": fate_points,
+        "character_aspects": character_aspects,
+        "scene_aspects": scene_aspects,
+        "active_conflict": enc is not None and not enc.resolved,
+    }
+
+
 def _build_state_summary(
     snapshot: GameSnapshot,
     *,
@@ -347,6 +377,14 @@ def _build_state_summary(
                 verb_count=verb_count,
             ):
                 pass
+
+    # Fate vocabulary (ADR-144 F2a): when the pack binds the Fate ruleset, the
+    # router needs the PCs' skills + the live aspects to classify a freeform
+    # action into one of the four Fate actions. Gated on the ruleset slug so no
+    # non-Fate pack's router prompt carries this block (same conditional-vocab
+    # discipline as confrontation_types / witnessed_act_vocabulary above).
+    if pack is not None and getattr(pack.rules, "ruleset", "") == "fate":
+        summary["fate"] = _build_fate_summary(snapshot)
 
     # Witnessed-act vocabulary + witness candidate set (wry_whimsy political
     # substrate, Plan 2b). Double-gated: the pack must declare witnessed-act

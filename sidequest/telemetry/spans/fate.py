@@ -295,6 +295,22 @@ SPAN_ROUTES["fate.conceded"] = SpanRoute(
         "fate_points_earned": (span.attributes or {}).get("fate_points_earned", 0),
     },
 )
+# --- F2a: classification span (GM panel = lie detector) ----------------------
+# The router classified a freeform action into one of the four Fate actions and
+# the bank engaged dispatch_fate_action. Literal key (no SPAN_* constant) — the
+# routing-completeness lint only inspects SPAN_* module constants.
+SPAN_ROUTES["fate.action.classified"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "action_classified",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "action": (span.attributes or {}).get("action", ""),
+        "skill": (span.attributes or {}).get("skill", ""),
+        "target": (span.attributes or {}).get("target", ""),
+        "confidence": (span.attributes or {}).get("confidence", 0.0),
+    },
+)
 
 
 def fate_exchange_committed_span(
@@ -387,7 +403,34 @@ def fate_conceded_span(
         pass
 
 
+def fate_action_classified_span(
+    *,
+    actor: str,
+    action: str,
+    skill: str,
+    target: str = "",
+    confidence: float = 0.0,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.action.classified`` — the Intent Router classified a freeform
+    player action into one of the four Fate actions (F2a). The GM-panel evidence
+    that a Fate action was engaged from natural language, not improvised."""
+    attributes: dict[str, Any] = {
+        "field": "action_classified",
+        "actor": actor,
+        "action": action,
+        "skill": skill,
+        "target": target,
+        "confidence": confidence,
+        **attrs,
+    }
+    with Span.open("fate.action.classified", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
+    "fate_action_classified_span",
     "fate_action_resolved_span",
     "fate_aspect_created_span",
     "fate_aspect_invoked_span",

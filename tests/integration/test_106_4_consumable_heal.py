@@ -185,3 +185,51 @@ def test_gained_item_materializer_carries_heal_amount() -> None:
         heal_amount="2d6+2",
     )
     assert item_dict_from_catalog(potion)["heal_amount"] == "2d6+2"
+
+
+# --- Part B: guaranteed-heal kit (every kit gets one; 30% chance it's Greater) ---
+
+
+class _FixedRng:
+    """Deterministic stand-in: ``random()`` returns a fixed value so the
+    upgrade branch is exercised without flakiness."""
+
+    def __init__(self, value: float) -> None:
+        self._v = value
+
+    def random(self) -> float:
+        return self._v
+
+    def randrange(self, n: int) -> int:
+        return 0
+
+
+def test_guaranteed_grant_upgrades_below_chance() -> None:
+    """A roll strictly below ``upgrade_chance`` yields the better item."""
+    from sidequest.game.builder import roll_guaranteed_grant
+    from sidequest.genre.models.character import GuaranteedGrant
+
+    grant = GuaranteedGrant(
+        item="potion_healing", upgrade="potion_healing_greater", upgrade_chance=0.30
+    )
+    assert roll_guaranteed_grant(grant, _FixedRng(0.1)) == "potion_healing_greater"
+
+
+def test_guaranteed_grant_base_at_or_above_chance() -> None:
+    """A roll at/above ``upgrade_chance`` yields the base item (never worse)."""
+    from sidequest.game.builder import roll_guaranteed_grant
+    from sidequest.genre.models.character import GuaranteedGrant
+
+    grant = GuaranteedGrant(
+        item="potion_healing", upgrade="potion_healing_greater", upgrade_chance=0.30
+    )
+    assert roll_guaranteed_grant(grant, _FixedRng(0.5)) == "potion_healing"
+
+
+def test_guaranteed_grant_no_upgrade_always_base() -> None:
+    """A grant with no upgrade always yields the base item regardless of roll."""
+    from sidequest.game.builder import roll_guaranteed_grant
+    from sidequest.genre.models.character import GuaranteedGrant
+
+    grant = GuaranteedGrant(item="potion_healing")
+    assert roll_guaranteed_grant(grant, _FixedRng(0.0)) == "potion_healing"

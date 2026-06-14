@@ -350,6 +350,23 @@ class BackstoryTables(BaseModel):
         return result.strip()
 
 
+class GuaranteedGrant(BaseModel):
+    """A starting item every character of a kit receives, independent of the
+    random slot rolls.
+
+    Story 106-4: lets a kit guarantee a baseline item (e.g. a heal potion) while
+    still rolling an *upside* — with probability ``upgrade_chance`` the granted
+    item is the better ``upgrade`` instead (upgrade-only: never worse, never
+    absent). General-purpose content primitive, not hardcoded to healing.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    item: str
+    upgrade: str | None = None
+    upgrade_chance: float = 0.0  # 0.0..1.0; probability the grant is `upgrade`
+
+
 class EquipmentTables(BaseModel):
     """Random equipment generation tables loaded from equipment_tables.yaml.
 
@@ -357,6 +374,10 @@ class EquipmentTables(BaseModel):
     `equipment_generation: random_table`. `class_tables` is a per-class
     override consumed by `equipment_generation: class_kit`; the chosen
     class's `kit_table` id resolves to one of these blocks.
+
+    `guaranteed_grants` maps a kit id (the same key as `class_tables`, or
+    `"tables"` for the random_table flow) to items always granted on top of the
+    random rolls — see `GuaranteedGrant` (Story 106-4).
     """
 
     model_config = {"extra": "forbid"}
@@ -364,6 +385,7 @@ class EquipmentTables(BaseModel):
     tables: dict[str, list[str]] = Field(default_factory=dict)
     rolls_per_slot: dict[str, int] = Field(default_factory=dict)
     class_tables: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
+    guaranteed_grants: dict[str, list[GuaranteedGrant]] = Field(default_factory=dict)
 
 
 class VisualStyle(BaseModel):

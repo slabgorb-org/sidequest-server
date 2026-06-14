@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 #: The Fate ladder — adjective per integer rung.
 LADDER: dict[int, str] = {
@@ -39,7 +39,7 @@ def ladder_name(value: int) -> str:
     return LADDER[value]
 
 
-class FateTier(str, Enum):
+class FateTier(StrEnum):
     """The four Fate outcomes, by shift count."""
 
     Fail = "Fail"

@@ -18,10 +18,10 @@ from sidequest.game.ruleset.fate_resolution import (
 @pytest.mark.parametrize(
     "ladder_total,opposition,expected_shifts,expected_tier",
     [
-        (3, 5, -2, FateTier.Fail),           # rolled under
-        (5, 5, 0, FateTier.Tie),             # exactly met
-        (6, 5, 1, FateTier.Succeed),         # +1 shift
-        (7, 5, 2, FateTier.Succeed),         # +2 shifts
+        (3, 5, -2, FateTier.Fail),  # rolled under
+        (5, 5, 0, FateTier.Tie),  # exactly met
+        (6, 5, 1, FateTier.Succeed),  # +1 shift
+        (7, 5, 2, FateTier.Succeed),  # +2 shifts
         (8, 5, 3, FateTier.SucceedWithStyle),  # +3 shifts
         (12, 5, 7, FateTier.SucceedWithStyle),
     ],

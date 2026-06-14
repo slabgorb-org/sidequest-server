@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from sidequest.game.fate_sheet import FateSheet
 from sidequest.game.rig_composure_pool import RigComposurePool
 from sidequest.game.status import Status, migrate_legacy_statuses
 from sidequest.game.system_strain import SystemStrainPool
@@ -131,6 +132,12 @@ class CreatureCore(BaseModel):
     # ``sidequest.game.vessel_tags.bind_rig_pool_from_inventory`` at
     # chargen-loadout completion and round-tripped through the save file.
     rig_pool: RigComposurePool | None = None
+    # Fate Core facet (ADR-144 F1b). None for every non-Fate creature; populated
+    # for a Fate-bound pack's creatures. Carried ALONGSIDE the d20 stats/HpPool
+    # (mirrors system_strain/spellcasting/rig_pool — an optional facet), so it
+    # round-trips through GameSnapshot.model_dump_json with no Alembic migration.
+    # Rules + spans live on FateRulesetModule; this is inert data.
+    fate_sheet: FateSheet | None = None
     # P2-deferred: advancement tracking (epic 39-8, mechanical progression)
     acquired_advancements: list[str] = Field(default_factory=list)
 

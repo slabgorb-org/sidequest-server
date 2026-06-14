@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import ValidationError
 
 # Importing the tools package wires every adapter onto default_registry.
 import sidequest.agents.tools  # noqa: F401
@@ -34,6 +35,7 @@ from sidequest.agents.tool_registry import (
     default_registry,
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
+from sidequest.agents.tools.fate_tools import ProposeFateCompelArgs
 
 TOOL_NAME = "propose_fate_compel"
 
@@ -155,3 +157,60 @@ def test_tool_registered_at_import_in_subprocess() -> None:
         f"subprocess registration check failed:\nstdout={result.stdout}\nstderr={result.stderr}"
     )
     assert "OK" in result.stdout
+
+
+# ===========================================================================
+# REWORK round 1 — Reviewer (Hermes) findings, RED. See ## Reviewer Assessment
+# in .session/116-2-session.md. LLM-tool input boundary (lang-review #11) + OTEL.
+# ===========================================================================
+
+
+def test_compel_args_reject_empty_actor_and_aspect() -> None:
+    """[SEC/MEDIUM] LLM-tool input boundary (lang-review #11). Empty actor/aspect_text
+    would fire an unattributable `fate.compel.offered` span — they must be rejected at
+    the Pydantic boundary (min_length=1), like every peer narrator tool. RED today: the
+    fields are unbounded `str`, so empty strings construct fine."""
+    with pytest.raises(ValidationError):
+        ProposeFateCompelArgs(actor="", aspect_text="An Aspect", compel_reason="because")
+    with pytest.raises(ValidationError):
+        ProposeFateCompelArgs(actor="Vance", aspect_text="", compel_reason="because")
+
+
+def test_compel_args_reject_overlong_aspect_text() -> None:
+    """[SEC/MEDIUM] aspect_text is echoed back into the next turn's tool_result — an
+    unbounded string is an echo-injection surface. It must be capped (Fate aspects are
+    short phrases). RED today: no max_length, so a 5000-char aspect constructs fine."""
+    with pytest.raises(ValidationError):
+        ProposeFateCompelArgs(actor="Vance", aspect_text="x" * 5000, compel_reason="because")
+
+
+@pytest.mark.asyncio
+async def test_compel_reason_reaches_offered_span(
+    otel_capture: InMemorySpanExporter,
+) -> None:
+    """[EDGE/MEDIUM] OTEL Observability: the narrator's stated complication
+    (`compel_reason`) must reach the `fate.compel.offered` span so the GM panel sees WHAT
+    was proposed, not merely THAT something was. RED today: `offer_compel` records only
+    actor + aspect; the reason is collected, echoed in the ToolResult, then dropped."""
+    reason = "Internal Affairs wants your badge for this case"
+    out = await default_registry.dispatch(
+        ToolUseBlock(
+            id="t1",
+            name=TOOL_NAME,
+            arguments={
+                "actor": "Vance",
+                "aspect_text": "Last Honest Cop in Vega",
+                "compel_reason": reason,
+            },
+        ),
+        _fate_ctx(),
+    )
+    assert out.is_error is False, f"dispatch errored: {getattr(out, 'content', out)}"
+
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == "fate.compel.offered"]
+    assert len(spans) >= 1, "propose_fate_compel did not fire fate.compel.offered"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs.get("reason") == reason, (
+        "compel_reason did not reach the fate.compel.offered span — "
+        "the GM panel cannot see the substance of the proposed compel"
+    )

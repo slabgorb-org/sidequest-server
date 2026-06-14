@@ -68,6 +68,17 @@ for _slug in WN_FAMILY_SLUGS:
             "hp_removed": (span.attributes or {}).get("hp_removed", 0),
         },
     )
+    SPAN_ROUTES[f"{_slug}.action.flavor_rider"] = SpanRoute(
+        event_type="state_transition",
+        component=_slug,
+        extract=lambda span: {
+            "field": "flavor_rider",
+            "actor": (span.attributes or {}).get("actor", ""),
+            "beat_id": (span.attributes or {}).get("beat_id", ""),
+            "attached": (span.attributes or {}).get("attached", False),
+            "affected_mechanics": (span.attributes or {}).get("affected_mechanics", False),
+        },
+    )
 
 
 def _require_family_slug(slug: str) -> None:
@@ -193,4 +204,47 @@ def wn_native_scaffolding_suppressed_span(
         **attrs,
     }
     with Span.open(f"{slug}.native_scaffolding_suppressed", attributes, tracer_override=_tracer):
+        pass
+
+
+def wn_flavor_rider_span(
+    *,
+    slug: str,
+    actor: str,
+    beat_id: str,
+    affected_mechanics: bool = False,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit {slug}.action.flavor_rider (story 108-5, ADR-143).
+
+    The GM-panel lie-detector that the player's RP-flavor rider — the freeform
+    "chandelier swing" the player typed alongside a WN action button and that
+    rides ``DICE_THROW.player_action`` — was attached as narrator color ONLY and
+    did NOT enter mechanical resolution. Under a Without-Number binding the roll
+    is already resolved on the button (the closed verb set is the scaffold that
+    forces the engine to be the authority); the rider is downstream cosmetic
+    context the narrator uses to flavor the resolved outcome (spec 108-5). The
+    span fires ONLY when text is actually attached, so ``attached`` is always
+    True. ``affected_mechanics`` is the structural attestation that the dispatch
+    resolved the d20/weapon dice without consulting the rider text — the green
+    guard ``test_rider_removes_identical_opponent_hp`` is its runtime proof.
+
+    Without this span the GM panel cannot tell an inert RP affordance from a
+    covert freeform-adjudication regression — the El Dorado failure ADR-143
+    exists to prevent. Pairs with {slug}.native_scaffolding_suppressed (108-1):
+    together they prove the WN round resolved on the button and only on the
+    button. Slug-honest per the WN family invariant (a wwn pack emits
+    ``wwn.action.flavor_rider``, never ``native.*``).
+    """
+    _require_family_slug(slug)
+    attributes: dict[str, Any] = {
+        "field": "flavor_rider",
+        "actor": actor,
+        "beat_id": beat_id,
+        "attached": True,
+        "affected_mechanics": affected_mechanics,
+        **attrs,
+    }
+    with Span.open(f"{slug}.action.flavor_rider", attributes, tracer_override=_tracer):
         pass

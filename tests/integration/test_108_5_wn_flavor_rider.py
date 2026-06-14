@@ -136,9 +136,7 @@ def test_flavor_rider_span_marks_mechanics_unaffected(otel_capture):
     )
 
     rider = spans_named(otel_capture, _FLAVOR_SPAN)
-    assert rider, (
-        f"precondition: {_FLAVOR_SPAN!r} must fire when a flavor rider is attached"
-    )
+    assert rider, f"precondition: {_FLAVOR_SPAN!r} must fire when a flavor rider is attached"
     attrs = dict(rider[0].attributes or {})
     assert attrs.get("attached") is True, (
         f"flavor_rider span must record attached=True when text rides the throw; "

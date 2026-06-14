@@ -105,6 +105,7 @@ from sidequest.telemetry.spans import (
     encounter_momentum_broadcast_span,
     encounter_opponent_attack_resolved_span,
     encounter_resolved_span,
+    wn_flavor_rider_span,
     wn_native_scaffolding_suppressed_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -705,6 +706,29 @@ def dispatch_dice_throw(
             "— WN combat dispatched without a P4 initiative order; resolving "
             "on the legacy immediate path",
             encounter.encounter_type,
+        )
+
+    # Story 108-5 (ADR-143): the RP-flavor rider lie-detector. When a WN combat
+    # throw carries freeform ``player_action`` text — the "chandelier swing" the
+    # player typed alongside the action button — emit {slug}.action.flavor_rider
+    # proving the text was attached as narrator color ONLY and never entered
+    # mechanical resolution (the roll is resolved on the button; the rider is
+    # downstream cosmetic context). The text still rides into replay_action_text
+    # below, but the d20/weapon dice are computed without consulting it. Pairs
+    # with 108-1's native_scaffolding_suppressed: together they prove the WN
+    # round resolved on the button and ONLY on the button. Scoped to WN
+    # hp_depletion combat — dial confrontations under a WN pack keep the native
+    # engine and are out of this feature's scope.
+    if (
+        isinstance(ruleset, WithoutNumberRulesetModule)
+        and cdef.win_condition == "hp_depletion"
+        and payload.player_action
+        and payload.player_action.strip()
+    ):
+        wn_flavor_rider_span(
+            slug=ruleset.slug,
+            actor=character_name,
+            beat_id=payload.beat_id or "",
         )
 
     if opposed_pending:

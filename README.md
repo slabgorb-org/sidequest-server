@@ -120,7 +120,7 @@ uv run pytest -k "name pattern"   # Filter
 
 ## Branching
 
-Gitflow. `develop` is the integration branch. `main` tracks releases. PRs target `develop`.
+GitHub-flow. `develop` is the single integration branch — there is no develop→main promotion. Branch off `develop`, open a PR, and squash-merge back into `develop` (even solo). PRs target `develop`.
 
 ## Related repos
 

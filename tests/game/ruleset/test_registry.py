@@ -78,3 +78,25 @@ def test_unknown_ruleset_still_fails_loud_after_awn():
     with pytest.raises(UnknownRulesetError) as exc:
         get_ruleset_module("ashes")  # close to "awn" but not registered
     assert "ashes" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# ADR-144 F1a — Fate ruleset module registration
+# ---------------------------------------------------------------------------
+
+
+def test_fate_registered_and_singleton():
+    from sidequest.game.ruleset.fate import FateRulesetModule
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    module = get_ruleset_module("fate")
+    assert isinstance(module, FateRulesetModule)
+    assert module.slug == "fate"
+    assert get_ruleset_module("fate") is module  # stateless singleton
+
+
+def test_unknown_ruleset_still_fails_loud_after_fate():
+    # Registering "fate" must not introduce a silent default (No Silent Fallbacks).
+    with pytest.raises(UnknownRulesetError) as exc:
+        get_ruleset_module("fudge")  # close to "fate" but not registered
+    assert "fudge" in str(exc.value)

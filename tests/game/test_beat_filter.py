@@ -223,6 +223,131 @@ def test_cast_spell_rejection_distinguishes_slots_from_unprepared():
     assert reason_ok is None
 
 
+# ---------------------------------------------------------------------------
+# Story 106-4 Part C — inventory beat-scan (Keith priority)
+# ---------------------------------------------------------------------------
+# A confrontation beat menu must scan the actor's carried inventory and surface
+# transient "use_item:<slug>" beats for usable consumables (a heal potion in a
+# fight). Gated to hp_depletion combat — drinking a heal potion in a chase /
+# social cdef is meaningless, so item beats only appear where the effect lands.
+
+
+def _hp_combat(beats):
+    return ConfrontationDef(
+        type="combat",
+        label="C",
+        category="combat",
+        win_condition="hp_depletion",
+        player_metric=MetricDef(name="m", starting=0, threshold=7),
+        opponent_metric=MetricDef(name="m", starting=0, threshold=7),
+        beats=beats,
+        opponent_default_stats={
+            "STR": 10,
+            "DEX": 10,
+            "CON": 10,
+            "INT": 10,
+            "WIS": 10,
+            "CHA": 10,
+            "hp": 10,
+            "armor_class": 10,
+            "dexterity": 10,
+        },
+    )
+
+
+def _potion(name="Potion of Mending", *, heal="1d6+2", tags=("consumable", "healing")):
+    return {"name": name, "category": "consumable", "tags": list(tags), "heal_amount": heal}
+
+
+def test_heal_consumable_surfaces_use_item_beat_in_hp_combat():
+    from sidequest.game.beat_filter import is_item_use_beat
+
+    cd = _hp_combat([_beat("strike")])
+    fighter = _class("Fighter", ["strike"])
+    out = beats_available_for(cd, fighter, spell_slots_remaining=0.0, inventory_items=[_potion()])
+    ids = [b.id for b in out]
+    # the authored strike stays, plus exactly one transient item-use beat
+    assert "strike" in ids
+    item_beats = [b for b in out if is_item_use_beat(b.id)]
+    assert len(item_beats) == 1
+    assert item_beats[0].label == "Drink Potion of Mending"
+
+
+def test_no_item_beat_when_no_inventory_passed():
+    # Backward compat: existing callers that omit inventory_items get no item
+    # beats and the pre-106-4 shape, byte-for-byte.
+    cd = _hp_combat([_beat("strike")])
+    fighter = _class("Fighter", ["strike"])
+    out = beats_available_for(cd, fighter, spell_slots_remaining=0.0)
+    assert [b.id for b in out] == ["strike"]
+
+
+def test_no_item_beat_outside_hp_depletion_combat():
+    from sidequest.game.beat_filter import is_item_use_beat
+
+    chase = ConfrontationDef(
+        type="chase",
+        label="Corridor Pursuit",
+        category="movement",
+        player_metric=MetricDef(name="separation", starting=0, threshold=7),
+        opponent_metric=MetricDef(name="pursuit", starting=0, threshold=7),
+        beats=[_beat("sprint")],
+    )
+    fighter = _class("Fighter", ["sprint"])
+    out = beats_available_for(
+        chase, fighter, spell_slots_remaining=0.0, inventory_items=[_potion()]
+    )
+    assert not any(is_item_use_beat(b.id) for b in out)
+
+
+def test_non_heal_consumable_does_not_surface_item_beat():
+    from sidequest.game.beat_filter import is_item_use_beat
+
+    cd = _hp_combat([_beat("strike")])
+    fighter = _class("Fighter", ["strike"])
+    rations = {"name": "Day's Rations", "category": "consumable", "tags": ["consumable"]}
+    out = beats_available_for(cd, fighter, spell_slots_remaining=0.0, inventory_items=[rations])
+    assert not any(is_item_use_beat(b.id) for b in out)
+
+
+def test_non_consumable_with_heal_amount_does_not_surface():
+    # A heal_amount on a non-consumable (mis-tagged) must NOT become a beat —
+    # the consume lane only removes genuine single-use items.
+    from sidequest.game.beat_filter import is_item_use_beat
+
+    cd = _hp_combat([_beat("strike")])
+    fighter = _class("Fighter", ["strike"])
+    weird = {"name": "Healing Idol", "category": "tool", "tags": ["tool"], "heal_amount": "1d6"}
+    out = beats_available_for(cd, fighter, spell_slots_remaining=0.0, inventory_items=[weird])
+    assert not any(is_item_use_beat(b.id) for b in out)
+
+
+def test_duplicate_consumables_collapse_to_one_beat():
+    # Two identical Potions of Mending -> one "Drink" beat (using it consumes
+    # one stack member; the menu shouldn't show the same action twice).
+    from sidequest.game.beat_filter import is_item_use_beat
+
+    cd = _hp_combat([_beat("strike")])
+    fighter = _class("Fighter", ["strike"])
+    out = beats_available_for(
+        cd,
+        fighter,
+        spell_slots_remaining=0.0,
+        inventory_items=[_potion(), _potion()],
+    )
+    item_beats = [b for b in out if is_item_use_beat(b.id)]
+    assert len(item_beats) == 1
+
+
+def test_item_use_beat_id_roundtrips_to_item_name():
+    # The dispatch resolves which item to consume by matching the slug in the
+    # beat id back against the inventory — the mapping must be stable.
+    from sidequest.game.beat_filter import item_slug, item_use_beat_id
+
+    assert item_use_beat_id("Potion of Mending") == "use_item:potion_of_mending"
+    assert item_slug("Potion of Mending (Greater)") == "potion_of_mending_greater"
+
+
 def test_existing_callers_unbroken_when_prepared_spells_omitted():
     """Backward compat: callers that pass only the existing 3 params must
     keep working. The new prepared_spells parameter is optional.

@@ -32,6 +32,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from sidequest.game.beat_filter import is_item_use_beat
 from sidequest.game.beat_kinds import (
     BeatKind,
     _opposite_side_first_actor,
@@ -156,11 +157,14 @@ class DiceThrowOutcome:
       every non-WN path). Mirrors the ``opposed_pending`` defer idiom.
     """
 
-    request: DiceRequestPayload
-    result: DiceResultPayload
     replay_action_text: str
     outcome: RollOutcome
     encounter_resolved: bool
+    # Story 106-4 Part C: an item-use commit ("Drink <potion>") rolls NO d20 —
+    # it is auto-success — so it carries no dice request/result pair. These are
+    # always present on the real dice paths; None ONLY on the item-use outcome.
+    request: DiceRequestPayload | None = None
+    result: DiceResultPayload | None = None
     opposed_pending: bool = False
     opposed_player_d20: int | None = None
     opposed_player_beat_id: str | None = None
@@ -373,6 +377,28 @@ def dispatch_dice_throw(
         raise DiceDispatchError(
             f"no ConfrontationDef for encounter_type {encounter.encounter_type!r} "
             f"(pack data bug — CLAUDE.md 'no silent fallback')"
+        )
+
+    # Story 106-4 Part C: a "Drink <potion>" item-use beat is not authored on
+    # the cdef — it's a transient beat synthesized from the actor's inventory.
+    # It resolves auto-success (no d20) and costs the Main Action; route it to
+    # the dedicated handler BEFORE the cdef beat lookup (which would otherwise
+    # reject the unknown id).
+    if is_item_use_beat(payload.beat_id):
+        return _dispatch_item_use(
+            payload=payload,
+            rolling_player_id=rolling_player_id,
+            character_name=character_name,
+            encounter=encounter,
+            cdef=cdef,
+            ruleset=ruleset,
+            pack=pack,
+            genre_slug=genre_slug,
+            session_id=session_id,
+            round_number=round_number,
+            room_broadcast=room_broadcast,
+            snapshot=snapshot,
+            emit_confrontation=emit_confrontation,
         )
 
     beat = next((b for b in cdef.beats if b.id == payload.beat_id), None)
@@ -1030,6 +1056,192 @@ def dispatch_dice_throw(
     )
 
 
+def _dispatch_item_use(
+    *,
+    payload: DiceThrowPayload,
+    rolling_player_id: str,
+    character_name: str,
+    encounter: StructuredEncounter,
+    cdef: ConfrontationDef,
+    ruleset: RulesetModule,
+    pack: GenrePack,
+    genre_slug: str,
+    session_id: str,
+    round_number: int,
+    room_broadcast: Callable[[object], None] | None,
+    snapshot: GameSnapshot,
+    emit_confrontation: Callable[[object, Callable[[str], object]], None] | None,
+) -> DiceThrowOutcome:
+    """Resolve a 'Drink <potion>' item-use beat (Story 106-4 Part C).
+
+    Auto-success, no d20: the carried consumable is consumed and its effect
+    (heal) applied. It COSTS the Main Action — on the WN sealed-round path the
+    seated opponent still acts at its own initiative slot; on the legacy
+    immediate hp_depletion path the opponent reprisal fires after. No player
+    dice pair is broadcast (nothing was rolled); the heal rides ``state_patch.hp``
+    + ``confrontation.item_used`` spans, and the round/reprisal messages + a fresh
+    CONFRONTATION frame are fanned out so the overlay updates.
+    """
+    from sidequest.game.beat_filter import item_use_beats
+    from sidequest.server.dispatch.item_use import apply_item_use, resolve_item_use
+
+    if cdef.win_condition != "hp_depletion":
+        raise DiceDispatchError(
+            f"item-use beat {payload.beat_id!r} on a non-hp_depletion confrontation "
+            f"{cdef.confrontation_type!r} — item beats are only offered in hp_depletion "
+            "combat (No Silent Fallbacks)"
+        )
+    # Validate the carried consumable up front so a bad commit fails loud BEFORE
+    # any state mutation (parity with the dice path's cast-shape validation).
+    character, item_index = resolve_item_use(snapshot, character_name, payload.beat_id)
+    display_name = str(character.core.inventory.items[item_index].get("name", "") or "")
+
+    actor = encounter.find_actor(character_name)
+    if actor is None:
+        actor = next((a for a in encounter.actors if a.side == "player"), None)
+    if actor is None:
+        raise DiceDispatchError(
+            f"item-use beat {payload.beat_id!r}: no player-side actor for "
+            f"{character_name!r} in encounter {encounter.encounter_type!r}"
+        )
+
+    wn_sealed_round = (
+        isinstance(ruleset, WithoutNumberRulesetModule)
+        and cdef.win_condition == "hp_depletion"
+        and bool(encounter.initiative)
+    )
+
+    commitment_pending = False
+    wn_waiting: list[str] = []
+    round_messages: list[object] = []
+
+    if wn_sealed_round:
+        from sidequest.server.dispatch.wn_round import (
+            run_wn_round,
+            seal_wn_commit,
+            wn_barrier_closed,
+            wn_waiting_actors,
+        )
+
+        # The transient beat the ledger reads at the actor's slot (id-only).
+        item_beat = item_use_beats([character.core.inventory.items[item_index]])[0]
+        seal_wn_commit(
+            encounter=encounter,
+            actor=actor,
+            beat=item_beat,
+            outcome=RollOutcome.Success,
+            spell_id=None,
+        )
+        wn_waiting = wn_waiting_actors(encounter=encounter, snapshot=snapshot)
+        if wn_barrier_closed(encounter=encounter, snapshot=snapshot):
+            # The walk applies the item at this PC's slot (consume + heal) and
+            # runs the opponent's own attack at its slot.
+            round_result = run_wn_round(
+                encounter=encounter,
+                cdef=cdef,
+                ruleset=ruleset,
+                pack=pack,
+                snapshot=snapshot,
+                session_id=session_id,
+                round_number=round_number,
+                rolling_player_id=rolling_player_id,
+                rng=random,
+            )
+            round_messages = round_result.messages
+        else:
+            commitment_pending = True
+    else:
+        # Legacy immediate hp_depletion (SWN-family non-WWN): apply the item now,
+        # then the seated opponent reprises (drinking still costs the action).
+        item_name, healed = apply_item_use(
+            character=character, item_index=item_index, turn_num=round_number
+        )
+        encounter.narrator_hints.append(
+            f"ITEM USED: {character_name} drank {item_name}, restoring {int(healed or 0)} HP "
+            f"(now {character.core.hp.current}/{character.core.hp.max}). Describe the drink "
+            "and its relief in fiction; the heal already applied mechanically."
+        )
+        module_has_opponent_turn = (
+            type(ruleset).resolve_opponent_attack is not RulesetModule.resolve_opponent_attack
+        )
+        if not encounter.resolved and module_has_opponent_turn:
+            round_messages = _resolve_opponent_reprisal(
+                encounter=encounter,
+                cdef=cdef,
+                ruleset=ruleset,
+                pack=pack,
+                snapshot=snapshot,
+                player_name=character_name,
+                session_id=session_id,
+                round_number=round_number,
+                rng=random,
+            )
+
+    # Broadcast: NO player dice pair (no roll). Fan out the opponent's answer
+    # (reprisal / round walk) then a fresh CONFRONTATION frame so the overlay
+    # reflects the new HP + consumed item without waiting for the narrator.
+    if room_broadcast is not None:
+        for _msg in round_messages:
+            room_broadcast(_msg)
+        union_payload = ConfrontationPayload(
+            **build_confrontation_payload(
+                encounter=encounter,
+                cdef=cdef,
+                genre_slug=genre_slug,
+                recipient_pc=None,
+                core_resolver=snapshot.find_creature_core,
+                active_stakes=snapshot.active_stakes,
+                portrait_resolver=make_confrontation_portrait_resolver(
+                    snapshot=snapshot, genre_pack=pack, genre_slug=genre_slug
+                ),
+                rules=pack.rules,
+            )
+        )
+        with encounter_momentum_broadcast_span(
+            encounter_type=encounter.encounter_type,
+            player_metric_after=encounter.player_metric.current,
+            opponent_metric_after=encounter.opponent_metric.current,
+            source="item_use",
+            beat_id=payload.beat_id,
+        ):
+            if emit_confrontation is not None:
+                supplier = make_confrontation_frame_supplier(
+                    snapshot=snapshot,
+                    genre_pack=pack,
+                    encounter=encounter,
+                    cdef=cdef,
+                    genre_slug=genre_slug,
+                )
+                emit_confrontation(union_payload, supplier)
+            else:
+                room_broadcast(ConfrontationMessage(payload=union_payload, player_id="server"))
+
+    if commitment_pending:
+        replay_text = (
+            f"[ITEM COMMITTED] {character_name} moves to drink {display_name}; "
+            f"the round waits on {', '.join(wn_waiting) or 'no one'}."
+        )
+    else:
+        replay_text = f"[ITEM USED] {character_name} drinks {display_name}."
+
+    logger.info(
+        "dice.item_use_resolved beat_id=%s actor=%s item=%r commitment_pending=%s "
+        "resolved_encounter=%s",
+        payload.beat_id,
+        character_name,
+        display_name,
+        commitment_pending,
+        encounter.resolved,
+    )
+
+    return DiceThrowOutcome(
+        replay_action_text=replay_text,
+        outcome=RollOutcome.Success,
+        encounter_resolved=encounter.resolved,
+        commitment_pending=commitment_pending,
+    )
+
+
 @dataclass(frozen=True)
 class _PlayerBeatApplication:
     """What one committed player beat did when it applied.
@@ -1629,6 +1841,12 @@ def _defensive_posture_for_reprisal(
     READS a posture, so it warns-and-continues rather than crashing combat.)
     """
     if defender_commit is None:
+        return "", 0, False
+    # Story 106-4 Part C: an item-use commit ("Drink <potion>") is a transient
+    # beat (not on the cdef) and is NOT defensive — it offers no mitigation and
+    # does not prevent the reprisal (drinking leaves you open). Recognise it
+    # explicitly so it does not trip the content-drift WARNING below.
+    if is_item_use_beat(defender_commit.beat_id):
         return "", 0, False
     beat = next((b for b in cdef.beats if b.id == defender_commit.beat_id), None)
     if beat is None:

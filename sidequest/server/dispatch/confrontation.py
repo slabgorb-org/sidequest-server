@@ -220,16 +220,26 @@ def build_confrontation_payload(
         # ``core_resolver``. A B/X core has ``spellcasting is None``, so the
         # derived value is None and the B/X arm runs unchanged (no-op) — the
         # WWN/B/X behavior split lives entirely in beat_filter.
-        if effective_spellcasting is None and core_resolver is not None and recipient_actor_name:
+        #
+        # Story 106-4 Part C: the SAME recipient core supplies the carried
+        # inventory so beats_available_for can append transient "Drink <potion>"
+        # item-use beats (gated to hp_depletion combat in the filter). Resolved
+        # once here; None when no core resolves (lobby/pre-chargen) → no item
+        # beats, which is correct.
+        recipient_inventory_items: list[dict[str, Any]] | None = None
+        if core_resolver is not None and recipient_actor_name:
             recipient_core = core_resolver(recipient_actor_name)
             if recipient_core is not None:
-                effective_spellcasting = recipient_core.spellcasting
+                if effective_spellcasting is None:
+                    effective_spellcasting = recipient_core.spellcasting
+                recipient_inventory_items = recipient_core.inventory.items
         filtered = beats_available_for(
             cdef,
             class_def,
             spell_slots_remaining=spell_slots,
             prepared_spells=prepared_spells,
             spellcasting=effective_spellcasting,
+            inventory_items=recipient_inventory_items,
         )
         rejection_reason = cast_spell_rejection_reason(
             cdef,
@@ -396,7 +406,17 @@ def build_confrontation_payload(
             def _offer_dc(beat_def: BeatDef) -> int:
                 return ruleset_module.offer_difficulty(beat=beat_def, target_core=target_core)
 
+        from sidequest.game.beat_filter import is_item_use_beat
+
         for beat_def, beat_dict in zip(beats_for_payload, payload["beats"], strict=True):
+            # Story 106-4 Part C: item-use beats ("Drink <potion>") are
+            # auto-success, no-roll actions — they carry NO to-hit difficulty.
+            # Leaving ``difficulty`` absent is the wire signal the UI reads to
+            # commit them without a dice tray (the cast_spell-tile precedent of
+            # a non-dice beat path). Stamping an attack DC here would make the
+            # client roll a d20 to drink a potion (wrong) — skip them.
+            if is_item_use_beat(beat_def.id):
+                continue
             beat_dict["difficulty"] = _offer_dc(beat_def)
         # GM-panel lie-detector (CLAUDE.md OTEL discipline): the offered
         # numbers here must match the resolution-time dice.request_sent
@@ -407,7 +427,9 @@ def build_confrontation_payload(
             confrontation_type=encounter.encounter_type,
             ruleset=rules.ruleset,
             target_name=target_name or "",
-            beat_difficulties=",".join(f"{b['id']}={b['difficulty']}" for b in payload["beats"]),
+            beat_difficulties=",".join(
+                f"{b['id']}={b['difficulty']}" for b in payload["beats"] if "difficulty" in b
+            ),
         ):
             pass
 

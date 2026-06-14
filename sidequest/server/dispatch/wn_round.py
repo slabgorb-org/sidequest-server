@@ -29,6 +29,7 @@ import logging
 import random
 from dataclasses import dataclass
 
+from sidequest.game.beat_filter import is_item_use_beat
 from sidequest.game.beat_kinds import _opposite_side_first_actor
 from sidequest.game.encounter import EncounterActor, StructuredEncounter, WnSealedCommit
 from sidequest.game.ruleset.base import RulesetModule
@@ -70,7 +71,12 @@ def seal_wn_commit(
             f"{actor.name!r} has already committed a Main Action this round — "
             "the WN turn model seals one action per participant per round"
         )
-    target = _opposite_side_first_actor(encounter, actor.side)
+    # Story 106-4 Part C: a "Drink <potion>" item-use beat has NO premise target
+    # (you act on yourself), so it pins target=None — a dead opponent at the
+    # actor's slot must not turn drinking into a dead-premise fizzle.
+    target = (
+        None if is_item_use_beat(beat.id) else _opposite_side_first_actor(encounter, actor.side)
+    )
     encounter.wn_commits.append(
         WnSealedCommit(
             actor=actor.name,
@@ -343,6 +349,26 @@ def run_wn_round(
 
         if encounter.resolved:
             logger.info("wn_round.slot_skipped reason=encounter_resolved token=%s", token)
+            continue
+
+        # Story 106-4 Part C: an item-use commit ("Drink <potion>") is
+        # auto-success — it consumes the carried consumable and applies its heal
+        # at this slot instead of resolving an attack beat. The seated opponent
+        # still acts at its OWN slot (drinking costs the Main Action, it does not
+        # skip the enemy's turn — Keith, 2026-06-14). A narrator hint carries the
+        # mechanical truth so the prose describes the real drink, not improv.
+        if is_item_use_beat(commit.beat_id):
+            from sidequest.server.dispatch.item_use import apply_item_use, resolve_item_use
+
+            character, item_index = resolve_item_use(snapshot, token, commit.beat_id)
+            item_name, healed = apply_item_use(
+                character=character, item_index=item_index, turn_num=round_number
+            )
+            encounter.narrator_hints.append(
+                f"ITEM USED: {token} drank {item_name}, restoring {int(healed or 0)} HP "
+                f"(now {character.core.hp.current}/{character.core.hp.max}). Describe the "
+                "drink and its relief in fiction; the heal already applied mechanically."
+            )
             continue
 
         beat = next((b for b in cdef.beats if b.id == commit.beat_id), None)

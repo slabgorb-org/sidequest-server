@@ -57,11 +57,13 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from sidequest.telemetry.spans.encounter import SPAN_POST_RESOLUTION_LETHALITY
-from sidequest.telemetry.spans.wwn import (
-    SPAN_WWN_MAJOR_INJURY_ROLL,
-    SPAN_WWN_MORTAL_INJURY_DECLARED,
-    SPAN_WWN_SHOCK_APPLIED,
-)
+
+# WN lethality spans are now emitted slug-namespaced from the WN core's
+# slug-parameterized emitters (spans/wn.py) — the per-slug SPAN_WWN_* constants
+# were removed in ADR-142. These are the wwn-bound span NAMES the core emits.
+SPAN_WWN_MAJOR_INJURY_ROLL = "wwn.major_injury.roll"
+SPAN_WWN_MORTAL_INJURY_DECLARED = "wwn.mortal_injury.declared"
+SPAN_WWN_SHOCK_APPLIED = "wwn.shock.applied"
 
 PLAYER = "Vesska"
 OPPONENT = "Foundry Reaver"

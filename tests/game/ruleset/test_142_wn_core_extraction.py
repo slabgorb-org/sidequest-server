@@ -293,3 +293,48 @@ def test_characterize_resolve_downed(slug):
     # Exactly one Mortal Injury status appended (no major injury when not traumatic).
     assert len(core.statuses) == 1
     assert "Mortal Injury" in core.statuses[0].text
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — hierarchy-lock tests (ADR-142)
+#
+# Pin the FLAT WN hierarchy: every concrete sibling reparents directly onto
+# WithoutNumberRulesetModule and inherits from no OTHER sibling, and prove the
+# smoking gun ADR-142 fixed (WWN must not resolve starship gunnery).
+# ---------------------------------------------------------------------------
+
+
+def test_all_wn_modules_reparented_onto_core_and_are_clean_siblings():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.ruleset.awn import AwnRulesetModule
+    from sidequest.game.ruleset.cwn import CwnRulesetModule
+    from sidequest.game.ruleset.swn import SwnRulesetModule
+    from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
+    from sidequest.game.ruleset.wwn import WwnRulesetModule
+
+    siblings = {SwnRulesetModule, WwnRulesetModule, CwnRulesetModule, AwnRulesetModule}
+    for slug in ("swn", "wwn", "cwn", "awn"):
+        module = get_ruleset_module(slug)
+        assert isinstance(module, WithoutNumberRulesetModule), f"{slug} not on the WN core"
+        ancestors = set(type(module).__mro__) - {type(module)}
+        assert not (ancestors & siblings), (
+            f"{slug} inherits from another WN sibling: {ancestors & siblings}"
+        )
+
+
+def test_wwn_does_not_inherit_starship_combat():
+    # The smoking gun ADR-142 fixed: WWN must NOT resolve ship gunnery.
+    import pytest
+
+    from sidequest.game.ruleset import get_ruleset_module
+
+    wwn = get_ruleset_module("wwn")
+    with pytest.raises(NotImplementedError):
+        wwn.ship_attack_params(
+            attacker_stats={},
+            pilot_skill=0,
+            attack_bonus=0,
+            geometry_modifier=0,
+            target_ac=10,
+            cfg=None,
+        )

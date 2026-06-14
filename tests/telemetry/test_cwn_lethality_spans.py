@@ -1,20 +1,37 @@
+"""CWN lethality spans — driven through the real ruleset methods (ADR-142).
+
+Migrated off the deleted per-slug ``cwn_*`` emitters: the WN lethality stack now
+emits ``cwn.{trauma.roll,shock.applied,mortal_injury.declared,major_injury.roll}``
+from the core's slug-parameterized emitters (spans/wn.py). This test drives the
+real ``get_ruleset_module("cwn")`` methods with an in-memory exporter and pins the
+routed span names + the attribute VALUES the old emitter tests asserted (traumatic,
+final, shock_ac, roll) — coverage the slug-name net in
+``tests/game/ruleset/test_142_wn_lethality_spans.py`` does not check.
+"""
+
 from __future__ import annotations
+
+import random
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from sidequest.game.creature_core import CreatureCore
+from sidequest.game.ruleset import get_ruleset_module
+from sidequest.genre.models.inventory import DamageSpec
+from sidequest.genre.models.rules import CwnConfig
 from sidequest.telemetry.spans._core import SPAN_ROUTES
-from sidequest.telemetry.spans.cwn import (
-    SPAN_CWN_MAJOR_INJURY_ROLL,
-    SPAN_CWN_MORTAL_INJURY_DECLARED,
-    SPAN_CWN_SHOCK_APPLIED,
-    SPAN_CWN_TRAUMA_ROLL,
-    cwn_major_injury_roll_span,
-    cwn_mortal_injury_declared_span,
-    cwn_shock_applied_span,
-    cwn_trauma_roll_span,
-)
+
+_AMAP = {
+    "STRENGTH": "Brawn",
+    "CONSTITUTION": "Body",
+    "DEXTERITY": "Reflex",
+    "INTELLIGENCE": "Tech",
+    "WISDOM": "Instinct",
+    "CHARISMA": "Cool",
+}
+_CFG = CwnConfig(attribute_map=_AMAP)
 
 
 def _exporter():
@@ -24,12 +41,16 @@ def _exporter():
     return exporter, provider.get_tracer("test")
 
 
+def _named(exporter, name: str):
+    return [s for s in exporter.get_finished_spans() if s.name == name]
+
+
 def test_all_four_spans_are_routed():
     for name in (
-        SPAN_CWN_TRAUMA_ROLL,
-        SPAN_CWN_SHOCK_APPLIED,
-        SPAN_CWN_MORTAL_INJURY_DECLARED,
-        SPAN_CWN_MAJOR_INJURY_ROLL,
+        "cwn.trauma.roll",
+        "cwn.shock.applied",
+        "cwn.mortal_injury.declared",
+        "cwn.major_injury.roll",
     ):
         assert name in SPAN_ROUTES
         assert SPAN_ROUTES[name].component == "cwn"
@@ -37,45 +58,52 @@ def test_all_four_spans_are_routed():
 
 def test_trauma_span_emits():
     exporter, tracer = _exporter()
-    cwn_trauma_roll_span(
+    # Random(42).randint(1,6) == 6 meets the default trauma_target=6 → traumatic.
+    get_ruleset_module("cwn").resolve_trauma(
+        spec=DamageSpec(dice="2d6", trauma_die="1d6", trauma_rating=3),
+        base_total=7,
+        cfg=_CFG,
+        rng=random.Random(42),
         actor="Mook",
-        weapon_die="1d6",
-        roll=6,
-        target=6,
-        traumatic=True,
-        rating=3,
-        base=7,
-        final=21,
         _tracer=tracer,
     )
-    spans = exporter.get_finished_spans()
-    assert spans[0].name == "cwn.trauma.roll"
+    spans = _named(exporter, "cwn.trauma.roll")
+    assert len(spans) == 1
     attrs = dict(spans[0].attributes or {})
     assert attrs["traumatic"] is True
-    assert attrs["final"] == 21
+    assert attrs["final"] == 21  # base 7 * rating 3
 
 
 def test_shock_span_emits():
     exporter, tracer = _exporter()
-    cwn_shock_applied_span(
-        actor="Mook", amount=2, melee_ac=8, shock_rating=10, shock_ac=15, _tracer=tracer
+    # shock=2, shock_ac=15, target_melee_ac=8 → 8 <= 15 → chip applies.
+    get_ruleset_module("cwn").resolve_shock(
+        spec=DamageSpec(dice="1d6", shock=2, shock_ac=15),
+        target_melee_ac=8,
+        actor="Mook",
+        _tracer=tracer,
     )
-    spans = exporter.get_finished_spans()
-    assert spans[0].name == "cwn.shock.applied"
+    spans = _named(exporter, "cwn.shock.applied")
+    assert len(spans) == 1
     assert dict(spans[0].attributes or {})["shock_ac"] == 15
 
 
-def test_mortal_span_emits():
+def test_mortal_and_major_span_emit():
     exporter, tracer = _exporter()
-    cwn_mortal_injury_declared_span(actor="Jax", rounds_to_die=6, _tracer=tracer)
-    assert exporter.get_finished_spans()[0].name == "cwn.mortal_injury.declared"
-
-
-def test_major_span_emits():
-    exporter, tracer = _exporter()
-    cwn_major_injury_roll_span(
-        actor="Jax", save_made=False, roll=9, text="Severed limb.", _tracer=tracer
+    core = CreatureCore(name="Jax", description="brave", personality="grim")
+    # Random(1).randint(1,20) == 5 < 15 → save fails → both spans fire.
+    get_ruleset_module("cwn").resolve_downed(
+        core=core,
+        save_target=15,
+        scene_traumatic=True,
+        cfg=_CFG,
+        rng=random.Random(1),
+        _tracer=tracer,
     )
-    spans = exporter.get_finished_spans()
-    assert spans[0].name == "cwn.major_injury.roll"
-    assert dict(spans[0].attributes or {})["roll"] == 9
+    assert _named(exporter, "cwn.mortal_injury.declared")
+    major = _named(exporter, "cwn.major_injury.roll")
+    assert len(major) == 1
+    # rng order: save roll (5, fails the DC-15 save) is consumed first, then the
+    # major-injury TABLE roll (10) — the table roll is what major_injury.roll reports.
+    assert dict(major[0].attributes or {})["roll"] == 10
+    assert dict(major[0].attributes or {})["save_made"] is False

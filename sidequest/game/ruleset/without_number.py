@@ -102,6 +102,15 @@ class WithoutNumberRulesetModule(RulesetModule):
     #: set by every concrete subclass; the core itself is never registered.
     slug: str
 
+    @property
+    def awards_native_turn_xp(self) -> bool:
+        """The Without Number family (SWN/WWN/CWN/AWN) does NOT use the native
+        ADR-021 per-turn XP tick. WN advancement is small-integer, GM-awarded
+        expedition/goal XP — not an OSR/D&D-scale per-turn counter. Suppress
+        ``award_turn_xp`` under any WN binding (sq-playtest 2026-06-13: a WWN L1
+        Warrior ticked to 135 XP). All four concrete WN siblings inherit this."""
+        return False
+
     # SWN save categories → the two attributes whose better modifier applies (SRD p.46).
     _SAVE_ATTRS = {
         "physical": ("STRENGTH", "CONSTITUTION"),

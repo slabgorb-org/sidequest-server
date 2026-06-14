@@ -129,3 +129,71 @@ def test_award_turn_xp_is_wired_into_the_real_narration_turn():
 
     src = inspect.getsource(WebSocketSessionHandler._execute_narration_turn)
     assert "award_turn_xp(" in src
+
+
+# --- WN-family gate (sq-playtest 2026-06-13 beneath_sunden) ---
+# A WWN-bound L1 Warrior ticked to 135 XP because the native ADR-021 per-turn
+# tick fired regardless of ruleset. WN uses small-integer GM-awarded expedition
+# XP, not an OSR-scale per-turn counter, so award_turn_xp must suppress under
+# any Without Number binding (and emit a loud suppression event, not a silent
+# no-op). See gm-decisions.md 2026-06-13 (WWN SRD is the authority).
+
+
+def test_award_turn_xp_suppressed_under_wwn(snap_with_char, monkeypatch):
+    from sidequest.game.ruleset.registry import get_ruleset_module
+    from sidequest.server.dispatch import encounter_lifecycle
+
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        encounter_lifecycle,
+        "_watcher_publish",
+        lambda event, payload, **kw: captured.append((event, payload)),
+    )
+
+    award_turn_xp(snap_with_char, in_combat=True, ruleset=get_ruleset_module("wwn"))
+
+    assert snap_with_char.characters[0].core.xp == 0, (
+        "WWN binding must NOT accrue the native per-turn XP tick; "
+        f"got {snap_with_char.characters[0].core.xp}"
+    )
+    suppressed = [p for _, p in captured if p.get("op") == "award_turn_xp_suppressed"]
+    assert len(suppressed) == 1, (
+        f"a single suppression event must fire (lie-detector); got {captured}"
+    )
+    assert suppressed[0].get("ruleset") == "wwn"
+    assert suppressed[0].get("field") == "xp"
+
+
+def test_award_turn_xp_still_applies_under_native(snap_with_char):
+    """The native dial engine keeps the per-turn tick — the gate is WN-only."""
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    award_turn_xp(snap_with_char, in_combat=True, ruleset=get_ruleset_module("native"))
+    assert snap_with_char.characters[0].core.xp == 25
+
+
+def test_award_turn_xp_none_ruleset_preserves_native_tick(snap_with_char):
+    """No module supplied (legacy/test callers) → native behavior, unchanged."""
+    award_turn_xp(snap_with_char, in_combat=False, ruleset=None)
+    assert snap_with_char.characters[0].core.xp == 10
+
+
+def test_without_number_family_suppresses_native_xp_capability():
+    """The capability flag: every WN sibling reports awards_native_turn_xp=False;
+    the native module reports True. This is the single source the gate reads."""
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    for slug in ("wwn", "cwn", "swn", "awn"):
+        assert get_ruleset_module(slug).awards_native_turn_xp is False, (
+            f"{slug} must not use the native per-turn XP tick"
+        )
+    assert get_ruleset_module("native").awards_native_turn_xp is True
+
+
+def test_award_turn_xp_suppressed_for_every_seated_pc_under_wwn(mp_snap_two_seats):
+    """The suppression is party-wide: no seat accrues native XP under WWN."""
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    award_turn_xp(mp_snap_two_seats, in_combat=True, ruleset=get_ruleset_module("wwn"))
+    xps = {c.core.name: c.core.xp for c in mp_snap_two_seats.characters}
+    assert xps == {"Ritali Veer": 0, "Catalina Valentine": 0}, xps

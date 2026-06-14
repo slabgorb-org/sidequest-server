@@ -33,6 +33,21 @@ class RulesetModule(ABC):
     #: registry key, also the value authors write in rules.yaml `ruleset:`
     slug: str
 
+    @property
+    def awards_native_turn_xp(self) -> bool:
+        """Whether the ADR-021 native per-turn XP tick (``award_turn_xp``)
+        applies under this ruleset.
+
+        ``True`` for the native dial engine, whose four-track progression
+        grants 10 (calm) / 25 (combat) XP every turn. The Without Number family
+        overrides this to ``False``: WN uses small-integer, GM-awarded
+        expedition/goal XP (WWN L2 ≈ 3 XP), NOT a continuously-ticking
+        OSR/D&D-scale counter. Without this gate a WWN-bound L1 Warrior ticked
+        to 135 XP with no award event (sq-playtest 2026-06-13, beneath_sunden).
+        See ``.pennyfarthing/sidecars/gm-decisions.md`` (2026-06-13: the WWN
+        SRD is the authority for any WWN-bound mechanical value)."""
+        return True
+
     @abstractmethod
     def find_confrontation(
         self, confrontations: list[ConfrontationDef], encounter_type: str

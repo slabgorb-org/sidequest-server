@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from sidequest.agents.orchestrator import NpcMention
+    from sidequest.game.ruleset.base import RulesetModule
 
 from sidequest.game.disposition import Attitude
 from sidequest.game.encounter import (
@@ -1482,11 +1483,25 @@ def _is_combat_category(pack: GenrePack, encounter_type: str) -> bool:
     return False
 
 
-def award_turn_xp(snapshot: GameSnapshot, *, in_combat: bool) -> None:
+def award_turn_xp(
+    snapshot: GameSnapshot,
+    *,
+    in_combat: bool,
+    ruleset: RulesetModule | None = None,
+) -> None:
     """Award the per-turn XP tick to every seated PC (party-wide).
 
     25 XP when ``in_combat`` is True, 10 otherwise. No-op when the
     snapshot has no characters.
+
+    ``ruleset`` gates the native ADR-021 tick (sq-playtest 2026-06-13). When a
+    ruleset module is supplied and ``ruleset.awards_native_turn_xp`` is False —
+    the Without Number family (SWN/WWN/CWN/AWN), which uses small-integer
+    GM-awarded expedition XP, not an OSR-scale per-turn counter — this is a
+    loud no-op: no ``core.xp`` mutation, and a ``xp`` suppression span fires so
+    the GM panel proves the native tick was gated rather than silently dropped
+    (No Silent Fallbacks). ``None`` (the default for legacy/test callers that
+    pass no module) preserves the native tick.
 
     SideQuest MP is sealed-rounds (ADR-036): every seated PC submits an
     action each round and they resolve together — there is no single
@@ -1506,6 +1521,22 @@ def award_turn_xp(snapshot: GameSnapshot, *, in_combat: bool) -> None:
     starve XP (No Silent Fallbacks).
     """
     if not snapshot.characters:
+        return
+    if ruleset is not None and not ruleset.awards_native_turn_xp:
+        # WN-family binding: the native per-turn XP tick does not apply. Emit a
+        # loud suppression event (lie-detector) so the GM panel sees the gate
+        # fired — WN advancement is GM-awarded expedition XP, surfaced through
+        # its own path, not this native accumulator.
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "xp",
+                "op": "award_turn_xp_suppressed",
+                "ruleset": getattr(ruleset, "slug", ""),
+                "in_combat": in_combat,
+            },
+            component="progression",
+        )
         return
     delta = 25 if in_combat else 10
     seated = {name for name in snapshot.player_seats.values() if name}

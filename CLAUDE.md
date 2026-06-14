@@ -296,7 +296,7 @@ default — never reap save-referenced artifacts (portraits, audio) on a timer.
 
 ## Git Workflow
 
-- Branch strategy: gitflow
+- Branch strategy: github-flow (`develop` is the single integration branch; no develop→main promotion)
 - Default branch: develop
 - Feature branches: `feat/{description}`
 - PRs target: develop

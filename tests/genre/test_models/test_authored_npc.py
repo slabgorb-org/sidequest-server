@@ -45,10 +45,12 @@ def test_location_tags_default_empty() -> None:
 def test_location_tags_parse() -> None:
     """``location_tags`` carries lowercase location/biome substrings the Monster
     Manual matches against the current location for placement-aware surfacing."""
-    npc = AuthoredNpc(
-        id="scarecrow",
-        name="Scarecrow",
-        location_tags=["yellow brick road", "cornfield"],
+    npc = AuthoredNpc.model_validate(
+        {
+            "id": "scarecrow",
+            "name": "Scarecrow",
+            "location_tags": ["yellow brick road", "cornfield"],
+        }
     )
     assert npc.location_tags == ["yellow brick road", "cornfield"]
 

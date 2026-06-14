@@ -298,6 +298,86 @@ def test_placed_npc_tag_match_is_substring_and_case_insensitive() -> None:
     assert "Tin Woodman" not in manual.format_nearby_npcs("Open Plain")
 
 
+def test_placed_npc_tag_match_over_match_direction() -> None:
+    """Tag matching is bidirectional: a location that is a *substring of the tag*
+    also matches (loc-in-tag), mirroring the ``activated_location`` anchor.
+
+    The cap-side test_placed_npc_tag_match... covers tag-in-loc ("FOREST" inside
+    "The Dark FOREST clearing"); this asserts the other direction so a terse
+    region key like "brick" still surfaces an NPC tagged "yellow brick road".
+    """
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    manual.add_npc(
+        {"name": "Scarecrow", "role": "companion", "culture": "Munchkin"},
+        ["yellow brick road"],
+    )
+    # "brick" is a substring of the tag "yellow brick road".
+    assert "Scarecrow" in manual.format_nearby_npcs("brick")
+
+
+def test_format_nearby_npcs_tolerates_none_location() -> None:
+    """M6: ``format_nearby_npcs(None)`` must not crash on ``None.lower()``.
+
+    A pre-bind / pre-chargen turn can hand the seam a ``None`` location. With no
+    meaningful location, placed NPCs are gated out (they need a match) but the
+    call returns cleanly — an unplaced NPC still surfaces.
+    """
+    manual = MonsterManual(genre="g", world="w")
+    manual.add_npc({"name": "Field Mouse", "role": "critter", "culture": "wild"}, [])
+    manual.add_npc(
+        {"name": "Scarecrow", "role": "companion", "culture": "Munchkin"},
+        ["yellow brick road"],
+    )
+
+    output = manual.format_nearby_npcs(None)  # type: ignore[arg-type]
+    assert "Field Mouse" in output  # unplaced — eligible everywhere
+    assert "Scarecrow" not in output  # placed but no location to match → gated
+
+
+def test_available_at_location_caps_surface_but_drops_excess_placed() -> None:
+    """More placed NPCs match the location than the "Other known NPCs" slice (3)
+    will surface — the excess is dropped by the cap, NOT silently widened.
+
+    The oz Yellow Brick Road has four companions tagged for it; only three reach
+    the narrator's "nearby (not yet met)" line. ``available_at_location`` returns
+    all four (uncapped — the caller slices); ``format_nearby_npcs`` shows three.
+    """
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    for name in ("Scarecrow", "Tin Woodman", "Cowardly Lion", "Field Mouse"):
+        manual.add_npc(
+            {"name": name, "role": "companion", "culture": "Ozian"},
+            ["yellow brick road"],
+        )
+
+    eligible = manual.available_at_location("The Yellow Brick Road — Morning")
+    assert len(eligible) == 4  # selector is uncapped
+
+    output = manual.format_nearby_npcs("The Yellow Brick Road — Morning")
+    surfaced = [
+        n for n in ("Scarecrow", "Tin Woodman", "Cowardly Lion", "Field Mouse") if n in output
+    ]
+    assert len(surfaced) == 3  # formatter slices to 3
+
+
+def test_add_npc_dedup_walkon_does_not_overwrite_authored() -> None:
+    """A later generated walk-on sharing a name with an already-present authored
+    NPC is deduped by ``add_npc`` — it does not append a second entry, and the
+    authored NPC's placement ``location_tags`` survive intact.
+    """
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    # Authored Scarecrow lands first, placed on the road.
+    manual.add_npc(
+        {"name": "Scarecrow", "role": "companion", "culture": "Munchkin"},
+        ["yellow brick road"],
+    )
+    # A generic walk-on with the same name arrives later, unplaced.
+    manual.add_npc({"name": "Scarecrow", "role": "vagrant", "culture": "wild"}, [])
+
+    assert len(manual.npcs) == 1
+    assert manual.npcs[0].location_tags == ["yellow brick road"]
+    assert manual.npcs[0].role == "companion"
+
+
 def test_manual_npc_extra_fields_forbidden() -> None:
     """``model_config.extra='forbid'`` rejects unknown keys on load."""
     import pytest

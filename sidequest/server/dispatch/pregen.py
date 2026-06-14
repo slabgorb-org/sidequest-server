@@ -194,44 +194,86 @@ def _generate_encounter(
 
 
 def _seed_authored_npcs(pack: Any, world: str, manual: MonsterManual) -> int:
-    """Add the world's authored ``npcs.yaml`` cast into ``manual`` with placement.
+    """Insert/refresh the world's authored ``npcs.yaml`` cast in ``manual``.
 
     Reads ``pack.worlds[world].authored_npcs`` (each an
-    :class:`~sidequest.genre.models.authored_npc.AuthoredNpc`) and adds each one
-    to the Monster Manual via :meth:`MonsterManual.add_npc`, carrying its
-    ``location_tags`` through to ``ManualNpc.location_tags`` so placement-aware
-    selection (:meth:`MonsterManual.available_at_location`) can surface it at the
-    right location before it has ever been narrated.
+    :class:`~sidequest.genre.models.authored_npc.AuthoredNpc`) and, for each:
 
-    Dedup is handled by ``add_npc`` (by name) — re-seeding across sessions does
-    not double-add. Returns the number of authored NPCs newly added.
+    - **inserts** it (via :meth:`MonsterManual.add_npc`) when no Manual entry
+      shares its name, carrying ``location_tags`` through to
+      ``ManualNpc.location_tags`` so placement-aware selection
+      (:meth:`MonsterManual.available_at_location`) can surface it at the right
+      location before it has ever been narrated;
+    - **upserts** its ``location_tags`` onto an already-present entry when they
+      differ — a stale on-disk Manual (the wry_whimsy/oz recurrence) otherwise
+      keeps its old/empty placement forever even after the author fixes the
+      roster (M4).
 
-    Tolerant of stub packs that don't expose ``worlds`` (returns 0) — the read
-    is via ``getattr`` so legacy seed_manual callers and test stubs are
-    unaffected.
+    Returns the number of entries inserted **or** tag-refreshed — i.e. how many
+    times the Manual changed, so the caller knows whether to persist.
+
+    No Silent Fallbacks (H3): ``pack`` lacking ``worlds`` (a pack that failed to
+    load → ``None``, or a stub) is the one tolerated no-op — the caller already
+    warned on a load failure. A ``world`` key that *is* absent from a real
+    ``worlds`` mapping is a config/wiring error and logs a WARNING. The roster is
+    read via direct attribute access (``world_obj.authored_npcs``) so a future
+    field rename surfaces loudly instead of masking as an empty roster. The
+    outcome is logged on every successful read — including a count of 0 — so an
+    empty roster is distinguishable from a read that never happened.
     """
     worlds = getattr(pack, "worlds", None)
-    if not worlds or not world:
+    if worlds is None:
+        # Pack failed to load or is a non-pack stub — nothing to seed. The
+        # seed_manual caller already logged the load failure (No Silent
+        # Fallbacks is satisfied upstream); a None pack here is not an error.
+        return 0
+    if not world:
+        logger.warning("pregen.authored_seed_skipped (reason=no_world_slug)")
         return 0
     world_obj = worlds.get(world)
     if world_obj is None:
+        logger.warning(
+            "pregen.authored_seed_world_not_found (world=%s, known_worlds=%s)",
+            world,
+            sorted(worlds.keys()),
+        )
         return 0
-    authored = getattr(world_obj, "authored_npcs", None) or []
-    before = len(manual.npcs)
+    # Direct access (not getattr-with-default): a real World always exposes
+    # ``authored_npcs`` (default_factory=list). Masking a rename behind ``or []``
+    # would silently drop the whole authored cast — the exact bug class H3 fixes.
+    authored = world_obj.authored_npcs
+    inserted = 0
+    refreshed = 0
     for npc in authored:
-        # Build the namegen-shaped ``data`` blob ``add_npc``/``_human_patch``
-        # read (name/role/culture/ocean_summary). The authored NPC's prose lives
-        # in history_seeds; we pass the role through so the "Other known NPCs"
-        # line reads naturally.
-        data: dict[str, Any] = {
-            "name": npc.name,
-            "role": npc.role or "",
-            "culture": "",
-        }
-        if npc.appearance:
-            data["ocean_summary"] = npc.appearance
-        manual.add_npc(data, list(npc.location_tags))
-    return len(manual.npcs) - before
+        new_tags = list(npc.location_tags)
+        # Mirror add_npc's dedup (find_npc_by_name) so the upsert targets the
+        # same entry add_npc would have collided with.
+        existing = manual.find_npc_by_name(npc.name)
+        if existing is None:
+            # Build the namegen-shaped ``data`` blob ``add_npc``/``_human_patch``
+            # read (name/role/culture/ocean_summary). The authored NPC's prose
+            # lives in history_seeds; we pass the role through so the "Other known
+            # NPCs" line reads naturally.
+            data: dict[str, Any] = {
+                "name": npc.name,
+                "role": npc.role or "",
+                "culture": "",
+            }
+            if npc.appearance:
+                data["ocean_summary"] = npc.appearance
+            manual.add_npc(data, new_tags)
+            inserted += 1
+        elif existing.location_tags != new_tags:
+            existing.location_tags = new_tags
+            refreshed += 1
+    logger.info(
+        "pregen.authored_npcs_seeded (world=%s, inserted=%d, refreshed=%d, total_authored=%d)",
+        world,
+        inserted,
+        refreshed,
+        len(authored),
+    )
+    return inserted + refreshed
 
 
 def seed_manual(
@@ -364,14 +406,11 @@ def seed_manual(
     # bug, 2026-06-14). Each authored NPC carries its ``location_tags`` into the
     # Manual so placement-aware selection can match it to the right location
     # BEFORE it has ever been narrated.
+    # _seed_authored_npcs logs its own outcome unconditionally (H3); we keep the
+    # count to surface it on the seed span below so the GM panel sees the authored
+    # cast entering the pool (No Silent Fallbacks — the seeding decision is a
+    # first-class span attribute, not just a log line).
     authored_seeded = _seed_authored_npcs(pack, world, manual)
-    if authored_seeded:
-        logger.info(
-            "pregen.authored_npcs_seeded (genre=%s, world=%s, count=%d)",
-            genre,
-            world,
-            authored_seeded,
-        )
 
     # ── Encounters: tier 1 + tier 2 ───────────────────────────
     # Social, Composure-only packs (combat_encounters=False) have no combat —
@@ -451,6 +490,10 @@ def seed_manual(
             "culture_count": len(cultures),
             "npcs_before": npcs_before,
             "npcs_after": npcs_after,
+            # Authored roster cast inserted/refreshed this seed (wry_whimsy/oz
+            # fix): GM-panel proof the world's npcs.yaml companions entered the
+            # Manual pool, not just the random-minted walk-ons.
+            "authored_npcs_seeded": authored_seeded,
             "encounters_after": len(manual.encounters),
             "combat_encounters": combat_encounters,
             # Roster-only worlds: namegen minting was skipped because the

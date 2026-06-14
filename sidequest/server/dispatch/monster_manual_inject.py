@@ -38,7 +38,10 @@ from sidequest.game.monster_manual import EntryState, MonsterManual
 from sidequest.game.session import NpcPatch, WorldStatePatch
 from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
-from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_INJECTED
+from sidequest.telemetry.spans.monster_manual import (
+    SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
+    SPAN_MONSTER_MANUAL_INJECTED,
+)
 
 if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
@@ -154,6 +157,39 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
                 sd.world_slug,
                 exc,
             )
+
+    # H1 (wry_whimsy/oz, 2026-06-14): backfill the world's authored cast
+    # UNCONDITIONALLY — independent of needs_seeding(). seed_manual only runs
+    # when the Manual needs more Available entries, so an existing on-disk Manual
+    # (>=4 NPCs + an encounter) never re-seeds and the authored companions never
+    # enter the pool — the bug recurs on every prior save. _seed_authored_npcs
+    # dedups by name (insert) and upserts stale placement tags, so this is safe
+    # to run every load; it only mutates when the authored roster has something
+    # new or changed. Saves + emits a span when it does (OTEL: the backfill is a
+    # subsystem decision the GM panel must see).
+    if pack is not None:
+        from sidequest.server.dispatch.pregen import _seed_authored_npcs
+
+        backfilled = _seed_authored_npcs(pack, sd.world_slug or "", manual)
+        if backfilled:
+            manual.save()
+            logger.info(
+                "monster_manual.authored_backfilled genre=%s world=%s count=%d",
+                sd.genre_slug,
+                sd.world_slug,
+                backfilled,
+            )
+            with Span.open(
+                SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
+                {
+                    "genre": sd.genre_slug,
+                    "world": sd.world_slug or "",
+                    "authored_backfilled": backfilled,
+                    "total_npcs": len(manual.npcs),
+                },
+            ):
+                pass
+
     sd.monster_manual = manual
     return manual
 
@@ -486,6 +522,17 @@ def inject(
         # ``current_location`` is meaningful.
         patches_with_location = sum(1 for p in all_patches if p.location)
 
+        # Placement-aware selection visibility (M5): ``eligible`` is the uncapped
+        # count of placed NPCs whose tags match here; ``matched`` is how many of
+        # those actually surfaced through the _AVAILABLE_NPC_INJECT_LIMIT slice.
+        # ``dropped`` (eligible − matched) makes the cap-loss visible — without it
+        # eligible-vs-matched looked like a placement miss, not a bounded bench
+        # (No Silent Fallbacks). oz road: 4 eligible, 3 matched, 1 dropped.
+        available_placed_eligible = sum(
+            1 for n in manual.available_at_location(current_location) if n.location_tags
+        )
+        available_placed_dropped = max(0, available_placed_eligible - available_placed_matched)
+
         with Span.open(
             SPAN_MONSTER_MANUAL_INJECTED,
             {
@@ -503,9 +550,10 @@ def inject(
                 # lie-detector that authored roster placement is actually firing
                 # (not silently ignored, the original bug).
                 "available_placed_matched": available_placed_matched,
-                "available_placed_eligible": sum(
-                    1 for n in manual.available_at_location(current_location) if n.location_tags
-                ),
+                "available_placed_eligible": available_placed_eligible,
+                # M5: placed-eligible NPCs the inject slice dropped (cap-loss made
+                # visible so eligible>matched isn't read as a placement failure).
+                "available_placed_dropped": available_placed_dropped,
                 "names_sanitized": names_sanitized,
                 "patches_with_location": patches_with_location,
                 "in_combat": bool(in_combat),

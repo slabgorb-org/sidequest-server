@@ -319,8 +319,13 @@ class MonsterManual(BaseModel):
 
         Dormant NPCs at other locations are omitted entirely — the narrator
         doesn't need the full world roster to narrate the current scene.
+
+        A ``None``/blank ``current_location`` (pre-bind / pre-chargen turn) is
+        tolerated: there is no location to match, so placed NPCs are gated out
+        and only Active-anchorless + unplaced NPCs surface (No crash on
+        ``None.lower()`` — M6, wry_whimsy/oz follow-up).
         """
-        loc_lower = current_location.lower()
+        loc_lower = (current_location or "").lower()
 
         at_location: list[ManualNpc] = []
         for npc in self.npcs:

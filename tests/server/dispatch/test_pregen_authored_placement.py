@@ -83,8 +83,129 @@ def test_authored_npc_without_tags_is_unplaced() -> None:
 
 
 def test_seed_authored_npcs_tolerates_pack_without_worlds() -> None:
-    """A stub pack with no ``worlds`` attribute (legacy seed_manual callers) is a
-    clean no-op, not a crash."""
+    """A stub pack with no ``worlds`` attribute (a pack that failed to load →
+    ``None``, or a legacy stub) is a clean no-op, not a crash."""
     manual = MonsterManual(genre="g", world="w")
     assert _seed_authored_npcs(object(), "w", manual) == 0
     assert manual.npcs == []
+
+
+def test_seed_authored_npcs_warns_on_world_not_found(caplog) -> None:  # type: ignore[no-untyped-def]
+    """H3 (No Silent Fallbacks): a world key that isn't in ``pack.worlds`` is a
+    config/wiring error — WARN loudly and return 0, never silently swallow it.
+
+    The original bug class: ``_seed_authored_npcs`` returned 0 with no signal on
+    a world-key mismatch, so the authored cast vanished and nobody could tell
+    whether the world had no roster or the key was wrong.
+    """
+    pack = _Pack(_world_with_authored(AuthoredNpc(id="x", name="X")))  # only "oz" exists
+    manual = MonsterManual(genre="wry_whimsy", world="kansas")
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        added = _seed_authored_npcs(pack, "kansas", manual)
+
+    assert added == 0
+    assert manual.npcs == []
+    assert any("world_not_found" in r.message for r in caplog.records)
+
+
+def test_seed_authored_npcs_logs_unconditionally(caplog) -> None:  # type: ignore[no-untyped-def]
+    """H3: the seeding outcome is logged on EVERY successful read — including a
+    world that exists but authors an empty roster (count=0) — so the GM/dev can
+    distinguish "world has no authored cast" from "the read never happened"."""
+    pack = _Pack(_world_with_authored())  # world exists, roster empty
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        added = _seed_authored_npcs(pack, "oz", manual)
+
+    assert added == 0
+    assert any("authored_npcs_seeded" in r.message for r in caplog.records)
+
+
+def test_seed_authored_npcs_upserts_stale_tags() -> None:
+    """M4: a re-seed must refresh placement tags on an already-present NPC.
+
+    ``add_npc`` dedups by name and returns early, so without an upsert a stale
+    on-disk Manual keeps its old (or empty) ``location_tags`` forever — exactly
+    the wry_whimsy/oz recurrence on an existing save. Re-seeding with new tags
+    updates the existing entry in place and the change counts toward the return
+    (so the caller knows to persist).
+    """
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    # First seed: Scarecrow present but with NO placement (stale-cache shape).
+    first = _Pack(_world_with_authored(AuthoredNpc(id="scarecrow", name="Scarecrow")))
+    assert _seed_authored_npcs(first, "oz", manual) == 1
+    assert manual.npcs[0].location_tags == []
+
+    # Re-seed with the corrected placement.
+    second = _Pack(
+        _world_with_authored(
+            AuthoredNpc(id="scarecrow", name="Scarecrow", location_tags=["yellow brick road"])
+        )
+    )
+    changed = _seed_authored_npcs(second, "oz", manual)
+
+    assert len(manual.npcs) == 1  # no duplicate
+    assert manual.npcs[0].location_tags == ["yellow brick road"]  # tags refreshed
+    assert changed == 1  # the upsert is reported so the caller saves
+
+
+def test_authored_npcs_flow_through_real_loader(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """H2: the REAL loader path, end to end — no ``SimpleNamespace`` stub.
+
+    Copies a real fixture pack, writes a ``npcs.yaml`` carrying ``location_tags``,
+    loads it through the production ``load_genre_pack``, and asserts the chain
+    ``npcs.yaml → AuthoredNpc.model_validate → World.authored_npcs.location_tags
+    → _seed_authored_npcs → selection`` is connected. The prior wiring test
+    stubbed the loader with ``SimpleNamespace``, so nothing proved the YAML key
+    actually binds through ``World``.
+    """
+    import shutil
+
+    from sidequest.genre.loader import load_genre_pack
+    from tests._helpers.fixture_packs import fixture_pack_path
+
+    pack_dir = tmp_path / "wwn_test_pack"
+    shutil.copytree(fixture_pack_path("wwn_test_pack"), pack_dir)
+    world_dir = pack_dir / "worlds" / "test_world"
+    (world_dir / "npcs.yaml").write_text(
+        "npcs:\n"
+        "  - id: scarecrow\n"
+        "    name: Scarecrow\n"
+        "    role: companion\n"
+        "    location_tags:\n"
+        "      - yellow brick road\n"
+        "      - cornfield\n"
+        "  - id: throne_guard\n"
+        "    name: Throne Guard\n"
+        "    role: sentry\n"
+        "    location_tags:\n"
+        "      - emerald city\n",
+        encoding="utf-8",
+    )
+
+    pack = load_genre_pack(pack_dir)
+    world = pack.worlds["test_world"]
+
+    # The YAML key bound through the real model into World.authored_npcs.
+    by_name = {n.name: n for n in world.authored_npcs}
+    assert by_name["Scarecrow"].location_tags == ["yellow brick road", "cornfield"]
+
+    # Drive the seam: seed from the loaded pack, then assert placement-aware
+    # surfacing at a matching vs a non-matching location.
+    manual = MonsterManual(genre="wwn_test_pack", world="test_world")
+    added = _seed_authored_npcs(pack, "test_world", manual)
+    assert added == 2
+
+    on_road = manual.format_nearby_npcs("The Yellow Brick Road — Morning")
+    assert "Scarecrow" in on_road
+    assert "Throne Guard" not in on_road
+
+    in_city = manual.format_nearby_npcs("The Emerald City — Throne Room")
+    assert "Throne Guard" in in_city
+    assert "Scarecrow" not in in_city

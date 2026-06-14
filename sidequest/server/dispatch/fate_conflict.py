@@ -18,18 +18,30 @@ and WN dispatch are untouched — this is a parallel engine selected by dispatch
 from __future__ import annotations
 
 import logging
+import random
+from dataclasses import dataclass
 
 from opentelemetry import trace
 
 from sidequest.game.encounter import (
     EncounterActor,
+    EncounterPhase,
     FateAction,
     FateSealedCommit,
     StructuredEncounter,
 )
-from sidequest.game.fate_sheet import FateSheet, StressTrackName
+from sidequest.game.fate_sheet import Aspect, FateSheet, StressTrackName
 from sidequest.game.ruleset.fate import FateRulesetModule
+from sidequest.game.ruleset.fate_resolution import Opposition
 from sidequest.game.session import GameSnapshot
+from sidequest.telemetry.spans import (
+    fate_aspect_created_span,
+    fate_conceded_span,
+    fate_exchange_committed_span,
+    fate_exchange_order_span,
+    fate_exchange_resolved_span,
+    fate_taken_out_span,
+)
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
@@ -216,3 +228,323 @@ def absorb_shifts(
         remaining = max(0, remaining - slot.value)
 
     return remaining <= 0
+
+
+@dataclass(frozen=True)
+class FateExchangeResult:
+    """What one exchange walk produced. ``resolution_order`` is the comma-joined
+    token sequence walked (already on the ``fate.exchange.resolved`` span);
+    ``narrator_hints`` are the mechanical-truth lines for the F2 narrator."""
+
+    resolution_order: str
+    resolved: bool
+    narrator_hints: list[str]
+
+
+def _roll_defense(
+    *,
+    ruleset: FateRulesetModule,
+    snapshot: GameSnapshot,
+    defender: str,
+    mental: bool,
+    rng: random.Random,
+    _tracer: trace.Tracer | None = None,
+) -> int:
+    """Roll the target's reactive defense (4dF + defense skill) and return the
+    ladder total. Emits ``fate.action_resolved`` for the defense roll (the GM
+    panel sees the defender's number)."""
+    core = snapshot.find_creature_core(defender)
+    sheet = core.fate_sheet if core is not None else None
+    skill = _DEFENSE_SKILL["mental" if mental else "physical"]
+    rating = sheet.skills.get(skill, 0) if sheet is not None else 0
+    outcome = ruleset.resolve_action(
+        skill_rating=rating,
+        opposition=Opposition(value=0, kind="active"),
+        rng=rng,
+        actor=defender,
+        _tracer=_tracer,
+    )
+    return outcome.ladder_total
+
+
+def _maybe_resolve_side_cleared(encounter: StructuredEncounter) -> None:
+    """End the confrontation when one side is wholly withdrawn (ADR-116/-139).
+    Uses the encounter's documented outcome labels: ``opponent_yielded`` (player
+    victory) / ``yielded`` (player loss)."""
+    if encounter.resolved:
+        return
+    players = [a for a in encounter.actors if a.side == "player"]
+    opponents = [a for a in encounter.actors if a.side == "opponent"]
+    if opponents and all(a.withdrawn for a in opponents):
+        encounter.resolved = True
+        encounter.outcome = "opponent_yielded"
+        encounter.structured_phase = EncounterPhase.Resolution
+    elif players and all(a.withdrawn for a in players):
+        encounter.resolved = True
+        encounter.outcome = "yielded"
+        encounter.structured_phase = EncounterPhase.Resolution
+
+
+def run_fate_exchange(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    rng: random.Random,
+    round_number: int = 0,
+    _tracer: trace.Tracer | None = None,
+) -> FateExchangeResult:
+    """Resolve one sealed Fate exchange in Notice/Empathy order.
+
+    Walks the committed actors; per actor resolves the committed action (overcome
+    / create-advantage / attack). Attacks roll the target's defense, compute
+    shifts, and absorb via stress/consequences → taken-out when capacity is
+    exhausted. Emits ``fate.exchange.committed`` → ``fate.exchange.order`` →
+    ``fate.exchange.resolved`` (the GM-panel polygraph). Clears the ledger —
+    commits never leak into the next exchange.
+
+    F1d passes the current interaction count as ``round_number`` so the resolved
+    span and watcher payload carry it for GM-panel telemetry.
+    """
+    committed = ", ".join(c.actor for c in encounter.fate_commits)
+    fate_exchange_committed_span(committed_actors=committed, _tracer=_tracer)
+
+    mental = encounter.category == "social"
+    order = fate_turn_order(encounter=encounter, snapshot=snapshot, mental=mental)
+    fate_exchange_order_span(
+        order=", ".join(order),
+        skill=_ORDER_SKILL["mental" if mental else "physical"],
+        _tracer=_tracer,
+    )
+
+    commits = {c.actor: c for c in encounter.fate_commits}
+    walked: list[str] = []
+    hints: list[str] = []
+
+    for name in order:
+        walked.append(name)
+        actor_obj = encounter.find_actor(name)
+        if actor_obj is None or actor_obj.withdrawn:
+            continue
+        commit = commits.get(name)
+        if commit is None:
+            # No proactive action sealed for this slot (e.g. an opponent the
+            # narrator did not commit). Reactive defense only.
+            continue
+        if encounter.resolved:
+            continue
+
+        if commit.action == "attack":
+            _resolve_attack(
+                encounter=encounter, snapshot=snapshot, ruleset=ruleset, commit=commit,
+                mental=mental, rng=rng, hints=hints, _tracer=_tracer,
+            )
+        elif commit.action == "create_advantage":
+            _resolve_create_advantage(
+                encounter=encounter, snapshot=snapshot, ruleset=ruleset, commit=commit,
+                mental=mental, rng=rng, hints=hints, _tracer=_tracer,
+            )
+        elif commit.action == "overcome":
+            _resolve_overcome(
+                encounter=encounter, snapshot=snapshot, ruleset=ruleset, commit=commit,
+                mental=mental, rng=rng, hints=hints, _tracer=_tracer,
+            )
+
+    encounter.fate_commits.clear()
+    encounter.narrator_hints.extend(hints)
+    resolution_order = ", ".join(walked)
+    fate_exchange_resolved_span(
+        resolution_order=resolution_order, resolved=encounter.resolved,
+        round_number=round_number, _tracer=_tracer,
+    )
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "encounter",
+            "op": "fate_exchange_resolved",
+            "resolution_order": resolution_order,
+            "encounter_type": encounter.encounter_type,
+            "resolved": encounter.resolved,
+            "round_number": round_number,
+            "source": "fate_exchange",
+        },
+        component="encounter",
+    )
+    return FateExchangeResult(
+        resolution_order=resolution_order, resolved=encounter.resolved, narrator_hints=hints
+    )
+
+
+def _opposition_total(
+    *,
+    ruleset: FateRulesetModule,
+    snapshot: GameSnapshot,
+    commit: FateSealedCommit,
+    mental: bool,
+    rng: random.Random,
+    _tracer: trace.Tracer | None = None,
+) -> int:
+    """The opposition value for a committed action: an ACTIVE target's rolled
+    defense, or the PASSIVE ``difficulty``."""
+    if commit.target is not None:
+        return _roll_defense(
+            ruleset=ruleset, snapshot=snapshot, defender=commit.target,
+            mental=mental, rng=rng, _tracer=_tracer,
+        )
+    return commit.difficulty
+
+
+def _resolve_attack(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    commit: FateSealedCommit,
+    mental: bool,
+    rng: random.Random,
+    hints: list[str],
+    _tracer: trace.Tracer | None = None,
+) -> None:
+    if commit.target is None:
+        raise FateConflictError("an attack must name a target (No Silent Fallbacks)")
+    target_core = snapshot.find_creature_core(commit.target)
+    if target_core is None or target_core.fate_sheet is None:
+        raise FateConflictError(
+            f"attack target {commit.target!r} has no Fate sheet to defend with"
+        )
+    defense_total = _roll_defense(
+        ruleset=ruleset, snapshot=snapshot, defender=commit.target,
+        mental=mental, rng=rng, _tracer=_tracer,
+    )
+    shifts = commit.ladder_total - defense_total
+    track = "mental" if mental else "physical"
+    if shifts <= 0:
+        if shifts == 0:
+            boost = Aspect(text=f"Momentum vs {commit.actor}", kind="boost", free_invokes=1)
+            encounter.situation_aspects.append(boost)
+            fate_aspect_created_span(
+                actor=commit.target, aspect=boost.text, free_invokes=1, _tracer=_tracer
+            )
+            hints.append(
+                f"{commit.actor}'s attack on {commit.target} tied — "
+                f"{commit.target} gains a boost ({boost.text})."
+            )
+        else:
+            hints.append(
+                f"{commit.actor}'s attack on {commit.target} missed (shifts={shifts})."
+            )
+        return
+    survived = absorb_shifts(
+        module=ruleset, sheet=target_core.fate_sheet, track=track, shifts=shifts,
+        actor=commit.target, source=commit.actor, _tracer=_tracer,
+    )
+    if survived:
+        hints.append(
+            f"{commit.target} absorbs {commit.actor}'s {shifts}-shift hit "
+            "(stress/consequences)."
+        )
+        return
+    target_actor = encounter.find_actor(commit.target)
+    if target_actor is None:
+        raise FateConflictError(
+            f"attack target {commit.target!r} is not seated in this encounter"
+        )
+    target_actor.withdrawn = True
+    fate_taken_out_span(actor=commit.target, by=commit.actor, shifts=shifts, _tracer=_tracer)
+    hints.append(
+        f"{commit.target} is TAKEN OUT by {commit.actor} ({shifts} unabsorbed shifts)."
+    )
+    _maybe_resolve_side_cleared(encounter)
+
+
+def _resolve_create_advantage(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    commit: FateSealedCommit,
+    mental: bool,
+    rng: random.Random,
+    hints: list[str],
+    _tracer: trace.Tracer | None = None,
+) -> None:
+    opposition = _opposition_total(
+        ruleset=ruleset, snapshot=snapshot, commit=commit,
+        mental=mental, rng=rng, _tracer=_tracer,
+    )
+    shifts = commit.ladder_total - opposition
+    if shifts >= 1:
+        free = 2 if shifts >= 3 else 1  # Succeed-with-Style → two free invokes
+        aspect = Aspect(
+            text=commit.aspect_text or f"Advantage by {commit.actor}",
+            kind="situation",
+            free_invokes=free,
+        )
+        encounter.situation_aspects.append(aspect)
+        fate_aspect_created_span(
+            actor=commit.actor, aspect=aspect.text, free_invokes=free, _tracer=_tracer
+        )
+    elif shifts == 0:
+        boost = Aspect(
+            text=commit.aspect_text or f"Fleeting Opening by {commit.actor}",
+            kind="boost",
+            free_invokes=1,
+        )
+        encounter.situation_aspects.append(boost)
+        fate_aspect_created_span(
+            actor=commit.actor, aspect=boost.text, free_invokes=1, _tracer=_tracer
+        )
+    else:
+        hints.append(f"{commit.actor}'s create-advantage failed (shifts={shifts}).")
+
+
+def _resolve_overcome(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    commit: FateSealedCommit,
+    mental: bool,
+    rng: random.Random,
+    hints: list[str],
+    _tracer: trace.Tracer | None = None,
+) -> None:
+    opposition = _opposition_total(
+        ruleset=ruleset, snapshot=snapshot, commit=commit,
+        mental=mental, rng=rng, _tracer=_tracer,
+    )
+    shifts = commit.ladder_total - opposition
+    if shifts >= 1:
+        hints.append(f"{commit.actor} overcomes the obstacle (shifts={shifts}).")
+    elif shifts == 0:
+        hints.append(f"{commit.actor} overcomes at a minor cost (tie).")
+    else:
+        hints.append(f"{commit.actor} fails to overcome (shifts={shifts}).")
+
+
+def concede_in_conflict(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    actor: str,
+    _tracer: trace.Tracer | None = None,
+) -> int:
+    """Player-initiated concession (pre-roll): the actor leaves on their terms,
+    withdrawing and earning 1 fate point + 1 per consequence taken this conflict
+    (SRD). Returns the fate points earned. Fails loud without a Fate sheet."""
+    core = snapshot.find_creature_core(actor)
+    if core is None or core.fate_sheet is None:
+        raise FateConflictError(f"{actor!r} has no Fate sheet to concede with")
+    filled = sum(1 for c in core.fate_sheet.consequences if c.aspect is not None)
+    earned = 1 + filled
+    for _ in range(earned):
+        ruleset.earn_fate_point(
+            sheet=core.fate_sheet, reason="concede", actor=actor, _tracer=_tracer
+        )
+    actor_obj = encounter.find_actor(actor)
+    if actor_obj is not None:
+        actor_obj.withdrawn = True
+    fate_conceded_span(actor=actor, fate_points_earned=earned, _tracer=_tracer)
+    _maybe_resolve_side_cleared(encounter)
+    return earned

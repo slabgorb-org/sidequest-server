@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.fate_sheet import Aspect, FateSheet
+from sidequest.game.ruleset.fate_resolution import Opposition
 from sidequest.game.session import GameSnapshot
 from sidequest.server.dispatch.fate_conflict import (
     FateConflictError,
@@ -14,6 +18,16 @@ from sidequest.server.dispatch.fate_conflict import (
     fate_waiting_actors,
     seal_fate_commit,
 )
+
+
+class _FixedRng:
+    """A deterministic stand-in for random.Random: every 4dF face is ``value``."""
+
+    def __init__(self, value: int = 0) -> None:
+        self._value = value
+
+    def choice(self, seq):
+        return self._value
 
 
 def _pc(name: str, skills: dict[str, int]) -> Character:
@@ -160,3 +174,181 @@ def test_absorb_rejects_unknown_track():
     module = get_ruleset_module("fate")
     with pytest.raises(FateConflictError, match="stress track"):
         absorb_shifts(module=module, sheet=FateSheet(), track="corruption", shifts=1, actor="Hero", source="Thug")  # type: ignore[arg-type]
+
+
+def _otel():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return exporter, provider.get_tracer("test")
+
+
+def _seal_attack(enc, snapshot, module, attacker, skill_rating, target, *, skill="Fight"):
+    # Compute the attacker's sealed roll deterministically (FixedRng(0) → 4dF=0).
+    outcome = module.resolve_action(
+        skill_rating=skill_rating, opposition=Opposition(value=0, kind="active"), rng=_FixedRng(0)
+    )
+    seal_fate_commit(
+        encounter=enc, actor=enc.find_actor(attacker), action="attack", skill=skill,
+        target=target, ladder_total=outcome.ladder_total, dice=outcome.dice,
+    )
+
+
+def test_attack_hits_and_target_absorbs_survives():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.session import Npc
+    from sidequest.server.dispatch.fate_conflict import run_fate_exchange
+
+    module = get_ruleset_module("fate")
+    enc = _enc(
+        [
+            EncounterActor(name="Hero", role="lead", side="player"),
+            EncounterActor(name="Thug", role="foe", side="opponent"),
+        ]
+    )
+    hero = _pc("Hero", {"Fight": 4, "Notice": 3})
+    snap = GameSnapshot(genre_slug="fate_test", characters=[hero], encounter=enc)
+    snap.npcs.append(
+        Npc(core=CreatureCore(name="Thug", description="d", personality="p", fate_sheet=FateSheet(skills={"Athletics": 1, "Notice": 1})))
+    )
+    _seal_attack(enc, snap, module, "Hero", 4, "Thug")  # ladder_total 4; defense 1 → shifts 3
+
+    exporter, tracer = _otel()
+    result = run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+
+    thug = enc.find_actor("Thug")
+    assert thug is not None
+    thug_sheet = snap.find_creature_core("Thug").fate_sheet
+    assert thug_sheet.stress["physical"].boxes[1].checked is True  # absorbed 3 via box2 + mild
+    assert thug_sheet.consequences[0].aspect is not None  # mild absorbed the 3rd shift
+    assert thug.withdrawn is False  # survived
+    assert enc.resolved is False
+    assert result.resolved is False  # the returned result mirrors the encounter (F1d consumes this)
+    assert result.resolution_order == "Hero, Thug"  # Notice 3 → Hero first, then the unsorted foe
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "fate.exchange.committed" in names
+    assert "fate.exchange.order" in names
+    assert "fate.exchange.resolved" in names
+    assert not enc.fate_commits  # ledger cleared
+
+
+def test_attack_takes_out_a_depleted_target_and_resolves():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.session import Npc
+    from sidequest.server.dispatch.fate_conflict import run_fate_exchange
+
+    module = get_ruleset_module("fate")
+    enc = _enc(
+        [
+            EncounterActor(name="Hero", role="lead", side="player"),
+            EncounterActor(name="Thug", role="foe", side="opponent"),
+        ]
+    )
+    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 4})], encounter=enc)
+    thug_sheet = FateSheet(skills={"Athletics": 1})
+    for b in thug_sheet.stress["physical"].boxes:
+        b.checked = True
+    for c in thug_sheet.consequences:
+        c.aspect = Aspect(text="old wound", kind="consequence", free_invokes=0)
+    snap.npcs.append(Npc(core=CreatureCore(name="Thug", description="d", personality="p", fate_sheet=thug_sheet)))
+    _seal_attack(enc, snap, module, "Hero", 4, "Thug")  # shifts 3, target cannot absorb
+
+    exporter, tracer = _otel()
+    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+
+    assert enc.find_actor("Thug").withdrawn is True
+    assert enc.resolved is True
+    assert enc.outcome == "opponent_yielded"  # all opponents out → player victory label
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "fate.taken_out" in names
+
+
+def test_create_advantage_places_a_situation_aspect():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.server.dispatch.fate_conflict import run_fate_exchange
+
+    module = get_ruleset_module("fate")
+    enc = _enc([EncounterActor(name="Hero", role="lead", side="player")])
+    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Notice": 3})], encounter=enc)
+    outcome = module.resolve_action(skill_rating=3, opposition=Opposition(value=0, kind="passive"), rng=_FixedRng(0))
+    seal_fate_commit(
+        encounter=enc, actor=enc.find_actor("Hero"), action="create_advantage", skill="Notice",
+        difficulty=2, ladder_total=outcome.ladder_total, aspect_text="Pinned Down",
+    )  # shifts = 3 - 2 = 1 → 1 free invoke
+
+    exporter, tracer = _otel()
+    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+
+    assert [a.text for a in enc.situation_aspects] == ["Pinned Down"]
+    assert enc.situation_aspects[0].free_invokes == 1
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "fate.aspect.created" in names
+
+
+def test_attack_that_misses_deals_no_damage():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.session import Npc
+    from sidequest.server.dispatch.fate_conflict import run_fate_exchange
+
+    module = get_ruleset_module("fate")
+    enc = _enc(
+        [
+            EncounterActor(name="Hero", role="lead", side="player"),
+            EncounterActor(name="Rival", role="foe", side="opponent"),
+        ]
+    )
+    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 1})], encounter=enc)
+    # Rival's Athletics 3 defense beats Hero's Fight 1 attack → shifts -2 (clean miss).
+    snap.npcs.append(Npc(core=CreatureCore(name="Rival", description="d", personality="p", fate_sheet=FateSheet(skills={"Athletics": 3}))))
+    _seal_attack(enc, snap, module, "Hero", 1, "Rival")
+
+    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0))
+
+    rival_sheet = snap.find_creature_core("Rival").fate_sheet
+    assert all(not b.checked for b in rival_sheet.stress["physical"].boxes)  # clean miss: no damage
+
+
+def test_concede_withdraws_and_earns_fate_points():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.server.dispatch.fate_conflict import concede_in_conflict
+
+    module = get_ruleset_module("fate")
+    enc = _enc([EncounterActor(name="Hero", role="lead", side="player")])
+    sheet = FateSheet(fate_points=1)
+    sheet.consequences[0].aspect = Aspect(text="Twisted Ankle", kind="consequence", free_invokes=1)
+    hero = _pc("Hero", {"Fight": 2})
+    hero.core.fate_sheet = sheet
+    snap = GameSnapshot(genre_slug="fate_test", characters=[hero], encounter=enc)
+
+    exporter, tracer = _otel()
+    earned = concede_in_conflict(encounter=enc, snapshot=snap, ruleset=module, actor="Hero", _tracer=tracer)
+
+    assert earned == 2  # 1 base + 1 consequence taken this conflict
+    assert sheet.fate_points == 3
+    assert enc.find_actor("Hero").withdrawn is True
+    assert "fate.conceded" in [s.name for s in exporter.get_finished_spans()]
+
+
+def test_tie_attack_grants_defender_boost():
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.session import Npc
+    from sidequest.server.dispatch.fate_conflict import run_fate_exchange
+
+    module = get_ruleset_module("fate")
+    enc = _enc([
+        EncounterActor(name="Hero", role="lead", side="player"),
+        EncounterActor(name="Rival", role="foe", side="opponent"),
+    ])
+    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 2})], encounter=enc)
+    snap.npcs.append(Npc(core=CreatureCore(name="Rival", description="d", personality="p", fate_sheet=FateSheet(skills={"Athletics": 2}))))
+    _seal_attack(enc, snap, module, "Hero", 2, "Rival")  # ladder 2 vs defense 2 → shifts 0 (tie)
+
+    exporter, tracer = _otel()
+    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+
+    rival = snap.find_creature_core("Rival")
+    assert rival is not None
+    assert all(not b.checked for b in rival.fate_sheet.stress["physical"].boxes)  # tie = no stress
+    boosts = [a for a in enc.situation_aspects if a.kind == "boost"]
+    assert len(boosts) == 1  # defender got a boost
+    assert "fate.aspect.created" in [s.name for s in exporter.get_finished_spans()]

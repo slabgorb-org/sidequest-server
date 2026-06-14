@@ -796,7 +796,9 @@ def _load_dungeon_map_context(
 
     loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
     world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
-    palette = load_theme_palette(world_dir.parent.parent)
+    # ADR-140 (story 113-1): themes/ is world-tier — resolve from the world dir,
+    # not the genre-pack root (world_dir.parent.parent).
+    palette = load_theme_palette(world_dir)
     return graph, palette, ENTRANCE_ID
 
 

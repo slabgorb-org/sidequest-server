@@ -82,6 +82,10 @@ class MessageType(StrEnum):
     # overlay and submits settled faces; the server resolves via dispatch_check
     # and broadcasts DiceRequest + DiceResult to the room.
     CHECK_THROW = "CHECK_THROW"
+    # ADR-144: a Fate-bound pack's player action (one of the three proactive Fate
+    # actions or a concession). Routed to FateActionHandler → fate_conflict, gated
+    # by isinstance(ruleset, FateRulesetModule). Distinct from DICE_THROW (beat+d20).
+    FATE_ACTION = "FATE_ACTION"
     BEAT_SELECTION = "BEAT_SELECTION"
     SCRAPBOOK_ENTRY = "SCRAPBOOK_ENTRY"
     YIELD = "YIELD"

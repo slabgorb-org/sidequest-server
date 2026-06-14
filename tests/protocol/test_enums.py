@@ -139,6 +139,10 @@ def test_message_type_dice_result_wire_string() -> None:
     assert MessageType.DICE_RESULT == "DICE_RESULT"
 
 
+def test_message_type_fate_action_wire_string() -> None:
+    assert MessageType.FATE_ACTION == "FATE_ACTION"
+
+
 def test_message_type_beat_selection_wire_string() -> None:
     assert MessageType.BEAT_SELECTION == "BEAT_SELECTION"
 
@@ -265,10 +269,14 @@ def test_message_type_complete_count() -> None:
     Story 101-2 removed VOICE_SIGNAL + VOICE_TEXT — the voice-generation
     protocol surface is fully dead (zero emitters/handlers, no UI readers).
     Dropped 56 → 54.
+    ADR-144 F1d added FATE_ACTION — the Fate-bound pack's player action (one of
+    the three proactive Fate actions or a concession). Routed to
+    FateActionHandler → fate_conflict, gated by isinstance(ruleset,
+    FateRulesetModule). Intentional addition; bumped 54 → 55.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 54
+    assert len(MessageType) == 55
 
 
 # ===========================================================================

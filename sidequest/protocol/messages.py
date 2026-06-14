@@ -30,6 +30,7 @@ from sidequest.protocol.dice import (
     DiceThrowPayload,
 )
 from sidequest.protocol.enums import MessageType, NarratorVerbosity, NarratorVocabulary
+from sidequest.protocol.fate import FateActionPayload
 from sidequest.protocol.models import (
     ClassRequirement,
     CompanionMember,
@@ -1285,6 +1286,14 @@ class DiceThrowMessage(ProtocolBase):
     player_id: str = ""
 
 
+class FateActionMessage(ProtocolBase):
+    """GameMessage::FateAction — a Fate-bound pack's player action (ADR-144)."""
+
+    type: Literal[MessageType.FATE_ACTION] = MessageType.FATE_ACTION
+    payload: FateActionPayload
+    player_id: str = ""
+
+
 class CheckThrowPayload(ProtocolBase):
     """Client -> server: initiate a non-beat SWN skill check or save.
 
@@ -1667,6 +1676,7 @@ _Phase1Variant = Annotated[
     | AudioCueMessage
     | DiceRequestMessage
     | DiceThrowMessage
+    | FateActionMessage
     | CheckThrowMessage
     | DiceResultMessage
     | OrbitalIntentMessage

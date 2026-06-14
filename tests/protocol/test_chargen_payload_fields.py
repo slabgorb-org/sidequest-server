@@ -97,6 +97,18 @@ def test_story_client_request_fields_accepted():
     assert p.description == "Tall, soot-stained."
 
 
+def test_ability_names_field_accepts_list_of_str():
+    p = CharacterCreationPayload(
+        ability_names=["Strength", "Agility", "Endurance", "Insight", "Spirit", "Harmony"]
+    )
+    assert p.ability_names == ["Strength", "Agility", "Endurance", "Insight", "Spirit", "Harmony"]
+
+
+def test_ability_names_defaults_to_none():
+    p = CharacterCreationPayload()
+    assert p.ability_names is None
+
+
 def test_class_requirement_extra_forbid():
     with pytest.raises(ValidationError):
         ClassRequirement(name="X", requirement_label="Y", garbage=True)

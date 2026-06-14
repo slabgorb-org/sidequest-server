@@ -24,6 +24,7 @@ never does (SWN authors no lethality surface).
 from __future__ import annotations
 
 import random
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
@@ -53,12 +54,19 @@ from sidequest.telemetry.spans.psionics import (
     effort_reclaim_span,
 )
 from sidequest.telemetry.spans.wn import (
+    chargen_attributes_assigned_span,
+    chargen_background_skills_span,
+    chargen_foci_applied_span,
     major_injury_roll_span,
     mortal_injury_declared_span,
     shock_applied_span,
     system_strain_delta_span,
     trauma_roll_span,
 )
+
+if TYPE_CHECKING:
+    from sidequest.game.chargen_contribution import FociContribution
+    from sidequest.genre.models.character import ClassDef
 
 # Source key for the WN psionic Effort pool. WN psionics draw every discipline
 # from ONE Effort pool (SWN SRD §6), so the pool keys ``core.effort`` under this
@@ -553,6 +561,198 @@ class WithoutNumberRulesetModule(RulesetModule):
             major_text=major_text,
             save_made=save_made,
         )
+
+    # ------------------------------------------------------------------
+    # Chargen resource seeding (ADR-143) — migrated from builder.seed_system_strain
+    # + builder.seed_wwn_magic onto the module surface.
+    # ------------------------------------------------------------------
+
+    def seed_chargen_resources(self, *, rules, stats, class_def):
+        """WN-family Effort pools + spellcasting + system strain (migrated from
+        builder.seed_wwn_magic + seed_system_strain, ADR-143)."""
+        from sidequest.game.chargen_contribution import ChargenResources
+        from sidequest.game.system_strain import SystemStrainPool
+        from sidequest.game.wwn_magic import EffortPool, SpellcastingState
+
+        # CwnConfig is imported at module level (~line 48); no local re-import.
+        # SystemStrainPool seeding (CWN/AWN): max == CONSTITUTION-flavor score.
+        # Gates on isinstance(cfg, CwnConfig) (covers CWN + AWN + future subclasses)
+        # rather than a slug string — consistent with the legacy seed_system_strain.
+        system_strain = None
+        cfg = rules.ruleset_config()
+        if isinstance(cfg, CwnConfig):
+            con_flavor = cfg.attribute_map["CONSTITUTION"]
+            body_score = int(stats.get(con_flavor, 10))
+            system_strain = SystemStrainPool(current=0, max=max(1, body_score), permanent=0)
+
+        # WWN Effort pools + spellcasting state (wwn packs, magic classes).
+        # Non-wwn / non-magic classes get ({}, None) — no silent partial state.
+        effort: dict[str, EffortPool] = {}
+        spellcasting: SpellcastingState | None = None
+        if (
+            rules.ruleset == "wwn"
+            and rules.wwn is not None
+            and class_def is not None
+            and class_def.wwn_magic is not None
+        ):
+            cm = class_def.wwn_magic
+            effort_base = rules.wwn.magic.effort_base
+            attr_map = rules.wwn.attribute_map
+
+            for src in cm.effort_sources:
+                flavor = attr_map[src.governing_attr]
+                score = int(stats.get(flavor, 10))
+                pool_max = effort_base + src.starting_skill_level + swn_attribute_modifier(score)
+                if cm.partial:
+                    pool_max -= 1
+                pool_max = max(1, pool_max)
+                effort[src.source] = EffortPool(source=src.source, max=pool_max)
+
+            level_key = "1"
+            if cm.casts_per_day_by_level:
+                casts_per_day = cm.casts_per_day_by_level.get(level_key, 0)
+                max_spell_level = cm.max_spell_level_by_level.get(level_key, 0)
+                capacity = cm.prepared_by_level.get(level_key, len(cm.starting_prepared))
+                prepared = cm.starting_prepared[:capacity]
+                spellcasting = SpellcastingState(
+                    prepared=prepared,
+                    casts_remaining=casts_per_day,
+                    casts_per_day=casts_per_day,
+                    max_spell_level=max_spell_level,
+                )
+
+        return ChargenResources(effort=effort, spellcasting=spellcasting, system_strain=system_strain)
+
+    # ------------------------------------------------------------------
+    # Chargen contribution methods (ADR-143 Task 10) — background skills +
+    # foci skill/ability grants.  Both emit slug-prefixed OTEL spans so the
+    # GM-panel lie-detector confirms which background and foci fired.
+    # ------------------------------------------------------------------
+
+    def contribute_background_skills(
+        self,
+        *,
+        background_def,
+        rng: random.Random,
+    ) -> dict[str, int]:
+        """WN background skill grants: free_skill + quick_skills at level 0.
+
+        WWN SRD §1.3: a background's free_skill is a "trained" (level-0) grant;
+        quick_skills are all taken at level 0 too. Since Background only carries
+        skill NAMES (no explicit level), 0 is the correct default. Emits
+        ``{slug}.chargen.background_skills`` on EVERY call (both the grant path
+        and the no-matching-def skip) so the GM panel can tell "evaluated, prose
+        background, no skills" (DD-5) apart from "never called" — the OTEL
+        lie-detector principle (CLAUDE.md).
+
+        rng unused: WWN background grants are deterministic; param preserved for
+        override flexibility (e.g. random quick-skill choice)."""
+        if background_def is None:
+            # DD-5: free-text prose background carries no mechanical skills. The
+            # span STILL fires (empty skills, reason) so the decision is visible.
+            chargen_background_skills_span(
+                ruleset=self.slug,
+                background="none",
+                skills={},
+                reason="no_matching_background_def",
+            )
+            return {}
+        grants: dict[str, int] = {}
+        if background_def.free_skill:
+            grants[background_def.free_skill] = max(grants.get(background_def.free_skill, 0), 0)
+        for s in background_def.quick_skills:
+            grants[s] = max(grants.get(s, 0), 0)
+        chargen_background_skills_span(
+            ruleset=self.slug,
+            background=background_def.id,
+            skills=dict(grants),
+        )
+        return grants
+
+    def contribute_foci(self, *, focus_defs) -> FociContribution:
+        """WN focus skill + ability grants: level-1 grants from each selected focus.
+
+        WWN SRD §1.5: chargen grants the first level of each chosen focus.
+        Skills use higher-of (max) semantics across all foci. Abilities are
+        collected as ClassAbilityDef instances; build() converts them to
+        AbilityDefinition stamping source=AbilitySource.Class. Emits
+        ``{slug}.chargen.foci_applied`` so the GM panel confirms which foci
+        fired and which skills were granted."""
+        from sidequest.game.chargen_contribution import FociContribution
+
+        skills: dict[str, int] = {}
+        abilities = []
+        for f in focus_defs:
+            for lvl in f.levels[:1]:  # chargen grants level 1 only
+                for sk, n in lvl.skills.items():
+                    skills[sk] = max(skills.get(sk, 0), n)
+                abilities.extend(lvl.abilities)
+        chargen_foci_applied_span(
+            ruleset=self.slug,
+            foci=[f.id for f in focus_defs],
+            skills=dict(skills),
+        )
+        return FociContribution(skills=skills, abilities=abilities)
+
+    # ------------------------------------------------------------------
+    # Prime-aware attribute assignment (ADR-143 Step 2).
+    #
+    # The WN SRD (WWN §1.5 / SWN §1.2) specifies that a character's prime
+    # requisite — the key ability for their Calling — should be their
+    # highest score. The native hint-derivation heuristic (base class
+    # assign_attributes) infers this from chargen hints; the WN override
+    # does it directly and unconditionally when class_def is provided.
+    #
+    # Supersedes the native hint-derivation heuristic: every WN-bound pack
+    # gets prime-aware placement regardless of race/mutation/training hints.
+    # ------------------------------------------------------------------
+
+    def assign_attributes(
+        self,
+        *,
+        pool: list[int],
+        ability_names: list[str],
+        class_def: ClassDef | None,
+        acc: object | None = None,
+    ) -> dict[str, int]:
+        """Prime-aware: the chosen Calling's prime_requisite gets the highest pool
+        value; remaining values fill the other stats high-to-low by declaration
+        order (ADR-143 Step 2). Supersedes the native hint-derivation heuristic.
+
+        When class_def is None or prime is not in ability_names, falls through to
+        high-to-low fill in declaration order (explicit fall-through, not a masked
+        error — no class hint at chargen time is a valid chargen path). Emits
+        ``{slug}.chargen.attributes_assigned`` on every call (the GM-panel lie-
+        detector confirming which prime, if any, drove the placement).
+
+        acc is accepted for signature compatibility with the base but is not used:
+        prime placement is unconditional and the hint-derivation heuristic is
+        fully superseded for the WN family."""
+        ordered = sorted(pool, reverse=True)
+        stats: dict[str, int] = {}
+
+        prime: str | None = None
+        if class_def is not None and class_def.prime_requisite in ability_names:
+            prime = class_def.prime_requisite
+
+        if prime is not None:
+            stats[prime] = ordered[0]
+            rest = list(ordered[1:])
+        else:
+            rest = list(ordered)
+
+        for name in ability_names:
+            if name == prime:
+                continue
+            stats[name] = rest.pop(0)
+
+        chargen_attributes_assigned_span(
+            ruleset=self.slug,
+            prime=prime,
+            top=ordered[0],
+            stats=stats,
+        )
+        return stats
 
     # ------------------------------------------------------------------
     # Effort engine (SWN/WWN SRD §1.4.4 / §6) — shared SWN-family crunch.

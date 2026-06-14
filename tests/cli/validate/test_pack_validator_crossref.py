@@ -555,3 +555,401 @@ class TestBrokenCrossRefSourcesAreLoud:
             f"A broken legend file must surface a loud ERROR naming the file "
             f"(No Silent Fallbacks), got: {errors}"
         )
+
+
+# ===========================================================================
+# ADR-143 Task 13 — chargen cross-reference lint (CG1/CG2/CG3)
+#
+# CG1  background: id in char_creation.yaml must resolve in backgrounds catalog
+# CG2  focus_id: in char_creation.yaml must resolve in foci catalog
+# CG3  skill names in skill_grants / Background.free_skill /
+#      Background.quick_skills / FocusLevel.skills must be in skills.yaml
+#
+# Three core rules, each tested in isolation on synthetic packs:
+#   — dangling focus_id → error
+#   — typo'd skill in skill_grants → error
+#   — fully-valid pack → zero errors
+#
+# Resolution semantics: world-tier backgrounds/foci REPLACE genre (no merge);
+# skills are always genre-tier.  The "world-first" test proves a world-defined
+# focus doesn't false-flag as dangling.
+# ===========================================================================
+
+
+class TestChargenCrossref:
+    """Synthetic-pack rule tests for ADR-143 chargen cross-reference lint."""
+
+    def _write_minimal_skills(self, pack_dir: Path, skills: list[str]) -> None:
+        _write_yaml(pack_dir / "skills.yaml", skills)
+
+    def _write_backgrounds(self, path: Path, backgrounds: list[dict]) -> None:
+        _write_yaml(path, backgrounds)
+
+    def _write_foci(self, path: Path, foci: list[dict]) -> None:
+        _write_yaml(path, foci)
+
+    def _write_char_creation(self, path: Path, scenes: list[dict]) -> None:
+        _write_yaml(path, scenes)
+
+    # -------------------------------------------------------------------
+    # CG2 — dangling focus_id
+    # -------------------------------------------------------------------
+
+    def test_dangling_focus_id_in_genre_chargen_is_error(self, tmp_path: Path) -> None:
+        """A ``focus_id`` in genre-tier char_creation.yaml that is absent from
+        the genre foci catalog must produce a LOUD ERROR naming the id.
+        This is the canonical ADR-143 CG2 rule test."""
+        schema_path, pack_dir, _world = _build_pack(tmp_path)
+
+        self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
+        self._write_foci(pack_dir / "foci.yaml", [
+            {"id": "real-focus", "display_name": "Real Focus", "levels": []},
+        ])
+        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
+            {"id": "bg-1", "display_name": "Background 1"},
+        ])
+        # Genre-tier char_creation referencing a NONEXISTENT focus id
+        self._write_char_creation(pack_dir / "char_creation.yaml", [
+            {
+                "id": "origin",
+                "title": "Origin",
+                "narration": "Choose.",
+                "choices": [
+                    {
+                        "label": "Option A",
+                        "description": "The real one.",
+                        "mechanical_effects": {
+                            "background": "bg-1",
+                            "focus_id": "real-focus",
+                            "skill_grants": {"Exert": 0},
+                        },
+                    },
+                    {
+                        "label": "Option B",
+                        "description": "The broken one.",
+                        "mechanical_effects": {
+                            "background": "bg-1",
+                            "focus_id": "ghost-focus",  # DANGLING
+                            "skill_grants": {"Notice": 0},
+                        },
+                    },
+                ],
+            }
+        ])
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        offenders = [e for e in errors if "ghost-focus" in e]
+        assert offenders, (
+            f"Expected a LOUD ERROR naming the dangling focus_id 'ghost-focus', got: {errors}"
+        )
+        assert any("char_creation.yaml" in e for e in offenders), (
+            f"Error must name 'char_creation.yaml', got: {offenders}"
+        )
+        # The valid choice must NOT produce an error
+        assert not any("real-focus" in e for e in errors), (
+            f"Valid focus_id 'real-focus' must not error, got: {errors}"
+        )
+
+    def test_dangling_focus_id_in_world_chargen_is_error(self, tmp_path: Path) -> None:
+        """A ``focus_id`` in world-tier char_creation.yaml that is absent from
+        the effective foci catalog (world-tier foci, since world defines them)
+        must produce a LOUD ERROR."""
+        schema_path, pack_dir, world_dir = _build_pack(tmp_path)
+
+        self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
+        # Genre-tier foci — NOT used since world overrides
+        self._write_foci(pack_dir / "foci.yaml", [
+            {"id": "genre-focus", "display_name": "Genre Focus", "levels": []},
+        ])
+        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
+            {"id": "bg-1", "display_name": "Background 1"},
+        ])
+        # World-tier foci — REPLACES genre (no merge)
+        self._write_foci(world_dir / "foci.yaml", [
+            {"id": "world-focus", "display_name": "World Focus", "levels": []},
+        ])
+        # World-tier char_creation references genre-only focus → dangling
+        self._write_char_creation(world_dir / "char_creation.yaml", [
+            {
+                "id": "origin",
+                "title": "Origin",
+                "narration": "Choose.",
+                "choices": [
+                    {
+                        "label": "Option A",
+                        "description": "References genre-only focus (now dangling).",
+                        "mechanical_effects": {
+                            "focus_id": "genre-focus",  # DANGLING in world context
+                            "skill_grants": {"Exert": 0},
+                        },
+                    }
+                ],
+            }
+        ])
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        offenders = [e for e in errors if "genre-focus" in e]
+        assert offenders, (
+            f"Expected ERROR for focus_id 'genre-focus' absent from world-tier foci, got: {errors}"
+        )
+
+    def test_world_tier_focus_resolves_when_world_defines_foci(self, tmp_path: Path) -> None:
+        """A world-tier focus_id that IS in the world foci catalog must NOT be
+        flagged — proves world-first resolution doesn't false-negative."""
+        schema_path, pack_dir, world_dir = _build_pack(tmp_path)
+
+        self._write_minimal_skills(pack_dir, ["Exert"])
+        # Genre-tier foci absent (pack ships no genre foci)
+        self._write_foci(world_dir / "foci.yaml", [
+            {"id": "world-focus", "display_name": "World Focus", "levels": []},
+        ])
+        self._write_backgrounds(world_dir / "backgrounds.yaml", [
+            {"id": "bg-1", "display_name": "Background 1"},
+        ])
+        self._write_char_creation(world_dir / "char_creation.yaml", [
+            {
+                "id": "origin",
+                "title": "Origin",
+                "narration": "Choose.",
+                "choices": [
+                    {
+                        "label": "Option A",
+                        "description": "Valid world focus ref.",
+                        "mechanical_effects": {
+                            "background": "bg-1",
+                            "focus_id": "world-focus",  # VALID at world tier
+                            "skill_grants": {"Exert": 0},
+                        },
+                    }
+                ],
+            }
+        ])
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        focus_errors = [e for e in errors if "world-focus" in e]
+        assert not focus_errors, (
+            f"Valid world-tier focus 'world-focus' must not be flagged; got: {focus_errors}"
+        )
+
+    # -------------------------------------------------------------------
+    # CG3 — typo'd skill in skill_grants
+    # -------------------------------------------------------------------
+
+    def test_typo_skill_in_skill_grants_is_error(self, tmp_path: Path) -> None:
+        """A skill name in ``skill_grants`` that is absent from the genre-tier
+        ``skills.yaml`` catalog must produce a LOUD ERROR naming the bad skill.
+        This is the canonical ADR-143 CG3 / skill_grants rule test."""
+        schema_path, pack_dir, _world = _build_pack(tmp_path)
+
+        self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
+        self._write_foci(pack_dir / "foci.yaml", [
+            {"id": "some-focus", "display_name": "Some Focus", "levels": []},
+        ])
+        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
+            {"id": "bg-1", "display_name": "Background 1"},
+        ])
+        self._write_char_creation(pack_dir / "char_creation.yaml", [
+            {
+                "id": "origin",
+                "title": "Origin",
+                "narration": "Choose.",
+                "choices": [
+                    {
+                        "label": "Option A",
+                        "description": "Typo'd skill.",
+                        "mechanical_effects": {
+                            "focus_id": "some-focus",
+                            "skill_grants": {"Exert": 0, "Snek": 0},  # "Snek" is a typo
+                        },
+                    }
+                ],
+            }
+        ])
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        offenders = [e for e in errors if "Snek" in e]
+        assert offenders, (
+            f"Expected LOUD ERROR naming typo'd skill 'Snek' in skill_grants, got: {errors}"
+        )
+        assert any("skill_grants" in e for e in offenders), (
+            f"Error must mention 'skill_grants', got: {offenders}"
+        )
+        # Valid skill must not be flagged
+        assert not any("Exert" in e for e in errors), (
+            f"Valid skill 'Exert' must not error, got: {errors}"
+        )
+
+    def test_typo_skill_in_backgrounds_free_skill_is_error(self, tmp_path: Path) -> None:
+        """A ``free_skill`` in backgrounds.yaml that is not in skills.yaml catalog
+        must produce a LOUD ERROR — same CG3 rule, different location."""
+        schema_path, pack_dir, _world = _build_pack(tmp_path)
+
+        self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
+        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
+            {
+                "id": "bg-1",
+                "display_name": "Background 1",
+                "free_skill": "Sneke",  # typo — not in catalog
+                "quick_skills": ["Exert", "Notice"],
+            }
+        ])
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        offenders = [e for e in errors if "Sneke" in e]
+        assert offenders, (
+            f"Expected ERROR naming typo'd free_skill 'Sneke', got: {errors}"
+        )
+        assert any("free_skill" in e for e in offenders), (
+            f"Error must mention 'free_skill', got: {offenders}"
+        )
+
+    def test_typo_skill_in_foci_level_skills_is_error(self, tmp_path: Path) -> None:
+        """A skill key in ``FocusLevel.skills`` that is not in skills.yaml catalog
+        must produce a LOUD ERROR — CG3 rule for foci.yaml."""
+        schema_path, pack_dir, _world = _build_pack(tmp_path)
+
+        self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
+        self._write_foci(pack_dir / "foci.yaml", [
+            {
+                "id": "focus-1",
+                "display_name": "Focus One",
+                "levels": [
+                    {"skills": {"Exert": 0, "Sneak": 1}, "abilities": []},  # "Sneak" not in catalog
+                ],
+            }
+        ])
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        offenders = [e for e in errors if "Sneak" in e]
+        assert offenders, (
+            f"Expected ERROR naming unknown skill 'Sneak' in FocusLevel.skills, got: {errors}"
+        )
+        assert any("foci.yaml" in e for e in offenders), (
+            f"Error must name 'foci.yaml', got: {offenders}"
+        )
+
+    # -------------------------------------------------------------------
+    # Fully-valid pack with skills/foci/backgrounds → zero errors
+    # -------------------------------------------------------------------
+
+    def test_fully_valid_chargen_pack_passes(self, tmp_path: Path) -> None:
+        """A pack with all chargen references resolving correctly produces zero
+        chargen-related errors.  Guards against the rules generating false positives
+        on well-formed content."""
+        schema_path, pack_dir, world_dir = _build_pack(tmp_path)
+
+        self._write_minimal_skills(pack_dir, ["Exert", "Notice", "Sneak", "Heal"])
+        self._write_foci(pack_dir / "foci.yaml", [
+            {
+                "id": "load-bearer",
+                "display_name": "Load Bearer",
+                "levels": [{"skills": {"Exert": 0}, "abilities": []}],
+            },
+        ])
+        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
+            {
+                "id": "Rope-Puller",
+                "display_name": "Rope-Puller",
+                "free_skill": "Exert",
+                "quick_skills": ["Exert", "Notice"],
+            },
+        ])
+        # Genre-tier char_creation — all refs valid
+        self._write_char_creation(pack_dir / "char_creation.yaml", [
+            {
+                "id": "trade",
+                "title": "Trade",
+                "narration": "Choose.",
+                "choices": [
+                    {
+                        "label": "Rope-Puller",
+                        "description": "A laborer who worked the winch.",
+                        "mechanical_effects": {
+                            "background": "Rope-Puller",
+                            "focus_id": "load-bearer",
+                            "skill_grants": {"Exert": 0},
+                        },
+                    }
+                ],
+            }
+        ])
+        # World-tier with its own foci/backgrounds — all valid
+        self._write_foci(world_dir / "foci.yaml", [
+            {
+                "id": "world-scout",
+                "display_name": "World Scout",
+                "levels": [{"skills": {"Sneak": 0}, "abilities": []}],
+            },
+        ])
+        self._write_backgrounds(world_dir / "backgrounds.yaml", [
+            {
+                "id": "Forest-Kin",
+                "display_name": "Forest Kin",
+                "free_skill": "Sneak",
+                "quick_skills": ["Sneak", "Heal"],
+            },
+        ])
+        self._write_char_creation(world_dir / "char_creation.yaml", [
+            {
+                "id": "origin",
+                "title": "Origin",
+                "narration": "Choose.",
+                "choices": [
+                    {
+                        "label": "Forest Kin",
+                        "description": "Raised in the deep woods.",
+                        "mechanical_effects": {
+                            "background": "Forest-Kin",
+                            "focus_id": "world-scout",
+                            "skill_grants": {"Sneak": 0},
+                        },
+                    }
+                ],
+            }
+        ])
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        chargen_errors = [
+            e for e in errors
+            if any(
+                kw in e
+                for kw in ("char_creation", "backgrounds.yaml", "foci.yaml", "skill_grants",
+                           "free_skill", "quick_skills", "background id", "focus_id", "skill '")
+            )
+        ]
+        assert not chargen_errors, (
+            f"A fully-valid chargen pack must produce zero chargen errors, got: {chargen_errors}"
+        )
+
+    # -------------------------------------------------------------------
+    # No-op for packs that don't author skills/foci/backgrounds (non-WWN)
+    # -------------------------------------------------------------------
+
+    def test_pack_without_chargen_files_has_no_chargen_errors(self, tmp_path: Path) -> None:
+        """A pack that ships no skills.yaml / backgrounds.yaml / foci.yaml must
+        produce zero chargen-related errors — the CG rules are no-ops for
+        non-WWN packs that haven't adopted the ADR-143 substrate."""
+        schema_path, pack_dir, _world = _build_pack(tmp_path)
+        # No skills.yaml, backgrounds.yaml, foci.yaml, or char_creation.yaml.
+        # The baseline build already leaves these absent.
+
+        errors, _ = validate_pack_structure(pack_dir, schema_path)
+
+        chargen_errors = [
+            e for e in errors
+            if any(
+                kw in e
+                for kw in ("char_creation", "backgrounds.yaml", "foci.yaml",
+                           "background id", "focus_id", "skill '")
+            )
+        ]
+        assert not chargen_errors, (
+            f"A pack without chargen files must produce zero chargen errors, got: {chargen_errors}"
+        )

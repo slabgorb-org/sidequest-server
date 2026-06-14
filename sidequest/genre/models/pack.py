@@ -24,10 +24,12 @@ from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig
 from sidequest.genre.models.bestiary import Bestiary
 from sidequest.genre.models.character import (
+    Background,
     BackstoryTables,
     CharCreationScene,
     ClassDef,
     EquipmentTables,
+    Focus,
     NpcArchetype,
     VisualStyle,
 )
@@ -327,6 +329,17 @@ class World(BaseModel):
     blocs: list[BlocDef] = Field(default_factory=list)
     """World-tier populations the outsider can move (``worlds/<slug>/premises.yaml``).
     Empty list when the world authors none."""
+    backgrounds: dict[str, Background] = Field(default_factory=dict)
+    """World-tier background CATALOG (``worlds/<slug>/backgrounds.yaml``), ADR-143.
+    Genre/world boundary: a world's backgrounds are CAST/CATALOG, not a genre
+    mechanic. Empty dict when the world authors none (a valid choice — world may
+    share the genre-tier roster). Consumers resolve world-first via
+    ``resolve_backgrounds``; the genre-tier ``GenrePack.backgrounds`` is the
+    shared default."""
+    foci: dict[str, Focus] = Field(default_factory=dict)
+    """World-tier focus CATALOG (``worlds/<slug>/foci.yaml``), ADR-143.
+    Same world-over-genre rule as ``backgrounds``. Empty dict when the world
+    authors none. Consumers resolve world-first via ``resolve_foci``."""
     client_theme_css: str | None = None
     """Raw contents of ``worlds/<slug>/client_theme.css`` if present.
 
@@ -412,6 +425,26 @@ class GenrePack(BaseModel):
     """Genre-tier ``mutations.yaml`` (AWN Plan 2): the mutation catalog the
     awn ruleset's mutation subsystem resolves against. None = the pack has
     no mutation system (a deliberate authoring choice, like magic.yaml)."""
+    backgrounds: dict[str, Background] = Field(default_factory=dict)
+    """Genre-tier background CATALOG (``backgrounds.yaml``), ADR-143.
+    Background definitions keyed by id. Empty dict when the pack ships no
+    backgrounds.yaml — a legitimate "pack authors none" state (absent ≠
+    error). Consumers resolve world-first via ``resolve_backgrounds``;
+    world-tier ``World.backgrounds`` replaces this dict wholesale when
+    non-empty (same world-over-genre rule as classes/foci)."""
+    foci: dict[str, Focus] = Field(default_factory=dict)
+    """Genre-tier focus CATALOG (``foci.yaml``), ADR-143.
+    Focus definitions keyed by id. Empty dict when absent (same
+    absent-OK rule as backgrounds). Consumers resolve world-first via
+    ``resolve_foci``."""
+    skills: list[str] = Field(default_factory=list)
+    """Genre-tier skill name catalog (``skills.yaml``), ADR-143.
+    Ordered list of skill-id strings the pack recognises. Empty list
+    when absent — the loader does not require a skills catalog. A present-
+    but-malformed file fails loud via pydantic validation. Genre-tier only:
+    unlike ``backgrounds``/``foci`` there is no world-tier skills override
+    (the skill vocabulary is a pack-wide constant; worlds extend backgrounds/
+    foci, not the skill list)."""
     source_dir: Path | None = None
     client_theme_css: str | None = None
     """Raw contents of the genre's top-level ``client_theme.css`` if present.

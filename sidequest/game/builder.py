@@ -25,19 +25,21 @@ from sidequest.game.creature_core import (
 from sidequest.game.creature_core import (
     HpConfigMissingClassError as _CoreHpConfigMissingClassError,
 )
-from sidequest.game.ruleset.swn import swn_attribute_modifier
-from sidequest.game.system_strain import SystemStrainPool
-from sidequest.game.wwn_magic import EffortPool, SpellcastingState
+from sidequest.game.ruleset import get_ruleset_module
+from sidequest.game.ruleset.base import _DEFAULT_STANDARD_ARRAY
 from sidequest.genre.models.character import (
+    Background,
     BackstoryTables,
     CharCreationScene,
+    ClassAbilityDef,
     ClassDef,
     EquipmentTables,
+    Focus,
     GuaranteedGrant,
     MechanicalEffects,
     OriginTraitDef,
 )
-from sidequest.genre.models.rules import CwnConfig, EdgeConfig, RulesConfig
+from sidequest.genre.models.rules import EdgeConfig, RulesConfig
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
@@ -82,95 +84,27 @@ def qualifying_classes_arrangement(
     return [c for c in classes if (arrangement.get(c.prime_requisite) or 0) >= c.minimum_score]
 
 
-def seed_system_strain(rules: RulesConfig, stats: dict[str, int]) -> SystemStrainPool | None:
-    """Return a SystemStrainPool for a CWN-family pack (max = CONSTITUTION-flavor score), else None.
+def _class_ability_to_definition(
+    ca: ClassAbilityDef,
+    *,
+    reference_url: str | None = None,
+) -> AbilityDefinition:
+    """Convert a ClassAbilityDef (YAML-authored, no source discriminator) to an
+    AbilityDefinition, stamping source=AbilitySource.Class.
 
-    System Strain is a CwnConfig mechanic, shared by CWN and AWN (which subclasses
-    CWN). We gate on the CAPABILITY (``isinstance(cfg, CwnConfig)``) rather than a
-    slug string so AWN — and any future CWN sister module — gets a strain pool for
-    free, instead of silently falling through the ``ruleset == "cwn"`` check.
-    ``attribute_map["CONSTITUTION"]`` gives the flavor stat name (e.g. "Body");
-    the pool max is clamped to at least 1. The ruleset's validator guarantees the
-    CONSTITUTION key exists in attribute_map.
+    Single source of truth for the six-field struct shared by class-signature
+    seeding (``_seed_class_abilities``, reference_url computed from pack_id) and
+    focus-ability seeding (ADR-143 Task 10, reference_url=None — there is no
+    AbilitySource.Focus, so foci are stamped Class to match class abilities).
     """
-    cfg = rules.ruleset_config()
-    if not isinstance(cfg, CwnConfig):  # covers CWN + AWN + future subclasses
-        return None
-    con_flavor = cfg.attribute_map["CONSTITUTION"]  # validated present by the ruleset validator
-    body_score = int(stats.get(con_flavor, 10))
-    return SystemStrainPool(current=0, max=max(1, body_score), permanent=0)
-
-
-def seed_wwn_magic(
-    rules: RulesConfig,
-    stats: dict[str, int],
-    class_def: ClassDef | None,
-) -> tuple[dict[str, EffortPool], SpellcastingState | None]:
-    """Seed WWN Effort pools + spellcasting state at chargen (SRD §1.4.4, §4.2).
-
-    Returns ``({}, None)`` for non-wwn rulesets and for non-magic classes
-    (no ``wwn_magic`` on the class def) — no silent partial state.
-
-    For a magic class:
-      * One ``EffortPool`` per ``WwnEffortSource``, keyed by ``source.source``,
-        with ``max = rules.wwn.magic.effort_base + source.starting_skill_level
-        + swn_attribute_modifier(score-of-governing-attr)``. WWN shares the SWN
-        attribute curve. A Partial class subtracts 1 (floor 1). The governing
-        attr is a CANONICAL key ("WISDOM") resolved through
-        ``rules.wwn.attribute_map`` to the pack's flavor stat name, then to the
-        score in ``stats`` (mirrors ``seed_system_strain``).
-      * A ``SpellcastingState`` from the level-1 cast tables (chargen level is
-        always 1): ``casts_per_day`` / ``max_spell_level`` from the by-level
-        dicts (default 0 if absent), ``casts_remaining = casts_per_day`` (full
-        at chargen), ``prepared`` seeded from ``class_def.wwn_magic.starting_prepared``
-        capped at the level-1 prepared capacity (``prepared_by_level["1"]``); when
-        that key is absent no truncation is applied.  A class with effort sources
-        but NO cast tables (an Effort-only Art user, e.g. the Vowed) yields
-        ``spellcasting = None`` but still returns its effort dict.
-        ``prepared_by_level`` is capacity metadata for the rest/prepare action.
-    """
-    if rules.ruleset != "wwn" or rules.wwn is None:
-        return {}, None
-    if class_def is None or class_def.wwn_magic is None:
-        return {}, None
-
-    cm = class_def.wwn_magic
-    effort_base = rules.wwn.magic.effort_base
-    attr_map = rules.wwn.attribute_map  # validated complete by _validate_wwn
-
-    effort: dict[str, EffortPool] = {}
-    for src in cm.effort_sources:
-        flavor = attr_map[src.governing_attr]  # canonical -> flavor stat name
-        score = int(stats.get(flavor, 10))
-        pool_max = effort_base + src.starting_skill_level + swn_attribute_modifier(score)
-        if cm.partial:
-            pool_max -= 1  # Partial class: Effort -1
-        pool_max = max(1, pool_max)  # WWN SRD: a caster's Effort is always at least 1
-        effort[src.source] = EffortPool(source=src.source, max=pool_max)
-
-    # Chargen level is always 1 (build() constructs level=1).
-    level_key = "1"
-    spellcasting: SpellcastingState | None = None
-    # casts_per_day_by_level is the canonical "is this a spell-caster class" signal:
-    # an Effort-only Art user (e.g. Vowed) has effort sources but no cast tables, so
-    # max_spell_level_by_level may be absent — gate the whole state on casts only.
-    if cm.casts_per_day_by_level:
-        casts_per_day = cm.casts_per_day_by_level.get(level_key, 0)
-        max_spell_level = cm.max_spell_level_by_level.get(level_key, 0)
-        # Seed prepared from the class's starting_prepared list, capped at
-        # the level-1 prepared capacity.  When "1" is absent in prepared_by_level,
-        # len(cm.starting_prepared) is used as the fallback cap — effectively
-        # no truncation.
-        capacity = cm.prepared_by_level.get(level_key, len(cm.starting_prepared))
-        prepared = cm.starting_prepared[:capacity]
-        spellcasting = SpellcastingState(
-            prepared=prepared,
-            casts_remaining=casts_per_day,
-            casts_per_day=casts_per_day,
-            max_spell_level=max_spell_level,
-        )
-
-    return effort, spellcasting
+    return AbilityDefinition(
+        name=ca.name,
+        genre_description=ca.genre_description,
+        mechanical_effect=ca.mechanical_effect,
+        involuntary=ca.involuntary,
+        source=AbilitySource.Class,
+        reference_url=reference_url,
+    )
 
 
 def _seed_class_abilities(
@@ -224,16 +158,7 @@ def _seed_class_abilities(
             ):
                 pass
 
-        abilities.append(
-            AbilityDefinition(
-                name=ca.name,
-                genre_description=ca.genre_description,
-                mechanical_effect=ca.mechanical_effect,
-                involuntary=ca.involuntary,
-                source=AbilitySource.Class,
-                reference_url=url,
-            )
-        )
+        abilities.append(_class_ability_to_definition(ca, reference_url=url))
 
 
 def _seed_item_abilities(abilities: list[AbilityDefinition], kit_def: object) -> None:
@@ -510,6 +435,8 @@ class AccumulatedChoices:
     catch_phrase: str | None = None
     backstory_fragments: list[str] = field(default_factory=list)
     stat_bonuses: dict[str, int] = field(default_factory=dict)
+    skill_grants: dict[str, int] = field(default_factory=dict)
+    foci: list[str] = field(default_factory=list)
     pronoun_hint: str | None = None
     jungian_hint: str | None = None
     rpg_role_hint: str | None = None
@@ -1109,6 +1036,9 @@ class CharacterBuilder:
         self._standard_array: list[int] | None = rules.standard_array
         self._race_label: str = rules.race_label or "Race"
         self._class_label: str = rules.class_label or "Class"
+        # ADR-143: ruleset module bound once at construction; build() delegates
+        # chargen resource seeding to seed_chargen_resources.
+        self._ruleset = get_ruleset_module(rules.ruleset)
 
         # Eager roll at construction — scan scenes for the first
         # `stat_generation: roll_3d6_strict` directive so stat values
@@ -1130,6 +1060,11 @@ class CharacterBuilder:
         self._bones_rerolled: set[str] = set()
         self._bones_pending_broadcasts: list[tuple[str, list[int]]] = []
         self._classes: list[ClassDef] = []
+        # ADR-143: chargen defs (backgrounds, foci) populated via with_chargen_defs().
+        # Default empty dicts so existing construction is unaffected (Task 10 consumes
+        # them; Task 9 only stores them).
+        self._backgrounds: dict[str, Background] = {}
+        self._foci: dict[str, Focus] = {}
         for s in scenes:
             eff = s.mechanical_effects
             if eff is None or eff.stat_generation is None:
@@ -1138,6 +1073,8 @@ class CharacterBuilder:
                 self._roll_3d6_strict()
             elif eff.stat_generation == "roll_3d6_arrange_visible":
                 self._roll_3d6_arrange_visible()
+            elif eff.stat_generation == "standard_array_arrange":
+                self._seed_standard_array_arrange()
             break
 
         self._backstory_tables: BackstoryTables | None = backstory_tables
@@ -1175,6 +1112,25 @@ class CharacterBuilder:
         """Attach the genre pack's class definitions for qualification loop
         and class_kit equipment selection."""
         self._classes = list(classes)
+        return self
+
+    def with_chargen_defs(
+        self,
+        *,
+        backgrounds: dict[str, Background],
+        foci: dict[str, Focus],
+    ) -> CharacterBuilder:
+        """Attach resolved background and focus catalogs for chargen application.
+
+        ADR-143 Task 9. Called from connect.py after ``resolve_backgrounds`` /
+        ``resolve_foci`` (world-first); Task 10 reads ``self._backgrounds`` and
+        ``self._foci`` in ``build()`` to seed the character. Defaults to empty
+        dicts in ``__init__`` so packs without these files are unaffected.
+
+        Returns self for fluent chaining (mirrors ``with_classes``).
+        """
+        self._backgrounds = dict(backgrounds)
+        self._foci = dict(foci)
         return self
 
     def with_pack_id(self, pack_id: str) -> CharacterBuilder:
@@ -1342,10 +1298,19 @@ class CharacterBuilder:
         self._arrangement_assignment = None
 
     def reject_arrangement(self) -> None:
-        """Discard the current pool and reroll. Stays in arrange mode."""
+        """Discard the current pool and reset. Stays in arrange mode.
+
+        For ``roll_3d6_arrange_visible`` this rerolls the pool.
+        For ``standard_array_arrange`` this re-seeds from the fixed standard
+        array (ADR-143 DD-3) — the values are unchanged, but all assignments
+        are cleared so the player can re-assign from scratch.
+        """
         if self._arrangement_assignment is None:
             raise RuntimeError("not in arrangement mode")
-        self._roll_3d6_arrange_visible()
+        if self._stat_generation == "standard_array_arrange":
+            self._seed_standard_array_arrange()
+        else:
+            self._roll_3d6_arrange_visible()
 
     @property
     def rules(self) -> RulesConfig:
@@ -1596,6 +1561,16 @@ class CharacterBuilder:
             # Stat bonuses accumulate additively across all scenes.
             for stat, bonus in eff.stat_bonuses.items():
                 acc.stat_bonuses[stat] = acc.stat_bonuses.get(stat, 0) + bonus
+
+            # Skill grants use higher-of (max) semantics per WWN rules —
+            # NOT additive. A later scene granting Sneak-0 does not undo
+            # an earlier Sneak-1.
+            for skill, lvl in eff.skill_grants.items():
+                acc.skill_grants[skill] = max(acc.skill_grants.get(skill, 0), lvl)
+
+            # Focus ids accumulate de-duped (no duplicate focus ids).
+            if eff.focus_id is not None and eff.focus_id not in acc.foci:
+                acc.foci.append(eff.focus_id)
 
         return acc
 
@@ -1853,6 +1828,7 @@ class CharacterBuilder:
             qualifying_classes=qualifying_names,
             class_requirements=class_requirements,
             confirm_enabled=confirm_enabled,
+            ability_names=list(self._ability_score_names),
         )
         return CharacterCreationMessage(payload=payload, player_id=player_id)
 
@@ -1989,7 +1965,7 @@ class CharacterBuilder:
         if effects.stat_generation is not None:
             if effects.stat_generation == "roll_3d6_strict":
                 self._roll_3d6_strict()
-            elif effects.stat_generation == "roll_3d6_arrange_visible":
+            elif effects.stat_generation in ("roll_3d6_arrange_visible", "standard_array_arrange"):
                 # Scene-flow method, not a generate_stats method.
                 # confirm_arrangement materializes _rolled_stats.
                 pass
@@ -2203,8 +2179,8 @@ class CharacterBuilder:
                         "chargen.class_qualifying",
                         {"class_ids": [c.id for c in qual]},
                     )
-            elif effects.stat_generation == "roll_3d6_arrange_visible":
-                # The pool was rolled at construction; arrangement
+            elif effects.stat_generation in ("roll_3d6_arrange_visible", "standard_array_arrange"):
+                # The pool was seeded at construction; arrangement
                 # materializes _rolled_stats. generate_stats() reuses the
                 # ``roll_3d6_strict`` branch — both materialize stats
                 # before generate_stats runs, so don't override
@@ -2882,15 +2858,54 @@ class CharacterBuilder:
                 },
             )
 
-        # SystemStrainPool seeding (CWN): max == Body/CON-flavor score.
-        # Non-cwn packs get None; seed_system_strain is a module-level
-        # pure helper (unit-testable without constructing a full builder).
-        system_strain = seed_system_strain(self._rules, stats)
+        # Chargen resource seeding (ADR-143): Effort pools + spellcasting +
+        # SystemStrainPool delegated to the bound RulesetModule.  The module
+        # returns ChargenResources with empty defaults for rulesets that seed
+        # nothing (native, swn); CWN/AWN return a system_strain pool; WWN
+        # returns effort + spellcasting for magic classes.
+        _res = self._ruleset.seed_chargen_resources(
+            rules=self._rules, stats=stats, class_def=_resolved_class_def
+        )
+        system_strain = _res.system_strain
+        wwn_effort, wwn_spellcasting = _res.effort, _res.spellcasting
 
-        # WWN Effort pools + spellcasting state (wwn packs, magic classes).
-        # Non-wwn / non-magic classes get ({}, None) — no silent partial state.
-        # _resolved_class_def is the ClassDef resolved from class_str above.
-        wwn_effort, wwn_spellcasting = seed_wwn_magic(self._rules, stats, _resolved_class_def)
+        # Chargen contribution application (ADR-143 Task 10): background skills
+        # + foci skill/ability grants, delegated to the bound RulesetModule.
+        #
+        # Background: look up the accumulated background ID in the loaded defs.
+        # If unmatched (None or free-text prose background), no skills are granted
+        # (DD-5 documented; this is NOT a silent fallback — DD-5 explicitly permits
+        # free-text backgrounds that carry no mechanical skill grants).
+        # If matched, the WN-core override reads the def and returns the grants.
+        #
+        # Foci: look up each accumulated focus ID; unmatched IDs are silently
+        # skipped here (the content validator catches them at pack-validate time).
+        _background_def = self._backgrounds.get(acc.background) if acc.background is not None else None
+        _focus_defs = [self._foci[fid] for fid in acc.foci if fid in self._foci]
+
+        _bg_skills = self._ruleset.contribute_background_skills(
+            background_def=_background_def, rng=self._rng
+        )
+        _foci_contrib = self._ruleset.contribute_foci(focus_defs=_focus_defs)
+
+        # Merge skills: scene grants ∪ background grants ∪ foci grants.
+        # Higher-of (max) semantics across all three sources — consistent
+        # with how AccumulatedChoices.skill_grants accumulates scene-level
+        # grants (not additive). A skill present in multiple sources takes
+        # the highest level.
+        _merged_skills: dict[str, int] = dict(acc.skill_grants)
+        for _sk, _lvl in _bg_skills.items():
+            _merged_skills[_sk] = max(_merged_skills.get(_sk, 0), _lvl)
+        for _sk, _lvl in _foci_contrib.skills.items():
+            _merged_skills[_sk] = max(_merged_skills.get(_sk, 0), _lvl)
+
+        # Convert foci ClassAbilityDef instances → AbilityDefinition, stamping
+        # source=AbilitySource.Class (no AbilitySource.Focus exists; Class matches
+        # how _seed_class_abilities converts ClassDef.abilities). Shared converter
+        # (_class_ability_to_definition) is the single source of truth for the
+        # six-field struct; foci pass reference_url=None.
+        for _ca in _foci_contrib.abilities:
+            abilities.append(_class_ability_to_definition(_ca, reference_url=None))
 
         # Resolved archetype: pairs jungian_hint / rpg_role_hint if both
         # are present. archetype_provenance is populated downstream by
@@ -2991,6 +3006,8 @@ class CharacterBuilder:
             pronouns=acc.pronoun_hint or "",
             stats=stats,
             abilities=abilities,
+            skills=_merged_skills,
+            foci=list(acc.foci),
             known_facts=[],
             affinities=[],
             is_friendly=True,
@@ -3049,6 +3066,21 @@ class CharacterBuilder:
         ]
         self._arrangement_assignment = {name: None for name in self._ability_score_names}
         # rolled_stats stays None until confirm_arrangement materializes it.
+
+    def _seed_standard_array_arrange(self) -> None:
+        """Seed the arrange pool from the pack's standard array (ADR-143 DD-3).
+
+        Parallel to _roll_3d6_arrange_visible, but the six values are the fixed
+        standard array (default [15,14,13,12,10,8] when unset) instead of 3d6
+        rolls. The existing arrange picker/handlers/FSM are reused unchanged.
+        """
+        base = (
+            self._standard_array
+            if self._standard_array is not None
+            else _DEFAULT_STANDARD_ARRAY
+        )
+        self._arrangement_pool = list(base)
+        self._arrangement_assignment = {name: None for name in self._ability_score_names}
 
     def _roll_3d6_strict(self) -> None:
         """Roll 3d6 stats once into self._rolled_stats.
@@ -3167,168 +3199,52 @@ class CharacterBuilder:
         return drained
 
     def _roll_3d6_stats(self) -> list[tuple[str, int]]:
-        """Roll 3d6 for each ability score in order. Returns ``(name, total)``
-        pairs in ``ability_score_names`` order.
-
-        Uses the builder's seedable RNG so tests can drive deterministic
-        outputs.
+        """Delegate to the module-level helper (ADR-143: moved to ruleset/base.py
+        so the builder and the ABC default generate_attributes share one
+        implementation). Uses the builder's seedable RNG.
         """
-        from sidequest.telemetry.spans import SPAN_CHARGEN_STAT_ROLL, Emitter
+        from sidequest.game.ruleset.base import _roll_3d6_stats
 
-        rng = self._rng
-        results: list[tuple[str, int]] = []
-        for name in self._ability_score_names:
-            dice = (rng.randint(1, 6), rng.randint(1, 6), rng.randint(1, 6))
-            total = sum(dice)
-            Emitter.fire(
-                SPAN_CHARGEN_STAT_ROLL,
-                {
-                    "stat": name,
-                    "dice": list(dice),
-                    "total": total,
-                },
-            )
-            results.append((name, total))
-        return results
+        return _roll_3d6_stats(self._ability_score_names, self._rng)
 
     @staticmethod
     def _allocate_point_buy(n: int, budget: int) -> list[int]:
-        """Allocate a point-buy budget across `n` stats.
+        """Delegate to the module-level helper (ADR-143: moved to ruleset/base.py).
 
-        All stats start at 8. Points distributed round-robin, raising each
-        stat by 1 at a time (cheapest-first) until budget is spent. No
-        stat can exceed 15. Cost table (cumulative from 8):
-          8→9..12: 1pt each; 13→14..15: 2pt each.
+        Preserved as a static method on CharacterBuilder so existing call
+        sites (tests, etc.) do not need to be updated.
         """
+        from sidequest.game.ruleset.base import _allocate_point_buy
 
-        def marginal_cost(value: int) -> int:
-            if 9 <= value <= 13:
-                return 1
-            if value in (14, 15):
-                return 2
-            # Outside [9, 15] — effectively infinite; callers filter via
-            # the next_val > 15 guard before reaching this branch.
-            return 1 << 30
-
-        stats = [8] * n
-        remaining = budget
-        while True:
-            any_raised = False
-            for i in range(n):
-                next_val = stats[i] + 1
-                if next_val > 15:
-                    continue
-                cost = marginal_cost(next_val)
-                if cost <= remaining:
-                    stats[i] = next_val
-                    remaining -= cost
-                    any_raised = True
-            if not any_raised or remaining == 0:
-                break
-        return stats
+        return _allocate_point_buy(n, budget)
 
     def generate_stats(self, acc: AccumulatedChoices) -> dict[str, int]:
-        """Generate ability scores per the declared stat_generation method.
+        """Delegate to the bound RulesetModule (ADR-143). The module owns the
+        attribute mechanics; the builder owns the FSM that gathered `acc`.
 
-        Strategies:
-        - roll_3d6_strict: reuse pre-rolled stats from construction or
-          scene directive; re-roll inline if absent (defensive — the
-          eager roll should have fired).
-        - standard_array: the pack-authored ``rules.standard_array`` (or the
-          legacy default [15, 14, 13, 12, 10, 8] when unset) mapped to the
-          ability_score_names in declaration order. When no explicit
-          stat_bonuses were set by chargen choices, derive bonuses from
-          accumulated hints (race/mutation/class) to differentiate stat
-          spreads across builds.
-        - point_buy: distribute point_buy_budget across ability scores.
-
-        Accumulated `acc.stat_bonuses` are applied additively on top of
-        the generated baseline (every strategy).
-
-        Raises UnknownStatGenerationError for any other method string.
-        """
-        method = self._stat_generation
-
-        if method == "roll_3d6_strict":
-            if self._rolled_stats is not None:
-                stats = dict(self._rolled_stats)
-            else:
-                # Defensive re-roll — shouldn't fire in practice because
-                # the eager construction roll covers this path.
-                rolled = self._roll_3d6_stats()
-                stats = dict(rolled)
-
-        elif method == "roll_the_bones":
-            if self._rolled_stats is None:
-                # No silent re-roll: the mode rolls eagerly at adoption, so
-                # a missing array is a programmer error, not a fallback case.
-                raise RuntimeError(
-                    "roll_the_bones mode active but no rolled stats recorded — "
-                    "_enter_roll_the_bones must run at mode adoption"
-                )
-            stats = dict(self._rolled_stats)
-
-        elif method == "standard_array":
-            # ADR-142 Step 2A: pack-authored array overrides the legacy
-            # D&D 5e default when set; None preserves existing behavior.
-            base_values = (
-                self._standard_array
-                if self._standard_array is not None
-                else [15, 14, 13, 12, 10, 8]
+        Resolves class_def from the builder's class roster + acc.class_hint so
+        the ruleset can use it for prime-aware assignment (ADR-143 Task 4).
+        Reuses the same resolution pattern as confirm_build: class_hint →
+        _default_class → None. Passes None when no classes are attached or
+        no class hint matches (no silent fallback — unmatched hint means no
+        class_def, not a fabricated one)."""
+        class_str = acc.class_hint or self._default_class
+        class_def = None
+        if class_str and self._classes:
+            class_def = next(
+                (c for c in self._classes if c.display_name == class_str),
+                None,
             )
-            stats = dict(zip(self._ability_score_names, base_values, strict=False))
-
-        elif method == "point_buy":
-            values = self._allocate_point_buy(
-                len(self._ability_score_names), self._point_buy_budget
-            )
-            stats = dict(zip(self._ability_score_names, values, strict=True))
-
-        else:
-            raise UnknownStatGenerationError(method=method)
-
-        # Apply explicit stat bonuses from chargen choices (origin,
-        # mutation, artifact).
-        for stat, bonus in acc.stat_bonuses.items():
-            if stat in stats:
-                stats[stat] += bonus
-
-        # Standard-array derivation: when no explicit bonuses were
-        # authored and we have at least 3 stats, differentiate the
-        # spread using accumulated hints.
-        if (
-            not acc.stat_bonuses
-            and method == "standard_array"
-            and len(self._ability_score_names) >= 3
-        ):
-            names = self._ability_score_names
-            # Origin/race → boost first stat
-            if acc.race_hint is not None:
-                stats[names[0]] = stats[names[0]] + 3
-            # Mutation/affinity → boost second stat, reduce last
-            if acc.mutation_hint is not None or acc.affinity_hint is not None:
-                stats[names[1]] = stats[names[1]] + 2
-                stats[names[-1]] = stats[names[-1]] - 1
-            # Class/training → boost third stat (floor at last index if
-            # fewer than 3 names, though the guard above already rejects
-            # that case).
-            if acc.class_hint is not None or acc.training_hint is not None:
-                idx = min(2, len(names) - 1)
-                stats[names[idx]] = stats[names[idx]] + 2
-
-        import json as _json
-
-        from sidequest.telemetry.spans import SPAN_CHARGEN_STATS_GENERATED, Emitter
-
-        Emitter.fire(
-            SPAN_CHARGEN_STATS_GENERATED,
-            {
-                "method": method,
-                "stat_count": len(stats),
-                "stats_json": _json.dumps(dict(stats), sort_keys=True),
-            },
+        return self._ruleset.generate_attributes(
+            method=self._stat_generation,
+            ability_names=self._ability_score_names,
+            standard_array=self._standard_array,
+            point_buy_budget=self._point_buy_budget,
+            rolled_stats=self._rolled_stats,
+            acc=acc,
+            rng=self._rng,
+            class_def=class_def,
         )
-        return stats
 
     # --- Private helpers ---
 

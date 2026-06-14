@@ -1,19 +1,16 @@
-"""seed_wwn_magic seeds SpellcastingState.prepared from class starting_prepared (Task 8).
-
-TDD: these tests are written BEFORE implementation and must fail RED on the
-unpatched codebase, then pass GREEN after.
+"""seed_chargen_resources seeds SpellcastingState.prepared from class starting_prepared (ADR-143).
 
 Locked behaviors:
 - ``starting_prepared`` on WwnClassMagic seeds SpellcastingState.prepared at chargen.
 - Over-capacity (starting_prepared > prepared_by_level["1"]) is silently truncated.
 - Absent capacity key (no "1" in prepared_by_level) → no truncation.
 - Non-caster (effort-only, no casts tables) → spellcasting is None, no crash.
-- Non-magic class (wwn_magic=None) OR non-wwn ruleset → ({}, None).
+- Non-magic class (wwn_magic=None) OR non-wwn ruleset → empty effort, None.
 """
 
 from __future__ import annotations
 
-from sidequest.game.builder import seed_wwn_magic
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.genre.models.character import (
     ClassDef,
     WwnClassMagic,
@@ -144,8 +141,11 @@ def _fighter_def() -> ClassDef:
 
 
 # ---------------------------------------------------------------------------
-# Tests — starting_prepared seeding (RED before GREEN)
+# Tests — starting_prepared seeding (via seed_chargen_resources, ADR-143)
 # ---------------------------------------------------------------------------
+
+_wwn_mod = get_ruleset_module("wwn")
+_native_mod = get_ruleset_module("native")
 
 
 class TestStartingPreparedSeeding:
@@ -157,10 +157,10 @@ class TestStartingPreparedSeeding:
             prepared_by_level={"1": 2},
         )
 
-        _, spellcasting = seed_wwn_magic(rules, _DEFAULT_STATS, cls)
+        res = _wwn_mod.seed_chargen_resources(rules=rules, stats=_DEFAULT_STATS, class_def=cls)
 
-        assert spellcasting is not None
-        assert spellcasting.prepared == ["cinder_lance", "still_the_breath"]
+        assert res.spellcasting is not None
+        assert res.spellcasting.prepared == ["cinder_lance", "still_the_breath"]
 
     def test_over_capacity_truncated_silently(self) -> None:
         """starting_prepared=[a,b,c] with prepared_by_level={"1":2} → prepared == ["a","b"]."""
@@ -170,10 +170,10 @@ class TestStartingPreparedSeeding:
             prepared_by_level={"1": 2},
         )
 
-        _, spellcasting = seed_wwn_magic(rules, _DEFAULT_STATS, cls)
+        res = _wwn_mod.seed_chargen_resources(rules=rules, stats=_DEFAULT_STATS, class_def=cls)
 
-        assert spellcasting is not None
-        assert spellcasting.prepared == ["cinder_lance", "still_the_breath"]
+        assert res.spellcasting is not None
+        assert res.spellcasting.prepared == ["cinder_lance", "still_the_breath"]
 
     def test_absent_capacity_key_no_truncation(self) -> None:
         """starting_prepared=[a] with prepared_by_level={} → prepared == ["a"] (no truncation)."""
@@ -183,10 +183,10 @@ class TestStartingPreparedSeeding:
             prepared_by_level={},  # no "1" key
         )
 
-        _, spellcasting = seed_wwn_magic(rules, _DEFAULT_STATS, cls)
+        res = _wwn_mod.seed_chargen_resources(rules=rules, stats=_DEFAULT_STATS, class_def=cls)
 
-        assert spellcasting is not None
-        assert spellcasting.prepared == ["cinder_lance"]
+        assert res.spellcasting is not None
+        assert res.spellcasting.prepared == ["cinder_lance"]
 
     def test_empty_starting_prepared_yields_empty_list(self) -> None:
         """Default (no starting_prepared) → prepared == [] — existing behaviour preserved."""
@@ -196,36 +196,36 @@ class TestStartingPreparedSeeding:
             prepared_by_level={"1": 3},
         )
 
-        _, spellcasting = seed_wwn_magic(rules, _DEFAULT_STATS, cls)
+        res = _wwn_mod.seed_chargen_resources(rules=rules, stats=_DEFAULT_STATS, class_def=cls)
 
-        assert spellcasting is not None
-        assert spellcasting.prepared == []
+        assert res.spellcasting is not None
+        assert res.spellcasting.prepared == []
 
     def test_effort_only_class_spellcasting_is_none_no_crash(self) -> None:
         """An effort-only Art user (no cast tables) → spellcasting is None; no crash."""
         rules = _wwn_rules()
         cls = _effort_only_def(starting_prepared=["cinder_lance"])
 
-        effort, spellcasting = seed_wwn_magic(rules, _DEFAULT_STATS, cls)
+        res = _wwn_mod.seed_chargen_resources(rules=rules, stats=_DEFAULT_STATS, class_def=cls)
 
-        assert spellcasting is None
+        assert res.spellcasting is None
         # effort dict is still populated for the Vowed
-        assert "vowed" in effort
+        assert "vowed" in res.effort
 
     def test_no_wwn_magic_class_returns_empty_and_none(self) -> None:
-        """Class with wwn_magic=None → ({}, None)."""
+        """Class with wwn_magic=None → empty effort, None spellcasting."""
         rules = _wwn_rules()
-        effort, spellcasting = seed_wwn_magic(rules, _DEFAULT_STATS, _fighter_def())
-        assert effort == {}
-        assert spellcasting is None
+        res = _wwn_mod.seed_chargen_resources(rules=rules, stats=_DEFAULT_STATS, class_def=_fighter_def())
+        assert res.effort == {}
+        assert res.spellcasting is None
 
     def test_non_wwn_ruleset_returns_empty_and_none(self) -> None:
-        """Non-wwn ruleset → ({}, None)."""
+        """Non-wwn ruleset → empty effort, None spellcasting."""
         rules = _native_rules()
-        effort, spellcasting = seed_wwn_magic(
-            rules,
-            {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
-            _fighter_def(),
+        res = _native_mod.seed_chargen_resources(
+            rules=rules,
+            stats={"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
+            class_def=_fighter_def(),
         )
-        assert effort == {}
-        assert spellcasting is None
+        assert res.effort == {}
+        assert res.spellcasting is None

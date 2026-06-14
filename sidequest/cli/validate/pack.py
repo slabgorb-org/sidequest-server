@@ -673,6 +673,246 @@ def _validate_archetype_constraints_crossref(pack_dir: Path, label: str) -> list
 
 
 # ---------------------------------------------------------------------------
+# ADR-143 — chargen cross-reference lint (Task 13)
+#
+# Four checks mirror the runtime resolution rules in chargen_defs_resolve.py:
+#
+#   CG1  Every ``background:`` id in char_creation.yaml's mechanical_effects
+#        blocks must resolve against the effective background catalog for that
+#        scope (world-tier backgrounds when the world defines them; otherwise
+#        genre-tier backgrounds).
+#   CG2  Every ``focus_id:`` in char_creation.yaml's mechanical_effects blocks
+#        must resolve against the effective focus catalog (same resolution).
+#   CG3  Every skill NAME used as a key in ``skill_grants`` (in
+#        char_creation.yaml), ``Background.free_skill``, ``Background.quick_skills``
+#        (in backgrounds.yaml), and ``FocusLevel.skills`` keys (in foci.yaml)
+#        must appear in the genre-tier ``skills.yaml`` catalog.  Skills are
+#        always genre-tier — there is no world-tier skills catalog.
+#
+# A missing background/focus/skill is a LOUD validation error (No Silent
+# Fallbacks).  The check is a no-op for packs / worlds that author no
+# skills.yaml / backgrounds.yaml / foci.yaml / char_creation.yaml.
+#
+# Resolution mirrors chargen_defs_resolve.resolve_backgrounds/resolve_foci:
+# world-tier dicts REPLACE the genre-tier dict (no merge).  A world that
+# defines its own backgrounds.yaml uses ONLY those backgrounds for scope
+# isolation; a world without one falls through to the genre-tier dict.
+# ---------------------------------------------------------------------------
+
+
+def _collect_skill_catalog(skills_path: Path) -> set[str]:
+    """Return the set of skill names from a genre-tier ``skills.yaml``.
+
+    Returns an empty set when the file is absent (no catalog → no CG3 checks).
+    A present-but-malformed file also returns empty set (the YAML structural
+    check will catch the malformation separately; we don't double-error here).
+    """
+    if not skills_path.is_file():
+        return set()
+    data, _read_err = _read_yaml(skills_path, "")
+    if not isinstance(data, list):
+        return set()
+    return {str(s) for s in data if isinstance(s, str)}
+
+
+def _collect_background_ids(backgrounds_path: Path) -> set[str]:
+    """Return the set of background ``id`` values from a ``backgrounds.yaml``.
+
+    Returns an empty set when the file is absent or unparseable.
+    """
+    if not backgrounds_path.is_file():
+        return set()
+    data, _read_err = _read_yaml(backgrounds_path, "")
+    if not isinstance(data, list):
+        return set()
+    ids: set[str] = set()
+    for entry in data:
+        if isinstance(entry, dict) and entry.get("id"):
+            ids.add(str(entry["id"]))
+    return ids
+
+
+def _collect_focus_ids(foci_path: Path) -> set[str]:
+    """Return the set of focus ``id`` values from a ``foci.yaml``.
+
+    Returns an empty set when the file is absent or unparseable.
+    """
+    if not foci_path.is_file():
+        return set()
+    data, _read_err = _read_yaml(foci_path, "")
+    if not isinstance(data, list):
+        return set()
+    ids: set[str] = set()
+    for entry in data:
+        if isinstance(entry, dict) and entry.get("id"):
+            ids.add(str(entry["id"]))
+    return ids
+
+
+def _iter_char_creation_mechanical_effects(data: Any) -> list[dict[str, Any]]:
+    """Return all ``mechanical_effects`` dicts from a parsed char_creation.yaml.
+
+    Walks scene-level ``mechanical_effects`` and all ``choices[*].mechanical_effects``
+    in every scene, returning a flat list of the raw effect dicts.  Accepts ``None``
+    or non-list data gracefully (returns ``[]``).
+    """
+    effects: list[dict[str, Any]] = []
+    if not isinstance(data, list):
+        return effects
+    for scene in data:
+        if not isinstance(scene, dict):
+            continue
+        # Scene-level mechanical_effects
+        me = scene.get("mechanical_effects")
+        if isinstance(me, dict):
+            effects.append(me)
+        # Choice-level mechanical_effects
+        for choice in scene.get("choices") or []:
+            if not isinstance(choice, dict):
+                continue
+            cme = choice.get("mechanical_effects")
+            if isinstance(cme, dict):
+                effects.append(cme)
+    return effects
+
+
+def _validate_chargen_crossref(
+    char_creation_path: Path,
+    backgrounds_path: Path,
+    foci_path: Path,
+    skill_catalog: set[str],
+    label: str,
+    scope_label: str = "",
+) -> list[str]:
+    """CG1 + CG2 + CG3 for a single char_creation.yaml.
+
+    ``backgrounds_path`` and ``foci_path`` are the EFFECTIVE paths after world-first
+    resolution (caller resolves which tier to use).  ``skill_catalog`` is always
+    the genre-tier set (there is no world-tier skills catalog).
+    ``scope_label`` is appended to error messages to distinguish genre-tier
+    vs world-tier sources (e.g. "world 'evropi'").
+    """
+    if not char_creation_path.is_file():
+        return []
+
+    data, read_err = _read_yaml(char_creation_path, label)
+    if read_err is not None:
+        return [read_err]
+
+    known_background_ids = _collect_background_ids(backgrounds_path)
+    known_focus_ids = _collect_focus_ids(foci_path)
+    # Only check resolution when this pack actually ships a catalog — an absent
+    # backgrounds/foci file means this pack authors none (no-op for non-WWN packs).
+    check_backgrounds = backgrounds_path.is_file()
+    check_foci = foci_path.is_file()
+    check_skills = bool(skill_catalog)
+
+    errors: list[str] = []
+    scope = f" ({scope_label})" if scope_label else ""
+    effects = _iter_char_creation_mechanical_effects(data)
+
+    for effect in effects:
+        # CG1 — background id resolution
+        bg_ref = effect.get("background")
+        if bg_ref and check_backgrounds and str(bg_ref) not in known_background_ids:
+            errors.append(
+                f"{label}: char_creation.yaml references unknown background id "
+                f"'{bg_ref}'{scope} (not in resolved backgrounds catalog)"
+            )
+        # CG2 — focus_id resolution
+        focus_ref = effect.get("focus_id")
+        if focus_ref and check_foci and str(focus_ref) not in known_focus_ids:
+            errors.append(
+                f"{label}: char_creation.yaml references unknown focus_id "
+                f"'{focus_ref}'{scope} (not in resolved foci catalog)"
+            )
+        # CG3 — skill_grants keys against skills catalog
+        if check_skills:
+            for skill_name in (effect.get("skill_grants") or {}):
+                if str(skill_name) not in skill_catalog:
+                    errors.append(
+                        f"{label}: char_creation.yaml skill_grants references unknown "
+                        f"skill '{skill_name}'{scope} (not in skills.yaml catalog)"
+                    )
+
+    return errors
+
+
+def _validate_backgrounds_skill_refs(
+    backgrounds_path: Path,
+    skill_catalog: set[str],
+    label: str,
+) -> list[str]:
+    """CG3 — validate skill names in ``backgrounds.yaml`` against the catalog.
+
+    Checks ``free_skill`` (a single skill string) and ``quick_skills`` (a list
+    of skill strings).  No-op when the file is absent or the catalog is empty.
+    """
+    if not backgrounds_path.is_file() or not skill_catalog:
+        return []
+    data, read_err = _read_yaml(backgrounds_path, label)
+    if read_err is not None:
+        return [read_err]
+    if not isinstance(data, list):
+        return []
+    errors: list[str] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        bg_id = entry.get("id", "<unnamed>")
+        # free_skill — a single string or None
+        free = entry.get("free_skill")
+        if isinstance(free, str) and free and free not in skill_catalog:
+            errors.append(
+                f"{label}: backgrounds.yaml background '{bg_id}' free_skill "
+                f"references unknown skill '{free}' (not in skills.yaml catalog)"
+            )
+        # quick_skills — a list of strings
+        for qs in entry.get("quick_skills") or []:
+            if isinstance(qs, str) and qs and qs not in skill_catalog:
+                errors.append(
+                    f"{label}: backgrounds.yaml background '{bg_id}' quick_skills "
+                    f"references unknown skill '{qs}' (not in skills.yaml catalog)"
+                )
+    return errors
+
+
+def _validate_foci_skill_refs(
+    foci_path: Path,
+    skill_catalog: set[str],
+    label: str,
+) -> list[str]:
+    """CG3 — validate skill names in ``foci.yaml`` levels against the catalog.
+
+    Checks each ``FocusLevel.skills`` dict key.  No-op when the file is absent
+    or the catalog is empty.
+    """
+    if not foci_path.is_file() or not skill_catalog:
+        return []
+    data, read_err = _read_yaml(foci_path, label)
+    if read_err is not None:
+        return [read_err]
+    if not isinstance(data, list):
+        return []
+    errors: list[str] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        focus_id = entry.get("id", "<unnamed>")
+        for lvl_idx, level in enumerate(entry.get("levels") or []):
+            if not isinstance(level, dict):
+                continue
+            for skill_name in (level.get("skills") or {}):
+                if str(skill_name) not in skill_catalog:
+                    errors.append(
+                        f"{label}: foci.yaml focus '{focus_id}' level[{lvl_idx}] "
+                        f"skills references unknown skill '{skill_name}' "
+                        f"(not in skills.yaml catalog)"
+                    )
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # Epic 74 — lore is world-only and must be non-empty (story 74-3)
 # ---------------------------------------------------------------------------
 
@@ -730,6 +970,9 @@ def _validate_world(
     genre_extensions_declared: list[str],
     genre_trope_ids: set[str],
     genre_allowed: tuple[set[str], set[str]] | None,
+    genre_skill_catalog: set[str],
+    genre_backgrounds_path: Path,
+    genre_foci_path: Path,
 ) -> tuple[list[str], list[str]]:
     """Validate a single world directory.
 
@@ -739,6 +982,15 @@ def _validate_world(
     ``genre_trope_ids`` and ``genre_allowed`` (the genre-tier resolved trope set
     and allowed class/race sets) are threaded down so the world-tier cross-ref
     lint can resolve references against the union of genre + world content.
+
+    ``genre_skill_catalog``, ``genre_backgrounds_path``, and ``genre_foci_path``
+    support ADR-143 chargen cross-reference checks (CG1/CG2/CG3).  The genre-tier
+    skill catalog may be empty and the genre-tier background/foci paths may point
+    at absent files — each downstream helper no-ops on an empty catalog / missing
+    file, so non-WWN packs need no special-casing here.  The world-tier chargen
+    is validated using world-first resolution: if the world defines its own
+    backgrounds/foci, those replace the genre-tier defs; skills always come from
+    the genre-tier catalog.
 
     Returns ``(errors, warnings)``.
     """
@@ -862,6 +1114,47 @@ def _validate_world(
             )
         )
 
+    # ADR-143 (Task 13) — chargen cross-reference lint at world tier.
+    # CG1/CG2: background/focus ids in world-tier char_creation.yaml must
+    # resolve against the effective catalog (world-tier if defined, else genre).
+    # CG3: skill names in chargen files + backgrounds + foci must be in the
+    # genre-tier skills catalog.
+    # Resolution mirrors chargen_defs_resolve: world backgrounds/foci REPLACE
+    # genre (no merge) — a world with its own backgrounds.yaml uses only those.
+    # Each helper no-ops on an empty catalog / absent file, so non-WWN worlds
+    # fall straight through without a guard here.
+    world_char_creation_path = world_dir / "char_creation.yaml"
+    world_backgrounds_path = world_dir / "backgrounds.yaml"
+    world_foci_path = world_dir / "foci.yaml"
+
+    # Resolve effective backgrounds + foci paths (world-first).
+    eff_backgrounds_path = (
+        world_backgrounds_path if world_backgrounds_path.is_file() else genre_backgrounds_path
+    )
+    eff_foci_path = world_foci_path if world_foci_path.is_file() else genre_foci_path
+
+    # CG1 + CG2 + CG3(skill_grants) on world char_creation.yaml
+    content_errors.extend(
+        _validate_chargen_crossref(
+            world_char_creation_path,
+            eff_backgrounds_path,
+            eff_foci_path,
+            genre_skill_catalog,
+            label,
+            scope_label=f"world '{world_dir.name}'",
+        )
+    )
+
+    # CG3 on world-tier backgrounds.yaml (free_skill + quick_skills)
+    content_errors.extend(
+        _validate_backgrounds_skill_refs(world_backgrounds_path, genre_skill_catalog, label)
+    )
+
+    # CG3 on world-tier foci.yaml (FocusLevel.skills keys)
+    content_errors.extend(
+        _validate_foci_skill_refs(world_foci_path, genre_skill_catalog, label)
+    )
+
     if is_draft:
         # Demote structural + content problems to warnings for draft worlds.
         # A world.yaml parse failure is never demoted — it's an unconditional error.
@@ -963,6 +1256,30 @@ def validate_pack_structure(pack_dir: Path, schema_path: Path) -> tuple[list[str
         )
     all_errors.extend(_validate_archetype_constraints_crossref(pack_dir, label))
 
+    # ADR-143 (Task 13) — chargen cross-reference lint at genre tier.
+    # CG1 + CG2 + CG3(skill_grants) on genre-tier char_creation.yaml (when present).
+    # CG3 on genre-tier backgrounds.yaml (free_skill + quick_skills).
+    # CG3 on genre-tier foci.yaml (FocusLevel.skills keys).
+    genre_backgrounds_path = pack_dir / "backgrounds.yaml"
+    genre_foci_path = pack_dir / "foci.yaml"
+    genre_skill_catalog = _collect_skill_catalog(pack_dir / "skills.yaml")
+    all_errors.extend(
+        _validate_chargen_crossref(
+            pack_dir / "char_creation.yaml",
+            genre_backgrounds_path,
+            genre_foci_path,
+            genre_skill_catalog,
+            label,
+            scope_label="genre tier",
+        )
+    )
+    all_errors.extend(
+        _validate_backgrounds_skill_refs(genre_backgrounds_path, genre_skill_catalog, label)
+    )
+    all_errors.extend(
+        _validate_foci_skill_refs(genre_foci_path, genre_skill_catalog, label)
+    )
+
     # Resolve extension paths for orphan check
     genre_ext_files, genre_ext_dirs = _resolve_extension_paths(
         extensions_declared, genre_extensions_schema
@@ -999,6 +1316,9 @@ def validate_pack_structure(pack_dir: Path, schema_path: Path) -> tuple[list[str
                 genre_extensions_declared=extensions_declared,
                 genre_trope_ids=genre_trope_ids,
                 genre_allowed=genre_allowed,
+                genre_skill_catalog=genre_skill_catalog,
+                genre_backgrounds_path=genre_backgrounds_path,
+                genre_foci_path=genre_foci_path,
             )
             all_errors.extend(w_errors)
             all_warnings.extend(w_warnings)

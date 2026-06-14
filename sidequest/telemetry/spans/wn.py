@@ -16,6 +16,7 @@ mechanical decision (the lie detector — CLAUDE.md OTEL Observability Principle
 
 from __future__ import annotations
 
+import json as _json
 from typing import Any
 
 from opentelemetry import trace
@@ -146,6 +147,138 @@ for _slug in WN_LETHALITY_SLUGS:
             component=_slug,
             extract=_extract,
         )
+
+
+# ---------------------------------------------------------------------------
+# Chargen spans — prime-aware attribute assignment (ADR-143 Step 2).
+#
+# Registered for all four WN-family slugs (SWN included): any WN-bound world
+# can have classes with prime_requisites even if SWN's lethality isn't
+# engaged. The span name is ``{slug}.chargen.attributes_assigned`` (the
+# slug-honesty invariant — a wwn pack emits ``wwn.chargen.attributes_assigned``
+# and an swn pack ``swn.chargen.attributes_assigned``).
+# ---------------------------------------------------------------------------
+
+
+def _chargen_attributes_assigned_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "chargen_attributes_assigned",
+        "prime": attrs.get("prime", ""),
+        "top": attrs.get("top", 0),
+        "stats": attrs.get("stats", ""),
+    }
+
+
+for _slug in WN_FAMILY_SLUGS:
+    SPAN_ROUTES[f"{_slug}.chargen.attributes_assigned"] = SpanRoute(
+        event_type="state_transition",
+        component=_slug,
+        extract=_chargen_attributes_assigned_extract,
+    )
+
+
+def chargen_attributes_assigned_span(
+    *,
+    ruleset: str,
+    prime: str | None,
+    top: int,
+    stats: dict[str, int],
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.chargen.attributes_assigned`` — lie-detector for
+    prime-aware stat assignment (ADR-143 Step 2). Fires on every WN chargen
+    whether prime is set or not, so the GM panel can confirm which path ran."""
+    attributes: dict[str, Any] = {
+        "prime": prime or "",
+        "top": top,
+        # Serialize the stats dict as JSON so the OTEL attribute type is a
+        # simple string — OTEL SDK rejects nested dicts as attribute values.
+        "stats": _json.dumps(dict(stats), sort_keys=True),
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.chargen.attributes_assigned", attributes, tracer_override=_tracer):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Chargen contribution spans — background_skills + foci_applied (ADR-143 Task 10).
+#
+# Registered for all four WN-family slugs (every WN-bound pack may author
+# backgrounds and foci). Span names are ``{slug}.chargen.background_skills``
+# and ``{slug}.chargen.foci_applied`` — the slug-honesty invariant: a wwn
+# pack emits ``wwn.chargen.background_skills``, an awn pack ``awn.*``.
+# ---------------------------------------------------------------------------
+
+
+def _chargen_background_skills_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "chargen_background_skills",
+        "background": attrs.get("background", ""),
+        "skills": attrs.get("skills", ""),
+    }
+
+
+def _chargen_foci_applied_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "chargen_foci_applied",
+        "foci": attrs.get("foci", ""),
+        "skills": attrs.get("skills", ""),
+    }
+
+
+for _slug in WN_FAMILY_SLUGS:
+    SPAN_ROUTES[f"{_slug}.chargen.background_skills"] = SpanRoute(
+        event_type="state_transition",
+        component=_slug,
+        extract=_chargen_background_skills_extract,
+    )
+    SPAN_ROUTES[f"{_slug}.chargen.foci_applied"] = SpanRoute(
+        event_type="state_transition",
+        component=_slug,
+        extract=_chargen_foci_applied_extract,
+    )
+
+
+def chargen_background_skills_span(
+    *,
+    ruleset: str,
+    background: str,
+    skills: dict[str, int],
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.chargen.background_skills`` — lie-detector for
+    background skill grants applied at chargen (ADR-143 Task 10)."""
+    attributes: dict[str, Any] = {
+        "background": background,
+        "skills": _json.dumps(dict(skills), sort_keys=True),
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.chargen.background_skills", attributes, tracer_override=_tracer):
+        pass
+
+
+def chargen_foci_applied_span(
+    *,
+    ruleset: str,
+    foci: list[str],
+    skills: dict[str, int],
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.chargen.foci_applied`` — lie-detector for focus skill
+    and ability grants applied at chargen (ADR-143 Task 10)."""
+    attributes: dict[str, Any] = {
+        "foci": _json.dumps(list(foci)),
+        "skills": _json.dumps(dict(skills), sort_keys=True),
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.chargen.foci_applied", attributes, tracer_override=_tracer):
+        pass
 
 
 def system_strain_delta_span(

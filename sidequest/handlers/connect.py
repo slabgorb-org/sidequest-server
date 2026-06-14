@@ -47,6 +47,7 @@ from sidequest.protocol.types import NonBlankString
 from sidequest.server import views
 from sidequest.server.asset_urls import rewrite_theme_css_asset_urls
 from sidequest.server.dispatch.char_creation_resolve import resolve_char_creation_scenes
+from sidequest.server.dispatch.chargen_defs_resolve import resolve_backgrounds, resolve_foci
 from sidequest.server.dispatch.class_resolve import resolve_classes
 from sidequest.server.dispatch.culture_context import resolve_culture_reference
 from sidequest.server.image_pacing import ImagePacingThrottle
@@ -936,6 +937,17 @@ class ConnectHandler:
                 chargen_classes = resolve_classes(genre_pack, row.world_slug)
                 if chargen_classes:
                     builder = builder.with_classes(chargen_classes)
+                # ADR-143 Task 9: attach resolved background + focus catalogs
+                # (world-first, same merge semantics as classes). Empty dicts
+                # when neither tier authors anything — no silent fallback, just
+                # a no-op for packs that have not yet migrated to the new
+                # chargen seam.
+                chargen_backgrounds = resolve_backgrounds(genre_pack, row.world_slug)
+                chargen_foci = resolve_foci(genre_pack, row.world_slug)
+                builder = builder.with_chargen_defs(
+                    backgrounds=chargen_backgrounds,
+                    foci=chargen_foci,
+                )
 
             # Opening-hook + world-context resolution (matches legacy branch).
             # Resolved once at connect time so chargen confirmation and the

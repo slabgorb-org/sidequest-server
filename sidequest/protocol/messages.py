@@ -451,6 +451,16 @@ class CharacterCreationPayload(ProtocolBase):
     confirm_enabled: bool | None = None
     """Whether the Confirm button on the_arrangement is enabled (all slots filled
     and ≥1 qualifying class)."""
+    ability_names: list[str] | None = None
+    """Ability-score names in declaration order, for the arrange panel's slots
+    (flavor-named packs like elemental_harmony use non-STR/DEX names).
+
+    The arrange render ALWAYS populates this with the pack's authoritative
+    ability-score names — standard STR/DEX/CON/INT/WIS/CHA or flavor names
+    alike — so the server is the single source of truth for slot labels. The
+    type is ``| None`` only for backward/forward compatibility with payloads
+    that omit the field (e.g. older servers, non-arrange phases); it is never
+    sent as explicit null, and the arrange path never leaves it unset."""
 
     # --- the_story (server → client) ---
     pronouns_options: list[str] | None = None

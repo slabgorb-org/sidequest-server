@@ -199,15 +199,20 @@ def _seed_authored_npcs(pack: Any, world: str, manual: MonsterManual) -> int:
     Reads ``pack.worlds[world].authored_npcs`` (each an
     :class:`~sidequest.genre.models.authored_npc.AuthoredNpc`) and, for each:
 
-    - **inserts** it (via :meth:`MonsterManual.add_npc`) when no Manual entry
-      shares its name, carrying ``location_tags`` through to
-      ``ManualNpc.location_tags`` so placement-aware selection
-      (:meth:`MonsterManual.available_at_location`) can surface it at the right
-      location before it has ever been narrated;
-    - **upserts** its ``location_tags`` onto an already-present entry when they
-      differ — a stale on-disk Manual (the wry_whimsy/oz recurrence) otherwise
-      keeps its old/empty placement forever even after the author fixes the
-      roster (M4).
+    - **inserts** it (via :meth:`MonsterManual.add_npc` with ``exact=True``) when
+      no Manual entry has its **exact** (case-insensitive) name, carrying
+      ``location_tags`` through to ``ManualNpc.location_tags`` so placement-aware
+      selection (:meth:`MonsterManual.available_at_location`) can surface it at
+      the right location before it has ever been narrated;
+    - **upserts** its ``location_tags`` onto an exact-name match when the tag
+      *set* differs — a stale on-disk Manual (the wry_whimsy/oz recurrence)
+      otherwise keeps its old/empty placement forever even after the author fixes
+      the roster (M4). The set comparison is order-insensitive so a reordered
+      YAML is not counted as a change.
+
+    Dedup is **exact**, not the fuzzy substring :meth:`MonsterManual.find_npc_by_name`
+    used for generated walk-ons: a canonical authored "Lion" must never be
+    shadowed by — nor overwrite the placement of — a pre-seeded "Cowardly Lion".
 
     Returns the number of entries inserted **or** tag-refreshed — i.e. how many
     times the Manual changed, so the caller knows whether to persist.
@@ -246,9 +251,12 @@ def _seed_authored_npcs(pack: Any, world: str, manual: MonsterManual) -> int:
     refreshed = 0
     for npc in authored:
         new_tags = list(npc.location_tags)
-        # Mirror add_npc's dedup (find_npc_by_name) so the upsert targets the
-        # same entry add_npc would have collided with.
-        existing = manual.find_npc_by_name(npc.name)
+        # EXACT-name dedup (not the fuzzy find_npc_by_name): a canonical authored
+        # NPC must never be shadowed by — nor mutate the placement of — a
+        # substring-colliding walk-on ("Lion" vs a pre-seeded "Cowardly Lion").
+        # The insert uses add_npc(exact=True) so its internal guard matches this
+        # lookup exactly (a fuzzy guard would silently drop the exact-miss).
+        existing = manual.find_npc_by_exact_name(npc.name)
         if existing is None:
             # Build the namegen-shaped ``data`` blob ``add_npc``/``_human_patch``
             # read (name/role/culture/ocean_summary). The authored NPC's prose
@@ -261,9 +269,13 @@ def _seed_authored_npcs(pack: Any, world: str, manual: MonsterManual) -> int:
             }
             if npc.appearance:
                 data["ocean_summary"] = npc.appearance
-            manual.add_npc(data, new_tags)
+            manual.add_npc(data, new_tags, exact=True)
             inserted += 1
-        elif existing.location_tags != new_tags:
+        elif set(existing.location_tags) != set(new_tags):
+            # Order-insensitive dirty check: a re-authored YAML with the same tags
+            # in a different order is NOT a change — comparing lists directly
+            # would fire a spurious save + OTEL backfill span every load. Assign
+            # the list so the authored order is preserved on a real change.
             existing.location_tags = new_tags
             refreshed += 1
     logger.info(

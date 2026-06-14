@@ -283,9 +283,13 @@ def test_ensure_loaded_backfill_emits_span(tmp_path: Path, otel_capture) -> None
             encounters=[_creature_encounter(enemy_name="Salt Burrower")],
         )
         seeded.save()
-        scarecrow = AuthoredNpc(id="scarecrow", name="Scarecrow", role="companion")
+        # Placed NPC (location_tags) so we also prove the placement-critical
+        # field survives the backfill — not just that the count incremented.
+        scarecrow = AuthoredNpc(
+            id="scarecrow", name="Scarecrow", role="companion", location_tags=["yellow brick road"]
+        )
         sd = _FakeSessionData(genre_pack=_pack_with_authored("flickering_reach", scarecrow))
-        monster_manual_inject.ensure_loaded(sd)
+        loaded = monster_manual_inject.ensure_loaded(sd)
 
     fired = [
         s
@@ -294,6 +298,10 @@ def test_ensure_loaded_backfill_emits_span(tmp_path: Path, otel_capture) -> None
     ]
     assert len(fired) == 1
     assert dict(fired[0].attributes or {}).get("authored_backfilled") == 1
+    # location_tags threaded through the backfill, not dropped.
+    assert loaded is not None
+    backfilled_scarecrow = next(n for n in loaded.npcs if n.name == "Scarecrow")
+    assert backfilled_scarecrow.location_tags == ["yellow brick road"]
 
 
 def test_ensure_loaded_no_backfill_span_when_nothing_added(tmp_path: Path, otel_capture) -> None:
@@ -314,6 +322,49 @@ def test_ensure_loaded_no_backfill_span_when_nothing_added(tmp_path: Path, otel_
         sd = _FakeSessionData(genre_pack=_pack_with_authored("flickering_reach"))
         monster_manual_inject.ensure_loaded(sd)
 
+    fired = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL
+    ]
+    assert fired == []
+
+
+def test_ensure_loaded_world_slug_absent_from_pack_warns_and_no_backfill(
+    tmp_path: Path, otel_capture, caplog
+) -> None:  # type: ignore[no-untyped-def]
+    """H3 at the ensure_loaded seam: when the session's ``world_slug`` is not a
+    key in ``pack.worlds`` (a config/wiring mismatch), the backfill must surface
+    a WARNING and add nothing — it must NOT crash session bind, and the backfill
+    span must NOT fire (its absence proves the world-miss path was taken)."""
+    import logging
+
+    from sidequest.genre.models.authored_npc import AuthoredNpc
+    from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL
+
+    with (
+        mock.patch(
+            "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        seeded = _manual_with(
+            npcs=[_human("Walkon1"), _human("Walkon2"), _human("Walkon3"), _human("Walkon4")],
+            encounters=[_creature_encounter(enemy_name="Salt Burrower")],
+        )
+        seeded.save()
+        scarecrow = AuthoredNpc(
+            id="scarecrow", name="Scarecrow", location_tags=["yellow brick road"]
+        )
+        # Pack only knows "oz"; the session is bound to "flickering_reach".
+        sd = _FakeSessionData(
+            world_slug="flickering_reach", genre_pack=_pack_with_authored("oz", scarecrow)
+        )
+        loaded = monster_manual_inject.ensure_loaded(sd)
+
+    assert loaded is not None
+    assert "Scarecrow" not in {n.name for n in loaded.npcs}  # nothing backfilled
+    assert any("world_not_found" in r.message for r in caplog.records)
     fired = [
         s
         for s in otel_capture.get_finished_spans()

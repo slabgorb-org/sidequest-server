@@ -359,6 +359,43 @@ def test_available_at_location_caps_surface_but_drops_excess_placed() -> None:
     assert len(surfaced) == 3  # formatter slices to 3
 
 
+def test_find_npc_by_exact_name_does_not_substring_match() -> None:
+    """``find_npc_by_exact_name`` matches only on full (case-insensitive) name —
+    it must NOT return a substring-colliding entry the way the fuzzy
+    ``find_npc_by_name`` does. This is the lookup the authored-cast dedup uses so
+    a canonical "Lion" is never confused with a walk-on "Cowardly Lion"."""
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    manual.add_npc({"name": "Cowardly Lion", "role": "companion", "culture": "Ozian"}, [])
+
+    # Fuzzy finder collides; exact finder does not.
+    assert manual.find_npc_by_name("Lion") is not None
+    assert manual.find_npc_by_exact_name("Lion") is None
+    # Exact still matches case-insensitively on the full name.
+    assert manual.find_npc_by_exact_name("cowardly lion") is not None
+
+
+def test_add_npc_exact_mode_inserts_substring_collision() -> None:
+    """With ``exact=True``, ``add_npc`` dedups only on full name — so a canonical
+    NPC whose name is a substring of an existing entry is still inserted, instead
+    of being silently swallowed by the fuzzy guard (authored-cast path)."""
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    manual.add_npc({"name": "Cowardly Lion", "role": "companion", "culture": "Ozian"}, [])
+
+    # Default (fuzzy) would drop "Lion"; exact mode inserts it as its own entry.
+    manual.add_npc({"name": "Lion", "role": "beast", "culture": "wild"}, [], exact=True)
+    names = {n.name for n in manual.npcs}
+    assert names == {"Cowardly Lion", "Lion"}
+
+
+def test_add_npc_exact_mode_still_dedups_true_duplicate() -> None:
+    """``exact=True`` still dedups an identical (case-insensitive) name — it only
+    drops the *fuzzy* substring collisions, not real duplicates."""
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    manual.add_npc({"name": "Scarecrow", "role": "companion", "culture": "Ozian"}, [], exact=True)
+    manual.add_npc({"name": "scarecrow", "role": "vagrant", "culture": "wild"}, [], exact=True)
+    assert len(manual.npcs) == 1
+
+
 def test_add_npc_dedup_walkon_does_not_overwrite_authored() -> None:
     """A later generated walk-on sharing a name with an already-present authored
     NPC is deduped by ``add_npc`` — it does not append a second entry, and the

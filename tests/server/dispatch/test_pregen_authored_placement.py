@@ -155,6 +155,82 @@ def test_seed_authored_npcs_upserts_stale_tags() -> None:
     assert changed == 1  # the upsert is reported so the caller saves
 
 
+def test_seed_authored_npc_inserts_despite_substring_walkon() -> None:
+    """REJECT-B1: an authored NPC whose name is a SUBSTRING of an existing
+    generated walk-on must still be inserted as its own entry — and must NOT
+    overwrite the walk-on's placement tags.
+
+    The fuzzy ``find_npc_by_name`` collapses "Lion" into a pre-seeded "Cowardly
+    Lion": the authored NPC would either vanish (silent drop — the very bug this
+    story fixes, via a rarer path) or write its tags onto the walk-on. Authored
+    dedup must be EXACT.
+    """
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    # A generated walk-on seeded first (no placement).
+    manual.add_npc({"name": "Cowardly Lion", "role": "beast", "culture": "wild"}, [])
+
+    # Authored "Lion" with its own placement.
+    pack = _Pack(
+        _world_with_authored(AuthoredNpc(id="lion", name="Lion", location_tags=["forest"]))
+    )
+    added = _seed_authored_npcs(pack, "oz", manual)
+
+    assert added == 1
+    names = {n.name for n in manual.npcs}
+    assert names == {"Cowardly Lion", "Lion"}  # authored NPC inserted, not swallowed
+    # The walk-on's (empty) placement was NOT corrupted by the authored tags.
+    walkon = next(n for n in manual.npcs if n.name == "Cowardly Lion")
+    assert walkon.location_tags == []
+    lion = next(n for n in manual.npcs if n.name == "Lion")
+    assert lion.location_tags == ["forest"]
+
+
+def test_seed_authored_npc_inserts_despite_substring_walkon_inverse() -> None:
+    """REJECT-B1 (inverse direction): an authored NPC whose name CONTAINS an
+    existing walk-on's name as a substring must also insert exactly, not collide.
+    """
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    manual.add_npc({"name": "Lion", "role": "beast", "culture": "wild"}, [])
+
+    pack = _Pack(
+        _world_with_authored(
+            AuthoredNpc(id="cowardly_lion", name="Cowardly Lion", location_tags=["timber"])
+        )
+    )
+    added = _seed_authored_npcs(pack, "oz", manual)
+
+    assert added == 1
+    assert {n.name for n in manual.npcs} == {"Lion", "Cowardly Lion"}
+
+
+def test_seed_authored_npcs_reordered_tags_is_not_a_change() -> None:
+    """REJECT-B2: the upsert dirty-check must be order-INSENSITIVE. A re-seed
+    whose ``location_tags`` carry the same tags in a different order is NOT a
+    change — it must not report a refresh (which would trigger a spurious save
+    and an OTEL backfill span every load)."""
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    first = _Pack(
+        _world_with_authored(
+            AuthoredNpc(
+                id="scarecrow", name="Scarecrow", location_tags=["yellow brick road", "cornfield"]
+            )
+        )
+    )
+    assert _seed_authored_npcs(first, "oz", manual) == 1
+
+    # Same tags, reversed order — semantically identical placement.
+    second = _Pack(
+        _world_with_authored(
+            AuthoredNpc(
+                id="scarecrow", name="Scarecrow", location_tags=["cornfield", "yellow brick road"]
+            )
+        )
+    )
+    changed = _seed_authored_npcs(second, "oz", manual)
+    assert changed == 0  # no spurious refresh
+    assert len(manual.npcs) == 1
+
+
 def test_authored_npcs_flow_through_real_loader(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """H2: the REAL loader path, end to end — no ``SimpleNamespace`` stub.
 

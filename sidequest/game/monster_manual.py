@@ -215,6 +215,21 @@ class MonsterManual(BaseModel):
                 return npc
         return None
 
+    def find_npc_by_exact_name(self, name: str) -> ManualNpc | None:
+        """Find an NPC by exact (case-insensitive) full-name match.
+
+        Unlike :meth:`find_npc_by_name`, this does NOT substring-match — so a
+        canonical authored "Lion" is never confused with a walk-on "Cowardly
+        Lion". Used by the authored-cast seeding path (:func:`~sidequest.server.
+        dispatch.pregen._seed_authored_npcs`) where a substring collision must
+        not shadow an authored NPC nor mutate the wrong entry's placement tags.
+        """
+        name_lower = name.lower()
+        for npc in self.npcs:
+            if npc.name.lower() == name_lower:
+                return npc
+        return None
+
     def find_enemy_by_name(self, name: str) -> tuple[dict, int] | None:
         """Find a pre-generated enemy across all encounters by name.
 
@@ -405,13 +420,24 @@ class MonsterManual(BaseModel):
 
     # ── Insertion ───────────────────────────────────────────────
 
-    def add_npc(self, data: dict[str, Any], location_tags: list[str]) -> None:
-        """Add a pre-generated NPC from namegen JSON output."""
+    def add_npc(
+        self, data: dict[str, Any], location_tags: list[str], *, exact: bool = False
+    ) -> None:
+        """Add a pre-generated NPC from namegen JSON output.
+
+        Dedup defaults to the fuzzy :meth:`find_npc_by_name` (substring) — the
+        legacy behavior for generated walk-ons. Pass ``exact=True`` to dedup on
+        full name only (:meth:`find_npc_by_exact_name`); the authored-cast path
+        uses this so a canonical NPC whose name is a substring of an existing
+        entry (e.g. "Lion" vs "Cowardly Lion") is still inserted instead of being
+        silently swallowed by the fuzzy guard.
+        """
         name = str(data.get("name") or "")
         role = str(data.get("role") or "")
         culture = str(data.get("culture") or "")
 
-        if self.find_npc_by_name(name) is not None:
+        match = self.find_npc_by_exact_name(name) if exact else self.find_npc_by_name(name)
+        if match is not None:
             return
 
         self.npcs.append(

@@ -318,6 +318,46 @@ SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_TOOTHLESS] = SpanRoute(
     },
 )
 
+# 108-2: the seater reconciled a router-named free-string opponent to a BOUND,
+# statted adversary in the scene (ADR-059 Monster-Manual / ADR-116 the Other).
+# Fires when the intent router invented an adversary name that matched no roster
+# entry (the "Hold-Dead"/"Arena Opponent" stubs) and the seater re-pointed it to
+# a co-located, statted, hostile ``creature_id`` creature instead of fabricating
+# one. The GM panel reads this to confirm the bound roster — not an improvised
+# HP-10 placeholder — reached the fight.
+SPAN_ENCOUNTER_OPPONENT_RESOLVED_FROM_ROSTER = "encounter.opponent_resolved_from_roster"
+SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_RESOLVED_FROM_ROSTER] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.opponent_resolved_from_roster",
+        "router_name": (span.attributes or {}).get("router_name", ""),
+        "bound_name": (span.attributes or {}).get("bound_name", ""),
+        "creature_id": (span.attributes or {}).get("creature_id", ""),
+        "match_scope": (span.attributes or {}).get("match_scope", ""),
+    },
+)
+
+# 108-2 (MINTING-MAJOR): the seater had to FABRICATE an opponent — a router-named
+# free-string adversary with no backing roster/bestiary entry AND no co-located
+# bound creature to resolve to. Loud lie-detector (No Silent Fallbacks): the GM
+# panel sees the engine invented a stub (and the content gap — author the
+# encounter's adversary). The stub is marked ``ephemeral`` and reaped with its
+# encounter so it never persists as durable canon.
+SPAN_ENCOUNTER_OPPONENT_MINTED_STUB = "encounter.opponent_minted_stub"
+SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_MINTED_STUB] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.opponent_minted_stub",
+        "encounter_type": (span.attributes or {}).get("confrontation_type", ""),
+        "opponent": (span.attributes or {}).get("opponent", ""),
+        "hp": (span.attributes or {}).get("hp", 0),
+        "armor_class": (span.attributes or {}).get("armor_class", 0),
+        "reason": (span.attributes or {}).get("reason", ""),
+    },
+)
+
 # Story 45-3: Mid-turn momentum broadcast lie-detector. Fires whenever the
 # server emits a CONFRONTATION frame carrying post-mutation momentum, so
 # the GM panel can audit "the dial moved on screen because the engine
@@ -976,6 +1016,64 @@ def encounter_opponent_attack_resolved_span(
             "attack_total": int(attack_total),
             "target_ac": int(target_ac),
             "hit": bool(hit),
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def encounter_opponent_resolved_from_roster_span(
+    *,
+    router_name: str,
+    bound_name: str,
+    creature_id: str,
+    match_scope: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """108-2: a router-named free-string opponent was reconciled to a bound,
+    statted adversary in the scene instead of fabricating a stub. ``match_scope``
+    records HOW it was found (``room``); ``creature_id`` proves a real bestiary
+    creature reached the fight (ADR-059 Monster-Manual doctrine)."""
+    with Span.open(
+        SPAN_ENCOUNTER_OPPONENT_RESOLVED_FROM_ROSTER,
+        {
+            "router_name": router_name,
+            "bound_name": bound_name,
+            "creature_id": creature_id,
+            "match_scope": match_scope,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def encounter_opponent_minted_stub_span(
+    *,
+    confrontation_type: str,
+    opponent: str,
+    hp: int,
+    armor_class: int,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """108-2 (MINTING-MAJOR): the seater fabricated an opponent with no backing
+    roster/bestiary entry and no co-located bound creature to resolve to. Loud
+    lie-detector for the content gap; the stub is marked ephemeral + reaped with
+    its encounter (No Silent Fallbacks)."""
+    with Span.open(
+        SPAN_ENCOUNTER_OPPONENT_MINTED_STUB,
+        {
+            "confrontation_type": confrontation_type,
+            "opponent": opponent,
+            "hp": hp,
+            "armor_class": armor_class,
+            "reason": reason,
             **attrs,
         },
         tracer_override=_tracer,

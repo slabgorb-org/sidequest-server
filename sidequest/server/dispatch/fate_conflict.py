@@ -30,6 +30,7 @@ from sidequest.game.encounter import (
     FateSealedCommit,
     StructuredEncounter,
 )
+from sidequest.game.fate_opponent import decide_opponent_action
 from sidequest.game.fate_sheet import Aspect, FateSheet, StressTrackName
 from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.fate import FateRulesetModule
@@ -42,6 +43,7 @@ from sidequest.telemetry.spans import (
     fate_exchange_committed_span,
     fate_exchange_order_span,
     fate_exchange_resolved_span,
+    fate_opponent_decided_span,
     fate_taken_out_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -280,6 +282,66 @@ def _maybe_resolve_side_cleared(encounter: StructuredEncounter) -> None:
         encounter.structured_phase = EncounterPhase.Resolution
 
 
+def _seat_opponent_commits(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    rng: random.Random,
+    mental: bool,
+    _tracer: trace.Tracer | None = None,
+) -> None:
+    """Seat a proactive attack commit for every live opponent that lacks one
+    (ADR-144 F2d). Runs at the TOP of the exchange so the committed span and the
+    ``commits`` dict include the opponent and the existing reactive walk lands the
+    opponent's stress on a PC. Mirrors ``dispatch_fate_action``'s PC seal+roll
+    path: ``decide_opponent_action`` chooses target+skill, then the opponent's 4dF
+    is rolled and sealed now (defense stays reactive at resolution).
+
+    A pre-committed opponent is left untouched — never double-committed
+    (``seal_fate_commit`` raises on a double; we skip rather than swallow it). A
+    seated opponent with no Fate sheet is an impossible state caught loud by
+    ``decide_opponent_action`` one line above (No Silent Fallbacks)."""
+    committed = {c.actor for c in encounter.fate_commits}
+    for opp in [a for a in encounter.actors if a.side == "opponent" and not a.withdrawn]:
+        if opp.name in committed:
+            continue
+        decision = decide_opponent_action(
+            encounter=encounter, snapshot=snapshot, opponent=opp, mental=mental
+        )
+        if decision is None:
+            continue
+        core = snapshot.find_creature_core(opp.name)
+        # decide_opponent_action already raised if opp had no Fate sheet; re-narrow
+        # for the rating lookup (the loudness lives in decide_opponent_action).
+        assert core is not None and core.fate_sheet is not None
+        rating = core.fate_sheet.skills.get(decision.skill, 0)
+        outcome = ruleset.resolve_action(
+            skill_rating=rating,
+            opposition=Opposition(value=0, kind="active"),
+            rng=rng,
+            actor=opp.name,
+            _tracer=_tracer,
+        )
+        seal_fate_commit(
+            encounter=encounter,
+            actor=opp,
+            action="attack",
+            skill=decision.skill,
+            target=decision.target,
+            ladder_total=outcome.ladder_total,
+            dice=outcome.dice,
+        )
+        fate_opponent_decided_span(
+            actor=opp.name,
+            action="attack",
+            skill=decision.skill,
+            target=decision.target,
+            ladder_total=outcome.ladder_total,
+            _tracer=_tracer,
+        )
+
+
 def run_fate_exchange(
     *,
     encounter: StructuredEncounter,
@@ -301,10 +363,19 @@ def run_fate_exchange(
     F1d passes the current interaction count as ``round_number`` so the resolved
     span and watcher payload carry it for GM-panel telemetry.
     """
+    mental = encounter.category == "social"
+    _seat_opponent_commits(
+        encounter=encounter,
+        snapshot=snapshot,
+        ruleset=ruleset,
+        rng=rng,
+        mental=mental,
+        _tracer=_tracer,
+    )
+
     committed = ", ".join(c.actor for c in encounter.fate_commits)
     fate_exchange_committed_span(committed_actors=committed, _tracer=_tracer)
 
-    mental = encounter.category == "social"
     order = fate_turn_order(encounter=encounter, snapshot=snapshot, mental=mental)
     fate_exchange_order_span(
         order=", ".join(order),

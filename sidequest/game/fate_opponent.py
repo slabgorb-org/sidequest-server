@@ -135,6 +135,13 @@ def decide_opponent_action(
 ) -> OpponentDecision | None:
     """Pick an opponent's proactive Fate action, deterministically.
 
+    Target priority (``_select_target``): (1) finish a live PC already *wounded* —
+    where "wounded" means any FILLED consequence slot (consequences are cross-track
+    invokable aspects per the Fate SRD, so a filled slot counts on EITHER track)
+    OR a checked stress box on *this* conflict track (stress is track-local); then
+    (2) retaliate against whoever attacked this opponent this exchange; then (3) the
+    highest-threat live PC, seating-order tiebreak.
+
     Returns an attack ``OpponentDecision``, or ``None`` when no live player-side PC
     exists (the side is cleared — do not seat a phantom attack). Raises ``ValueError``
     if the opponent has no fate_sheet/core — an impossible seated state (No Silent

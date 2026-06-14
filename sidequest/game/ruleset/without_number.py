@@ -24,6 +24,7 @@ never does (SWN authors no lethality surface).
 from __future__ import annotations
 
 import random
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
@@ -53,12 +54,16 @@ from sidequest.telemetry.spans.psionics import (
     effort_reclaim_span,
 )
 from sidequest.telemetry.spans.wn import (
+    chargen_attributes_assigned_span,
     major_injury_roll_span,
     mortal_injury_declared_span,
     shock_applied_span,
     system_strain_delta_span,
     trauma_roll_span,
 )
+
+if TYPE_CHECKING:
+    from sidequest.genre.models.character import ClassDef
 
 # Source key for the WN psionic Effort pool. WN psionics draw every discipline
 # from ONE Effort pool (SWN SRD §6), so the pool keys ``core.effort`` under this
@@ -614,6 +619,66 @@ class WithoutNumberRulesetModule(RulesetModule):
                 )
 
         return ChargenResources(effort=effort, spellcasting=spellcasting, system_strain=system_strain)
+
+    # ------------------------------------------------------------------
+    # Prime-aware attribute assignment (ADR-143 Step 2).
+    #
+    # The WN SRD (WWN §1.5 / SWN §1.2) specifies that a character's prime
+    # requisite — the key ability for their Calling — should be their
+    # highest score. The native hint-derivation heuristic (base class
+    # assign_attributes) infers this from chargen hints; the WN override
+    # does it directly and unconditionally when class_def is provided.
+    #
+    # Supersedes the native hint-derivation heuristic: every WN-bound pack
+    # gets prime-aware placement regardless of race/mutation/training hints.
+    # ------------------------------------------------------------------
+
+    def assign_attributes(
+        self,
+        *,
+        pool: list[int],
+        ability_names: list[str],
+        class_def: ClassDef | None,
+        acc: object | None = None,
+    ) -> dict[str, int]:
+        """Prime-aware: the chosen Calling's prime_requisite gets the highest pool
+        value; remaining values fill the other stats high-to-low by declaration
+        order (ADR-143 Step 2). Supersedes the native hint-derivation heuristic.
+
+        When class_def is None or prime is not in ability_names, falls through to
+        high-to-low fill in declaration order (explicit fall-through, not a masked
+        error — no class hint at chargen time is a valid chargen path). Emits
+        ``{slug}.chargen.attributes_assigned`` on every call (the GM-panel lie-
+        detector confirming which prime, if any, drove the placement).
+
+        acc is accepted for signature compatibility with the base but is not used:
+        prime placement is unconditional and the hint-derivation heuristic is
+        fully superseded for the WN family."""
+        ordered = sorted(pool, reverse=True)
+        stats: dict[str, int] = {}
+
+        prime: str | None = None
+        if class_def is not None and class_def.prime_requisite in ability_names:
+            prime = class_def.prime_requisite
+
+        if prime is not None:
+            stats[prime] = ordered[0]
+            rest = list(ordered[1:])
+        else:
+            rest = list(ordered)
+
+        for name in ability_names:
+            if name == prime:
+                continue
+            stats[name] = rest.pop(0)
+
+        chargen_attributes_assigned_span(
+            ruleset=self.slug,
+            prime=prime,
+            top=ordered[0],
+            stats=stats,
+        )
+        return stats
 
     # ------------------------------------------------------------------
     # Effort engine (SWN/WWN SRD §1.4.4 / §6) — shared SWN-family crunch.

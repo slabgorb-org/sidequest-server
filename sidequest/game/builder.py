@@ -3099,7 +3099,21 @@ class CharacterBuilder:
 
     def generate_stats(self, acc: AccumulatedChoices) -> dict[str, int]:
         """Delegate to the bound RulesetModule (ADR-143). The module owns the
-        attribute mechanics; the builder owns the FSM that gathered `acc`."""
+        attribute mechanics; the builder owns the FSM that gathered `acc`.
+
+        Resolves class_def from the builder's class roster + acc.class_hint so
+        the ruleset can use it for prime-aware assignment (ADR-143 Task 4).
+        Reuses the same resolution pattern as confirm_build: class_hint →
+        _default_class → None. Passes None when no classes are attached or
+        no class hint matches (no silent fallback — unmatched hint means no
+        class_def, not a fabricated one)."""
+        class_str = acc.class_hint or self._default_class
+        class_def = None
+        if class_str and self._classes:
+            class_def = next(
+                (c for c in self._classes if c.display_name == class_str),
+                None,
+            )
         return self._ruleset.generate_attributes(
             method=self._stat_generation,
             ability_names=self._ability_score_names,
@@ -3108,6 +3122,7 @@ class CharacterBuilder:
             rolled_stats=self._rolled_stats,
             acc=acc,
             rng=self._rng,
+            class_def=class_def,
         )
 
     # --- Private helpers ---

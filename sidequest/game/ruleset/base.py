@@ -259,7 +259,7 @@ class RulesetModule(ABC):
         from sidequest.game.chargen_contribution import ChargenResources
         return ChargenResources()
 
-    def generate_attributes(
+    def _generate_attribute_values(
         self,
         *,
         method: str,
@@ -267,21 +267,30 @@ class RulesetModule(ABC):
         standard_array: list[int] | None,
         point_buy_budget: int,
         rolled_stats: list[tuple[str, int]] | None,
-        acc: AccumulatedChoices,
         rng: random.Random,
-    ) -> dict[str, int]:
-        """Generate the ability-score dict per `method`. Default = the historical
-        builder behavior (point_buy / standard_array + hint-derivation / 3d6 / bones).
-        WithoutNumberRulesetModule overrides the assignment to be prime-aware (ADR-143)."""
-        from sidequest.telemetry.spans import SPAN_CHARGEN_STATS_GENERATED, Emitter
+    ) -> list[int]:
+        """Produce the raw attribute value pool for the given generation method.
 
+        Returns a list of ints in the pool's native order for every path — no
+        sorting happens here. The roll paths (3d6/bones) return values in
+        ability_names order via rolled_stats; standard_array returns the array
+        exactly as authored; point_buy returns the allocator's order. Any
+        sorting/placement is the responsibility of the assign_attributes
+        implementation that consumes this pool (the WN override sorts descending
+        for prime-aware placement; the base default zips in declaration order).
+
+        Extracted from generate_attributes (ADR-143 Task 4) so the value-generation
+        logic is reusable across the base and any override that wants to call super()
+        value-gen then do its own assignment.
+        """
         if method == "roll_3d6_strict":
             if rolled_stats is not None:
-                stats = dict(rolled_stats)
+                # Return values in ability_names order (paired with names).
+                return [v for _, v in rolled_stats]
             else:
                 # Defensive re-roll — shouldn't fire in practice because
                 # the eager construction roll covers this path.
-                stats = dict(_roll_3d6_stats(ability_names, rng))
+                return [v for _, v in _roll_3d6_stats(ability_names, rng)]
 
         elif method == "roll_the_bones":
             if rolled_stats is None:
@@ -291,39 +300,60 @@ class RulesetModule(ABC):
                     "roll_the_bones mode active but no rolled stats recorded — "
                     "_enter_roll_the_bones must run at mode adoption"
                 )
-            stats = dict(rolled_stats)
+            return [v for _, v in rolled_stats]
 
         elif method == "standard_array":
             # ADR-142 Step 2A: pack-authored array overrides the legacy
             # D&D 5e default when set; None preserves existing behavior.
-            base_values = (
-                standard_array
+            return (
+                list(standard_array)
                 if standard_array is not None
                 else [15, 14, 13, 12, 10, 8]
             )
-            stats = dict(zip(ability_names, base_values, strict=False))
 
         elif method == "point_buy":
-            values = _allocate_point_buy(len(ability_names), point_buy_budget)
-            stats = dict(zip(ability_names, values, strict=True))
+            return _allocate_point_buy(len(ability_names), point_buy_budget)
 
         else:
             from sidequest.game.builder import UnknownStatGenerationError
 
             raise UnknownStatGenerationError(method=method)
 
-        # Apply explicit stat bonuses from chargen choices (origin,
-        # mutation, artifact).
-        for stat, bonus in acc.stat_bonuses.items():
-            if stat in stats:
-                stats[stat] += bonus
+    def assign_attributes(
+        self,
+        *,
+        pool: list[int],
+        ability_names: list[str],
+        class_def: object | None,
+        acc: AccumulatedChoices | None = None,
+    ) -> dict[str, int]:
+        """Place pool values onto stats. Default: declaration order (historical),
+        plus the standard-array hint-derivation heuristic when acc is provided.
+
+        WN-core overrides with prime-aware placement (ADR-143 DD-4: heuristic
+        stays native-only; the WN override supersedes it entirely).
+
+        NOTE: acc is needed here ONLY for the hint-derivation heuristic that gates
+        on ``not acc.stat_bonuses`` and ``method == "standard_array"``. Since this
+        default runs on all non-WN rulesets (native), the heuristic is preserved
+        verbatim. The WN override ignores acc — prime placement is unconditional
+        when class_def is provided.
+
+        IMPORTANT: acc.stat_bonuses are applied by generate_attributes AFTER this
+        call returns, not inside assign_attributes. The hint-derivation guard
+        ``not acc.stat_bonuses`` is safe because bonuses haven't been applied yet
+        at call time — acc carries the *authored* bonus set, not post-apply values.
+        """
+        stats = dict(zip(ability_names, pool, strict=False))
 
         # Standard-array derivation: when no explicit bonuses were
         # authored and we have at least 3 stats, differentiate the
         # spread using accumulated hints.
+        # This block is NATIVE/DEFAULT only — WN overrides assign_attributes
+        # entirely and never reaches this branch.
         if (
-            not acc.stat_bonuses
-            and method == "standard_array"
+            acc is not None
+            and not acc.stat_bonuses
             and len(ability_names) >= 3
         ):
             names = ability_names
@@ -340,6 +370,64 @@ class RulesetModule(ABC):
             if acc.class_hint is not None or acc.training_hint is not None:
                 idx = min(2, len(names) - 1)
                 stats[names[idx]] = stats[names[idx]] + 2
+
+        return stats
+
+    def generate_attributes(
+        self,
+        *,
+        method: str,
+        ability_names: list[str],
+        standard_array: list[int] | None,
+        point_buy_budget: int,
+        rolled_stats: list[tuple[str, int]] | None,
+        acc: AccumulatedChoices,
+        rng: random.Random,
+        class_def: object | None = None,
+    ) -> dict[str, int]:
+        """Generate the ability-score dict per `method`. Splits into value-gen
+        (_generate_attribute_values) + assignment (assign_attributes) so
+        WithoutNumberRulesetModule can override only the assignment step.
+
+        acc.stat_bonuses are applied HERE (after assign_attributes returns) so
+        every ruleset gets them regardless of assignment strategy. The hint-
+        derivation heuristic lives in the DEFAULT assign_attributes; the WN
+        override supersedes it with prime-aware placement (ADR-143 Task 4).
+
+        class_def is forwarded to assign_attributes. CharacterBuilder resolves
+        it from the builder's class roster + acc.class_hint before delegating."""
+        from sidequest.telemetry.spans import SPAN_CHARGEN_STATS_GENERATED, Emitter
+
+        pool = self._generate_attribute_values(
+            method=method,
+            ability_names=ability_names,
+            standard_array=standard_array,
+            point_buy_budget=point_buy_budget,
+            rolled_stats=rolled_stats,
+            rng=rng,
+        )
+
+        # The hint-derivation heuristic only fires on standard_array when no
+        # explicit stat bonuses were set. Pass the method context via acc
+        # introspection: the heuristic already guards ``not acc.stat_bonuses``
+        # and the native default gates on standard_array via the caller context.
+        # For the heuristic to fire correctly on non-standard_array paths we
+        # add an explicit guard here — pass acc only when method == standard_array.
+        assign_acc = acc if method == "standard_array" else None
+
+        stats = self.assign_attributes(
+            pool=pool,
+            ability_names=ability_names,
+            class_def=class_def,
+            acc=assign_acc,
+        )
+
+        # Apply explicit stat bonuses from chargen choices (origin,
+        # mutation, artifact). Applied AFTER assignment so the bonuses
+        # stack on top of the placed values, not the pool values.
+        for stat, bonus in acc.stat_bonuses.items():
+            if stat in stats:
+                stats[stat] += bonus
 
         Emitter.fire(
             SPAN_CHARGEN_STATS_GENERATED,

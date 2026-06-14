@@ -59,6 +59,19 @@ def _dying_window_expired(sd, status) -> bool:
     rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
     cfg = rules.ruleset_config() if rules is not None else None
     if not isinstance(cfg, (CwnConfig, WwnConfig)):
+        # A stabilizable window is a structural guarantee that a WN cfg was bound
+        # when it opened. Reaching here means the bound cfg changed out from under
+        # an open window (a pack hot-swap / reload inconsistency) — fail LOUD
+        # rather than silently never-expiring a window that would then block play
+        # forever (No Silent Fallbacks). We still return False (don't expire on a
+        # cfg we can't read) but the error surfaces the misconfiguration.
+        logger.error(
+            "dying_window.no_wn_cfg actor_window_open created_turn=%s cfg=%s — "
+            "cannot compute the WWN dying-window deadline; window will not expire "
+            "until a WN cfg is readable",
+            getattr(status, "created_turn", None),
+            type(cfg).__name__,
+        )
         return False
     deadline = status.created_turn + cfg.trauma.mortal_injury_rounds
     return sd.snapshot.turn_manager.interaction >= deadline
@@ -576,11 +589,16 @@ class PlayerActionHandler:
         # (the PC can't take normal actions) but the downed soloist may still ACT
         # (free-text) to try to stabilize — and each submission spends a round on
         # the engine-owned clock. Two outcomes on the player's own turn:
-        #   - deadline passed → convert the window to terminal-dead and block
+        #   - deadline passed → tick the clock (the fatal final round — NOT a
+        #     stabilization), convert the window to terminal-dead and block
         #     (AC4: stalling can't pause the clock), then fall through to the
         #     existing terminal block below.
-        #   - still within the window → emit the per-round tick (lie-detector for
-        #     the clock) and PERMIT the action — route it to the narrator.
+        #   - still within the window → PERMIT the action and route it to the
+        #     narrator. The gate does NOT emit a tick here: it cannot know whether
+        #     the permitted action is a stabilization, and a hardcoded value would
+        #     contradict the stabilize tool's own tick/resolved spans (the
+        #     lie-detector must not assert what it can't observe). The tool emits
+        #     the honest tick when it adjudicates the attempt.
         if (
             downed_status is not None
             and downed_core is not None
@@ -592,7 +610,7 @@ class PlayerActionHandler:
                 dying_window_tick_span,
             )
 
-            slug = _bound_wn_slug(sd) or "wwn"
+            slug = _bound_wn_slug(sd)
             rounds_elapsed = max(
                 0, sd.snapshot.turn_manager.interaction - downed_status.created_turn
             )
@@ -608,8 +626,15 @@ class PlayerActionHandler:
                     incapacitating=True,
                 )
                 downed_core.statuses.append(terminal)
+                dying_window_tick_span(
+                    ruleset=slug or "wwn",
+                    actor=acting_name,
+                    rounds_elapsed=rounds_elapsed,
+                    difficulty=8 + rounds_elapsed,
+                    action_was_stabilization=False,
+                )
                 dying_window_resolved_span(
-                    ruleset=slug,
+                    ruleset=slug or "wwn",
                     actor=acting_name,
                     outcome="died",
                     final_rounds_elapsed=rounds_elapsed,
@@ -617,13 +642,6 @@ class PlayerActionHandler:
                 )
                 downed_status = terminal  # fall through to the terminal block
             else:
-                dying_window_tick_span(
-                    ruleset=slug,
-                    actor=acting_name,
-                    rounds_elapsed=rounds_elapsed,
-                    difficulty=8 + rounds_elapsed,
-                    action_was_stabilization=False,
-                )
                 downed_status = None  # permit — route to the narrator
         if downed_status is not None:
             from sidequest.server.post_resolution_lethality import (

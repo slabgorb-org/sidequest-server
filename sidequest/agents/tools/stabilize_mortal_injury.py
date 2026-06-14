@@ -52,7 +52,10 @@ from sidequest.game.ruleset.without_number import (
     is_dying_window_status,
 )
 from sidequest.game.status import Status, StatusSeverity
-from sidequest.telemetry.spans.wn import dying_window_resolved_span
+from sidequest.telemetry.spans.wn import (
+    dying_window_resolved_span,
+    dying_window_tick_span,
+)
 
 _MORTAL_INJURY_MARKER = "Mortal Injury"
 _FRAIL_TEXT = "Frail — recovering at 1 HP"
@@ -155,6 +158,19 @@ async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolCont
     rounds_elapsed = derived_rounds
     difficulty = 8 + rounds_elapsed
     success = args.roll >= difficulty
+
+    # Honest per-round tick: a stabilize attempt IS a stabilization (the gate
+    # cannot know this, so it emits no tick — the tool owns the truthful one),
+    # carrying the real roll and outcome for the GM panel.
+    dying_window_tick_span(
+        ruleset=module.slug,
+        actor=args.actor,
+        rounds_elapsed=rounds_elapsed,
+        difficulty=difficulty,
+        action_was_stabilization=True,
+        roll=args.roll,
+        success=success,
+    )
 
     if success:
         # Clear the dying window and downgrade to a Frail Wound; recover at 1 HP.

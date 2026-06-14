@@ -19,10 +19,91 @@ memorize anything this morning". The two gates are NOT collapsed into one.
 
 from __future__ import annotations
 
+import re
+from typing import Any
+
+from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.error import PackError
 from sidequest.genre.models.character import ClassDef
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
+
+# Story 106-4 Part C — transient inventory item-use beats. The confrontation
+# beat menu scans the actor's carried inventory and offers a "Drink <potion>"
+# beat for each usable heal consumable so a player can drink mid-fight (the
+# Zork-Problem / Agency fix: the verb set was closed at the most consequential
+# moment). The beat id encodes the item slug so the dispatch can match it back
+# to the inventory stack to consume. Resolution is auto-success (no roll) and
+# costs the Main Action — the opponent still acts on its initiative slot
+# (Keith, 2026-06-14; WWN-faithful, consistent with 106-2 Option A).
+ITEM_USE_BEAT_PREFIX = "use_item:"
+
+
+def item_slug(name: str) -> str:
+    """Stable, reversible-enough slug for an item name (``"Potion of Mending"``
+    → ``"potion_of_mending"``). The dispatch matches a committed item-use beat
+    back to an inventory item by comparing this slug, so it must be a pure
+    function of the name with no external state."""
+    return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+
+
+def item_use_beat_id(name: str) -> str:
+    """The transient beat id for using the named item."""
+    return f"{ITEM_USE_BEAT_PREFIX}{item_slug(name)}"
+
+
+def is_item_use_beat(beat_id: str) -> bool:
+    """True iff ``beat_id`` is a transient inventory item-use beat."""
+    return beat_id.startswith(ITEM_USE_BEAT_PREFIX)
+
+
+def _is_consumable(item: dict[str, Any]) -> bool:
+    """Mirror of narration_apply._is_consumable_item (kept local to avoid a
+    game→server layering import): a genuine single-use item — category
+    ``consumable`` OR a ``consumable`` tag. Only these may be spent on use."""
+    category = str(item.get("category", "") or "").strip().lower()
+    if category == "consumable":
+        return True
+    tags = item.get("tags") or []
+    if isinstance(tags, (list, tuple, set)):
+        return any(str(tag).strip().lower() == "consumable" for tag in tags)
+    return False
+
+
+def item_use_beats(inventory_items: list[dict[str, Any]] | None) -> list[BeatDef]:
+    """Transient item-use BeatDefs for the usable heal consumables carried.
+
+    A usable item is a genuine consumable (``_is_consumable``) carrying a
+    truthy ``heal_amount`` — the effect the dispatch will roll and apply. Two
+    identical stacks collapse to one beat (the action is the same; using it
+    consumes one). ``kind``/``stat_check`` are inert for these beats: the
+    dispatch intercepts the ``use_item:`` id BEFORE confrontation resolution,
+    so they never feed the dial/attack engine — they exist only to satisfy the
+    BeatDef model and render the tile.
+    """
+    if not inventory_items:
+        return []
+    beats: list[BeatDef] = []
+    seen: set[str] = set()
+    for item in inventory_items:
+        name = str(item.get("name", "") or "").strip()
+        if not name or not _is_consumable(item) or not item.get("heal_amount"):
+            continue
+        slug = item_slug(name)
+        if slug in seen:
+            continue
+        seen.add(slug)
+        beats.append(
+            BeatDef(
+                id=item_use_beat_id(name),
+                label=f"Drink {name}",
+                kind=BeatKind.push,
+                base=0,
+                stat_check="CON",
+                flavor="Spend your action to use a carried item.",
+            )
+        )
+    return beats
 
 
 def _has_any_prepared(prepared_spells: dict[int, list[str]] | None) -> bool:
@@ -38,6 +119,7 @@ def beats_available_for(
     spell_slots_remaining: float,
     prepared_spells: dict[int, list[str]] | None = None,
     spellcasting: SpellcastingState | None = None,
+    inventory_items: list[dict[str, Any]] | None = None,
 ) -> list[BeatDef]:
     """Return the BeatDefs the given class can select this turn.
 
@@ -99,6 +181,13 @@ def beats_available_for(
             if prepared_spells is not None and not _has_any_prepared(prepared_spells):
                 continue
         pool.append(beat)
+    # Story 106-4 Part C: append transient item-use beats from the actor's
+    # inventory, gated to hp_depletion combat — a heal consumable is only
+    # usable where HP is the track (a chase/social cdef has no HP to restore,
+    # so offering "Drink Potion" there is a dead affordance). Appended AFTER
+    # the authored pool so item beats sort to the end of the menu.
+    if inventory_items and confrontation.win_condition == "hp_depletion":
+        pool.extend(item_use_beats(inventory_items))
     return pool
 
 

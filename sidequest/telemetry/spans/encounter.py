@@ -339,6 +339,25 @@ SPAN_ROUTES[SPAN_ENCOUNTER_MOMENTUM_BROADCAST] = SpanRoute(
     },
 )
 
+# Story 106-4 Part C — inventory item-use beat lie-detector. Fires when a
+# player commits a "Drink <potion>" beat mid-confrontation: the engine consumed
+# the item and applied its heal effect. The GM panel reads this to confirm the
+# heal was mechanically backed (item gone, HP pool moved) rather than narrator
+# improvisation. ``healed`` is the post-clamp HP restored; ``hp_after`` the new
+# pool current.
+SPAN_CONFRONTATION_ITEM_USED = "confrontation.item_used"
+SPAN_ROUTES[SPAN_CONFRONTATION_ITEM_USED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "confrontation.item_used",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "item": (span.attributes or {}).get("item", ""),
+        "healed": (span.attributes or {}).get("healed", 0),
+        "hp_after": (span.attributes or {}).get("hp_after", 0),
+    },
+)
+
 # Dual-track momentum constants — flat-only baseline; routes land with the
 # GM-panel encounter timeline rollout.
 SPAN_ENCOUNTER_BEAT_SKIPPED = "encounter.beat_skipped"
@@ -1094,6 +1113,34 @@ def encounter_beat_skipped_span(
         {"reason": reason, "actor": actor, "actor_side": actor_side, "beat_id": beat_id, **attrs},
     ) as s:
         yield s
+
+
+def confrontation_item_used_span(
+    *,
+    actor: str,
+    item: str,
+    healed: int,
+    hp_after: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit a confrontation.item_used span (Story 106-4 Part C lie-detector).
+
+    Point mutation, not a span of work — opens and immediately closes so the
+    WatcherSpanProcessor routes it to the GM panel's state_transition feed.
+    """
+    with Span.open(
+        SPAN_CONFRONTATION_ITEM_USED,
+        {
+            "actor": actor,
+            "item": item,
+            "healed": healed,
+            "hp_after": hp_after,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ):
+        pass
 
 
 @contextmanager

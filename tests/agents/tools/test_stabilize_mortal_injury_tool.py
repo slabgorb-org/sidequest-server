@@ -149,7 +149,14 @@ def _cwn_character(name: str, *, mortal: bool = True) -> Character:
         system_strain=SystemStrainPool(current=0, max=12, permanent=0),
     )
     if mortal:
-        core.statuses.append(Status(text=_MORTAL_TEXT, severity=StatusSeverity.Scar))
+        # Story 108-6: dying window status (stabilizable + incapacitating)
+        core.statuses.append(Status(
+            text=_MORTAL_TEXT,
+            severity=StatusSeverity.Scar,
+            incapacitating=True,
+            stabilizable=True,
+            created_turn=0,  # engine-owned clock: rounds_elapsed derived from created_turn
+        ))
     return Character(
         core=core,
         backstory="Street samurai for hire.",
@@ -158,11 +165,11 @@ def _cwn_character(name: str, *, mortal: bool = True) -> Character:
     )
 
 
-def _build_snapshot(characters: list[Character] | None = None) -> GameSnapshot:
+def _build_snapshot(characters: list[Character] | None = None, interaction: int = 1) -> GameSnapshot:
     return GameSnapshot(
         genre_slug="neon_dystopia",
         world_slug="franchise_nations",
-        turn_manager=TurnManager(interaction=1),
+        turn_manager=TurnManager(interaction=interaction),
         characters=characters or [],
         npcs=[],
     )
@@ -333,7 +340,7 @@ async def test_awn_pack_can_stabilize() -> None:
 
 async def test_difficulty_scales_with_rounds_elapsed() -> None:
     char = _cwn_character("Jax")
-    snap = _build_snapshot(characters=[char])
+    snap = _build_snapshot(characters=[char], interaction=5)
     pack = _FakePack()
     store = _store_with(snap)
     ctx = _make_ctx(store, genre_pack=pack)

@@ -76,6 +76,17 @@ if TYPE_CHECKING:
 PSIONIC_EFFORT_SOURCE = "psionic"
 
 
+def is_dying_window_status(status: object) -> bool:
+    """True for the WWN dying-window Mortal Injury status (story 108-6).
+
+    The single predicate the input gate, the stabilize tool, and the expiry pass
+    all share to answer "is this the live, stabilizable dying window?". Keyed on
+    the structured ``stabilizable`` flag — never a scrape of ``text`` (CLAUDE.md:
+    structured markers, not source/text scraping; cf. ``incapacitating``).
+    """
+    return bool(getattr(status, "stabilizable", False))
+
+
 def swn_attribute_modifier(score: int) -> int:
     """SWN Revised tight curve (NOT D&D's (score-10)//2).
 
@@ -475,6 +486,7 @@ class WithoutNumberRulesetModule(RulesetModule):
         created_turn: int = 0,
         created_in_encounter: str | None = None,
         superseded_by_terminal: bool = False,
+        dying_window: bool = False,
         _tracer: trace.Tracer | None = None,
     ) -> DownedResult:
         """Resolve a WN character dropped to 0 HP.
@@ -487,17 +499,23 @@ class WithoutNumberRulesetModule(RulesetModule):
         and attaches a second Scar. Emits {slug}.mortal_injury.declared and
         (when rolled) {slug}.major_injury.roll.
 
+        ``dying_window`` (story 108-6) selects which Mortal Injury status to mint
+        when NOT superseded: ``True`` mints the live WWN dying window
+        (``incapacitating`` + ``stabilizable`` — the solo last-stand the gate
+        permits the player to drive), ``False`` mints the ordinary
+        non-incapacitating death clock (a downed opponent, or a PC dropped with a
+        live hostile still present). The seam chooses ``dying_window`` from
+        live-hostile presence; this method just classifies the status.
+
         ``superseded_by_terminal`` (sq-playtest #239 death dual-status): when the
         genre lethality policy has ALREADY ruled this actor terminally dead (an
         ``incapacitating`` "Downed — ... (mortally wounded)" status is present),
-        a coexisting non-incapacitating "dies in N rounds unless stabilized"
-        window is a CONTRADICTORY second status — terminal-dead vs. stabilizable.
-        The real WWN dying window is deferred to story 106-5 (and is unactionable
-        in solo per .pennyfarthing/sidecars/gm-decisions.md). So we SUPERSEDE:
-        the WN lethality span still fires (GM-panel lie-detector — WN lethality
-        IS engaged), carrying ``superseded_by_terminal=True``, but the
-        contradictory window status (and any Major Injury scar) is NOT appended.
-        A terminally-dead PC then shows exactly ONE coherent status.
+        a coexisting "dies in N rounds unless stabilized" window is a
+        CONTRADICTORY second status — terminal-dead vs. stabilizable. So we
+        SUPERSEDE: the WN lethality span still fires (GM-panel lie-detector — WN
+        lethality IS engaged), carrying ``superseded_by_terminal=True``, but no
+        Mortal Injury status (and no Major Injury scar) is appended. A
+        terminally-dead PC then shows exactly ONE coherent status.
         """
         if not isinstance(cfg, (CwnConfig, WwnConfig)):
             raise ValueError(
@@ -505,12 +523,24 @@ class WithoutNumberRulesetModule(RulesetModule):
             )
         rounds = cfg.trauma.mortal_injury_rounds
         if not superseded_by_terminal:
+            # Story 108-6: a down mints one of two Mortal Injury statuses.
+            #   - dying_window=True (a downed PC with no live hostile — the scoped
+            #     solo case): the live WWN dying window — ``incapacitating`` (the
+            #     PC can't take normal actions) AND ``stabilizable`` (the marker
+            #     the turn-intake gate reads to PERMIT the soloist's stabilize
+            #     attempt). The deadline derives from ``created_turn`` provenance.
+            #   - dying_window=False (a downed opponent, or a PC with a live
+            #     hostile present): the ordinary Mortal Injury death clock — the
+            #     pre-108-6 behavior (non-incapacitating, not stabilizable).
+            # Nothing native is tuned either way (ADR-143).
             core.statuses.append(
                 Status(
                     text=f"Mortal Injury — dies in {rounds} rounds unless stabilized",
                     severity=StatusSeverity.Scar,
                     created_turn=created_turn,
                     created_in_encounter=created_in_encounter,
+                    incapacitating=dying_window,
+                    stabilizable=dying_window,
                 )
             )
         mortal_injury_declared_span(

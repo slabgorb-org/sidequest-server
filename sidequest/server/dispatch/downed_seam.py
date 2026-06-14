@@ -101,6 +101,24 @@ def physical_save_target_for(
     ).difficulty
 
 
+def _has_live_hostile_on_side(snapshot, encounter, *, hostile_side: str) -> bool:
+    """True if any non-withdrawn actor on ``hostile_side`` still has HP > 0.
+
+    Story 108-6: ``actor_side`` IS the hostile side relative to the downed PC
+    (the PC is the first live actor on the OPPOSITE side, per
+    ``_opposite_side_first_actor``). A live hostile means the PC gets no last
+    stand — terminal, as today. Field cleared (no live hostile) is the scoped
+    solo case — open the WWN dying window. This is a seating/branch decision, NOT
+    a native-mechanic tune (ADR-143).
+    """
+    for actor in encounter.actors:
+        if actor.side == hostile_side and not getattr(actor, "withdrawn", False):
+            hostile_core = snapshot.find_creature_core(actor.name)
+            if hostile_core is not None and hostile_core.hp.current > 0:
+                return True
+    return False
+
+
 def run_cwn_wwn_downed_seam(
     *,
     ruleset,
@@ -166,13 +184,37 @@ def run_cwn_wwn_downed_seam(
     # coherent status — the WN ``mortal_injury.declared`` span still fires
     # (GM-panel proof WN lethality engaged), marked ``superseded_by_terminal``.
     superseded = any(getattr(s, "incapacitating", False) for s in down_core.statuses)
+    # Story 108-6: the stabilizable WWN dying window (incapacitating + player-
+    # drivable) opens ONLY for a down with the field cleared — no live hostile
+    # can still act on the downed actor. That is the scoped solo last-stand case.
+    # A down WITH a live hostile (every opponent the player just dropped — the
+    # live player IS the hostile — and a PC dropped at sword-point) takes the
+    # ORDINARY Mortal Injury death clock, exactly as before 108-6. ``superseded``
+    # (an already-stamped terminal verdict) still mints nothing. This is a
+    # seating/branch decision, not a native-mechanic tune (ADR-143).
+    live_hostile = _has_live_hostile_on_side(snapshot, encounter, hostile_side=actor_side)
+    open_window = not superseded and not live_hostile
+    created_turn = snapshot.turn_manager.interaction
     ruleset.resolve_downed(
         core=down_core,
         save_target=save_target,
         scene_traumatic=scene_traumatic,
         cfg=cfg,
         rng=rng,
-        created_turn=snapshot.turn_manager.interaction,
+        created_turn=created_turn,
         created_in_encounter=encounter.encounter_type,
         superseded_by_terminal=superseded,
+        dying_window=open_window,
     )
+    if open_window and isinstance(cfg, (CwnConfig, WwnConfig)):
+        from sidequest.telemetry.spans.wn import dying_window_opened_span
+
+        rounds = cfg.trauma.mortal_injury_rounds
+        dying_window_opened_span(
+            ruleset=ruleset.slug,
+            actor=down_name,
+            created_turn=created_turn,
+            mortal_injury_rounds=rounds,
+            deadline_round=created_turn + rounds,
+            reason="no_live_hostile",
+        )

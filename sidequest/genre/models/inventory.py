@@ -8,13 +8,20 @@ from __future__ import annotations
 import random
 import re
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sidequest.protocol.dice import DieSides
 
 _DICE_RE = re.compile(r"^(?P<count>\d+)d(?P<faces>\d+)$")
+
+# Licenses that permit verbatim reproduction of an SRD mechanical envelope
+# (ADR-145 D4). The Without Number line is "wn-free"; nothing else permits
+# verbatim reuse. Single source of truth for the verbatim-license invariant,
+# enforced structurally in ItemProvenance and (defense in depth) in the
+# extraction tool.
+_VERBATIM_LICENSES = frozenset({"wn-free"})
 
 # Parity die (the tabletop "no d2 in the bag" move): a d2 is realized by
 # throwing a real, renderable die and reading its parity — even → 1, odd → 2.
@@ -142,6 +149,39 @@ class DamageSpec(BaseModel):
         return sum(rng.randint(1, faces) for _ in range(count)) + self.bonus
 
 
+class ItemProvenance(BaseModel):
+    """Where a catalog item's mechanics came from (ADR-145 D2).
+
+    Strict, first-class data — not a YAML comment — so the extraction tool
+    (114-3) and the licensing audit can read it. ``mode`` describes the
+    *mechanical envelope* only; presentation (``name``/``description``) is
+    always freely reskinnable regardless of mode (ADR-145 D1).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    mode: Literal["verbatim", "derived", "bespoke"]
+    srd: str | None = None  # "wwn" | "cwn" | "swn" | "awn"; None iff bespoke
+    srd_ref: str | None = None  # SRD section/table, e.g. "WWN SRD §3.0.1 Armor"
+    # "wn-free" = Without Number SRD free-use terms (all four WN SRDs);
+    # "ccby" = Fate Core; "none"/"na" = no verbatim permission.
+    license: Literal["wn-free", "ccby", "none", "na"] = "na"
+    extracted_by: str | None = None  # extraction-tool version stamp; None for hand-authored bespoke
+
+    @model_validator(mode="after")
+    def _verbatim_requires_permitting_license(self) -> ItemProvenance:
+        # No Silent Fallbacks (ADR-145 D4): a verbatim record may only claim a
+        # license that permits verbatim reuse. Enforced structurally here so NO
+        # construction path — not just the extraction tool — can mint a
+        # self-inconsistent verbatim item. Mirrors DamageSpec._shock_requires_ceiling.
+        if self.mode == "verbatim" and self.license not in _VERBATIM_LICENSES:
+            raise ValueError(
+                f"provenance mode='verbatim' requires a license permitting verbatim reuse "
+                f"(one of {sorted(_VERBATIM_LICENSES)}); got license={self.license!r} (ADR-145 D4)"
+            )
+        return self
+
+
 class CatalogItem(BaseModel):
     """A single item in the genre pack's item catalog."""
 
@@ -167,6 +207,12 @@ class CatalogItem(BaseModel):
     heal_amount: str | None = (
         None  # consumable: HP restored on use, NdM[+B] (e.g. "1d6+2"); applied at consume (Story 106-4)
     )
+    # ADR-145 D2 schema delta. None-defaulted so existing melee/armor items
+    # validate unchanged; populated by SRD extraction (114-3).
+    provenance: ItemProvenance | None = None  # where the mechanics came from
+    tech_level: int | None = None  # SWN/AWN/CWN TL tag
+    range_band: str | None = None  # ranged: "thrown" | "pistol" | "rifle" | ... (SRD bands)
+    magazine: int | None = None  # ranged: shots per reload
 
 
 class CarryMode(StrEnum):

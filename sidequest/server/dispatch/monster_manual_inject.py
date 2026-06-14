@@ -51,6 +51,17 @@ logger = logging.getLogger(__name__)
 # active at the current location. Mirrors the Rust
 # ``format_nearby_npcs`` "Other known NPCs" slice (top 3).
 _AVAILABLE_NPC_INJECT_LIMIT = 3
+# Cap on ACTIVE-at-location humans re-surfaced into the snapshot each turn.
+# sq-playtest 2026-06-13 (oz): the Active-at-location loop was UNCAPPED, so a
+# scene where the narrator had named several NPCs re-injected all of them every
+# turn (observed 7-10 "nearby" humans on a quiet road) — over-feeding the
+# narrator's bench and amplifying the entourage feel. A genuinely-present active
+# NPC also persists as a stateful ``snapshot.npcs`` entry (the cite path), so
+# bounding this re-injection bench does NOT make a present NPC vanish; it only
+# stops dangling the whole roster as "nearby" candidates. Generous enough for a
+# legitimately populated scene, bounded enough that a lull does not accrete a
+# crowd.
+_ACTIVE_NPC_INJECT_LIMIT = 5
 # Cap on encounter blocks materialized outside of combat. In combat the
 # narrator gets every Available encounter so the creature stat blocks land
 # in ``snapshot.npcs``; out of combat we surface only the leading 2 so a
@@ -149,19 +160,25 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
 
 def _npc_patches_for_available_humans(
     manual: MonsterManual, current_location: str
-) -> list[NpcPatch]:
+) -> tuple[list[NpcPatch], int]:
     """Build patches for Active-at-location + top-N Available humans.
 
     Mirrors :meth:`MonsterManual.format_nearby_npcs` selection logic:
 
     - Active NPCs whose ``activated_location`` overlaps ``current_location``
       (substring either direction) — full-profile patch, stamped with
-      the explicit anchor location.
+      the explicit anchor location. Capped at
+      :data:`_ACTIVE_NPC_INJECT_LIMIT` (sq-playtest 2026-06-13): the loop was
+      previously uncapped and re-surfaced every named NPC every turn.
     - First :data:`_AVAILABLE_NPC_INJECT_LIMIT` Available NPCs — name-only
       patch stamped with the party's ``current_location`` so the
       projection layer's ``in_same_zone()`` matches them.
 
     Dormant NPCs are skipped — same exclusion as the Rust formatter.
+
+    Returns ``(patches, active_capped)`` — ``active_capped`` is the number of
+    Active-at-location humans dropped by the cap, surfaced in the injection
+    span so the GM panel sees the bench was bounded (not silently truncated).
 
     Playtest 2026-05-11 regression: prior versions left ``location=None``
     on every patch, which silently masked every co-located target from
@@ -172,18 +189,30 @@ def _npc_patches_for_available_humans(
     loc_lower = (current_location or "").lower()
     fallback_location = current_location or None
 
-    patches: list[NpcPatch] = []
-
+    # Collect all Active-at-location matches first, then cap — so the cap drops
+    # the tail deterministically (manual.npcs order) and we can report how many
+    # were elided rather than silently swallowing them (No Silent Fallbacks).
+    active_patches: list[NpcPatch] = []
     for npc in manual.npcs:
         if npc.state != EntryState.ACTIVE:
             continue
         anchor = npc.activated_location
         if anchor is None:
-            patches.append(_human_patch(npc, location=fallback_location))
+            active_patches.append(_human_patch(npc, location=fallback_location))
             continue
         anchor_lower = anchor.lower()
         if loc_lower and (anchor_lower in loc_lower or loc_lower in anchor_lower):
-            patches.append(_human_patch(npc, location=anchor))
+            active_patches.append(_human_patch(npc, location=anchor))
+
+    active_capped = max(0, len(active_patches) - _ACTIVE_NPC_INJECT_LIMIT)
+    if active_capped:
+        logger.info(
+            "monster_manual.active_inject_capped kept=%d dropped=%d location=%r",
+            _ACTIVE_NPC_INJECT_LIMIT,
+            active_capped,
+            current_location,
+        )
+    patches: list[NpcPatch] = active_patches[:_ACTIVE_NPC_INJECT_LIMIT]
 
     available = [n for n in manual.npcs if n.state == EntryState.AVAILABLE][
         :_AVAILABLE_NPC_INJECT_LIMIT
@@ -191,7 +220,7 @@ def _npc_patches_for_available_humans(
     for npc in available:
         patches.append(_human_patch(npc, location=fallback_location))
 
-    return patches
+    return patches, active_capped
 
 
 def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
@@ -420,8 +449,9 @@ def inject(
     combat_encounters = getattr(rules, "combat_encounters", True)
 
     all_patches: list[NpcPatch] = []
+    active_capped = 0
     if manual is not None:
-        human_patches = _npc_patches_for_available_humans(manual, current_location)
+        human_patches, active_capped = _npc_patches_for_available_humans(manual, current_location)
         creature_patches = (
             _npc_patches_for_encounters(manual, in_combat, current_location)
             if combat_encounters
@@ -451,6 +481,7 @@ def inject(
                 "total_encounters": len(manual.encounters),
                 "npcs_injected": len(human_patches),
                 "creatures_injected": len(creature_patches),
+                "active_npcs_capped": active_capped,
                 "names_sanitized": names_sanitized,
                 "patches_with_location": patches_with_location,
                 "in_combat": bool(in_combat),

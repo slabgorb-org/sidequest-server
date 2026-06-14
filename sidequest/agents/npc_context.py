@@ -35,6 +35,28 @@ from sidequest.telemetry.spans import npc_working_set_span
 DEFAULT_RECENCY_WINDOW = 2
 
 
+def _same_scene(loc_a: str | None, loc_b: str | None) -> bool:
+    """Co-location test for the scene-present floor.
+
+    Tolerant of the phrasing drift that creeps into ``character_locations``
+    strings across turns ("the Yellow Brick Road" vs "Yellow Brick Road"),
+    matching the Monster Manual's activated-location heuristic
+    (``monster_manual_inject._npc_patches_for_available_humans``): case-folded
+    equality OR substring overlap either direction.
+
+    Returns ``False`` when either side is blank — a missing location is *not*
+    treated as a match. Callers gate on a known party location before applying
+    the filter, so the blank-party case never reaches here as a false prune.
+    """
+    if not loc_a or not loc_b:
+        return False
+    a = loc_a.strip().casefold()
+    b = loc_b.strip().casefold()
+    if not a or not b:
+        return False
+    return a == b or a in b or b in a
+
+
 @dataclass(frozen=True)
 class NpcWorkingSet:
     """The budgeted projection of the roster for one narrator turn.
@@ -104,6 +126,7 @@ def build_npc_working_set(
     current_turn: int,
     player_referenced_npcs: set[str] | None = None,
     recency_window: int = DEFAULT_RECENCY_WINDOW,
+    current_location: str | None = None,
 ) -> NpcWorkingSet:
     """Partition the roster into a budgeted working-set for the narrator prompt.
 
@@ -114,6 +137,16 @@ def build_npc_working_set(
             ``None`` selects compact-only mode for the off-stage tier (the
             scene-present floor is unaffected).
         recency_window: turns within which a stateful NPC is scene-present.
+        current_location: the party's scene location (``character_locations``
+            coordinate, same source as ``Npc.last_seen_location``). When
+            ``None`` it is resolved from ``snapshot.party_location()``. The
+            scene-present floor additionally requires CO-LOCATION: an NPC last
+            cited in another scene/region is demoted off-stage even within the
+            recency window (the entourage-bloat fix — sq-playtest 2026-06-13).
+            When no party location can be resolved (party split / pre-chargen),
+            the co-location filter is inactive and the floor falls back to
+            recency-only (No Silent Fallbacks: we never prune on an unknown
+            location).
 
     Returns:
         An :class:`NpcWorkingSet`. Every roster member surfaces in exactly one
@@ -122,8 +155,23 @@ def build_npc_working_set(
     threshold = current_turn - recency_window
     references_present = bool(player_referenced_npcs)
 
+    # Co-location floor (sq-playtest 2026-06-13 "everyone is hanging out with
+    # me"): the recency floor alone kept an NPC cited in region A "scene-present"
+    # in region B for the whole window, so the narrator kept it on stage and
+    # re-cited it — a self-perpetuating entourage that never shed on movement.
+    # Refining the floor to *recent AND co-located* drops the left-behind NPC to
+    # off-stage the moment the party's scene diverges from where it was last
+    # seen. This does NOT violate ADR-118's "never drop the present scene"
+    # ruling — an NPC in a different region was never physically present; this
+    # corrects what "present" means.
+    resolved_location = (
+        current_location if current_location is not None else snapshot.party_location()
+    )
+    location_filter_active = bool(resolved_location)
+
     full_profiles: list[Npc] = []
     off_stage: list[Npc | NpcPoolMember] = []
+    location_pruned = 0
 
     # Stateful NPCs carry recency — classify the floor by last_seen_turn.
     # ``last_seen_turn == 0`` is the unset sentinel (interaction starts at 1 and
@@ -133,10 +181,23 @@ def build_npc_working_set(
     # budgeting at turns 1-2 and violating No Silent Fallbacks. Never-seen NPCs
     # are off-stage regardless of the threshold.
     for npc in snapshot.npcs:
-        if npc.last_seen_turn > 0 and npc.last_seen_turn >= threshold:
-            full_profiles.append(npc)
-        else:
+        recent = npc.last_seen_turn > 0 and npc.last_seen_turn >= threshold
+        if not recent:
             off_stage.append(npc)
+            continue
+        # Recency says scene-present. Require co-location too. An NPC whose
+        # ``last_seen_location`` is unknown (None) is kept full — a cite always
+        # stamps a location, so None is the legacy/pre-bind case and we fail
+        # toward keeping a possibly-present NPC rather than pruning on no data.
+        if (
+            location_filter_active
+            and npc.last_seen_location is not None
+            and not _same_scene(npc.last_seen_location, resolved_location)
+        ):
+            off_stage.append(npc)
+            location_pruned += 1
+            continue
+        full_profiles.append(npc)
 
     # Pool members have no recency field; they can never be scene-present.
     off_stage.extend(snapshot.npc_pool)
@@ -155,6 +216,8 @@ def build_npc_working_set(
         compact_count=len(compact_names),
         total_pool=len(snapshot.npcs) + len(snapshot.npc_pool),
         references_present=references_present,
+        location_pruned=location_pruned,
+        location_filter_active=location_filter_active,
     ):
         pass
 

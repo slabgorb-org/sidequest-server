@@ -54,7 +54,7 @@ def _item_dict_from_catalog(catalog_item: CatalogItem) -> dict:
     Mirrors the Rust ``Item`` JSON shape (connect.rs:1795-1812).
     """
     rarity = catalog_item.rarity.strip() or "common"
-    return {
+    item_dict: dict = {
         "id": catalog_item.id,
         "name": catalog_item.name,
         "description": catalog_item.description,
@@ -69,6 +69,12 @@ def _item_dict_from_catalog(catalog_item: CatalogItem) -> dict:
         "uses_remaining": catalog_item.resource_ticks,
         "state": "Carried",
     }
+    # Story 106-4: carry the consumable heal effect onto the inventory dict so
+    # the consume seam (narration_apply._apply_consumable_heal) can apply it.
+    # Without this the kit-rolled Potion of Mending heals nothing.
+    if catalog_item.heal_amount:
+        item_dict["heal_amount"] = catalog_item.heal_amount
+    return item_dict
 
 
 def _upgrade_hint_items_from_catalog(

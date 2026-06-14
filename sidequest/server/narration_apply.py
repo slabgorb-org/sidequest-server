@@ -74,6 +74,7 @@ from sidequest.game.session import (
     upsert_quest_status,
 )
 from sidequest.game.table.types import TableCommit
+from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import FleeConsequence, MoraleTrigger, ResolutionMode
 from sidequest.genre.names import generator as _namegen_module
@@ -126,6 +127,7 @@ from sidequest.telemetry.spans import (
     quest_updates_legacy_emitted_span,
     region_entry_canonicalized_dedup_span,
     region_entry_rejected_span,
+    state_patch_hp_span,
     table_commit_span,
     trope_resolution_handshake_span,
 )
@@ -3167,6 +3169,86 @@ def _is_consumable_item(item: dict[str, object]) -> bool:
     return False
 
 
+_HEAL_EXPR_RE = re.compile(r"^\s*(\d+d\d+)\s*([+-]\s*\d+)?\s*$", re.IGNORECASE)
+
+
+def _parse_heal_spec(expr: object) -> DamageSpec | None:
+    """Parse an item ``heal_amount`` expression (``"1d6+2"``) into a
+    :class:`DamageSpec` (reusing its validated NdM+bonus roller). Returns
+    None for a blank/absent value (most consumables don't heal) and raises
+    nothing for a malformed one — the caller logs the miss loudly so a
+    content typo is visible on the GM panel rather than silently no-healing.
+    """
+    if not expr:
+        return None
+    m = _HEAL_EXPR_RE.match(str(expr))
+    if not m:
+        return None
+    dice = m.group(1)
+    bonus = int(m.group(2).replace(" ", "")) if m.group(2) else 0
+    return DamageSpec(dice=dice, bonus=bonus)
+
+
+def _apply_consumable_heal(
+    item: dict[str, object],
+    recipient: Character,
+    *,
+    player_name: str,
+    turn_num: int,
+) -> int | None:
+    """Apply a consumed item's ``heal_amount`` to the recipient's HpPool and
+    emit the ``state_patch.hp`` lie-detector span (ADR-114 §6).
+
+    Story 106-4: the consume lane removed the item but never applied its
+    effect — a drunk Potion of Mending healed ZERO HP. This is the effect
+    half. Returns the HP actually restored (post-clamp delta), or None when
+    the item carries no heal effect. Magnitude is authored on the item
+    (``heal_amount``, e.g. ``"1d6+2"`` per the WWN-SRD ruling) — not invented
+    here; a malformed expression is surfaced loudly (No Silent Fallbacks).
+    """
+    raw = item.get("heal_amount")
+    if not raw:
+        return None
+    spec = _parse_heal_spec(raw)
+    if spec is None:
+        logger.warning(
+            "state.consumable_heal_malformed player=%s turn=%d item=%r heal_amount=%r "
+            "reason=not_NdM_plus_bonus",
+            player_name,
+            turn_num,
+            str(item.get("name", "") or ""),
+            raw,
+        )
+        return None
+    pool = recipient.core.hp
+    before = pool.current
+    rolled = spec.roll(random.Random())
+    new_current = recipient.core.apply_hp_delta(rolled)
+    delta = new_current - before
+    state_patch_hp_span(
+        actor=recipient.core.name,
+        delta=delta,
+        source="consumable_heal",
+        current=new_current,
+        maximum=pool.max,
+        item=str(item.get("name", "") or ""),
+        rolled=rolled,
+    )
+    logger.info(
+        "state.consumable_heal player=%s turn=%d item=%r heal_amount=%r rolled=%d "
+        "applied=%d hp=%d/%d",
+        player_name,
+        turn_num,
+        str(item.get("name", "") or ""),
+        str(raw),
+        rolled,
+        delta,
+        new_current,
+        pool.max,
+    )
+    return delta
+
+
 def resolve_item_recipient(
     snapshot: GameSnapshot,
     entry: dict[str, object],
@@ -4798,6 +4880,17 @@ def _apply_narration_result_to_snapshot(
                     # "No Silent Fallbacks" the refusal is surfaced on the OTEL
                     # span (preserved_consumes) + an INFO log, not swallowed.
                     if _is_consumable_item(existing):
+                        # Story 106-4: apply the item's effect BEFORE removing
+                        # it — a heal_amount consumable (Potion of Mending)
+                        # restores HP to the recipient's pool + emits the
+                        # state_patch.hp lie-detector span. The consume half
+                        # was already wired; this is the effect half.
+                        _apply_consumable_heal(
+                            existing,
+                            recipient_char,
+                            player_name=player_name,
+                            turn_num=turn_num,
+                        )
                         recipient_char.core.inventory.items.pop(idx)
                         consumed_names.append(consume_name)
                     else:

@@ -164,6 +164,9 @@ class CatalogItem(BaseModel):
     armor_class: int | None = (
         None  # armor: SWN ascending AC the attack rolls against (distinct from mitigation soak)
     )
+    heal_amount: str | None = (
+        None  # consumable: HP restored on use, NdM[+B] (e.g. "1d6+2"); applied at consume (Story 106-4)
+    )
 
 
 class CarryMode(StrEnum):

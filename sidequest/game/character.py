@@ -109,6 +109,12 @@ class Character(BaseModel):
     # Abilities (P1-required — narrator uses genre_description for context)
     abilities: list[AbilityDefinition] = Field(default_factory=list)
 
+    # WWN Skills/Foci substrate (ADR-143 Task 7): skill name → level mapping and
+    # list of focus ids. Defaulted so all existing Character construction is
+    # unaffected; populated by the chargen builder in Task 10.
+    skills: dict[str, int] = Field(default_factory=dict)
+    foci: list[str] = Field(default_factory=list)
+
     # Character knowledge (P1-required — narrator uses known_facts for continuity)
     known_facts: list[KnownFact] = Field(default_factory=list)
 

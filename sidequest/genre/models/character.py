@@ -272,6 +272,57 @@ class ClassDef(BaseModel):
     warrior: bool = False
 
 
+class Background(BaseModel):
+    """A WWN Background: grants a free skill + quick skills at chargen (SRD §1.3)."""
+
+    model_config = {"extra": "forbid"}
+
+    id: str
+    display_name: str
+    description: str = ""
+    free_skill: str | None = None
+    quick_skills: list[str] = Field(default_factory=list)
+
+
+class FocusLevel(BaseModel):
+    """One level of a Focus: skill grants + ability grants (SRD §1.5).
+
+    ``abilities`` uses :class:`ClassAbilityDef` (the same type as
+    :class:`ClassDef.abilities`) rather than the protocol
+    :class:`~sidequest.protocol.models.AbilityDefinition` because Focus
+    abilities are authored in YAML *without* a ``source`` discriminator —
+    ``ClassAbilityDef`` is precisely ``AbilityDefinition`` minus ``source``.
+    The chargen builder (Task 10) converts these to ``AbilityDefinition``,
+    stamping the source when seeding onto ``Character.abilities`` (there is no
+    ``AbilitySource.Focus`` value today — the enum is Race/Class/Item/Play —
+    so the builder stamps ``AbilitySource.Class``, matching how
+    ``ClassAbilityDef`` entries are seeded; a dedicated Focus source can be
+    added later if needed). Do NOT change this to ``AbilityDefinition`` here —
+    that conversion belongs in the builder, not the content model.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    skills: dict[str, int] = Field(default_factory=dict)
+    abilities: list[ClassAbilityDef] = Field(default_factory=list)
+
+
+class Focus(BaseModel):
+    """A WWN Focus (feat-like talent), 1-2 levels.
+
+    WWN Foci have at most 2 levels; this model is intentionally permissive
+    (``levels`` is an unbounded list) — the loader/validator enforces the
+    1-2-level cap (Task 13), not the model.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    id: str
+    display_name: str
+    description: str = ""
+    levels: list[FocusLevel] = Field(default_factory=list)
+
+
 class CharCreationChoice(BaseModel):
     """A choice within a character creation scene."""
 

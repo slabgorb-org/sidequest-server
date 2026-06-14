@@ -57,6 +57,17 @@ for _slug in WN_FAMILY_SLUGS:
             "target": (span.attributes or {}).get("target", ""),
         },
     )
+    SPAN_ROUTES[f"{_slug}.native_scaffolding_suppressed"] = SpanRoute(
+        event_type="state_transition",
+        component=_slug,
+        extract=lambda span: {
+            "field": "native_scaffolding_suppressed",
+            "actor": (span.attributes or {}).get("actor", ""),
+            "beat_id": (span.attributes or {}).get("beat_id", ""),
+            "suppressed": (span.attributes or {}).get("suppressed", ""),
+            "hp_removed": (span.attributes or {}).get("hp_removed", 0),
+        },
+    )
 
 
 def _require_family_slug(slug: str) -> None:
@@ -147,4 +158,39 @@ def wn_dead_premise_span(
         **attrs,
     }
     with Span.open(f"{slug}.dead_premise", attributes, tracer_override=_tracer):
+        pass
+
+
+def wn_native_scaffolding_suppressed_span(
+    *,
+    slug: str,
+    actor: str,
+    beat_id: str,
+    hp_removed: int,
+    suppressed: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit {slug}.native_scaffolding_suppressed (story 108-1, ADR-143).
+
+    The GM-panel lie-detector that the native combat engine did NOT resolve
+    this committed WN action: under a Without-Number binding ``run_wn_round``
+    applies the WN math (weapon dice → HP, the hp_depletion win check) directly
+    and never reaches ``ruleset.apply_beat`` — so no native fleeting tag
+    (Opening / Counter Stance), no dial-metric advance, no composure rider, and
+    no Brace-as-an-action fired. ``suppressed`` names the riders that were cut;
+    ``hp_removed`` is the WN damage that DID resolve, so a reader can tell a
+    real strike from a no-op. Slug-honest per the WN family invariant (a wwn
+    pack emits ``wwn.native_scaffolding_suppressed``, never ``native.*``).
+    """
+    _require_family_slug(slug)
+    attributes: dict[str, Any] = {
+        "field": "native_scaffolding_suppressed",
+        "actor": actor,
+        "beat_id": beat_id,
+        "hp_removed": hp_removed,
+        "suppressed": suppressed,
+        **attrs,
+    }
+    with Span.open(f"{slug}.native_scaffolding_suppressed", attributes, tracer_override=_tracer):
         pass

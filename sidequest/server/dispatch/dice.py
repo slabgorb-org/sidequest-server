@@ -34,6 +34,7 @@ from dataclasses import dataclass
 
 from sidequest.game.beat_filter import is_item_use_beat
 from sidequest.game.beat_kinds import (
+    ApplyResult,
     BeatKind,
     _opposite_side_first_actor,
     apply_beat_hp_channel,
@@ -104,6 +105,7 @@ from sidequest.telemetry.spans import (
     encounter_momentum_broadcast_span,
     encounter_opponent_attack_resolved_span,
     encounter_resolved_span,
+    wn_native_scaffolding_suppressed_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -1259,6 +1261,81 @@ class _PlayerBeatApplication:
     damage_result_payload: DiceResultPayload | None
 
 
+def _resolve_wn_committed_action(
+    *,
+    encounter: StructuredEncounter,
+    actor: EncounterActor,
+    beat: BeatDef,
+    beat_id: str,
+    slug: str,
+    damage_resolver: Callable[[], int] | None,
+    edge_resolver: Callable[[str], object | None],
+) -> ApplyResult:
+    """Resolve one committed player action under a Without-Number binding
+    WITHOUT the native beat engine (story 108-1, ADR-143).
+
+    We bind Without Number so we never balance combat (SOUL: "Bind the Ruleset,
+    Don't Balance It"). The native ``apply_beat`` scaffolding is REMOVED from
+    the WN combat path, not tuned to fit it — no fleeting-tag grant (Opening /
+    Counter Stance), no dial-metric advance, no composure/edge rider, no
+    Brace-as-an-action, no taunt activation. What remains is the WN math: the
+    strike's already-rolled weapon dice land on the target's ablative HP
+    (ADR-114) through the same ``apply_beat_hp_channel`` helper the native
+    engine used, and a 0-HP drop fires the hp_depletion win condition via
+    ``check_hp_depletion`` — the exact HP-resolution tail of
+    ``beat_kinds.apply_beat``, with every native dial/tag rider cut.
+
+    Emits ``{slug}.native_scaffolding_suppressed`` (the GM-panel lie-detector
+    that the native engine is OFF) and returns an ``ApplyResult`` with
+    ``deltas=None`` (no dial deltas exist on this path).
+    """
+    damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
+    hp_removed = 0
+    if damage_channel == "strike" and damage_resolver is not None:
+        damage_total = damage_resolver()
+        primary_target = _opposite_side_first_actor(encounter, actor.side)
+        if primary_target is not None:
+            hp_target = edge_resolver(primary_target)
+            if hp_target is not None:
+                # Mitigation parity with apply_beat's strike channel: a
+                # ``mitigation_override`` on the beat wins; otherwise the first
+                # armor item on the target supplies flat mitigation.
+                mitigation_override = getattr(beat, "mitigation_override", None)
+                if mitigation_override is not None:
+                    target_mitigation = int(mitigation_override)
+                else:
+                    target_mitigation = 0
+                    for item_dict in hp_target.inventory.items:
+                        mit = item_dict.get("mitigation")
+                        if mit is not None:
+                            target_mitigation = int(mit)
+                            break
+                hp_removed = apply_beat_hp_channel(
+                    target=hp_target,
+                    channel="strike",
+                    damage_total=damage_total,
+                    target_mitigation=target_mitigation,
+                    source_beat_id=beat_id,
+                )
+
+    resolved = check_hp_depletion(encounter, edge_resolver, beat_id=beat_id) is not None
+
+    wn_native_scaffolding_suppressed_span(
+        slug=slug,
+        actor=actor.name,
+        beat_id=beat_id,
+        hp_removed=hp_removed,
+        suppressed="fleeting_tag,dial_advance,composure_rider,brace_action,taunt",
+    )
+    return ApplyResult(
+        deltas=None,
+        resolved=resolved,
+        skipped_reason=None,
+        impact=None,
+        hp_removed=hp_removed,
+    )
+
+
 def _apply_committed_player_beat(
     *,
     beat_id: str,
@@ -1544,15 +1621,35 @@ def _apply_committed_player_beat(
                         component="encounter",
                     )
 
-    apply_result = ruleset.apply_beat(
-        encounter=encounter,
-        actor=actor,
-        beat=beat,
-        outcome=outcome_tier,
-        turn=round_number,
-        edge_resolver=snapshot.find_creature_core,
-        damage_resolver=damage_resolver_fn,
-    )
+    # Story 108-1 / ADR-143 — the engine core cut. Under a Without-Number
+    # binding the native beat engine is REMOVED from the WN COMBAT path (not
+    # tuned to fit it): resolve the committed action with WN math only — weapon
+    # dice → ablative HP + the hp_depletion win check — and emit the
+    # native-scaffolding-suppressed lie-detector span. SCOPE is hp_depletion
+    # COMBAT only (epic 108): dial confrontations under a WN pack — CWN net-run,
+    # chase, negotiation — KEEP the native ADR-033 dial engine, so the gate
+    # requires win_condition=="hp_depletion". Native packs (the isinstance gate
+    # excludes them) keep the full dial/tag engine for every confrontation.
+    if isinstance(ruleset, WithoutNumberRulesetModule) and cdef.win_condition == "hp_depletion":
+        apply_result = _resolve_wn_committed_action(
+            encounter=encounter,
+            actor=actor,
+            beat=beat,
+            beat_id=beat_id,
+            slug=ruleset.slug,
+            damage_resolver=damage_resolver_fn,
+            edge_resolver=snapshot.find_creature_core,
+        )
+    else:
+        apply_result = ruleset.apply_beat(
+            encounter=encounter,
+            actor=actor,
+            beat=beat,
+            outcome=outcome_tier,
+            turn=round_number,
+            edge_resolver=snapshot.find_creature_core,
+            damage_resolver=damage_resolver_fn,
+        )
 
     if apply_result.skipped_reason:
         raise DiceDispatchError(f"beat {beat_id!r} skipped: {apply_result.skipped_reason}")

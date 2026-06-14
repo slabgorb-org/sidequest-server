@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from sidequest.game.encounter_tag import EncounterTag
+from sidequest.game.fate_sheet import Aspect
 from sidequest.game.table.types import TableState
 from sidequest.game.taunt import TauntState
 from sidequest.protocol.models import EncounterLocationOverlay, InitiativeEntry
@@ -148,6 +149,42 @@ class WnSealedCommit(BaseModel):
     spell_id: str | None = None
 
 
+FateAction = Literal["overcome", "create_advantage", "attack"]
+"""The three proactive Fate Core actions committable in an exchange (ADR-144 F1c).
+Defend is reactive (engine-rolled), never committed; there is no ``full_defense``
+(not a Fate SRD action)."""
+
+
+class FateSealedCommit(BaseModel):
+    """One sealed Fate action in an exchange (ADR-144 F1c).
+
+    Mirrors :class:`WnSealedCommit` one tier over. A proactive Fate action seals
+    here until every seated PC has committed; ``run_fate_exchange`` consumes and
+    clears the ledger. The attacker's 4dF roll is resolved AT COMMIT TIME (like
+    the WN to-hit): ``ladder_total`` = 4dF + skill + invoke bonus, ``dice`` the
+    raw faces. The reactive defense roll happens at the actor's slot.
+
+    ``action`` is one of the three proactive Fate actions; ``defend`` is
+    reactive (the engine rolls it for an attack's target) and is never a
+    committed value. There is no ``full_defense`` action — not in the Fate SRD.
+    Opposition is ACTIVE when ``target`` is set (the engine rolls that actor's
+    defense) or PASSIVE when ``difficulty`` is set (a set number on the ladder).
+    ``aspect_text`` carries the situation aspect a create-advantage means to
+    place.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    actor: str
+    action: FateAction
+    skill: str
+    target: str | None = None
+    difficulty: int = 0
+    ladder_total: int = 0
+    dice: tuple[int, int, int, int] = (0, 0, 0, 0)
+    aspect_text: str = ""
+
+
 class EncounterMetric(BaseModel):
     """Ascending dial. ``current`` advances toward ``threshold``; the side
     that reaches ``threshold`` first triggers resolution.
@@ -204,6 +241,19 @@ class StructuredEncounter(BaseModel):
     Main Actions seal here until every live seated participant has committed; the
     round walk consumes and clears it. Always empty for native/dial encounters and
     between WN rounds."""
+    fate_commits: list[FateSealedCommit] = Field(default_factory=list)
+    """ADR-144 F1c: the Fate sealed-commit ledger for the CURRENT exchange.
+    Proactive actions seal here until every live seated PC has committed; the
+    exchange walk consumes and clears it. Always empty for native/WN encounters
+    and between Fate exchanges (sibling to ``wn_commits``)."""
+    situation_aspects: list[Aspect] = Field(default_factory=list)
+    """ADR-144 F1c: scene-scoped Fate aspects placed by create-advantage (and
+    boosts from ties). Distinct from character/consequence aspects, which live on
+    the actor's FateSheet. Cleared on scene end (F2/F3 lifecycle)."""
+    zones: list[str] = Field(default_factory=list)
+    """ADR-144 F1c: named Fate zones for this scene (reuses the encounter as the
+    spatial notion — design §4.2 / open-Q3). An actor's current zone lives in
+    ``EncounterActor.per_actor_state['zone']``. Empty for non-Fate encounters."""
     tags: list[EncounterTag] = Field(default_factory=list)
     outcome: str | None = None
     resolved: bool = False

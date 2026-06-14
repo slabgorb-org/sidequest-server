@@ -238,12 +238,167 @@ def fate_consequence_taken_span(
         pass
 
 
+# --- F1c: conflict exchange spans (GM panel = lie detector) ------------------
+SPAN_ROUTES["fate.exchange.committed"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "exchange_committed",
+        "committed_actors": (span.attributes or {}).get("committed_actors", ""),
+    },
+)
+SPAN_ROUTES["fate.exchange.order"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "exchange_order",
+        "order": (span.attributes or {}).get("order", ""),
+        "skill": (span.attributes or {}).get("skill", ""),
+    },
+)
+SPAN_ROUTES["fate.exchange.resolved"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "exchange_resolved",
+        "resolution_order": (span.attributes or {}).get("resolution_order", ""),
+        "resolved": (span.attributes or {}).get("resolved", False),
+        "round_number": (span.attributes or {}).get("round_number", 0),
+    },
+)
+SPAN_ROUTES["fate.aspect.created"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "aspect_created",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "aspect": (span.attributes or {}).get("aspect", ""),
+        "free_invokes": (span.attributes or {}).get("free_invokes", 0),
+    },
+)
+SPAN_ROUTES["fate.taken_out"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "taken_out",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "by": (span.attributes or {}).get("by", ""),
+        "shifts": (span.attributes or {}).get("shifts", 0),
+    },
+)
+SPAN_ROUTES["fate.conceded"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "conceded",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "fate_points_earned": (span.attributes or {}).get("fate_points_earned", 0),
+    },
+)
+
+
+def fate_exchange_committed_span(
+    *, committed_actors: str, _tracer: trace.Tracer | None = None, **attrs: Any
+) -> None:
+    """Emit ``fate.exchange.committed`` — the sealed-commit barrier closed."""
+    attributes: dict[str, Any] = {
+        "field": "exchange_committed",
+        "committed_actors": committed_actors,
+        **attrs,
+    }
+    with Span.open("fate.exchange.committed", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_exchange_order_span(
+    *, order: str, skill: str, _tracer: trace.Tracer | None = None, **attrs: Any
+) -> None:
+    """Emit ``fate.exchange.order`` — the resolved turn order for this exchange,
+    keyed by the initiative skill (Notice for physical, Empathy for mental conflicts)."""
+    attributes: dict[str, Any] = {
+        "field": "exchange_order",
+        "order": order,
+        "skill": skill,
+        **attrs,
+    }
+    with Span.open("fate.exchange.order", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_exchange_resolved_span(
+    *, resolution_order: str, resolved: bool, _tracer: trace.Tracer | None = None, **attrs: Any
+) -> None:
+    """Emit ``fate.exchange.resolved`` — the exchange walk finished. ``resolved``
+    is whether the confrontation itself ended this exchange."""
+    attributes: dict[str, Any] = {
+        "field": "exchange_resolved",
+        "resolution_order": resolution_order,
+        "resolved": resolved,
+        **attrs,
+    }
+    with Span.open("fate.exchange.resolved", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_aspect_created_span(
+    *, actor: str, aspect: str, free_invokes: int, _tracer: trace.Tracer | None = None, **attrs: Any
+) -> None:
+    """Emit ``fate.aspect.created`` — create-advantage placed a situation aspect
+    (or a boost) with ``free_invokes`` free invocations."""
+    attributes: dict[str, Any] = {
+        "field": "aspect_created",
+        "actor": actor,
+        "aspect": aspect,
+        "free_invokes": free_invokes,
+        **attrs,
+    }
+    with Span.open("fate.aspect.created", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_taken_out_span(
+    *, actor: str, by: str, shifts: int, _tracer: trace.Tracer | None = None, **attrs: Any
+) -> None:
+    """Emit ``fate.taken_out`` — an actor's stress+consequences could not absorb a
+    hit and they are out of the conflict."""
+    attributes: dict[str, Any] = {
+        "field": "taken_out",
+        "actor": actor,
+        "by": by,
+        "shifts": shifts,
+        **attrs,
+    }
+    with Span.open("fate.taken_out", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_conceded_span(
+    *, actor: str, fate_points_earned: int, _tracer: trace.Tracer | None = None, **attrs: Any
+) -> None:
+    """Emit ``fate.conceded`` — a player conceded (pre-roll), leaving on their
+    terms and earning fate points."""
+    attributes: dict[str, Any] = {
+        "field": "conceded",
+        "actor": actor,
+        "fate_points_earned": fate_points_earned,
+        **attrs,
+    }
+    with Span.open("fate.conceded", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
     "fate_action_resolved_span",
+    "fate_aspect_created_span",
     "fate_aspect_invoked_span",
     "fate_compel_accepted_span",
     "fate_compel_offered_span",
+    "fate_conceded_span",
     "fate_consequence_taken_span",
+    "fate_exchange_committed_span",
+    "fate_exchange_order_span",
+    "fate_exchange_resolved_span",
     "fate_point_delta_span",
     "fate_stress_applied_span",
+    "fate_taken_out_span",
 ]

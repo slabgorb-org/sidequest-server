@@ -266,6 +266,15 @@ class RulesetModule(ABC):
         from sidequest.game.chargen_contribution import ChargenResources
         return ChargenResources()
 
+    def contribute_background_skills(self, *, background_def, rng: random.Random) -> dict[str, int]:
+        """Background → skill-level dict. Default: none. WN-core reads the def."""
+        return {}
+
+    def contribute_foci(self, *, focus_defs):
+        """Foci → skills + abilities. Default: none. WN-core reads the defs."""
+        from sidequest.game.chargen_contribution import FociContribution
+        return FociContribution()
+
     def _generate_attribute_values(
         self,
         *,

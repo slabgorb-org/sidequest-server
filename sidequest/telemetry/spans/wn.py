@@ -202,6 +202,85 @@ def chargen_attributes_assigned_span(
         pass
 
 
+# ---------------------------------------------------------------------------
+# Chargen contribution spans — background_skills + foci_applied (ADR-143 Task 10).
+#
+# Registered for all four WN-family slugs (every WN-bound pack may author
+# backgrounds and foci). Span names are ``{slug}.chargen.background_skills``
+# and ``{slug}.chargen.foci_applied`` — the slug-honesty invariant: a wwn
+# pack emits ``wwn.chargen.background_skills``, an awn pack ``awn.*``.
+# ---------------------------------------------------------------------------
+
+
+def _chargen_background_skills_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "chargen_background_skills",
+        "background": attrs.get("background", ""),
+        "skills": attrs.get("skills", ""),
+    }
+
+
+def _chargen_foci_applied_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "chargen_foci_applied",
+        "foci": attrs.get("foci", ""),
+        "skills": attrs.get("skills", ""),
+    }
+
+
+for _slug in WN_FAMILY_SLUGS:
+    SPAN_ROUTES[f"{_slug}.chargen.background_skills"] = SpanRoute(
+        event_type="state_transition",
+        component=_slug,
+        extract=_chargen_background_skills_extract,
+    )
+    SPAN_ROUTES[f"{_slug}.chargen.foci_applied"] = SpanRoute(
+        event_type="state_transition",
+        component=_slug,
+        extract=_chargen_foci_applied_extract,
+    )
+
+
+def chargen_background_skills_span(
+    *,
+    ruleset: str,
+    background: str,
+    skills: dict[str, int],
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.chargen.background_skills`` — lie-detector for
+    background skill grants applied at chargen (ADR-143 Task 10)."""
+    attributes: dict[str, Any] = {
+        "background": background,
+        "skills": _json.dumps(dict(skills), sort_keys=True),
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.chargen.background_skills", attributes, tracer_override=_tracer):
+        pass
+
+
+def chargen_foci_applied_span(
+    *,
+    ruleset: str,
+    foci: list[str],
+    skills: dict[str, int],
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.chargen.foci_applied`` — lie-detector for focus skill
+    and ability grants applied at chargen (ADR-143 Task 10)."""
+    attributes: dict[str, Any] = {
+        "foci": _json.dumps(list(foci)),
+        "skills": _json.dumps(dict(skills), sort_keys=True),
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.chargen.foci_applied", attributes, tracer_override=_tracer):
+        pass
+
+
 def system_strain_delta_span(
     *,
     ruleset: str,

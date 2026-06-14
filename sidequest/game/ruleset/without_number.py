@@ -55,6 +55,8 @@ from sidequest.telemetry.spans.psionics import (
 )
 from sidequest.telemetry.spans.wn import (
     chargen_attributes_assigned_span,
+    chargen_background_skills_span,
+    chargen_foci_applied_span,
     major_injury_roll_span,
     mortal_injury_declared_span,
     shock_applied_span,
@@ -63,6 +65,7 @@ from sidequest.telemetry.spans.wn import (
 )
 
 if TYPE_CHECKING:
+    from sidequest.game.chargen_contribution import FociContribution
     from sidequest.genre.models.character import ClassDef
 
 # Source key for the WN psionic Effort pool. WN psionics draw every discipline
@@ -619,6 +622,77 @@ class WithoutNumberRulesetModule(RulesetModule):
                 )
 
         return ChargenResources(effort=effort, spellcasting=spellcasting, system_strain=system_strain)
+
+    # ------------------------------------------------------------------
+    # Chargen contribution methods (ADR-143 Task 10) — background skills +
+    # foci skill/ability grants.  Both emit slug-prefixed OTEL spans so the
+    # GM-panel lie-detector confirms which background and foci fired.
+    # ------------------------------------------------------------------
+
+    def contribute_background_skills(
+        self,
+        *,
+        background_def,
+        rng: random.Random,
+    ) -> dict[str, int]:
+        """WN background skill grants: free_skill + quick_skills at level 0.
+
+        WWN SRD §1.3: a background's free_skill is a "trained" (level-0) grant;
+        quick_skills are all taken at level 0 too. Since Background only carries
+        skill NAMES (no explicit level), 0 is the correct default. Emits
+        ``{slug}.chargen.background_skills`` on EVERY call (both the grant path
+        and the no-matching-def skip) so the GM panel can tell "evaluated, prose
+        background, no skills" (DD-5) apart from "never called" — the OTEL
+        lie-detector principle (CLAUDE.md).
+
+        rng unused: WWN background grants are deterministic; param preserved for
+        override flexibility (e.g. random quick-skill choice)."""
+        if background_def is None:
+            # DD-5: free-text prose background carries no mechanical skills. The
+            # span STILL fires (empty skills, reason) so the decision is visible.
+            chargen_background_skills_span(
+                ruleset=self.slug,
+                background="none",
+                skills={},
+                reason="no_matching_background_def",
+            )
+            return {}
+        grants: dict[str, int] = {}
+        if background_def.free_skill:
+            grants[background_def.free_skill] = max(grants.get(background_def.free_skill, 0), 0)
+        for s in background_def.quick_skills:
+            grants[s] = max(grants.get(s, 0), 0)
+        chargen_background_skills_span(
+            ruleset=self.slug,
+            background=background_def.id,
+            skills=dict(grants),
+        )
+        return grants
+
+    def contribute_foci(self, *, focus_defs) -> FociContribution:
+        """WN focus skill + ability grants: level-1 grants from each selected focus.
+
+        WWN SRD §1.5: chargen grants the first level of each chosen focus.
+        Skills use higher-of (max) semantics across all foci. Abilities are
+        collected as ClassAbilityDef instances; build() converts them to
+        AbilityDefinition stamping source=AbilitySource.Class. Emits
+        ``{slug}.chargen.foci_applied`` so the GM panel confirms which foci
+        fired and which skills were granted."""
+        from sidequest.game.chargen_contribution import FociContribution
+
+        skills: dict[str, int] = {}
+        abilities = []
+        for f in focus_defs:
+            for lvl in f.levels[:1]:  # chargen grants level 1 only
+                for sk, n in lvl.skills.items():
+                    skills[sk] = max(skills.get(sk, 0), n)
+                abilities.extend(lvl.abilities)
+        chargen_foci_applied_span(
+            ruleset=self.slug,
+            foci=[f.id for f in focus_defs],
+            skills=dict(skills),
+        )
+        return FociContribution(skills=skills, abilities=abilities)
 
     # ------------------------------------------------------------------
     # Prime-aware attribute assignment (ADR-143 Step 2).

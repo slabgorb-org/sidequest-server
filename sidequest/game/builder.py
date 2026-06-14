@@ -31,6 +31,7 @@ from sidequest.genre.models.character import (
     Background,
     BackstoryTables,
     CharCreationScene,
+    ClassAbilityDef,
     ClassDef,
     EquipmentTables,
     Focus,
@@ -81,6 +82,29 @@ def qualifying_classes_arrangement(
     as 0 — they cannot satisfy any minimum.
     """
     return [c for c in classes if (arrangement.get(c.prime_requisite) or 0) >= c.minimum_score]
+
+
+def _class_ability_to_definition(
+    ca: ClassAbilityDef,
+    *,
+    reference_url: str | None = None,
+) -> AbilityDefinition:
+    """Convert a ClassAbilityDef (YAML-authored, no source discriminator) to an
+    AbilityDefinition, stamping source=AbilitySource.Class.
+
+    Single source of truth for the six-field struct shared by class-signature
+    seeding (``_seed_class_abilities``, reference_url computed from pack_id) and
+    focus-ability seeding (ADR-143 Task 10, reference_url=None — there is no
+    AbilitySource.Focus, so foci are stamped Class to match class abilities).
+    """
+    return AbilityDefinition(
+        name=ca.name,
+        genre_description=ca.genre_description,
+        mechanical_effect=ca.mechanical_effect,
+        involuntary=ca.involuntary,
+        source=AbilitySource.Class,
+        reference_url=reference_url,
+    )
 
 
 def _seed_class_abilities(
@@ -134,16 +158,7 @@ def _seed_class_abilities(
             ):
                 pass
 
-        abilities.append(
-            AbilityDefinition(
-                name=ca.name,
-                genre_description=ca.genre_description,
-                mechanical_effect=ca.mechanical_effect,
-                involuntary=ca.involuntary,
-                source=AbilitySource.Class,
-                reference_url=url,
-            )
-        )
+        abilities.append(_class_ability_to_definition(ca, reference_url=url))
 
 
 def _seed_item_abilities(abilities: list[AbilityDefinition], kit_def: object) -> None:
@@ -2854,6 +2869,44 @@ class CharacterBuilder:
         system_strain = _res.system_strain
         wwn_effort, wwn_spellcasting = _res.effort, _res.spellcasting
 
+        # Chargen contribution application (ADR-143 Task 10): background skills
+        # + foci skill/ability grants, delegated to the bound RulesetModule.
+        #
+        # Background: look up the accumulated background ID in the loaded defs.
+        # If unmatched (None or free-text prose background), no skills are granted
+        # (DD-5 documented; this is NOT a silent fallback — DD-5 explicitly permits
+        # free-text backgrounds that carry no mechanical skill grants).
+        # If matched, the WN-core override reads the def and returns the grants.
+        #
+        # Foci: look up each accumulated focus ID; unmatched IDs are silently
+        # skipped here (the content validator catches them at pack-validate time).
+        _background_def = self._backgrounds.get(acc.background) if acc.background is not None else None
+        _focus_defs = [self._foci[fid] for fid in acc.foci if fid in self._foci]
+
+        _bg_skills = self._ruleset.contribute_background_skills(
+            background_def=_background_def, rng=self._rng
+        )
+        _foci_contrib = self._ruleset.contribute_foci(focus_defs=_focus_defs)
+
+        # Merge skills: scene grants ∪ background grants ∪ foci grants.
+        # Higher-of (max) semantics across all three sources — consistent
+        # with how AccumulatedChoices.skill_grants accumulates scene-level
+        # grants (not additive). A skill present in multiple sources takes
+        # the highest level.
+        _merged_skills: dict[str, int] = dict(acc.skill_grants)
+        for _sk, _lvl in _bg_skills.items():
+            _merged_skills[_sk] = max(_merged_skills.get(_sk, 0), _lvl)
+        for _sk, _lvl in _foci_contrib.skills.items():
+            _merged_skills[_sk] = max(_merged_skills.get(_sk, 0), _lvl)
+
+        # Convert foci ClassAbilityDef instances → AbilityDefinition, stamping
+        # source=AbilitySource.Class (no AbilitySource.Focus exists; Class matches
+        # how _seed_class_abilities converts ClassDef.abilities). Shared converter
+        # (_class_ability_to_definition) is the single source of truth for the
+        # six-field struct; foci pass reference_url=None.
+        for _ca in _foci_contrib.abilities:
+            abilities.append(_class_ability_to_definition(_ca, reference_url=None))
+
         # Resolved archetype: pairs jungian_hint / rpg_role_hint if both
         # are present. archetype_provenance is populated downstream by
         # dispatch (connect.rs) once the tiered resolver runs.
@@ -2953,6 +3006,8 @@ class CharacterBuilder:
             pronouns=acc.pronoun_hint or "",
             stats=stats,
             abilities=abilities,
+            skills=_merged_skills,
+            foci=list(acc.foci),
             known_facts=[],
             affinities=[],
             is_friendly=True,

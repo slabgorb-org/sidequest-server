@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from sidequest.game.system_strain import SystemStrainPool
 from sidequest.game.wwn_magic import EffortPool, SpellcastingState
+from sidequest.genre.models.character import ClassAbilityDef
 
 
 class ChargenResources(BaseModel):
@@ -19,7 +20,13 @@ class ChargenResources(BaseModel):
 
 
 class FociContribution(BaseModel):
-    """Skill grants + ability definitions contributed by selected Foci."""
+    """Skill grants + ability definitions contributed by selected Foci.
+
+    ``abilities`` uses :class:`ClassAbilityDef` (the YAML-authored type, same as
+    :class:`~sidequest.genre.models.character.FocusLevel.abilities`). The chargen
+    builder (Task 10) converts these to ``AbilityDefinition``, stamping
+    ``source=AbilitySource.Class`` when seeding onto ``Character.abilities``.
+    """
     model_config = {"extra": "forbid"}
     skills: dict[str, int] = Field(default_factory=dict)
-    abilities: list = Field(default_factory=list)
+    abilities: list[ClassAbilityDef] = Field(default_factory=list)

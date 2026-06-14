@@ -171,8 +171,14 @@ def dispatch_throw(
     genre_slug: str = "heavy_metal",
     stats: dict[str, int] | None = None,
     room_broadcast=None,
+    player_action: str | None = None,
 ):
-    """One PC's sealed Main Action arriving on the production dice seam."""
+    """One PC's sealed Main Action arriving on the production dice seam.
+
+    ``player_action`` is the optional RP-flavor rider the player types into the
+    InputBar before clicking a button (the "chandelier swing", story 108-5). It
+    rides alongside the throw as narrator context and is mechanically inert.
+    """
     from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
     from sidequest.server.dispatch.dice import dispatch_dice_throw
 
@@ -185,6 +191,7 @@ def dispatch_throw(
         ),
         face=[face],
         beat_id=beat_id,
+        player_action=player_action,
     )
     return dispatch_dice_throw(
         payload=payload,

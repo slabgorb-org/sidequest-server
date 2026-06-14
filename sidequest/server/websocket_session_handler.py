@@ -1421,7 +1421,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         and not snapshot.encounter.resolved
                         and _is_combat_category(sd.genre_pack, snapshot.encounter.encounter_type)
                     )
-                    award_turn_xp(snapshot, in_combat=in_combat_now)
+                    # sq-playtest 2026-06-13: gate the native ADR-021 per-turn XP
+                    # tick by the bound ruleset. A WWN-bound world (beneath_sunden)
+                    # must NOT accrue the native 10/25-per-turn counter — WN uses
+                    # GM-awarded expedition XP. award_turn_xp suppresses + emits a
+                    # span when the module reports awards_native_turn_xp=False.
+                    from sidequest.game.ruleset.registry import get_ruleset_module
+
+                    _turn_ruleset = get_ruleset_module(sd.genre_pack.rules.ruleset)
+                    award_turn_xp(snapshot, in_combat=in_combat_now, ruleset=_turn_ruleset)
                     # ADR-021 track 1: milestone → level-up runs on the freshly
                     # awarded XP. The consumer that makes accumulation matter.
                     apply_level_ups(snapshot, sd.genre_pack.progression)

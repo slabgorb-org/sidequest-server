@@ -657,7 +657,16 @@ def session_fixture():
     # ``boring_streak >= mock`` comparison. Pin ``drama_thresholds=None`` (the
     # realistic "pack ships no pacing.yaml" value, e.g. caverns_and_claudes) so
     # the ``or`` falls through to real defaults — same pattern as progression.
+    #
+    # sq-playtest 2026-06-13 wired the native per-turn XP gate into the same turn
+    # path: it reads ``get_ruleset_module(genre_pack.rules.ruleset)``. A bare
+    # MagicMock's ``rules.ruleset`` is an auto-mock, not a registered slug, so
+    # the resolver fails loud (UnknownRulesetError — correct in production, where
+    # the slug is always real). Hand it a real default ``RulesConfig`` so
+    # ``rules.ruleset`` is ``"native"`` (the native tick applies — fixture
+    # behavior unchanged) — same real-defaults pattern as progression above.
     from sidequest.genre.models.progression import ProgressionConfig
+    from sidequest.genre.models.rules import RulesConfig
 
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
@@ -668,7 +677,9 @@ def session_fixture():
         repository=_mock_repo,
         dungeon_repository=MagicMock(),
         telemetry_sink=MagicMock(),
-        genre_pack=MagicMock(progression=ProgressionConfig(), drama_thresholds=None),
+        genre_pack=MagicMock(
+            progression=ProgressionConfig(), drama_thresholds=None, rules=RulesConfig()
+        ),
         orchestrator=MagicMock(),
     )
     # Task E.2 wiring: ``_apply_narration_result_to_snapshot`` (called by

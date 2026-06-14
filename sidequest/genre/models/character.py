@@ -116,6 +116,13 @@ class MechanicalEffects(BaseModel):
     rig_trait: str | None = None
     catch_phrase: str | None = Field(default=None, alias="catch", serialization_alias="catch")
     stat_bonuses: dict[str, int] = Field(default_factory=dict)
+    # WWN Skills/Foci substrate (ADR-143). A chargen scene may grant skill
+    # levels (skill name → level; accumulated higher-of, not additive) and/or
+    # select a focus. ``focus_id`` is a registry KEY (not a display name) that
+    # resolves against the pack's foci definitions when the grants are applied
+    # in build() (Task 9/10).
+    skill_grants: dict[str, int] = Field(default_factory=dict)
+    focus_id: str | None = None
     pronoun_hint: str | None = None
     stat_generation: str | None = None
     equipment_generation: str | None = None

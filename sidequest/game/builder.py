@@ -418,6 +418,8 @@ class AccumulatedChoices:
     catch_phrase: str | None = None
     backstory_fragments: list[str] = field(default_factory=list)
     stat_bonuses: dict[str, int] = field(default_factory=dict)
+    skill_grants: dict[str, int] = field(default_factory=dict)
+    foci: list[str] = field(default_factory=list)
     pronoun_hint: str | None = None
     jungian_hint: str | None = None
     rpg_role_hint: str | None = None
@@ -1518,6 +1520,16 @@ class CharacterBuilder:
             # Stat bonuses accumulate additively across all scenes.
             for stat, bonus in eff.stat_bonuses.items():
                 acc.stat_bonuses[stat] = acc.stat_bonuses.get(stat, 0) + bonus
+
+            # Skill grants use higher-of (max) semantics per WWN rules —
+            # NOT additive. A later scene granting Sneak-0 does not undo
+            # an earlier Sneak-1.
+            for skill, lvl in eff.skill_grants.items():
+                acc.skill_grants[skill] = max(acc.skill_grants.get(skill, 0), lvl)
+
+            # Focus ids accumulate de-duped (no duplicate focus ids).
+            if eff.focus_id is not None and eff.focus_id not in acc.foci:
+                acc.foci.append(eff.focus_id)
 
         return acc
 

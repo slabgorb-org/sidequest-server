@@ -4,12 +4,9 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sidequest.agents.subsystems.fate_action import run_fate_action_dispatch
 
 from sidequest.agents.subsystems import SubsystemOutput, get_registered
+from sidequest.agents.subsystems.fate_action import run_fate_action_dispatch
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
@@ -18,16 +15,18 @@ from sidequest.game.session import GameSnapshot, Npc
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
 
-def _otel():
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    # The handler emits through the global tracer (no _tracer kwarg on the bank
-    # path), so install this provider as the process tracer for the assertion.
-    from opentelemetry import trace
+class _FixedRng:
+    """A deterministic stand-in for ``random.Random`` — the Fate engine only
+    calls ``.choice(...)`` for the 4dF roll. Returns the fixed value so every
+    die is neutral (0): Hero(Fight 4) vs Thug(0) lands +4 shifts, taking out the
+    fully-depleted Thug every run. Mirrors the F1d test double in
+    ``tests/server/dispatch/test_fate_dispatch_routing.py``."""
 
-    trace.set_tracer_provider(provider)
-    return exporter
+    def __init__(self, value: int = 0) -> None:
+        self._value = value
+
+    def choice(self, seq):
+        return self._value
 
 
 def _pc(name: str, skills: dict[str, int]) -> Character:
@@ -78,8 +77,8 @@ def _dispatch(action: str, **params) -> SubsystemDispatch:
     )
 
 
-def test_handler_builds_payload_routes_and_emits_classified_span():
-    exporter = _otel()
+def test_handler_builds_payload_routes_and_emits_classified_span(otel_capture):
+    exporter = otel_capture
     snap, enc = _solo_combat()
     out = asyncio.run(
         run_fate_action_dispatch(
@@ -87,6 +86,7 @@ def test_handler_builds_payload_routes_and_emits_classified_span():
             snapshot=snap,
             pack=_fate_pack(),
             player_name="Hero",
+            rng=_FixedRng(0),  # neutral 4dF → the +4-skill attack lands deterministically
         )
     )
     assert isinstance(out, SubsystemOutput)

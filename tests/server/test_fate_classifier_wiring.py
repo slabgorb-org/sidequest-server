@@ -15,11 +15,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
 from sidequest.agents.subsystems import get_registered, run_dispatch_bank
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
@@ -32,6 +27,18 @@ from sidequest.protocol.dispatch import (
     SubsystemDispatch,
     VisibilityTag,
 )
+
+
+class _FixedRng:
+    """Deterministic ``random.Random`` stand-in (Fate engine calls ``.choice``
+    only). Neutral 4dF (0) → Hero(Fight 4) lands +4 shifts on the depleted Thug
+    every run. Injected through the real bank's context-kwarg filtering."""
+
+    def __init__(self, value: int = 0) -> None:
+        self._value = value
+
+    def choice(self, seq):
+        return self._value
 
 
 def _pc(name: str, skills: dict[str, int]) -> Character:
@@ -76,12 +83,8 @@ def test_fate_action_is_registered_in_the_live_bank():
     assert "fate_action" in get_registered()
 
 
-def test_freeform_fate_action_engages_the_exchange_through_the_bank():
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
-
+def test_freeform_fate_action_engages_the_exchange_through_the_bank(otel_capture):
+    exporter = otel_capture
     snap, enc = _solo_combat()
     pack = SimpleNamespace(rules=SimpleNamespace(ruleset="fate"))
     package = DispatchPackage(
@@ -105,7 +108,15 @@ def test_freeform_fate_action_engages_the_exchange_through_the_bank():
     )
 
     result = asyncio.run(
-        run_dispatch_bank(package, context={"snapshot": snap, "pack": pack, "player_name": "Hero"})
+        run_dispatch_bank(
+            package,
+            context={
+                "snapshot": snap,
+                "pack": pack,
+                "player_name": "Hero",
+                "rng": _FixedRng(0),  # deterministic 4dF so the attack lands through the real bank
+            },
+        )
     )
 
     # Bank engaged the engine (confidence 0.95 ≥ 0.6 default), not degraded.

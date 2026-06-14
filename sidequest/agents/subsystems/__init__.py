@@ -30,6 +30,9 @@ Registered handlers (post-Story 59-6):
     political substrate (Plan 2): applies a publicly-witnessed act to the
     live ``PoliticalState`` belief/defiance dials, injects the ADR-053
     witness contradiction, and emits the premise/bloc OTEL spans.
+  - ``fate_action`` → ``run_fate_action_dispatch`` — engages one classified
+    Fate action (overcome/create_advantage/attack/concede) via
+    ``dispatch_fate_action`` on a ``ruleset: fate`` pack (ADR-144 F2a).
 
 All eight subsystems are live on the turn path. The Intent Router's
 system prompt names them as valid dispatch types and the dispatch
@@ -178,6 +181,7 @@ def _register_defaults() -> None:
     from sidequest.agents.subsystems.distinctive_detail import run_distinctive_detail
     from sidequest.agents.subsystems.environment_clock import run_environment_clock_dispatch
     from sidequest.agents.subsystems.equip import run_equip_dispatch
+    from sidequest.agents.subsystems.fate_action import run_fate_action_dispatch
     from sidequest.agents.subsystems.magic_working import run_magic_working_dispatch
     from sidequest.agents.subsystems.movement import run_movement_dispatch
     from sidequest.agents.subsystems.npc_agency import run_npc_agency
@@ -197,6 +201,7 @@ def _register_defaults() -> None:
         ("witnessed_act", run_witnessed_act_dispatch),
         ("equip", run_equip_dispatch),
         ("environment_clock", run_environment_clock_dispatch),
+        ("fate_action", run_fate_action_dispatch),
     ):
         _REGISTRY.pop(name, None)
         _REGISTRY[name] = fn

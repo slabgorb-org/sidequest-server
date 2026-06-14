@@ -17,7 +17,7 @@ from sidequest.agents.tool_registry import (
     tool,
 )
 from sidequest.game.ruleset import get_ruleset_module
-from sidequest.game.ruleset.cwn import CwnRulesetModule
+from sidequest.game.ruleset.awn import AwnRulesetModule
 from sidequest.mutation.use_ops import use_mutation as resolve_use_mutation
 
 
@@ -57,12 +57,12 @@ async def use_mutation(args: UseMutationArgs, ctx: ToolContext) -> ToolResult:
         if pack is not None and pack.rules is not None
         else None
     )
-    if not isinstance(module, CwnRulesetModule):
+    if not isinstance(module, AwnRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
         raise ValueError(
-            f"use_mutation requires a CWN-family ruleset (awn); loaded pack has ruleset={ruleset!r}"
+            f"use_mutation requires an AWN ruleset (awn); loaded pack has ruleset={ruleset!r}"
         )
-    # pack cannot be None here: module is CwnRulesetModule only when pack was not
+    # pack cannot be None here: module is AwnRulesetModule only when pack was not
     # None and pack.rules was not None (see the ternary above).
     assert pack is not None
     if pack.mutations is None:

@@ -1,21 +1,21 @@
-"""Tool: adjust_system_strain — narrator-driven CWN-family (cwn/awn) System Strain changes.
+"""Tool: adjust_system_strain — narrator-driven WN lethality (wwn/cwn/awn) System Strain changes.
 
 This is the PRODUCTION CALLER that makes the strain engine reachable in a
 real game. It is a THIN wrapper — all rules (gating, permanent floor, rest
-recovery, first-aid cost) live in CwnRulesetModule.apply_system_strain.
+recovery, first-aid cost) live in WithoutNumberRulesetModule.apply_system_strain.
 
     narrator: adjust_system_strain(actor=Jax, kind=temporary, amount=2, ...)
                     |
                     v
-    engine:   CwnRulesetModule.apply_system_strain(core=jax.core, ...)
+    engine:   WithoutNumberRulesetModule.apply_system_strain(core=jax.core, ...)
                     |
                     v
     pool:     SystemStrainPool.current updated in place
 
 Guards (fail loud — no silent fallbacks per CLAUDE.md):
-- bound module ``not isinstance(module, CwnRulesetModule)`` → ValueError (the tool
-  requires a CWN-family ruleset — ``cwn`` or its ``awn`` subclass — since System
-  Strain is a CwnRulesetModule mechanic)
+- bound module ``not isinstance(module, WithoutNumberRulesetModule)`` → ValueError (the tool
+  requires a strain-bearing WN ruleset — wwn/cwn/awn — since System Strain is a
+  WN-core lethality mechanic; SWN carries no System Strain surface)
 - actor not found in snapshot → NOT_FOUND
 - no active session → ERROR_FATAL
 
@@ -38,7 +38,7 @@ from sidequest.agents.tool_registry import (
     tool,
 )
 from sidequest.game.ruleset import get_ruleset_module
-from sidequest.game.ruleset.cwn import CwnRulesetModule
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 
 
 class AdjustSystemStrainArgs(BaseModel):
@@ -73,36 +73,36 @@ class AdjustSystemStrainArgs(BaseModel):
 @tool(
     name="adjust_system_strain",
     description=(
-        "Adjust a CWN-family character's System Strain pool. CWN-family only "
-        "(cwn/awn) — raises if the loaded pack's ruleset is not cwn or awn. "
+        "Adjust a Without Number character's System Strain pool. The strain-bearing "
+        "WN rulesets (wwn/cwn/awn) — raises if the loaded pack is not one of them "
+        "(System Strain is WN-core lethality, ADR-142; SWN carries no strain surface). "
         "kind: 'temporary' (incidental stress), 'permanent' (cyberware install/remove), "
         "'rest' (nightly recovery), 'first_aid' (medkit cost from pack config). "
         "Over-max adds are refused (applied=False); the refusal reason is returned so "
         "the narrator can describe the limit being hit."
     ),
     category=ToolCategory.WRITE,
-    ruleset=("cwn", "awn"),
+    ruleset=("wwn", "cwn", "awn"),
 )
 async def adjust_system_strain(args: AdjustSystemStrainArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
-    # Capability gate (not a slug string): System Strain is a CwnRulesetModule
-    # mechanic, so the tool serves any module that IS a CwnRulesetModule — covers
-    # cwn AND awn (AwnRulesetModule subclasses it). Resolve the bound module and
-    # check the capability rather than `ruleset != "cwn"`, which silently
-    # excluded awn.
+    # Capability gate (not a slug string): System Strain is a Without Number
+    # lethality mechanic hoisted to the WN core (ADR-142), so the tool serves
+    # any module that IS a WithoutNumberRulesetModule — wwn/cwn/awn. Resolve
+    # the bound module and check the capability rather than a slug string.
     pack = ctx.genre_pack
     module = (
         get_ruleset_module(pack.rules.ruleset)
         if pack is not None and pack.rules is not None
         else None
     )
-    if not isinstance(module, CwnRulesetModule):
+    if not isinstance(module, WithoutNumberRulesetModule):
         ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
         raise ValueError(
-            f"adjust_system_strain requires a CWN-family ruleset (cwn/awn); "
+            f"adjust_system_strain requires a Without Number ruleset (wwn/cwn/awn); "
             f"loaded pack has ruleset={ruleset!r}"
         )
 

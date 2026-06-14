@@ -88,7 +88,7 @@ class _FakeAwnPack:
 
 
 @dataclass
-class _NonCwnRules:
+class _NonAwnRules:
     ruleset: str = "native"
 
     def ruleset_config(self) -> None:
@@ -96,13 +96,13 @@ class _NonCwnRules:
 
 
 @dataclass
-class _NonCwnPack:
-    rules: _NonCwnRules = None  # type: ignore[assignment]
+class _NonAwnPack:
+    rules: _NonAwnRules = None  # type: ignore[assignment]
     mutations: MutationCatalog | None = None
 
     def __post_init__(self) -> None:
         if self.rules is None:
-            self.rules = _NonCwnRules()
+            self.rules = _NonAwnRules()
 
 
 # ---------------------------------------------------------------------------
@@ -253,18 +253,18 @@ def test_use_mutation_is_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 1: non-CWN-family pack raises ValueError
+# Test 1: non-AWN pack raises ValueError
 # ---------------------------------------------------------------------------
 
 
-async def test_refuses_non_cwn_family_pack() -> None:
+async def test_refuses_non_awn_pack() -> None:
     char = _awn_character("Rux")
     snap = _build_snapshot(characters=[char])
-    pack = _NonCwnPack()
+    pack = _NonAwnPack()
     store = _store_with(snap)
     ctx = _make_ctx(store, genre_pack=pack)
 
-    with pytest.raises(ValueError, match="CWN-family"):
+    with pytest.raises(ValueError, match="AWN"):
         await _call(
             {"actor": "Rux", "mutation_id": "structure/crushing_jaws"},
             ctx,

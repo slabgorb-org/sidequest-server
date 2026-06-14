@@ -77,6 +77,16 @@ def rules_standard_array() -> RulesConfig:
     )
 
 
+def rules_custom_standard_array(values: list[int]) -> RulesConfig:
+    return RulesConfig(
+        stat_generation="standard_array",
+        ability_score_names=list(ABILITY_NAMES),
+        point_buy_budget=27,
+        default_class="Fighter",
+        standard_array=values,
+    )
+
+
 def rules_point_buy(budget: int = 27) -> RulesConfig:
     return RulesConfig(
         stat_generation="point_buy",
@@ -223,6 +233,40 @@ class TestGenerateStats:
         stats = b.generate_stats(AccumulatedChoices())
         # Canonical D&D 5e standard array.
         assert stats == {"STR": 15, "DEX": 14, "CON": 13, "INT": 12, "WIS": 10, "CHA": 8}
+
+    def test_standard_array_uses_pack_authored_values_when_set(self) -> None:
+        """ADR-142 Step 2A: a pack may author its own standard array (e.g. the
+        WWN array). When RulesConfig.standard_array is set, those values map to
+        the ability score names in declaration order — overriding the legacy
+        D&D array."""
+        wwn_array = [14, 12, 11, 10, 9, 7]
+        b = CharacterBuilder(
+            scenes=one_choice_scene(), rules=rules_custom_standard_array(wwn_array)
+        )
+        stats = b.generate_stats(AccumulatedChoices())
+        assert stats == {"STR": 14, "DEX": 12, "CON": 11, "INT": 10, "WIS": 9, "CHA": 7}
+
+    def test_standard_array_defaults_to_legacy_when_unset(self) -> None:
+        """ADR-142 Step 2A: when standard_array is NOT authored (None), the
+        builder still produces the legacy D&D 5e array — every existing pack's
+        behavior is preserved byte-for-byte."""
+        rules = rules_standard_array()
+        assert rules.standard_array is None
+        b = CharacterBuilder(scenes=one_choice_scene(), rules=rules)
+        stats = b.generate_stats(AccumulatedChoices())
+        assert stats == {"STR": 15, "DEX": 14, "CON": 13, "INT": 12, "WIS": 10, "CHA": 8}
+
+    def test_standard_array_too_short_raises(self) -> None:
+        """ADR-142 Step 2A: when standard_array is shorter than ability_score_names,
+        the validator raises immediately — no silent padding (No Silent Fallbacks)."""
+        with pytest.raises(ValueError, match="no silent padding"):
+            RulesConfig(
+                stat_generation="standard_array",
+                ability_score_names=list(ABILITY_NAMES),  # 6 scores
+                point_buy_budget=27,
+                default_class="Fighter",
+                standard_array=[14, 12, 11],  # only 3 entries for 6 scores
+            )
 
     def test_standard_array_applies_explicit_bonuses(self) -> None:
         b = CharacterBuilder(scenes=one_choice_scene(), rules=rules_standard_array())

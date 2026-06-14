@@ -48,7 +48,7 @@ from sidequest.game.encounter import (
 from sidequest.game.hp_depletion import check_hp_depletion
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.base import RulesetModule
-from sidequest.game.ruleset.swn import SwnRulesetModule
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 from sidequest.game.ruleset.wwn import WwnRulesetModule
 from sidequest.game.session import GameSnapshot
 from sidequest.game.status import status_roll_modifier
@@ -644,14 +644,14 @@ def dispatch_dice_throw(
     wn_round_messages: list[object] = []
     wn_sealed_round = (
         not opposed_pending
-        and isinstance(ruleset, SwnRulesetModule)
+        and isinstance(ruleset, WithoutNumberRulesetModule)
         and cdef.win_condition == "hp_depletion"
         and bool(encounter.initiative)
     )
     if (
         not opposed_pending
         and not wn_sealed_round
-        and isinstance(ruleset, SwnRulesetModule)
+        and isinstance(ruleset, WithoutNumberRulesetModule)
         and cdef.win_condition == "hp_depletion"
     ):
         # Story 106-2 (Option A): WWN combat resolves the opponent attack ONLY

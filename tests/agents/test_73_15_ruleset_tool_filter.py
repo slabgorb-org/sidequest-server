@@ -57,9 +57,26 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
 
-GATED_WWN = {"commit_effort", "long_rest", "veterans_luck"}
-GATED_CWN = {"adjust_system_strain", "stabilize_mortal_injury"}
-GATED_ALL = GATED_WWN | GATED_CWN
+# Per-tool ruleset advertisement after ADR-142 DD-5 (Effort + lethality are
+# WN-core, so the tools that drive them advertise to the whole WN family that
+# carries the capability, not a single slug):
+#   commit_effort           → swn/wwn/cwn/awn (Effort is WN-core)
+#   adjust_system_strain     → wwn/cwn/awn (System Strain — strain-bearing WN siblings)
+#   stabilize_mortal_injury  → wwn/cwn/awn (Mortal Injury — strain-bearing WN siblings)
+#   long_rest, veterans_luck → wwn-only (WWN Warrior / magic surface)
+ADVERTISED = {
+    "commit_effort": {"swn", "wwn", "cwn", "awn"},
+    "adjust_system_strain": {"wwn", "cwn", "awn"},
+    "stabilize_mortal_injury": {"wwn", "cwn", "awn"},
+    "long_rest": {"wwn"},
+    "veterans_luck": {"wwn"},
+}
+GATED_ALL = set(ADVERTISED)
+
+
+def _expected_for(slug: str) -> set[str]:
+    """The gated tools that should appear in the partition for ``slug``."""
+    return {name for name, slugs in ADVERTISED.items() if slug in slugs}
 
 
 class _NoArgs(BaseModel):
@@ -194,15 +211,39 @@ def test_default_registry_native_excludes_the_five_gated_tools() -> None:
 
 def test_default_registry_wwn_partition() -> None:
     names = _names(default_registry.tool_definitions(ruleset="wwn"))
-    assert names >= GATED_WWN, f"missing WWN tools: {GATED_WWN - names}"
-    assert GATED_CWN.isdisjoint(names), f"WWN pack leaked CWN tools: {GATED_CWN & names}"
+    expected = _expected_for("wwn")  # commit_effort, long_rest, veterans_luck, +strain/stabilize
+    assert names >= expected, f"missing WWN tools: {expected - names}"
+    # The gated tools NOT advertised to wwn must not leak in.
+    not_for_wwn = GATED_ALL - expected
+    assert not_for_wwn.isdisjoint(names), (
+        f"WWN pack leaked non-WWN gated tools: {not_for_wwn & names}"
+    )
     assert "roll_dice" in names
 
 
 def test_default_registry_cwn_partition() -> None:
     names = _names(default_registry.tool_definitions(ruleset="cwn"))
-    assert names >= GATED_CWN, f"missing CWN tools: {GATED_CWN - names}"
-    assert GATED_WWN.isdisjoint(names), f"CWN pack leaked WWN tools: {GATED_WWN & names}"
+    # DD-5: cwn now also sees commit_effort (Effort is WN-core) alongside the
+    # strain/stabilize tools; it must NOT see the wwn-only Warrior/magic tools.
+    expected = _expected_for("cwn")  # commit_effort, adjust_system_strain, stabilize_mortal_injury
+    assert names >= expected, f"missing CWN tools: {expected - names}"
+    not_for_cwn = GATED_ALL - expected  # long_rest, veterans_luck
+    assert not_for_cwn.isdisjoint(names), (
+        f"CWN pack leaked non-CWN gated tools: {not_for_cwn & names}"
+    )
+    assert "roll_dice" in names
+
+
+def test_default_registry_swn_partition() -> None:
+    # DD-5: swn now sees commit_effort (Effort is WN-core), but NOT the strain/
+    # stabilize tools (SWN has no strain surface) nor the wwn-only tools.
+    names = _names(default_registry.tool_definitions(ruleset="swn"))
+    expected = _expected_for("swn")  # {commit_effort}
+    assert names >= expected, f"missing SWN tools: {expected - names}"
+    not_for_swn = GATED_ALL - expected
+    assert not_for_swn.isdisjoint(names), (
+        f"SWN pack leaked non-SWN gated tools: {not_for_swn & names}"
+    )
     assert "roll_dice" in names
 
 
@@ -223,7 +264,12 @@ def test_default_registry_unfiltered_still_lists_all_gated_tools() -> None:
 @pytest.mark.asyncio
 async def test_commit_effort_self_guard_still_raises_on_native_pack() -> None:
     """Even if the filter regresses and commit_effort is dispatched on a native
-    pack, the handler must still fail loud (rendered as an error ToolResult)."""
+    pack, the handler must still fail loud (rendered as an error ToolResult).
+
+    ADR-142 DD-5: commit_effort now serves every WN ruleset (swn/wwn/cwn/awn)
+    because Effort is WN-core, so the guard rejects only NON-WN packs (native
+    here). The fail-loud behavior on a native pack is unchanged; the error string
+    now names the Without Number family rather than 'wwn-only'."""
     repository = MagicMock()
     repository.load.return_value = MagicMock()  # truthy session — get past the load guard
     ctx = ToolContext(
@@ -243,7 +289,8 @@ async def test_commit_effort_self_guard_still_raises_on_native_pack() -> None:
         ctx,
     )
     assert out.is_error is True
-    assert "wwn-only" in out.content.lower()
+    assert "without number" in out.content.lower()
+    assert "ruleset='native'" in out.content.lower()
 
 
 class _NoopFilter:
@@ -372,13 +419,20 @@ async def test_native_pack_narration_excludes_gated_tools_from_sdk_array(
 
 
 @pytest.mark.asyncio
-async def test_wwn_pack_narration_includes_wwn_excludes_cwn(
+async def test_wwn_pack_narration_includes_wwn_tools_excludes_non_wwn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sdk = await _run_turn(monkeypatch, "wwn")
     sent = {t["name"] for t in sdk.messages.calls[0]["tools"]}
-    assert sent >= GATED_WWN, f"WWN narration missing WWN tools: {GATED_WWN - sent}"
-    assert GATED_CWN.isdisjoint(sent), f"WWN narration leaked CWN tools: {GATED_CWN & sent}"
+    # DD-5: WWN narration advertises every tool whose WN-core capability WWN
+    # carries — commit_effort, long_rest, veterans_luck, AND the strain/stabilize
+    # lethality tools (wwn is a strain-bearing WN sibling).
+    expected = _expected_for("wwn")
+    assert sent >= expected, f"WWN narration missing WWN tools: {expected - sent}"
+    # No gated tool that WWN should NOT see leaks in (none, in fact — every gated
+    # tool advertises to wwn — but assert the invariant data-drivenly).
+    not_for_wwn = GATED_ALL - expected
+    assert not_for_wwn.isdisjoint(sent), f"WWN narration leaked non-WWN tools: {not_for_wwn & sent}"
 
 
 @pytest.mark.asyncio

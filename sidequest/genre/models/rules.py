@@ -1010,6 +1010,12 @@ class RulesConfig(BaseModel):
     magic_level: str = ""
     stat_generation: str = ""
     point_buy_budget: int = 0
+    # ADR-142 Step 2A: per-pack standard array for `stat_generation:
+    # standard_array`. None ⇒ the engine's legacy default [15, 14, 13, 12,
+    # 10, 8] (D&D 5e). WWN packs author [14, 12, 11, 10, 9, 7]. Fail-loud:
+    # when set it must carry at least as many entries as there are ability
+    # scores, so every score name gets a value (validated below).
+    standard_array: list[int] | None = None
     ability_score_names: list[str] = Field(default_factory=list)
     allowed_classes: list[str] = Field(default_factory=list)
     allowed_races: list[str] = Field(default_factory=list)
@@ -1141,6 +1147,24 @@ class RulesConfig(BaseModel):
                     f"swn attribute_map[{swn_attr!r}] = {flavor!r} is not in "
                     f"ability_score_names {sorted(declared)}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_standard_array(self) -> RulesConfig:
+        """ADR-142 Step 2A: when a pack authors `standard_array`, it must carry
+        at least as many entries as there are ability scores so every score
+        name receives a value. Fail loud (No Silent Fallbacks) rather than
+        leave a stat unmapped at chargen.
+        """
+        if self.standard_array is None:
+            return self
+        needed = len(self.ability_score_names)
+        if needed and len(self.standard_array) < needed:
+            raise ValueError(
+                f"rules.standard_array has {len(self.standard_array)} entries but "
+                f"{needed} ability scores are declared ({self.ability_score_names}); "
+                "author one value per ability score — no silent padding"
+            )
         return self
 
     @model_validator(mode="after")

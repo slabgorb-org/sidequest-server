@@ -15,7 +15,7 @@ from collections import deque
 from typing import TYPE_CHECKING
 
 from sidequest.game.ruleset.registry import get_ruleset_module
-from sidequest.game.ruleset.swn import SwnRulesetModule
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 from sidequest.orbital.beats import StoryBeat, StoryBeatKind, advance_clock_via_beat
 from sidequest.orbital.clock import Clock
 from sidequest.orbital.render import Scope
@@ -85,18 +85,18 @@ class Session:
         semantically.
         """
         clear_scratch_on_scene_end(self._snapshot, reason=reason, turn=turn)
-        # SWN-family scene-boundary Effort reclaim (SRD §1.4.4 / §6). The Effort
-        # engine is shared SWN-family crunch (Story 102-6 lifted it to the base),
+        # WN-family scene-boundary Effort reclaim (SRD §1.4.4 / §6). The Effort
+        # engine is shared WN-family crunch (Story 102-6 lifted it to the base),
         # so a swn psychic's scene-committed Effort reclaims at scene end exactly
         # as a wwn caster's does. Gated on the bound module being an
-        # ``SwnRulesetModule`` (swn/cwn/awn/wwn) so native sessions are completely
+        # ``WithoutNumberRulesetModule`` (swn/cwn/awn/wwn) so native sessions are completely
         # untouched. ``reclaim_scene_effort`` drops only ``scene`` commitments and
         # is a no-op for cores with none, so iterating every PC core is safe. It
         # emits one ``{ruleset}.effort.reclaim`` span per pool touched (GM-panel
         # lie detector). The day/long-rest reclaim TRIGGER is deferred to Plan 3.
         if self._ruleset:
             module = get_ruleset_module(self._ruleset)
-            if isinstance(module, SwnRulesetModule):
+            if isinstance(module, WithoutNumberRulesetModule):
                 for char in self._snapshot.characters:
                     module.reclaim_scene_effort(core=char.core)
         self.advance_via_beat(StoryBeat(kind=StoryBeatKind.ENCOUNTER, trigger=f"scene-{reason}"))

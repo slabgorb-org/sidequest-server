@@ -516,7 +516,7 @@ def _resolve_mutation_for_beat(
     idiom: every miss is LOUD (an ``awn.mutation.refused`` span the GM panel
     can see), never a silent fall-through to bare narration.
     """
-    from sidequest.game.ruleset.cwn import CwnRulesetModule
+    from sidequest.game.ruleset.awn import AwnRulesetModule
     from sidequest.game.ruleset.registry import get_ruleset_module
     from sidequest.mutation.use_ops import use_mutation
     from sidequest.telemetry.spans.awn import awn_mutation_refused_span
@@ -536,9 +536,9 @@ def _resolve_mutation_for_beat(
         return
     rules = getattr(pack, "rules", None)
     module = get_ruleset_module(rules.ruleset) if rules is not None else None
-    if not isinstance(module, CwnRulesetModule):
+    if not isinstance(module, AwnRulesetModule):
         awn_mutation_refused_span(
-            actor=actor.name, mutation_id=mutation_id, reason="non_cwn_family_ruleset"
+            actor=actor.name, mutation_id=mutation_id, reason="non_awn_ruleset"
         )
         return
     core = snapshot.find_creature_core(actor.name)

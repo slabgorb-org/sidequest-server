@@ -1090,6 +1090,9 @@ class CharacterBuilder:
         self._default_race: str | None = rules.default_race
         self._edge_config: EdgeConfig | None = rules.edge_config
         self._point_buy_budget: int = rules.point_buy_budget
+        # ADR-142 Step 2A: per-pack standard array (None ⇒ legacy default
+        # [15, 14, 13, 12, 10, 8], resolved in generate_stats).
+        self._standard_array: list[int] | None = rules.standard_array
         self._race_label: str = rules.race_label or "Race"
         self._class_label: str = rules.class_label or "Class"
 
@@ -3177,7 +3180,8 @@ class CharacterBuilder:
         - roll_3d6_strict: reuse pre-rolled stats from construction or
           scene directive; re-roll inline if absent (defensive — the
           eager roll should have fired).
-        - standard_array: [15, 14, 13, 12, 10, 8] mapped to the
+        - standard_array: the pack-authored ``rules.standard_array`` (or the
+          legacy default [15, 14, 13, 12, 10, 8] when unset) mapped to the
           ability_score_names in declaration order. When no explicit
           stat_bonuses were set by chargen choices, derive bonuses from
           accumulated hints (race/mutation/class) to differentiate stat
@@ -3211,7 +3215,13 @@ class CharacterBuilder:
             stats = dict(self._rolled_stats)
 
         elif method == "standard_array":
-            base_values = [15, 14, 13, 12, 10, 8]
+            # ADR-142 Step 2A: pack-authored array overrides the legacy
+            # D&D 5e default when set; None preserves existing behavior.
+            base_values = (
+                self._standard_array
+                if self._standard_array is not None
+                else [15, 14, 13, 12, 10, 8]
+            )
             stats = dict(zip(self._ability_score_names, base_values, strict=False))
 
         elif method == "point_buy":

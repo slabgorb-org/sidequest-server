@@ -98,7 +98,9 @@ def _attacker_stats(pack: GenrePack) -> dict[str, int]:
     return {name: 14 for name in pack.rules.ability_score_names}
 
 
-def _make_snapshot_and_encounter(pack: GenrePack, attacker: str, opponent: str, *, opponent_hp: int):
+def _make_snapshot_and_encounter(
+    pack: GenrePack, attacker: str, opponent: str, *, opponent_hp: int
+):
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.game.encounter import (
@@ -230,8 +232,13 @@ def test_road_warrior_strike_depletes_ablative_hp_on_real_turn(otel_capture, mon
     assert target.hp.current == target.hp.max  # precondition: full HP
 
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Vex", beat_id=beat.id,
-        face=[20], request_id="rw-ablative",
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Vex",
+        beat_id=beat.id,
+        face=[20],
+        request_id="rw-ablative",
     )
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
@@ -246,7 +253,7 @@ def test_road_warrior_strike_depletes_ablative_hp_on_real_turn(otel_capture, mon
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-def test_road_warrior_downed_target_routes_through_cwn_seam(otel_capture, monkeypatch) -> None:
+def test_road_warrior_downed_target_gets_mortal_injury(otel_capture, monkeypatch) -> None:
     """A real road_warrior strike that drops a target to 0 HP runs the CWN
     downed seam and declares a Mortal Injury — the cwn-specific lie-detector span
     firing on a real road_warrior turn. RED while the pack is native (the seam is
@@ -266,8 +273,13 @@ def test_road_warrior_downed_target_routes_through_cwn_seam(otel_capture, monkey
     assert target is not None
 
     _drive_strike(
-        snap=snap, enc=enc, pack=pack, attacker="Vex", beat_id=beat.id,
-        face=[20], request_id="rw-downed",
+        snap=snap,
+        enc=enc,
+        pack=pack,
+        attacker="Vex",
+        beat_id=beat.id,
+        face=[20],
+        request_id="rw-downed",
     )
 
     assert target.hp.current == 0, (
@@ -308,9 +320,7 @@ def test_road_warrior_personal_weapons_carry_damage_specs() -> None:
     pack = _load_road_warrior()
     catalog = pack.inventory.item_catalog
     personal_weapons = [
-        item
-        for item in catalog
-        if item.category == "weapon" and "mounted" not in item.tags
+        item for item in catalog if item.category == "weapon" and "mounted" not in item.tags
     ]
     assert personal_weapons, "road_warrior must declare personal weapons in its catalog"
 

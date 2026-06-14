@@ -56,15 +56,20 @@ def test_awn_module_is_singleton():
     assert get_ruleset_module("awn") is get_ruleset_module("awn")  # stateless singleton
 
 
-def test_awn_module_is_a_cwn_subclass():
-    # AWN combat == CWN combat: the module subclasses CwnRulesetModule so every
-    # capability check (isinstance(module, CwnRulesetModule)) covers AWN for free.
+def test_awn_module_is_a_clean_without_number_sibling():
+    # ADR-142: AWN combat == WN-core combat. AWN reparents directly onto
+    # WithoutNumberRulesetModule (a clean sibling), NOT onto CwnRulesetModule —
+    # the old Awn(Cwn) chain is dismantled. The WN-core capability checks
+    # (isinstance(module, WithoutNumberRulesetModule)) cover AWN; AWN is NOT a CWN.
     from sidequest.game.ruleset.awn import AwnRulesetModule
     from sidequest.game.ruleset.cwn import CwnRulesetModule
     from sidequest.game.ruleset.registry import get_ruleset_module
+    from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 
-    assert issubclass(AwnRulesetModule, CwnRulesetModule)
-    assert isinstance(get_ruleset_module("awn"), CwnRulesetModule)
+    assert issubclass(AwnRulesetModule, WithoutNumberRulesetModule)
+    assert not issubclass(AwnRulesetModule, CwnRulesetModule)
+    assert isinstance(get_ruleset_module("awn"), WithoutNumberRulesetModule)
+    assert not isinstance(get_ruleset_module("awn"), CwnRulesetModule)
 
 
 def test_unknown_ruleset_still_fails_loud_after_awn():

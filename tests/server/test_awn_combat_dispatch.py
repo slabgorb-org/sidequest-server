@@ -1,10 +1,12 @@
 """AWN combat dispatch — production-path wiring proof (Story 88-1, §11.4 Test 4).
 
-AWN combat IS CWN combat (faithful SRD port): ``AwnRulesetModule`` subclasses
-``CwnRulesetModule`` with NO method overrides in Plan 1, so every CWN combat
-subsystem — Shock, Trauma, Mortal Injury, ablative HP, opponent reprisal — must
-fire IDENTICALLY for an ``awn``-bound pack. This proves it by driving REAL
-strikes through the production ``dispatch_dice_throw`` with a synthetic
+AWN combat IS the Without Number core combat (faithful SRD port): after ADR-142
+``AwnRulesetModule`` is a clean ``WithoutNumberRulesetModule`` sibling (no longer
+``Awn(Cwn)``) and inherits the shared lethality stack — Shock, Trauma, Mortal
+Injury, ablative HP, opponent reprisal — which must fire IDENTICALLY for an
+``awn``-bound pack, now emitting ``awn.*`` spans via ``self.slug`` (the honest-slug
+correction; AWN no longer mislabels its lethality as ``cwn.*``). This proves it by
+driving REAL strikes through the production ``dispatch_dice_throw`` with a synthetic
 ``ruleset="awn"`` pack and asserting on OTEL spans + HP state — NOT source text
 (CLAUDE.md forbids source-grep wiring tests).
 
@@ -12,8 +14,8 @@ This is the integration test that proves the seams are wired:
   * ``get_ruleset_module("awn")`` resolves inside the production dispatcher
     (dice.py:297) — Items 1 & 2. (UnknownRulesetError until registered.)
   * ``pack.rules.ruleset_config()`` returns the awn block — Item 3.
-  * The inherited ``cwn.*`` spans fire for AWN: ``cwn.trauma.roll``,
-    ``cwn.shock.applied``, ``cwn.mortal_injury.declared``.
+  * The slug-namespaced ``awn.*`` spans fire for AWN: ``awn.trauma.roll``,
+    ``awn.shock.applied``, ``awn.mortal_injury.declared``.
   * ``state_patch.hp`` fires and the target's ablative HP depletes (ADR-114).
   * The 0-HP downed seam (``run_cwn_wwn_downed_seam``) runs for AWN — Item 5
     (the slug-string ``ruleset in ("cwn","wwn")`` guard must be taught "awn").
@@ -346,7 +348,7 @@ def _drive_strike(*, snap, enc, pack, attacker, face, request_id, round_number=1
 def test_awn_strike_fires_trauma_span_and_depletes_hp(otel_capture, monkeypatch):
     """A real AWN strike resolves through dispatch_dice_throw: get_ruleset_module
     ('awn') resolves (Items 1/2), ruleset_config() yields the awn block (Item 3),
-    the inherited Trauma seam fires cwn.trauma.roll, and ablative HP depletes
+    the inherited Trauma seam fires awn.trauma.roll, and ablative HP depletes
     (state_patch.hp). Forces the trauma die LOW (deterministic; the span fires
     regardless of traumatic-ness).
     """
@@ -363,10 +365,11 @@ def test_awn_strike_fires_trauma_span_and_depletes_hp(otel_capture, monkeypatch)
     )
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
-    assert "cwn.trauma.roll" in span_names, (
-        f"the inherited cwn.trauma.roll span must fire for an AWN strike with a "
-        f"trauma_die — get_ruleset_module('awn') must resolve and AwnRulesetModule "
-        f"must inherit resolve_trauma; got spans: {span_names}"
+    assert "awn.trauma.roll" in span_names, (
+        f"the awn.trauma.roll span must fire for an AWN strike with a trauma_die — "
+        f"get_ruleset_module('awn') must resolve and AwnRulesetModule must inherit "
+        f"the WN-core resolve_trauma (ADR-142, slug-namespaced awn.*); "
+        f"got spans: {span_names}"
     )
     assert "state_patch.hp" in span_names, (
         f"ADR-114 ablative HP: a state_patch.hp span must fire on the strike; "
@@ -385,8 +388,8 @@ def test_awn_strike_fires_trauma_span_and_depletes_hp(otel_capture, monkeypatch)
 
 def test_awn_shock_chips_hp_on_miss(otel_capture):
     """An AWN melee weapon chips fixed Shock damage on a MISS vs a low-AC target
-    (inherited CWN Shock). face=[1] forces a miss; the shock chip applies and
-    cwn.shock.applied fires.
+    (inherited WN-core Shock). face=[1] forces a miss; the shock chip applies and
+    awn.shock.applied fires.
     """
     pack = _make_awn_shock_pack()
     snap, enc = _make_snapshot_and_encounter("Vane", "Scrag", opponent_hp=20)
@@ -397,8 +400,8 @@ def test_awn_shock_chips_hp_on_miss(otel_capture):
     _drive_strike(snap=snap, enc=enc, pack=pack, attacker="Vane", face=[1], request_id="awn-shock")
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
-    assert "cwn.shock.applied" in span_names, (
-        f"the inherited cwn.shock.applied span must fire when an AWN strike MISSES "
+    assert "awn.shock.applied" in span_names, (
+        f"the awn.shock.applied span must fire when an AWN strike MISSES "
         f"a low-Melee-AC target with a shock weapon; got spans: {span_names}"
     )
     assert "state_patch.hp" in span_names, (
@@ -422,7 +425,7 @@ def test_awn_downed_target_gets_mortal_injury(otel_capture, monkeypatch):
     the slug-string ``pack.rules.ruleset in ("cwn","wwn")`` at downed_seam.py:128,
     which currently EXCLUDES "awn" → the seam returns early and NO Mortal Injury
     fires. After the fix (isinstance on ruleset_config()), AWN rides the seam and
-    cwn.mortal_injury.declared fires.
+    awn.mortal_injury.declared fires.
 
     Determinism: opponent seeded at hp=1 so one 1d6 strike (face=20) drops it to
     0; trauma die forced LOW so the hit is non-traumatic (no Major Injury path).
@@ -443,7 +446,7 @@ def test_awn_downed_target_gets_mortal_injury(otel_capture, monkeypatch):
         f"hp={target.hp.current}"
     )
     span_names = [s.name for s in otel_capture.get_finished_spans()]
-    assert "cwn.mortal_injury.declared" in span_names, (
+    assert "awn.mortal_injury.declared" in span_names, (
         f"an AWN target dropped to 0 HP must declare a Mortal Injury — the downed "
         f"seam's slug-string guard (downed_seam.py:128) must accept 'awn'; "
         f"got spans: {span_names}"

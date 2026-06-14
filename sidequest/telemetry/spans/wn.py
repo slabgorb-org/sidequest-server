@@ -53,6 +53,226 @@ for _slug in WN_FAMILY_SLUGS:
         )
 
 
+# ---------------------------------------------------------------------------
+# Lethality spans — slug-parameterized (ADR-142, Task 6 / DD-4).
+#
+# The WWN/CWN/AWN lethality stack (System Strain, Trauma, Shock, Mortal Injury,
+# Major Injury) is hoisted to ``WithoutNumberRulesetModule`` (ADR-142), so its
+# spans are emitted slug-namespaced from the core via ``self.slug`` — exactly
+# the precedent ``effort_commit_span(ruleset=...)`` set (spans/psionics.py). The
+# per-slug ``extract`` lambdas are copied byte-for-byte from the corresponding
+# ``spans/wwn.py`` registrations so the GM-panel projection is unchanged when
+# WWN/CWN later switch to these emitters. SWN has no lethality config and never
+# emits these — only the three lethality-bearing slugs are routed.
+# ---------------------------------------------------------------------------
+
+# Lethality-bearing WN slugs (SWN carries no trauma/system_strain config).
+WN_LETHALITY_SLUGS: tuple[str, ...] = ("wwn", "cwn", "awn")
+
+
+def _system_strain_delta_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "system_strain",
+        "actor": attrs.get("actor", ""),
+        "source": attrs.get("source", ""),
+        "amount": attrs.get("amount", 0),
+        "new_total": attrs.get("new_total", 0),
+        "max": attrs.get("max", 0),
+        "applied": attrs.get("applied", True),
+    }
+
+
+def _trauma_roll_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "trauma",
+        "actor": attrs.get("actor", ""),
+        "weapon_die": attrs.get("weapon_die", ""),
+        "roll": attrs.get("roll", 0),
+        "target": attrs.get("target", 0),
+        "traumatic": attrs.get("traumatic", False),
+        "rating": attrs.get("rating", 1),
+        "base": attrs.get("base", 0),
+        "final": attrs.get("final", 0),
+    }
+
+
+def _shock_applied_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "shock",
+        "actor": attrs.get("actor", ""),
+        "amount": attrs.get("amount", 0),
+        "melee_ac": attrs.get("melee_ac", 0),
+        "shock_rating": attrs.get("shock_rating", 0),
+        "shock_ac": attrs.get("shock_ac", 0),
+    }
+
+
+def _mortal_injury_declared_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "mortal_injury",
+        "actor": attrs.get("actor", ""),
+        "rounds_to_die": attrs.get("rounds_to_die", 0),
+    }
+
+
+def _major_injury_roll_extract(span: _SpanLike) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "major_injury",
+        "actor": attrs.get("actor", ""),
+        "save_made": attrs.get("save_made", True),
+        "roll": attrs.get("roll", 0),
+        "text": attrs.get("text", ""),
+    }
+
+
+# Event suffix -> the byte-identical extractor copied from spans/wwn.py.
+_WN_LETHALITY_EXTRACTS = {
+    "system_strain.delta": _system_strain_delta_extract,
+    "trauma.roll": _trauma_roll_extract,
+    "shock.applied": _shock_applied_extract,
+    "mortal_injury.declared": _mortal_injury_declared_extract,
+    "major_injury.roll": _major_injury_roll_extract,
+}
+
+for _slug in WN_LETHALITY_SLUGS:
+    for _event, _extract in _WN_LETHALITY_EXTRACTS.items():
+        SPAN_ROUTES[f"{_slug}.{_event}"] = SpanRoute(
+            event_type="state_transition",
+            component=_slug,
+            extract=_extract,
+        )
+
+
+def system_strain_delta_span(
+    *,
+    ruleset: str,
+    actor: str,
+    source: str,
+    amount: int,
+    new_total: int,
+    max: int,
+    applied: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.system_strain.delta`` (lie-detector for WN System Strain)."""
+    attributes: dict[str, Any] = {
+        "field": "system_strain",
+        "actor": actor,
+        "source": source,
+        "amount": amount,
+        "new_total": new_total,
+        "max": max,
+        "applied": applied,
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.system_strain.delta", attributes, tracer_override=_tracer):
+        pass
+
+
+def trauma_roll_span(
+    *,
+    ruleset: str,
+    actor: str,
+    weapon_die: str,
+    roll: int,
+    target: int,
+    traumatic: bool,
+    rating: int,
+    base: int,
+    final: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.trauma.roll`` (lie-detector for the WN trauma threshold check)."""
+    attributes: dict[str, Any] = {
+        "field": "trauma",
+        "actor": actor,
+        "weapon_die": weapon_die,
+        "roll": roll,
+        "target": target,
+        "traumatic": traumatic,
+        "rating": rating,
+        "base": base,
+        "final": final,
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.trauma.roll", attributes, tracer_override=_tracer):
+        pass
+
+
+def shock_applied_span(
+    *,
+    ruleset: str,
+    actor: str,
+    amount: int,
+    melee_ac: int,
+    shock_rating: int,
+    shock_ac: int | None = None,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.shock.applied`` (lie-detector for WN shock damage)."""
+    attributes: dict[str, Any] = {
+        "field": "shock",
+        "actor": actor,
+        "amount": amount,
+        "melee_ac": melee_ac,
+        "shock_rating": shock_rating,
+        "shock_ac": shock_ac,
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.shock.applied", attributes, tracer_override=_tracer):
+        pass
+
+
+def mortal_injury_declared_span(
+    *,
+    ruleset: str,
+    actor: str,
+    rounds_to_die: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.mortal_injury.declared`` (lie-detector for WN mortal wound)."""
+    attributes: dict[str, Any] = {
+        "field": "mortal_injury",
+        "actor": actor,
+        "rounds_to_die": rounds_to_die,
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.mortal_injury.declared", attributes, tracer_override=_tracer):
+        pass
+
+
+def major_injury_roll_span(
+    *,
+    ruleset: str,
+    actor: str,
+    save_made: bool,
+    roll: int,
+    text: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``{ruleset}.major_injury.roll`` (lie-detector for the WN Major Injury table)."""
+    attributes: dict[str, Any] = {
+        "field": "major_injury",
+        "actor": actor,
+        "save_made": save_made,
+        "roll": roll,
+        "text": text,
+        **attrs,
+    }
+    with Span.open(f"{ruleset}.major_injury.roll", attributes, tracer_override=_tracer):
+        pass
+
+
 def wn_attack_resolved_span(
     *,
     slug: str,

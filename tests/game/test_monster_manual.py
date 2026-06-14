@@ -237,6 +237,67 @@ def test_active_npc_without_location_anchors_to_current() -> None:
     assert "Floater" in output
 
 
+def test_placed_npc_surfaces_at_matching_location() -> None:
+    """An AVAILABLE NPC with ``location_tags`` matching the current location is
+    surfaced as "not yet met" before it has ever been narrated.
+
+    This is the wry_whimsy/oz bug: canonical companions are authored with a
+    placement (e.g. the Scarecrow's cornfield on the Yellow Brick Road) but,
+    never having been narrated, they had ``activated_location=None`` and so
+    were eligible everywhere — and lost the selection race to generic
+    walk-ons. A placed NPC must surface where its tags match the location.
+    """
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    manual.add_npc(
+        {"name": "Scarecrow", "role": "companion", "culture": "Munchkin"},
+        ["yellow brick road", "cornfield"],
+    )
+
+    output = manual.format_nearby_npcs("The Yellow Brick Road — Morning")
+    assert "Scarecrow" in output
+    assert "Other known NPCs" in output
+
+
+def test_placed_npc_hidden_at_nonmatching_location() -> None:
+    """A placed NPC must NOT surface where none of its tags match.
+
+    Placement gates the NPC: tagged for the cornfield, it does not appear in
+    the Emerald City. (Contrast an *unplaced* NPC, which keeps the legacy
+    everywhere-eligible behavior — see ``test_unplaced_npc_surfaces_anywhere``.)
+    """
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    manual.add_npc(
+        {"name": "Scarecrow", "role": "companion", "culture": "Munchkin"},
+        ["yellow brick road", "cornfield"],
+    )
+
+    output = manual.format_nearby_npcs("The Emerald City — Throne Room")
+    assert "Scarecrow" not in output
+
+
+def test_unplaced_npc_surfaces_anywhere() -> None:
+    """An AVAILABLE NPC with NO ``location_tags`` keeps legacy behavior:
+    eligible as a generic "Other known NPC" everywhere (generated walk-ons)."""
+    manual = MonsterManual(genre="g", world="w")
+    manual.add_npc({"name": "Field Mouse", "role": "critter", "culture": "wild"}, [])
+
+    output = manual.format_nearby_npcs("Anywhere At All")
+    assert "Field Mouse" in output
+
+
+def test_placed_npc_tag_match_is_substring_and_case_insensitive() -> None:
+    """Tag matching mirrors the ``activated_location`` anchor match: a tag is a
+    lowercase substring tested against the lowercased location string (either
+    direction)."""
+    manual = MonsterManual(genre="g", world="w")
+    manual.add_npc({"name": "Tin Woodman", "role": "companion", "culture": "Winkie"}, ["forest"])
+
+    # "forest" is a substring of "The Dark FOREST clearing" (case-insensitive)
+    assert "Tin Woodman" in manual.format_nearby_npcs("The Dark FOREST clearing")
+    # No overlap → hidden
+    assert "Tin Woodman" not in manual.format_nearby_npcs("Open Plain")
+
+
 def test_manual_npc_extra_fields_forbidden() -> None:
     """``model_config.extra='forbid'`` rejects unknown keys on load."""
     import pytest

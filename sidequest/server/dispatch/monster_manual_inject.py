@@ -160,7 +160,7 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
 
 def _npc_patches_for_available_humans(
     manual: MonsterManual, current_location: str
-) -> tuple[list[NpcPatch], int]:
+) -> tuple[list[NpcPatch], int, int]:
     """Build patches for Active-at-location + top-N Available humans.
 
     Mirrors :meth:`MonsterManual.format_nearby_npcs` selection logic:
@@ -170,15 +170,21 @@ def _npc_patches_for_available_humans(
       the explicit anchor location. Capped at
       :data:`_ACTIVE_NPC_INJECT_LIMIT` (sq-playtest 2026-06-13): the loop was
       previously uncapped and re-surfaced every named NPC every turn.
-    - First :data:`_AVAILABLE_NPC_INJECT_LIMIT` Available NPCs — name-only
-      patch stamped with the party's ``current_location`` so the
-      projection layer's ``in_same_zone()`` matches them.
+    - First :data:`_AVAILABLE_NPC_INJECT_LIMIT` Available NPCs, selected via
+      :meth:`MonsterManual.available_at_location` (wry_whimsy/oz fix): a
+      *placed* Available NPC (non-empty ``location_tags``) only surfaces where
+      its tags match ``current_location``; an *unplaced* one stays eligible
+      everywhere. Each is a name-only patch stamped with the party's
+      ``current_location`` so the projection layer's ``in_same_zone()`` matches.
 
     Dormant NPCs are skipped — same exclusion as the Rust formatter.
 
-    Returns ``(patches, active_capped)`` — ``active_capped`` is the number of
-    Active-at-location humans dropped by the cap, surfaced in the injection
-    span so the GM panel sees the bench was bounded (not silently truncated).
+    Returns ``(patches, active_capped, available_placed_matched)`` —
+    ``active_capped`` is the number of Active-at-location humans dropped by the
+    cap; ``available_placed_matched`` is how many of the surfaced Available
+    humans were matched by ``location_tags`` (vs unplaced fallback). Both are
+    surfaced in the injection span so the GM panel sees placement-aware
+    selection working and the bench bounded (No Silent Fallbacks).
 
     Playtest 2026-05-11 regression: prior versions left ``location=None``
     on every patch, which silently masked every co-located target from
@@ -214,13 +220,18 @@ def _npc_patches_for_available_humans(
         )
     patches: list[NpcPatch] = active_patches[:_ACTIVE_NPC_INJECT_LIMIT]
 
-    available = [n for n in manual.npcs if n.state == EntryState.AVAILABLE][
-        :_AVAILABLE_NPC_INJECT_LIMIT
-    ]
+    # Placement-aware Available selection (wry_whimsy/oz fix): a placed NPC
+    # (non-empty ``location_tags``) only surfaces where its tags match
+    # ``current_location``; an unplaced NPC stays eligible everywhere. Placed
+    # matches are ordered ahead of unplaced ones so authored roster NPCs win the
+    # surfacing race against generic generated walk-ons. Mirrors
+    # ``MonsterManual.available_at_location`` exactly.
+    available = manual.available_at_location(current_location)[:_AVAILABLE_NPC_INJECT_LIMIT]
+    available_placed_matched = sum(1 for n in available if n.location_tags)
     for npc in available:
         patches.append(_human_patch(npc, location=fallback_location))
 
-    return patches, active_capped
+    return patches, active_capped, available_placed_matched
 
 
 def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
@@ -450,8 +461,11 @@ def inject(
 
     all_patches: list[NpcPatch] = []
     active_capped = 0
+    available_placed_matched = 0
     if manual is not None:
-        human_patches, active_capped = _npc_patches_for_available_humans(manual, current_location)
+        human_patches, active_capped, available_placed_matched = _npc_patches_for_available_humans(
+            manual, current_location
+        )
         creature_patches = (
             _npc_patches_for_encounters(manual, in_combat, current_location)
             if combat_encounters
@@ -482,6 +496,16 @@ def inject(
                 "npcs_injected": len(human_patches),
                 "creatures_injected": len(creature_patches),
                 "active_npcs_capped": active_capped,
+                # Placement-aware selection visibility (wry_whimsy/oz fix): how
+                # many surfaced Available humans were matched by ``location_tags``
+                # vs. fell through as unplaced walk-ons, and how many placed NPCs
+                # in the whole pool are eligible at this location. The GM-panel
+                # lie-detector that authored roster placement is actually firing
+                # (not silently ignored, the original bug).
+                "available_placed_matched": available_placed_matched,
+                "available_placed_eligible": sum(
+                    1 for n in manual.available_at_location(current_location) if n.location_tags
+                ),
                 "names_sanitized": names_sanitized,
                 "patches_with_location": patches_with_location,
                 "in_combat": bool(in_combat),

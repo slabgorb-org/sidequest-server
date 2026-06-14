@@ -48,7 +48,11 @@ def _manual_with(
 
 
 def _human(
-    name: str, *, state: EntryState = EntryState.AVAILABLE, activated_location: str | None = None
+    name: str,
+    *,
+    state: EntryState = EntryState.AVAILABLE,
+    activated_location: str | None = None,
+    location_tags: list[str] | None = None,
 ) -> ManualNpc:
     return ManualNpc(
         data={
@@ -61,6 +65,7 @@ def _human(
         name=name,
         role="scavenger",
         culture="Scrapborn",
+        location_tags=list(location_tags or []),
         state=state,
         activated_location=activated_location,
     )
@@ -258,6 +263,37 @@ def test_inject_filters_active_humans_by_location_substring() -> None:
     assert "FloatAvail" in names  # available NPCs always surface (top 3 cap)
 
 
+def test_inject_surfaces_placed_available_npc_at_matching_location() -> None:
+    """A placed AVAILABLE NPC (``location_tags``) materializes into the snapshot
+    where its tags match — the production-path mirror of
+    ``MonsterManual.available_at_location``. This is the wry_whimsy/oz fix at the
+    seam that actually feeds the narrator (``snapshot.npcs``)."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human("Scarecrow", location_tags=["yellow brick road", "cornfield"]),
+            _human("Throne Guard", location_tags=["emerald city"]),
+        ],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(
+        sd, snap, current_location="The Yellow Brick Road — Morning", in_combat=False
+    )
+    names = [n.core.name for n in snap.npcs]
+    assert "Scarecrow" in names  # placement matches the road
+    assert "Throne Guard" not in names  # placed for the Emerald City, gated out
+
+
+def test_inject_unplaced_available_npc_still_surfaces_anywhere() -> None:
+    """An AVAILABLE NPC with no ``location_tags`` keeps the legacy
+    everywhere-eligible behavior (generated walk-ons)."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(npcs=[_human("Field Mouse")])
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="Some Unrelated Place", in_combat=False)
+    assert "Field Mouse" in [n.core.name for n in snap.npcs]
+
+
 def test_inject_caps_active_at_location_humans() -> None:
     """sq-playtest 2026-06-13 (oz entourage): the Active-at-location loop was
     uncapped and re-surfaced every named NPC every turn. It is now bounded to
@@ -308,6 +344,35 @@ def test_inject_span_reports_active_capped_count(otel_capture) -> None:
         f"span must report {dropped} active humans capped; got {attrs.get('active_npcs_capped')}"
     )
     assert attrs.get("npcs_injected") == _ACTIVE_NPC_INJECT_LIMIT
+
+
+def test_inject_span_reports_placement_match_count(otel_capture) -> None:
+    """The injection span surfaces placement-aware selection so the GM panel can
+    see authored ``location_tags`` actually firing (wry_whimsy/oz fix)."""
+    from sidequest.telemetry.spans import SPAN_MONSTER_MANUAL_INJECTED
+
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human("Scarecrow", location_tags=["yellow brick road"]),  # matches → surfaces
+            _human("Throne Guard", location_tags=["emerald city"]),  # placed elsewhere → gated
+            _human("Field Mouse"),  # unplaced → surfaces as fallback
+        ],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(
+        sd, snap, current_location="The Yellow Brick Road — Morning", in_combat=False
+    )
+
+    fired = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_MONSTER_MANUAL_INJECTED]
+    assert len(fired) == 1
+    attrs = dict(fired[0].attributes or {})
+    # One placed NPC (Scarecrow) matched and surfaced; Field Mouse was an
+    # unplaced fallback (not counted as placed-matched).
+    assert attrs.get("available_placed_matched") == 1
+    # Only Scarecrow is placement-eligible at this location (Throne Guard's tag
+    # does not overlap the road).
+    assert attrs.get("available_placed_eligible") == 1
 
 
 def test_inject_skips_dormant_humans() -> None:

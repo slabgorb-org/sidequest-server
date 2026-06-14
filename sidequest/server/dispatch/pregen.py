@@ -28,7 +28,7 @@ import logging
 import math
 import random
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sidequest.cli.encountergen.encountergen import main as encountergen_main
 from sidequest.cli.namegen.namegen import main as namegen_main
@@ -193,6 +193,47 @@ def _generate_encounter(
     return _run_cli_capturing_json(encountergen_main, argv, label="encountergen")
 
 
+def _seed_authored_npcs(pack: Any, world: str, manual: MonsterManual) -> int:
+    """Add the world's authored ``npcs.yaml`` cast into ``manual`` with placement.
+
+    Reads ``pack.worlds[world].authored_npcs`` (each an
+    :class:`~sidequest.genre.models.authored_npc.AuthoredNpc`) and adds each one
+    to the Monster Manual via :meth:`MonsterManual.add_npc`, carrying its
+    ``location_tags`` through to ``ManualNpc.location_tags`` so placement-aware
+    selection (:meth:`MonsterManual.available_at_location`) can surface it at the
+    right location before it has ever been narrated.
+
+    Dedup is handled by ``add_npc`` (by name) — re-seeding across sessions does
+    not double-add. Returns the number of authored NPCs newly added.
+
+    Tolerant of stub packs that don't expose ``worlds`` (returns 0) — the read
+    is via ``getattr`` so legacy seed_manual callers and test stubs are
+    unaffected.
+    """
+    worlds = getattr(pack, "worlds", None)
+    if not worlds or not world:
+        return 0
+    world_obj = worlds.get(world)
+    if world_obj is None:
+        return 0
+    authored = getattr(world_obj, "authored_npcs", None) or []
+    before = len(manual.npcs)
+    for npc in authored:
+        # Build the namegen-shaped ``data`` blob ``add_npc``/``_human_patch``
+        # read (name/role/culture/ocean_summary). The authored NPC's prose lives
+        # in history_seeds; we pass the role through so the "Other known NPCs"
+        # line reads naturally.
+        data: dict[str, Any] = {
+            "name": npc.name,
+            "role": npc.role or "",
+            "culture": "",
+        }
+        if npc.appearance:
+            data["ocean_summary"] = npc.appearance
+        manual.add_npc(data, list(npc.location_tags))
+    return len(manual.npcs) - before
+
+
 def seed_manual(
     *,
     genre_packs_path: Path,
@@ -314,6 +355,23 @@ def seed_manual(
                         (axes[2] if axes else ""),
                     )
                     manual.add_npc(data, [])
+
+    # ── Authored roster NPCs (placement-aware) ────────────────
+    # The world's authored ``npcs.yaml`` cast (canonical companions, named
+    # individuals) must participate in the Monster Manual's "nearby (not yet
+    # met)" surfacing — otherwise they only exist as pre-loaded ``state.npcs``
+    # and the Manual surfaces generic generated walk-ons instead (wry_whimsy/oz
+    # bug, 2026-06-14). Each authored NPC carries its ``location_tags`` into the
+    # Manual so placement-aware selection can match it to the right location
+    # BEFORE it has ever been narrated.
+    authored_seeded = _seed_authored_npcs(pack, world, manual)
+    if authored_seeded:
+        logger.info(
+            "pregen.authored_npcs_seeded (genre=%s, world=%s, count=%d)",
+            genre,
+            world,
+            authored_seeded,
+        )
 
     # ── Encounters: tier 1 + tier 2 ───────────────────────────
     # Social, Composure-only packs (combat_encounters=False) have no combat —

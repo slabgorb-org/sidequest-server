@@ -311,6 +311,23 @@ SPAN_ROUTES["fate.action.classified"] = SpanRoute(
         "confidence": (span.attributes or {}).get("confidence", 0.0),
     },
 )
+# --- F2d: deterministic opponent decision span (GM panel = lie detector) ------
+# The opponent AI chose a proactive action against the player. The GM-panel
+# evidence that the swing was an engine decision, not narrator improvisation.
+# Literal key (no SPAN_* constant) — the routing-completeness lint only inspects
+# SPAN_* module constants.
+SPAN_ROUTES["fate.opponent.decided"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "opponent_decided",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "action": (span.attributes or {}).get("action", ""),
+        "skill": (span.attributes or {}).get("skill", ""),
+        "target": (span.attributes or {}).get("target", ""),
+        "ladder_total": (span.attributes or {}).get("ladder_total", 0),
+    },
+)
 
 
 def fate_exchange_committed_span(
@@ -429,6 +446,32 @@ def fate_action_classified_span(
         pass
 
 
+def fate_opponent_decided_span(
+    *,
+    actor: str,
+    action: str,
+    skill: str,
+    target: str,
+    ladder_total: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.opponent.decided`` — the deterministic opponent AI chose a
+    proactive action against the player (F2d). The GM-panel evidence that the
+    swing was an engine decision, not narrator improvisation."""
+    attributes: dict[str, Any] = {
+        "field": "opponent_decided",
+        "actor": actor,
+        "action": action,
+        "skill": skill,
+        "target": target,
+        "ladder_total": ladder_total,
+        **attrs,
+    }
+    with Span.open("fate.opponent.decided", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
     "fate_action_classified_span",
     "fate_action_resolved_span",
@@ -441,6 +484,7 @@ __all__ = [
     "fate_exchange_committed_span",
     "fate_exchange_order_span",
     "fate_exchange_resolved_span",
+    "fate_opponent_decided_span",
     "fate_point_delta_span",
     "fate_stress_applied_span",
     "fate_taken_out_span",

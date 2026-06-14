@@ -442,6 +442,17 @@ def test_tie_attack_grants_defender_boost():
         )
     )
     _seal_attack(enc, snap, module, "Hero", 2, "Rival")  # ladder 2 vs defense 2 → shifts 0 (tie)
+    # F2d seats an opponent attack for any un-committed opponent; pre-seal Rival's
+    # action as a clean MISS so seating skips it (no double-commit) and Rival's
+    # resolution adds no aspect — isolating the assertion to Hero's tie boost.
+    seal_fate_commit(
+        encounter=enc,
+        actor=enc.find_actor("Rival"),
+        action="attack",
+        skill="Athletics",
+        target="Hero",
+        ladder_total=-5,  # guaranteed miss vs any 4dF defense → no boost from Rival
+    )
 
     exporter, tracer = _otel()
     run_fate_exchange(
@@ -452,7 +463,7 @@ def test_tie_attack_grants_defender_boost():
     assert rival is not None
     assert all(not b.checked for b in rival.fate_sheet.stress["physical"].boxes)  # tie = no stress
     boosts = [a for a in enc.situation_aspects if a.kind == "boost"]
-    assert len(boosts) == 1  # defender got a boost
+    assert [b.text for b in boosts] == ["Momentum vs Hero"]  # only Hero's tie granted a boost
     assert "fate.aspect.created" in [s.name for s in exporter.get_finished_spans()]
 
 
@@ -462,11 +473,20 @@ def test_create_advantage_succeed_with_style_grants_two_invokes():
 
     module = get_ruleset_module("fate")
     enc = _enc([EncounterActor(name="Hero", role="lead", side="player")])
-    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Notice": 4})], encounter=enc)
-    outcome = module.resolve_action(skill_rating=4, opposition=Opposition(value=0, kind="passive"), rng=_FixedRng(0))
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Notice": 4})], encounter=enc
+    )
+    outcome = module.resolve_action(
+        skill_rating=4, opposition=Opposition(value=0, kind="passive"), rng=_FixedRng(0)
+    )
     seal_fate_commit(
-        encounter=enc, actor=enc.find_actor("Hero"), action="create_advantage", skill="Notice",
-        difficulty=1, ladder_total=outcome.ladder_total, aspect_text="Flanked",
+        encounter=enc,
+        actor=enc.find_actor("Hero"),
+        action="create_advantage",
+        skill="Notice",
+        difficulty=1,
+        ladder_total=outcome.ladder_total,
+        aspect_text="Flanked",
     )  # shifts = 4 - 1 = 3 → Succeed-with-Style → 2 free invokes
 
     run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0))

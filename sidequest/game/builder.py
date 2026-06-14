@@ -33,6 +33,7 @@ from sidequest.genre.models.character import (
     CharCreationScene,
     ClassDef,
     EquipmentTables,
+    GuaranteedGrant,
     MechanicalEffects,
     OriginTraitDef,
 )
@@ -804,6 +805,19 @@ def humanize_snake_case(s: str) -> str:
          "mystery_compass" → "Mystery Compass".
     """
     return " ".join(word.capitalize() if word else "" for word in s.split("_"))
+
+
+def roll_guaranteed_grant(grant: GuaranteedGrant, rng: random.Random) -> str:
+    """Resolve a :class:`GuaranteedGrant` to the item id actually granted.
+
+    Story 106-4: returns ``grant.upgrade`` when an upgrade is configured and the
+    roll lands strictly below ``grant.upgrade_chance``; otherwise ``grant.item``.
+    Upgrade-only — the base item is the floor, so a guaranteed grant never yields
+    nothing and never something worse than the base.
+    """
+    if grant.upgrade and rng.random() < grant.upgrade_chance:
+        return grant.upgrade
+    return grant.item
 
 
 def _split_name(full_name: str) -> tuple[str, str]:
@@ -2577,6 +2591,46 @@ class CharacterBuilder:
                         }
                     )
                     added += 1
+            # Story 106-4: guaranteed grants — items every character of this kit
+            # receives on top of the random rolls (e.g. a heal potion), with an
+            # optional probabilistic upgrade. Keyed by kit id (class_kit:<id> →
+            # <id>; random_table → "tables"). Appended as generic dicts; the
+            # chargen catalog-upgrade pass enriches them (name/tags/heal_amount)
+            # by id just like the rolled items.
+            kit_id = (
+                kit_source.split(":", 1)[1] if kit_source.startswith("class_kit:") else "tables"
+            )
+            for grant in self._equipment_tables.guaranteed_grants.get(kit_id, []):
+                granted_id = roll_guaranteed_grant(grant, self._rng)
+                if not granted_id.strip():
+                    span.add_event(
+                        "chargen.blank_guaranteed_grant_skipped",
+                        {"kit_id": kit_id, "base": grant.item, "severity": "warn"},
+                    )
+                    continue
+                display_name = humanize_snake_case(granted_id) or "Unknown Item"
+                items.append(
+                    {
+                        "id": granted_id,
+                        "name": display_name,
+                        "description": f"Starting equipment (guaranteed): {display_name}",
+                        "category": "consumable",
+                        "value": 0,
+                        "weight": 1.0,
+                        "rarity": "common",
+                        "narrative_weight": 0.3,
+                        "tags": [],
+                        "equipped": False,
+                        "quantity": 1,
+                        "uses_remaining": None,
+                        "state": "Carried",
+                    }
+                )
+                added += 1
+                span.add_event(
+                    "chargen.guaranteed_grant_added",
+                    {"kit_id": kit_id, "item_id": granted_id, "base": grant.item},
+                )
             if class_kit_requested and kit_source.startswith("class_kit:"):
                 span.add_event(
                     "chargen.class_kit_rolled",

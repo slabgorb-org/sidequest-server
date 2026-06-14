@@ -114,6 +114,24 @@ def test_e2e_chargen_produces_classed_warrior(cc_pack):
     assert character.core.hp.current == character.core.hp.max
 
 
+def test_e2e_warrior_kit_always_includes_exactly_one_heal_potion(cc_pack):
+    """Story 106-4 Part B: every Warrior starts with EXACTLY one heal potion —
+    base ``potion_healing`` or (30%) the upgraded ``potion_healing_greater`` —
+    never zero, never two. The guaranteed_grants primitive makes the kit
+    deterministic so the beat-scan (Part C) tests against a known heal, and
+    removes the old ~30%-of-Warriors-start-empty coin flip (playtest finding).
+
+    25 fresh rolls: pre-fix the random consumable pool gave a heal only ~1-in-3.
+    """
+    heal_ids = {"potion_healing", "potion_healing_greater"}
+    for i in range(25):
+        builder = _drive_chargen(cc_pack, target_class="Warrior", name=f"W{i}")
+        character = builder.build("Wiring")
+        ids = [it["id"] for it in character.core.inventory.items]
+        heals = [x for x in ids if x in heal_ids]
+        assert len(heals) == 1, f"warrior {i} should get exactly one heal, got {heals} in {ids}"
+
+
 def test_e2e_chargen_produces_classed_mage(cc_pack):
     builder = _drive_chargen(cc_pack, target_class="Mage")
     character = builder.build("Wiring")
@@ -124,6 +142,12 @@ def test_e2e_chargen_produces_classed_mage(cc_pack):
     rolled_ids = {i["id"] for i in character.core.inventory.items}
     mage_kit = cc_pack.equipment_tables.class_tables["mage_kit"]
     mage_items = {i for items in mage_kit.values() for i in items}
+    # Story 106-4 Part B: guaranteed_grants add a heal potion (base or upgrade)
+    # outside the random slot lists — include those ids in the allowed set.
+    for grant in cc_pack.equipment_tables.guaranteed_grants.get("mage_kit", []):
+        mage_items.add(grant.item)
+        if grant.upgrade:
+            mage_items.add(grant.upgrade)
     assert rolled_ids.issubset(mage_items), (
         f"Items {rolled_ids - mage_items} leaked from outside mage_kit"
     )

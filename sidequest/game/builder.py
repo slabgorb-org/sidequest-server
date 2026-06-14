@@ -1775,6 +1775,7 @@ class CharacterBuilder:
             qualifying_classes=qualifying_names,
             class_requirements=class_requirements,
             confirm_enabled=confirm_enabled,
+            ability_names=list(self._ability_score_names),
         )
         return CharacterCreationMessage(payload=payload, player_id=player_id)
 

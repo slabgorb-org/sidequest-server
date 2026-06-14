@@ -7,6 +7,7 @@ module plan needs them (YAGNI).
 
 from __future__ import annotations
 
+import json
 import random
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
@@ -17,10 +18,77 @@ from sidequest.protocol.models import InitiativeEntry
 
 if TYPE_CHECKING:
     from sidequest.game.beat_kinds import ApplyResult
+    from sidequest.game.builder import AccumulatedChoices
     from sidequest.game.lethality import DownedResult, LethalityResult
     from sidequest.game.table.types import TableCommit, TableResolutionOutcome, TableState
     from sidequest.genre.models.inventory import DamageSpec
     from sidequest.genre.models.world import Route
+
+
+def _roll_3d6_stats(ability_names: list[str], rng: random.Random) -> list[tuple[str, int]]:
+    """Roll 3d6 for each ability score in order. Returns ``(name, total)``
+    pairs in ``ability_names`` order, emitting one ``SPAN_CHARGEN_STAT_ROLL``
+    per stat.
+
+    Extracted from CharacterBuilder._roll_3d6_stats (ADR-143) so both the
+    builder and the ABC default generate_attributes share one implementation.
+    Uses the passed seedable RNG so tests can drive deterministic outputs.
+    """
+    from sidequest.telemetry.spans import SPAN_CHARGEN_STAT_ROLL, Emitter
+
+    results: list[tuple[str, int]] = []
+    for name in ability_names:
+        dice = (rng.randint(1, 6), rng.randint(1, 6), rng.randint(1, 6))
+        total = sum(dice)
+        Emitter.fire(
+            SPAN_CHARGEN_STAT_ROLL,
+            {
+                "stat": name,
+                "dice": list(dice),
+                "total": total,
+            },
+        )
+        results.append((name, total))
+    return results
+
+
+def _allocate_point_buy(n: int, budget: int) -> list[int]:
+    """Allocate a point-buy budget across `n` stats.
+
+    All stats start at 8. Points distributed round-robin, raising each
+    stat by 1 at a time (cheapest-first) until budget is spent. No
+    stat can exceed 15. Cost table (cumulative from 8):
+      8→9..12: 1pt each; 13→14..15: 2pt each.
+
+    Extracted from CharacterBuilder._allocate_point_buy (ADR-143 Step 1)
+    so both the ABC default and future overrides can call it.
+    """
+
+    def marginal_cost(value: int) -> int:
+        if 9 <= value <= 13:
+            return 1
+        if value in (14, 15):
+            return 2
+        # Outside [9, 15] — effectively infinite; callers filter via
+        # the next_val > 15 guard before reaching this branch.
+        return 1 << 30
+
+    stats = [8] * n
+    remaining = budget
+    while True:
+        any_raised = False
+        for i in range(n):
+            next_val = stats[i] + 1
+            if next_val > 15:
+                continue
+            cost = marginal_cost(next_val)
+            if cost <= remaining:
+                stats[i] = next_val
+                remaining -= cost
+                any_raised = True
+        if not any_raised or remaining == 0:
+            break
+    return stats
 
 
 class UnknownRulesetError(ValueError):
@@ -190,6 +258,98 @@ class RulesetModule(ABC):
         the wwn_magic/system_strain import at module load."""
         from sidequest.game.chargen_contribution import ChargenResources
         return ChargenResources()
+
+    def generate_attributes(
+        self,
+        *,
+        method: str,
+        ability_names: list[str],
+        standard_array: list[int] | None,
+        point_buy_budget: int,
+        rolled_stats: list[tuple[str, int]] | None,
+        acc: AccumulatedChoices,
+        rng: random.Random,
+    ) -> dict[str, int]:
+        """Generate the ability-score dict per `method`. Default = the historical
+        builder behavior (point_buy / standard_array + hint-derivation / 3d6 / bones).
+        WithoutNumberRulesetModule overrides the assignment to be prime-aware (ADR-143)."""
+        from sidequest.telemetry.spans import SPAN_CHARGEN_STATS_GENERATED, Emitter
+
+        if method == "roll_3d6_strict":
+            if rolled_stats is not None:
+                stats = dict(rolled_stats)
+            else:
+                # Defensive re-roll — shouldn't fire in practice because
+                # the eager construction roll covers this path.
+                stats = dict(_roll_3d6_stats(ability_names, rng))
+
+        elif method == "roll_the_bones":
+            if rolled_stats is None:
+                # No silent re-roll: the mode rolls eagerly at adoption, so
+                # a missing array is a programmer error, not a fallback case.
+                raise RuntimeError(
+                    "roll_the_bones mode active but no rolled stats recorded — "
+                    "_enter_roll_the_bones must run at mode adoption"
+                )
+            stats = dict(rolled_stats)
+
+        elif method == "standard_array":
+            # ADR-142 Step 2A: pack-authored array overrides the legacy
+            # D&D 5e default when set; None preserves existing behavior.
+            base_values = (
+                standard_array
+                if standard_array is not None
+                else [15, 14, 13, 12, 10, 8]
+            )
+            stats = dict(zip(ability_names, base_values, strict=False))
+
+        elif method == "point_buy":
+            values = _allocate_point_buy(len(ability_names), point_buy_budget)
+            stats = dict(zip(ability_names, values, strict=True))
+
+        else:
+            from sidequest.game.builder import UnknownStatGenerationError
+
+            raise UnknownStatGenerationError(method=method)
+
+        # Apply explicit stat bonuses from chargen choices (origin,
+        # mutation, artifact).
+        for stat, bonus in acc.stat_bonuses.items():
+            if stat in stats:
+                stats[stat] += bonus
+
+        # Standard-array derivation: when no explicit bonuses were
+        # authored and we have at least 3 stats, differentiate the
+        # spread using accumulated hints.
+        if (
+            not acc.stat_bonuses
+            and method == "standard_array"
+            and len(ability_names) >= 3
+        ):
+            names = ability_names
+            # Origin/race → boost first stat
+            if acc.race_hint is not None:
+                stats[names[0]] = stats[names[0]] + 3
+            # Mutation/affinity → boost second stat, reduce last
+            if acc.mutation_hint is not None or acc.affinity_hint is not None:
+                stats[names[1]] = stats[names[1]] + 2
+                stats[names[-1]] = stats[names[-1]] - 1
+            # Class/training → boost third stat (floor at last index if
+            # fewer than 3 names, though the guard above already rejects
+            # that case).
+            if acc.class_hint is not None or acc.training_hint is not None:
+                idx = min(2, len(names) - 1)
+                stats[names[idx]] = stats[names[idx]] + 2
+
+        Emitter.fire(
+            SPAN_CHARGEN_STATS_GENERATED,
+            {
+                "method": method,
+                "stat_count": len(stats),
+                "stats_json": json.dumps(dict(stats), sort_keys=True),
+            },
+        )
+        return stats
 
     def resolve_trauma(
         self, *, spec, base_total, cfg, rng, actor="", _tracer=None

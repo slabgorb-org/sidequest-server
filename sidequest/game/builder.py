@@ -3078,168 +3078,37 @@ class CharacterBuilder:
         return drained
 
     def _roll_3d6_stats(self) -> list[tuple[str, int]]:
-        """Roll 3d6 for each ability score in order. Returns ``(name, total)``
-        pairs in ``ability_score_names`` order.
-
-        Uses the builder's seedable RNG so tests can drive deterministic
-        outputs.
+        """Delegate to the module-level helper (ADR-143: moved to ruleset/base.py
+        so the builder and the ABC default generate_attributes share one
+        implementation). Uses the builder's seedable RNG.
         """
-        from sidequest.telemetry.spans import SPAN_CHARGEN_STAT_ROLL, Emitter
+        from sidequest.game.ruleset.base import _roll_3d6_stats
 
-        rng = self._rng
-        results: list[tuple[str, int]] = []
-        for name in self._ability_score_names:
-            dice = (rng.randint(1, 6), rng.randint(1, 6), rng.randint(1, 6))
-            total = sum(dice)
-            Emitter.fire(
-                SPAN_CHARGEN_STAT_ROLL,
-                {
-                    "stat": name,
-                    "dice": list(dice),
-                    "total": total,
-                },
-            )
-            results.append((name, total))
-        return results
+        return _roll_3d6_stats(self._ability_score_names, self._rng)
 
     @staticmethod
     def _allocate_point_buy(n: int, budget: int) -> list[int]:
-        """Allocate a point-buy budget across `n` stats.
+        """Delegate to the module-level helper (ADR-143: moved to ruleset/base.py).
 
-        All stats start at 8. Points distributed round-robin, raising each
-        stat by 1 at a time (cheapest-first) until budget is spent. No
-        stat can exceed 15. Cost table (cumulative from 8):
-          8→9..12: 1pt each; 13→14..15: 2pt each.
+        Preserved as a static method on CharacterBuilder so existing call
+        sites (tests, etc.) do not need to be updated.
         """
+        from sidequest.game.ruleset.base import _allocate_point_buy
 
-        def marginal_cost(value: int) -> int:
-            if 9 <= value <= 13:
-                return 1
-            if value in (14, 15):
-                return 2
-            # Outside [9, 15] — effectively infinite; callers filter via
-            # the next_val > 15 guard before reaching this branch.
-            return 1 << 30
-
-        stats = [8] * n
-        remaining = budget
-        while True:
-            any_raised = False
-            for i in range(n):
-                next_val = stats[i] + 1
-                if next_val > 15:
-                    continue
-                cost = marginal_cost(next_val)
-                if cost <= remaining:
-                    stats[i] = next_val
-                    remaining -= cost
-                    any_raised = True
-            if not any_raised or remaining == 0:
-                break
-        return stats
+        return _allocate_point_buy(n, budget)
 
     def generate_stats(self, acc: AccumulatedChoices) -> dict[str, int]:
-        """Generate ability scores per the declared stat_generation method.
-
-        Strategies:
-        - roll_3d6_strict: reuse pre-rolled stats from construction or
-          scene directive; re-roll inline if absent (defensive — the
-          eager roll should have fired).
-        - standard_array: the pack-authored ``rules.standard_array`` (or the
-          legacy default [15, 14, 13, 12, 10, 8] when unset) mapped to the
-          ability_score_names in declaration order. When no explicit
-          stat_bonuses were set by chargen choices, derive bonuses from
-          accumulated hints (race/mutation/class) to differentiate stat
-          spreads across builds.
-        - point_buy: distribute point_buy_budget across ability scores.
-
-        Accumulated `acc.stat_bonuses` are applied additively on top of
-        the generated baseline (every strategy).
-
-        Raises UnknownStatGenerationError for any other method string.
-        """
-        method = self._stat_generation
-
-        if method == "roll_3d6_strict":
-            if self._rolled_stats is not None:
-                stats = dict(self._rolled_stats)
-            else:
-                # Defensive re-roll — shouldn't fire in practice because
-                # the eager construction roll covers this path.
-                rolled = self._roll_3d6_stats()
-                stats = dict(rolled)
-
-        elif method == "roll_the_bones":
-            if self._rolled_stats is None:
-                # No silent re-roll: the mode rolls eagerly at adoption, so
-                # a missing array is a programmer error, not a fallback case.
-                raise RuntimeError(
-                    "roll_the_bones mode active but no rolled stats recorded — "
-                    "_enter_roll_the_bones must run at mode adoption"
-                )
-            stats = dict(self._rolled_stats)
-
-        elif method == "standard_array":
-            # ADR-142 Step 2A: pack-authored array overrides the legacy
-            # D&D 5e default when set; None preserves existing behavior.
-            base_values = (
-                self._standard_array
-                if self._standard_array is not None
-                else [15, 14, 13, 12, 10, 8]
-            )
-            stats = dict(zip(self._ability_score_names, base_values, strict=False))
-
-        elif method == "point_buy":
-            values = self._allocate_point_buy(
-                len(self._ability_score_names), self._point_buy_budget
-            )
-            stats = dict(zip(self._ability_score_names, values, strict=True))
-
-        else:
-            raise UnknownStatGenerationError(method=method)
-
-        # Apply explicit stat bonuses from chargen choices (origin,
-        # mutation, artifact).
-        for stat, bonus in acc.stat_bonuses.items():
-            if stat in stats:
-                stats[stat] += bonus
-
-        # Standard-array derivation: when no explicit bonuses were
-        # authored and we have at least 3 stats, differentiate the
-        # spread using accumulated hints.
-        if (
-            not acc.stat_bonuses
-            and method == "standard_array"
-            and len(self._ability_score_names) >= 3
-        ):
-            names = self._ability_score_names
-            # Origin/race → boost first stat
-            if acc.race_hint is not None:
-                stats[names[0]] = stats[names[0]] + 3
-            # Mutation/affinity → boost second stat, reduce last
-            if acc.mutation_hint is not None or acc.affinity_hint is not None:
-                stats[names[1]] = stats[names[1]] + 2
-                stats[names[-1]] = stats[names[-1]] - 1
-            # Class/training → boost third stat (floor at last index if
-            # fewer than 3 names, though the guard above already rejects
-            # that case).
-            if acc.class_hint is not None or acc.training_hint is not None:
-                idx = min(2, len(names) - 1)
-                stats[names[idx]] = stats[names[idx]] + 2
-
-        import json as _json
-
-        from sidequest.telemetry.spans import SPAN_CHARGEN_STATS_GENERATED, Emitter
-
-        Emitter.fire(
-            SPAN_CHARGEN_STATS_GENERATED,
-            {
-                "method": method,
-                "stat_count": len(stats),
-                "stats_json": _json.dumps(dict(stats), sort_keys=True),
-            },
+        """Delegate to the bound RulesetModule (ADR-143). The module owns the
+        attribute mechanics; the builder owns the FSM that gathered `acc`."""
+        return self._ruleset.generate_attributes(
+            method=self._stat_generation,
+            ability_names=self._ability_score_names,
+            standard_array=self._standard_array,
+            point_buy_budget=self._point_buy_budget,
+            rolled_stats=self._rolled_stats,
+            acc=acc,
+            rng=self._rng,
         )
-        return stats
 
     # --- Private helpers ---
 
